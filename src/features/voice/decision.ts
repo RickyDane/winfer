@@ -247,6 +247,10 @@ export function parseDecision(result: DecisionResult, ctx: ToolContext): Decisio
   if (decisions.some((d) => d.tool.id === "spawn_panes" && d.args.prompt)) {
     return decisions.filter((d) => d.tool.id !== "send_to_pane");
   }
+  // Telling the open agents and racing new ones both hand out the task; telling wins.
+  if (decisions.some((d) => d.tool.id === "broadcast")) {
+    return decisions.filter((d) => d.tool.id !== "race_agents");
+  }
   return decisions;
 }
 

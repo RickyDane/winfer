@@ -11,7 +11,7 @@ import { toolContext } from "@/features/palette/entries";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
-import { needsWriting, writeInstructions } from "./writer";
+import { needsWriting, planPerRecipient, recipientsOf, writeInstructions } from "./writer";
 import { buildRequest, orderByMention, parseDecision, verdict, type Decision, type DecisionResult } from "./decision";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
@@ -101,14 +101,35 @@ function commandsFor(decisions: Decision[], transcript: string): Command[] {
   return orderByMention(decisions.flatMap((d) => d.tool.toCommands(d.args, ctx)), transcript, ctx);
 }
 
+/** Spawn order for a decision: one entry per new agent, in the order they were named. */
+function spawnOrder(d: Decision, transcript: string): string[] {
+  const ctx = toolContext();
+  return orderByMention(d.tool.toCommands(d.args, ctx), transcript, ctx).flatMap((c) =>
+    c.type === "pane.spawn" ? Array(c.count ?? 1).fill(c.provider === "default" ? "claude" : c.provider) : [],
+  );
+}
+
 async function run(decisions: Decision[], transcript: string) {
-  if (needsWriting(decisions)) {
-    show("deciding", { transcript, message: "Writing the prompt…" });
-    decisions = await writeInstructions(decisions, transcript);
+  // Commands that reach several agents get one planned message per agent.
+  const planned = new Map<Decision, Command[]>();
+  for (const d of decisions) {
+    const recipients = recipientsOf(d, d.tool.id === "spawn_panes" ? spawnOrder(d, transcript) : []);
+    const instruction = String(d.args.prompt ?? d.args.text ?? "");
+    if (!recipients || !instruction) continue;
+    show("deciding", { transcript, message: `Writing ${recipients.length} prompts…` });
+    const commands = await planPerRecipient(transcript, instruction, recipients);
+    if (commands) planned.set(d, commands);
   }
-  const commands = commandsFor(decisions, transcript);
+  const single = decisions.filter((d) => !planned.has(d));
+  if (needsWriting(single)) {
+    show("deciding", { transcript, message: "Writing the prompt…" });
+    const written = await writeInstructions(single, transcript);
+    decisions = decisions.map((d) => (planned.has(d) ? d : written[single.indexOf(d)]));
+  }
+  const commands = decisions.flatMap((d) => planned.get(d) ?? commandsFor([d], transcript));
   commands.forEach(execute);
-  const written = decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
+  const perAgent = [...planned.values()].flat().length;
+  const written = perAgent ? `${perAgent} individual prompts` : decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
   const summary = decisions.map(describe).join(" · ") + (written ? ` — “${String(written).slice(0, 140)}”` : "");
   useVoice.setState((s) => ({
     recent: [...s.recent, `${transcript} → ${summary}`].slice(-3),

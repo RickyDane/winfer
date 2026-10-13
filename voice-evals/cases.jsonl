@@ -78,3 +78,5 @@
 {"utterance": "open six codex windows", "expect": ["spawn_panes"], "counts": {"codex": 6}}
 {"utterance": "open five new terminals", "expect": ["spawn_panes"]}
 {"utterance": "Öffne acht Claude Fenster", "expect": ["spawn_panes"], "counts": {"claude": 8}, "tags": ["de"]}
+{"utterance": "Sag allen, sie sollen einen Flappy Bird Klon erstellen, bis auf das letzte Fenster, das soll bitte einen Super Mario Bros Klon erstellen.", "expect": ["broadcast", "send_to_pane"], "tags": ["de"]}
+{"utterance": "let three of the terminals build a flappy bird clone and the last one a super mario clone", "expect": ["broadcast", "send_to_pane"]}

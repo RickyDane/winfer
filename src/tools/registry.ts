@@ -522,7 +522,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "broadcast",
     title: "Tell all agents",
-    description: "Tell all agents at once to do something",
+    description: "Tell several or all agents that are already open to do something, possibly different things each (e.g. “all build X except the last one, which builds Y”). Not for opening or creating new windows",
     risk: "safe",
     params: { text: { kind: "span", slot: "instruction", ask: "What exactly should be sent to all agents?" } },
     toCommands: (args) => (args.text ? [{ type: "pane.broadcast", text: String(args.text) }] : [{ type: "ui.overlay", overlay: "broadcast" }]),
@@ -531,7 +531,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "race_agents",
     title: "Race agents",
-    description: "Race several agents against each other on one task to compare who does it best; only when the user says race, compete or compare",
+    description: "Start new agents that race each other on the same task to compare who does it best; only when the user says race, compete or compare",
     risk: "safe",
     params: {
       counts: { kind: "perOption", ask: "How many agents of this provider should race?", options: installedAgents, max: 3 },

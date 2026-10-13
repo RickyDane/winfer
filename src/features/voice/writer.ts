@@ -7,6 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { leaves } from "@/features/layout/tree";
 import { readTerminal } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import type { Command } from "@/commands/bus";
+import type { ProviderId } from "@/features/providers/providers";
 import type { Decision } from "./decision";
 
 export type WriterProvider = "off" | "workers" | "codex";
@@ -100,3 +102,88 @@ export async function writeInstructions(decisions: Decision[], transcript: strin
 
 /** Whether any decision has an instruction the writer would rewrite. */
 export const needsWriting = (decisions: Decision[]) => writerEnabled() && decisions.some((d) => instructionField(d) !== null);
+
+// ---------------------------------------------------------------------------------------------
+// Per-pane planning: one command, several recipients, possibly different instructions
+// ("all of you build Flappy Bird, except the last one: Super Mario").
+
+export interface Recipient {
+  /** Shown to the LLM, e.g. "pane 2 (Codex)" or "new agent 3 (Claude Code)". */
+  label: string;
+  /** Builds the command that delivers this recipient's message. */
+  deliver: (message: string) => Command;
+}
+
+/** Recipients of a decision that reaches several agents, or null for single-recipient ones. */
+export function recipientsOf(d: Decision, spawnOrder: ProviderId[]): Recipient[] | null {
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId)!;
+  const name = (id: string) => providerName(s.providers, id);
+  const order = ws.layout ? leaves(ws.layout) : [];
+  const agents = order.map((id, i) => ({ pane: ws.panes.find((p) => p.id === id)!, n: i + 1 })).filter((x) => x.pane.provider !== "shell");
+
+  if (d.tool.id === "broadcast" || (d.tool.id === "send_to_pane" && d.args.target === "all")) {
+    const submit = d.args.submit !== false;
+    return agents.length > 1
+      ? agents.map(({ pane, n }) => ({
+          label: `pane ${n} (${name(pane.provider)})`,
+          deliver: (text) => ({ type: "pane.sendText", target: { id: pane.id }, text, submit }),
+        }))
+      : null;
+  }
+  if (d.tool.id === "spawn_panes" && d.args.prompt) {
+    const model = d.args.model && d.args.model !== "default" ? String(d.args.model) : undefined;
+    return spawnOrder.length > 1
+      ? spawnOrder.map((provider, i) => ({
+          label: `new agent ${i + 1} (${name(provider)})`,
+          deliver: (prompt) => ({ type: "pane.spawn", provider, count: 1, prompt, model }),
+        }))
+      : null;
+  }
+  return null;
+}
+
+export const PLAN_SYSTEM = [
+  "The user gave one voice command that goes to several coding agents. Decide the exact message each recipient receives.",
+  "Recipients can get different tasks (e.g. 'all build X except the last one, which builds Y'). 'The last one' is the last in the list.",
+  "Each message must stand alone: the agent doesn't know about the others or the list. Be concrete, 1–3 sentences, in the user's language.",
+  'Output only JSON: an array with exactly one string per recipient, in list order, e.g. ["…", "…"].',
+].join(" ");
+
+/** Parses the first JSON string array in the model's answer. */
+export function parseMessages(answer: string, expected: number): string[] | null {
+  const start = answer.indexOf("[");
+  const end = answer.lastIndexOf("]");
+  if (start < 0 || end <= start) return null;
+  try {
+    const list = JSON.parse(answer.slice(start, end + 1));
+    return Array.isArray(list) && list.length === expected && list.every((m) => typeof m === "string" && m.trim())
+      ? list.map((m: string) => m.trim())
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Asks the LLM for one message per recipient; null if the writer is off or the plan doesn't fit. */
+export async function planPerRecipient(transcript: string, instruction: string, recipients: Recipient[]): Promise<Command[] | null> {
+  const config = useWorkspaces.getState().voiceConfig;
+  const provider = config.writer ?? "workers";
+  if (provider === "off") return null;
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId)!;
+  const user = [
+    `Spoken: "${transcript}"`,
+    `Instruction as heard: "${instruction}"`,
+    `Workspace: ${ws.name} (${ws.rootDir})`,
+    `Recipients, in order:\n${recipients.map((r, i) => `${i + 1}. ${r.label}`).join("\n")}`,
+  ].join("\n");
+  try {
+    const answer = await invoke<string>("llm_compose", { req: { provider, model: config.writerModel ?? "", system: PLAN_SYSTEM, user } });
+    const messages = parseMessages(answer, recipients.length);
+    return messages ? recipients.map((r, i) => r.deliver(messages[i])) : null;
+  } catch (err) {
+    console.warn("per-pane planning failed", err);
+    return null;
+  }
+}

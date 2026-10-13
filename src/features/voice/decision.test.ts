@@ -134,6 +134,11 @@ describe("parseDecision", () => {
     expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.spawn", provider: "claude", count: 1, prompt: undefined }]);
   });
 
+  it("doesn't start a race next to telling the open agents", () => {
+    const decisions = parseDecision({ answers: { action_1: choice("broadcast"), action_2: choice("race_agents", 3), instruction: choice("build a flappy bird clone"), instruction_given: { type: "noul", noul: 0.9 } } }, ctx);
+    expect(decisions.map((d) => d.tool.id)).toEqual(["broadcast"]);
+  });
+
   it("picks free text from a transcript span", () => {
     const [d] = parseDecision(
       { answers: { action_1: choice("send_to_pane"), target: choice("p-a"), instruction: choice("run the tests"), instruction_given: { type: "noul", noul: 0.95 }, "send_to_pane.submit": { type: "noul", noul: 0.9 } } },
