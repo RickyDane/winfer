@@ -136,10 +136,15 @@ describe("parseDecision", () => {
 
   it("applies the confidence policy", () => {
     const at = (c: number, tool = "zoom_pane") => parseDecision({ answers: { action_1: choice(tool, c) } }, ctx);
+    // Default: run anything clear enough; drop near-ties.
     expect(verdict(at(2.5))).toBe("run");
-    expect(verdict(at(1.4))).toBe("confirm");
+    expect(verdict(at(1.4))).toBe("run");
+    expect(verdict(at(20, "close_all_panes"))).toBe("run");
     expect(verdict(at(1.01))).toBe("reject");
-    expect(verdict(at(20, "merge_worktree"))).toBe("confirm"); // risky tools always confirm
+    // Opt-in confirmation for uncertain or risky commands.
+    expect(verdict(at(2.5), { confirm: true })).toBe("run");
+    expect(verdict(at(1.4), { confirm: true })).toBe("confirm");
+    expect(verdict(at(20, "merge_worktree"), { confirm: true })).toBe("confirm");
     expect(verdict(parseDecision({ answers: { action_1: choice("none") } }, ctx))).toBe("reject");
   });
 });

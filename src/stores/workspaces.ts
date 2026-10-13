@@ -75,7 +75,7 @@ interface WorkspaceState {
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
-  voiceConfig: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto" };
+  voiceConfig: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean };
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -101,7 +101,7 @@ interface WorkspaceState {
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
   setSearchPane: (id: string | null) => void;
-  setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto" }) => void;
+  setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -326,7 +326,7 @@ interface Snapshot {
     activeWorkspaceId?: string;
     sidebarOpen?: boolean;
     browserOpen?: boolean;
-    voice?: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto" };
+    voice?: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean };
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
   } | null;

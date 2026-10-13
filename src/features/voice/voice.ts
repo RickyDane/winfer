@@ -137,7 +137,7 @@ async function decide(transcript: string) {
   useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
 
   const decisions = parseDecision(result, ctx);
-  switch (verdict(decisions)) {
+  switch (verdict(decisions, { confirm: useWorkspaces.getState().voiceConfig.confirm ?? false })) {
     case "run":
       return run(decisions, transcript);
     case "confirm":

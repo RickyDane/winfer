@@ -53,7 +53,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] "Type hello world into Claude" → text is typed into Claude's prompt, not sent.
 - [ ] "Close all windows" → asks to confirm, then closes every pane in the workspace.
 - [ ] Hold ⌥⇧Space and dictate → text is typed into the focused pane, not sent.
-- [ ] An unclear command shows a confirm prompt with alternatives (↩ runs, Esc cancels).
+- [ ] Commands run immediately (no confirmation). Optional: Settings → "Ask before running uncertain or risky voice commands" brings back the confirm prompt.
 - [ ] Settings → Language "Deutsch" + download a multilingual model → "Öffne ein neues Fenster mit Codex" works.
 - [ ] "Open Claude with Opus" / "Switch Claude to Sonnet"; pane header shows the model; pane menu → Change model….
 - [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.

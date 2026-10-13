@@ -260,11 +260,15 @@ export function clarity(probabilities: Record<string, number> | undefined, chose
 
 export type Verdict = "run" | "confirm" | "reject";
 
-export function verdict(decisions: Decision[]): Verdict {
+/**
+ * Run, ask or drop. By default everything clear enough runs immediately; near-ties (mostly
+ * background speech) are dropped. With `confirm`, uncertain or risky commands ask first.
+ */
+export function verdict(decisions: Decision[], opts: { confirm?: boolean } = {}): Verdict {
   if (decisions.length === 0) return "reject";
   const lowest = Math.min(...decisions.map((d) => d.confidence));
   if (lowest < CONFIRM) return "reject";
-  if (lowest < AUTO_RUN || decisions.some((d) => d.tool.risk === "confirm")) return "confirm";
+  if (opts.confirm && (lowest < AUTO_RUN || decisions.some((d) => d.tool.risk === "confirm"))) return "confirm";
   return "run";
 }
 

@@ -16,6 +16,7 @@ const inputClass = "h-8 w-full rounded-md border border-border bg-panel px-2.5 f
 function VoiceSettings() {
   const status = useVoice((s) => s.status);
   const readback = useWorkspaces((s) => s.voiceConfig.readback ?? false);
+  const confirm = useWorkspaces((s) => s.voiceConfig.confirm ?? false);
   const [accountId, setAccountId] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -91,6 +92,11 @@ function VoiceSettings() {
       <label className="flex items-center gap-2 text-[13px] text-fg">
         <input type="checkbox" checked={readback} onChange={(e) => useWorkspaces.getState().setVoiceConfig({ readback: e.target.checked })} />
         Speak agent updates aloud (“Codex needs your input”, “Claude Code finished”)
+      </label>
+
+      <label className="flex items-center gap-2 text-[13px] text-fg">
+        <input type="checkbox" checked={confirm} onChange={(e) => useWorkspaces.getState().setVoiceConfig({ confirm: e.target.checked })} />
+        Ask before running uncertain or risky voice commands
       </label>
 
       <Section title="Voice commands (Cloudflare Clef)">
