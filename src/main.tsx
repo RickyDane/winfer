@@ -1,11 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import "./styles/globals.css";
 
 async function main() {
   // Plain-browser dev mode (no Tauri runtime): use a fake backend.
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) await import("./dev/mockTauri");
+  // Imported after the mock so modules that listen at load time see the (fake) backend.
+  const { default: App } = await import("./App");
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

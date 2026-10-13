@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter};
 
 pub struct HookServer {
@@ -70,13 +70,21 @@ fn claude_settings() -> Value {
 
 /// Extra CLI arguments that wire a provider's hooks to the server.
 pub fn provider_args(provider_id: &str) -> Vec<String> {
-    let Some(server) = server() else { return Vec::new() };
+    let Some(server) = server() else {
+        return Vec::new();
+    };
     match provider_id {
-        "claude" => vec!["--settings".into(), server.claude_settings.to_string_lossy().into_owned()],
+        "claude" => vec![
+            "--settings".into(),
+            server.claude_settings.to_string_lossy().into_owned(),
+        ],
         // Codex runs `notify` with the event JSON as the last argument.
         "codex" => {
             let script = hook_command("codex", "turn-complete", "\"$1\"");
-            vec!["-c".into(), format!("notify=['sh','-c','{script}','winfer']")]
+            vec![
+                "-c".into(),
+                format!("notify=['sh','-c','{script}','winfer']"),
+            ]
         }
         _ => Vec::new(),
     }
@@ -84,13 +92,20 @@ pub fn provider_args(provider_id: &str) -> Vec<String> {
 
 pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> {
     let settings_path = data_dir.join("claude-hooks.json");
-    std::fs::write(&settings_path, serde_json::to_vec_pretty(&claude_settings())?)?;
+    std::fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&claude_settings())?,
+    )?;
 
     let token = format!("{:032x}", rand::random::<u128>());
     let addr = serve(token.clone(), move |event| {
         let _ = app.emit("agent://status", event);
     })?;
-    let _ = SERVER.set(HookServer { addr, token, claude_settings: settings_path });
+    let _ = SERVER.set(HookServer {
+        addr,
+        token,
+        claude_settings: settings_path,
+    });
     Ok(())
 }
 
@@ -109,7 +124,12 @@ fn serve(token: String, emit: impl Fn(StatusEvent) + Send + 'static) -> std::io:
                 .headers()
                 .iter()
                 .any(|h| h.field.equiv("X-Winfer-Token") && h.value.as_str() == token);
-            let parts: Vec<String> = req.url().trim_start_matches('/').split('/').map(String::from).collect();
+            let parts: Vec<String> = req
+                .url()
+                .trim_start_matches('/')
+                .split('/')
+                .map(String::from)
+                .collect();
 
             let code = match (authorized, parts.as_slice()) {
                 (false, _) => 401,
@@ -117,9 +137,9 @@ fn serve(token: String, emit: impl Fn(StatusEvent) + Send + 'static) -> std::io:
                     let mut body = String::new();
                     let _ = req.as_reader().take(64 * 1024).read_to_string(&mut body);
                     if let Some(status) = status_for(provider, event) {
-                        let message = serde_json::from_str::<Value>(&body)
-                            .ok()
-                            .and_then(|v| v.get("message").and_then(Value::as_str).map(String::from));
+                        let message = serde_json::from_str::<Value>(&body).ok().and_then(|v| {
+                            v.get("message").and_then(Value::as_str).map(String::from)
+                        });
                         emit(StatusEvent {
                             pane_id: pane_id.clone(),
                             provider: provider.clone(),
@@ -170,14 +190,27 @@ mod tests {
         let recv = || rx.recv_timeout(std::time::Duration::from_secs(5));
 
         // Claude: JSON on stdin.
-        let claude = format!("echo '{{\"message\":\"Claude needs your permission\"}}' | {}", hook_command("claude", "Notification", "@-"));
+        let claude = format!(
+            "echo '{{\"message\":\"Claude needs your permission\"}}' | {}",
+            hook_command("claude", "Notification", "@-")
+        );
         run(&claude, "secret", &[]);
         let event = recv().unwrap();
-        assert_eq!((event.pane_id.as_str(), event.status), ("p-1", "needs-input"));
-        assert_eq!(event.message.as_deref(), Some("Claude needs your permission"));
+        assert_eq!(
+            (event.pane_id.as_str(), event.status),
+            ("p-1", "needs-input")
+        );
+        assert_eq!(
+            event.message.as_deref(),
+            Some("Claude needs your permission")
+        );
 
         // Codex: JSON as the last argument.
-        run(&hook_command("codex", "turn-complete", "\"$1\""), "secret", &[r#"{"type":"agent-turn-complete"}"#]);
+        run(
+            &hook_command("codex", "turn-complete", "\"$1\""),
+            "secret",
+            &[r#"{"type":"agent-turn-complete"}"#],
+        );
         assert_eq!(recv().unwrap().status, "done");
 
         // Wrong token is rejected.
@@ -188,9 +221,20 @@ mod tests {
     #[test]
     fn claude_settings_wire_every_event() {
         let settings = claude_settings();
-        for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop"] {
-            let command = settings["hooks"][event][0]["hooks"][0]["command"].as_str().unwrap();
-            assert!(command.contains(&format!("/hook/claude/$WINFER_PANE_ID/{event}")), "{event}: {command}");
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "Notification",
+            "Stop",
+        ] {
+            let command = settings["hooks"][event][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
+            assert!(
+                command.contains(&format!("/hook/claude/$WINFER_PANE_ID/{event}")),
+                "{event}: {command}"
+            );
         }
     }
 }

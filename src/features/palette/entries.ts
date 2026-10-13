@@ -2,6 +2,7 @@ import { execute } from "@/commands/bus";
 import { bindingFor, formatKeys } from "@/commands/keymap";
 import { TOOLS, type ToolContext } from "@/tools/registry";
 import { useWorkspaces } from "@/stores/workspaces";
+import { useBrowser } from "@/features/browser/browser";
 
 export interface Entry {
   id: string;
@@ -10,9 +11,17 @@ export interface Entry {
   run: () => void;
 }
 
-export function toolContext(): ToolContext {
+export function toolContext(lastCommands: ToolContext["lastCommands"] = []): ToolContext {
   const s = useWorkspaces.getState();
-  return { providers: s.providers, workspaces: s.workspaces, active: s.workspaces.find((w) => w.id === s.activeWorkspaceId)! };
+  const tabs = useBrowser.getState().tabs[s.activeWorkspaceId] ?? [];
+  return {
+    providers: s.providers,
+    workspaces: s.workspaces,
+    active: s.workspaces.find((w) => w.id === s.activeWorkspaceId)!,
+    focusedPaneId: s.focusedPaneId,
+    browserTabs: tabs.map((t) => t.title || t.url),
+    lastCommands,
+  };
 }
 
 export function paletteEntries(): Entry[] {

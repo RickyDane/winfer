@@ -63,6 +63,7 @@ export const BINDINGS: Binding[] = [
   { keys: "Mod+B", title: "Toggle sidebar", group: "App", command: { type: "ui.toggleSidebar" } },
   { keys: "Mod+Shift+B", win: "Ctrl+Shift+Alt+B", title: "Toggle browser", group: "App", command: { type: "ui.toggleBrowser" } },
   { keys: "Mod+L", title: "Browser address bar", group: "App", command: { type: "browser.focusUrl" } },
+  { keys: "Mod+,", title: "Settings", group: "App", command: { type: "ui.settings" } },
   { keys: "Mod+/", title: "Keyboard shortcuts", group: "App", command: { type: "ui.cheatSheet" } },
 ];
 
@@ -89,6 +90,7 @@ const CODE_KEYS: Record<string, string> = {
   Equal: "=",
   Minus: "-",
   Slash: "/",
+  Comma: ",",
   Enter: "Enter",
   NumpadEnter: "Enter",
   Space: "Space",

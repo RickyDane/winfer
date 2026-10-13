@@ -1,0 +1,213 @@
+/**
+ * Voice → Clef (System One) → tools.
+ *
+ * The request asks Clef to pick tools from the Tool Registry (their descriptions are the option
+ * text) and to fill every parameter as a typed question. Clef can only choose among the options we
+ * give it, so it can't invent commands. Free text (URLs, prompts) is picked from spans of the
+ * transcript. No grammar parsing happens anywhere.
+ */
+import type { Command } from "@/commands/bus";
+import { TOOLS, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
+import { leaves } from "@/features/layout/tree";
+import { providerName } from "@/stores/workspaces";
+
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+const MAX_SPAN_WORDS = 12;
+const MAX_CHOICES = 255;
+
+/** Thresholds from the M0.5 spike (re-fit with the eval set once real data exists). */
+export const AUTO_RUN = 0.6;
+export const CONFIRM = 0.3;
+
+type Question =
+  | { type: "choice"; instructions: string; criteria: Record<string, string | null> }
+  | { type: "noul"; instructions: string }
+  | { type: "score"; instructions: string; criteria: string[] };
+
+export interface DecisionRequest {
+  state: unknown;
+  questions: Record<string, Question>;
+}
+
+type Answer =
+  | { type: "choice"; choice: string; probabilities?: Record<string, number>; confidence?: number }
+  | { type: "noul"; noul: number }
+  | { type: "score"; score: number; probabilities?: Record<string, number>; confidence?: number };
+
+export interface DecisionResult {
+  answers: Record<string, Answer>;
+}
+
+/** Pane targets are shared by many tools, so they're asked once. */
+const SHARED_PARAMS = new Set(["target"]);
+
+const questionKey = (tool: ToolDef, param: string, option?: string) =>
+  SHARED_PARAMS.has(param) ? param : [tool.id, param, option].filter(Boolean).join(".");
+
+/** Contiguous word spans of the transcript, used as choices for free-text parameters. */
+export function transcriptSpans(transcript: string): string[] {
+  const words = transcript.replace(/[.,!?;]+(\s|$)/g, "$1").split(/\s+/).filter(Boolean);
+  const spans = new Set<string>();
+  for (let len = 1; len <= Math.min(MAX_SPAN_WORDS, words.length); len++) {
+    for (let i = 0; i + len <= words.length; i++) spans.add(words.slice(i, i + len).join(" "));
+  }
+  // Longer spans first so the cap drops single words, not whole phrases.
+  return [...spans].sort((a, b) => b.length - a.length).slice(0, MAX_CHOICES - 1);
+}
+
+function question(param: ParamDef, ctx: ToolContext, transcript: string, prefix: string): Question | Question[] | null {
+  const instructions = `${prefix}${param.ask}`;
+  switch (param.kind) {
+    case "enum": {
+      const options = param.options(ctx);
+      return Object.keys(options).length >= 2 ? { type: "choice", instructions, criteria: options } : null;
+    }
+    case "count":
+      return { type: "choice", instructions, criteria: Object.fromEntries(NUMBER_WORDS.slice(0, param.max + 1).map((w) => [w, null])) };
+    case "bool":
+      return { type: "noul", instructions };
+    case "level":
+      return { type: "score", instructions, criteria: param.levels };
+    case "span": {
+      const spans = transcriptSpans(transcript);
+      return spans.length ? { type: "choice", instructions, criteria: Object.fromEntries([["none", "Not mentioned"], ...spans.map((s) => [s, null])]) } : null;
+    }
+    case "perOption":
+      return null; // expanded by the caller
+  }
+}
+
+export function buildRequest(transcript: string, ctx: ToolContext, recent: string[] = []): DecisionRequest {
+  const panes = ctx.active.layout ? leaves(ctx.active.layout) : [];
+  const state = {
+    transcript,
+    app: {
+      workspace: ctx.active.name,
+      focusedPane: ctx.focusedPaneId ? panes.indexOf(ctx.focusedPaneId) + 1 : null,
+      panes: panes.map((id, i) => {
+        const pane = ctx.active.panes.find((p) => p.id === id)!;
+        return { number: i + 1, provider: providerName(ctx.providers, pane.provider), status: pane.status, branch: pane.worktree?.branch ?? null };
+      }),
+      workspaces: ctx.workspaces.map((w) => w.name),
+      installedProviders: ctx.providers.filter((p) => p.installed).map((p) => p.name),
+      browserTabs: ctx.browserTabs,
+      recentCommands: recent,
+    },
+  };
+
+  const tools = Object.fromEntries(TOOLS.map((t) => [t.id, t.description]));
+  const questions: Record<string, Question> = {
+    action_1: { type: "choice", instructions: "Which tool does the user's first requested action map to?", criteria: tools },
+    action_2: {
+      type: "choice",
+      instructions: "Which tool does a second, different action map to? Answer none unless the user clearly asked for two different things.",
+      criteria: tools,
+    },
+  };
+
+  for (const tool of TOOLS) {
+    for (const [name, param] of Object.entries(tool.params)) {
+      const key = questionKey(tool, name);
+      if (questions[key]) continue;
+      const prefix = SHARED_PARAMS.has(name) ? "" : `If the user wants “${tool.title}”: `;
+      if (param.kind === "perOption") {
+        for (const [option, label] of Object.entries(param.options(ctx))) {
+          questions[questionKey(tool, name, option)] = {
+            type: "choice",
+            instructions: `${prefix}${param.ask} (${label})`,
+            criteria: Object.fromEntries(NUMBER_WORDS.slice(0, param.max + 1).map((w) => [w, null])),
+          };
+        }
+        continue;
+      }
+      const q = question(param, ctx, transcript, prefix);
+      if (q && !Array.isArray(q)) questions[key] = q;
+    }
+  }
+  return { state, questions };
+}
+
+export interface Decision {
+  tool: ToolDef;
+  args: Args;
+  confidence: number;
+  /** Next-best tools for the confirmation prompt. */
+  alternatives: { tool: ToolDef; probability: number }[];
+}
+
+const byId = (id: string) => TOOLS.find((t) => t.id === id);
+
+function argsFor(tool: ToolDef, answers: Record<string, Answer>, ctx: ToolContext): Args {
+  const args: Args = {};
+  for (const [name, param] of Object.entries(tool.params)) {
+    if (param.kind === "perOption") {
+      args[name] = Object.fromEntries(
+        Object.keys(param.options(ctx)).map((option) => {
+          const a = answers[questionKey(tool, name, option)];
+          return [option, a?.type === "choice" ? Math.max(0, NUMBER_WORDS.indexOf(a.choice)) : 0];
+        }),
+      );
+      continue;
+    }
+    const answer = answers[questionKey(tool, name)];
+    if (!answer) {
+      // Skipped single-option enums resolve to their only option.
+      if (param.kind === "enum") args[name] = Object.keys(param.options(ctx))[0];
+      continue;
+    }
+    if (answer.type === "noul") args[name] = answer.noul >= 0.5;
+    else if (answer.type === "score" && param.kind === "level") {
+      const best = Object.entries(answer.probabilities ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0];
+      args[name] = best ?? param.levels[Math.round(Math.min(Math.max(answer.score, 0), param.levels.length - 1))];
+    } else if (answer.type === "choice") {
+      if (param.kind === "count") args[name] = Math.max(0, NUMBER_WORDS.indexOf(answer.choice));
+      else if (param.kind === "span") args[name] = answer.choice === "none" ? undefined : answer.choice;
+      else args[name] = answer.choice;
+    }
+  }
+  return args;
+}
+
+/** Turns Clef's answers into up to two decisions (the second only if it's a different tool). */
+export function parseDecision(result: DecisionResult, ctx: ToolContext): Decision[] {
+  const decisions: Decision[] = [];
+  for (const key of ["action_1", "action_2"]) {
+    const answer = result.answers[key];
+    if (answer?.type !== "choice") continue;
+    const tool = byId(answer.choice);
+    if (!tool || tool.id === "none") continue;
+    if (key === "action_2" && decisions.some((d) => d.tool.id === tool.id)) continue;
+    if (key === "action_2" && decisions.length === 0) continue;
+    const alternatives = Object.entries(answer.probabilities ?? {})
+      .filter(([id]) => id !== tool.id && id !== "none")
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .flatMap(([id, probability]) => (byId(id) ? [{ tool: byId(id)!, probability }] : []));
+    decisions.push({ tool, args: argsFor(tool, result.answers, ctx), confidence: answer.confidence ?? answer.probabilities?.[tool.id] ?? 0, alternatives });
+  }
+  return decisions;
+}
+
+export type Verdict = "run" | "confirm" | "reject";
+
+export function verdict(decisions: Decision[]): Verdict {
+  if (decisions.length === 0) return "reject";
+  const lowest = Math.min(...decisions.map((d) => d.confidence));
+  if (lowest < CONFIRM) return "reject";
+  if (lowest < AUTO_RUN || decisions.some((d) => d.tool.risk === "confirm")) return "confirm";
+  return "run";
+}
+
+/** Spawn order follows the order providers were mentioned ("claude, codex and grok"). */
+export function orderByMention(commands: Command[], transcript: string, ctx: ToolContext): Command[] {
+  const text = transcript.toLowerCase();
+  const position = (provider: string) => {
+    const p = ctx.providers.find((x) => x.id === provider);
+    const names = [p?.name, p?.id, ...(p?.aliases ?? [])].filter(Boolean).map((n) => n!.toLowerCase());
+    const hits = names.map((n) => text.indexOf(n)).filter((i) => i >= 0);
+    return hits.length ? Math.min(...hits) : Infinity;
+  };
+  return [...commands].sort((a, b) =>
+    a.type === "pane.spawn" && b.type === "pane.spawn" ? position(a.provider) - position(b.provider) : 0,
+  );
+}

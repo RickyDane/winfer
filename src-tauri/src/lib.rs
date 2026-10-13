@@ -6,6 +6,7 @@ mod menu;
 mod providers;
 mod pty;
 mod store;
+mod voice;
 mod worktree;
 
 use tauri::Manager;
@@ -27,11 +28,17 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(pty::PtyManager::default())
         .manage(browser::BrowserManager::default())
+        .manage(voice::Voice::new())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
             hooks::start(app.handle().clone(), &data_dir)?;
+            browser::kill_orphans(app.handle());
+            voice::preload(app.handle());
+            if let Err(err) = voice::register_shortcuts(app.handle()) {
+                eprintln!("voice shortcuts unavailable: {err}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -58,12 +65,22 @@ pub fn run() {
             browser::browser_resize,
             browser::browser_input,
             browser::browser_selection,
+            voice::voice_status,
+            voice::voice_download_model,
+            voice::voice_configure,
+            voice::voice_set_credentials,
+            voice::voice_clear_credentials,
+            voice::voice_decide,
+            voice::voice_test_connection,
+            voice::voice_start,
+            voice::voice_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 app.state::<browser::BrowserManager>().shutdown();
+                voice::shutdown(app);
             }
         });
 }

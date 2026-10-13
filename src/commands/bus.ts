@@ -14,7 +14,7 @@ import {
   type Preset,
   type SplitDir,
 } from "@/features/layout/tree";
-import { closeTerminal } from "@/features/terminal/xtermRegistry";
+import { closeTerminal, sendText } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
 import * as browser from "@/features/browser/browser";
@@ -34,6 +34,8 @@ export type Command =
   | { type: "pane.swapDir"; dir: Direction }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  /** Types text into a pane's terminal (and presses Enter if `submit`). */
+  | { type: "pane.sendText"; target: PaneRef; text: string; submit?: boolean }
   | { type: "pane.showChanges"; target: PaneRef }
   | { type: "pane.mergeWorktree"; target: PaneRef }
   | { type: "pane.discardWorktree"; target: PaneRef }
@@ -55,7 +57,8 @@ export type Command =
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   | { type: "ui.palette"; query?: string }
-  | { type: "ui.cheatSheet" };
+  | { type: "ui.cheatSheet" }
+  | { type: "ui.settings" };
 
 const store = () => useWorkspaces.getState();
 const active = (): Workspace => {
@@ -159,6 +162,11 @@ export function execute(cmd: Command): void {
       s.updateActive((w) => ({ zoomedPaneId: w.zoomedPaneId === id ? null : id }));
       return;
     }
+    case "pane.sendText": {
+      const id = resolvePane(cmd.target);
+      if (id) sendText(id, cmd.text + (cmd.submit ? "\r" : ""));
+      return;
+    }
     case "pane.showChanges": {
       const pane = paneWithWorktree(cmd.target);
       if (pane) s.setDiffPane(pane.id);
@@ -240,6 +248,8 @@ export function execute(cmd: Command): void {
       return s.paletteQuery === null ? s.openPalette(cmd.query) : s.closePalette();
     case "ui.cheatSheet":
       return s.setCheatSheet(!s.cheatSheetOpen);
+    case "ui.settings":
+      return s.setSettings(!s.settingsOpen);
   }
 }
 

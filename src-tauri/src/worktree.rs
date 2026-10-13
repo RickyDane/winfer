@@ -51,16 +51,33 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn repo_root(dir: &Path) -> Option<PathBuf> {
-    git(dir, &["rev-parse", "--show-toplevel"]).ok().map(PathBuf::from)
+    git(dir, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(PathBuf::from)
 }
 
 fn branch_exists(repo: &Path, branch: &str) -> bool {
-    git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok()
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_ok()
 }
 
 /// Creates a worktree for `provider` in the repo containing `dir`. `Ok(None)` if not a git repo.
-pub fn create(worktrees_dir: &Path, dir: &Path, provider: &str) -> Result<Option<WorktreeInfo>, String> {
-    let Some(repo) = repo_root(dir) else { return Ok(None) };
+pub fn create(
+    worktrees_dir: &Path,
+    dir: &Path,
+    provider: &str,
+) -> Result<Option<WorktreeInfo>, String> {
+    let Some(repo) = repo_root(dir) else {
+        return Ok(None);
+    };
 
     let base = match git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
         Ok(branch) => branch,
@@ -68,18 +85,36 @@ pub fn create(worktrees_dir: &Path, dir: &Path, provider: &str) -> Result<Option
         Err(_) => git(&repo, &["rev-parse", "HEAD"])?,
     };
 
-    let repo_name = repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
+    let repo_name = repo
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".into());
     let mut hasher = DefaultHasher::new();
     repo.hash(&mut hasher);
     let parent = worktrees_dir.join(format!("{repo_name}-{:08x}", hasher.finish() as u32));
 
     let (branch, path) = (1..)
-        .map(|n| (format!("winfer/{provider}-{n}"), parent.join(format!("{provider}-{n}"))))
+        .map(|n| {
+            (
+                format!("winfer/{provider}-{n}"),
+                parent.join(format!("{provider}-{n}")),
+            )
+        })
         .find(|(branch, path)| !branch_exists(&repo, branch) && !path.exists())
         .expect("unbounded range");
 
     std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    git(&repo, &["worktree", "add", "-b", &branch, &path.to_string_lossy(), &base])?;
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &path.to_string_lossy(),
+            &base,
+        ],
+    )?;
 
     Ok(Some(WorktreeInfo {
         repo: repo.to_string_lossy().into_owned(),
@@ -99,11 +134,19 @@ pub fn diff(info: &WorktreeInfo) -> Result<WorktreeDiff, String> {
         .lines()
         .map(String::from)
         .collect::<Vec<_>>();
-    let ahead = git(path, &["rev-list", "--count", &format!("{}..HEAD", info.base)])?
-        .parse()
-        .unwrap_or(0);
+    let ahead = git(
+        path,
+        &["rev-list", "--count", &format!("{}..HEAD", info.base)],
+    )?
+    .parse()
+    .unwrap_or(0);
     let dirty = !git(path, &["status", "--porcelain"])?.is_empty();
-    Ok(WorktreeDiff { diff, untracked, ahead, dirty })
+    Ok(WorktreeDiff {
+        diff,
+        untracked,
+        ahead,
+        dirty,
+    })
 }
 
 /// Merges the worktree branch into its base in the main checkout. Refuses instead of
@@ -113,14 +156,21 @@ pub fn merge(info: &WorktreeInfo) -> Result<String, String> {
     let repo = Path::new(&info.repo);
 
     if !git(path, &["status", "--porcelain"])?.is_empty() {
-        return Err("The worktree has uncommitted changes. Ask the agent to commit them first.".into());
+        return Err(
+            "The worktree has uncommitted changes. Ask the agent to commit them first.".into(),
+        );
     }
     let current = git(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
     if current != info.base {
-        return Err(format!("The main checkout is on “{current}”, not “{}”. Switch it back first.", info.base));
+        return Err(format!(
+            "The main checkout is on “{current}”, not “{}”. Switch it back first.",
+            info.base
+        ));
     }
     if !git(repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
-        return Err("The main checkout has uncommitted changes. Commit or stash them first.".into());
+        return Err(
+            "The main checkout has uncommitted changes. Commit or stash them first.".into(),
+        );
     }
 
     match git(repo, &["merge", "--no-ff", "--no-edit", &info.branch]) {
@@ -142,11 +192,19 @@ pub fn remove(info: &WorktreeInfo, delete_branch: bool) -> Result<(), String> {
 }
 
 fn worktrees_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("worktrees"))
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("worktrees"))
 }
 
 #[tauri::command]
-pub async fn worktree_create(app: AppHandle, dir: String, provider: String) -> Result<Option<WorktreeInfo>, String> {
+pub async fn worktree_create(
+    app: AppHandle,
+    dir: String,
+    provider: String,
+) -> Result<Option<WorktreeInfo>, String> {
     create(&worktrees_dir(&app)?, &resolve_cwd(Some(&dir)), &provider)
 }
 
@@ -170,12 +228,19 @@ mod tests {
     use super::*;
 
     fn sh(dir: &Path, script: &str) {
-        let ok = Command::new("sh").arg("-c").arg(script).current_dir(dir).status().unwrap().success();
+        let ok = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success();
         assert!(ok, "failed: {script}");
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("winfer-test-{name}-{:x}", rand::random::<u32>()));
+        let dir =
+            std::env::temp_dir().join(format!("winfer-test-{name}-{:x}", rand::random::<u32>()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -192,7 +257,10 @@ mod tests {
 
     #[test]
     fn non_repo_returns_none() {
-        assert_eq!(create(&temp_dir("wt"), &temp_dir("plain"), "claude").unwrap(), None);
+        assert_eq!(
+            create(&temp_dir("wt"), &temp_dir("plain"), "claude").unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -202,7 +270,10 @@ mod tests {
 
         let a = create(&wts, &repo, "claude").unwrap().unwrap();
         let b = create(&wts, &repo, "claude").unwrap().unwrap();
-        assert_eq!((a.branch.as_str(), b.branch.as_str()), ("winfer/claude-1", "winfer/claude-2"));
+        assert_eq!(
+            (a.branch.as_str(), b.branch.as_str()),
+            ("winfer/claude-1", "winfer/claude-2")
+        );
         assert_eq!(a.base, "main");
 
         // Uncommitted + untracked changes show up and block merging.
@@ -215,7 +286,10 @@ mod tests {
         assert!(merge(&a).unwrap_err().contains("uncommitted"));
 
         // Once committed, it merges into main.
-        sh(&path, "git add . && git -c user.email=t@t -c user.name=t commit -qm work");
+        sh(
+            &path,
+            "git add . && git -c user.email=t@t -c user.name=t commit -qm work",
+        );
         assert_eq!(diff(&a).unwrap().ahead, 1);
         merge(&a).unwrap();
         sh(&repo, "grep -q two a.txt && test -f b.txt");
@@ -230,11 +304,17 @@ mod tests {
     fn merge_conflict_is_aborted() {
         let repo = repo();
         let a = create(&temp_dir("wt"), &repo, "codex").unwrap().unwrap();
-        sh(Path::new(&a.path), "echo theirs > a.txt && git -c user.email=t@t -c user.name=t commit -qam theirs");
+        sh(
+            Path::new(&a.path),
+            "echo theirs > a.txt && git -c user.email=t@t -c user.name=t commit -qam theirs",
+        );
         sh(&repo, "echo ours > a.txt && git commit -qam ours");
 
         assert!(merge(&a).unwrap_err().contains("aborted"));
         // Main checkout is left clean, not mid-merge.
-        sh(&repo, "test -z \"$(git status --porcelain)\" && grep -q ours a.txt");
+        sh(
+            &repo,
+            "test -z \"$(git status --porcelain)\" && grep -q ours a.txt",
+        );
     }
 }

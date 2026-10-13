@@ -222,6 +222,14 @@ export function detachTerminal(paneId: string) {
   entry.host.remove();
 }
 
+/** Writes text to a pane's process as if typed. */
+export function sendText(paneId: string, text: string) {
+  const entry = entries.get(paneId);
+  if (!entry?.spawned || entry.exited) return;
+  void invoke("pty_write", { paneId, data: text });
+  if (text.includes("\r")) reportInput(paneId);
+}
+
 /** Milliseconds since the pane last produced output. */
 export function outputAge(paneId: string): number {
   const entry = entries.get(paneId);

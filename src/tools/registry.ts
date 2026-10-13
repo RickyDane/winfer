@@ -15,6 +15,11 @@ export interface ToolContext {
   providers: Provider[];
   workspaces: Workspace[];
   active: Workspace;
+  focusedPaneId: string | null;
+  /** Titles or URLs of the active workspace's browser tabs. */
+  browserTabs: string[];
+  /** Commands from the last executed voice request ("do that again"). */
+  lastCommands: Command[];
 }
 
 type Options = (ctx: ToolContext) => Record<string, string | null>;
@@ -340,6 +345,15 @@ export const TOOLS: ToolDef[] = [
     palette: () => [{ title: "Toggle browser", args: {} }],
   },
   {
+    id: "open_settings",
+    title: "Settings",
+    description: "Open winfer's settings",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "ui.settings" }],
+    palette: () => [{ title: "Settings", args: {} }],
+  },
+  {
     id: "show_shortcuts",
     title: "Keyboard shortcuts",
     description: "Show the list of keyboard shortcuts",
@@ -347,6 +361,27 @@ export const TOOLS: ToolDef[] = [
     params: {},
     toCommands: () => [{ type: "ui.cheatSheet" }],
     palette: () => [{ title: "Keyboard shortcuts", args: {} }],
+  },
+  {
+    id: "send_to_pane",
+    title: "Tell an agent",
+    description: "Type a message or instruction into an agent's terminal, like telling Claude to run the tests",
+    risk: "safe",
+    params: {
+      target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets },
+      text: { kind: "span", ask: "What exactly should be typed to the agent?" },
+      submit: { kind: "bool", ask: "Should the message be sent right away (not just typed)?" },
+    },
+    toCommands: (args) =>
+      args.text ? [{ type: "pane.sendText", target: target(args), text: String(args.text), submit: args.submit !== false }] : [],
+  },
+  {
+    id: "repeat_last",
+    title: "Repeat",
+    description: "Do the previous voice command again",
+    risk: "safe",
+    params: {},
+    toCommands: (_args, ctx) => ctx.lastCommands,
   },
   {
     id: "none",

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -26,8 +26,13 @@ pub struct Cdp {
 }
 
 impl Cdp {
-    pub async fn connect(ws_url: &str, on_event: impl Fn(Event) + Send + Sync + 'static) -> Result<Arc<Self>, String> {
-        let (ws, _) = tokio_tungstenite::connect_async(ws_url).await.map_err(|e| format!("CDP connect failed: {e}"))?;
+    pub async fn connect(
+        ws_url: &str,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+    ) -> Result<Arc<Self>, String> {
+        let (ws, _) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .map_err(|e| format!("CDP connect failed: {e}"))?;
         let (mut sink, mut stream) = ws.split();
         let (out, mut rx) = mpsc::unbounded_channel::<Message>();
         let pending: Arc<Pending> = Arc::default();
@@ -44,10 +49,16 @@ impl Cdp {
         tauri::async_runtime::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
                 let Message::Text(text) = msg else { continue };
-                let Ok(value) = serde_json::from_str::<Value>(text.as_str()) else { continue };
+                let Ok(value) = serde_json::from_str::<Value>(text.as_str()) else {
+                    continue;
+                };
                 if let Some(id) = value.get("id").and_then(Value::as_u64) {
                     let result = match value.get("error") {
-                        Some(err) => Err(err.get("message").and_then(Value::as_str).unwrap_or("CDP error").to_string()),
+                        Some(err) => Err(err
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("CDP error")
+                            .to_string()),
                         None => Ok(value.get("result").cloned().unwrap_or(Value::Null)),
                     };
                     if let Some(tx) = reader_pending.lock().unwrap().remove(&id) {
@@ -57,7 +68,10 @@ impl Cdp {
                     on_event(Event {
                         method: method.to_string(),
                         params: value.get("params").cloned().unwrap_or(Value::Null),
-                        session_id: value.get("sessionId").and_then(Value::as_str).map(String::from),
+                        session_id: value
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .map(String::from),
                     });
                 }
             }
@@ -67,10 +81,19 @@ impl Cdp {
             }
         });
 
-        Ok(Arc::new(Self { out, pending, next_id: AtomicU64::new(1) }))
+        Ok(Arc::new(Self {
+            out,
+            pending,
+            next_id: AtomicU64::new(1),
+        }))
     }
 
-    pub async fn call(&self, method: &str, params: Value, session_id: Option<&str>) -> Result<Value, String> {
+    pub async fn call(
+        &self,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+    ) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut msg = json!({ "id": id, "method": method, "params": params });
         if let Some(session) = session_id {

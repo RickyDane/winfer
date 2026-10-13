@@ -36,10 +36,15 @@ const PLATFORM: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64")
     "linux64"
 };
 
-const SHELL_BIN: &str = if cfg!(windows) { "chrome-headless-shell.exe" } else { "chrome-headless-shell" };
+const SHELL_BIN: &str = if cfg!(windows) {
+    "chrome-headless-shell.exe"
+} else {
+    "chrome-headless-shell"
+};
 
 fn managed_exe(dir: &Path) -> PathBuf {
-    dir.join(format!("chrome-headless-shell-{PLATFORM}")).join(SHELL_BIN)
+    dir.join(format!("chrome-headless-shell-{PLATFORM}"))
+        .join(SHELL_BIN)
 }
 
 fn system_candidates() -> Vec<PathBuf> {
@@ -67,17 +72,29 @@ fn system_candidates() -> Vec<PathBuf> {
 }
 
 pub fn find(managed_dir: &Path) -> Option<Executable> {
-    if let Some(path) = std::env::var_os("WINFER_CHROME").map(PathBuf::from).filter(|p| p.exists()) {
-        return Some(Executable { path, source: "env" });
+    if let Some(path) = std::env::var_os("WINFER_CHROME")
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+    {
+        return Some(Executable {
+            path,
+            source: "env",
+        });
     }
     let managed = managed_exe(managed_dir);
     if managed.exists() {
-        return Some(Executable { path: managed, source: "managed" });
+        return Some(Executable {
+            path: managed,
+            source: "managed",
+        });
     }
     system_candidates()
         .into_iter()
         .find(|p| p.exists())
-        .map(|path| Executable { path, source: "system" })
+        .map(|path| Executable {
+            path,
+            source: "system",
+        })
 }
 
 fn run(cmd: &mut Command) -> Result<String, String> {
@@ -93,8 +110,9 @@ fn run(cmd: &mut Command) -> Result<String, String> {
 /// which ship with macOS and Windows 10+.
 pub fn install(managed_dir: &Path) -> Result<Executable, String> {
     const FEED: &str = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
-    let feed: serde_json::Value = serde_json::from_str(&run(Command::new("curl").args(["-fsSL", FEED]))?)
-        .map_err(|e| format!("bad Chrome for Testing feed: {e}"))?;
+    let feed: serde_json::Value =
+        serde_json::from_str(&run(Command::new("curl").args(["-fsSL", FEED]))?)
+            .map_err(|e| format!("bad Chrome for Testing feed: {e}"))?;
     let url = feed["channels"]["Stable"]["downloads"]["chrome-headless-shell"]
         .as_array()
         .and_then(|list| list.iter().find(|d| d["platform"] == PLATFORM))
@@ -104,16 +122,29 @@ pub fn install(managed_dir: &Path) -> Result<Executable, String> {
 
     std::fs::create_dir_all(managed_dir).map_err(|e| e.to_string())?;
     let zip = managed_dir.join("download.zip");
-    run(Command::new("curl").args(["-fsSL", "-o"]).arg(&zip).arg(&url))?;
-    let extracted = run(Command::new("tar").arg("-xf").arg(&zip).arg("-C").arg(managed_dir));
+    run(Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(&zip)
+        .arg(&url))?;
+    let extracted = run(Command::new("tar")
+        .arg("-xf")
+        .arg(&zip)
+        .arg("-C")
+        .arg(managed_dir));
     let _ = std::fs::remove_file(&zip);
     extracted?;
 
     let exe = managed_exe(managed_dir);
     if !exe.exists() {
-        return Err(format!("download finished but {} is missing", exe.display()));
+        return Err(format!(
+            "download finished but {} is missing",
+            exe.display()
+        ));
     }
-    Ok(Executable { path: exe, source: "managed" })
+    Ok(Executable {
+        path: exe,
+        source: "managed",
+    })
 }
 
 pub struct Launched {
@@ -129,13 +160,23 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
     cmd.arg("--remote-debugging-port=0")
         .arg("--remote-debugging-address=127.0.0.1")
         .arg(format!("--user-data-dir={}", profile_dir.display()))
-        .args(["--no-first-run", "--no-default-browser-check", "--disable-features=Translate,MediaRouter", "--mute-audio"]);
+        .args([
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-features=Translate,MediaRouter",
+            "--mute-audio",
+        ]);
     if !exe.is_headless_shell() {
         cmd.arg("--headless=new");
     }
-    cmd.arg("about:blank").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    cmd.arg("about:blank")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
     let stderr = child.stderr.take().expect("piped stderr");
 
     // Chrome prints "DevTools listening on ws://127.0.0.1:PORT/devtools/browser/<id>" on stderr.
@@ -166,7 +207,11 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
         .and_then(|rest| rest.split('/').next())
         .and_then(|p| p.parse().ok())
         .ok_or_else(|| format!("unexpected DevTools URL: {ws_url}"))?;
-    Ok(Launched { child, port, ws_url })
+    Ok(Launched {
+        child,
+        port,
+        ws_url,
+    })
 }
 
 #[cfg(test)]

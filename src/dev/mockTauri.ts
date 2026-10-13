@@ -38,6 +38,9 @@ type MockTab = { id: string; url: string; title: string; byAgent: boolean };
 const browserTabs = new Map<string, MockTab[]>();
 const screencasts = new Map<string, { tabId: string; channel: Channel<ArrayBuffer>; viewport: any }>();
 const inputs: unknown[] = [];
+
+// Fake voice: tests set what was "said" and what Clef "answers"; requests are kept for inspection.
+const voice = { said: "", mode: "command", answers: {} as Record<string, unknown>, requests: [] as unknown[] };
 let tabCounter = 0;
 
 async function renderFrame(workspaceId: string) {
@@ -162,6 +165,34 @@ mockIPC(
         return null;
       case "browser_selection":
         return "";
+      case "voice_status":
+        return {
+          models: [
+            { id: "base.en", file: "ggml-base.en.bin", size: 147964211, label: "Base (English, 148 MB) — fast", installed: true },
+            { id: "small.en", file: "ggml-small.en.bin", size: 487614201, label: "Small (English, 488 MB) — more accurate", installed: false },
+          ],
+          sttModel: "base.en",
+          clefModel: "clef-flash",
+          credentials: true,
+        };
+      case "voice_configure":
+      case "voice_set_credentials":
+      case "voice_clear_credentials":
+        return null;
+      case "voice_test_connection":
+        return 187;
+      case "voice_start":
+        voice.mode = a.mode;
+        void emit("voice://state", { state: "listening", mode: a.mode });
+        void emit("voice://level", 0.05);
+        return null;
+      case "voice_stop":
+        void emit("voice://state", { state: "transcribing", mode: voice.mode });
+        setTimeout(() => void emit("voice://transcript", { mode: voice.mode, text: voice.said, ms: 142 }), 150);
+        return null;
+      case "voice_decide":
+        voice.requests.push(a.body);
+        return new Promise((resolve) => setTimeout(() => resolve({ answers: voice.answers }), 200));
       case "plugin:dialog|open":
         return "/Users/demo/Projects/bridgemind-api";
       case "plugin:dialog|message": {
@@ -184,6 +215,7 @@ mockIPC(
 /** Lets automated checks simulate hook events: `__winferMock.status("p-…", "needs-input")`. */
 (window as any).__winferMock = {
   inputs,
+  voice,
   /** Simulates an agent opening a tab through CDP. */
   agentTab: (workspaceId: string, url: string) => {
     browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard", byAgent: true });

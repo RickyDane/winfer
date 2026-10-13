@@ -56,6 +56,9 @@ interface WorkspaceState {
   cheatSheetOpen: boolean;
   /** Pane whose worktree changes are shown in the diff view. */
   diffPaneId: string | null;
+  settingsOpen: boolean;
+  /** Voice model choices, persisted and pushed to the backend on launch. */
+  voiceConfig: { sttModel?: string; clefModel?: string };
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -72,6 +75,8 @@ interface WorkspaceState {
   closePalette: () => void;
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
+  setSettings: (open: boolean) => void;
+  setVoiceConfig: (config: { sttModel?: string; clefModel?: string }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -100,6 +105,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   paletteQuery: null,
   cheatSheetOpen: false,
   diffPaneId: null,
+  settingsOpen: false,
+  voiceConfig: {},
 
   hydrate: async () => {
     hydration ??= loadSnapshot();
@@ -132,6 +139,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       focusedPaneId: firstPane(active),
       sidebarOpen: ui.sidebarOpen ?? true,
       browserOpen: ui.browserOpen ?? true,
+      voiceConfig: ui.voice ?? {},
     });
   },
 
@@ -229,6 +237,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   closePalette: () => set({ paletteQuery: null }),
   setCheatSheet: (open) => set({ cheatSheetOpen: open, paletteQuery: null }),
   setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
+  setSettings: (open) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false }),
+  setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleBrowser: () => set((s) => ({ browserOpen: !s.browserOpen })),
@@ -247,7 +257,12 @@ type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
-  ui: { activeWorkspaceId?: string; sidebarOpen?: boolean; browserOpen?: boolean } | null;
+  ui: {
+    activeWorkspaceId?: string;
+    sidebarOpen?: boolean;
+    browserOpen?: boolean;
+    voice?: { sttModel?: string; clefModel?: string };
+  } | null;
 }
 
 async function loadSnapshot(): Promise<Snapshot> {
@@ -265,7 +280,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree }) => ({ id, provider, title, cwd, worktree })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig },
   };
 }
 

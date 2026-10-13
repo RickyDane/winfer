@@ -1,0 +1,54 @@
+{"utterance": "open 3 new instances with claude, codex and grok", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1, "grok": 1}}
+{"utterance": "open two claudes and a codex", "expect": ["spawn_panes"], "counts": {"claude": 2, "codex": 1}}
+{"utterance": "open cloud code", "expect": ["spawn_panes"], "counts": {"claude": 1}, "tags": ["asr"]}
+{"utterance": "give me two codecs", "expect": ["spawn_panes"], "counts": {"codex": 2}, "tags": ["asr"]}
+{"utterance": "spin up four grok agents", "expect": ["spawn_panes"], "counts": {"grok": 4}}
+{"utterance": "new shell please", "expect": ["spawn_panes"], "counts": {"shell": 1}}
+{"utterance": "open an agy pane", "expect": ["spawn_panes"], "counts": {"agy": 1}}
+{"utterance": "open a gravity agent", "expect": ["spawn_panes"], "counts": {"agy": 1}, "tags": ["asr"]}
+{"utterance": "start claude and codex in separate worktrees", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1}}
+{"utterance": "launch three clouds each on its own work tree", "expect": ["spawn_panes"], "counts": {"claude": 3}, "tags": ["asr"]}
+{"utterance": "close the codex one", "expect": ["close_pane"]}
+{"utterance": "close this pane", "expect": ["close_pane"]}
+{"utterance": "get rid of the shell", "expect": ["close_pane"]}
+{"utterance": "focus pane three", "expect": ["focus_pane"]}
+{"utterance": "go to the grok pane", "expect": ["focus_pane"]}
+{"utterance": "jump to claude", "expect": ["focus_pane"]}
+{"utterance": "make it bigger", "expect": ["resize_pane"]}
+{"utterance": "make the claude one a lot bigger", "expect": ["resize_pane"]}
+{"utterance": "shrink the shell a little", "expect": ["resize_pane"]}
+{"utterance": "zoom in on two", "expect": ["zoom_pane"]}
+{"utterance": "maximize grok", "expect": ["zoom_pane"]}
+{"utterance": "swap claude and codex", "expect": ["swap_panes"]}
+{"utterance": "make all the panes the same size", "expect": ["equalize_panes"]}
+{"utterance": "switch to a grid layout", "expect": ["set_layout"]}
+{"utterance": "tell claude to run the tests", "expect": ["send_to_pane"]}
+{"utterance": "ask codex to fix the lint errors", "expect": ["send_to_pane"]}
+{"utterance": "open localhost 3000", "expect": ["open_url"]}
+{"utterance": "go to github dot com", "expect": ["open_url"]}
+{"utterance": "new browser tab", "expect": ["browser_new_tab"]}
+{"utterance": "close the browser tab", "expect": ["browser_close_tab"]}
+{"utterance": "go back", "expect": ["browser_navigate"]}
+{"utterance": "go forward a page", "expect": ["browser_navigate"]}
+{"utterance": "reload the browser", "expect": ["browser_navigate"]}
+{"utterance": "use the airpods microphone", "expect": ["set_device"]}
+{"utterance": "switch to bridgemind api", "expect": ["switch_workspace"]}
+{"utterance": "go to the personal workspace", "expect": ["switch_workspace"]}
+{"utterance": "create a new workspace", "expect": ["create_workspace"]}
+{"utterance": "hide the sidebar", "expect": ["toggle_sidebar"]}
+{"utterance": "show the browser", "expect": ["toggle_browser"]}
+{"utterance": "what are the shortcuts", "expect": ["show_shortcuts"]}
+{"utterance": "do that again", "expect": ["repeat_last"]}
+{"utterance": "um yeah so anyway", "expect": ["none"], "tags": ["noise"]}
+{"utterance": "what's the weather like today", "expect": ["none"], "tags": ["noise"]}
+{"utterance": "thanks", "expect": ["none"], "tags": ["noise"]}
+{"utterance": "blah blah banana the fish", "expect": ["none"], "tags": ["noise"]}
+{"utterance": "close codex and open grok", "expect": ["close_pane"], "second": ["spawn_panes"], "counts": {"grok": 1}, "tags": ["multi"]}
+{"utterance": "reload the browser and focus pane one", "expect": ["browser_navigate"], "second": ["focus_pane"], "tags": ["multi"]}
+{"utterance": "open two codex panes and make them equal size", "expect": ["spawn_panes"], "second": ["equalize_panes"], "counts": {"codex": 2}, "tags": ["multi"]}
+{"utterance": "open a cloud and a codecs", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1}, "tags": ["asr"]}
+{"utterance": "kill the grok pane", "expect": ["close_pane"]}
+{"utterance": "refresh", "expect": ["browser_navigate"]}
+{"utterance": "open localhost 5173 in the browser", "expect": ["open_url"]}
+{"utterance": "hey what time is it", "expect": ["none"], "tags": ["noise"]}
+{"utterance": "open three codex panes in worktrees and switch to a grid", "expect": ["spawn_panes"], "second": ["set_layout"], "counts": {"codex": 3}, "tags": ["multi"]}

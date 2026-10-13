@@ -79,7 +79,7 @@ export function Sidebar() {
         <button className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Theme">
           <Moon size={14} />
         </button>
-        <button className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Settings">
+        <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Settings (⌘,)">
           <Settings size={14} />
         </button>
       </footer>

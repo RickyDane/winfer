@@ -34,6 +34,11 @@ tokio = { version = "1.53.2", features = ["sync", "time", "macros", "rt"] }
 tokio-tungstenite = "0.30.0"
 futures-util = "0.3.34"
 base64 = "0.23.1"
+cpal = "0.18.2"
+ureq = { version = "3.4.2", features = ["json"] }
+keyring = "4.2.0"
+sha2 = "0.11.1"
+hex = "0.4.3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -46,3 +51,12 @@ strip = true
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.16.0"

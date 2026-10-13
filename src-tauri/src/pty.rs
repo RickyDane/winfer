@@ -15,8 +15,8 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::env::{login_env, user_shell};
-use crate::{browser, hooks};
 use crate::providers;
+use crate::{browser, hooks};
 
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
@@ -175,7 +175,9 @@ pub fn pty_spawn(
 
     // Agents share the workspace browser (started on demand if one is installed).
     let cdp_url = match (&req.workspace_id, req.provider_id.as_str()) {
-        (Some(ws), provider) if provider != "shell" => app.state::<browser::BrowserManager>().cdp_url(&app, ws),
+        (Some(ws), provider) if provider != "shell" => {
+            app.state::<browser::BrowserManager>().cdp_url(&app, ws)
+        }
         _ => None,
     };
     let cmd = build_command(&req, cdp_url.as_deref())?;

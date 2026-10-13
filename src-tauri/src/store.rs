@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -76,7 +76,9 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     #[cfg(test)]
@@ -84,7 +86,9 @@ impl Store {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrate(&conn).unwrap();
-        Self { conn: Mutex::new(conn) }
+        Self {
+            conn: Mutex::new(conn),
+        }
     }
 
     pub fn load(&self) -> rusqlite::Result<Snapshot> {
@@ -128,7 +132,9 @@ impl Store {
         }
 
         let ui = conn
-            .query_row("SELECT value FROM kv WHERE key = 'ui'", [], |r| r.get::<_, String>(0))
+            .query_row("SELECT value FROM kv WHERE key = 'ui'", [], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or(Value::Null);
