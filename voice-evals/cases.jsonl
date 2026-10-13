@@ -69,3 +69,5 @@
 {"utterance": "Sag Claude, er soll die Tests ausführen", "expect": ["send_to_pane"], "text": "tests", "tags": ["de"]}
 {"utterance": "Öffne localhost 3000 im Browser", "expect": ["open_url"], "tags": ["de"]}
 {"utterance": "Wie spät ist es?", "expect": ["none"], "tags": ["de", "noise"]}
+{"utterance": "stop all current sessions", "expect": ["interrupt_all"]}
+{"utterance": "stop all agents", "expect": ["interrupt_all"]}

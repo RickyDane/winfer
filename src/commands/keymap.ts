@@ -55,6 +55,7 @@ export const BINDINGS: Binding[] = [
   { keys: "Mod+J", title: "Next agent needing attention", group: "Panes", command: { type: "pane.nextAttention" } },
   { keys: "Mod+Shift+I", win: "Ctrl+Shift+Alt+I", title: "Broadcast to all agents", group: "Panes", command: { type: "ui.overlay", overlay: "broadcast" } },
   { keys: "Mod+Shift+R", win: "Ctrl+Shift+Alt+R", title: "Race mode", group: "Panes", command: { type: "ui.overlay", overlay: "race" } },
+  { keys: "Mod+Shift+.", win: "Ctrl+Shift+Alt+.", title: "Stop all agents", group: "Panes", command: { type: "pane.interruptAll" } },
   { keys: "Mod+.", title: "Interrupt agent", group: "Panes", command: { type: "pane.interrupt", target: "focused" } },
   { keys: "Mod+F", title: "Search scrollback", group: "Panes", command: { type: "pane.search" } },
   { keys: "Mod+Enter", title: "Zoom pane", group: "Layout", command: { type: "pane.zoom", target: "focused" } },

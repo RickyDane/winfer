@@ -24,7 +24,17 @@ pub fn run() {
         env::login_env();
     });
 
-    let builder = tauri::Builder::default();
+    let builder =
+        tauri::Builder::default()
+        // One winfer at a time: a second launch focuses the running window instead. Two copies
+        // would share the database and kill each other's browsers as "orphans".
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }));
     #[cfg(target_os = "macos")]
     let builder = builder.menu(menu::build);
 

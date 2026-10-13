@@ -127,8 +127,12 @@ fn agent_args(
     }
     if resume {
         args.extend(provider.resume_args.iter().cloned());
-    } else if let Some(prompt) = prompt.filter(|_| provider.prompt_arg) {
-        args.push(prompt.to_string());
+    } else if let Some(prompt) = prompt {
+        if let Some(flag) = &provider.prompt_flag {
+            args.extend([flag.clone(), prompt.to_string()]);
+        } else if provider.prompt_arg {
+            args.push(prompt.to_string());
+        }
     }
     args
 }
@@ -273,7 +277,7 @@ pub fn pty_spawn(
 
     // CLIs without a prompt argument get the prompt typed in once they've had time to start.
     let typed_prompt = req.prompt.clone().filter(|_| {
-        !req.resume && !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg)
+        !req.resume && !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg || p.prompt_flag.is_some())
     });
     if let Some(prompt) = typed_prompt {
         let pane_id = req.pane_id.clone();
@@ -412,6 +416,9 @@ mod tests {
         );
         let resumed = agent_args(claude, vec![], vec![], Some("opus"), true, Some("ignored"));
         assert_eq!(resumed, ["--model", "opus", "--continue"]);
+        // OpenCode has no launch-time model flag and takes the prompt as an option.
+        let opencode = providers::find("opencode").unwrap();
+        assert_eq!(agent_args(opencode, vec![], vec![], Some("opencode/big-pickle"), false, Some("fix it")), ["--prompt", "fix it"]);
         let codex = providers::find("codex").unwrap();
         assert_eq!(
             agent_args(

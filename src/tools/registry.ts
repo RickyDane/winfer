@@ -470,6 +470,15 @@ export const TOOLS: ToolDef[] = [
     palette: () => [{ title: "Interrupt agent", args: { target: "focused" } }],
   },
   {
+    id: "interrupt_all",
+    title: "Stop all agents",
+    description: "Stop or interrupt all agents and sessions at once, keeping their panes open",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "pane.interruptAll" }],
+    palette: () => [{ title: "Stop all agents", args: {} }],
+  },
+  {
     id: "approve_agent",
     title: "Approve agent",
     description: "Approve or allow the permission an agent is asking for",

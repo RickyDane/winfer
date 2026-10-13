@@ -24,6 +24,9 @@ pub struct Provider {
     /// Accepts an initial prompt as its last argument (otherwise it's typed in after start).
     #[serde(default)]
     pub prompt_arg: bool,
+    /// Option that takes the initial prompt, e.g. `--prompt` (OpenCode).
+    #[serde(default)]
+    pub prompt_flag: Option<String>,
     /// Keys that accept a pending permission prompt (default: Enter).
     #[serde(default)]
     pub approve_input: Option<String>,

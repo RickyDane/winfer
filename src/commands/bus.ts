@@ -42,6 +42,8 @@ export type Command =
   | { type: "pane.move"; paneId: string; targetId: string; side: DropSide }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  /** Stops every running agent in the active workspace; panes stay open. */
+  | { type: "pane.interruptAll" }
   /** Closes every pane in the active workspace. */
   | { type: "pane.closeAll" }
   /** Stops what an agent is doing (Esc; Ctrl-C for shells). */
@@ -160,6 +162,12 @@ export function execute(cmd: Command): void {
         restartTerminal(paneById(pane.id)!);
       }
       logActivity(pane.workspaceId, `Model: ${name}`, pane.provider);
+      return;
+    }
+    case "pane.interruptAll": {
+      const ws = active();
+      for (const pane of ws.panes) sendText(pane.id, pane.provider === "shell" ? "\x03" : "\x1b");
+      logActivity(ws.id, `Stopped all ${ws.panes.length} sessions`);
       return;
     }
     case "pane.closeAll": {

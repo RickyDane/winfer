@@ -70,7 +70,11 @@
     "modelArg": "--model",
     "modelsCommand": [
       "models"
-    ]
+    ],
+    "resumeArgs": [
+      "--continue"
+    ],
+    "promptFlag": "--prompt-interactive"
   },
   {
     "id": "grok",
@@ -94,10 +98,10 @@
       "opencode",
       "open code"
     ],
-    "modelArg": "--model",
-    "modelsCommand": [
-      "models"
-    ]
+    "resumeArgs": [
+      "--continue"
+    ],
+    "promptFlag": "--prompt"
   },
   {
     "id": "cursor",
@@ -111,7 +115,11 @@
     "modelArg": "--model",
     "modelsCommand": [
       "models"
-    ]
+    ],
+    "resumeArgs": [
+      "--continue"
+    ],
+    "promptArg": true
   },
   {
     "id": "shell",
