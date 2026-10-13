@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -57,6 +57,9 @@ pub struct SpawnRequest {
     provider_id: String,
     cwd: Option<String>,
     workspace_id: Option<String>,
+    /// Append the provider's resume arguments (used when restoring panes after a restart).
+    #[serde(default)]
+    resume: bool,
     cols: u16,
     rows: u16,
 }
@@ -94,11 +97,7 @@ fn resolve_cwd(cwd: Option<&str>) -> PathBuf {
         Some(p) => PathBuf::from(p),
         None => home.clone(),
     };
-    if path.is_dir() {
-        path
-    } else {
-        home
-    }
+    if path.is_dir() { path } else { home }
 }
 
 fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
@@ -109,6 +108,9 @@ fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
         Some(command) => {
             let mut cmd = CommandBuilder::new(command);
             cmd.args(&provider.args);
+            if req.resume {
+                cmd.args(&provider.resume_args);
+            }
             cmd
         }
         None => {
@@ -220,7 +222,11 @@ pub fn pty_spawn(
 }
 
 #[tauri::command]
-pub fn pty_write(state: State<'_, PtyManager>, pane_id: String, data: String) -> Result<(), String> {
+pub fn pty_write(
+    state: State<'_, PtyManager>,
+    pane_id: String,
+    data: String,
+) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap();
     let session = sessions.get_mut(&pane_id).ok_or("no such pane")?;
     session
@@ -271,11 +277,15 @@ mod tests {
             provider_id: "shell".into(),
             cwd: Some("~".into()),
             workspace_id: Some("ws-test".into()),
+            resume: false,
             cols: 80,
             rows: 24,
         };
         let mut cmd = build_command(&req).unwrap();
-        cmd.args(["-c", "echo \"[$WINFER_PANE_ID $WINFER_WORKSPACE $TERM $PWD]\""]);
+        cmd.args([
+            "-c",
+            "echo \"[$WINFER_PANE_ID $WINFER_WORKSPACE $TERM $PWD]\"",
+        ]);
 
         let pair = native_pty_system().openpty(size(80, 24)).unwrap();
         let _child = pair.slave.spawn_command(cmd).unwrap();
@@ -316,6 +326,7 @@ mod tests {
             provider_id: "nope".into(),
             cwd: None,
             workspace_id: None,
+            resume: false,
             cols: 80,
             rows: 24,
         };

@@ -14,6 +14,7 @@ import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
 function TitleBar() {
   const { toggleSidebar, toggleBrowser } = useWorkspaces();
   const workspace = useActiveWorkspace();
+  if (!workspace) return null;
   return (
     // pl-20 leaves room for the macOS traffic lights (titleBarStyle: Overlay).
     <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pr-3 pl-20 text-fg-subtle">
@@ -45,13 +46,15 @@ function EmptyWorkspace() {
 }
 
 export function AppShell() {
-  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive } = useWorkspaces();
+  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate } = useWorkspaces();
   useKeymap();
 
   useEffect(() => {
     void loadProviders();
-  }, [loadProviders]);
+    void hydrate();
+  }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
+  if (!workspace) return <div className="h-full" data-tauri-drag-region />;
   const panes = new Map(workspace.panes.map((p) => [p.id, p]));
   const order = workspace.layout ? leaves(workspace.layout) : [];
   const zoomed = workspace.zoomedPaneId;

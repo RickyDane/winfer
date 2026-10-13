@@ -3,6 +3,9 @@ mod env;
 mod menu;
 mod providers;
 mod pty;
+mod store;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,13 +20,23 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(pty::PtyManager::default())
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_dir)?;
+            app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             providers::providers_list,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            store::state_load,
+            store::state_save,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

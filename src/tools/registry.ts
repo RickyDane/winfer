@@ -204,6 +204,15 @@ export const TOOLS: ToolDef[] = [
     palette: (ctx) => ctx.workspaces.map((w) => ({ title: `Workspace: ${w.name}`, args: { workspace: w.id } })),
   },
   {
+    id: "create_workspace",
+    title: "New workspace",
+    description: "Create a new workspace for a project folder",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "workspace.create" }],
+    palette: () => [{ title: "New workspace…", args: {} }],
+  },
+  {
     id: "toggle_sidebar",
     title: "Toggle sidebar",
     description: "Show or hide the workspace sidebar",

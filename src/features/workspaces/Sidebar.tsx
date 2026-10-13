@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Moon, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { execute } from "@/commands/bus";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 
@@ -10,7 +11,11 @@ export function Sidebar() {
     <aside className="flex h-full w-60 shrink-0 flex-col rounded-[var(--radius-pane)] border border-border bg-panel">
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <span className="text-xs font-medium tracking-wide text-fg-subtle">Workspaces</span>
-        <button className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="New workspace">
+        <button
+          onClick={() => execute({ type: "workspace.create" })}
+          className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
+          title="New workspace"
+        >
           <Plus size={14} />
         </button>
       </div>
@@ -18,17 +23,24 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2">
         {workspaces.map((ws) => {
           const active = ws.id === activeWorkspaceId;
-          const count = ws.panes.length || ws.unread;
+          const count = ws.panes.length;
+          const attention = ws.panes.some((p) => p.unseen);
           return (
             <div key={ws.id} className="mb-0.5">
               <button
                 onClick={() => setActiveWorkspace(ws.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  execute({ type: "workspace.remove", id: ws.id });
+                }}
+                title={`${ws.rootDir} — right-click to remove`}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
                   active ? "bg-active font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
                 )}
               >
                 <span className="flex-1 truncate">{ws.name}</span>
+                {attention && <span className="size-1.5 rounded-full bg-warning" title="An agent needs attention" />}
                 {count > 0 && (
                   <span className="rounded bg-hover px-1.5 text-[11px] font-normal text-fg-muted">{count}</span>
                 )}
@@ -46,7 +58,12 @@ export function Sidebar() {
                     )}
                   >
                     <StatusDot status={pane.status} />
-                    <span className="truncate">{providerName(providers, pane.provider)}</span>
+                    <span className={cn("truncate", pane.unseen && "font-semibold text-fg")}>
+                      {providerName(providers, pane.provider)}
+                    </span>
+                    {pane.worktree && (
+                      <span className="ml-auto truncate font-mono text-[10px] text-fg-subtle">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
+                    )}
                   </button>
                 ))}
             </div>

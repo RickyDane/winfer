@@ -15,6 +15,7 @@ import {
   type SplitDir,
 } from "@/features/layout/tree";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { useWorkspaces, type Workspace } from "@/stores/workspaces";
 
 export type Direction = "left" | "right" | "up" | "down";
@@ -34,6 +35,9 @@ export type Command =
   | { type: "layout.equalize" }
   | { type: "layout.preset"; name: Preset | "next" }
   | { type: "workspace.switch"; target: { id: string } | { index: number } }
+  /** Without a rootDir, asks for a folder. */
+  | { type: "workspace.create"; rootDir?: string; name?: string }
+  | { type: "workspace.remove"; id: string }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   | { type: "ui.palette"; query?: string }
@@ -160,6 +164,12 @@ export function execute(cmd: Command): void {
       if (ws) s.setActiveWorkspace(ws.id);
       return;
     }
+    case "workspace.create":
+      void createWorkspace(cmd.rootDir, cmd.name);
+      return;
+    case "workspace.remove":
+      void removeWorkspace(cmd.id);
+      return;
     case "ui.toggleSidebar":
       return s.toggleSidebar();
     case "ui.toggleBrowser":
@@ -176,4 +186,27 @@ function forceSplitDir(node: LayoutNode, paneId: string, dir: SplitDir): LayoutN
   if (node.kind === "leaf") return node;
   if (node.children.some((c) => c.kind === "leaf" && c.paneId === paneId)) return { ...node, dir };
   return { ...node, children: node.children.map((c) => forceSplitDir(c, paneId, dir)) };
+}
+
+async function createWorkspace(rootDir?: string, name?: string) {
+  const dir = rootDir ?? (await open({ directory: true, title: "Choose a folder for the new workspace" }));
+  if (typeof dir !== "string") return;
+  const base = dir.split(/[\\/]/).filter(Boolean).at(-1) ?? dir;
+  store().createWorkspace(name ?? base, dir);
+}
+
+async function removeWorkspace(id: string) {
+  const ws = store().workspaces.find((w) => w.id === id);
+  if (!ws) return;
+  if (ws.panes.length > 0) {
+    const agents = ws.panes.length === 1 ? "1 pane" : `${ws.panes.length} panes`;
+    const ok = await ask(`Remove workspace “${ws.name}”? Its ${agents} will be closed. Files and worktrees stay on disk.`, {
+      title: "Remove workspace",
+      kind: "warning",
+      okLabel: "Remove",
+    });
+    if (!ok) return;
+  }
+  ws.panes.forEach((p) => closeTerminal(p.id));
+  store().removeWorkspace(id);
 }

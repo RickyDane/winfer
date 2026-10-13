@@ -111,6 +111,7 @@ async function spawn(entry: Entry) {
         providerId: entry.pane.provider,
         cwd: entry.pane.cwd,
         workspaceId: entry.pane.workspaceId,
+        resume: entry.pane.resume,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },
