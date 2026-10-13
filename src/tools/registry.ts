@@ -50,6 +50,9 @@ export interface ToolDef {
   palette?(ctx: ToolContext): PaletteEntry[];
 }
 
+const installedAgents: Options = (ctx) =>
+  Object.fromEntries(ctx.providers.filter((p) => p.installed && p.id !== "shell").map((p) => [p.id, p.name]));
+
 const installedProviders: Options = (ctx) =>
   Object.fromEntries(ctx.providers.filter((p) => p.installed).map((p) => [p.id, p.name]));
 
@@ -374,6 +377,50 @@ export const TOOLS: ToolDef[] = [
     },
     toCommands: (args) =>
       args.text ? [{ type: "pane.sendText", target: target(args), text: String(args.text), submit: args.submit !== false }] : [],
+  },
+  {
+    id: "interrupt_agent",
+    title: "Interrupt agent",
+    description: "Stop or interrupt what an agent is currently doing",
+    risk: "safe",
+    params: { target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets } },
+    toCommands: (args) => [{ type: "pane.interrupt", target: target(args) }],
+    palette: () => [{ title: "Interrupt agent", args: { target: "focused" } }],
+  },
+  {
+    id: "approve_agent",
+    title: "Approve agent",
+    description: "Approve or allow the permission an agent is asking for",
+    risk: "confirm",
+    params: { target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets } },
+    toCommands: (args) => [{ type: "pane.approve", target: target(args) }],
+    palette: () => [{ title: "Approve agent's request", args: { target: "focused" } }],
+  },
+  {
+    id: "broadcast",
+    title: "Tell all agents",
+    description: "Send the same message or instruction to every agent in the workspace",
+    risk: "safe",
+    params: { text: { kind: "span", ask: "What exactly should be sent to all agents?" } },
+    toCommands: (args) => (args.text ? [{ type: "pane.broadcast", text: String(args.text) }] : [{ type: "ui.overlay", overlay: "broadcast" }]),
+    palette: () => [{ title: "Broadcast to all agents…", args: {} }],
+  },
+  {
+    id: "race_agents",
+    title: "Race agents",
+    description: "Give the same task to several agents in parallel and compare their results",
+    risk: "safe",
+    params: {
+      counts: { kind: "perOption", ask: "How many agents of this provider should race?", options: installedAgents, max: 3 },
+      prompt: { kind: "span", ask: "What task should the agents race on?" },
+    },
+    toCommands: (args) => {
+      const counts = (args.counts as Record<string, number>) ?? {};
+      return args.prompt && Object.values(counts).some((n) => n > 0)
+        ? [{ type: "race.start", counts, prompt: String(args.prompt) }]
+        : [{ type: "ui.overlay", overlay: "race" }];
+    },
+    palette: () => [{ title: "Race mode…", args: {} }],
   },
   {
     id: "repeat_last",

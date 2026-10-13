@@ -10,11 +10,11 @@ const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
 
 const providers = [
-  { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: true, installed: true },
-  { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], aliases: [], statusHooks: true, installed: true },
-  { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, installed: true },
-  { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, installed: false },
-  { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, installed: true },
+  { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, installed: true },
+  { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, installed: true },
+  { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, installed: true },
+  { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, installed: false },
+  { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, installed: true },
 ];
 
 const SAMPLE_DIFF = `diff --git a/src/common/guards/subscription.guard.ts b/src/common/guards/subscription.guard.ts
@@ -88,9 +88,9 @@ mockIPC(
         localStorage.setItem("winfer-mock-state", JSON.stringify(a.snapshot));
         return null;
       case "pty_spawn": {
-        const { paneId, providerId, cwd, resume } = a.req;
+        const { paneId, providerId, cwd, resume, prompt } = a.req;
         channels.set(paneId, a.onData);
-        send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}\x1b[0m\r\n$ `);
+        send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}${prompt ? ` · prompt: ${prompt}` : ""}\x1b[0m\r\n$ `);
         return { attached: false, pid: 1 };
       }
       case "pty_write": {

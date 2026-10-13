@@ -4,8 +4,9 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { PaneMenu } from "./PaneMenu";
+import { PaneSearch } from "./PaneSearch";
 import { TerminalHost } from "./TerminalHost";
-import type { Pane } from "@/stores/workspaces";
+import { useWorkspaces, type Pane } from "@/stores/workspaces";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -29,13 +30,14 @@ interface Props {
 
 export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
   const target = { id: pane.id };
+  const searching = useWorkspaces((s) => s.searchPaneId === pane.id);
 
   return (
     <section
       data-pane-id={pane.id}
       onMouseDown={onFocus}
       className={cn(
-        "flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel",
+        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel",
         focused ? "border-accent/70" : "border-border",
       )}
     >
@@ -84,6 +86,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
         </HeaderButton>
       </header>
 
+      {searching && <PaneSearch paneId={pane.id} />}
       <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
         <TerminalHost pane={pane} focused={focused} />
       </div>

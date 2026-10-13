@@ -12,6 +12,10 @@ export interface Provider {
   aliases: string[];
   /** Reports status through hooks; otherwise status is inferred from output. */
   statusHooks: boolean;
+  /** Accepts an initial prompt as an argument (otherwise it's typed in after start). */
+  promptArg: boolean;
+  /** Keys that accept a pending permission prompt (default Enter). */
+  approveInput: string | null;
   installed: boolean;
 }
 

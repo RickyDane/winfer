@@ -29,6 +29,10 @@ export interface Pane {
   unseen: boolean;
   /** Latest local dev-server URL printed in this pane (e.g. http://localhost:5173/). */
   devUrl: string | null;
+  /** Panes started together by race mode share an id. */
+  raceId: string | null;
+  /** Initial prompt given when the agent was started (not persisted). */
+  prompt: string | null;
 }
 
 export interface Workspace {
@@ -57,6 +61,10 @@ interface WorkspaceState {
   /** Pane whose worktree changes are shown in the diff view. */
   diffPaneId: string | null;
   settingsOpen: boolean;
+  /** Open overlay for agent orchestration: race mode or broadcast. */
+  overlay: "race" | "broadcast" | null;
+  /** Pane whose scrollback search bar is open (⌘F). */
+  searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
   voiceConfig: { sttModel?: string; clefModel?: string };
   hydrate: () => Promise<void>;
@@ -65,7 +73,7 @@ interface WorkspaceState {
   createWorkspace: (name: string, rootDir: string) => string;
   removeWorkspace: (id: string) => void;
   focusPane: (id: string) => void;
-  addPane: (provider: ProviderId, opts?: { splitFrom?: string; worktree?: boolean }) => string;
+  addPane: (provider: ProviderId, opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string }) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
   setPaneStatus: (id: string, status: AgentStatus) => void;
@@ -76,6 +84,8 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
+  setOverlay: (overlay: "race" | "broadcast" | null) => void;
+  setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
@@ -106,6 +116,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   cheatSheetOpen: false,
   diffPaneId: null,
   settingsOpen: false,
+  overlay: null,
+  searchPaneId: null,
   voiceConfig: {},
 
   hydrate: async () => {
@@ -127,7 +139,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !resumed.has(key);
         resumed.add(key);
-        return { ...p, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null };
+        return { ...p, raceId: p.raceId ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -190,6 +202,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             resume: false,
             unseen: false,
             devUrl: null,
+            raceId: opts?.raceId ?? null,
+            prompt: opts?.prompt ?? null,
           },
         ],
         layout: insertDwindle(w.layout, id, opts?.splitFrom ?? focusedPaneId),
@@ -238,6 +252,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setCheatSheet: (open) => set({ cheatSheetOpen: open, paletteQuery: null }),
   setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
   setSettings: (open) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false }),
+  setOverlay: (overlay) => set({ overlay, paletteQuery: null, cheatSheetOpen: false }),
+  setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -253,7 +269,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree">;
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -278,7 +294,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree }) => ({ id, provider, title, cwd, worktree })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId }) => ({ id, provider, title, cwd, worktree, raceId })),
     })),
     ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig },
   };

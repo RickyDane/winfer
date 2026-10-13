@@ -5,12 +5,12 @@ import type { Workspace } from "@/stores/workspaces";
 import { buildRequest, orderByMention, parseDecision, transcriptSpans, verdict, type DecisionResult } from "./decision";
 
 const provider = (id: string, name: string, aliases: string[] = []): Provider => ({
-  id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, installed: true,
+  id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, promptArg: false, approveInput: null, installed: true,
 });
 
 const pane = (id: string, provider: string) => ({
   id, workspaceId: "ws", provider, title: "api", cwd: "~", status: "idle" as const, worktree: null,
-  wantsWorktree: false, resume: false, unseen: false, devUrl: null,
+  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null,
 });
 
 const workspace: Workspace = {

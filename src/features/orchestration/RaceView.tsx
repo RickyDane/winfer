@@ -1,0 +1,225 @@
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { Flag, GitBranch, Minus, Plus, RefreshCw, Trophy, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { execute } from "@/commands/bus";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { StatusDot } from "@/features/terminal/StatusDot";
+import { closeTerminal } from "@/features/terminal/xtermRegistry";
+import { mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
+import { providerName, useActiveWorkspace, useWorkspaces, type Pane } from "@/stores/workspaces";
+
+interface Stats {
+  files: number;
+  adds: number;
+  dels: number;
+  untracked: number;
+  ahead: number;
+  dirty: boolean;
+}
+
+function diffStats(diff: string): Pick<Stats, "files" | "adds" | "dels"> {
+  let files = 0, adds = 0, dels = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) files++;
+    else if (line.startsWith("+") && !line.startsWith("+++")) adds++;
+    else if (line.startsWith("-") && !line.startsWith("---")) dels++;
+  }
+  return { files, adds, dels };
+}
+
+function StartForm({ onStarted }: { onStarted: () => void }) {
+  const providers = useWorkspaces((s) => s.providers).filter((p) => p.installed && p.id !== "shell");
+  const [prompt, setPrompt] = useState("");
+  const [counts, setCounts] = useState<Record<string, number>>(() => Object.fromEntries(providers.slice(0, 2).map((p) => [p.id, 1])));
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  const bump = (id: string, d: number) => setCounts((c) => ({ ...c, [id]: Math.min(3, Math.max(0, (c[id] ?? 0) + d)) }));
+
+  return (
+    <section className="space-y-3">
+      <textarea
+        autoFocus
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={3}
+        placeholder="Task for every agent, e.g. “Make the cancelled-tier guard return 403 and add a regression test”"
+        className="w-full resize-none rounded-md border border-border bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:border-accent"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        {providers.map((p) => (
+          <div key={p.id} className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-fg">
+            <ProviderIcon provider={p.id} size={12} />
+            <span>{p.name}</span>
+            <button onClick={() => bump(p.id, -1)} className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
+              <Minus size={11} />
+            </button>
+            <span className="w-3 text-center font-mono">{counts[p.id] ?? 0}</span>
+            <button onClick={() => bump(p.id, 1)} className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
+              <Plus size={11} />
+            </button>
+          </div>
+        ))}
+        <button
+          disabled={!prompt.trim() || total < 2}
+          onClick={() => {
+            execute({ type: "race.start", counts, prompt: prompt.trim() });
+            onStarted();
+          }}
+          className="ml-auto flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
+          title={total < 2 ? "Pick at least two agents" : undefined}
+        >
+          <Flag size={12} /> Start race ({total})
+        </button>
+      </div>
+      <p className="text-[11px] text-fg-subtle">Each agent gets its own git worktree and branch, so they can't overwrite each other.</p>
+    </section>
+  );
+}
+
+function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
+  const providers = useWorkspaces((s) => s.providers);
+  const [stats, setStats] = useState<Record<string, Stats | string>>({});
+
+  const load = useCallback(() => {
+    for (const pane of panes) {
+      if (!pane.worktree) continue;
+      worktreeDiff(pane.worktree).then(
+        (d) => setStats((s) => ({ ...s, [pane.id]: { ...diffStats(d.diff), untracked: d.untracked.length, ahead: d.ahead, dirty: d.dirty } })),
+        (e) => setStats((s) => ({ ...s, [pane.id]: String(e) })),
+      );
+    }
+  }, [panes]);
+
+  // Worktrees are created as each agent starts, so reload when their paths appear.
+  const worktrees = panes.map((p) => p.worktree?.path ?? "").join("|");
+  useEffect(load, [raceId, worktrees]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickWinner = async (winner: Pane) => {
+    const losers = panes.filter((p) => p.id !== winner.id);
+    if (!winner.worktree) return;
+    const ok = await ask(
+      `Merge ${winner.worktree.branch} into ${winner.worktree.base}, then close the other ${losers.length} agent${losers.length === 1 ? "" : "s"} and delete their worktrees?`,
+      { title: "Pick winner", kind: "warning", okLabel: "Merge and clean up" },
+    );
+    if (!ok) return;
+    try {
+      await mergeWorktree(winner.worktree);
+    } catch (err) {
+      await message(String(err), { title: "Merge not possible", kind: "error" });
+      return;
+    }
+    const s = useWorkspaces.getState();
+    for (const loser of losers) {
+      closeTerminal(loser.id);
+      s.removePane(loser.id);
+      if (loser.worktree) await removeWorktree(loser.worktree, true).catch(() => {});
+    }
+    s.updatePane(winner.id, { raceId: null });
+  };
+
+  const isolated = panes.every((p) => p.worktree);
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2 text-xs text-fg-muted">
+        <Flag size={12} className="text-accent" />
+        <span className="flex-1 truncate">{panes[0]?.prompt ?? "Race"}</span>
+        <button onClick={load} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Refresh changes">
+          <RefreshCw size={12} />
+        </button>
+      </div>
+      {!isolated && <p className="text-[11px] text-warning">Some agents aren't in their own worktree (the folder isn't a git repo), so they share files.</p>}
+      <div className="divide-y divide-border rounded-lg border border-border">
+        {panes.map((pane) => {
+          const st = stats[pane.id];
+          return (
+            <div key={pane.id} className="flex items-center gap-3 px-3 py-2 text-xs">
+              <StatusDot status={pane.status} />
+              <ProviderIcon provider={pane.provider} size={13} />
+              <span className="w-28 truncate text-fg">{providerName(providers, pane.provider)}</span>
+              <span className="flex w-32 items-center gap-1 truncate font-mono text-[11px] text-fg-subtle">
+                <GitBranch size={11} /> {pane.worktree?.branch.replace(/^winfer\//, "") ?? "—"}
+              </span>
+              <span className="flex-1 font-mono text-[11px]">
+                {typeof st === "string" ? (
+                  <span className="text-danger">{st}</span>
+                ) : st ? (
+                  <>
+                    <span className="text-fg-muted">{st.files + st.untracked} files </span>
+                    <span className="text-success">+{st.adds} </span>
+                    <span className="text-danger">−{st.dels}</span>
+                    <span className="text-fg-subtle">
+                      {" "}· {st.ahead} commit{st.ahead === 1 ? "" : "s"}
+                      {st.dirty && " · uncommitted"}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-fg-subtle">…</span>
+                )}
+              </span>
+              <button onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })} className="rounded px-1.5 py-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
+                Focus
+              </button>
+              <button
+                disabled={!pane.worktree}
+                onClick={() => execute({ type: "pane.showChanges", target: { id: pane.id } })}
+                className="rounded px-1.5 py-0.5 text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40"
+              >
+                Diff
+              </button>
+              <button
+                disabled={!pane.worktree}
+                onClick={() => void pickWinner(pane)}
+                className="flex items-center gap-1 rounded-md bg-accent-soft px-2 py-0.5 text-accent hover:bg-accent hover:text-white disabled:opacity-40"
+              >
+                <Trophy size={11} /> Pick
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** ⌘⇧R: start a race and compare the competing agents' changes. */
+export function RaceView() {
+  const { overlay, setOverlay } = useWorkspaces();
+  const workspace = useActiveWorkspace();
+  const [showForm, setShowForm] = useState(false);
+
+  useEffect(() => {
+    if (overlay !== "race") return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overlay, setOverlay]);
+
+  if (overlay !== "race" || !workspace) return null;
+  const races = new Map<string, Pane[]>();
+  for (const pane of workspace.panes) {
+    if (pane.raceId) races.set(pane.raceId, [...(races.get(pane.raceId) ?? []), pane]);
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
+      <div className="h-fit max-h-[80vh] w-[760px] space-y-5 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="flex items-center gap-2">
+          <Flag size={14} className="text-accent" />
+          <h1 className="flex-1 text-sm font-semibold text-fg">Race mode</h1>
+          {races.size > 0 && !showForm && (
+            <button onClick={() => setShowForm(true)} className="rounded-md border border-border-strong px-2 py-1 text-xs text-fg hover:bg-hover">
+              New race
+            </button>
+          )}
+          <button onClick={() => setOverlay(null)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
+            <X size={14} />
+          </button>
+        </header>
+        {(races.size === 0 || showForm) && <StartForm onStarted={() => setShowForm(false)} />}
+        {[...races].map(([raceId, panes]) => (
+          <RaceBoard key={raceId} raceId={raceId} panes={panes} />
+        ))}
+      </div>
+    </div>
+  );
+}

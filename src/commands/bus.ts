@@ -26,7 +26,7 @@ export type Direction = "left" | "right" | "up" | "down";
 export type PaneRef = "focused" | { id: string } | { index: number };
 
 export type Command =
-  | { type: "pane.spawn"; provider: ProviderId | "default"; count?: number }
+  | { type: "pane.spawn"; provider: ProviderId | "default"; count?: number; prompt?: string; worktree?: boolean }
   | { type: "pane.split"; dir: SplitDir; provider?: ProviderId | "default" }
   | { type: "pane.close"; target: PaneRef }
   | { type: "pane.focus"; target: PaneRef }
@@ -34,6 +34,16 @@ export type Command =
   | { type: "pane.swapDir"; dir: Direction }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  /** Stops what an agent is doing (Esc; Ctrl-C for shells). */
+  | { type: "pane.interrupt"; target: PaneRef }
+  /** Accepts the agent's pending permission prompt. */
+  | { type: "pane.approve"; target: PaneRef }
+  /** Sends the same text to every agent pane in the workspace. */
+  | { type: "pane.broadcast"; text: string; submit?: boolean; paneIds?: string[] }
+  /** Race mode: start several agents on the same prompt, each in its own worktree. */
+  | { type: "race.start"; counts: Record<ProviderId, number>; prompt: string }
+  /** Toggles the scrollback search bar of the focused pane. */
+  | { type: "pane.search" }
   /** Types text into a pane's terminal (and presses Enter if `submit`). */
   | { type: "pane.sendText"; target: PaneRef; text: string; submit?: boolean }
   | { type: "pane.showChanges"; target: PaneRef }
@@ -58,7 +68,8 @@ export type Command =
   | { type: "ui.toggleBrowser" }
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
-  | { type: "ui.settings" };
+  | { type: "ui.settings" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" };
 
 const store = () => useWorkspaces.getState();
 const active = (): Workspace => {
@@ -71,6 +82,8 @@ function resolveProvider(provider: ProviderId | "default"): ProviderId {
   if (provider !== "default") return provider;
   return store().providers.find((p) => p.id === "claude" && p.installed) ? "claude" : "shell";
 }
+
+const paneById = (id: string | null) => (id ? active().panes.find((p) => p.id === id) : undefined);
 
 export function resolvePane(target: PaneRef): string | null {
   const ws = active();
@@ -114,7 +127,36 @@ export function execute(cmd: Command): void {
   switch (cmd.type) {
     case "pane.spawn": {
       const provider = resolveProvider(cmd.provider);
-      for (let i = 0; i < Math.max(1, cmd.count ?? 1); i++) s.addPane(provider);
+      for (let i = 0; i < Math.max(1, cmd.count ?? 1); i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree });
+      return;
+    }
+    case "pane.interrupt": {
+      const pane = paneById(resolvePane(cmd.target));
+      if (pane) sendText(pane.id, pane.provider === "shell" ? "\x03" : "\x1b");
+      return;
+    }
+    case "pane.approve": {
+      const pane = paneById(resolvePane(cmd.target));
+      if (pane) sendText(pane.id, s.providers.find((p) => p.id === pane.provider)?.approveInput ?? "\r");
+      return;
+    }
+    case "pane.broadcast": {
+      const targets = cmd.paneIds ?? active().panes.filter((p) => p.provider !== "shell").map((p) => p.id);
+      targets.forEach((id) => sendText(id, cmd.text + (cmd.submit === false ? "" : "\r")));
+      return;
+    }
+    case "race.start": {
+      const raceId = `race-${crypto.randomUUID().slice(0, 8)}`;
+      for (const [provider, count] of Object.entries(cmd.counts)) {
+        for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, worktree: true, raceId });
+      }
+      s.updateActive((w) => ({ layout: w.layout && buildPreset("grid", leaves(w.layout)) }));
+      s.setOverlay("race");
+      return;
+    }
+    case "pane.search": {
+      const id = resolvePane("focused");
+      s.setSearchPane(s.searchPaneId === id ? null : id);
       return;
     }
     case "pane.split": {
@@ -250,6 +292,8 @@ export function execute(cmd: Command): void {
       return s.setCheatSheet(!s.cheatSheetOpen);
     case "ui.settings":
       return s.setSettings(!s.settingsOpen);
+    case "ui.overlay":
+      return s.setOverlay(s.overlay === cmd.overlay ? null : cmd.overlay);
   }
 }
 

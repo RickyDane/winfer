@@ -21,6 +21,12 @@ pub struct Provider {
     /// Reports status through hooks (see hooks.rs) instead of output heuristics.
     #[serde(default)]
     pub status_hooks: bool,
+    /// Accepts an initial prompt as its last argument (otherwise it's typed in after start).
+    #[serde(default)]
+    pub prompt_arg: bool,
+    /// Keys that accept a pending permission prompt (default: Enter).
+    #[serde(default)]
+    pub approve_input: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

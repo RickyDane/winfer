@@ -14,7 +14,9 @@
       "cloud code",
       "claud"
     ],
-    "statusHooks": true
+    "statusHooks": true,
+    "promptArg": true,
+    "approveInput": "\r"
   },
   {
     "id": "codex",
@@ -30,7 +32,9 @@
       "codecs",
       "code x"
     ],
-    "statusHooks": true
+    "statusHooks": true,
+    "promptArg": true,
+    "approveInput": "y"
   },
   {
     "id": "agy",

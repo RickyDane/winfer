@@ -7,6 +7,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme } from "@xterm/xterm";
@@ -45,6 +46,8 @@ interface Entry {
   pane: Pane;
   term: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
+  searchResults: { index: number; count: number };
   host: HTMLDivElement;
   opened: boolean;
   spawned: boolean;
@@ -79,6 +82,12 @@ function create(pane: Pane): Entry {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const search = new SearchAddon();
+  term.loadAddon(search);
+  search.onDidChangeResults(({ resultIndex, resultCount }) => {
+    const entry = entries.get(pane.id);
+    if (entry) entry.searchResults = { index: resultIndex, count: resultCount };
+  });
   term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)));
 
   // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows) must reach the app, not the PTY.
@@ -116,7 +125,7 @@ function create(pane: Pane): Entry {
   host.style.width = "100%";
   host.style.height = "100%";
 
-  return { pane, term, fit, host, opened: false, spawned: false, exited: false, lastOutput: 0, decoder: new TextDecoder() };
+  return { pane, term, fit, search, searchResults: { index: -1, count: 0 }, host, opened: false, spawned: false, exited: false, lastOutput: 0, decoder: new TextDecoder() };
 }
 
 /** Gives an agent pane its own git worktree before it starts (if the folder is a repo). */
@@ -153,6 +162,7 @@ async function spawn(entry: Entry) {
         cwd: entry.pane.cwd,
         workspaceId: entry.pane.workspaceId,
         resume: entry.pane.resume,
+        prompt: entry.pane.prompt,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },
@@ -220,6 +230,28 @@ export function detachTerminal(paneId: string) {
   if (!entry) return;
   entry.observer?.disconnect();
   entry.host.remove();
+}
+
+const SEARCH_DECORATIONS = {
+  matchBackground: "#6d7cff55",
+  matchOverviewRuler: "#6d7cff",
+  activeMatchBackground: "#f5b544aa",
+  activeMatchColorOverviewRuler: "#f5b544",
+};
+
+/** Searches a pane's scrollback; returns the active match index and total count. */
+export function searchTerminal(paneId: string, query: string, direction: "next" | "previous" | "clear") {
+  const entry = entries.get(paneId);
+  if (!entry) return { index: -1, count: 0 };
+  if (direction === "clear" || !query) {
+    entry.search.clearDecorations();
+    entry.searchResults = { index: -1, count: 0 };
+    return entry.searchResults;
+  }
+  const options = { caseSensitive: false, decorations: SEARCH_DECORATIONS };
+  if (direction === "next") entry.search.findNext(query, options);
+  else entry.search.findPrevious(query, options);
+  return entry.searchResults;
 }
 
 /** Writes text to a pane's process as if typed. */

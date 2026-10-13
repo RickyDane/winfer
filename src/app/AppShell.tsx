@@ -8,6 +8,8 @@ import { CommandPalette } from "@/features/palette/CommandPalette";
 import { DiffView } from "@/features/worktree/DiffView";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { VoiceHUD } from "@/features/voice/VoiceHUD";
+import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
+import { RaceView } from "@/features/orchestration/RaceView";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -117,6 +119,8 @@ export function AppShell() {
       <CheatSheet />
       <DiffView />
       <SettingsModal />
+      <RaceView />
+      <BroadcastBar />
       <VoiceHUD />
     </div>
   );

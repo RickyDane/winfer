@@ -24,6 +24,9 @@ pub struct PaneRecord {
     pub cwd: String,
     /// `{ path, branch, base, repo }` when the pane runs in its own git worktree.
     pub worktree: Option<Value>,
+    /// Groups panes started together by race mode.
+    #[serde(default)]
+    pub race_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -68,6 +71,8 @@ const MIGRATIONS: &[&str] = &[r#"
         sort INTEGER NOT NULL
     );
     CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+"#, r#"
+    ALTER TABLE panes ADD COLUMN race_id TEXT;
 "#];
 
 impl Store {
@@ -115,7 +120,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut panes = conn.prepare(
-            "SELECT id, provider, title, cwd, worktree FROM panes WHERE workspace_id = ?1 ORDER BY sort",
+            "SELECT id, provider, title, cwd, worktree, race_id FROM panes WHERE workspace_id = ?1 ORDER BY sort",
         )?;
         for ws in &mut workspaces {
             ws.panes = panes
@@ -126,6 +131,7 @@ impl Store {
                         title: r.get(2)?,
                         cwd: r.get(3)?,
                         worktree: json(r.get(4)?),
+                        race_id: r.get(5)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -164,8 +170,8 @@ impl Store {
             )?;
             for (j, pane) in ws.panes.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         pane.id,
                         ws.id,
@@ -174,6 +180,7 @@ impl Store {
                         pane.cwd,
                         pane.worktree.as_ref().map(Value::to_string),
                         j as i64,
+                        pane.race_id,
                     ],
                 )?;
             }
@@ -221,7 +228,7 @@ mod tests {
                     "layout": { "kind": "leaf", "paneId": "p-1" },
                     "zoomedPaneId": null, "presetIndex": 2, "useWorktrees": true,
                     "panes": [{ "id": "p-1", "provider": "claude", "title": "api", "cwd": "/tmp/wt",
-                                "worktree": { "path": "/tmp/wt", "branch": "winfer/claude-1" } }]
+                                "worktree": { "path": "/tmp/wt", "branch": "winfer/claude-1" }, "raceId": "race-1" }]
                 },
                 { "id": "ws-2", "name": "home", "rootDir": "~", "layout": null, "zoomedPaneId": null,
                   "presetIndex": 0, "useWorktrees": false, "panes": [] }

@@ -61,6 +61,9 @@ pub struct SpawnRequest {
     /// Append the provider's resume arguments (used when restoring panes after a restart).
     #[serde(default)]
     resume: bool,
+    /// Initial prompt for a fresh agent (race mode, voice "open claude and tell it to …").
+    #[serde(default)]
+    prompt: Option<String>,
     cols: u16,
     rows: u16,
 }
@@ -116,6 +119,8 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBui
             cmd.args(&provider.args);
             if req.resume {
                 cmd.args(&provider.resume_args);
+            } else if let Some(prompt) = req.prompt.as_ref().filter(|_| provider.prompt_arg) {
+                cmd.arg(prompt);
             }
             cmd
         }
@@ -207,6 +212,7 @@ pub fn pty_spawn(
         }
     });
 
+    let app_for_prompt = app.clone();
     let pane_id = req.pane_id.clone();
     let session_output = output.clone();
     std::thread::spawn(move || {
@@ -234,6 +240,24 @@ pub fn pty_spawn(
             output,
         },
     );
+
+    // CLIs without a prompt argument get the prompt typed in once they've had time to start.
+    let typed_prompt = req
+        .prompt
+        .clone()
+        .filter(|_| !req.resume && !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg));
+    if let Some(prompt) = typed_prompt {
+        let pane_id = req.pane_id.clone();
+        let app = app_for_prompt;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            let manager = app.state::<PtyManager>();
+            let mut sessions = manager.sessions.lock().unwrap();
+            if let Some(session) = sessions.get_mut(&pane_id) {
+                let _ = session.writer.write_all(format!("{prompt}\r").as_bytes());
+            }
+        });
+    }
 
     Ok(SpawnResult {
         attached: false,
@@ -298,6 +322,7 @@ mod tests {
             cwd: Some("~".into()),
             workspace_id: Some("ws-test".into()),
             resume: false,
+            prompt: None,
             cols: 80,
             rows: 24,
         };
@@ -347,6 +372,7 @@ mod tests {
             cwd: None,
             workspace_id: None,
             resume: false,
+            prompt: None,
             cols: 80,
             rows: 24,
         };
