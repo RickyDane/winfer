@@ -1,4 +1,6 @@
 mod env;
+#[cfg(target_os = "macos")]
+mod menu;
 mod providers;
 mod pty;
 
@@ -9,7 +11,11 @@ pub fn run() {
         env::login_env();
     });
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(menu::build);
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .manage(pty::PtyManager::default())
         .invoke_handler(tauri::generate_handler![

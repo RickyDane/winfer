@@ -1,10 +1,10 @@
-import { Ellipsis, Maximize2, Plus, X } from "lucide-react";
+import { Ellipsis, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { TerminalHost } from "./TerminalHost";
-import { closeTerminal } from "./xtermRegistry";
-import { useWorkspaces, type Pane } from "@/stores/workspaces";
+import type { Pane } from "@/stores/workspaces";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -17,16 +17,21 @@ const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: (
   </button>
 );
 
-export function PaneFrame({ pane, focused, onFocus }: { pane: Pane; focused: boolean; onFocus: () => void }) {
-  const { addPane, removePane } = useWorkspaces();
+interface Props {
+  pane: Pane;
+  /** 1-based position in layout order; matches ⌘1–9 and voice "focus 3". */
+  index: number;
+  focused: boolean;
+  zoomed: boolean;
+  onFocus: () => void;
+}
 
-  const close = () => {
-    closeTerminal(pane.id);
-    removePane(pane.id);
-  };
+export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
+  const target = { id: pane.id };
 
   return (
     <section
+      data-pane-id={pane.id}
       onMouseDown={onFocus}
       className={cn(
         "flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel",
@@ -34,19 +39,26 @@ export function PaneFrame({ pane, focused, onFocus }: { pane: Pane; focused: boo
       )}
     >
       <header className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3">
+        <span className="min-w-3 font-mono text-[11px] text-fg-subtle">{index}</span>
         <StatusDot status={pane.status} />
         <ProviderIcon provider={pane.provider} />
         <span className="flex-1 truncate font-mono text-xs text-fg-muted">{pane.title}</span>
         <HeaderButton title="More">
           <Ellipsis size={14} />
         </HeaderButton>
-        <HeaderButton title="Zoom (⌘↩)">
-          <Maximize2 size={13} />
+        <HeaderButton title={zoomed ? "Restore (⌘↩)" : "Zoom (⌘↩)"} onClick={() => execute({ type: "pane.zoom", target })}>
+          {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </HeaderButton>
-        <HeaderButton title="Split with a shell (⌘D)" onClick={() => addPane("shell", { splitFrom: pane.id })}>
+        <HeaderButton
+          title="Split right (⌘D)"
+          onClick={() => {
+            onFocus();
+            execute({ type: "pane.split", dir: "row" });
+          }}
+        >
           <Plus size={14} />
         </HeaderButton>
-        <HeaderButton title="Close (⌘W)" onClick={close}>
+        <HeaderButton title="Close (⌘W)" onClick={() => execute({ type: "pane.close", target })}>
           <X size={14} />
         </HeaderButton>
       </header>
