@@ -45,6 +45,21 @@ function VoiceSettings() {
     <>
       <Section title="Speech recognition (on this Mac)">
         <p className="text-xs text-fg-muted">Hold ⌥Space to give a command, ⌥⇧Space to dictate into the focused pane. Audio never leaves your machine.</p>
+        <label className="flex items-center gap-2 text-[13px] text-fg">
+          Language
+          <select
+            value={status.language}
+            onChange={(e) => void configureVoice({ language: e.target.value as "en" | "de" | "auto" })}
+            className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+          >
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+            <option value="auto">Auto-detect</option>
+          </select>
+          {status.language !== "en" && status.sttModel.endsWith(".en") && (
+            <span className="text-xs text-warning">Pick a multilingual model below for {status.language === "de" ? "German" : "other languages"}.</span>
+          )}
+        </label>
         {status.models.map((m) => (
           <label key={m.id} className="flex items-center gap-3 text-[13px] text-fg">
             <input

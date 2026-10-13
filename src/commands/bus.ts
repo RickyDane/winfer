@@ -10,6 +10,8 @@ import {
   PRESETS,
   resizePane,
   swapLeaves,
+  movePane,
+  type DropSide,
   type LayoutNode,
   type Preset,
   type SplitDir,
@@ -36,6 +38,8 @@ export type Command =
   | { type: "pane.focus"; target: PaneRef }
   | { type: "pane.focusDir"; dir: Direction }
   | { type: "pane.swapDir"; dir: Direction }
+  /** Drag and drop: place a pane beside another (or swap with it for "center"). */
+  | { type: "pane.move"; paneId: string; targetId: string; side: DropSide }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
   /** Closes every pane in the active workspace. */
@@ -232,6 +236,11 @@ export function execute(cmd: Command): void {
       const from = resolvePane("focused");
       const to = from && paneInDirection(from, cmd.dir);
       if (from && to) s.updateActive((w) => ({ layout: w.layout && swapLeaves(w.layout, from, to) }));
+      return;
+    }
+    case "pane.move": {
+      s.updateActive((w) => ({ layout: w.layout && movePane(w.layout, cmd.paneId, cmd.targetId, cmd.side), zoomedPaneId: null }));
+      s.focusPane(cmd.paneId);
       return;
     }
     case "pane.resize": {

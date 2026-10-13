@@ -201,6 +201,7 @@ mockIPC(
             { id: "small.en", file: "ggml-small.en.bin", size: 487614201, label: "Small (English, 488 MB) — more accurate", installed: false },
           ],
           sttModel: "base.en",
+          language: "en",
           clefModel: "clef-flash",
           credentials: true,
         };

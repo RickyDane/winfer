@@ -12,6 +12,7 @@ import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
 import { RaceView } from "@/features/orchestration/RaceView";
 import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
+import { DragLayer } from "@/features/layout/DragLayer";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -129,6 +130,7 @@ export function AppShell() {
       <BroadcastBar />
       <RecipesView />
       <ModelPicker />
+      <DragLayer />
       <VoiceHUD />
     </div>
   );

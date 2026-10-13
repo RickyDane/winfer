@@ -27,6 +27,7 @@ export interface ModelStatus {
 export interface VoiceStatus {
   models: ModelStatus[];
   sttModel: string;
+  language: "en" | "de" | "auto";
   clefModel: string;
   credentials: boolean;
 }
@@ -215,7 +216,7 @@ export function startVoice() {
 export const startListening = (mode: Mode = "command") => void invoke("voice_start", { mode });
 export const stopListening = () => void invoke("voice_stop");
 
-export async function configureVoice(config: { sttModel?: string; clefModel?: string }) {
+export async function configureVoice(config: { sttModel?: string; clefModel?: string; language?: "en" | "de" | "auto" }) {
   useWorkspaces.getState().setVoiceConfig(config);
   await invoke("voice_configure", { config });
   await refreshVoiceStatus();

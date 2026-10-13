@@ -5,6 +5,7 @@ import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { PaneMenu } from "./PaneMenu";
 import { PaneSearch } from "./PaneSearch";
+import { beginDrag, useDrag } from "@/features/layout/drag";
 import { TerminalHost } from "./TerminalHost";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 
@@ -31,6 +32,7 @@ interface Props {
 export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
   const target = { id: pane.id };
   const searching = useWorkspaces((s) => s.searchPaneId === pane.id);
+  const beingDragged = useDrag((s) => s.paneId === pane.id);
 
   return (
     <section
@@ -39,9 +41,14 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
       className={cn(
         "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel",
         focused ? "border-accent/70" : "border-border",
+        beingDragged && "opacity-40",
       )}
     >
-      <header className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3">
+      <header
+        onPointerDown={(e) => beginDrag(e, pane.id)}
+        title="Drag to move this pane"
+        className="flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
+      >
         <span className="min-w-3 font-mono text-[11px] text-fg-subtle">{index}</span>
         <StatusDot status={pane.status} />
         <ProviderIcon provider={pane.provider} />

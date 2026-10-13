@@ -18,6 +18,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Drag a gap between panes to resize; ⌘⌃←→↑↓ resizes from the keyboard.
 - [ ] ⌘⌥←→↑↓ moves focus; ⌘⇧⌥←→↑↓ swaps panes; ⌘1–9 focuses pane N.
 - [ ] ⌘↩ zooms a pane and back; ⌘⌃L cycles layouts; ⌘⌃= equalizes.
+- [ ] Drag a pane by its header onto another pane: edges place it beside (left/right/top/bottom), the middle swaps; Esc cancels.
 - [ ] ⌘K palette: type "grid", Enter → grid layout.
 - [ ] ⌘F searches a pane's scrollback (Enter / ⇧Enter to step).
 
@@ -53,6 +54,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] "Close all windows" → asks to confirm, then closes every pane in the workspace.
 - [ ] Hold ⌥⇧Space and dictate → text is typed into the focused pane, not sent.
 - [ ] An unclear command shows a confirm prompt with alternatives (↩ runs, Esc cancels).
+- [ ] Settings → Language "Deutsch" + download a multilingual model → "Öffne ein neues Fenster mit Codex" works.
+- [ ] "Open Claude with Opus" / "Switch Claude to Sonnet"; pane header shows the model; pane menu → Change model….
 - [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.
 - [ ] Optional: `CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice` reports accuracy (target ≥ 90%) and latency.
 

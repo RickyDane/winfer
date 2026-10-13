@@ -146,3 +146,36 @@ export function buildPreset(preset: Preset, ids: string[]): LayoutNode | null {
       return ids.reduce<LayoutNode | null>((tree, id, i) => insertDwindle(tree, id, i > 0 ? ids[i - 1] : null), null);
   }
 }
+
+export type DropSide = "left" | "right" | "top" | "bottom" | "center";
+
+/**
+ * Drag and drop: moves `paneId` next to `targetId` on `side`, or swaps the two for "center".
+ * Joining a split that already runs in that direction adds a sibling instead of nesting.
+ */
+export function movePane(root: LayoutNode, paneId: string, targetId: string, side: DropSide): LayoutNode {
+  if (paneId === targetId) return root;
+  if (side === "center") return swapLeaves(root, paneId, targetId);
+  const without = removeLeaf(root, paneId);
+  if (!without) return root;
+  const dir: SplitDir = side === "left" || side === "right" ? "row" : "col";
+  const before = side === "left" || side === "top";
+
+  const visit = (node: LayoutNode): LayoutNode => {
+    if (node.kind === "leaf") {
+      return node.paneId === targetId ? split(dir, before ? [leaf(paneId), node] : [node, leaf(paneId)]) : node;
+    }
+    const i = node.children.findIndex((c) => c.kind === "leaf" && c.paneId === targetId);
+    if (i >= 0 && node.dir === dir) {
+      // Split the target's share between it and the dropped pane.
+      const children = [...node.children];
+      const sizes = [...node.sizes];
+      const half = sizes[i] / 2;
+      children.splice(before ? i : i + 1, 0, leaf(paneId));
+      sizes.splice(i, 1, half, half);
+      return { ...node, children, sizes };
+    }
+    return { ...node, children: node.children.map(visit) };
+  };
+  return visit(without);
+}

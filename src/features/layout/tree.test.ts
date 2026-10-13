@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPreset, equalize, insertDwindle, leaf, leaves, pathTo, removeLeaf, resizePane, split, swapLeaves } from "./tree";
+import { buildPreset, equalize, insertDwindle, leaf, leaves, movePane, pathTo, removeLeaf, resizePane, split, swapLeaves } from "./tree";
 
 describe("insertDwindle", () => {
   it("creates a leaf in an empty layout", () => {
@@ -82,5 +82,25 @@ describe("other ops", () => {
     expect(buildPreset("main-stack", ["a", "b", "c"])).toEqual(
       split("col", [leaf("a"), split("row", [leaf("b"), leaf("c")])], [0.6, 0.4]),
     );
+  });
+});
+
+describe("movePane (drag and drop)", () => {
+  const tree = split("row", [leaf("a"), split("col", [leaf("b"), leaf("c")])]);
+
+  it("drops on an edge to split the target", () => {
+    expect(movePane(tree, "c", "a", "bottom")).toEqual(split("row", [split("col", [leaf("a"), leaf("c")]), leaf("b")]));
+  });
+
+  it("joins a split that already runs that way instead of nesting", () => {
+    expect(movePane(tree, "c", "a", "left")).toEqual(split("row", [leaf("c"), leaf("a"), leaf("b")], [0.25, 0.25, 0.5]));
+  });
+
+  it("swaps on the center", () => {
+    expect(leaves(movePane(tree, "a", "c", "center"))).toEqual(["c", "b", "a"]);
+  });
+
+  it("ignores dropping a pane on itself", () => {
+    expect(movePane(tree, "a", "a", "right")).toBe(tree);
   });
 });
