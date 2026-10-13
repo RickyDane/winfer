@@ -45,7 +45,7 @@ describe("buildRequest", () => {
   });
 
   it("asks one count question per installed provider, in words", () => {
-    expect(req.questions["spawn_panes.counts.grok"]).toMatchObject({ type: "choice", criteria: { zero: null, four: null } });
+    expect(req.questions["spawn_panes.counts.grok"]).toMatchObject({ type: "choice", criteria: { zero: null, four: null, nine: null } });
   });
 
   it("asks the pane target once for all tools", () => {
@@ -98,6 +98,13 @@ describe("parseDecision", () => {
       [{ type: "pane.close", target: { id: "p-b" } }],
       [{ type: "layout.preset", name: "grid" }],
     ]);
+  });
+
+  it("opens more than four, and the default agent when none is named", () => {
+    const six = parseDecision({ answers: { action_1: choice("spawn_panes"), "spawn_panes.counts.codex": choice("six") } }, ctx);
+    expect(six[0].tool.toCommands(six[0].args, ctx)).toMatchObject([{ type: "pane.spawn", provider: "codex", count: 6 }]);
+    const unnamed = parseDecision({ answers: { action_1: choice("spawn_panes"), "spawn_panes.total": choice("five") } }, ctx);
+    expect(unnamed[0].tool.toCommands(unnamed[0].args, ctx)).toMatchObject([{ type: "pane.spawn", provider: "default", count: 5 }]);
   });
 
   it("gives a new agent its instruction instead of typing it elsewhere", () => {

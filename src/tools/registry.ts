@@ -124,20 +124,21 @@ export const TOOLS: ToolDef[] = [
     description: "Open, start, launch or spin up new agents, terminals or windows (Claude Code, Codex, …), one or several, optionally with a specific model or in their own worktrees. Names may be misheard: cloud means Claude, codecs means Codex",
     risk: "safe",
     params: {
-      counts: { kind: "perOption", ask: "How many new panes of this provider are requested?", options: installedProviders, max: 4 },
+      counts: { kind: "perOption", ask: "How many new panes of this provider are requested?", options: installedProviders, max: 9 },
+      total: { kind: "count", ask: "How many new panes or windows are requested in total?", max: 9 },
       prompt: { kind: "span", slot: "instruction", ask: "What should the new agent be told to do, if anything (e.g. “create a Flappy Bird clone”)?" },
       model: { kind: "enum", ask: "Which AI model did the user name, e.g. Opus or Sonnet? default if none.", options: modelOptions },
     },
-    toCommands: (args, ctx) =>
-      Object.entries((args.counts as Record<string, number>) ?? {})
-        .filter(([, n]) => n > 0)
-        .map(([provider, count]) => ({
-          type: "pane.spawn",
-          provider,
-          count,
-          prompt: args.prompt ? String(args.prompt) : undefined,
-          model: modelFor(ctx, provider, args.model),
-        })),
+    toCommands: (args, ctx) => {
+      const prompt = args.prompt ? String(args.prompt) : undefined;
+      const named = Object.entries((args.counts as Record<string, number>) ?? {}).filter(([, n]) => n > 0);
+      // "Open five windows" names no agent: open the default agent that many times.
+      if (named.length === 0) {
+        const count = Math.max(1, Number(args.total) || 1);
+        return [{ type: "pane.spawn", provider: "default", count, prompt }];
+      }
+      return named.map(([provider, count]) => ({ type: "pane.spawn", provider, count, prompt, model: modelFor(ctx, provider, args.model) }));
+    },
     palette: (ctx) =>
       ctx.providers
         .filter((p) => p.installed)

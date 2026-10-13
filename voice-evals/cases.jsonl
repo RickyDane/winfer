@@ -75,3 +75,6 @@
 {"utterance": "Öffne die erstellte Seite im Browser", "expect": ["open_url"], "url": "index.html", "tags": ["de"]}
 {"utterance": "open the page you just made", "expect": ["open_url"], "url": "index.html"}
 {"utterance": "show me the dev server", "expect": ["open_url"], "url": "localhost:5173"}
+{"utterance": "open six codex windows", "expect": ["spawn_panes"], "counts": {"codex": 6}}
+{"utterance": "open five new terminals", "expect": ["spawn_panes"]}
+{"utterance": "Öffne acht Claude Fenster", "expect": ["spawn_panes"], "counts": {"claude": 8}, "tags": ["de"]}
