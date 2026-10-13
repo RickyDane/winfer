@@ -1,0 +1,188 @@
+{
+  "request": {
+    "model": "clef-flash",
+    "state": {
+      "transcript": "open two claudes and a codex",
+      "app": {
+        "workspace": "winfer",
+        "workspaces": [
+          "winfer",
+          "bridgemind-api",
+          "bridgemind-web",
+          "personal"
+        ],
+        "focusedPane": "p2",
+        "panes": [
+          {
+            "id": "p1",
+            "label": "Claude 1",
+            "provider": "claude",
+            "status": "waiting_for_approval"
+          },
+          {
+            "id": "p2",
+            "label": "Codex 1",
+            "provider": "codex",
+            "status": "running"
+          },
+          {
+            "id": "p3",
+            "label": "Shell",
+            "provider": "shell",
+            "status": "idle"
+          },
+          {
+            "id": "p4",
+            "label": "Grok 1",
+            "provider": "grok",
+            "status": "idle"
+          }
+        ],
+        "installedProviders": [
+          {
+            "id": "claude",
+            "name": "Claude Code (Anthropic)"
+          },
+          {
+            "id": "codex",
+            "name": "Codex CLI (OpenAI)"
+          },
+          {
+            "id": "agy",
+            "name": "agy, Antigravity CLI (Google)"
+          },
+          {
+            "id": "grok",
+            "name": "Grok CLI (xAI)"
+          },
+          {
+            "id": "shell",
+            "name": "plain zsh shell"
+          }
+        ],
+        "browserTabs": [
+          {
+            "id": "t1",
+            "title": "winfer dev - localhost:5173",
+            "active": true
+          },
+          {
+            "id": "t2",
+            "title": "Pull requests - GitHub",
+            "active": false
+          }
+        ],
+        "recentCommands": [
+          "open two claudes and a codex",
+          "focus pane one"
+        ]
+      }
+    },
+    "questions": {
+      "action_1": {
+        "type": "choice",
+        "instructions": "The user spoke a voice command to winfer, a terminal app for coding agents. Which app command does the transcript ask for first? The transcript may contain speech-recognition errors.",
+        "criteria": {
+          "spawn_panes": "Open new terminal panes running agents like claude, codex, agy, grok or a shell.",
+          "close_pane": "Close an existing pane and stop whatever is running inside it.",
+          "focus_pane": "Move keyboard focus to a specific existing pane.",
+          "zoom_pane": "Maximize one pane to fill the window, or un-zoom it.",
+          "resize_pane": "Make a pane bigger or smaller relative to its neighbours.",
+          "swap_panes": "Swap the positions of two panes in the layout.",
+          "equalize_panes": "Make all panes the same size.",
+          "set_layout": "Change the pane arrangement, e.g. grid, columns, rows or stack.",
+          "send_to_pane": "Type a message or instruction into one agent pane, e.g. tell claude to do something.",
+          "broadcast": "Send the same message or instruction to every agent pane at once.",
+          "approve_agent": "Approve or accept a pending permission request from an agent.",
+          "interrupt_agent": "Stop or cancel what an agent is currently doing, without closing its pane.",
+          "open_url": "Open a specific website, URL or localhost port in the built-in browser.",
+          "browser_new_tab": "Open a new empty browser tab.",
+          "browser_close_tab": "Close the current browser tab.",
+          "browser_switch_tab": "Switch to another already-open browser tab.",
+          "browser_back": "Go back to the previous page in the browser.",
+          "browser_forward": "Go forward to the next page in the browser.",
+          "browser_reload": "Reload or refresh the current browser page.",
+          "set_device": "Change the microphone or audio input/output device.",
+          "switch_workspace": "Switch to a different existing workspace or project.",
+          "create_workspace": "Create a brand new workspace.",
+          "toggle_sidebar": "Show or hide the sidebar.",
+          "toggle_browser": "Show or hide the built-in browser panel.",
+          "load_recipe": "Load a saved recipe, a preset set of panes and layout.",
+          "show_shortcuts": "Show the list of keyboard shortcuts and voice commands.",
+          "repeat_last": "Repeat the previous voice command again.",
+          "undo_last": "Undo the previous voice command.",
+          "none": "Not a command for the app: chatter, noise, unclear or unrelated speech."
+        }
+      },
+      "target_pane": {
+        "type": "choice",
+        "instructions": "Which existing pane does the command refer to? 'it' or 'this' means the focused pane.",
+        "criteria": {
+          "p1": "Claude 1 (claude, waiting_for_approval)",
+          "p2": "Codex 1 (codex, running)",
+          "p3": "Shell (shell, idle)",
+          "p4": "Grok 1 (grok, idle)",
+          "none": "no existing pane is targeted"
+        }
+      }
+    }
+  },
+  "response": {
+    "model": "clef-flash",
+    "answers": {
+      "action_1": {
+        "type": "choice",
+        "choice": "spawn_panes",
+        "probabilities": {
+          "approve_agent": 0.006000431521508541,
+          "broadcast": 0.008452036462480259,
+          "browser_back": 0.004382229234951735,
+          "browser_close_tab": 0.0033844436566972304,
+          "browser_forward": 0.0035868333346559464,
+          "browser_new_tab": 0.00490419578809928,
+          "browser_reload": 0.003619196049158727,
+          "browser_switch_tab": 0.004201697433107768,
+          "close_pane": 0.004678824226960176,
+          "create_workspace": 0.004489581196263055,
+          "equalize_panes": 0.0051396265804780255,
+          "focus_pane": 0.020165195408680857,
+          "interrupt_agent": 0.006238717781943595,
+          "load_recipe": 0.010730604966043295,
+          "none": 0.007724051820042326,
+          "open_url": 0.013914432294013502,
+          "repeat_last": 0.005914432904886372,
+          "resize_pane": 0.004424985098484763,
+          "send_to_pane": 0.008672785322069807,
+          "set_device": 0.0029071033179621664,
+          "set_layout": 0.009391980028529251,
+          "show_shortcuts": 0.003283254110879433,
+          "spawn_panes": 0.8246958479776516,
+          "swap_panes": 0.005600729999397034,
+          "switch_workspace": 0.005866694128885563,
+          "toggle_browser": 0.004061107715485599,
+          "toggle_sidebar": 0.002824617301665947,
+          "undo_last": 0.004893557800888309,
+          "zoom_pane": 0.005850806538129789
+        },
+        "confidence": 0.8184349854054249
+      },
+      "target_pane": {
+        "type": "choice",
+        "choice": "none",
+        "probabilities": {
+          "none": 0.6734509736077599,
+          "p1": 0.08811289494054825,
+          "p2": 0.14484565074233394,
+          "p3": 0.03988393747653032,
+          "p4": 0.05370654323282766
+        },
+        "confidence": 0.5918137170096998
+      }
+    },
+    "usage": {
+      "input_tokens": 1344,
+      "output_tokens": 0
+    }
+  },
+  "latency_ms": 6243.2
+}

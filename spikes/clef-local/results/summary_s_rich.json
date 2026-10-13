@@ -1,0 +1,219 @@
+{
+  "size": "s_rich",
+  "n": 66,
+  "input_tokens": {
+    "min": 1336,
+    "max": 1349
+  },
+  "action_1_acc": 0.9545454545454546,
+  "action_2_acc": null,
+  "action_2_acc_multi_only": null,
+  "args_acc": 0.4594594594594595,
+  "args_n": 37,
+  "per_arg": {
+    "counts": "0/14",
+    "worktree": "0/3",
+    "target_pane": "20/20",
+    "resize_amount": "0/3",
+    "workspace": "0/3"
+  },
+  "latency_ms": {
+    "p50": 6014.9,
+    "p95": 6123.1,
+    "max": 6257.9,
+    "min": 5959.2
+  },
+  "latency_stage1_ms": {
+    "p50": 6014.9,
+    "p95": 6123.1
+  },
+  "calls_mean": 1,
+  "input_tokens_mean": 1340.5151515151515,
+  "peak_rss_kb": 6787408,
+  "conf_correct_all": [
+    0.279,
+    0.318,
+    0.344,
+    0.379,
+    0.571,
+    0.623,
+    0.624,
+    0.629,
+    0.652,
+    0.663,
+    0.684,
+    0.687,
+    0.707,
+    0.712,
+    0.719,
+    0.726,
+    0.732,
+    0.742,
+    0.75,
+    0.75,
+    0.768,
+    0.786,
+    0.79,
+    0.792,
+    0.793,
+    0.815,
+    0.815,
+    0.816,
+    0.818,
+    0.819,
+    0.823,
+    0.829,
+    0.836,
+    0.843,
+    0.851,
+    0.851,
+    0.854,
+    0.86,
+    0.866,
+    0.868,
+    0.869,
+    0.872,
+    0.877,
+    0.881,
+    0.889,
+    0.891,
+    0.901,
+    0.91,
+    0.915,
+    0.919,
+    0.919,
+    0.921,
+    0.923,
+    0.928,
+    0.928,
+    0.933,
+    0.942,
+    0.942,
+    0.953,
+    0.956,
+    0.957,
+    0.959,
+    0.961
+  ],
+  "conf_correct": {
+    "n": 63,
+    "min": 0.27900036818610247,
+    "p10": 0.6253275401627677,
+    "median": 0.8289217522865788
+  },
+  "conf_incorrect": {
+    "n": 3,
+    "values": [
+      0.294,
+      0.379,
+      0.449
+    ]
+  },
+  "threshold_sweep_auto/confirm_lo": {
+    "0.9/0.5": {
+      "auto": {
+        "n": 17,
+        "correct": 17
+      },
+      "confirm": {
+        "n": 42,
+        "correct": 42
+      },
+      "reject": {
+        "n": 7,
+        "correct": 4
+      }
+    },
+    "0.85/0.5": {
+      "auto": {
+        "n": 29,
+        "correct": 29
+      },
+      "confirm": {
+        "n": 30,
+        "correct": 30
+      },
+      "reject": {
+        "n": 7,
+        "correct": 4
+      }
+    },
+    "0.75/0.45": {
+      "auto": {
+        "n": 43,
+        "correct": 43
+      },
+      "confirm": {
+        "n": 16,
+        "correct": 16
+      },
+      "reject": {
+        "n": 7,
+        "correct": 4
+      }
+    },
+    "0.65/0.4": {
+      "auto": {
+        "n": 55,
+        "correct": 55
+      },
+      "confirm": {
+        "n": 5,
+        "correct": 4
+      },
+      "reject": {
+        "n": 6,
+        "correct": 4
+      }
+    },
+    "0.5/0.3": {
+      "auto": {
+        "n": 59,
+        "correct": 59
+      },
+      "confirm": {
+        "n": 5,
+        "correct": 3
+      },
+      "reject": {
+        "n": 2,
+        "correct": 1
+      }
+    }
+  },
+  "failures": [
+    {
+      "id": 20,
+      "utt": "zoom in on two",
+      "a1": [
+        "resize_pane",
+        0.379
+      ],
+      "exp": [
+        "zoom_pane"
+      ]
+    },
+    {
+      "id": 37,
+      "utt": "go back",
+      "a1": [
+        "interrupt_agent",
+        0.294
+      ],
+      "exp": [
+        "browser_back"
+      ]
+    },
+    {
+      "id": 66,
+      "utt": "open three codex panes in worktrees and switch to a grid",
+      "a1": [
+        "set_layout",
+        0.449
+      ],
+      "exp": [
+        "spawn_panes"
+      ]
+    }
+  ]
+}

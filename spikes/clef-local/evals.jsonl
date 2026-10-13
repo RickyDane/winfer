@@ -1,0 +1,66 @@
+{"id":1,"utterance":"open 3 new instances with claude, codex and grok","action_1":["spawn_panes"],"args":{"counts":{"claude":1,"codex":1,"grok":1}}}
+{"id":2,"utterance":"open two claudes and a codex","action_1":["spawn_panes"],"args":{"counts":{"claude":2,"codex":1}}}
+{"id":3,"utterance":"open cloud code","action_1":["spawn_panes"],"args":{"counts":{"claude":1}},"tags":["asr"]}
+{"id":4,"utterance":"give me two codecs","action_1":["spawn_panes"],"args":{"counts":{"codex":2}},"tags":["asr"]}
+{"id":5,"utterance":"spin up four grok agents","action_1":["spawn_panes"],"args":{"counts":{"grok":4}}}
+{"id":6,"utterance":"new shell please","action_1":["spawn_panes"],"args":{"counts":{"shell":1}}}
+{"id":7,"utterance":"open an agy pane","action_1":["spawn_panes"],"args":{"counts":{"agy":1}}}
+{"id":8,"utterance":"open a gravity agent","action_1":["spawn_panes"],"args":{"counts":{"agy":1}},"tags":["asr"]}
+{"id":9,"utterance":"start claude and codex in separate worktrees","action_1":["spawn_panes"],"args":{"counts":{"claude":1,"codex":1},"worktree":true}}
+{"id":10,"utterance":"launch three clouds each on its own work tree","action_1":["spawn_panes"],"args":{"counts":{"claude":3},"worktree":true},"tags":["asr"]}
+{"id":11,"utterance":"close the codex one","action_1":["close_pane"],"args":{"target_pane":["p2"]}}
+{"id":12,"utterance":"close this pane","action_1":["close_pane"],"args":{"target_pane":["p2","none"]}}
+{"id":13,"utterance":"get rid of the shell","action_1":["close_pane"],"args":{"target_pane":["p3"]}}
+{"id":14,"utterance":"focus pane three","action_1":["focus_pane"],"args":{"target_pane":["p3"]}}
+{"id":15,"utterance":"go to the grok pane","action_1":["focus_pane"],"args":{"target_pane":["p4"]}}
+{"id":16,"utterance":"jump to claude","action_1":["focus_pane"],"args":{"target_pane":["p1"]}}
+{"id":17,"utterance":"make it bigger","action_1":["resize_pane"],"args":{"target_pane":["p2","none"],"resize_amount":[0,1]}}
+{"id":18,"utterance":"make the claude one a lot bigger","action_1":["resize_pane"],"args":{"target_pane":["p1"],"resize_amount":[2]}}
+{"id":19,"utterance":"shrink the shell a little","action_1":["resize_pane"],"args":{"target_pane":["p3"],"resize_amount":[0]}}
+{"id":20,"utterance":"zoom in on two","action_1":["zoom_pane"],"args":{"target_pane":["p2"]}}
+{"id":21,"utterance":"maximize grok","action_1":["zoom_pane"],"args":{"target_pane":["p4"]}}
+{"id":22,"utterance":"swap claude and codex","action_1":["swap_panes"]}
+{"id":23,"utterance":"make all the panes the same size","action_1":["equalize_panes"]}
+{"id":24,"utterance":"switch to a grid layout","action_1":["set_layout"]}
+{"id":25,"utterance":"tell claude to run the tests","action_1":["send_to_pane"],"args":{"target_pane":["p1"]}}
+{"id":26,"utterance":"ask codex to fix the lint errors","action_1":["send_to_pane"],"args":{"target_pane":["p2"]}}
+{"id":27,"utterance":"tell everyone to commit their work","action_1":["broadcast"]}
+{"id":28,"utterance":"approve claude","action_1":["approve_agent"],"args":{"target_pane":["p1"]}}
+{"id":29,"utterance":"yeah accept that request","action_1":["approve_agent"],"args":{"target_pane":["p1","none"]}}
+{"id":30,"utterance":"stop codex","action_1":["interrupt_agent"],"args":{"target_pane":["p2"]}}
+{"id":31,"utterance":"cancel whatever grok is doing","action_1":["interrupt_agent"],"args":{"target_pane":["p4"]}}
+{"id":32,"utterance":"open localhost 3000","action_1":["open_url"]}
+{"id":33,"utterance":"go to github dot com","action_1":["open_url"]}
+{"id":34,"utterance":"new browser tab","action_1":["browser_new_tab"]}
+{"id":35,"utterance":"close the browser tab","action_1":["browser_close_tab"]}
+{"id":36,"utterance":"switch to the github tab","action_1":["browser_switch_tab"]}
+{"id":37,"utterance":"go back","action_1":["browser_back"]}
+{"id":38,"utterance":"go forward a page","action_1":["browser_forward"]}
+{"id":39,"utterance":"reload the browser","action_1":["browser_reload"]}
+{"id":40,"utterance":"use the airpods microphone","action_1":["set_device"]}
+{"id":41,"utterance":"switch to bridgemind api","action_1":["switch_workspace"],"args":{"workspace":"bridgemind-api"}}
+{"id":42,"utterance":"go to the personal workspace","action_1":["switch_workspace"],"args":{"workspace":"personal"}}
+{"id":43,"utterance":"create a new workspace","action_1":["create_workspace"]}
+{"id":44,"utterance":"hide the sidebar","action_1":["toggle_sidebar"]}
+{"id":45,"utterance":"show the browser","action_1":["toggle_browser"]}
+{"id":46,"utterance":"load my full stack recipe","action_1":["load_recipe"]}
+{"id":47,"utterance":"what are the shortcuts","action_1":["show_shortcuts"]}
+{"id":48,"utterance":"undo that","action_1":["undo_last"]}
+{"id":49,"utterance":"do that again","action_1":["repeat_last"]}
+{"id":50,"utterance":"um yeah so anyway","action_1":["none"],"tags":["noise"]}
+{"id":51,"utterance":"what's the weather like today","action_1":["none"],"tags":["noise"]}
+{"id":52,"utterance":"thanks","action_1":["none"],"tags":["noise"]}
+{"id":53,"utterance":"blah blah banana the fish","action_1":["none"],"tags":["noise"]}
+{"id":54,"utterance":"close codex and open grok","action_1":["close_pane"],"action_2":["spawn_panes"],"args":{"counts":{"grok":1}},"tags":["multi"]}
+{"id":55,"utterance":"reload the browser and focus pane one","action_1":["browser_reload"],"action_2":["focus_pane"],"args":{"target_pane":["p1"]},"tags":["multi"]}
+{"id":56,"utterance":"stop grok and tell codex to push","action_1":["interrupt_agent"],"action_2":["send_to_pane"],"tags":["multi"]}
+{"id":57,"utterance":"approve claude then switch to bridgemind web","action_1":["approve_agent"],"action_2":["switch_workspace"],"args":{"workspace":"bridgemind-web"},"tags":["multi"]}
+{"id":58,"utterance":"open two codex panes and make them equal size","action_1":["spawn_panes"],"action_2":["equalize_panes"],"args":{"counts":{"codex":2}},"tags":["multi"]}
+{"id":59,"utterance":"open a cloud and a codecs","action_1":["spawn_panes"],"args":{"counts":{"claude":1,"codex":1}},"tags":["asr"]}
+{"id":60,"utterance":"focus the claude pane and approve it","action_1":["focus_pane"],"action_2":["approve_agent"],"args":{"target_pane":["p1"]},"tags":["multi"]}
+{"id":61,"utterance":"kill the grok pane","action_1":["close_pane"],"args":{"target_pane":["p4"]}}
+{"id":62,"utterance":"refresh","action_1":["browser_reload"]}
+{"id":63,"utterance":"open localhost 5173 in the browser","action_1":["open_url"]}
+{"id":64,"utterance":"hey what time is it","action_1":["none"],"tags":["noise"]}
+{"id":65,"utterance":"tell all the agents to pull main","action_1":["broadcast"]}
+{"id":66,"utterance":"open three codex panes in worktrees and switch to a grid","action_1":["spawn_panes"],"action_2":["set_layout"],"args":{"counts":{"codex":3},"worktree":true},"tags":["multi"]}

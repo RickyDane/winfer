@@ -1,0 +1,329 @@
+{
+  "digits": {
+    "counts_acc": "4/14",
+    "p50_ms": 3514,
+    "tokens": 822,
+    "rows": [
+      {
+        "id": 1,
+        "ok": false,
+        "got": {
+          "grok": 1
+        }
+      },
+      {
+        "id": 2,
+        "ok": false,
+        "got": {
+          "claude": 1
+        }
+      },
+      {
+        "id": 3,
+        "ok": false,
+        "got": {}
+      },
+      {
+        "id": 4,
+        "ok": false,
+        "got": {}
+      },
+      {
+        "id": 5,
+        "ok": false,
+        "got": {
+          "grok": 3
+        }
+      },
+      {
+        "id": 6,
+        "ok": true,
+        "got": {
+          "shell": 1
+        }
+      },
+      {
+        "id": 7,
+        "ok": true,
+        "got": {
+          "agy": 1
+        }
+      },
+      {
+        "id": 8,
+        "ok": true,
+        "got": {
+          "agy": 1
+        }
+      },
+      {
+        "id": 9,
+        "ok": false,
+        "got": {
+          "claude": 1
+        }
+      },
+      {
+        "id": 10,
+        "ok": false,
+        "got": {}
+      },
+      {
+        "id": 54,
+        "ok": true,
+        "got": {
+          "grok": 1
+        }
+      },
+      {
+        "id": 58,
+        "ok": false,
+        "got": {}
+      },
+      {
+        "id": 59,
+        "ok": false,
+        "got": {
+          "claude": 1
+        }
+      },
+      {
+        "id": 66,
+        "ok": false,
+        "got": {
+          "codex": 2
+        }
+      }
+    ]
+  },
+  "words": {
+    "counts_acc": "8/14",
+    "p50_ms": 4074,
+    "tokens": 942,
+    "rows": [
+      {
+        "id": 1,
+        "ok": true,
+        "got": {
+          "claude": 1,
+          "codex": 1,
+          "grok": 1
+        }
+      },
+      {
+        "id": 2,
+        "ok": true,
+        "got": {
+          "claude": 2,
+          "codex": 1
+        }
+      },
+      {
+        "id": 3,
+        "ok": false,
+        "got": {}
+      },
+      {
+        "id": 4,
+        "ok": false,
+        "got": {}
+      },
+      {
+        "id": 5,
+        "ok": true,
+        "got": {
+          "grok": 4
+        }
+      },
+      {
+        "id": 6,
+        "ok": true,
+        "got": {
+          "shell": 1
+        }
+      },
+      {
+        "id": 7,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "agy": 1
+        }
+      },
+      {
+        "id": 8,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "agy": 1
+        }
+      },
+      {
+        "id": 9,
+        "ok": false,
+        "got": {
+          "claude": 1
+        }
+      },
+      {
+        "id": 10,
+        "ok": true,
+        "got": {
+          "claude": 3
+        }
+      },
+      {
+        "id": 54,
+        "ok": true,
+        "got": {
+          "grok": 1
+        }
+      },
+      {
+        "id": 58,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "codex": 1
+        }
+      },
+      {
+        "id": 59,
+        "ok": true,
+        "got": {
+          "claude": 1,
+          "codex": 1
+        }
+      },
+      {
+        "id": 66,
+        "ok": true,
+        "got": {
+          "codex": 3
+        }
+      }
+    ]
+  },
+  "words_nopanes": {
+    "counts_acc": "2/14",
+    "p50_ms": 3904,
+    "tokens": 908,
+    "rows": [
+      {
+        "id": 1,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "codex": 1,
+          "agy": 1,
+          "grok": 1
+        }
+      },
+      {
+        "id": 2,
+        "ok": true,
+        "got": {
+          "claude": 2,
+          "codex": 1
+        }
+      },
+      {
+        "id": 3,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "codex": 1
+        }
+      },
+      {
+        "id": 4,
+        "ok": false,
+        "got": {
+          "claude": 2,
+          "codex": 2
+        }
+      },
+      {
+        "id": 5,
+        "ok": true,
+        "got": {
+          "grok": 4
+        }
+      },
+      {
+        "id": 6,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "codex": 1,
+          "shell": 1
+        }
+      },
+      {
+        "id": 7,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "codex": 1,
+          "agy": 1
+        }
+      },
+      {
+        "id": 8,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "agy": 1
+        }
+      },
+      {
+        "id": 9,
+        "ok": false,
+        "got": {
+          "claude": 2,
+          "codex": 1
+        }
+      },
+      {
+        "id": 10,
+        "ok": false,
+        "got": {
+          "claude": 3,
+          "codex": 3
+        }
+      },
+      {
+        "id": 54,
+        "ok": false,
+        "got": {
+          "claude": 1,
+          "grok": 1
+        }
+      },
+      {
+        "id": 58,
+        "ok": false,
+        "got": {
+          "claude": 2,
+          "codex": 2
+        }
+      },
+      {
+        "id": 59,
+        "ok": false,
+        "got": {
+          "claude": 2,
+          "codex": 1
+        }
+      },
+      {
+        "id": 66,
+        "ok": false,
+        "got": {
+          "claude": 3,
+          "codex": 3
+        }
+      }
+    ]
+  }
+}

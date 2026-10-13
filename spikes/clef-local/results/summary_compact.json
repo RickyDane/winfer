@@ -1,0 +1,318 @@
+{
+  "size": "compact",
+  "n": 66,
+  "input_tokens": {
+    "min": 2444,
+    "max": 2457
+  },
+  "action_1_acc": 0.8181818181818182,
+  "action_2_acc": 0.13636363636363635,
+  "action_2_acc_multi_only": 0.5714285714285714,
+  "args_acc": 0.5675675675675675,
+  "args_n": 37,
+  "per_arg": {
+    "counts": "4/14",
+    "worktree": "14/14",
+    "target_pane": "15/20",
+    "resize_amount": "2/3",
+    "workspace": "3/3"
+  },
+  "latency_ms": {
+    "p50": 13340.349999999999,
+    "p95": 13633.550000000001,
+    "max": 13734.1,
+    "min": 12168.6
+  },
+  "latency_stage1_ms": {
+    "p50": 13340.349999999999,
+    "p95": 13633.550000000001
+  },
+  "calls_mean": 1,
+  "input_tokens_mean": 2448.4848484848485,
+  "peak_rss_kb": 6949792,
+  "conf_correct_all": [
+    0.121,
+    0.127,
+    0.143,
+    0.154,
+    0.158,
+    0.188,
+    0.224,
+    0.225,
+    0.231,
+    0.258,
+    0.262,
+    0.278,
+    0.28,
+    0.292,
+    0.3,
+    0.325,
+    0.326,
+    0.329,
+    0.329,
+    0.337,
+    0.357,
+    0.381,
+    0.387,
+    0.414,
+    0.426,
+    0.433,
+    0.434,
+    0.447,
+    0.462,
+    0.465,
+    0.471,
+    0.498,
+    0.506,
+    0.555,
+    0.568,
+    0.58,
+    0.583,
+    0.589,
+    0.591,
+    0.607,
+    0.614,
+    0.632,
+    0.657,
+    0.661,
+    0.679,
+    0.689,
+    0.724,
+    0.745,
+    0.746,
+    0.766,
+    0.776,
+    0.778,
+    0.806,
+    0.829
+  ],
+  "conf_correct": {
+    "n": 54,
+    "min": 0.1212536907621607,
+    "p10": 0.1986804688723533,
+    "median": 0.44045877006605105
+  },
+  "conf_incorrect": {
+    "n": 12,
+    "values": [
+      0.104,
+      0.114,
+      0.216,
+      0.258,
+      0.289,
+      0.332,
+      0.343,
+      0.406,
+      0.487,
+      0.519,
+      0.578,
+      0.618
+    ]
+  },
+  "threshold_sweep_auto/confirm_lo": {
+    "0.9/0.5": {
+      "auto": {
+        "n": 0,
+        "correct": 0
+      },
+      "confirm": {
+        "n": 25,
+        "correct": 22
+      },
+      "reject": {
+        "n": 41,
+        "correct": 32
+      }
+    },
+    "0.85/0.5": {
+      "auto": {
+        "n": 0,
+        "correct": 0
+      },
+      "confirm": {
+        "n": 25,
+        "correct": 22
+      },
+      "reject": {
+        "n": 41,
+        "correct": 32
+      }
+    },
+    "0.75/0.45": {
+      "auto": {
+        "n": 5,
+        "correct": 5
+      },
+      "confirm": {
+        "n": 25,
+        "correct": 21
+      },
+      "reject": {
+        "n": 36,
+        "correct": 28
+      }
+    },
+    "0.65/0.4": {
+      "auto": {
+        "n": 12,
+        "correct": 12
+      },
+      "confirm": {
+        "n": 24,
+        "correct": 19
+      },
+      "reject": {
+        "n": 30,
+        "correct": 23
+      }
+    },
+    "0.5/0.3": {
+      "auto": {
+        "n": 25,
+        "correct": 22
+      },
+      "confirm": {
+        "n": 22,
+        "correct": 18
+      },
+      "reject": {
+        "n": 19,
+        "correct": 14
+      }
+    }
+  },
+  "failures": [
+    {
+      "id": 3,
+      "utt": "open cloud code",
+      "a1": [
+        "focus_pane",
+        0.104
+      ],
+      "exp": [
+        "spawn_panes"
+      ]
+    },
+    {
+      "id": 30,
+      "utt": "stop codex",
+      "a1": [
+        "close_pane",
+        0.332
+      ],
+      "exp": [
+        "interrupt_agent"
+      ]
+    },
+    {
+      "id": 37,
+      "utt": "go back",
+      "a1": [
+        "focus_pane",
+        0.258
+      ],
+      "exp": [
+        "browser_back"
+      ]
+    },
+    {
+      "id": 41,
+      "utt": "switch to bridgemind api",
+      "a1": [
+        "focus_pane",
+        0.406
+      ],
+      "exp": [
+        "switch_workspace"
+      ]
+    },
+    {
+      "id": 42,
+      "utt": "go to the personal workspace",
+      "a1": [
+        "focus_pane",
+        0.343
+      ],
+      "exp": [
+        "switch_workspace"
+      ]
+    },
+    {
+      "id": 48,
+      "utt": "undo that",
+      "a1": [
+        "interrupt_agent",
+        0.487
+      ],
+      "exp": [
+        "undo_last"
+      ]
+    },
+    {
+      "id": 51,
+      "utt": "what's the weather like today",
+      "a1": [
+        "send_to_pane",
+        0.216
+      ],
+      "exp": [
+        "none"
+      ]
+    },
+    {
+      "id": 52,
+      "utt": "thanks",
+      "a1": [
+        "focus_pane",
+        0.114
+      ],
+      "exp": [
+        "none"
+      ]
+    },
+    {
+      "id": 55,
+      "utt": "reload the browser and focus pane one",
+      "a1": [
+        "focus_pane",
+        0.519
+      ],
+      "exp": [
+        "browser_reload"
+      ]
+    },
+    {
+      "id": 58,
+      "utt": "open two codex panes and make them equal size",
+      "a1": [
+        "resize_pane",
+        0.289
+      ],
+      "exp": [
+        "spawn_panes"
+      ]
+    },
+    {
+      "id": 65,
+      "utt": "tell all the agents to pull main",
+      "a1": [
+        "focus_pane",
+        0.578
+      ],
+      "exp": [
+        "broadcast"
+      ]
+    },
+    {
+      "id": 66,
+      "utt": "open three codex panes in worktrees and switch to a grid",
+      "a1": [
+        "set_layout",
+        0.618
+      ],
+      "exp": [
+        "spawn_panes"
+      ]
+    }
+  ]
+}

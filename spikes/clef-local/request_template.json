@@ -1,0 +1,242 @@
+{
+  "model": "clef-flash",
+  "state": {
+    "transcript": "open 3 new instances with claude, codex and grok",
+    "app": {
+      "workspace": "winfer",
+      "workspaces": [
+        "winfer",
+        "bridgemind-api",
+        "bridgemind-web",
+        "personal"
+      ],
+      "focusedPane": "p2",
+      "panes": [
+        {
+          "id": "p1",
+          "label": "Claude 1",
+          "provider": "claude",
+          "status": "waiting_for_approval"
+        },
+        {
+          "id": "p2",
+          "label": "Codex 1",
+          "provider": "codex",
+          "status": "running"
+        },
+        {
+          "id": "p3",
+          "label": "Shell",
+          "provider": "shell",
+          "status": "idle"
+        },
+        {
+          "id": "p4",
+          "label": "Grok 1",
+          "provider": "grok",
+          "status": "idle"
+        }
+      ],
+      "installedProviders": [
+        {
+          "id": "claude",
+          "name": "Claude Code (Anthropic)"
+        },
+        {
+          "id": "codex",
+          "name": "Codex CLI (OpenAI)"
+        },
+        {
+          "id": "agy",
+          "name": "agy, Antigravity CLI (Google)"
+        },
+        {
+          "id": "grok",
+          "name": "Grok CLI (xAI)"
+        },
+        {
+          "id": "shell",
+          "name": "plain zsh shell"
+        }
+      ],
+      "browserTabs": [
+        {
+          "id": "t1",
+          "title": "winfer dev - localhost:5173",
+          "active": true
+        },
+        {
+          "id": "t2",
+          "title": "Pull requests - GitHub",
+          "active": false
+        }
+      ],
+      "recentCommands": [
+        "open two claudes and a codex",
+        "focus pane one"
+      ]
+    }
+  },
+  "questions": {
+    "action_1": {
+      "type": "choice",
+      "instructions": "The user spoke a voice command to winfer, a terminal app for coding agents. Which app command does the transcript ask for first? The transcript may contain speech-recognition errors.",
+      "criteria": {
+        "spawn_panes": "Open new terminal panes running agents like claude, codex, agy, grok or a shell.",
+        "close_pane": "Close an existing pane and stop whatever is running inside it.",
+        "focus_pane": "Move keyboard focus to a specific existing pane.",
+        "zoom_pane": "Maximize one pane to fill the window, or un-zoom it.",
+        "resize_pane": "Make a pane bigger or smaller relative to its neighbours.",
+        "swap_panes": "Swap the positions of two panes in the layout.",
+        "equalize_panes": "Make all panes the same size.",
+        "set_layout": "Change the pane arrangement, e.g. grid, columns, rows or stack.",
+        "send_to_pane": "Type a message or instruction into one agent pane, e.g. tell claude to do something.",
+        "broadcast": "Send the same message or instruction to every agent pane at once.",
+        "approve_agent": "Approve or accept a pending permission request from an agent.",
+        "interrupt_agent": "Stop or cancel what an agent is currently doing, without closing its pane.",
+        "open_url": "Open a specific website, URL or localhost port in the built-in browser.",
+        "browser_new_tab": "Open a new empty browser tab.",
+        "browser_close_tab": "Close the current browser tab.",
+        "browser_switch_tab": "Switch to another already-open browser tab.",
+        "browser_back": "Go back to the previous page in the browser.",
+        "browser_forward": "Go forward to the next page in the browser.",
+        "browser_reload": "Reload or refresh the current browser page.",
+        "set_device": "Change the microphone or audio input/output device.",
+        "switch_workspace": "Switch to a different existing workspace or project.",
+        "create_workspace": "Create a brand new workspace.",
+        "toggle_sidebar": "Show or hide the sidebar.",
+        "toggle_browser": "Show or hide the built-in browser panel.",
+        "load_recipe": "Load a saved recipe, a preset set of panes and layout.",
+        "show_shortcuts": "Show the list of keyboard shortcuts and voice commands.",
+        "repeat_last": "Repeat the previous voice command again.",
+        "undo_last": "Undo the previous voice command.",
+        "none": "Not a command for the app: chatter, noise, unclear or unrelated speech."
+      }
+    },
+    "action_2": {
+      "type": "choice",
+      "instructions": "If the transcript asks for a second, different command after the first one, which is it? Otherwise none.",
+      "criteria": {
+        "spawn_panes": null,
+        "close_pane": null,
+        "focus_pane": null,
+        "zoom_pane": null,
+        "resize_pane": null,
+        "swap_panes": null,
+        "equalize_panes": null,
+        "set_layout": null,
+        "send_to_pane": null,
+        "broadcast": null,
+        "approve_agent": null,
+        "interrupt_agent": null,
+        "open_url": null,
+        "browser_new_tab": null,
+        "browser_close_tab": null,
+        "browser_switch_tab": null,
+        "browser_back": null,
+        "browser_forward": null,
+        "browser_reload": null,
+        "set_device": null,
+        "switch_workspace": null,
+        "create_workspace": null,
+        "toggle_sidebar": null,
+        "toggle_browser": null,
+        "load_recipe": null,
+        "show_shortcuts": null,
+        "repeat_last": null,
+        "undo_last": null,
+        "none": null
+      }
+    },
+    "spawn_panes.count.claude": {
+      "type": "choice",
+      "instructions": "How many new claude panes (Claude Code (Anthropic)) should be opened?",
+      "criteria": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    "spawn_panes.count.codex": {
+      "type": "choice",
+      "instructions": "How many new codex panes (Codex CLI (OpenAI)) should be opened?",
+      "criteria": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    "spawn_panes.count.agy": {
+      "type": "choice",
+      "instructions": "How many new agy panes (agy, Antigravity CLI (Google)) should be opened?",
+      "criteria": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    "spawn_panes.count.grok": {
+      "type": "choice",
+      "instructions": "How many new grok panes (Grok CLI (xAI)) should be opened?",
+      "criteria": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    "spawn_panes.count.shell": {
+      "type": "choice",
+      "instructions": "How many new shell panes (plain zsh shell) should be opened?",
+      "criteria": {
+        "0": null,
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    "target_pane": {
+      "type": "choice",
+      "instructions": "Which existing pane does the command refer to? 'it' or 'this' means the focused pane.",
+      "criteria": {
+        "p1": "Claude 1 (claude, waiting_for_approval)",
+        "p2": "Codex 1 (codex, running)",
+        "p3": "Shell (shell, idle)",
+        "p4": "Grok 1 (grok, idle)",
+        "none": "no existing pane is targeted"
+      }
+    },
+    "resize_amount": {
+      "type": "score",
+      "instructions": "How much should the pane be resized?",
+      "criteria": [
+        "slightly",
+        "moderately",
+        "a lot"
+      ]
+    },
+    "spawn_panes.worktree": {
+      "type": "noul",
+      "instructions": "Did the user ask for the new panes to use separate git worktrees?"
+    },
+    "workspace": {
+      "type": "choice",
+      "instructions": "Which workspace does the user name, if any?",
+      "criteria": {
+        "winfer": null,
+        "bridgemind-api": null,
+        "bridgemind-web": null,
+        "personal": null,
+        "none": "no workspace named"
+      }
+    }
+  }
+}

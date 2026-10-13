@@ -1,0 +1,505 @@
+{
+  "label": "mlx_clef-flash-4bit",
+  "load_s": 4.07,
+  "mlx": "0.32.3",
+  "floor": {
+    "tokens": 142,
+    "p50": 876.2,
+    "min": 874.6,
+    "max": 895.9,
+    "tok_per_s": 162.1
+  },
+  "syn500": {
+    "tokens": 575,
+    "p50": 3112.0,
+    "min": 3106.9,
+    "max": 3128.3,
+    "tok_per_s": 184.8
+  },
+  "syn1k": {
+    "tokens": 1115,
+    "p50": 6039.6,
+    "min": 6030.6,
+    "max": 6041.1,
+    "tok_per_s": 184.6
+  },
+  "syn2k": {
+    "tokens": 2195,
+    "p50": 11636.2,
+    "min": 11583.2,
+    "max": 11690.2,
+    "tok_per_s": 188.6
+  },
+  "stage1_1k": {
+    "tokens": 1002,
+    "p50": 5616.8,
+    "min": 5556.9,
+    "max": 5673.2,
+    "tok_per_s": 178.4
+  },
+  "s_rich": {
+    "tokens": 1344,
+    "p50": 7294.9,
+    "min": 7287.8,
+    "max": 7299.5,
+    "tok_per_s": 184.2
+  },
+  "real_full": {
+    "tokens": 2644,
+    "p50": 14273.3,
+    "min": 14193.2,
+    "max": 14286.4,
+    "tok_per_s": 185.2
+  },
+  "real_full_example_answers": {
+    "action_1": [
+      "spawn_panes",
+      0.764
+    ],
+    "action_2": [
+      "focus_pane",
+      0.536
+    ],
+    "spawn_panes.count.claude": [
+      "2",
+      0.589
+    ],
+    "spawn_panes.count.codex": [
+      "1",
+      0.967
+    ],
+    "spawn_panes.count.agy": [
+      "0",
+      0.993
+    ],
+    "spawn_panes.count.grok": [
+      "0",
+      0.983
+    ],
+    "spawn_panes.count.shell": [
+      "0",
+      0.975
+    ],
+    "target_pane": [
+      "none",
+      0.487
+    ],
+    "resize_amount": [
+      null,
+      0.478
+    ],
+    "spawn_panes.worktree": [
+      null,
+      0.012
+    ],
+    "workspace": [
+      "winfer",
+      0.808
+    ]
+  },
+  "peak_memory_gb": 7.15,
+  "s_rich_eval": {
+    "n": 66,
+    "action_1_acc": 0.9545454545454546,
+    "p50_ms": 7297.0374374999665,
+    "max_ms": 7593.875374994241,
+    "rows": [
+      {
+        "id": 1,
+        "a1": "spawn_panes",
+        "conf": 0.829,
+        "ok": true
+      },
+      {
+        "id": 2,
+        "a1": "spawn_panes",
+        "conf": 0.761,
+        "ok": true
+      },
+      {
+        "id": 3,
+        "a1": "spawn_panes",
+        "conf": 0.243,
+        "ok": true
+      },
+      {
+        "id": 4,
+        "a1": "spawn_panes",
+        "conf": 0.715,
+        "ok": true
+      },
+      {
+        "id": 5,
+        "a1": "spawn_panes",
+        "conf": 0.692,
+        "ok": true
+      },
+      {
+        "id": 6,
+        "a1": "spawn_panes",
+        "conf": 0.642,
+        "ok": true
+      },
+      {
+        "id": 7,
+        "a1": "spawn_panes",
+        "conf": 0.754,
+        "ok": true
+      },
+      {
+        "id": 8,
+        "a1": "spawn_panes",
+        "conf": 0.668,
+        "ok": true
+      },
+      {
+        "id": 9,
+        "a1": "spawn_panes",
+        "conf": 0.605,
+        "ok": true
+      },
+      {
+        "id": 10,
+        "a1": "spawn_panes",
+        "conf": 0.665,
+        "ok": true
+      },
+      {
+        "id": 11,
+        "a1": "close_pane",
+        "conf": 0.906,
+        "ok": true
+      },
+      {
+        "id": 12,
+        "a1": "close_pane",
+        "conf": 0.9,
+        "ok": true
+      },
+      {
+        "id": 13,
+        "a1": "close_pane",
+        "conf": 0.776,
+        "ok": true
+      },
+      {
+        "id": 14,
+        "a1": "focus_pane",
+        "conf": 0.916,
+        "ok": true
+      },
+      {
+        "id": 15,
+        "a1": "focus_pane",
+        "conf": 0.891,
+        "ok": true
+      },
+      {
+        "id": 16,
+        "a1": "focus_pane",
+        "conf": 0.723,
+        "ok": true
+      },
+      {
+        "id": 17,
+        "a1": "resize_pane",
+        "conf": 0.836,
+        "ok": true
+      },
+      {
+        "id": 18,
+        "a1": "resize_pane",
+        "conf": 0.866,
+        "ok": true
+      },
+      {
+        "id": 19,
+        "a1": "resize_pane",
+        "conf": 0.905,
+        "ok": true
+      },
+      {
+        "id": 20,
+        "a1": "resize_pane",
+        "conf": 0.383,
+        "ok": false
+      },
+      {
+        "id": 21,
+        "a1": "zoom_pane",
+        "conf": 0.657,
+        "ok": true
+      },
+      {
+        "id": 22,
+        "a1": "swap_panes",
+        "conf": 0.866,
+        "ok": true
+      },
+      {
+        "id": 23,
+        "a1": "equalize_panes",
+        "conf": 0.9,
+        "ok": true
+      },
+      {
+        "id": 24,
+        "a1": "set_layout",
+        "conf": 0.926,
+        "ok": true
+      },
+      {
+        "id": 25,
+        "a1": "send_to_pane",
+        "conf": 0.895,
+        "ok": true
+      },
+      {
+        "id": 26,
+        "a1": "send_to_pane",
+        "conf": 0.685,
+        "ok": true
+      },
+      {
+        "id": 27,
+        "a1": "broadcast",
+        "conf": 0.747,
+        "ok": true
+      },
+      {
+        "id": 28,
+        "a1": "approve_agent",
+        "conf": 0.694,
+        "ok": true
+      },
+      {
+        "id": 29,
+        "a1": "approve_agent",
+        "conf": 0.794,
+        "ok": true
+      },
+      {
+        "id": 30,
+        "a1": "interrupt_agent",
+        "conf": 0.775,
+        "ok": true
+      },
+      {
+        "id": 31,
+        "a1": "interrupt_agent",
+        "conf": 0.884,
+        "ok": true
+      },
+      {
+        "id": 32,
+        "a1": "open_url",
+        "conf": 0.838,
+        "ok": true
+      },
+      {
+        "id": 33,
+        "a1": "open_url",
+        "conf": 0.772,
+        "ok": true
+      },
+      {
+        "id": 34,
+        "a1": "browser_new_tab",
+        "conf": 0.904,
+        "ok": true
+      },
+      {
+        "id": 35,
+        "a1": "browser_close_tab",
+        "conf": 0.886,
+        "ok": true
+      },
+      {
+        "id": 36,
+        "a1": "browser_switch_tab",
+        "conf": 0.927,
+        "ok": true
+      },
+      {
+        "id": 37,
+        "a1": "interrupt_agent",
+        "conf": 0.377,
+        "ok": false
+      },
+      {
+        "id": 38,
+        "a1": "browser_forward",
+        "conf": 0.906,
+        "ok": true
+      },
+      {
+        "id": 39,
+        "a1": "browser_reload",
+        "conf": 0.909,
+        "ok": true
+      },
+      {
+        "id": 40,
+        "a1": "set_device",
+        "conf": 0.952,
+        "ok": true
+      },
+      {
+        "id": 41,
+        "a1": "switch_workspace",
+        "conf": 0.934,
+        "ok": true
+      },
+      {
+        "id": 42,
+        "a1": "switch_workspace",
+        "conf": 0.944,
+        "ok": true
+      },
+      {
+        "id": 43,
+        "a1": "create_workspace",
+        "conf": 0.931,
+        "ok": true
+      },
+      {
+        "id": 44,
+        "a1": "toggle_sidebar",
+        "conf": 0.935,
+        "ok": true
+      },
+      {
+        "id": 45,
+        "a1": "toggle_browser",
+        "conf": 0.731,
+        "ok": true
+      },
+      {
+        "id": 46,
+        "a1": "load_recipe",
+        "conf": 0.874,
+        "ok": true
+      },
+      {
+        "id": 47,
+        "a1": "show_shortcuts",
+        "conf": 0.962,
+        "ok": true
+      },
+      {
+        "id": 48,
+        "a1": "undo_last",
+        "conf": 0.565,
+        "ok": true
+      },
+      {
+        "id": 49,
+        "a1": "repeat_last",
+        "conf": 0.704,
+        "ok": true
+      },
+      {
+        "id": 50,
+        "a1": "none",
+        "conf": 0.629,
+        "ok": true
+      },
+      {
+        "id": 51,
+        "a1": "none",
+        "conf": 0.462,
+        "ok": true
+      },
+      {
+        "id": 52,
+        "a1": "none",
+        "conf": 0.308,
+        "ok": true
+      },
+      {
+        "id": 53,
+        "a1": "none",
+        "conf": 0.703,
+        "ok": true
+      },
+      {
+        "id": 54,
+        "a1": "close_pane",
+        "conf": 0.871,
+        "ok": true
+      },
+      {
+        "id": 55,
+        "a1": "browser_reload",
+        "conf": 0.827,
+        "ok": true
+      },
+      {
+        "id": 56,
+        "a1": "interrupt_agent",
+        "conf": 0.538,
+        "ok": true
+      },
+      {
+        "id": 57,
+        "a1": "approve_agent",
+        "conf": 0.564,
+        "ok": true
+      },
+      {
+        "id": 58,
+        "a1": "spawn_panes",
+        "conf": 0.612,
+        "ok": true
+      },
+      {
+        "id": 59,
+        "a1": "spawn_panes",
+        "conf": 0.747,
+        "ok": true
+      },
+      {
+        "id": 60,
+        "a1": "focus_pane",
+        "conf": 0.806,
+        "ok": true
+      },
+      {
+        "id": 61,
+        "a1": "close_pane",
+        "conf": 0.848,
+        "ok": true
+      },
+      {
+        "id": 62,
+        "a1": "browser_reload",
+        "conf": 0.795,
+        "ok": true
+      },
+      {
+        "id": 63,
+        "a1": "open_url",
+        "conf": 0.921,
+        "ok": true
+      },
+      {
+        "id": 64,
+        "a1": "none",
+        "conf": 0.418,
+        "ok": true
+      },
+      {
+        "id": 65,
+        "a1": "broadcast",
+        "conf": 0.836,
+        "ok": true
+      },
+      {
+        "id": 66,
+        "a1": "set_layout",
+        "conf": 0.634,
+        "ok": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* Design tokens, taken from the reference screenshot (dark, low-contrast, mono). */
+@theme {
+  --color-app: #0b0b0d;
+  --color-panel: #121215;
+  --color-panel-raised: #17171b;
+  --color-hover: #1d1d22;
+  --color-active: #24242a;
+  --color-border: #26262c;
+  --color-border-strong: #33333b;
+
+  --color-fg: #e6e6ea;
+  --color-fg-muted: #9a9aa3;
+  --color-fg-subtle: #6b6b74;
+
+  --color-accent: #6d7cff;
+  --color-accent-soft: #6d7cff26;
+  --color-success: #4ade80;
+  --color-warning: #f5b544;
+  --color-danger: #f26d6d;
+  --color-claude: #d97757;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --radius-pane: 10px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-app);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+}
