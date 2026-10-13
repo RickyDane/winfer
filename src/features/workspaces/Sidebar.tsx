@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, Moon, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
 import { StatusDot } from "@/features/terminal/StatusDot";
+import { ActivityFeed } from "./ActivityFeed";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 
 export function Sidebar() {
@@ -71,6 +72,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      <ActivityFeed />
       <footer className="flex items-center gap-2 border-t border-border px-4 py-3">
         <span className="flex size-6 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">
           W

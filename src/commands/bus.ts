@@ -18,7 +18,9 @@ import { closeTerminal, sendText } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
 import * as browser from "@/features/browser/browser";
-import { useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
+import { loadRecipe } from "@/features/recipes/recipes";
+import { providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
+import { logActivity } from "@/stores/activity";
 
 export type Direction = "left" | "right" | "up" | "down";
 
@@ -72,7 +74,8 @@ export type Command =
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" };
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" }
+  | { type: "recipe.load"; id: string };
 
 const store = () => useWorkspaces.getState();
 const active = (): Workspace => {
@@ -130,7 +133,9 @@ export function execute(cmd: Command): void {
   switch (cmd.type) {
     case "pane.spawn": {
       const provider = resolveProvider(cmd.provider);
-      for (let i = 0; i < Math.max(1, cmd.count ?? 1); i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree });
+      const count = Math.max(1, cmd.count ?? 1);
+      for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree });
+      logActivity(s.activeWorkspaceId, `Opened ${count > 1 ? `${count}× ` : ""}${providerName(s.providers, provider)}`, provider);
       return;
     }
     case "pane.interrupt": {
@@ -155,6 +160,8 @@ export function execute(cmd: Command): void {
       }
       s.updateActive((w) => ({ layout: w.layout && buildPreset("grid", leaves(w.layout)) }));
       s.setOverlay("race");
+      const racers = Object.values(cmd.counts).reduce((a, b) => a + b, 0);
+      logActivity(s.activeWorkspaceId, `Race started with ${racers} agents: ${cmd.prompt}`);
       return;
     }
     case "pane.search": {
@@ -174,6 +181,8 @@ export function execute(cmd: Command): void {
     case "pane.close": {
       const id = resolvePane(cmd.target);
       if (!id) return;
+      const closing = paneById(id);
+      if (closing) logActivity(closing.workspaceId, `Closed ${providerName(s.providers, closing.provider)}`, closing.provider);
       closeTerminal(id);
       s.removePane(id);
       return;
@@ -300,6 +309,8 @@ export function execute(cmd: Command): void {
       return s.setCheatSheet(!s.cheatSheetOpen);
     case "ui.settings":
       return s.setSettings(!s.settingsOpen);
+    case "recipe.load":
+      return loadRecipe(cmd.id);
     case "ui.overlay":
       return s.setOverlay(s.overlay === cmd.overlay ? null : cmd.overlay);
   }
@@ -349,6 +360,7 @@ async function mergePane(pane: { worktree: WorktreeInfo }) {
   if (!ok) return;
   try {
     await mergeWorktree(pane.worktree);
+    logActivity(active().id, `Merged ${branch} into ${base}`);
     await message(`Merged ${branch} into ${base}.`, { title: "Merged", kind: "info" });
   } catch (err) {
     await message(String(err), { title: "Merge not possible", kind: "error" });
@@ -365,6 +377,7 @@ async function discardPane(pane: { id: string; worktree: WorktreeInfo }) {
   if (!ok) return;
   closeTerminal(pane.id);
   store().removePane(pane.id);
+  logActivity(active().id, `Discarded ${branch}`);
   try {
     await removeWorktree(pane.worktree, true);
   } catch (err) {

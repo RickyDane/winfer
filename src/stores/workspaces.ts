@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { fetchProviders, type Provider, type ProviderId } from "@/features/providers/providers";
 import { insertDwindle, leaves, removeLeaf, type LayoutNode } from "@/features/layout/tree";
+import type { Recipe } from "@/features/recipes/recipes";
 
 export type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
@@ -61,12 +62,14 @@ interface WorkspaceState {
   /** Pane whose worktree changes are shown in the diff view. */
   diffPaneId: string | null;
   settingsOpen: boolean;
-  /** Open overlay for agent orchestration: race mode or broadcast. */
-  overlay: "race" | "broadcast" | null;
+  /** Open overlay for agent orchestration and recipes. */
+  overlay: "race" | "broadcast" | "recipes" | null;
+  /** User-saved recipes (persisted). */
+  recipes: Recipe[];
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
-  voiceConfig: { sttModel?: string; clefModel?: string };
+  voiceConfig: { sttModel?: string; clefModel?: string; readback?: boolean };
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -87,9 +90,10 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
-  setOverlay: (overlay: "race" | "broadcast" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | null) => void;
+  setRecipes: (recipes: Recipe[]) => void;
   setSearchPane: (id: string | null) => void;
-  setVoiceConfig: (config: { sttModel?: string; clefModel?: string }) => void;
+  setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -120,6 +124,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   diffPaneId: null,
   settingsOpen: false,
   overlay: null,
+  recipes: [],
   searchPaneId: null,
   voiceConfig: {},
 
@@ -155,6 +160,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       sidebarOpen: ui.sidebarOpen ?? true,
       browserOpen: ui.browserOpen ?? true,
       voiceConfig: ui.voice ?? {},
+      recipes: ui.recipes ?? [],
     });
   },
 
@@ -258,6 +264,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
   setSettings: (open) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false }),
   setOverlay: (overlay) => set({ overlay, paletteQuery: null, cheatSheetOpen: false }),
+  setRecipes: (recipes) => set({ recipes }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -282,7 +289,8 @@ interface Snapshot {
     activeWorkspaceId?: string;
     sidebarOpen?: boolean;
     browserOpen?: boolean;
-    voice?: { sttModel?: string; clefModel?: string };
+    voice?: { sttModel?: string; clefModel?: string; readback?: boolean };
+    recipes?: Recipe[];
   } | null;
 }
 
@@ -301,7 +309,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId }) => ({ id, provider, title, cwd, worktree, raceId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes },
   };
 }
 

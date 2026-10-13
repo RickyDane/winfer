@@ -10,6 +10,7 @@ import { sendText } from "@/features/terminal/xtermRegistry";
 import { toolContext } from "@/features/palette/entries";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
+import { logActivity } from "@/stores/activity";
 import { buildRequest, orderByMention, parseDecision, verdict, type Decision, type DecisionResult } from "./decision";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
@@ -107,6 +108,7 @@ function run(decisions: Decision[], transcript: string) {
     lastCommands: decisions.some((d) => d.tool.id === "repeat_last") ? s.lastCommands : commands,
   }));
   show("done", { message: summary, pending: null }, 2500);
+  logActivity(useWorkspaces.getState().activeWorkspaceId, `Voice: “${transcript}” → ${summary}`);
 }
 
 export function confirmPending(alternative?: Decision) {

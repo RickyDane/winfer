@@ -10,6 +10,7 @@ import type { Command, PaneRef } from "@/commands/bus";
 import type { Provider } from "@/features/providers/providers";
 import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
 import { providerName, type Workspace } from "@/stores/workspaces";
+import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
 
 export interface ToolContext {
   providers: Provider[];
@@ -439,6 +440,15 @@ export const TOOLS: ToolDef[] = [
         : [{ type: "ui.overlay", overlay: "race" }];
     },
     palette: () => [{ title: "Race mode…", args: {} }],
+  },
+  {
+    id: "load_recipe",
+    title: "Load recipe",
+    description: "Set up a saved recipe of agents, layout and preview, like pair programming or full stack",
+    risk: "safe",
+    params: { recipe: { kind: "enum", ask: "Which recipe?", options: () => Object.fromEntries(allRecipes().map((r) => [r.id, `${r.name}: ${describeRecipe(r)}`])) } },
+    toCommands: (args) => (args.recipe ? [{ type: "recipe.load", id: String(args.recipe) }] : [{ type: "ui.overlay", overlay: "recipes" }]),
+    palette: () => [...allRecipes().map((r) => ({ title: `Recipe: ${r.name}`, args: { recipe: r.id } })), { title: "Recipes…", args: {} }],
   },
   {
     id: "repeat_last",

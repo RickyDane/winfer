@@ -7,6 +7,7 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
 import { providerName, useActiveWorkspace, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { logActivity } from "@/stores/activity";
 
 interface Stats {
   files: number;
@@ -115,6 +116,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
       if (loser.worktree) await removeWorktree(loser.worktree, true).catch(() => {});
     }
     s.updatePane(winner.id, { raceId: null });
+    logActivity(winner.workspaceId, `Race won by ${providerName(s.providers, winner.provider)} (${winner.worktree.branch})`, winner.provider);
   };
 
   const isolated = panes.every((p) => p.worktree);

@@ -61,13 +61,20 @@ interface Entry {
 
 const entries = new Map<string, Entry>();
 
-listen<{ paneId: string; code: number }>("pty://exit", ({ payload }) => {
-  const entry = entries.get(payload.paneId);
-  if (!entry) return;
-  entry.exited = true;
-  entry.term.write(`\r\n\x1b[2m[process exited with code ${payload.code}]\x1b[0m\r\n`);
-  reportStatus(payload.paneId, payload.code === 0 ? "done" : "error", `exited with code ${payload.code}`);
-});
+let started = false;
+
+/** Subscribes to PTY exit events. Called once at startup. */
+export function startTerminalEvents() {
+  if (started) return;
+  started = true;
+  void listen<{ paneId: string; code: number }>("pty://exit", ({ payload }) => {
+    const entry = entries.get(payload.paneId);
+    if (!entry) return;
+    entry.exited = true;
+    entry.term.write(`\r\n\x1b[2m[process exited with code ${payload.code}]\x1b[0m\r\n`);
+    reportStatus(payload.paneId, payload.code === 0 ? "done" : "error", `exited with code ${payload.code}`);
+  });
+}
 
 function create(pane: Pane): Entry {
   const term = new Terminal({

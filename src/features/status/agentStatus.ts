@@ -6,6 +6,8 @@ import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { providerName, useWorkspaces, type AgentStatus, type Pane } from "@/stores/workspaces";
 import { outputAge } from "@/features/terminal/xtermRegistry";
+import { logActivity } from "@/stores/activity";
+import { speak } from "@/features/voice/readback";
 
 const IDLE_AFTER_MS = 4000;
 
@@ -35,7 +37,14 @@ export function reportStatus(paneId: string, status: AgentStatus, message?: stri
   const pane = findPane(paneId);
   if (!pane || pane.status === status) return;
   useWorkspaces.getState().setPaneStatus(paneId, status);
-  if (status === "needs-input" || status === "done" || status === "error") void notify(pane, status, message);
+  if (status === "needs-input" || status === "done" || status === "error") {
+    void notify(pane, status, message);
+    const name = providerName(useWorkspaces.getState().providers, pane.provider);
+    const verb = status === "needs-input" ? "needs your input" : status === "done" ? "finished" : "stopped with an error";
+    const detail = message && status === "needs-input" ? (message.startsWith(name) ? message : `${name}: ${message}`) : `${name} ${verb}`;
+    logActivity(pane.workspaceId, detail, pane.provider);
+    if (useWorkspaces.getState().focusedPaneId !== pane.id || !document.hasFocus()) speak(`${name} ${verb}`);
+  }
 }
 
 /** The user submitted input to an agent: it's working now. */

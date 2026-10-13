@@ -9,6 +9,7 @@ import { openUrl } from "@/features/browser/browser";
 import { reportStatus } from "@/features/status/agentStatus";
 import { pasteText, readTerminal, sendText, startDetached } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
+import { logActivity } from "@/stores/activity";
 
 interface Call {
   id: string;
@@ -65,6 +66,7 @@ export async function runTool(call: Call): Promise<string> {
       if (text.includes("\n")) pasteText(pane.id, text);
       else sendText(pane.id, text);
       if (a.submit !== false) sendText(pane.id, "\r");
+      logActivity(ws.id, `${describe(ws, self)} → ${describe(ws, pane)}: ${text.split("\n")[0].slice(0, 80)}`, self.provider);
       return `Sent to ${describe(ws, pane)}.`;
     }
     case "spawn_agent": {
@@ -83,6 +85,7 @@ export async function runTool(call: Call): Promise<string> {
       const pane = fresh.panes.find((p) => p.id === id)!;
       // Panes in a workspace the user isn't looking at start immediately, off-screen.
       if (ws.id !== useWorkspaces.getState().activeWorkspaceId) startDetached(pane);
+      logActivity(ws.id, `${describe(ws, self)} started ${provider.name}`, self.provider);
       return `Started ${provider.name} as pane ${order(fresh).indexOf(pane) + 1}.`;
     }
     case "open_url": {
@@ -90,6 +93,7 @@ export async function runTool(call: Call): Promise<string> {
       if (!url) throw new ToolError("url is empty");
       if (ws.id === s.activeWorkspaceId) await openUrl(url, { newTab: Boolean(a.new_tab) });
       else await invoke("browser_new_tab", { workspaceId: ws.id, url });
+      logActivity(ws.id, `${describe(ws, self)} opened ${url}`, self.provider);
       return `Opened ${url} in the browser panel.`;
     }
     case "notify_user": {

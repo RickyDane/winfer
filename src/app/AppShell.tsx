@@ -10,10 +10,12 @@ import { SettingsModal } from "@/features/settings/SettingsModal";
 import { VoiceHUD } from "@/features/voice/VoiceHUD";
 import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
 import { RaceView } from "@/features/orchestration/RaceView";
+import { RecipesView } from "@/features/recipes/RecipesView";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startAgentApi } from "@/features/mcp/agentApi";
+import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
@@ -78,6 +80,7 @@ export function AppShell() {
   useEffect(() => {
     void loadProviders();
     void hydrate();
+    startTerminalEvents();
     startStatusTracking();
     startVoice();
     startAgentApi();
@@ -123,6 +126,7 @@ export function AppShell() {
       <SettingsModal />
       <RaceView />
       <BroadcastBar />
+      <RecipesView />
       <VoiceHUD />
     </div>
   );
