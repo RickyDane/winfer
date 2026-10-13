@@ -90,7 +90,7 @@ fn size(cols: u16, rows: u16) -> PtySize {
 }
 
 /// Expands `~` and falls back to the home directory if the path doesn't exist.
-fn resolve_cwd(cwd: Option<&str>) -> PathBuf {
+pub(crate) fn resolve_cwd(cwd: Option<&str>) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
     let path = match cwd {
         Some("~") => home.clone(),

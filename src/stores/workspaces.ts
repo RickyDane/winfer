@@ -52,6 +52,8 @@ interface WorkspaceState {
   browserOpen: boolean;
   paletteQuery: string | null;
   cheatSheetOpen: boolean;
+  /** Pane whose worktree changes are shown in the diff view. */
+  diffPaneId: string | null;
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -67,6 +69,7 @@ interface WorkspaceState {
   openPalette: (query?: string) => void;
   closePalette: () => void;
   setCheatSheet: (open: boolean) => void;
+  setDiffPane: (id: string | null) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -94,6 +97,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   browserOpen: true,
   paletteQuery: null,
   cheatSheetOpen: false,
+  diffPaneId: null,
 
   hydrate: async () => {
     hydration ??= loadSnapshot();
@@ -221,6 +225,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   openPalette: (query = "") => set({ paletteQuery: query, cheatSheetOpen: false }),
   closePalette: () => set({ paletteQuery: null }),
   setCheatSheet: (open) => set({ cheatSheetOpen: open, paletteQuery: null }),
+  setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleBrowser: () => set((s) => ({ browserOpen: !s.browserOpen })),

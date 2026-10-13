@@ -5,6 +5,7 @@ mod menu;
 mod providers;
 mod pty;
 mod store;
+mod worktree;
 
 use tauri::Manager;
 
@@ -39,6 +40,10 @@ pub fn run() {
             pty::pty_kill,
             store::state_load,
             store::state_save,
+            worktree::worktree_create,
+            worktree::worktree_diff,
+            worktree::worktree_merge,
+            worktree::worktree_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

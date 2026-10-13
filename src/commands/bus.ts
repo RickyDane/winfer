@@ -15,8 +15,9 @@ import {
   type SplitDir,
 } from "@/features/layout/tree";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
-import { ask, open } from "@tauri-apps/plugin-dialog";
-import { useWorkspaces, type Workspace } from "@/stores/workspaces";
+import { ask, message, open } from "@tauri-apps/plugin-dialog";
+import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
+import { useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 
 export type Direction = "left" | "right" | "up" | "down";
 
@@ -32,6 +33,9 @@ export type Command =
   | { type: "pane.swapDir"; dir: Direction }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  | { type: "pane.showChanges"; target: PaneRef }
+  | { type: "pane.mergeWorktree"; target: PaneRef }
+  | { type: "pane.discardWorktree"; target: PaneRef }
   /** Jump to the next pane (any workspace) whose agent needs input or finished unseen. */
   | { type: "pane.nextAttention" }
   | { type: "layout.equalize" }
@@ -40,6 +44,7 @@ export type Command =
   /** Without a rootDir, asks for a folder. */
   | { type: "workspace.create"; rootDir?: string; name?: string }
   | { type: "workspace.remove"; id: string }
+  | { type: "workspace.toggleWorktrees" }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   | { type: "ui.palette"; query?: string }
@@ -147,10 +152,26 @@ export function execute(cmd: Command): void {
       s.updateActive((w) => ({ zoomedPaneId: w.zoomedPaneId === id ? null : id }));
       return;
     }
+    case "pane.showChanges": {
+      const pane = paneWithWorktree(cmd.target);
+      if (pane) s.setDiffPane(pane.id);
+      return;
+    }
+    case "pane.mergeWorktree": {
+      const pane = paneWithWorktree(cmd.target);
+      if (pane) void mergePane(pane);
+      return;
+    }
+    case "pane.discardWorktree": {
+      const pane = paneWithWorktree(cmd.target);
+      if (pane) void discardPane(pane);
+      return;
+    }
     case "pane.nextAttention": {
       const all = s.workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : []).map((id) => w.panes.find((p) => p.id === id)!));
       const rank = (p: (typeof all)[number]) => (p.status === "needs-input" ? 0 : p.unseen ? 1 : 2);
-      const candidates = all.filter((p) => rank(p) < 2);
+      // Skip the pane we're already on so repeated ⌘J cycles through everything waiting.
+      const candidates = all.filter((p) => rank(p) < 2 && p.id !== s.focusedPaneId);
       if (candidates.length === 0) return;
       // Most urgent first; among equals, the next one after the focused pane (wrapping).
       const start = all.findIndex((p) => p.id === s.focusedPaneId);
@@ -184,6 +205,9 @@ export function execute(cmd: Command): void {
       return;
     case "workspace.remove":
       void removeWorkspace(cmd.id);
+      return;
+    case "workspace.toggleWorktrees":
+      s.updateActive((w) => ({ useWorktrees: !w.useWorktrees }));
       return;
     case "ui.toggleSidebar":
       return s.toggleSidebar();
@@ -224,4 +248,41 @@ async function removeWorkspace(id: string) {
   }
   ws.panes.forEach((p) => closeTerminal(p.id));
   store().removeWorkspace(id);
+}
+
+function paneWithWorktree(target: PaneRef) {
+  const id = resolvePane(target);
+  const pane = active().panes.find((p) => p.id === id);
+  if (pane?.worktree) return pane as typeof pane & { worktree: NonNullable<typeof pane.worktree> };
+  if (pane) void message("This pane isn't running in its own worktree.", { title: "No worktree", kind: "info" });
+  return null;
+}
+
+async function mergePane(pane: { worktree: WorktreeInfo }) {
+  const { branch, base } = pane.worktree;
+  const ok = await ask(`Merge ${branch} into ${base}?`, { title: "Merge worktree", okLabel: "Merge" });
+  if (!ok) return;
+  try {
+    await mergeWorktree(pane.worktree);
+    await message(`Merged ${branch} into ${base}.`, { title: "Merged", kind: "info" });
+  } catch (err) {
+    await message(String(err), { title: "Merge not possible", kind: "error" });
+  }
+}
+
+async function discardPane(pane: { id: string; worktree: WorktreeInfo }) {
+  const { branch, path } = pane.worktree;
+  const ok = await ask(`Close this pane, delete ${path} and the branch ${branch}? Unmerged work is lost.`, {
+    title: "Discard worktree",
+    kind: "warning",
+    okLabel: "Discard",
+  });
+  if (!ok) return;
+  closeTerminal(pane.id);
+  store().removePane(pane.id);
+  try {
+    await removeWorktree(pane.worktree, true);
+  } catch (err) {
+    await message(String(err), { title: "Couldn't remove worktree", kind: "error" });
+  }
 }

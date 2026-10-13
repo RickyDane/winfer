@@ -13,6 +13,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
+import { createWorktree } from "@/features/worktree/worktree";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
@@ -117,8 +118,25 @@ function create(pane: Pane): Entry {
   return { pane, term, fit, host, opened: false, spawned: false, exited: false, lastOutput: 0 };
 }
 
+/** Gives an agent pane its own git worktree before it starts (if the folder is a repo). */
+async function prepareWorktree(entry: Entry) {
+  const pane = entry.pane;
+  if (!pane.wantsWorktree || pane.worktree) return;
+  try {
+    const worktree = await createWorktree(pane.cwd, pane.provider);
+    const patch = worktree ? { worktree, cwd: worktree.path, wantsWorktree: false } : { wantsWorktree: false };
+    useWorkspaces.getState().updatePane(pane.id, patch);
+    entry.pane = { ...pane, ...patch };
+    if (worktree) entry.term.write(`\x1b[2mworktree ${worktree.branch} (from ${worktree.base}) at ${worktree.path}\x1b[0m\r\n`);
+  } catch (err) {
+    useWorkspaces.getState().updatePane(pane.id, { wantsWorktree: false });
+    entry.term.write(`\x1b[33mCouldn't create a worktree, starting in ${pane.cwd}: ${err}\x1b[0m\r\n`);
+  }
+}
+
 async function spawn(entry: Entry) {
   entry.spawned = true;
+  await prepareWorktree(entry);
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (data) => {
     entry.term.write(new Uint8Array(data));

@@ -4,6 +4,7 @@ import { BrowserPanel } from "@/features/browser/BrowserPanel";
 import { NewPaneMenu } from "@/features/panes/NewPaneMenu";
 import { CheatSheet } from "@/features/palette/CheatSheet";
 import { CommandPalette } from "@/features/palette/CommandPalette";
+import { DiffView } from "@/features/worktree/DiffView";
 import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { leaves, setSizesAt } from "@/features/layout/tree";
@@ -92,6 +93,7 @@ export function AppShell() {
       </main>
       <CommandPalette />
       <CheatSheet />
+      <DiffView />
     </div>
   );
 }

@@ -1,8 +1,9 @@
-import { Ellipsis, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
+import { PaneMenu } from "./PaneMenu";
 import { TerminalHost } from "./TerminalHost";
 import type { Pane } from "@/stores/workspaces";
 
@@ -43,9 +44,18 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
         <StatusDot status={pane.status} />
         <ProviderIcon provider={pane.provider} />
         <span className="flex-1 truncate font-mono text-xs text-fg-muted">{pane.title}</span>
-        <HeaderButton title="More">
-          <Ellipsis size={14} />
-        </HeaderButton>
+        {pane.worktree && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => execute({ type: "pane.showChanges", target })}
+            title={`${pane.worktree.path}\nClick to show changes`}
+            className="flex max-w-40 items-center gap-1 truncate rounded px-1.5 py-0.5 font-mono text-[11px] text-fg-subtle hover:bg-hover hover:text-fg"
+          >
+            <GitBranch size={11} />
+            <span className="truncate">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
+          </button>
+        )}
+        <PaneMenu pane={pane} />
         <HeaderButton title={zoomed ? "Restore (⌘↩)" : "Zoom (⌘↩)"} onClick={() => execute({ type: "pane.zoom", target })}>
           {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </HeaderButton>
