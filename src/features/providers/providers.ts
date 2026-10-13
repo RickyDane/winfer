@@ -16,10 +16,20 @@ export interface Provider {
   promptArg: boolean;
   /** Keys that accept a pending permission prompt (default Enter). */
   approveInput: string | null;
+  /** Launch flag that selects the model, if the CLI has one. */
+  modelArg: string | null;
+  /** Typed into a running session to switch models (`{model}` is replaced), if supported. */
+  modelCommand: string | null;
   installed: boolean;
 }
 
+export interface ModelInfo {
+  id: string;
+  label: string;
+}
+
 export const fetchProviders = () => invoke<Provider[]>("providers_list");
+export const fetchModels = (id: ProviderId) => invoke<ModelInfo[]>("providers_models", { id });
 
 /** Pane icon color per provider; unknown providers fall back to the muted foreground. */
 export const PROVIDER_COLORS: Record<string, string> = {

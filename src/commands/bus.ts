@@ -14,7 +14,7 @@ import {
   type Preset,
   type SplitDir,
 } from "@/features/layout/tree";
-import { closeTerminal, sendText } from "@/features/terminal/xtermRegistry";
+import { closeTerminal, restartTerminal, sendText } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
 import * as browser from "@/features/browser/browser";
@@ -28,7 +28,9 @@ export type Direction = "left" | "right" | "up" | "down";
 export type PaneRef = "focused" | { id: string } | { index: number };
 
 export type Command =
-  | { type: "pane.spawn"; provider: ProviderId | "default"; count?: number; prompt?: string; worktree?: boolean }
+  | { type: "pane.spawn"; provider: ProviderId | "default"; count?: number; prompt?: string; worktree?: boolean; model?: string }
+  /** Switches a running agent's model: in place where the CLI supports it, else by restarting it. */
+  | { type: "pane.setModel"; target: PaneRef; model: string | null }
   | { type: "pane.split"; dir: SplitDir; provider?: ProviderId | "default" }
   | { type: "pane.close"; target: PaneRef }
   | { type: "pane.focus"; target: PaneRef }
@@ -76,7 +78,7 @@ export type Command =
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" }
   | { type: "recipe.load"; id: string };
 
 const store = () => useWorkspaces.getState();
@@ -136,8 +138,24 @@ export function execute(cmd: Command): void {
     case "pane.spawn": {
       const provider = resolveProvider(cmd.provider);
       const count = Math.max(1, cmd.count ?? 1);
-      for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree });
+      for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree, model: cmd.model });
       logActivity(s.activeWorkspaceId, `Opened ${count > 1 ? `${count}× ` : ""}${providerName(s.providers, provider)}`, provider);
+      return;
+    }
+    case "pane.setModel": {
+      const pane = paneById(resolvePane(cmd.target));
+      const provider = pane && s.providers.find((p) => p.id === pane.provider);
+      if (!pane || !provider?.modelArg || pane.model === cmd.model) return;
+      const name = `${providerName(s.providers, pane.provider)} → ${cmd.model ?? "default model"}`;
+      if (provider.modelCommand && cmd.model) {
+        sendText(pane.id, `${provider.modelCommand.replace("{model}", cmd.model)}\r`);
+        s.updatePane(pane.id, { model: cmd.model });
+      } else {
+        // No in-session switch: restart with the new model and resume the conversation.
+        s.updatePane(pane.id, { model: cmd.model, resume: true, prompt: null });
+        restartTerminal(paneById(pane.id)!);
+      }
+      logActivity(pane.workspaceId, `Model: ${name}`, pane.provider);
       return;
     }
     case "pane.closeAll": {

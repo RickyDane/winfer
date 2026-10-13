@@ -21,6 +21,7 @@ export function toolContext(lastCommands: ToolContext["lastCommands"] = []): Too
     focusedPaneId: s.focusedPaneId,
     browserTabs: tabs.map((t) => t.title || t.url),
     lastCommands,
+    models: s.models,
   };
 }
 

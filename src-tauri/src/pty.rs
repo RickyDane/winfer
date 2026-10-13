@@ -64,6 +64,9 @@ pub struct SpawnRequest {
     /// Initial prompt for a fresh agent (race mode, voice "open claude and tell it to …").
     #[serde(default)]
     prompt: Option<String>,
+    /// Model to launch with (the provider's `modelArg`); `None` uses the CLI's default.
+    #[serde(default)]
+    model: Option<String>,
     cols: u16,
     rows: u16,
 }
@@ -111,12 +114,17 @@ fn agent_args(
     provider: &providers::Provider,
     mcp_args: Vec<String>,
     hook_args: Vec<String>,
+    model: Option<&str>,
     resume: bool,
     prompt: Option<&str>,
 ) -> Vec<String> {
     let mut args = mcp_args;
     args.extend(hook_args);
     args.extend(provider.args.iter().cloned());
+    // Global option, so it goes before subcommands like Codex's `resume`.
+    if let (Some(flag), Some(model)) = (&provider.model_arg, model.filter(|m| !m.is_empty())) {
+        args.extend([flag.clone(), model.to_string()]);
+    }
     if resume {
         args.extend(provider.resume_args.iter().cloned());
     } else if let Some(prompt) = prompt.filter(|_| provider.prompt_arg) {
@@ -140,6 +148,7 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBui
                 provider,
                 mcp::agent_args(&provider.id, &servers),
                 hooks::provider_args(&provider.id),
+                req.model.as_deref(),
                 req.resume,
                 req.prompt.as_deref(),
             ));
@@ -263,10 +272,9 @@ pub fn pty_spawn(
     );
 
     // CLIs without a prompt argument get the prompt typed in once they've had time to start.
-    let typed_prompt = req
-        .prompt
-        .clone()
-        .filter(|_| !req.resume && !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg));
+    let typed_prompt = req.prompt.clone().filter(|_| {
+        !req.resume && !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg)
+    });
     if let Some(prompt) = typed_prompt {
         let pane_id = req.pane_id.clone();
         let app = app_for_prompt;
@@ -344,6 +352,7 @@ mod tests {
             workspace_id: Some("ws-test".into()),
             resume: false,
             prompt: None,
+            model: None,
             cols: 80,
             rows: 24,
         };
@@ -387,14 +396,34 @@ mod tests {
             claude,
             vec!["--mcp-config".into(), "{}".into()],
             vec!["--settings".into(), "/hooks.json".into()],
+            None,
             false,
             Some("fix the login bug"),
         );
-        assert_eq!(args, ["--mcp-config", "{}", "--settings", "/hooks.json", "fix the login bug"]);
-        let resumed = agent_args(claude, vec![], vec![], true, Some("ignored"));
-        assert_eq!(resumed, ["--continue"]);
+        assert_eq!(
+            args,
+            [
+                "--mcp-config",
+                "{}",
+                "--settings",
+                "/hooks.json",
+                "fix the login bug"
+            ]
+        );
+        let resumed = agent_args(claude, vec![], vec![], Some("opus"), true, Some("ignored"));
+        assert_eq!(resumed, ["--model", "opus", "--continue"]);
         let codex = providers::find("codex").unwrap();
-        assert_eq!(agent_args(codex, vec!["-c".into(), "a=1".into()], vec![], true, None), ["-c", "a=1", "resume", "--last"]);
+        assert_eq!(
+            agent_args(
+                codex,
+                vec!["-c".into(), "a=1".into()],
+                vec![],
+                Some("gpt-5.5"),
+                true,
+                None
+            ),
+            ["-c", "a=1", "--model", "gpt-5.5", "resume", "--last"]
+        );
     }
 
     #[test]
@@ -411,6 +440,7 @@ mod tests {
             workspace_id: None,
             resume: false,
             prompt: None,
+            model: None,
             cols: 80,
             rows: 24,
         };

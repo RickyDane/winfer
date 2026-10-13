@@ -7,7 +7,7 @@
  * - `toCommands` turns resolved arguments into Command Bus commands.
  */
 import type { Command, PaneRef } from "@/commands/bus";
-import type { Provider } from "@/features/providers/providers";
+import type { ModelInfo, Provider } from "@/features/providers/providers";
 import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
 import { providerName, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
@@ -21,6 +21,8 @@ export interface ToolContext {
   browserTabs: string[];
   /** Commands from the last executed voice request ("do that again"). */
   lastCommands: Command[];
+  /** Models each provider offers. */
+  models: Record<string, ModelInfo[]>;
 }
 
 type Options = (ctx: ToolContext) => Record<string, string | null>;
@@ -55,6 +57,24 @@ export interface ToolDef {
 const installedAgents: Options = (ctx) =>
   Object.fromEntries(ctx.providers.filter((p) => p.installed && p.id !== "shell").map((p) => [p.id, p.name]));
 
+/** Every known model across installed agents, for voice ("open Claude with Opus"). */
+const modelOptions: Options = (ctx) => {
+  const options: Record<string, string> = { default: "No model named; use the agent's default" };
+  for (const p of ctx.providers.filter((p) => p.installed && p.modelArg)) {
+    for (const m of (ctx.models[p.id] ?? []).slice(0, 40)) {
+      if (!options[m.id] && Object.keys(options).length < 250) options[m.id] = `${m.label} (${p.name})`;
+    }
+  }
+  return options;
+};
+
+/** A spoken model only applies to providers that offer it (or that can't list models). */
+const modelFor = (ctx: ToolContext, provider: string, model: unknown): string | undefined => {
+  if (!model || model === "default") return undefined;
+  const list = ctx.models[provider] ?? [];
+  return list.length === 0 || list.some((m) => m.id === model) ? String(model) : undefined;
+};
+
 /** Installed providers, with the names speech recognition tends to mishear them as. */
 const installedProviders: Options = (ctx) =>
   Object.fromEntries(
@@ -87,16 +107,23 @@ export const TOOLS: ToolDef[] = [
   {
     id: "spawn_panes",
     title: "New pane",
-    description: "Open, start, launch or spin up new agents, terminals or windows (Claude Code, Codex, …), one or several, optionally in their own worktrees. Names may be misheard: cloud means Claude, codecs means Codex",
+    description: "Open, start, launch or spin up new agents, terminals or windows (Claude Code, Codex, …), one or several, optionally with a specific model or in their own worktrees. Names may be misheard: cloud means Claude, codecs means Codex",
     risk: "safe",
     params: {
       counts: { kind: "perOption", ask: "How many new panes of this provider are requested?", options: installedProviders, max: 4 },
       prompt: { kind: "span", slot: "instruction", ask: "What should the new agent be told to do, if anything (e.g. “create a Flappy Bird clone”)?" },
+      model: { kind: "enum", ask: "Which AI model did the user name, e.g. Opus or Sonnet? default if none.", options: modelOptions },
     },
-    toCommands: (args) =>
+    toCommands: (args, ctx) =>
       Object.entries((args.counts as Record<string, number>) ?? {})
         .filter(([, n]) => n > 0)
-        .map(([provider, count]) => ({ type: "pane.spawn", provider, count, prompt: args.prompt ? String(args.prompt) : undefined })),
+        .map(([provider, count]) => ({
+          type: "pane.spawn",
+          provider,
+          count,
+          prompt: args.prompt ? String(args.prompt) : undefined,
+          model: modelFor(ctx, provider, args.model),
+        })),
     palette: (ctx) =>
       ctx.providers
         .filter((p) => p.installed)
@@ -122,6 +149,23 @@ export const TOOLS: ToolDef[] = [
     params: { target: { kind: "enum", ask: "Which pane should be closed?", options: paneTargets } },
     toCommands: (args) => [{ type: "pane.close", target: target(args) }],
     palette: () => [{ title: "Close pane", args: { target: "focused" } }],
+  },
+  {
+    id: "change_model",
+    title: "Change model",
+    description: "Change or switch the model of an agent that is already running, when the user says switch or change, e.g. switch Claude to Opus. Not when the user says open, start or create",
+    risk: "safe",
+    params: {
+      target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets },
+      model: { kind: "enum", ask: "Which AI model did the user name, e.g. Opus or Sonnet? default if none.", options: modelOptions },
+    },
+    toCommands: (args, ctx) => {
+      const pane = args.target && args.target !== "focused" ? ctx.active.panes.find((p) => p.id === args.target) : ctx.active.panes.find((p) => p.id === ctx.focusedPaneId);
+      if (!pane || !args.model || args.model === "default") return [{ type: "ui.overlay", overlay: "model" }];
+      const model = modelFor(ctx, pane.provider, args.model);
+      return model ? [{ type: "pane.setModel", target: target(args), model }] : [{ type: "ui.overlay", overlay: "model" }];
+    },
+    palette: () => [{ title: "Change model…", args: {} }],
   },
   {
     id: "close_all_panes",

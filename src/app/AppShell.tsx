@@ -11,6 +11,7 @@ import { VoiceHUD } from "@/features/voice/VoiceHUD";
 import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
 import { RaceView } from "@/features/orchestration/RaceView";
 import { RecipesView } from "@/features/recipes/RecipesView";
+import { ModelPicker } from "@/features/models/ModelPicker";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -127,6 +128,7 @@ export function AppShell() {
       <RaceView />
       <BroadcastBar />
       <RecipesView />
+      <ModelPicker />
       <VoiceHUD />
     </div>
   );

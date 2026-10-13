@@ -13,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter};
 
 use crate::hooks;
@@ -92,9 +92,15 @@ pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
     pending().lock().unwrap().insert(call.id.clone(), tx);
     if app.emit("mcp://call", &call).is_err() {
         pending().lock().unwrap().remove(&call.id);
-        return Reply { ok: false, text: "winfer isn't ready".into() };
+        return Reply {
+            ok: false,
+            text: "winfer isn't ready".into(),
+        };
     }
-    let reply = rx.recv_timeout(Duration::from_secs(60)).unwrap_or(Reply { ok: false, text: "winfer didn't answer in time".into() });
+    let reply = rx.recv_timeout(Duration::from_secs(60)).unwrap_or(Reply {
+        ok: false,
+        text: "winfer didn't answer in time".into(),
+    });
     pending().lock().unwrap().remove(&call.id);
     reply
 }
@@ -110,14 +116,21 @@ pub fn mcp_respond(id: String, reply: Reply) {
 // Agent side: `winfer mcp-stdio`.
 
 fn forward(hook: &str, token: &str, call: &Call) -> Reply {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(90))).http_status_as_error(false).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(90)))
+        .http_status_as_error(false)
+        .build()
+        .into();
     let result = agent
         .post(&format!("http://{hook}/mcp"))
         .header("X-Winfer-Token", token)
         .send_json(call)
         .map_err(|e| e.to_string())
         .and_then(|mut r| r.body_mut().read_json::<Reply>().map_err(|e| e.to_string()));
-    result.unwrap_or_else(|err| Reply { ok: false, text: format!("couldn't reach winfer: {err}") })
+    result.unwrap_or_else(|err| Reply {
+        ok: false,
+        text: format!("couldn't reach winfer: {err}"),
+    })
 }
 
 fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
@@ -136,14 +149,21 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             let (hook, token, pane) = env;
             let call = Call {
                 id: String::new(),
-                tool: message["params"]["name"].as_str().unwrap_or_default().into(),
+                tool: message["params"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
                 args: message["params"]["arguments"].clone(),
                 pane_id: pane.clone(),
             };
             let reply = forward(hook, token, &call);
             json!({ "content": [{ "type": "text", "text": reply.text }], "isError": !reply.ok })
         }
-        _ => return Some(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("unknown method {method}") } })),
+        _ => {
+            return Some(
+                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("unknown method {method}") } }),
+            );
+        }
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
@@ -151,10 +171,16 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
 /// Entry point for `winfer mcp-stdio`: newline-delimited JSON-RPC on stdin/stdout.
 pub fn run_stdio() {
     let var = |k: &str| std::env::var(k).unwrap_or_default();
-    let env = (var("WINFER_HOOK"), var("WINFER_TOKEN"), var("WINFER_PANE_ID"));
+    let env = (
+        var("WINFER_HOOK"),
+        var("WINFER_TOKEN"),
+        var("WINFER_PANE_ID"),
+    );
     let stdout = std::io::stdout();
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
-        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         if let Some(response) = handle(&message, &env) {
             let mut out = stdout.lock();
             let _ = writeln!(out, "{response}");
@@ -181,7 +207,11 @@ pub fn winfer_server(pane_id: &str) -> Option<Server> {
         name: "winfer",
         command: exe.to_string_lossy().into_owned(),
         args: vec!["mcp-stdio".into()],
-        env: vec![("WINFER_HOOK", hooks.addr.clone()), ("WINFER_TOKEN", hooks.token.clone()), ("WINFER_PANE_ID", pane_id.to_string())],
+        env: vec![
+            ("WINFER_HOOK", hooks.addr.clone()),
+            ("WINFER_TOKEN", hooks.token.clone()),
+            ("WINFER_PANE_ID", pane_id.to_string()),
+        ],
     })
 }
 
@@ -195,17 +225,32 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
             let config: serde_json::Map<String, Value> = servers
                 .iter()
                 .map(|s| {
-                    let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
-                    (s.name.to_string(), json!({ "command": s.command, "args": s.args, "env": env }))
+                    let env: serde_json::Map<String, Value> = s
+                        .env
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), json!(v)))
+                        .collect();
+                    (
+                        s.name.to_string(),
+                        json!({ "command": s.command, "args": s.args, "env": env }),
+                    )
                 })
                 .collect();
-            vec!["--mcp-config".into(), json!({ "mcpServers": config }).to_string()]
+            vec![
+                "--mcp-config".into(),
+                json!({ "mcpServers": config }).to_string(),
+            ]
         }
         "codex" => servers
             .iter()
             .flat_map(|s| {
                 let key = s.name.replace('-', "_");
-                let env = s.env.iter().map(|(k, v)| format!("{k}={}", json!(v))).collect::<Vec<_>>().join(", ");
+                let env = s
+                    .env
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", json!(v)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let mut args = vec![
                     "-c".to_string(),
                     format!("mcp_servers.{key}.command={}", json!(s.command)),
@@ -235,13 +280,42 @@ mod tests {
         let init = handle(&json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }), &env()).unwrap();
         assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
         assert!(init["result"]["capabilities"]["tools"].is_object());
-        assert!(handle(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), &env()).is_none());
+        assert!(
+            handle(
+                &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+                &env()
+            )
+            .is_none()
+        );
 
-        let list = handle(&json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }), &env()).unwrap();
-        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_panes", "read_pane", "send_to_pane", "spawn_agent", "open_url", "notify_user"]);
+        let list = handle(
+            &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            &env(),
+        )
+        .unwrap();
+        let names: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "list_panes",
+                "read_pane",
+                "send_to_pane",
+                "spawn_agent",
+                "open_url",
+                "notify_user"
+            ]
+        );
 
-        let unknown = handle(&json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }), &env()).unwrap();
+        let unknown = handle(
+            &json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }),
+            &env(),
+        )
+        .unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
     }
 
@@ -250,15 +324,28 @@ mod tests {
         // Nothing listens on port 1: the call must come back as an MCP tool error.
         let res = handle(&json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "list_panes", "arguments": {} } }), &env()).unwrap();
         assert_eq!(res["result"]["isError"], true);
-        assert!(res["result"]["content"][0]["text"].as_str().unwrap().contains("couldn't reach winfer"));
+        assert!(
+            res["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("couldn't reach winfer")
+        );
     }
 
     #[test]
     fn registers_servers_per_cli() {
-        let servers = [Server { name: "winfer", command: "/app/winfer".into(), args: vec!["mcp-stdio".into()], env: vec![("WINFER_PANE_ID", "p-1".into())] }];
+        let servers = [Server {
+            name: "winfer",
+            command: "/app/winfer".into(),
+            args: vec!["mcp-stdio".into()],
+            env: vec![("WINFER_PANE_ID", "p-1".into())],
+        }];
         let claude = agent_args("claude", &servers);
         let config: Value = serde_json::from_str(&claude[1]).unwrap();
-        assert_eq!(config["mcpServers"]["winfer"]["env"]["WINFER_PANE_ID"], "p-1");
+        assert_eq!(
+            config["mcpServers"]["winfer"]["env"]["WINFER_PANE_ID"],
+            "p-1"
+        );
         let codex = agent_args("codex", &servers);
         assert!(codex.contains(&r#"mcp_servers.winfer.command="/app/winfer""#.to_string()));
         assert!(codex.contains(&r#"mcp_servers.winfer.env={WINFER_PANE_ID="p-1"}"#.to_string()));

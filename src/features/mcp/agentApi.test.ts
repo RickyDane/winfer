@@ -17,7 +17,7 @@ const terminal = await import("@/features/terminal/xtermRegistry");
 
 const pane = (id: string, provider: string) => ({
   id, workspaceId: "ws", provider, title: "api", cwd: "~", status: "idle" as const, worktree: null,
-  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null,
+  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null,
 });
 
 beforeEach(() => {
@@ -26,8 +26,8 @@ beforeEach(() => {
     activeWorkspaceId: "ws",
     focusedPaneId: "p-1",
     providers: [
-      { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: [], aliases: [], statusHooks: true, promptArg: true, approveInput: "\r", installed: true },
-      { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: [], aliases: [], statusHooks: true, promptArg: true, approveInput: "y", installed: true },
+      { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: [], aliases: [], statusHooks: true, promptArg: true, approveInput: "\r", modelArg: null, modelCommand: null, installed: true },
+      { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: [], aliases: [], statusHooks: true, promptArg: true, approveInput: "y", modelArg: null, modelCommand: null, installed: true },
     ],
     workspaces: [
       {

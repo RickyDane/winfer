@@ -142,7 +142,10 @@ impl Instance {
                 self.emit_tabs();
             }
             "Overlay.inspectNodeRequested" => {
-                let (Some(session), Some(node)) = (event.session_id.clone(), event.params["backendNodeId"].as_i64()) else {
+                let (Some(session), Some(node)) = (
+                    event.session_id.clone(),
+                    event.params["backendNodeId"].as_i64(),
+                ) else {
                     return;
                 };
                 let instance = self.clone();
@@ -152,10 +155,20 @@ impl Instance {
                     }
                 });
             }
-            _ if event.method.starts_with("Runtime.") || event.method.starts_with("Log.") || event.method.starts_with("Network.") => {
-                let Some(entry) = inspect::console_entry(&event) else { return };
+            _ if event.method.starts_with("Runtime.")
+                || event.method.starts_with("Log.")
+                || event.method.starts_with("Network.") =>
+            {
+                let Some(entry) = inspect::console_entry(&event) else {
+                    return;
+                };
                 let target = event.session_id.as_deref().and_then(|session| {
-                    self.sessions.lock().unwrap().iter().find(|(_, s)| s.as_str() == session).map(|(t, _)| t.clone())
+                    self.sessions
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|(_, s)| s.as_str() == session)
+                        .map(|(t, _)| t.clone())
                 });
                 if let Some(target) = target {
                     self.record_console(&target, entry);
@@ -214,16 +227,32 @@ impl Instance {
         if let Some(session) = self.sessions.lock().unwrap().get(target_id) {
             return Ok(session.clone());
         }
-        let cell = self.attaching.lock().unwrap().entry(target_id.to_string()).or_default().clone();
+        let cell = self
+            .attaching
+            .lock()
+            .unwrap()
+            .entry(target_id.to_string())
+            .or_default()
+            .clone();
         let session = cell
             .get_or_try_init(|| async {
                 let cdp = self.cdp().await?;
                 let res = cdp
-                    .call("Target.attachToTarget", json!({ "targetId": target_id, "flatten": true }), None)
+                    .call(
+                        "Target.attachToTarget",
+                        json!({ "targetId": target_id, "flatten": true }),
+                        None,
+                    )
                     .await?;
-                let session = res["sessionId"].as_str().ok_or("attach returned no session")?.to_string();
+                let session = res["sessionId"]
+                    .as_str()
+                    .ok_or("attach returned no session")?
+                    .to_string();
                 // Register before enabling domains so their first events map to this target.
-                self.sessions.lock().unwrap().insert(target_id.to_string(), session.clone());
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .insert(target_id.to_string(), session.clone());
                 cdp.call("Page.enable", json!({}), Some(&session)).await?;
                 for domain in ["Runtime.enable", "Log.enable", "Network.enable"] {
                     let _ = cdp.call(domain, json!({}), Some(&session)).await;
@@ -331,7 +360,9 @@ pub fn playwright_server(cdp_url: &str) -> crate::mcp::Server {
     crate::mcp::Server {
         name: "winfer-browser",
         command: "npx".into(),
-        args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", cdp_url].map(String::from).to_vec(),
+        args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", cdp_url]
+            .map(String::from)
+            .to_vec(),
         env: Vec::new(),
     }
 }
@@ -781,7 +812,5 @@ mod tests {
                 .unwrap();
             assert_eq!(value["result"]["value"], "hello");
         });
-
     }
-
 }

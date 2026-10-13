@@ -60,3 +60,12 @@
 {"utterance": "insert fix the failing test into pane two", "expect": ["send_to_pane"], "text": "fix the failing test"}
 {"utterance": "Create a new window for each provider and tell them to create a new Flappy Bird clone.", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1, "agy": 1, "grok": 1}, "prompt": "create a new flappy bird"}
 {"utterance": "open claude and codex and ask both to write a snake game in python", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1}, "prompt": "write a snake game"}
+{"utterance": "open claude with opus", "expect": ["spawn_panes"], "counts": {"claude": 1}, "model": "opus"}
+{"utterance": "switch claude to sonnet", "expect": ["change_model"], "model": "sonnet"}
+{"utterance": "Öffne ein neues Fenster mit Claud und sag ihm, er soll einen Flippy Bird clone bauen.", "expect": ["spawn_panes"], "counts": {"claude": 1}, "prompt": "flippy bird", "tags": ["de"]}
+{"utterance": "Öffne zwei Codex Fenster", "expect": ["spawn_panes"], "counts": {"codex": 2}, "tags": ["de"]}
+{"utterance": "Schließe alle Fenster", "expect": ["close_all_panes"], "tags": ["de"]}
+{"utterance": "Wechsle zum Claude Fenster", "expect": ["focus_pane"], "tags": ["de"]}
+{"utterance": "Sag Claude, er soll die Tests ausführen", "expect": ["send_to_pane"], "text": "tests", "tags": ["de"]}
+{"utterance": "Öffne localhost 3000 im Browser", "expect": ["open_url"], "tags": ["de"]}
+{"utterance": "Wie spät ist es?", "expect": ["none"], "tags": ["de", "noise"]}

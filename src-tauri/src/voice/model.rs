@@ -30,6 +30,20 @@ pub const MODELS: &[ModelSpec] = &[
         label: "Base (English, 148 MB) — fast",
     },
     ModelSpec {
+        id: "base",
+        file: "ggml-base.bin",
+        size: 147_951_465,
+        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        label: "Base (multilingual incl. German, 148 MB) — fast",
+    },
+    ModelSpec {
+        id: "small",
+        file: "ggml-small.bin",
+        size: 487_601_967,
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        label: "Small (multilingual incl. German, 488 MB) — more accurate",
+    },
+    ModelSpec {
         id: "small.en",
         file: "ggml-small.en.bin",
         size: 487_614_201,
@@ -39,6 +53,11 @@ pub const MODELS: &[ModelSpec] = &[
 ];
 
 pub const DEFAULT_MODEL: &str = "base.en";
+
+/// English-only models (`*.en`) can't transcribe other languages.
+pub fn english_only(spec: &ModelSpec) -> bool {
+    spec.id.ends_with(".en")
+}
 
 pub fn spec(id: &str) -> Option<&'static ModelSpec> {
     MODELS.iter().find(|m| m.id == id)
@@ -103,7 +122,7 @@ mod tests {
     #[ignore]
     fn downloads_and_verifies_base_model() {
         let dir = PathBuf::from(std::env::var("WINFER_MODELS_DIR").expect("set WINFER_MODELS_DIR"));
-        let spec = spec(DEFAULT_MODEL).unwrap();
+        let spec = spec(&std::env::var("WINFER_MODEL_ID").unwrap_or(DEFAULT_MODEL.into())).unwrap();
         let path = download(&dir, spec).unwrap();
         assert!(installed(&dir, spec), "{}", path.display());
     }

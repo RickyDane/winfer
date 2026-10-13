@@ -132,6 +132,49 @@ function VoiceSettings() {
   );
 }
 
+/** Default model per agent for new panes. */
+function ModelSettings() {
+  const { providers, models, agentModels, setAgentModel, loadModels } = useWorkspaces();
+  const agents = providers.filter((p) => p.installed && p.modelArg);
+  useEffect(() => agents.forEach((p) => void loadModels(p.id)), [agents.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (agents.length === 0) return null;
+  return (
+    <Section title="Agent models (defaults for new panes)">
+      <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+        {agents.map((p) => {
+          const list = models[p.id] ?? [];
+          return (
+            <div key={p.id} className="contents">
+              <span className="text-[13px] text-fg">{p.name}</span>
+              {list.length ? (
+                <select
+                  value={agentModels[p.id] ?? ""}
+                  onChange={(e) => setAgentModel(p.id, e.target.value || null)}
+                  className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+                >
+                  <option value="">CLI default</option>
+                  {list.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  defaultValue={agentModels[p.id] ?? ""}
+                  onBlur={(e) => setAgentModel(p.id, e.target.value.trim() || null)}
+                  placeholder="CLI default (type a model name)"
+                  className={inputClass}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 export function SettingsModal() {
   const { settingsOpen, setSettings } = useWorkspaces();
 
@@ -145,13 +188,14 @@ export function SettingsModal() {
   if (!settingsOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setSettings(false)}>
-      <div className="w-[600px] space-y-6 rounded-xl border border-border-strong bg-panel-raised p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="max-h-[85vh] w-[600px] space-y-6 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center">
           <h1 className="flex-1 text-sm font-semibold text-fg">Settings</h1>
           <button onClick={() => setSettings(false)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={14} />
           </button>
         </header>
+        <ModelSettings />
         <VoiceSettings />
       </div>
     </div>

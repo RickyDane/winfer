@@ -26,6 +26,13 @@ export function PaneMenu({ pane }: { pane: Pane }) {
           { label: "Discard worktree", run: () => execute({ type: "pane.discardWorktree", target }), danger: true },
         ]
       : []),
+    {
+      label: "Change model…",
+      run: () => {
+        execute({ type: "pane.focus", target });
+        execute({ type: "ui.overlay", overlay: "model" });
+      },
+    },
     { label: "Zoom", run: () => execute({ type: "pane.zoom", target } satisfies Command) },
     { label: "Close", run: () => execute({ type: "pane.close", target }) },
   ];

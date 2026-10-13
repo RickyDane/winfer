@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import { fetchProviders, type Provider, type ProviderId } from "@/features/providers/providers";
+import { fetchModels, fetchProviders, type ModelInfo, type Provider, type ProviderId } from "@/features/providers/providers";
 import { insertDwindle, leaves, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
 
@@ -34,6 +34,8 @@ export interface Pane {
   raceId: string | null;
   /** Initial prompt given when the agent was started (not persisted). */
   prompt: string | null;
+  /** Model the agent runs with; null means the CLI's default. */
+  model: string | null;
 }
 
 export interface Workspace {
@@ -63,9 +65,13 @@ interface WorkspaceState {
   diffPaneId: string | null;
   settingsOpen: boolean;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | null;
+  overlay: "race" | "broadcast" | "recipes" | "model" | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
+  /** Models each provider offers (from its CLI), loaded in the background. */
+  models: Record<ProviderId, ModelInfo[]>;
+  /** Default model per provider for new panes (persisted). */
+  agentModels: Record<ProviderId, string>;
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
@@ -78,7 +84,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string },
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
@@ -90,8 +96,10 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
+  loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
+  setAgentModel: (provider: ProviderId, model: string | null) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean }) => void;
   toggleSidebar: () => void;
@@ -125,6 +133,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   settingsOpen: false,
   overlay: null,
   recipes: [],
+  models: {},
+  agentModels: {},
   searchPaneId: null,
   voiceConfig: {},
 
@@ -147,7 +157,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !resumed.has(key);
         resumed.add(key);
-        return { ...p, raceId: p.raceId ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, raceId: p.raceId ?? null, model: p.model ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -161,10 +171,16 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       browserOpen: ui.browserOpen ?? true,
       voiceConfig: ui.voice ?? {},
       recipes: ui.recipes ?? [],
+      agentModels: ui.agentModels ?? {},
     });
   },
 
-  loadProviders: async () => set({ providers: await fetchProviders() }),
+  loadProviders: async () => {
+    const providers = await fetchProviders();
+    set({ providers });
+    // Warm the model lists in the background; some CLIs take a few seconds to list them.
+    for (const p of providers.filter((p) => p.installed && p.modelArg)) void get().loadModels(p.id);
+  },
 
   setActiveWorkspace: (id) => {
     const ws = get().workspaces.find((w) => w.id === id);
@@ -221,6 +237,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             devUrl: null,
             raceId: opts?.raceId ?? null,
             prompt: opts?.prompt ?? null,
+            model: opts?.model ?? get().agentModels[provider] ?? null,
           },
         ],
         layout: insertDwindle(w.layout, id, opts?.splitFrom ?? (background ? null : focusedPaneId)),
@@ -271,6 +288,20 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setSettings: (open) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false }),
   setOverlay: (overlay) => set({ overlay, paletteQuery: null, cheatSheetOpen: false }),
   setRecipes: (recipes) => set({ recipes }),
+  loadModels: async (provider) => {
+    const cached = get().models[provider];
+    if (cached) return cached;
+    const list = await fetchModels(provider).catch(() => []);
+    set((s) => ({ models: { ...s.models, [provider]: list } }));
+    return list;
+  },
+  setAgentModel: (provider, model) =>
+    set((s) => {
+      const agentModels = { ...s.agentModels };
+      if (model) agentModels[provider] = model;
+      else delete agentModels[provider];
+      return { agentModels };
+    }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -287,7 +318,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -297,6 +328,7 @@ interface Snapshot {
     browserOpen?: boolean;
     voice?: { sttModel?: string; clefModel?: string; readback?: boolean };
     recipes?: Recipe[];
+    agentModels?: Record<ProviderId, string>;
   } | null;
 }
 
@@ -313,9 +345,9 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId }) => ({ id, provider, title, cwd, worktree, raceId })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels },
   };
 }
 

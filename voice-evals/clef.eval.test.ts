@@ -20,6 +20,8 @@ interface Case {
   prompt?: string;
   /** Substring the text typed into a pane must contain. */
   text?: string;
+  /** Model the decision must carry. */
+  model?: string;
 }
 
 // Real aliases, since they're part of what Clef sees.
@@ -32,9 +34,9 @@ const cases: Case[] = readFileSync(new URL("./cases.jsonl", import.meta.url), "u
   .filter(Boolean)
   .map((l: string) => JSON.parse(l));
 
-const provider = (id: string, name: string): Provider => ({ id, name, command: id, args: [], resumeArgs: [], aliases: aliases[id] ?? [], statusHooks: false, promptArg: false, approveInput: null, installed: true });
+const provider = (id: string, name: string): Provider => ({ id, name, command: id, args: [], resumeArgs: [], aliases: aliases[id] ?? [], statusHooks: false, promptArg: false, approveInput: null, modelArg: id === "shell" ? null : "--model", modelCommand: null, installed: true });
 const pane = (id: string, p: string, status: "working" | "idle" | "needs-input") => ({
-  id, workspaceId: "ws", provider: p, title: "api", cwd: "~", status, worktree: null, wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null,
+  id, workspaceId: "ws", provider: p, title: "api", cwd: "~", status, worktree: null, wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null,
 });
 const ws: Workspace = {
   id: "ws", name: "bridgemind", rootDir: "~", zoomedPaneId: null, presetIndex: 0, useWorktrees: true,
@@ -48,6 +50,7 @@ const ctx: ToolContext = {
   focusedPaneId: "p-1",
   browserTabs: ["localhost:3000", "GitHub"],
   lastCommands: [],
+  models: { claude: [{ id: "fable", label: "Fable (latest)" }, { id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }, { id: "haiku", label: "Haiku (latest)" }] },
 };
 
 async function ask(utterance: string): Promise<{ result: DecisionResult; ms: number }> {
@@ -83,6 +86,7 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
         if (ok && c.prompt) ok = prompt.includes(c.prompt) && !/^(and |tell |ask )/.test(prompt);
         // Plain "open X" commands must not invent a prompt.
         if (ok && spawn && !c.prompt && prompt) ok = false;
+        if (ok && c.model) ok = decisions.some((d) => d.args.model === c.model);
         const typed = decisions.find((d) => d.tool.id === "send_to_pane");
         if (ok && c.text) ok = String(typed?.args.text ?? "").toLowerCase().includes(c.text);
         const probs = Object.values((result.answers.action_1 as { probabilities?: Record<string, number> })?.probabilities ?? {}).sort((a, b) => b - a);

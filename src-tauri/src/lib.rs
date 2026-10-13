@@ -49,6 +49,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             providers::providers_list,
+            providers::providers_models,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

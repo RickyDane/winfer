@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[test]
 fn stdio_server_forwards_tool_calls() {
@@ -12,12 +12,25 @@ fn stdio_server_forwards_tool_calls() {
     let addr = http.server_addr().to_ip().unwrap().to_string();
     let server = std::thread::spawn(move || {
         let mut req = http.recv().unwrap();
-        let token = req.headers().iter().find(|h| h.field.equiv("X-Winfer-Token")).map(|h| h.value.to_string());
+        let token = req
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("X-Winfer-Token"))
+            .map(|h| h.value.to_string());
         let mut body = String::new();
         req.as_reader().read_to_string(&mut body).unwrap();
         let call: Value = serde_json::from_str(&body).unwrap();
-        let text = format!("{}:{}:{}:{}", token.unwrap_or_default(), call["tool"], call["paneId"], call["args"]["pane"]);
-        req.respond(tiny_http::Response::from_string(json!({ "ok": true, "text": text }).to_string())).unwrap();
+        let text = format!(
+            "{}:{}:{}:{}",
+            token.unwrap_or_default(),
+            call["tool"],
+            call["paneId"],
+            call["args"]["pane"]
+        );
+        req.respond(tiny_http::Response::from_string(
+            json!({ "ok": true, "text": text }).to_string(),
+        ))
+        .unwrap();
     });
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_winfer"))
@@ -44,10 +57,20 @@ fn stdio_server_forwards_tool_calls() {
     let out = child.wait_with_output().unwrap();
     server.join().unwrap();
 
-    let lines: Vec<Value> = String::from_utf8_lossy(&out.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!(lines.len(), 3, "one response per request, none for the notification");
+    let lines: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "one response per request, none for the notification"
+    );
     assert_eq!(lines[0]["result"]["serverInfo"]["name"], "winfer");
     assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 6);
-    assert_eq!(lines[2]["result"]["content"][0]["text"], r#"secret:"read_pane":"p-9":2"#);
+    assert_eq!(
+        lines[2]["result"]["content"][0]["text"],
+        r#"secret:"read_pane":"p-9":2"#
+    );
     assert_eq!(lines[2]["result"]["isError"], false);
 }

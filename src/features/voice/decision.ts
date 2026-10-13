@@ -42,7 +42,7 @@ export interface DecisionResult {
 }
 
 /** Pane targets are shared by many tools, so they're asked once. */
-const SHARED_PARAMS = new Set(["target"]);
+const SHARED_PARAMS = new Set(["target", "model"]);
 /** Free-text parameters share one question per slot (an agent instruction, a web address). */
 /** Yes/no "is there any?" per slot: choice questions almost never pick "none" over a span. */
 const SLOT_PRESENT = {
@@ -218,6 +218,8 @@ export function withoutLeadIn(text: string): string {
   const trimmed = text
     .replace(/^(and|then|please)\s+/i, "")
     .replace(/^(?:(?:tell|ask|have|get|let)\s+)?(?:it|them|him|her|both|all|each|everyone|[\w-]+(?:\s+(?:one|code|agent|agents))?)\s+to\s+/i, "")
+    // German: "(sag Claude,) er soll …", "sie sollen …"
+    .replace(/^(?:(?:sag|sage|bitte)\s+)?(?:(?:ihm|ihr|ihnen|[\w-]+),?\s+)?(?:er|sie|es)\s+soll(?:en)?\s+/i, "")
     .replace(/^(insert|type|send|say)\s+/i, "")
     .replace(/\s+into\s+(?:pane\s+\w+|[\w-]+(?:'s)?(?:\s+(?:pane|prompt|window))?)$/i, "");
   return trimmed || text;

@@ -57,6 +57,19 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
             <span className="truncate">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
           </button>
         )}
+        {pane.model && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              onFocus();
+              execute({ type: "ui.overlay", overlay: "model" });
+            }}
+            title="Model · click to change"
+            className="max-w-28 truncate rounded px-1.5 py-0.5 font-mono text-[11px] text-fg-subtle hover:bg-hover hover:text-fg"
+          >
+            {pane.model}
+          </button>
+        )}
         {pane.devUrl && (
           <button
             onMouseDown={(e) => e.stopPropagation()}

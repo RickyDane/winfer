@@ -169,11 +169,17 @@ fn serve(
                         let _ = req.as_reader().take(1024 * 1024).read_to_string(&mut body);
                         let reply = match serde_json::from_str::<crate::mcp::Call>(&body) {
                             Ok(call) => on_mcp(call),
-                            Err(err) => crate::mcp::Reply { ok: false, text: format!("bad request: {err}") },
+                            Err(err) => crate::mcp::Reply {
+                                ok: false,
+                                text: format!("bad request: {err}"),
+                            },
                         };
                         let json = serde_json::to_string(&reply).unwrap_or_default();
-                        let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("valid header");
-                        let _ = req.respond(tiny_http::Response::from_string(json).with_header(header));
+                        let header =
+                            tiny_http::Header::from_bytes("Content-Type", "application/json")
+                                .expect("valid header");
+                        let _ =
+                            req.respond(tiny_http::Response::from_string(json).with_header(header));
                     });
                     continue;
                 }
@@ -199,15 +205,34 @@ mod tests {
 
     #[test]
     fn mcp_route_needs_token_and_forwards_calls() {
-        let addr = serve("secret".into(), |_| {}, |call| crate::mcp::Reply { ok: true, text: format!("{}:{}", call.tool, call.pane_id) }).unwrap();
-        let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+        let addr = serve(
+            "secret".into(),
+            |_| {},
+            |call| crate::mcp::Reply {
+                ok: true,
+                text: format!("{}:{}", call.tool, call.pane_id),
+            },
+        )
+        .unwrap();
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
         let body = serde_json::json!({ "tool": "list_panes", "args": {}, "paneId": "p-1" });
 
-        let mut ok = agent.post(&format!("http://{addr}/mcp")).header("X-Winfer-Token", "secret").send_json(&body).unwrap();
+        let mut ok = agent
+            .post(&format!("http://{addr}/mcp"))
+            .header("X-Winfer-Token", "secret")
+            .send_json(&body)
+            .unwrap();
         let reply: Value = ok.body_mut().read_json().unwrap();
         assert_eq!(reply["text"], "list_panes:p-1");
 
-        let denied = agent.post(&format!("http://{addr}/mcp")).header("X-Winfer-Token", "nope").send_json(&body).unwrap();
+        let denied = agent
+            .post(&format!("http://{addr}/mcp"))
+            .header("X-Winfer-Token", "nope")
+            .send_json(&body)
+            .unwrap();
         assert_eq!(denied.status(), 401);
     }
 
@@ -219,7 +244,10 @@ mod tests {
         let addr = serve(
             "secret".into(),
             move |e| tx.send(e).unwrap(),
-            |call| crate::mcp::Reply { ok: true, text: format!("{} from {}", call.tool, call.pane_id) },
+            |call| crate::mcp::Reply {
+                ok: true,
+                text: format!("{} from {}", call.tool, call.pane_id),
+            },
         )
         .unwrap();
         let run = |script: &str, token: &str, args: &[&str]| {

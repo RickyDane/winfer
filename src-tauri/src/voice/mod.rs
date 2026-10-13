@@ -29,6 +29,8 @@ struct Config {
     stt_model: String,
     clef_model: String,
     vocabulary: String,
+    /// "en", "de" or "auto" (detect). English-only models always use "en".
+    language: String,
 }
 
 pub struct Voice {
@@ -50,6 +52,7 @@ impl Voice {
                 stt_model: model::DEFAULT_MODEL.into(),
                 clef_model: "clef-flash".into(),
                 vocabulary: String::new(),
+                language: "en".into(),
             }),
         }
     }
@@ -83,7 +86,9 @@ pub fn preload(app: &AppHandle) {
     std::thread::spawn(move || {
         let voice = app.state::<Voice>();
         let stt_model = voice.config.lock().unwrap().stt_model.clone();
-        let (Ok(dir), Some(spec)) = (models_dir(&app), model::spec(&stt_model)) else { return };
+        let (Ok(dir), Some(spec)) = (models_dir(&app), model::spec(&stt_model)) else {
+            return;
+        };
         if model::installed(&dir, spec) {
             if let Err(err) = voice.stt.preload(&model::path(&dir, spec)) {
                 eprintln!("speech model preload failed: {err}");
@@ -143,16 +148,25 @@ pub fn stop(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let voice = app.state::<Voice>();
-        let (stt_model, prompt) = {
+        let (stt_model, prompt, language) = {
             let config = voice.config.lock().unwrap();
-            (config.stt_model.clone(), config.vocabulary.clone())
+            (
+                config.stt_model.clone(),
+                config.vocabulary.clone(),
+                config.language.clone(),
+            )
         };
         let started = Instant::now();
         let result = models_dir(&app).and_then(|dir| {
             let spec = model::spec(&stt_model).ok_or("unknown model")?;
+            let language = if model::english_only(spec) {
+                "en"
+            } else {
+                language.as_str()
+            };
             voice
                 .stt
-                .transcribe(&model::path(&dir, spec), &samples, &prompt)
+                .transcribe(&model::path(&dir, spec), &samples, &prompt, language)
         });
         voice.transcribing.store(false, Ordering::SeqCst);
         match result {
@@ -215,6 +229,7 @@ pub struct ModelStatus {
 pub struct VoiceStatus {
     models: Vec<ModelStatus>,
     stt_model: String,
+    language: String,
     clef_model: String,
     credentials: bool,
 }
@@ -232,6 +247,7 @@ pub fn voice_status(app: AppHandle, voice: State<'_, Voice>) -> Result<VoiceStat
             })
             .collect(),
         stt_model: config.stt_model.clone(),
+        language: config.language.clone(),
         clef_model: config.clef_model.clone(),
         credentials: cloud::load().is_some(),
     })
@@ -254,12 +270,16 @@ pub struct VoiceConfig {
     clef_model: Option<String>,
     /// Words to bias recognition toward (providers, workspaces, panes).
     vocabulary: Option<Vec<String>>,
+    language: Option<String>,
 }
 
 #[tauri::command]
 pub fn voice_configure(app: AppHandle, voice: State<'_, Voice>, config: VoiceConfig) {
     let mut c = voice.config.lock().unwrap();
-    if let Some(m) = config.stt_model.filter(|m| model::spec(m).is_some() && *m != c.stt_model) {
+    if let Some(m) = config
+        .stt_model
+        .filter(|m| model::spec(m).is_some() && *m != c.stt_model)
+    {
         c.stt_model = m;
         preload(&app);
     }
@@ -268,6 +288,12 @@ pub fn voice_configure(app: AppHandle, voice: State<'_, Voice>, config: VoiceCon
         .filter(|m| m == "clef-flash" || m == "clef")
     {
         c.clef_model = m;
+    }
+    if let Some(lang) = config
+        .language
+        .filter(|l| matches!(l.as_str(), "en" | "de" | "auto"))
+    {
+        c.language = lang;
     }
     if let Some(words) = config.vocabulary {
         c.vocabulary = words.join(", ");

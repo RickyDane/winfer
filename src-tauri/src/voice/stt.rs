@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 struct Loaded {
     path: PathBuf,
@@ -33,7 +35,7 @@ impl Transcriber {
     /// Loads the model and runs one silent pass so the first real request is fast
     /// (the first-ever Metal run compiles shaders, which can take several seconds).
     pub fn preload(&self, model: &Path) -> Result<(), String> {
-        self.transcribe(model, &[], "").map(|_| ())
+        self.transcribe(model, &[], "", "en").map(|_| ())
     }
 
     /// Transcribes 16 kHz mono audio. `prompt` biases recognition toward known words
@@ -43,18 +45,24 @@ impl Transcriber {
         model: &Path,
         samples: &[f32],
         prompt: &str,
+        language: &str,
     ) -> Result<String, String> {
         let mut loaded = self.loaded.lock().unwrap();
         if loaded.as_ref().is_none_or(|l| l.path != model) {
             let ctx = WhisperContext::new_with_params(model, WhisperContextParameters::default())
                 .map_err(|e| e.to_string())?;
             let state = ctx.create_state().map_err(|e| e.to_string())?;
-            *loaded = Some(Loaded { path: model.to_path_buf(), state, _ctx: ctx });
+            *loaded = Some(Loaded {
+                path: model.to_path_buf(),
+                state,
+                _ctx: ctx,
+            });
         }
         let state = &mut loaded.as_mut().unwrap().state;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some("en"));
+        // "auto" lets whisper detect the language (multilingual models only).
+        params.set_language(Some(language));
         params.set_no_context(true);
         params.set_single_segment(true);
         params.set_no_timestamps(true);
@@ -119,34 +127,88 @@ mod e2e {
     #[test]
     #[ignore]
     fn transcribes_synthesized_command() {
-        let model = PathBuf::from(std::env::var("WINFER_WHISPER_MODEL").expect("set WINFER_WHISPER_MODEL"));
+        let model =
+            PathBuf::from(std::env::var("WINFER_WHISPER_MODEL").expect("set WINFER_WHISPER_MODEL"));
         let dir = std::env::temp_dir().join(format!("winfer-say-{:x}", rand::random::<u32>()));
         std::fs::create_dir_all(&dir).unwrap();
         let wav = dir.join("speech.wav");
         let ok = std::process::Command::new("say")
             .args(["-o"])
             .arg(&wav)
-            .args(["--data-format=LEI16@16000", "Open three new instances with Claude, Codex and Grok"])
+            .args([
+                "--data-format=LEI16@16000",
+                "Open three new instances with Claude, Codex and Grok",
+            ])
             .status()
             .unwrap()
             .success();
         assert!(ok);
-
-        // 16-bit little-endian mono PCM after the WAV header.
-        let bytes = std::fs::read(&wav).unwrap();
-        let data = bytes.windows(4).position(|w| w == b"data").unwrap() + 8;
-        let samples: Vec<f32> = bytes[data..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0).collect();
+        let samples = read_wav(&wav);
 
         let t = Transcriber::new();
         let started = std::time::Instant::now();
-        t.transcribe(&model, &samples, "Claude, Codex, Grok, Antigravity").unwrap();
+        t.transcribe(&model, &samples, "Claude, Codex, Grok, Antigravity", "en")
+            .unwrap();
         eprintln!("cold (incl. model load): {:?}", started.elapsed());
         let started = std::time::Instant::now();
-        let text = t.transcribe(&model, &samples, "Claude, Codex, Grok, Antigravity").unwrap();
+        let text = t
+            .transcribe(&model, &samples, "Claude, Codex, Grok, Antigravity", "en")
+            .unwrap();
         eprintln!("transcript: {text:?} warm in {:?}", started.elapsed());
         let lower = text.to_lowercase();
         for word in ["open", "claude", "codex"] {
             assert!(lower.contains(word), "missing {word:?} in {text:?}");
         }
+    }
+
+    /// German speech with a multilingual model and auto-detect.
+    /// Run with: WINFER_WHISPER_MODEL=/path/ggml-base.bin cargo test -- --ignored german
+    #[test]
+    #[ignore]
+    fn transcribes_german() {
+        let model =
+            PathBuf::from(std::env::var("WINFER_WHISPER_MODEL").expect("set WINFER_WHISPER_MODEL"));
+        let dir = std::env::temp_dir().join(format!("winfer-say-de-{:x}", rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("speech.wav");
+        let ok = std::process::Command::new("say")
+            .args(["-v", "Anna", "-o"])
+            .arg(&wav)
+            .args(["--data-format=LEI16@16000", "Öffne ein neues Fenster mit Claude und sag ihm, er soll einen Flappy Bird Klon bauen"])
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let samples = read_wav(&wav);
+        let t = Transcriber::new();
+        for language in ["de", "auto"] {
+            let started = std::time::Instant::now();
+            let text = t
+                .transcribe(
+                    &model,
+                    &samples,
+                    "Claude, Codex, Grok, Antigravity",
+                    language,
+                )
+                .unwrap();
+            eprintln!("{language}: {text:?} in {:?}", started.elapsed());
+            let lower = text.to_lowercase();
+            for word in ["fenster", "claud", "bird"] {
+                assert!(
+                    lower.contains(word),
+                    "{language}: missing {word:?} in {text:?}"
+                );
+            }
+        }
+    }
+
+    fn read_wav(wav: &std::path::Path) -> Vec<f32> {
+        // 16-bit little-endian mono PCM after the WAV header.
+        let bytes = std::fs::read(&wav).unwrap();
+        let data = bytes.windows(4).position(|w| w == b"data").unwrap() + 8;
+        bytes[data..]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+            .collect()
     }
 }

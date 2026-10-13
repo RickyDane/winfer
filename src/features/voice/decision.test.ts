@@ -5,12 +5,12 @@ import type { Workspace } from "@/stores/workspaces";
 import { buildRequest, orderByMention, parseDecision, transcriptSpans, verdict, withoutLeadIn, type DecisionResult } from "./decision";
 
 const provider = (id: string, name: string, aliases: string[] = []): Provider => ({
-  id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, promptArg: false, approveInput: null, installed: true,
+  id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true,
 });
 
 const pane = (id: string, provider: string) => ({
   id, workspaceId: "ws", provider, title: "api", cwd: "~", status: "idle" as const, worktree: null,
-  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null,
+  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null,
 });
 
 const workspace: Workspace = {
@@ -26,6 +26,7 @@ const ctx: ToolContext = {
   focusedPaneId: "p-a",
   browserTabs: [],
   lastCommands: [],
+  models: { claude: [{ id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }] },
 };
 
 describe("buildRequest", () => {
@@ -143,6 +144,25 @@ describe("parseDecision", () => {
   });
 });
 
+describe("models", () => {
+  it("opens an agent with a spoken model only if that agent offers it", () => {
+    const [d] = parseDecision(
+      { answers: { action_1: choice("spawn_panes"), "spawn_panes.counts.claude": choice("one"), "spawn_panes.counts.codex": choice("one"), model: choice("opus") } },
+      ctx,
+    );
+    // Codex can't list models here, so it gets the name as-is; Claude offers "opus".
+    expect(d.tool.toCommands(d.args, ctx).map((c) => c.type === "pane.spawn" && [c.provider, c.model])).toEqual([
+      ["claude", "opus"],
+      ["codex", "opus"],
+    ]);
+  });
+
+  it("switches the model of a pane", () => {
+    const [d] = parseDecision({ answers: { action_1: choice("change_model"), target: choice("p-a"), model: choice("sonnet") } }, ctx);
+    expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.setModel", target: { id: "p-a" }, model: "sonnet" }]);
+  });
+});
+
 describe("withoutLeadIn", () => {
   it.each([
     ["ask it to add dark mode to the settings page", "add dark mode to the settings page"],
@@ -153,5 +173,8 @@ describe("withoutLeadIn", () => {
     ["insert fix the failing test into pane two", "fix the failing test"],
     ["create a Flappy Bird clone", "create a Flappy Bird clone"],
     ["hello world", "hello world"],
+    ["er soll einen Flappy Bird Klon bauen", "einen Flappy Bird Klon bauen"],
+    ["Claude er soll die Tests ausführen", "die Tests ausführen"],
+    ["sag ihm, er soll die Tests ausführen", "die Tests ausführen"],
   ])("%s → %s", (input, expected) => expect(withoutLeadIn(input)).toBe(expected));
 });

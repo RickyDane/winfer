@@ -16,7 +16,27 @@
     ],
     "statusHooks": true,
     "promptArg": true,
-    "approveInput": "\r"
+    "approveInput": "\r",
+    "modelArg": "--model",
+    "models": [
+      {
+        "id": "fable",
+        "label": "Fable (latest)"
+      },
+      {
+        "id": "opus",
+        "label": "Opus (latest)"
+      },
+      {
+        "id": "sonnet",
+        "label": "Sonnet (latest)"
+      },
+      {
+        "id": "haiku",
+        "label": "Haiku (latest)"
+      }
+    ],
+    "modelCommand": "/model {model}"
   },
   {
     "id": "codex",
@@ -34,7 +54,8 @@
     ],
     "statusHooks": true,
     "promptArg": true,
-    "approveInput": "y"
+    "approveInput": "y",
+    "modelArg": "--model"
   },
   {
     "id": "agy",
@@ -45,6 +66,10 @@
       "antigravity",
       "anti gravity",
       "agy"
+    ],
+    "modelArg": "--model",
+    "modelsCommand": [
+      "models"
     ]
   },
   {
@@ -57,7 +82,8 @@
       "groc",
       "grock",
       "grok build"
-    ]
+    ],
+    "modelArg": "--model"
   },
   {
     "id": "opencode",
@@ -67,6 +93,10 @@
     "aliases": [
       "opencode",
       "open code"
+    ],
+    "modelArg": "--model",
+    "modelsCommand": [
+      "models"
     ]
   },
   {
@@ -77,6 +107,10 @@
     "aliases": [
       "cursor",
       "cursor agent"
+    ],
+    "modelArg": "--model",
+    "modelsCommand": [
+      "models"
     ]
   },
   {

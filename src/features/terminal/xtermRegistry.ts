@@ -170,6 +170,7 @@ async function spawn(entry: Entry) {
         workspaceId: entry.pane.workspaceId,
         resume: entry.pane.resume,
         prompt: entry.pane.prompt,
+        model: entry.pane.model,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },
@@ -305,6 +306,14 @@ export function outputAge(paneId: string): number {
 
 export function focusTerminal(paneId: string) {
   entries.get(paneId)?.term.focus();
+}
+
+/** Restarts a pane's process in place (e.g. with a different model), resuming its session. */
+export function restartTerminal(pane: Pane) {
+  const slot = entries.get(pane.id)?.host.parentElement ?? null;
+  closeTerminal(pane.id);
+  if (slot) attachTerminal(pane, slot);
+  else startDetached(pane);
 }
 
 /** Kills the PTY and disposes the terminal. */
