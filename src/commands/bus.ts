@@ -16,7 +16,7 @@ import {
   type Preset,
   type SplitDir,
 } from "@/features/layout/tree";
-import { closeTerminal, restartTerminal, sendText } from "@/features/terminal/xtermRegistry";
+import { closeTerminal, pasteText, restartTerminal, sendText } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
 import * as browser from "@/features/browser/browser";
@@ -97,6 +97,13 @@ const active = (): Workspace => {
 function resolveProvider(provider: ProviderId | "default"): ProviderId {
   if (provider !== "default") return provider;
   return store().providers.find((p) => p.id === "claude" && p.installed) ? "claude" : "shell";
+}
+
+/** Multi-line text goes in as one paste; a typed newline would make agents submit early. */
+function typeInto(paneId: string, text: string, submit: boolean) {
+  if (text.includes("\n")) pasteText(paneId, text);
+  else sendText(paneId, text);
+  if (submit) sendText(paneId, "\r");
 }
 
 const paneById = (id: string | null) => (id ? active().panes.find((p) => p.id === id) : undefined);
@@ -192,7 +199,7 @@ export function execute(cmd: Command): void {
     }
     case "pane.broadcast": {
       const targets = cmd.paneIds ?? active().panes.filter((p) => p.provider !== "shell").map((p) => p.id);
-      targets.forEach((id) => sendText(id, cmd.text + (cmd.submit === false ? "" : "\r")));
+      targets.forEach((id) => typeInto(id, cmd.text, cmd.submit !== false));
       return;
     }
     case "race.start": {
@@ -265,7 +272,7 @@ export function execute(cmd: Command): void {
     }
     case "pane.sendText": {
       const id = resolvePane(cmd.target);
-      if (id) sendText(id, cmd.text + (cmd.submit ? "\r" : ""));
+      if (id) typeInto(id, cmd.text, cmd.submit ?? false);
       return;
     }
     case "pane.showChanges": {

@@ -72,3 +72,6 @@
 {"utterance": "stop all current sessions", "expect": ["interrupt_all"]}
 {"utterance": "stop all agents", "expect": ["interrupt_all"]}
 {"utterance": "Change all the models to Opus", "expect": ["change_model"], "model": "opus"}
+{"utterance": "Öffne die erstellte Seite im Browser", "expect": ["open_url"], "url": "index.html", "tags": ["de"]}
+{"utterance": "open the page you just made", "expect": ["open_url"], "url": "index.html"}
+{"utterance": "show me the dev server", "expect": ["open_url"], "url": "localhost:5173"}

@@ -22,6 +22,8 @@ interface Case {
   text?: string;
   /** Model the decision must carry. */
   model?: string;
+  /** URL the browser must open. */
+  url?: string;
 }
 
 // Real aliases, since they're part of what Clef sees.
@@ -50,6 +52,10 @@ const ctx: ToolContext = {
   focusedPaneId: "p-1",
   browserTabs: ["localhost:3000", "GitHub"],
   lastCommands: [],
+  recentAddresses: {
+    "file:///Users/ricky/Coding/index.html": "HTML file index.html that pane 1 (Claude Code) created (/Users/ricky/Coding/index.html), most recent",
+    "http://localhost:5173/": "local dev server at localhost:5173/ started in pane 3 (Shell)",
+  },
   models: { claude: [{ id: "fable", label: "Fable (latest)" }, { id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }, { id: "haiku", label: "Haiku (latest)" }] },
 };
 
@@ -87,6 +93,10 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
         // Plain "open X" commands must not invent a prompt.
         if (ok && spawn && !c.prompt && prompt) ok = false;
         if (ok && c.model) ok = decisions.some((d) => d.args.model === c.model);
+        if (ok && c.url) {
+          const opened = decisions.flatMap((d) => d.tool.toCommands(d.args, ctx)).find((cmd) => cmd.type === "browser.open");
+          ok = opened?.type === "browser.open" && opened.url.includes(c.url);
+        }
         const typed = decisions.find((d) => d.tool.id === "send_to_pane");
         if (ok && c.text) ok = String(typed?.args.text ?? "").toLowerCase().includes(c.text);
         const probs = Object.values((result.answers.action_1 as { probabilities?: Record<string, number> })?.probabilities ?? {}).sort((a, b) => b - a);
@@ -100,7 +110,12 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
           margin: (probs[0] ?? 0) - (probs[1] ?? 0),
           ratio: (probs[0] ?? 0) / Math.max(probs[1] ?? 0, 1e-6),
           tokens: (result as { usage?: { input_tokens?: number } }).usage?.input_tokens ?? 0,
-          text: String(decisions.find((d) => d.args.prompt || d.args.text || d.args.url)?.args.prompt ?? decisions.find((d) => d.args.text)?.args.text ?? ""),
+          text: String(
+            decisions.find((d) => d.args.prompt)?.args.prompt ??
+              decisions.find((d) => d.args.text)?.args.text ??
+              (decisions.flatMap((d) => d.tool.toCommands(d.args, ctx)).find((c) => c.type === "browser.open") as { url?: string } | undefined)?.url ??
+              "",
+          ),
         });
       }
       const accuracy = rows.filter((r) => r.ok).length / rows.length;

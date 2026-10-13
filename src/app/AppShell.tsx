@@ -18,6 +18,7 @@ import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
+import { loadHome } from "@/lib/home";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
@@ -82,6 +83,7 @@ export function AppShell() {
   useEffect(() => {
     void loadProviders();
     void hydrate();
+    void loadHome();
     startTerminalEvents();
     startStatusTracking();
     startVoice();

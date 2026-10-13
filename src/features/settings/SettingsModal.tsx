@@ -3,6 +3,7 @@ import { Check, Download, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useWorkspaces } from "@/stores/workspaces";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
+import { WORKERS_MODELS } from "@/features/voice/writer";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="space-y-3">
@@ -17,6 +18,8 @@ function VoiceSettings() {
   const status = useVoice((s) => s.status);
   const readback = useWorkspaces((s) => s.voiceConfig.readback ?? false);
   const confirm = useWorkspaces((s) => s.voiceConfig.confirm ?? false);
+  const writer = useWorkspaces((s) => s.voiceConfig.writer ?? "workers");
+  const writerModel = useWorkspaces((s) => s.voiceConfig.writerModel ?? "");
   const [accountId, setAccountId] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -98,6 +101,46 @@ function VoiceSettings() {
         <input type="checkbox" checked={confirm} onChange={(e) => useWorkspaces.getState().setVoiceConfig({ confirm: e.target.checked })} />
         Ask before running uncertain or risky voice commands
       </label>
+
+      <Section title="Prompt writer (LLM)">
+        <p className="text-xs text-fg-muted">
+          Turns what you say into a clear prompt for the agent, using its recent output as context (“tell Claude to make the page nicer” →
+          a concrete task). Clef still decides which action runs. “Type … into Claude” stays word for word.
+        </p>
+        <div className="flex items-center gap-2">
+          <select
+            value={writer}
+            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | "workers" | "codex", writerModel: "" })}
+            className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+          >
+            <option value="workers">Cloudflare Workers AI (fast, uses the token below)</option>
+            <option value="codex">OpenAI via your ChatGPT plan (Codex CLI, slower)</option>
+            <option value="off">Off (send my words as spoken)</option>
+          </select>
+          {writer === "workers" && (
+            <select
+              value={writerModel || WORKERS_MODELS[0].id}
+              onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writerModel: e.target.value })}
+              className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+            >
+              {WORKERS_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          )}
+          {writer === "codex" && (
+            <input
+              defaultValue={writerModel}
+              onBlur={(e) => useWorkspaces.getState().setVoiceConfig({ writerModel: e.target.value.trim() })}
+              placeholder="Model (Codex default)"
+              className={inputClass + " w-48"}
+            />
+          )}
+        </div>
+        {writer === "codex" && <p className="text-[11px] text-fg-subtle">Uses your Codex login (“codex login” → Sign in with ChatGPT); runs read-only.</p>}
+      </Section>
 
       <Section title="Voice commands (Cloudflare Clef)">
         <p className="text-xs text-fg-muted">

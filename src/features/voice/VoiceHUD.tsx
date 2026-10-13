@@ -54,6 +54,7 @@ export function VoiceHUD() {
             <>
               <Loader2 size={15} className="animate-spin text-accent" />
               <span className="truncate text-fg">{transcript ? `“${transcript}”` : "Transcribing…"}</span>
+              {message && <span className="ml-auto shrink-0 text-xs text-fg-subtle">{message}</span>}
             </>
           )}
           {phase === "done" && (

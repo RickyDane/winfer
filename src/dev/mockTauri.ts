@@ -220,6 +220,8 @@ mockIPC(
         void emit("voice://state", { state: "transcribing", mode: voice.mode });
         setTimeout(() => void emit("voice://transcript", { mode: voice.mode, text: voice.said, ms: 142 }), 150);
         return null;
+      case "llm_compose":
+        return new Promise((resolve) => setTimeout(() => resolve(`[written] ${String(a.req.user).match(/Instruction as heard: "([^"]*)"/)?.[1] ?? ""}`), 300));
       case "voice_decide":
         voice.requests.push(a.body);
         return new Promise((resolve) => setTimeout(() => resolve({ answers: voice.answers }), 200));

@@ -3,7 +3,7 @@
 //! which tool to run.
 
 mod capture;
-mod cloud;
+pub mod cloud;
 pub mod model;
 mod stt;
 

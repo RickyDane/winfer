@@ -231,6 +231,7 @@ export function selectTab(tabId: string, workspaceId = activeWorkspaceId()) {
 
 /** Opens a URL: reuses a tab already on that origin unless `newTab`, else the active tab. */
 export async function openUrl(input: string, opts: { newTab?: boolean } = {}) {
+  if (!input.trim()) return focusUrlBar();
   const ws = useWorkspaces.getState();
   if (!ws.browserOpen) ws.toggleBrowser();
   if (!(await ensureBrowser())) return;

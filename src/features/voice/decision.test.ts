@@ -27,6 +27,7 @@ const ctx: ToolContext = {
   browserTabs: [],
   lastCommands: [],
   models: { claude: [{ id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }] },
+  recentAddresses: { "file:///Users/r/Coding/index.html": "/Users/r/Coding/index.html — mentioned in pane 1 (Claude Code)" },
 };
 
 describe("buildRequest", () => {
@@ -174,6 +175,21 @@ describe("models", () => {
   it("switches the model of a pane", () => {
     const [d] = parseDecision({ answers: { action_1: choice("change_model"), target: choice("p-a"), model: choice("sonnet") } }, ctx);
     expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.setModel", target: { id: "p-a" }, model: "sonnet" }]);
+  });
+});
+
+describe("open_url", () => {
+  it("opens a page an agent mentioned instead of searching for nothing", () => {
+    const [d] = parseDecision({ answers: { action_1: choice("open_url"), recent: choice("file:///Users/r/Coding/index.html"), address_given: { type: "noul", noul: 0.1 } } }, ctx);
+    expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "browser.open", url: "file:///Users/r/Coding/index.html", newTab: false }]);
+  });
+
+  it("prefers a spoken address", () => {
+    const [d] = parseDecision(
+      { answers: { action_1: choice("open_url"), recent: choice("none"), address: choice("localhost 3000"), address_given: { type: "noul", noul: 0.9 } } },
+      ctx,
+    );
+    expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "browser.open", url: "localhost 3000", newTab: false }]);
   });
 });
 

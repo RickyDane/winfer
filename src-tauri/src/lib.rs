@@ -1,6 +1,7 @@
 mod browser;
 mod env;
 mod hooks;
+mod llm;
 mod mcp;
 #[cfg(target_os = "macos")]
 mod menu;
@@ -96,6 +97,7 @@ pub fn run() {
             voice::voice_start,
             voice::voice_stop,
             mcp::mcp_respond,
+            llm::llm_compose,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

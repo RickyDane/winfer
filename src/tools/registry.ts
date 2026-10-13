@@ -23,6 +23,8 @@ export interface ToolContext {
   lastCommands: Command[];
   /** Models each provider offers. */
   models: Record<string, ModelInfo[]>;
+  /** Web addresses and .html files recently mentioned in pane output (url → where from). */
+  recentAddresses: Record<string, string>;
 }
 
 type Options = (ctx: ToolContext) => Record<string, string | null>;
@@ -349,13 +351,25 @@ export const TOOLS: ToolDef[] = [
   {
     id: "open_url",
     title: "Open URL",
-    description: "Open a website, web address or localhost dev server in the built-in browser",
+    description: "Open a website, web address, localhost dev server or a page an agent created in the built-in browser",
     risk: "safe",
     params: {
       url: { kind: "span", slot: "address", ask: "Which address or site should be opened?" },
+      recent: {
+        kind: "enum",
+        ask: "Which of the addresses the agents recently mentioned does the user mean (e.g. “the page you created”)? none if the user said an address.",
+        options: (ctx) => ({ none: "None of these / the user said an address", ...ctx.recentAddresses }),
+      },
       newTab: { kind: "bool", ask: "Did the user ask for a new tab?" },
     },
-    toCommands: (args) => [{ type: "browser.open", url: String(args.url ?? ""), newTab: Boolean(args.newTab) }],
+    toCommands: (args, ctx) => {
+      const recent = args.recent && args.recent !== "none" ? String(args.recent) : undefined;
+      // Only words that look like an address count ("github.com", "localhost 3000"), not "the page".
+      const spoken = typeof args.url === "string" && /(\.[a-z]{2,}\b|localhost|\b\d{2,5}\b|\/)/i.test(args.url) ? args.url.trim() : undefined;
+      // A spoken address wins unless it's just words ("the page") and an agent's address fits.
+      const url = recent ?? spoken ?? Object.keys(ctx.recentAddresses)[0];
+      return url ? [{ type: "browser.open", url, newTab: Boolean(args.newTab) }] : [{ type: "browser.focusUrl" }];
+    },
     palette: () => [],
   },
   {

@@ -11,6 +11,7 @@ import { toolContext } from "@/features/palette/entries";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
+import { needsWriting, writeInstructions } from "./writer";
 import { buildRequest, orderByMention, parseDecision, verdict, type Decision, type DecisionResult } from "./decision";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
@@ -84,7 +85,7 @@ function describe(d: Decision): string {
     return `Open ${parts.join(", ") || "nothing"}`;
   }
   const details = Object.entries(d.args)
-    .filter(([key, v]) => v !== undefined && typeof v !== "object" && key !== "submit")
+    .filter(([key, v]) => v !== undefined && typeof v !== "object" && !["submit", "text", "prompt", "newTab", "recent"].includes(key))
     .map(([key, v]) => {
       if (key === "target" && typeof v === "string" && v !== "focused") {
         const order = ctx.active.layout ? leaves(ctx.active.layout) : [];
@@ -100,10 +101,15 @@ function commandsFor(decisions: Decision[], transcript: string): Command[] {
   return orderByMention(decisions.flatMap((d) => d.tool.toCommands(d.args, ctx)), transcript, ctx);
 }
 
-function run(decisions: Decision[], transcript: string) {
+async function run(decisions: Decision[], transcript: string) {
+  if (needsWriting(decisions)) {
+    show("deciding", { transcript, message: "Writing the prompt…" });
+    decisions = await writeInstructions(decisions, transcript);
+  }
   const commands = commandsFor(decisions, transcript);
   commands.forEach(execute);
-  const summary = decisions.map(describe).join(" · ");
+  const written = decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
+  const summary = decisions.map(describe).join(" · ") + (written ? ` — “${String(written).slice(0, 140)}”` : "");
   useVoice.setState((s) => ({
     recent: [...s.recent, `${transcript} → ${summary}`].slice(-3),
     lastCommands: decisions.some((d) => d.tool.id === "repeat_last") ? s.lastCommands : commands,
@@ -115,7 +121,7 @@ function run(decisions: Decision[], transcript: string) {
 export function confirmPending(alternative?: Decision) {
   const pending = useVoice.getState().pending;
   if (!pending) return;
-  run(alternative ? [alternative] : pending.decisions, pending.transcript);
+  void run(alternative ? [alternative] : pending.decisions, pending.transcript);
 }
 
 export function cancelPending() {

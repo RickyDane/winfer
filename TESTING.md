@@ -51,6 +51,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Hold ⌥Space, say "open two new instances with Claude and Codex", release → two panes open. (First use asks for microphone access.)
 - [ ] "Create a new Claude instance and tell it to create a Flappy Bird clone" → Claude opens with that prompt.
 - [ ] "Type hello world into Claude" → text is typed into Claude's prompt, not sent.
+- [ ] Prompt writer (Settings, Workers AI by default): "tell Claude to make the page nicer" → Claude receives a concrete prompt (shown in the HUD). Try "OpenAI via your ChatGPT plan" too.
+- [ ] After an agent created a page: "Öffne die erstellte Seite im Browser" / "open the page you just made" opens that file; "show me the dev server" opens localhost.
 - [ ] "Close all windows" → asks to confirm, then closes every pane in the workspace.
 - [ ] Hold ⌥⇧Space and dictate → text is typed into the focused pane, not sent.
 - [ ] Commands run immediately (no confirmation). Optional: Settings → "Ask before running uncertain or risky voice commands" brings back the confirm prompt.
