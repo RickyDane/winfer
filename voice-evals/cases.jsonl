@@ -58,3 +58,5 @@
 {"utterance": "close everything", "expect": ["close_all_panes"]}
 {"utterance": "type hello world into claude", "expect": ["send_to_pane"], "text": "hello world"}
 {"utterance": "insert fix the failing test into pane two", "expect": ["send_to_pane"], "text": "fix the failing test"}
+{"utterance": "Create a new window for each provider and tell them to create a new Flappy Bird clone.", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1, "agy": 1, "grok": 1}, "prompt": "create a new flappy bird"}
+{"utterance": "open claude and codex and ask both to write a snake game in python", "expect": ["spawn_panes"], "counts": {"claude": 1, "codex": 1}, "prompt": "write a snake game"}

@@ -12,7 +12,6 @@ import { leaves } from "@/features/layout/tree";
 import { providerName } from "@/stores/workspaces";
 
 const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
-const MAX_SPAN_WORDS = 12;
 const MAX_CHOICES = 255;
 
 /**
@@ -44,19 +43,43 @@ export interface DecisionResult {
 
 /** Pane targets are shared by many tools, so they're asked once. */
 const SHARED_PARAMS = new Set(["target"]);
+/** Free-text parameters share one question per slot (an agent instruction, a web address). */
+/** Yes/no "is there any?" per slot: choice questions almost never pick "none" over a span. */
+const SLOT_PRESENT = {
+  instruction: "Did the user give an instruction or message for an agent (something for it to do or type, like “create a Flappy Bird clone”), beyond just opening, closing or arranging panes?",
+  address: "Did the user mention a website, web address or localhost port to open?",
+} as const;
 
-const questionKey = (tool: ToolDef, param: string, option?: string) =>
-  SHARED_PARAMS.has(param) ? param : [tool.id, param, option].filter(Boolean).join(".");
+const SLOT_QUESTIONS = {
+  instruction:
+    "What instruction or message should go to the agent(s)? Only the instruction itself, e.g. “create a Flappy Bird clone”, " +
+    "without lead-ins like “and tell it to” or “ask them to”. Answer none if the user gave no instruction.",
+  address: "Which words are the website, web address or localhost port to open? Answer none if no address was mentioned.",
+} as const;
+const MAX_SHORT_SPAN = 6;
 
-/** Contiguous word spans of the transcript, used as choices for free-text parameters. */
+function questionKey(tool: ToolDef, param: string, option?: string) {
+  if (SHARED_PARAMS.has(param)) return param;
+  const def = tool.params[param];
+  if (def?.kind === "span") return def.slot;
+  return [tool.id, param, option].filter(Boolean).join(".");
+}
+
+/**
+ * Candidate stretches of the transcript for free text: short phrases (names, URLs) plus every
+ * ending of the sentence (instructions usually come last: "… and tell it to <instruction>").
+ */
 export function transcriptSpans(transcript: string): string[] {
   const words = transcript.replace(/[.,!?;]+(\s|$)/g, "$1").split(/\s+/).filter(Boolean);
   const spans = new Set<string>();
-  for (let len = 1; len <= Math.min(MAX_SPAN_WORDS, words.length); len++) {
-    for (let i = 0; i + len <= words.length; i++) spans.add(words.slice(i, i + len).join(" "));
+  for (let start = 0; start < words.length; start++) {
+    for (let len = 1; start + len <= words.length; len++) {
+      if (len <= MAX_SHORT_SPAN || start + len === words.length) spans.add(words.slice(start, start + len).join(" "));
+    }
   }
-  // Longer spans first so the cap drops single words, not whole phrases.
-  return [...spans].sort((a, b) => b.length - a.length).slice(0, MAX_CHOICES - 1);
+  // Shortest first: when unsure the model leans toward earlier options, and a short
+  // phrase is a safer default than the whole sentence.
+  return [...spans].sort((a, b) => a.length - b.length).slice(0, MAX_CHOICES - 1);
 }
 
 function question(param: ParamDef, ctx: ToolContext, transcript: string, prefix: string): Question | Question[] | null {
@@ -74,7 +97,13 @@ function question(param: ParamDef, ctx: ToolContext, transcript: string, prefix:
       return { type: "score", instructions, criteria: param.levels };
     case "span": {
       const spans = transcriptSpans(transcript);
-      return spans.length ? { type: "choice", instructions, criteria: Object.fromEntries([["none", "Not mentioned"], ...spans.map((s) => [s, null])]) } : null;
+      return spans.length
+        ? {
+            type: "choice",
+            instructions: SLOT_QUESTIONS[param.slot],
+            criteria: Object.fromEntries([["none", "Not mentioned"], ...spans.map((s) => [s, null])]),
+          }
+        : null;
     }
     case "perOption":
       return null; // expanded by the caller
@@ -115,7 +144,7 @@ export function buildRequest(transcript: string, ctx: ToolContext, recent: strin
     for (const [name, param] of Object.entries(tool.params)) {
       const key = questionKey(tool, name);
       if (questions[key]) continue;
-      const prefix = SHARED_PARAMS.has(name) ? "" : `If the user wants “${tool.title}”: `;
+      const prefix = SHARED_PARAMS.has(name) || param.kind === "span" ? "" : `If the user wants “${tool.title}”: `;
       if (param.kind === "perOption") {
         for (const [option, label] of Object.entries(param.options(ctx))) {
           questions[questionKey(tool, name, option)] = {
@@ -128,6 +157,7 @@ export function buildRequest(transcript: string, ctx: ToolContext, recent: strin
       }
       const q = question(param, ctx, transcript, prefix);
       if (q && !Array.isArray(q)) questions[key] = q;
+      if (q && param.kind === "span") questions[`${key}_given`] = { type: "noul", instructions: SLOT_PRESENT[param.slot] };
     }
   }
   return { state, questions };
@@ -168,11 +198,29 @@ function argsFor(tool: ToolDef, answers: Record<string, Answer>, ctx: ToolContex
       args[name] = best ?? param.levels[Math.round(Math.min(Math.max(answer.score, 0), param.levels.length - 1))];
     } else if (answer.type === "choice") {
       if (param.kind === "count") args[name] = Math.max(0, NUMBER_WORDS.indexOf(answer.choice));
-      else if (param.kind === "span") args[name] = answer.choice === "none" ? undefined : answer.choice;
+      else if (param.kind === "span") {
+        const given = answers[`${param.slot}_given`];
+        const present = given?.type === "noul" ? given.noul >= 0.5 : true;
+        args[name] = !present || answer.choice === "none" ? undefined : param.slot === "instruction" ? withoutLeadIn(answer.choice) : answer.choice;
+      }
       else args[name] = answer.choice;
     }
   }
   return args;
+}
+
+/**
+ * Clef sometimes picks the instruction together with how it was addressed ("ask it to add
+ * dark mode", "Claude to run the tests"). Trims that framing from the extracted text only;
+ * which tool runs is still decided entirely by Clef.
+ */
+export function withoutLeadIn(text: string): string {
+  const trimmed = text
+    .replace(/^(and|then|please)\s+/i, "")
+    .replace(/^(?:(?:tell|ask|have|get|let)\s+)?(?:it|them|him|her|both|all|each|everyone|[\w-]+(?:\s+(?:one|code|agent|agents))?)\s+to\s+/i, "")
+    .replace(/^(insert|type|send|say)\s+/i, "")
+    .replace(/\s+into\s+(?:pane\s+\w+|[\w-]+(?:'s)?(?:\s+(?:pane|prompt|window))?)$/i, "");
+  return trimmed || text;
 }
 
 /** Turns Clef's answers into up to two decisions (the second only if it's a different tool). */

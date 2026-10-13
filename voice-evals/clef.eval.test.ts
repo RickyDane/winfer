@@ -66,7 +66,7 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
   it(
     "routes utterances to the expected tools",
     async () => {
-      const rows: { utterance: string; got: string; ok: boolean; confidence: number; ms: number; top: number; margin: number; ratio: number; tokens: number }[] = [];
+      const rows: { utterance: string; got: string; ok: boolean; confidence: number; ms: number; top: number; margin: number; ratio: number; tokens: number; text: string }[] = [];
       for (const c of cases) {
         const { result, ms } = await ask(c.utterance);
         const decisions = parseDecision(result, ctx);
@@ -78,7 +78,11 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
           const counts = spawn.args.counts as Record<string, number>;
           ok = Object.entries(c.counts).every(([p, n]) => counts[p] === n);
         }
-        if (ok && c.prompt) ok = String(spawn?.args.prompt ?? "").toLowerCase().includes(c.prompt);
+        // The prompt must contain the instruction and not start with a lead-in like "and tell them to".
+        const prompt = String(spawn?.args.prompt ?? "").toLowerCase();
+        if (ok && c.prompt) ok = prompt.includes(c.prompt) && !/^(and |tell |ask )/.test(prompt);
+        // Plain "open X" commands must not invent a prompt.
+        if (ok && spawn && !c.prompt && prompt) ok = false;
         const typed = decisions.find((d) => d.tool.id === "send_to_pane");
         if (ok && c.text) ok = String(typed?.args.text ?? "").toLowerCase().includes(c.text);
         const probs = Object.values((result.answers.action_1 as { probabilities?: Record<string, number> })?.probabilities ?? {}).sort((a, b) => b - a);
@@ -92,6 +96,7 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
           margin: (probs[0] ?? 0) - (probs[1] ?? 0),
           ratio: (probs[0] ?? 0) / Math.max(probs[1] ?? 0, 1e-6),
           tokens: (result as { usage?: { input_tokens?: number } }).usage?.input_tokens ?? 0,
+          text: String(decisions.find((d) => d.args.prompt || d.args.text || d.args.url)?.args.prompt ?? decisions.find((d) => d.args.text)?.args.text ?? ""),
         });
       }
       const accuracy = rows.filter((r) => r.ok).length / rows.length;

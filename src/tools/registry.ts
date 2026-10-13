@@ -31,7 +31,8 @@ export type ParamDef =
   | { kind: "perOption"; ask: string; options: Options; max: number } // → one count question per option
   | { kind: "bool"; ask: string } // → noul
   | { kind: "level"; ask: string; levels: string[] } // → score
-  | { kind: "span"; ask: string }; // → choice over transcript spans
+  /** Free text picked from the transcript. Tools share one question per slot. */
+  | { kind: "span"; slot: "instruction" | "address"; ask: string }; // → choice over transcript spans
 
 export type Args = Record<string, unknown>;
 
@@ -90,7 +91,7 @@ export const TOOLS: ToolDef[] = [
     risk: "safe",
     params: {
       counts: { kind: "perOption", ask: "How many new panes of this provider are requested?", options: installedProviders, max: 4 },
-      prompt: { kind: "span", ask: "What should the new agent be told to do, if anything (e.g. “create a Flappy Bird clone”)?" },
+      prompt: { kind: "span", slot: "instruction", ask: "What should the new agent be told to do, if anything (e.g. “create a Flappy Bird clone”)?" },
     },
     toCommands: (args) =>
       Object.entries((args.counts as Record<string, number>) ?? {})
@@ -290,7 +291,7 @@ export const TOOLS: ToolDef[] = [
     description: "Open a website, web address or localhost dev server in the built-in browser",
     risk: "safe",
     params: {
-      url: { kind: "span", ask: "Which address or site should be opened?" },
+      url: { kind: "span", slot: "address", ask: "Which address or site should be opened?" },
       newTab: { kind: "bool", ask: "Did the user ask for a new tab?" },
     },
     toCommands: (args) => [{ type: "browser.open", url: String(args.url ?? ""), newTab: Boolean(args.newTab) }],
@@ -409,7 +410,7 @@ export const TOOLS: ToolDef[] = [
     risk: "safe",
     params: {
       target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets },
-      text: { kind: "span", ask: "What exactly should be typed to the agent?" },
+      text: { kind: "span", slot: "instruction", ask: "What exactly should be typed to the agent?" },
       submit: { kind: "bool", ask: "Should the message be sent right away? No if the user only said type or insert it." },
     },
     toCommands: (args) =>
@@ -438,7 +439,7 @@ export const TOOLS: ToolDef[] = [
     title: "Tell all agents",
     description: "Tell all agents at once to do something",
     risk: "safe",
-    params: { text: { kind: "span", ask: "What exactly should be sent to all agents?" } },
+    params: { text: { kind: "span", slot: "instruction", ask: "What exactly should be sent to all agents?" } },
     toCommands: (args) => (args.text ? [{ type: "pane.broadcast", text: String(args.text) }] : [{ type: "ui.overlay", overlay: "broadcast" }]),
     palette: () => [{ title: "Broadcast to all agents…", args: {} }],
   },
@@ -449,7 +450,7 @@ export const TOOLS: ToolDef[] = [
     risk: "safe",
     params: {
       counts: { kind: "perOption", ask: "How many agents of this provider should race?", options: installedAgents, max: 3 },
-      prompt: { kind: "span", ask: "What task should the agents race on?" },
+      prompt: { kind: "span", slot: "instruction", ask: "What task should the agents race on?" },
     },
     toCommands: (args) => {
       const counts = (args.counts as Record<string, number>) ?? {};

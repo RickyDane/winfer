@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolContext } from "@/tools/registry";
 import type { Provider } from "@/features/providers/providers";
 import type { Workspace } from "@/stores/workspaces";
-import { buildRequest, orderByMention, parseDecision, transcriptSpans, verdict, type DecisionResult } from "./decision";
+import { buildRequest, orderByMention, parseDecision, transcriptSpans, verdict, withoutLeadIn, type DecisionResult } from "./decision";
 
 const provider = (id: string, name: string, aliases: string[] = []): Provider => ({
   id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, promptArg: false, approveInput: null, installed: true,
@@ -50,8 +50,17 @@ describe("buildRequest", () => {
     expect(Object.keys(req.questions).filter((k) => k.endsWith("target"))).toEqual(["target"]);
   });
 
-  it("offers transcript spans for free text", () => {
-    expect(transcriptSpans("tell claude to run the tests.")).toContain("run the tests");
+  it("offers short phrases and sentence endings as free text", () => {
+    const spans = transcriptSpans("create a new window for each provider and tell them to create a new Flappy Bird clone.");
+    expect(spans).toContain("create a new Flappy Bird clone");
+    expect(spans).toContain("Flappy Bird");
+    expect(spans).not.toContain("create a new window for each provider and tell"); // long, not an ending
+    expect(spans.length).toBeLessThan(120);
+  });
+
+  it("asks free text once per slot", () => {
+    expect(Object.keys(req.questions).filter((k) => k === "instruction" || k === "address")).toEqual(["instruction", "address"]);
+    expect(Object.keys(req.questions).some((k) => k.endsWith(".prompt") || k.endsWith(".text") || k.endsWith(".url"))).toBe(false);
   });
 });
 
@@ -96,8 +105,8 @@ describe("parseDecision", () => {
           action_1: choice("spawn_panes"),
           action_2: choice("send_to_pane", 3),
           "spawn_panes.counts.codex": choice("one"),
-          "spawn_panes.prompt": choice("add dark mode to the settings page"),
-          "send_to_pane.text": choice("add dark mode to the settings page"),
+          instruction: choice("add dark mode to the settings page"),
+          instruction_given: { type: "noul", noul: 0.9 },
         },
       },
       ctx,
@@ -108,9 +117,17 @@ describe("parseDecision", () => {
     ]);
   });
 
+  it("ignores a picked span when the user gave no instruction", () => {
+    const [d] = parseDecision(
+      { answers: { action_1: choice("spawn_panes"), "spawn_panes.counts.claude": choice("one"), instruction: choice("open cloud code"), instruction_given: { type: "noul", noul: 0.1 } } },
+      ctx,
+    );
+    expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.spawn", provider: "claude", count: 1, prompt: undefined }]);
+  });
+
   it("picks free text from a transcript span", () => {
     const [d] = parseDecision(
-      { answers: { action_1: choice("send_to_pane"), target: choice("p-a"), "send_to_pane.text": choice("run the tests"), "send_to_pane.submit": { type: "noul", noul: 0.9 } } },
+      { answers: { action_1: choice("send_to_pane"), target: choice("p-a"), instruction: choice("run the tests"), instruction_given: { type: "noul", noul: 0.95 }, "send_to_pane.submit": { type: "noul", noul: 0.9 } } },
       ctx,
     );
     expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.sendText", target: { id: "p-a" }, text: "run the tests", submit: true }]);
@@ -124,4 +141,17 @@ describe("parseDecision", () => {
     expect(verdict(at(20, "merge_worktree"))).toBe("confirm"); // risky tools always confirm
     expect(verdict(parseDecision({ answers: { action_1: choice("none") } }, ctx))).toBe("reject");
   });
+});
+
+describe("withoutLeadIn", () => {
+  it.each([
+    ["ask it to add dark mode to the settings page", "add dark mode to the settings page"],
+    ["claude to run the tests", "run the tests"],
+    ["ask codex to fix the lint errors", "fix the lint errors"],
+    ["ask both to write a snake game in python", "write a snake game in python"],
+    ["and tell them to create a new Flappy Bird clone", "create a new Flappy Bird clone"],
+    ["insert fix the failing test into pane two", "fix the failing test"],
+    ["create a Flappy Bird clone", "create a Flappy Bird clone"],
+    ["hello world", "hello world"],
+  ])("%s → %s", (input, expected) => expect(withoutLeadIn(input)).toBe(expected));
 });

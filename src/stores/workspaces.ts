@@ -186,7 +186,13 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     }),
 
   focusPane: (id) => {
-    set({ focusedPaneId: id });
+    // In a zoomed workspace the focused pane must be the visible one, so the zoom follows.
+    set((s) => ({
+      focusedPaneId: id,
+      workspaces: s.workspaces.map((w) =>
+        w.zoomedPaneId && w.zoomedPaneId !== id && w.panes.some((p) => p.id === id) ? { ...w, zoomedPaneId: id } : w,
+      ),
+    }));
     get().updatePane(id, { unseen: false });
   },
 
