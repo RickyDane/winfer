@@ -4,50 +4,88 @@
     "name": "Claude Code",
     "command": "claude",
     "args": [],
-    "resumeArgs": ["--continue"],
-    "aliases": ["claude", "claude code", "cloud", "cloud code", "claud"]
+    "resumeArgs": [
+      "--continue"
+    ],
+    "aliases": [
+      "claude",
+      "claude code",
+      "cloud",
+      "cloud code",
+      "claud"
+    ],
+    "statusHooks": true
   },
   {
     "id": "codex",
     "name": "Codex",
     "command": "codex",
     "args": [],
-    "resumeArgs": ["resume", "--last"],
-    "aliases": ["codex", "codecs", "code x"]
+    "resumeArgs": [
+      "resume",
+      "--last"
+    ],
+    "aliases": [
+      "codex",
+      "codecs",
+      "code x"
+    ],
+    "statusHooks": true
   },
   {
     "id": "agy",
     "name": "Antigravity",
     "command": "agy",
     "args": [],
-    "aliases": ["antigravity", "anti gravity", "agy"]
+    "aliases": [
+      "antigravity",
+      "anti gravity",
+      "agy"
+    ]
   },
   {
     "id": "grok",
     "name": "Grok Build",
     "command": "grok",
     "args": [],
-    "aliases": ["grok", "groc", "grock", "grok build"]
+    "aliases": [
+      "grok",
+      "groc",
+      "grock",
+      "grok build"
+    ]
   },
   {
     "id": "opencode",
     "name": "OpenCode",
     "command": "opencode",
     "args": [],
-    "aliases": ["opencode", "open code"]
+    "aliases": [
+      "opencode",
+      "open code"
+    ]
   },
   {
     "id": "cursor",
     "name": "Cursor CLI",
     "command": "cursor-agent",
     "args": [],
-    "aliases": ["cursor", "cursor agent"]
+    "aliases": [
+      "cursor",
+      "cursor agent"
+    ]
   },
   {
     "id": "shell",
     "name": "Shell",
     "command": null,
     "args": [],
-    "aliases": ["shell", "terminal", "zsh", "bash", "powershell"]
+    "aliases": [
+      "shell",
+      "terminal",
+      "zsh",
+      "bash",
+      "powershell"
+    ]
   }
 ]

@@ -12,6 +12,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
+import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
@@ -47,6 +48,7 @@ interface Entry {
   opened: boolean;
   spawned: boolean;
   exited: boolean;
+  lastOutput: number;
   observer?: ResizeObserver;
   frame?: number;
   resizeTimer?: number;
@@ -59,7 +61,7 @@ listen<{ paneId: string; code: number }>("pty://exit", ({ payload }) => {
   if (!entry) return;
   entry.exited = true;
   entry.term.write(`\r\n\x1b[2m[process exited with code ${payload.code}]\x1b[0m\r\n`);
-  useWorkspaces.getState().setPaneStatus(payload.paneId, payload.code === 0 ? "done" : "error");
+  reportStatus(payload.paneId, payload.code === 0 ? "done" : "error", `exited with code ${payload.code}`);
 });
 
 function create(pane: Pane): Entry {
@@ -83,8 +85,23 @@ function create(pane: Pane): Entry {
 
   term.onData((data) => {
     const entry = entries.get(pane.id);
-    if (entry?.spawned && !entry.exited) void invoke("pty_write", { paneId: pane.id, data });
+    if (!entry?.spawned || entry.exited) return;
+    void invoke("pty_write", { paneId: pane.id, data });
+    if (data.includes("\r")) reportInput(pane.id);
   });
+
+  // Terminal notifications: OSC 9 (iTerm2/ConEmu style), OSC 777 (notify;title;body), bell.
+  term.parser.registerOscHandler(9, (data) => {
+    reportStatus(pane.id, "needs-input", data);
+    return true;
+  });
+  term.parser.registerOscHandler(777, (data) => {
+    const [kind, title, body] = data.split(";");
+    if (kind === "notify") reportStatus(pane.id, "needs-input", [title, body].filter(Boolean).join(": "));
+    return true;
+  });
+  // Shells beep on tab completion; only agents' bells mean "look at me".
+  term.onBell(() => pane.provider !== "shell" && reportStatus(pane.id, "needs-input"));
 
   term.onResize(({ cols, rows }) => {
     const entry = entries.get(pane.id);
@@ -97,13 +114,17 @@ function create(pane: Pane): Entry {
   host.style.width = "100%";
   host.style.height = "100%";
 
-  return { pane, term, fit, host, opened: false, spawned: false, exited: false };
+  return { pane, term, fit, host, opened: false, spawned: false, exited: false, lastOutput: 0 };
 }
 
 async function spawn(entry: Entry) {
   entry.spawned = true;
   const channel = new Channel<ArrayBuffer>();
-  channel.onmessage = (data) => entry.term.write(new Uint8Array(data));
+  channel.onmessage = (data) => {
+    entry.term.write(new Uint8Array(data));
+    entry.lastOutput = Date.now();
+    reportOutput(entry.pane.id);
+  };
   try {
     await invoke("pty_spawn", {
       req: {
@@ -117,7 +138,7 @@ async function spawn(entry: Entry) {
       },
       onData: channel,
     });
-    useWorkspaces.getState().setPaneStatus(entry.pane.id, "working");
+    useWorkspaces.getState().setPaneStatus(entry.pane.id, entry.pane.provider === "shell" ? "idle" : "working");
   } catch (err) {
     entry.exited = true;
     entry.term.write(`\x1b[31mFailed to start ${entry.pane.provider}: ${err}\x1b[0m\r\n`);
@@ -166,6 +187,12 @@ export function detachTerminal(paneId: string) {
   if (!entry) return;
   entry.observer?.disconnect();
   entry.host.remove();
+}
+
+/** Milliseconds since the pane last produced output. */
+export function outputAge(paneId: string): number {
+  const entry = entries.get(paneId);
+  return entry ? Date.now() - entry.lastOutput : Infinity;
 }
 
 export function focusTerminal(paneId: string) {

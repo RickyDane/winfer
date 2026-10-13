@@ -1,4 +1,5 @@
 mod env;
+mod hooks;
 #[cfg(target_os = "macos")]
 mod menu;
 mod providers;
@@ -27,6 +28,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
+            hooks::start(app.handle().clone(), &data_dir)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

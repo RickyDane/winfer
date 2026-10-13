@@ -10,6 +10,8 @@ export interface Provider {
   args: string[];
   resumeArgs: string[];
   aliases: string[];
+  /** Reports status through hooks; otherwise status is inferred from output. */
+  statusHooks: boolean;
   installed: boolean;
 }
 

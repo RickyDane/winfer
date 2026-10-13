@@ -15,6 +15,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::env::{login_env, user_shell};
+use crate::hooks;
 use crate::providers;
 
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
@@ -107,6 +108,8 @@ fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
     let mut cmd = match &provider.command {
         Some(command) => {
             let mut cmd = CommandBuilder::new(command);
+            // Hook args first: Codex's `-c` must precede subcommands like `resume`.
+            cmd.args(hooks::provider_args(&provider.id));
             cmd.args(&provider.args);
             if req.resume {
                 cmd.args(&provider.resume_args);
@@ -128,6 +131,10 @@ fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "winfer");
     cmd.env("WINFER_PANE_ID", &req.pane_id);
+    if let Some(server) = hooks::server() {
+        cmd.env("WINFER_HOOK", &server.addr);
+        cmd.env("WINFER_TOKEN", &server.token);
+    }
     if let Some(workspace) = &req.workspace_id {
         cmd.env("WINFER_WORKSPACE", workspace);
     }

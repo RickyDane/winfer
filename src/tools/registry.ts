@@ -117,6 +117,15 @@ export const TOOLS: ToolDef[] = [
         .map(([id, label]) => ({ title: `Focus ${label}`, args: { target: id } })),
   },
   {
+    id: "focus_attention",
+    title: "Next agent needing attention",
+    description: "Jump to the next agent that is waiting for input or has finished",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "pane.nextAttention" }],
+    palette: () => [{ title: "Next agent needing attention", args: {} }],
+  },
+  {
     id: "zoom_pane",
     title: "Zoom pane",
     description: "Show one pane full size, or restore the tiled layout",

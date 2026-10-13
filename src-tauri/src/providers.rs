@@ -18,6 +18,9 @@ pub struct Provider {
     pub resume_args: Vec<String>,
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// Reports status through hooks (see hooks.rs) instead of output heuristics.
+    #[serde(default)]
+    pub status_hooks: bool,
 }
 
 #[derive(Debug, Serialize)]

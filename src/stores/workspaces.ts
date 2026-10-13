@@ -71,6 +71,8 @@ interface WorkspaceState {
   toggleBrowser: () => void;
 }
 
+let hydration: Promise<Snapshot> | null = null;
+
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 
 function newWorkspace(name: string, rootDir: string): Workspace {
@@ -94,7 +96,9 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   cheatSheetOpen: false,
 
   hydrate: async () => {
-    const snapshot = await loadSnapshot();
+    hydration ??= loadSnapshot();
+    const snapshot = await hydration;
+    if (get().hydrated) return;
     if (snapshot.workspaces.length === 0) {
       const home = newWorkspace("home", "~");
       set({ hydrated: true, workspaces: [home], activeWorkspaceId: home.id });

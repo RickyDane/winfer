@@ -5,6 +5,7 @@ import { NewPaneMenu } from "@/features/panes/NewPaneMenu";
 import { CheatSheet } from "@/features/palette/CheatSheet";
 import { CommandPalette } from "@/features/palette/CommandPalette";
 import { useKeymap } from "@/commands/keymap";
+import { startStatusTracking } from "@/features/status/agentStatus";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
@@ -52,6 +53,7 @@ export function AppShell() {
   useEffect(() => {
     void loadProviders();
     void hydrate();
+    startStatusTracking();
   }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
   if (!workspace) return <div className="h-full" data-tauri-drag-region />;

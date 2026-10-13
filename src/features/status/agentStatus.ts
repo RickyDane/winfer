@@ -1,0 +1,72 @@
+/**
+ * Agent status: hook events from Claude Code / Codex (src-tauri/src/hooks.rs), terminal
+ * notifications (OSC 9/777, bell) and, for agents without hooks, output activity.
+ */
+import { listen } from "@tauri-apps/api/event";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { providerName, useWorkspaces, type AgentStatus, type Pane } from "@/stores/workspaces";
+import { outputAge } from "@/features/terminal/xtermRegistry";
+
+const IDLE_AFTER_MS = 4000;
+
+const findPane = (id: string): Pane | undefined =>
+  useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === id);
+
+const hasHooks = (pane: Pane) => useWorkspaces.getState().providers.find((p) => p.id === pane.provider)?.statusHooks ?? false;
+
+let permission: Promise<boolean> | null = null;
+async function canNotify() {
+  permission ??= isPermissionGranted().then((granted) => granted || requestPermission().then((r) => r === "granted"));
+  return permission;
+}
+
+async function notify(pane: Pane, status: AgentStatus, message?: string) {
+  const s = useWorkspaces.getState();
+  if (document.hasFocus() && s.focusedPaneId === pane.id) return;
+  if (!(await canNotify())) return;
+  const workspace = s.workspaces.find((w) => w.id === pane.workspaceId)?.name ?? "";
+  const name = providerName(s.providers, pane.provider);
+  const title = status === "needs-input" ? `${name} needs your input` : status === "error" ? `${name} exited with an error` : `${name} finished`;
+  sendNotification({ title, body: message ? `${workspace}: ${message}` : workspace });
+}
+
+/** Single entry point for status changes; notifies on transitions that need the user. */
+export function reportStatus(paneId: string, status: AgentStatus, message?: string) {
+  const pane = findPane(paneId);
+  if (!pane || pane.status === status) return;
+  useWorkspaces.getState().setPaneStatus(paneId, status);
+  if (status === "needs-input" || status === "done" || status === "error") void notify(pane, status, message);
+}
+
+/** The user submitted input to an agent: it's working now. */
+export function reportInput(paneId: string) {
+  const pane = findPane(paneId);
+  if (pane && pane.provider !== "shell") reportStatus(paneId, "working");
+}
+
+/** Output arrived from an agent without hooks. */
+export function reportOutput(paneId: string) {
+  const pane = findPane(paneId);
+  if (pane && pane.provider !== "shell" && !hasHooks(pane) && pane.status !== "working") {
+    useWorkspaces.getState().setPaneStatus(paneId, "working");
+  }
+}
+
+let started = false;
+
+export function startStatusTracking() {
+  if (started) return;
+  started = true;
+  void listen<{ paneId: string; status: AgentStatus; message?: string }>("agent://status", ({ payload }) =>
+    reportStatus(payload.paneId, payload.status, payload.message ?? undefined),
+  );
+
+  // Agents without hooks: quiet output means they're waiting.
+  window.setInterval(() => {
+    for (const pane of useWorkspaces.getState().workspaces.flatMap((w) => w.panes)) {
+      if (pane.status === "working" && pane.provider !== "shell" && !hasHooks(pane) && outputAge(pane.id) > IDLE_AFTER_MS) {
+        reportStatus(pane.id, "idle");
+      }
+    }
+  }, 1000);
+}

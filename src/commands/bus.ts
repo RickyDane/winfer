@@ -32,6 +32,8 @@ export type Command =
   | { type: "pane.swapDir"; dir: Direction }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  /** Jump to the next pane (any workspace) whose agent needs input or finished unseen. */
+  | { type: "pane.nextAttention" }
   | { type: "layout.equalize" }
   | { type: "layout.preset"; name: Preset | "next" }
   | { type: "workspace.switch"; target: { id: string } | { index: number } }
@@ -143,6 +145,19 @@ export function execute(cmd: Command): void {
       if (!id) return;
       s.focusPane(id);
       s.updateActive((w) => ({ zoomedPaneId: w.zoomedPaneId === id ? null : id }));
+      return;
+    }
+    case "pane.nextAttention": {
+      const all = s.workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : []).map((id) => w.panes.find((p) => p.id === id)!));
+      const rank = (p: (typeof all)[number]) => (p.status === "needs-input" ? 0 : p.unseen ? 1 : 2);
+      const candidates = all.filter((p) => rank(p) < 2);
+      if (candidates.length === 0) return;
+      // Most urgent first; among equals, the next one after the focused pane (wrapping).
+      const start = all.findIndex((p) => p.id === s.focusedPaneId);
+      const distance = (p: (typeof all)[number]) => (all.indexOf(p) - start + all.length) % all.length || all.length;
+      const next = candidates.sort((a, b) => rank(a) - rank(b) || distance(a) - distance(b))[0];
+      if (next.workspaceId !== s.activeWorkspaceId) s.setActiveWorkspace(next.workspaceId);
+      store().focusPane(next.id);
       return;
     }
     case "layout.equalize":
