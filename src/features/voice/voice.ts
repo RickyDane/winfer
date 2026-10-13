@@ -142,7 +142,7 @@ async function decide(transcript: string) {
     case "confirm":
       return show("confirm", { pending: { decisions, transcript }, message: decisions.map(describe).join(" · ") });
     case "reject":
-      return show("error", { message: "Didn't catch a command" }, 3000);
+      return show("error", { message: `No winfer command in “${transcript}”` }, 4000);
   }
 }
 

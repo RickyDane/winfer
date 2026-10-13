@@ -55,14 +55,15 @@ describe("buildRequest", () => {
   });
 });
 
-const choice = (c: string, confidence = 0.9, probabilities?: Record<string, number>) => ({ type: "choice" as const, choice: c, confidence, probabilities });
+/** A choice answer whose winner beats the runner-up by `ratio`. */
+const choice = (c: string, ratio = 10) => ({ type: "choice" as const, choice: c, confidence: 0.1, probabilities: { [c]: 0.5, other: 0.5 / ratio } });
 
 describe("parseDecision", () => {
   it("turns counts into spawn commands in the order they were said", () => {
     const result: DecisionResult = {
       answers: {
         action_1: choice("spawn_panes"),
-        action_2: choice("spawn_panes", 0.55), // repeats action_1 → dropped
+        action_2: choice("spawn_panes", 1.5), // repeats action_1 → dropped
         "spawn_panes.counts.claude": choice("one"),
         "spawn_panes.counts.codex": choice("one"),
         "spawn_panes.counts.grok": choice("one"),
@@ -79,12 +80,31 @@ describe("parseDecision", () => {
 
   it("keeps a different second action and resolves the shared pane target", () => {
     const decisions = parseDecision(
-      { answers: { action_1: choice("close_pane", 0.8), action_2: choice("set_layout", 0.7), target: choice("p-b"), "set_layout.preset": choice("grid") } },
+      { answers: { action_1: choice("close_pane", 4), action_2: choice("set_layout", 3), target: choice("p-b"), "set_layout.preset": choice("grid") } },
       ctx,
     );
     expect(decisions.map((d) => d.tool.toCommands(d.args, ctx))).toEqual([
       [{ type: "pane.close", target: { id: "p-b" } }],
       [{ type: "layout.preset", name: "grid" }],
+    ]);
+  });
+
+  it("gives a new agent its instruction instead of typing it elsewhere", () => {
+    const decisions = parseDecision(
+      {
+        answers: {
+          action_1: choice("spawn_panes"),
+          action_2: choice("send_to_pane", 3),
+          "spawn_panes.counts.codex": choice("one"),
+          "spawn_panes.prompt": choice("add dark mode to the settings page"),
+          "send_to_pane.text": choice("add dark mode to the settings page"),
+        },
+      },
+      ctx,
+    );
+    expect(decisions.map((d) => d.tool.id)).toEqual(["spawn_panes"]);
+    expect(decisions[0].tool.toCommands(decisions[0].args, ctx)).toEqual([
+      { type: "pane.spawn", provider: "codex", count: 1, prompt: "add dark mode to the settings page" },
     ]);
   });
 
@@ -98,10 +118,10 @@ describe("parseDecision", () => {
 
   it("applies the confidence policy", () => {
     const at = (c: number, tool = "zoom_pane") => parseDecision({ answers: { action_1: choice(tool, c) } }, ctx);
-    expect(verdict(at(0.75))).toBe("run");
-    expect(verdict(at(0.45))).toBe("confirm");
-    expect(verdict(at(0.2))).toBe("reject");
-    expect(verdict(at(0.95, "merge_worktree"))).toBe("confirm"); // risky tools always confirm
+    expect(verdict(at(2.5))).toBe("run");
+    expect(verdict(at(1.4))).toBe("confirm");
+    expect(verdict(at(1.01))).toBe("reject");
+    expect(verdict(at(20, "merge_worktree"))).toBe("confirm"); // risky tools always confirm
     expect(verdict(parseDecision({ answers: { action_1: choice("none") } }, ctx))).toBe("reject");
   });
 });

@@ -2,7 +2,7 @@
  * Accuracy/latency eval against the real Clef API. Skipped unless CF_ACCOUNT_ID and
  * CF_API_TOKEN are set:  CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice [clef-flash|clef]
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ToolContext } from "@/tools/registry";
 import type { Provider } from "@/features/providers/providers";
@@ -16,14 +16,23 @@ interface Case {
   expect: string[];
   second?: string[];
   counts?: Record<string, number>;
+  /** Substring the extracted spawn prompt must contain. */
+  prompt?: string;
+  /** Substring the text typed into a pane must contain. */
+  text?: string;
 }
+
+// Real aliases, since they're part of what Clef sees.
+const aliases: Record<string, string[]> = Object.fromEntries(
+  JSON.parse(readFileSync(new URL("../src-tauri/resources/providers.json", import.meta.url), "utf8")).map((p: { id: string; aliases?: string[] }) => [p.id, p.aliases ?? []]),
+);
 
 const cases: Case[] = readFileSync(new URL("./cases.jsonl", import.meta.url), "utf8")
   .split("\n")
   .filter(Boolean)
   .map((l: string) => JSON.parse(l));
 
-const provider = (id: string, name: string): Provider => ({ id, name, command: id, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, installed: true });
+const provider = (id: string, name: string): Provider => ({ id, name, command: id, args: [], resumeArgs: [], aliases: aliases[id] ?? [], statusHooks: false, promptArg: false, approveInput: null, installed: true });
 const pane = (id: string, p: string, status: "working" | "idle" | "needs-input") => ({
   id, workspaceId: "ws", provider: p, title: "api", cwd: "~", status, worktree: null, wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null,
 });
@@ -57,19 +66,36 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
   it(
     "routes utterances to the expected tools",
     async () => {
-      const rows: { utterance: string; got: string; ok: boolean; confidence: number; ms: number }[] = [];
+      const rows: { utterance: string; got: string; ok: boolean; confidence: number; ms: number; top: number; margin: number; ratio: number; tokens: number }[] = [];
       for (const c of cases) {
         const { result, ms } = await ask(c.utterance);
         const decisions = parseDecision(result, ctx);
-        const got = decisions[0]?.tool.id ?? "none";
-        let ok = c.expect.includes(got);
-        if (ok && c.counts && got === "spawn_panes") {
-          const counts = decisions[0].args.counts as Record<string, number>;
+        const got = decisions.map((d) => d.tool.id).join("+") || "none";
+        // Two-action commands may come back in either order.
+        let ok = decisions.length ? decisions.some((d) => c.expect.includes(d.tool.id)) : c.expect.includes("none");
+        const spawn = decisions.find((d) => d.tool.id === "spawn_panes");
+        if (ok && c.counts && spawn) {
+          const counts = spawn.args.counts as Record<string, number>;
           ok = Object.entries(c.counts).every(([p, n]) => counts[p] === n);
         }
-        rows.push({ utterance: c.utterance, got, ok, confidence: decisions[0]?.confidence ?? 0, ms: Math.round(ms) });
+        if (ok && c.prompt) ok = String(spawn?.args.prompt ?? "").toLowerCase().includes(c.prompt);
+        const typed = decisions.find((d) => d.tool.id === "send_to_pane");
+        if (ok && c.text) ok = String(typed?.args.text ?? "").toLowerCase().includes(c.text);
+        const probs = Object.values((result.answers.action_1 as { probabilities?: Record<string, number> })?.probabilities ?? {}).sort((a, b) => b - a);
+        rows.push({
+          utterance: c.utterance,
+          got,
+          ok,
+          confidence: decisions[0]?.confidence ?? 0,
+          ms: Math.round(ms),
+          top: probs[0] ?? 0,
+          margin: (probs[0] ?? 0) - (probs[1] ?? 0),
+          ratio: (probs[0] ?? 0) / Math.max(probs[1] ?? 0, 1e-6),
+          tokens: (result as { usage?: { input_tokens?: number } }).usage?.input_tokens ?? 0,
+        });
       }
       const accuracy = rows.filter((r) => r.ok).length / rows.length;
+      if (process.env.EVAL_REPORT) writeFileSync(process.env.EVAL_REPORT, JSON.stringify(rows, null, 1));
       const sorted = rows.map((r) => r.ms).sort((a, b) => a - b);
       console.table(rows.filter((r) => !r.ok));
       console.log(

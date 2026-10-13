@@ -214,6 +214,18 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
     })
 }
 
+/// Kills a test's browser even when an assertion panics, so failed runs don't leak Chrome.
+#[cfg(test)]
+pub(crate) struct ChromeGuard(pub Child);
+
+#[cfg(test)]
+impl Drop for ChromeGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,10 +238,9 @@ mod tests {
             eprintln!("no Chrome found; skipping");
             return;
         };
-        let mut launched = launch(&exe, &tmp.join("profile")).unwrap();
+        let launched = launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = ChromeGuard(launched.child);
         assert!(launched.ws_url.starts_with("ws://127.0.0.1:"));
         assert!(launched.port > 0);
-        let _ = launched.child.kill();
-        let _ = launched.child.wait();
     }
 }

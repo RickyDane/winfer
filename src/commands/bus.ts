@@ -36,6 +36,8 @@ export type Command =
   | { type: "pane.swapDir"; dir: Direction }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  /** Closes every pane in the active workspace. */
+  | { type: "pane.closeAll" }
   /** Stops what an agent is doing (Esc; Ctrl-C for shells). */
   | { type: "pane.interrupt"; target: PaneRef }
   /** Accepts the agent's pending permission prompt. */
@@ -136,6 +138,16 @@ export function execute(cmd: Command): void {
       const count = Math.max(1, cmd.count ?? 1);
       for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree });
       logActivity(s.activeWorkspaceId, `Opened ${count > 1 ? `${count}× ` : ""}${providerName(s.providers, provider)}`, provider);
+      return;
+    }
+    case "pane.closeAll": {
+      const ws = active();
+      if (ws.panes.length === 0) return;
+      for (const pane of [...ws.panes]) {
+        closeTerminal(pane.id);
+        s.removePane(pane.id);
+      }
+      logActivity(ws.id, `Closed all ${ws.panes.length} panes`);
       return;
     }
     case "pane.interrupt": {

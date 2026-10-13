@@ -15,9 +15,13 @@ const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "sev
 const MAX_SPAN_WORDS = 12;
 const MAX_CHOICES = 255;
 
-/** Thresholds from the M0.5 spike (re-fit with the eval set once real data exists). */
-export const AUTO_RUN = 0.6;
-export const CONFIRM = 0.3;
+/**
+ * Gate on how clearly the chosen tool beats the runner-up (top probability ÷ second). Clef's own
+ * `confidence` doesn't separate right from wrong on the Workers AI model; this ratio does
+ * (voice-evals, Oct 2026: correct median ≈ 8, wrong answers ≤ 1.12 apart from argument mistakes).
+ */
+export const AUTO_RUN = 2;
+export const CONFIRM = 1.05;
 
 type Question =
   | { type: "choice"; instructions: string; criteria: Record<string, string | null> }
@@ -96,12 +100,14 @@ export function buildRequest(transcript: string, ctx: ToolContext, recent: strin
   };
 
   const tools = Object.fromEntries(TOOLS.map((t) => [t.id, t.description]));
+  // The second action only needs short labels; full descriptions are already in action_1.
+  const titles = Object.fromEntries(TOOLS.map((t) => [t.id, t.title]));
   const questions: Record<string, Question> = {
     action_1: { type: "choice", instructions: "Which tool does the user's first requested action map to?", criteria: tools },
     action_2: {
       type: "choice",
       instructions: "Which tool does a second, different action map to? Answer none unless the user clearly asked for two different things.",
-      criteria: tools,
+      criteria: titles,
     },
   };
 
@@ -130,6 +136,7 @@ export function buildRequest(transcript: string, ctx: ToolContext, recent: strin
 export interface Decision {
   tool: ToolDef;
   args: Args;
+  /** Top probability divided by the runner-up's; higher means a clearer choice. */
   confidence: number;
   /** Next-best tools for the confirmation prompt. */
   alternatives: { tool: ToolDef; probability: number }[];
@@ -183,9 +190,22 @@ export function parseDecision(result: DecisionResult, ctx: ToolContext): Decisio
       .sort((a, b) => b[1] - a[1])
       .slice(0, 2)
       .flatMap(([id, probability]) => (byId(id) ? [{ tool: byId(id)!, probability }] : []));
-    decisions.push({ tool, args: argsFor(tool, result.answers, ctx), confidence: answer.confidence ?? answer.probabilities?.[tool.id] ?? 0, alternatives });
+    decisions.push({ tool, args: argsFor(tool, result.answers, ctx), confidence: clarity(answer.probabilities, tool.id), alternatives });
+  }
+  // "Open Codex and ask it to …": the new agent already gets the instruction as its prompt,
+  // so a second "tell an agent" would type it into some other pane.
+  if (decisions.some((d) => d.tool.id === "spawn_panes" && d.args.prompt)) {
+    return decisions.filter((d) => d.tool.id !== "send_to_pane");
   }
   return decisions;
+}
+
+/** Ratio of the chosen option's probability to the best other option's. */
+export function clarity(probabilities: Record<string, number> | undefined, chosen: string): number {
+  if (!probabilities) return 0;
+  const top = probabilities[chosen] ?? 0;
+  const second = Math.max(0, ...Object.entries(probabilities).filter(([id]) => id !== chosen).map(([, p]) => p));
+  return second > 0 ? top / second : top > 0 ? Infinity : 0;
 }
 
 export type Verdict = "run" | "confirm" | "reject";

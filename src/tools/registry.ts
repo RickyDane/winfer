@@ -54,8 +54,16 @@ export interface ToolDef {
 const installedAgents: Options = (ctx) =>
   Object.fromEntries(ctx.providers.filter((p) => p.installed && p.id !== "shell").map((p) => [p.id, p.name]));
 
+/** Installed providers, with the names speech recognition tends to mishear them as. */
 const installedProviders: Options = (ctx) =>
-  Object.fromEntries(ctx.providers.filter((p) => p.installed).map((p) => [p.id, p.name]));
+  Object.fromEntries(
+    ctx.providers
+      .filter((p) => p.installed)
+      .map((p) => {
+        const heard = p.aliases.filter((a) => a.toLowerCase() !== p.name.toLowerCase() && a !== p.id);
+        return [p.id, heard.length ? `${p.name} (also heard as ${heard.join(", ")})` : p.name];
+      }),
+  );
 
 /** Pane targets: "focused" plus every pane by id, described by number and provider. */
 const paneTargets: Options = (ctx) => ({
@@ -78,15 +86,16 @@ export const TOOLS: ToolDef[] = [
   {
     id: "spawn_panes",
     title: "New pane",
-    description: "Open one or more new terminal panes running agent CLIs",
+    description: "Open, start, launch or spin up new agents, terminals or windows (Claude Code, Codex, …), one or several, optionally in their own worktrees. Names may be misheard: cloud means Claude, codecs means Codex",
     risk: "safe",
     params: {
       counts: { kind: "perOption", ask: "How many new panes of this provider are requested?", options: installedProviders, max: 4 },
+      prompt: { kind: "span", ask: "What should the new agent be told to do, if anything (e.g. “create a Flappy Bird clone”)?" },
     },
     toCommands: (args) =>
       Object.entries((args.counts as Record<string, number>) ?? {})
         .filter(([, n]) => n > 0)
-        .map(([provider, count]) => ({ type: "pane.spawn", provider, count })),
+        .map(([provider, count]) => ({ type: "pane.spawn", provider, count, prompt: args.prompt ? String(args.prompt) : undefined })),
     palette: (ctx) =>
       ctx.providers
         .filter((p) => p.installed)
@@ -95,7 +104,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "split_pane",
     title: "Split pane",
-    description: "Split the focused pane and open the default agent beside or below it",
+    description: "Split the focused pane in two; only when the user literally says split",
     risk: "safe",
     params: { dir: { kind: "enum", ask: "Split beside or below?", options: () => ({ right: "Beside", down: "Below" }) } },
     toCommands: (args) => [{ type: "pane.split", dir: args.dir === "down" ? "col" : "row" }],
@@ -112,6 +121,15 @@ export const TOOLS: ToolDef[] = [
     params: { target: { kind: "enum", ask: "Which pane should be closed?", options: paneTargets } },
     toCommands: (args) => [{ type: "pane.close", target: target(args) }],
     palette: () => [{ title: "Close pane", args: { target: "focused" } }],
+  },
+  {
+    id: "close_all_panes",
+    title: "Close all panes",
+    description: "Close all panes, windows or agents in this workspace at once",
+    risk: "confirm",
+    params: {},
+    toCommands: () => [{ type: "pane.closeAll" }],
+    palette: () => [{ title: "Close all panes", args: {} }],
   },
   {
     id: "focus_pane",
@@ -216,7 +234,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "toggle_worktrees",
     title: "Toggle worktrees",
-    description: "Turn separate git worktrees for new agents on or off in this workspace",
+    description: "Change the workspace setting that turns worktrees on or off; not for opening agents",
     risk: "safe",
     params: {},
     toCommands: () => [{ type: "workspace.toggleWorktrees" }],
@@ -269,7 +287,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "open_url",
     title: "Open URL",
-    description: "Open a web address or local dev server in the built-in browser",
+    description: "Open a website, web address or localhost dev server in the built-in browser",
     risk: "safe",
     params: {
       url: { kind: "span", ask: "Which address or site should be opened?" },
@@ -387,12 +405,12 @@ export const TOOLS: ToolDef[] = [
   {
     id: "send_to_pane",
     title: "Tell an agent",
-    description: "Type a message or instruction into an agent's terminal, like telling Claude to run the tests",
+    description: "Tell an existing agent to do something, or type or insert text into a pane, e.g. tell Claude to run the tests",
     risk: "safe",
     params: {
       target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets },
       text: { kind: "span", ask: "What exactly should be typed to the agent?" },
-      submit: { kind: "bool", ask: "Should the message be sent right away (not just typed)?" },
+      submit: { kind: "bool", ask: "Should the message be sent right away? No if the user only said type or insert it." },
     },
     toCommands: (args) =>
       args.text ? [{ type: "pane.sendText", target: target(args), text: String(args.text), submit: args.submit !== false }] : [],
@@ -418,7 +436,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "broadcast",
     title: "Tell all agents",
-    description: "Send the same message or instruction to every agent in the workspace",
+    description: "Tell all agents at once to do something",
     risk: "safe",
     params: { text: { kind: "span", ask: "What exactly should be sent to all agents?" } },
     toCommands: (args) => (args.text ? [{ type: "pane.broadcast", text: String(args.text) }] : [{ type: "ui.overlay", overlay: "broadcast" }]),
@@ -427,7 +445,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "race_agents",
     title: "Race agents",
-    description: "Give the same task to several agents in parallel and compare their results",
+    description: "Race several agents against each other on one task to compare who does it best; only when the user says race, compete or compare",
     risk: "safe",
     params: {
       counts: { kind: "perOption", ask: "How many agents of this provider should race?", options: installedAgents, max: 3 },
@@ -461,7 +479,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "none",
     title: "Nothing",
-    description: "Not a command, unclear, or background speech",
+    description: "Not a request to winfer: questions, chit-chat, weather, time, or unrelated speech",
     risk: "safe",
     params: {},
     toCommands: () => [],

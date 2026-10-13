@@ -31,7 +31,7 @@
 {"utterance": "go back", "expect": ["browser_navigate"]}
 {"utterance": "go forward a page", "expect": ["browser_navigate"]}
 {"utterance": "reload the browser", "expect": ["browser_navigate"]}
-{"utterance": "use the airpods microphone", "expect": ["set_device"]}
+{"utterance": "use the airpods microphone", "expect": ["none"], "tags": ["noise"]}
 {"utterance": "switch to bridgemind api", "expect": ["switch_workspace"]}
 {"utterance": "go to the personal workspace", "expect": ["switch_workspace"]}
 {"utterance": "create a new workspace", "expect": ["create_workspace"]}
@@ -52,3 +52,9 @@
 {"utterance": "open localhost 5173 in the browser", "expect": ["open_url"]}
 {"utterance": "hey what time is it", "expect": ["none"], "tags": ["noise"]}
 {"utterance": "open three codex panes in worktrees and switch to a grid", "expect": ["spawn_panes"], "second": ["set_layout"], "counts": {"codex": 3}, "tags": ["multi"]}
+{"utterance": "create a new Claude instance and tell it to create a Flappy Bird clone", "expect": ["spawn_panes"], "counts": {"claude": 1}, "prompt": "flappy bird"}
+{"utterance": "open codex and ask it to add dark mode to the settings page", "expect": ["spawn_panes"], "counts": {"codex": 1}, "prompt": "dark mode"}
+{"utterance": "close all windows", "expect": ["close_all_panes"]}
+{"utterance": "close everything", "expect": ["close_all_panes"]}
+{"utterance": "type hello world into claude", "expect": ["send_to_pane"], "text": "hello world"}
+{"utterance": "insert fix the failing test into pane two", "expect": ["send_to_pane"], "text": "fix the failing test"}

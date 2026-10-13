@@ -298,7 +298,8 @@ mod chrome_tests {
             eprintln!("no Chrome found; skipping");
             return;
         };
-        let mut launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
         tauri::async_runtime::block_on(async {
             let (tx, rx) = mpsc::channel::<Event>();
             let tx = Mutex::new(tx);
@@ -382,7 +383,5 @@ mod chrome_tests {
             let described = cdp.call("DOM.describeNode", json!({ "backendNodeId": node }), Some(&session)).await.unwrap();
             assert_eq!(described["node"]["nodeName"], "BUTTON");
         });
-        let _ = launched.child.kill();
-        let _ = launched.child.wait();
     }
 }
