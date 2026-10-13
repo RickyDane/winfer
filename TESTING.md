@@ -8,6 +8,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 ## 1. Basics
 - [ ] App opens; window has the sidebar, a `home` workspace and the browser panel.
 - [ ] Sidebar **+** → pick a git repo folder → a new workspace appears and is selected.
+- [ ] Right-click a workspace → small menu (Open, Reveal folder, Remove workspace…); removing asks first.
 - [ ] ⌘T opens Claude Code in that workspace (or a shell if Claude isn't installed).
 - [ ] "New" menu lists providers; uninstalled ones are greyed out.
 - [ ] Typing in a terminal works; colors, links (click) and copy/paste (⌘C/⌘V) work.

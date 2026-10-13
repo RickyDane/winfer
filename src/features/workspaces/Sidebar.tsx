@@ -3,10 +3,15 @@ import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
+import { WorkspaceMenu } from "./WorkspaceMenu";
+import { useCallback, useState } from "react";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 
 export function Sidebar() {
   const { providers, workspaces, activeWorkspaceId, focusedPaneId, setActiveWorkspace, focusPane } = useWorkspaces();
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const menuWorkspace = menu && workspaces.find((w) => w.id === menu.id);
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col rounded-[var(--radius-pane)] border border-border bg-panel">
@@ -32,9 +37,9 @@ export function Sidebar() {
                 onClick={() => setActiveWorkspace(ws.id)}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  execute({ type: "workspace.remove", id: ws.id });
+                  setMenu({ id: ws.id, x: e.clientX, y: e.clientY });
                 }}
-                title={`${ws.rootDir} — right-click to remove`}
+                title={ws.rootDir}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
                   active ? "bg-active font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
@@ -72,6 +77,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      {menu && menuWorkspace && <WorkspaceMenu ws={menuWorkspace} x={menu.x} y={menu.y} onClose={closeMenu} />}
       <ActivityFeed />
       <footer className="flex items-center gap-2 border-t border-border px-4 py-3">
         <span className="flex size-6 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">

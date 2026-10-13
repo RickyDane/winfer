@@ -387,15 +387,13 @@ async function createWorkspace(rootDir?: string, name?: string) {
 async function removeWorkspace(id: string) {
   const ws = store().workspaces.find((w) => w.id === id);
   if (!ws) return;
-  if (ws.panes.length > 0) {
-    const agents = ws.panes.length === 1 ? "1 pane" : `${ws.panes.length} panes`;
-    const ok = await ask(`Remove workspace “${ws.name}”? Its ${agents} will be closed. Files and worktrees stay on disk.`, {
-      title: "Remove workspace",
-      kind: "warning",
-      okLabel: "Remove",
-    });
-    if (!ok) return;
-  }
+  const panes = ws.panes.length === 0 ? "" : ` Its ${ws.panes.length === 1 ? "1 pane" : `${ws.panes.length} panes`} will be closed.`;
+  const ok = await ask(`Remove workspace “${ws.name}” from winfer?${panes} Files and worktrees stay on disk.`, {
+    title: "Remove workspace",
+    kind: "warning",
+    okLabel: "Remove",
+  });
+  if (!ok) return;
   ws.panes.forEach((p) => closeTerminal(p.id));
   store().removeWorkspace(id);
 }
