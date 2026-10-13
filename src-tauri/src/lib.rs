@@ -1,6 +1,7 @@
 mod browser;
 mod env;
 mod hooks;
+mod mcp;
 #[cfg(target_os = "macos")]
 mod menu;
 mod providers;
@@ -10,6 +11,11 @@ mod voice;
 mod worktree;
 
 use tauri::Manager;
+
+/// `winfer mcp-stdio`: the MCP server agents launch to talk to the running app.
+pub fn run_mcp_stdio() {
+    mcp::run_stdio();
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -78,6 +84,7 @@ pub fn run() {
             voice::voice_test_connection,
             voice::voice_start,
             voice::voice_stop,
+            mcp::mcp_respond,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

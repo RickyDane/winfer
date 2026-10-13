@@ -73,7 +73,10 @@ interface WorkspaceState {
   createWorkspace: (name: string, rootDir: string) => string;
   removeWorkspace: (id: string) => void;
   focusPane: (id: string) => void;
-  addPane: (provider: ProviderId, opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string }) => string;
+  addPane: (
+    provider: ProviderId,
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string },
+  ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
   setPaneStatus: (id: string, status: AgentStatus) => void;
@@ -183,10 +186,12 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
 
   addPane: (provider, opts) => {
     const { activeWorkspaceId, focusedPaneId } = get();
+    const workspaceId = opts?.workspaceId ?? activeWorkspaceId;
+    const background = workspaceId !== activeWorkspaceId;
     const id = newId("p");
     set((s) => ({
-      focusedPaneId: id,
-      workspaces: updateWorkspace(s.workspaces, activeWorkspaceId, (w) => ({
+      focusedPaneId: background ? s.focusedPaneId : id,
+      workspaces: updateWorkspace(s.workspaces, workspaceId, (w) => ({
         ...w,
         panes: [
           ...w.panes,
@@ -206,7 +211,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             prompt: opts?.prompt ?? null,
           },
         ],
-        layout: insertDwindle(w.layout, id, opts?.splitFrom ?? focusedPaneId),
+        layout: insertDwindle(w.layout, id, opts?.splitFrom ?? (background ? null : focusedPaneId)),
         zoomedPaneId: null,
       })),
     }));

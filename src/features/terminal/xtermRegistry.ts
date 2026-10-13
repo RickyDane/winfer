@@ -198,6 +198,26 @@ function scheduleFit(entry: Entry) {
   });
 }
 
+/** Starts a pane's process without showing it (e.g. an agent started in a background workspace). */
+export function startDetached(pane: Pane) {
+  if (entries.has(pane.id)) return;
+  const entry = create(pane);
+  entries.set(pane.id, entry);
+  entry.term.resize(120, 32);
+  void spawn(entry);
+}
+
+/** Last `lines` lines of a pane's screen + scrollback as plain text. */
+export function readTerminal(paneId: string, lines: number): string | null {
+  const entry = entries.get(paneId);
+  if (!entry) return null;
+  const buffer = entry.term.buffer.active;
+  const out: string[] = [];
+  for (let i = Math.max(0, buffer.length - lines); i < buffer.length; i++) out.push(buffer.getLine(i)?.translateToString(true) ?? "");
+  while (out.length && !out.at(-1)!.trim()) out.pop();
+  return out.join("\n");
+}
+
 export function attachTerminal(pane: Pane, slot: HTMLElement) {
   let entry = entries.get(pane.id);
   if (!entry) {

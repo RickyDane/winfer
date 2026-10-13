@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeUrl } from "./browser";
+import { normalizeUrl } from "./url";
 
 describe("normalizeUrl", () => {
   it.each([

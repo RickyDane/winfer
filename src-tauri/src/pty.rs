@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::env::{login_env, user_shell};
 use crate::providers;
-use crate::{browser, hooks};
+use crate::{browser, hooks, mcp};
 
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
@@ -104,24 +104,45 @@ pub(crate) fn resolve_cwd(cwd: Option<&str>) -> PathBuf {
     if path.is_dir() { path } else { home }
 }
 
+/// Orders an agent's CLI arguments. MCP args come first: Claude's `--mcp-config` is variadic and
+/// would swallow a following positional prompt, and the single-value `--settings` after it ends
+/// the list. Codex's `-c` overrides must precede subcommands like `resume`.
+fn agent_args(
+    provider: &providers::Provider,
+    mcp_args: Vec<String>,
+    hook_args: Vec<String>,
+    resume: bool,
+    prompt: Option<&str>,
+) -> Vec<String> {
+    let mut args = mcp_args;
+    args.extend(hook_args);
+    args.extend(provider.args.iter().cloned());
+    if resume {
+        args.extend(provider.resume_args.iter().cloned());
+    } else if let Some(prompt) = prompt.filter(|_| provider.prompt_arg) {
+        args.push(prompt.to_string());
+    }
+    args
+}
+
 fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBuilder, String> {
     let provider = providers::find(&req.provider_id)
         .ok_or_else(|| format!("unknown provider: {}", req.provider_id))?;
 
     let mut cmd = match &provider.command {
         Some(command) => {
+            let servers: Vec<_> = mcp::winfer_server(&req.pane_id)
+                .into_iter()
+                .chain(cdp_url.map(browser::playwright_server))
+                .collect();
             let mut cmd = CommandBuilder::new(command);
-            // Hook args first: Codex's `-c` must precede subcommands like `resume`.
-            cmd.args(hooks::provider_args(&provider.id));
-            if let Some(url) = cdp_url {
-                cmd.args(browser::agent_mcp_args(&provider.id, url));
-            }
-            cmd.args(&provider.args);
-            if req.resume {
-                cmd.args(&provider.resume_args);
-            } else if let Some(prompt) = req.prompt.as_ref().filter(|_| provider.prompt_arg) {
-                cmd.arg(prompt);
-            }
+            cmd.args(agent_args(
+                provider,
+                mcp::agent_args(&provider.id, &servers),
+                hooks::provider_args(&provider.id),
+                req.resume,
+                req.prompt.as_deref(),
+            ));
             cmd
         }
         None => {
@@ -357,6 +378,23 @@ mod tests {
         let home = dirs::home_dir().unwrap();
         let expected = format!("[p-test ws-test xterm-256color {}]", home.display());
         assert!(out.contains(&expected), "output was: {out:?}");
+    }
+
+    #[test]
+    fn mcp_config_never_swallows_the_prompt() {
+        let claude = providers::find("claude").unwrap();
+        let args = agent_args(
+            claude,
+            vec!["--mcp-config".into(), "{}".into()],
+            vec!["--settings".into(), "/hooks.json".into()],
+            false,
+            Some("fix the login bug"),
+        );
+        assert_eq!(args, ["--mcp-config", "{}", "--settings", "/hooks.json", "fix the login bug"]);
+        let resumed = agent_args(claude, vec![], vec![], true, Some("ignored"));
+        assert_eq!(resumed, ["--continue"]);
+        let codex = providers::find("codex").unwrap();
+        assert_eq!(agent_args(codex, vec!["-c".into(), "a=1".into()], vec![], true, None), ["-c", "a=1", "resume", "--last"]);
     }
 
     #[test]

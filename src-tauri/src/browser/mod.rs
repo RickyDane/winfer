@@ -326,22 +326,13 @@ pub fn kill_orphans(app: &AppHandle) {
     }
 }
 
-/// CLI args that give an agent the Playwright MCP server, attached to the workspace browser.
-pub fn agent_mcp_args(provider_id: &str, cdp_url: &str) -> Vec<String> {
-    let args = json!(["-y", "@playwright/mcp@latest", "--cdp-endpoint", cdp_url]);
-    match provider_id {
-        "claude" => {
-            let config =
-                json!({ "mcpServers": { "winfer-browser": { "command": "npx", "args": args } } });
-            vec!["--mcp-config".into(), config.to_string()]
-        }
-        "codex" => vec![
-            "-c".into(),
-            "mcp_servers.winfer_browser.command=\"npx\"".into(),
-            "-c".into(),
-            format!("mcp_servers.winfer_browser.args={args}"),
-        ],
-        _ => Vec::new(),
+/// Playwright MCP server attached to the workspace browser.
+pub fn playwright_server(cdp_url: &str) -> crate::mcp::Server {
+    crate::mcp::Server {
+        name: "winfer-browser",
+        command: "npx".into(),
+        args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", cdp_url].map(String::from).to_vec(),
+        env: Vec::new(),
     }
 }
 
@@ -794,13 +785,4 @@ mod tests {
         let _ = launched.child.wait();
     }
 
-    #[test]
-    fn mcp_args_per_provider() {
-        let claude = agent_mcp_args("claude", "http://127.0.0.1:9");
-        assert_eq!(claude[0], "--mcp-config");
-        assert!(claude[1].contains("--cdp-endpoint") && claude[1].contains("http://127.0.0.1:9"));
-        let codex = agent_mcp_args("codex", "http://127.0.0.1:9");
-        assert_eq!(codex.len(), 4);
-        assert!(agent_mcp_args("agy", "x").is_empty());
-    }
 }

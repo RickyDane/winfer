@@ -98,9 +98,14 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
     )?;
 
     let token = format!("{:032x}", rand::random::<u128>());
-    let addr = serve(token.clone(), move |event| {
-        let _ = app.emit("agent://status", event);
-    })?;
+    let status_app = app.clone();
+    let addr = serve(
+        token.clone(),
+        move |event| {
+            let _ = status_app.emit("agent://status", event);
+        },
+        move |call| crate::mcp::dispatch(&app, call),
+    )?;
     let _ = SERVER.set(HookServer {
         addr,
         token,
@@ -110,7 +115,14 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
 }
 
 /// Binds 127.0.0.1 on a random port and handles hook requests on a background thread.
-fn serve(token: String, emit: impl Fn(StatusEvent) + Send + 'static) -> std::io::Result<String> {
+/// `/mcp` calls (from `winfer mcp-stdio`) are answered on their own threads since they wait
+/// for the webview, so status hooks never queue behind them.
+fn serve(
+    token: String,
+    emit: impl Fn(StatusEvent) + Send + 'static,
+    on_mcp: impl Fn(crate::mcp::Call) -> crate::mcp::Reply + Send + Sync + 'static,
+) -> std::io::Result<String> {
+    let on_mcp = std::sync::Arc::new(on_mcp);
     let http = tiny_http::Server::http("127.0.0.1:0").map_err(std::io::Error::other)?;
     let addr = http
         .server_addr()
@@ -150,6 +162,21 @@ fn serve(token: String, emit: impl Fn(StatusEvent) + Send + 'static) -> std::io:
                     }
                     204
                 }
+                (true, [mcp]) if mcp == "mcp" => {
+                    let on_mcp = on_mcp.clone();
+                    std::thread::spawn(move || {
+                        let mut body = String::new();
+                        let _ = req.as_reader().take(1024 * 1024).read_to_string(&mut body);
+                        let reply = match serde_json::from_str::<crate::mcp::Call>(&body) {
+                            Ok(call) => on_mcp(call),
+                            Err(err) => crate::mcp::Reply { ok: false, text: format!("bad request: {err}") },
+                        };
+                        let json = serde_json::to_string(&reply).unwrap_or_default();
+                        let header = tiny_http::Header::from_bytes("Content-Type", "application/json").expect("valid header");
+                        let _ = req.respond(tiny_http::Response::from_string(json).with_header(header));
+                    });
+                    continue;
+                }
                 _ => 404,
             };
             let _ = req.respond(tiny_http::Response::empty(code));
@@ -170,12 +197,31 @@ mod tests {
         assert_eq!(status_for("claude", "Unknown"), None);
     }
 
+    #[test]
+    fn mcp_route_needs_token_and_forwards_calls() {
+        let addr = serve("secret".into(), |_| {}, |call| crate::mcp::Reply { ok: true, text: format!("{}:{}", call.tool, call.pane_id) }).unwrap();
+        let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+        let body = serde_json::json!({ "tool": "list_panes", "args": {}, "paneId": "p-1" });
+
+        let mut ok = agent.post(&format!("http://{addr}/mcp")).header("X-Winfer-Token", "secret").send_json(&body).unwrap();
+        let reply: Value = ok.body_mut().read_json().unwrap();
+        assert_eq!(reply["text"], "list_panes:p-1");
+
+        let denied = agent.post(&format!("http://{addr}/mcp")).header("X-Winfer-Token", "nope").send_json(&body).unwrap();
+        assert_eq!(denied.status(), 401);
+    }
+
     /// Runs the real hook commands through `sh` + curl against the server.
     #[cfg(unix)]
     #[test]
     fn hook_commands_reach_the_server() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let addr = serve("secret".into(), move |e| tx.send(e).unwrap()).unwrap();
+        let addr = serve(
+            "secret".into(),
+            move |e| tx.send(e).unwrap(),
+            |call| crate::mcp::Reply { ok: true, text: format!("{} from {}", call.tool, call.pane_id) },
+        )
+        .unwrap();
         let run = |script: &str, token: &str, args: &[&str]| {
             std::process::Command::new("sh")
                 .args(["-c", script, "winfer"])

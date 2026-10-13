@@ -13,6 +13,7 @@ import { RaceView } from "@/features/orchestration/RaceView";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
+import { startAgentApi } from "@/features/mcp/agentApi";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
@@ -79,6 +80,7 @@ export function AppShell() {
     void hydrate();
     startStatusTracking();
     startVoice();
+    startAgentApi();
   }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
   if (!workspace) return <div className="h-full" data-tauri-drag-region />;
