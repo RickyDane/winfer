@@ -71,3 +71,4 @@
 {"utterance": "Wie spät ist es?", "expect": ["none"], "tags": ["de", "noise"]}
 {"utterance": "stop all current sessions", "expect": ["interrupt_all"]}
 {"utterance": "stop all agents", "expect": ["interrupt_all"]}
+{"utterance": "Change all the models to Opus", "expect": ["change_model"], "model": "opus"}

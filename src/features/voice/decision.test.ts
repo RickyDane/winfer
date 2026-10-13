@@ -157,6 +157,15 @@ describe("models", () => {
     ]);
   });
 
+  it("changes the model of every pane that offers it", () => {
+    const [d] = parseDecision({ answers: { action_1: choice("change_model"), target: choice("all"), model: choice("opus") } }, ctx);
+    // p-a is Claude (offers opus); p-b is Codex, which can't list models, so it gets the name as-is.
+    expect(d.tool.toCommands(d.args, ctx)).toEqual([
+      { type: "pane.setModel", target: { id: "p-a" }, model: "opus" },
+      { type: "pane.setModel", target: { id: "p-b" }, model: "opus" },
+    ]);
+  });
+
   it("switches the model of a pane", () => {
     const [d] = parseDecision({ answers: { action_1: choice("change_model"), target: choice("p-a"), model: choice("sonnet") } }, ctx);
     expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.setModel", target: { id: "p-a" }, model: "sonnet" }]);

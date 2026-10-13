@@ -89,6 +89,7 @@ const installedProviders: Options = (ctx) =>
 /** Pane targets: "focused" plus every pane by id, described by number and provider. */
 const paneTargets: Options = (ctx) => ({
   focused: "The pane that currently has focus",
+  all: "All panes / every agent at once",
   ...Object.fromEntries(
     (ctx.active.layout ? leaves(ctx.active.layout) : []).map((id, i) => {
       const pane = ctx.active.panes.find((p) => p.id === id)!;
@@ -98,7 +99,18 @@ const paneTargets: Options = (ctx) => ({
 });
 
 const target = (args: Args): PaneRef =>
-  args.target && args.target !== "focused" ? { id: String(args.target) } : "focused";
+  args.target && args.target !== "focused" && args.target !== "all" ? { id: String(args.target) } : "focused";
+
+/** Panes a command applies to: every pane for "all", else the one target. */
+const targets = (args: Args, ctx: ToolContext): PaneRef[] =>
+  args.target === "all" ? (ctx.active.layout ? leaves(ctx.active.layout) : []).map((id) => ({ id })) : [target(args)];
+
+/** Runs `make` once per targeted pane. */
+const perPane = (args: Args, ctx: ToolContext, make: (t: PaneRef) => Command | null): Command[] =>
+  targets(args, ctx).flatMap((t) => {
+    const cmd = make(t);
+    return cmd ? [cmd] : [];
+  });
 
 const RESIZE_STEP: Record<string, number> = { slightly: 0.05, moderately: 0.1, "a lot": 0.2 };
 const DIRECTIONS = { left: "Left", right: "Right", up: "Up", down: "Down" } as const;
@@ -147,7 +159,7 @@ export const TOOLS: ToolDef[] = [
     description: "Close a terminal pane and stop the agent running in it",
     risk: "safe",
     params: { target: { kind: "enum", ask: "Which pane should be closed?", options: paneTargets } },
-    toCommands: (args) => [{ type: "pane.close", target: target(args) }],
+    toCommands: (args) => (args.target === "all" ? [{ type: "pane.closeAll" }] : [{ type: "pane.close", target: target(args) }]),
     palette: () => [{ title: "Close pane", args: { target: "focused" } }],
   },
   {
@@ -160,10 +172,15 @@ export const TOOLS: ToolDef[] = [
       model: { kind: "enum", ask: "Which AI model did the user name, e.g. Opus or Sonnet? default if none.", options: modelOptions },
     },
     toCommands: (args, ctx) => {
-      const pane = args.target && args.target !== "focused" ? ctx.active.panes.find((p) => p.id === args.target) : ctx.active.panes.find((p) => p.id === ctx.focusedPaneId);
-      if (!pane || !args.model || args.model === "default") return [{ type: "ui.overlay", overlay: "model" }];
-      const model = modelFor(ctx, pane.provider, args.model);
-      return model ? [{ type: "pane.setModel", target: target(args), model }] : [{ type: "ui.overlay", overlay: "model" }];
+      if (!args.model || args.model === "default") return [{ type: "ui.overlay", overlay: "model" }];
+      // Each pane gets the model only if its agent offers it ("change all the models to Opus").
+      const commands = perPane(args, ctx, (t) => {
+        const id = t === "focused" ? ctx.focusedPaneId : "id" in t ? t.id : null;
+        const pane = ctx.active.panes.find((p) => p.id === id);
+        const model = pane && modelFor(ctx, pane.provider, args.model);
+        return model ? { type: "pane.setModel", target: t, model } : null;
+      });
+      return commands.length ? commands : [{ type: "ui.overlay", overlay: "model" }];
     },
     palette: () => [{ title: "Change model…", args: {} }],
   },
@@ -457,8 +474,8 @@ export const TOOLS: ToolDef[] = [
       text: { kind: "span", slot: "instruction", ask: "What exactly should be typed to the agent?" },
       submit: { kind: "bool", ask: "Should the message be sent right away? No if the user only said type or insert it." },
     },
-    toCommands: (args) =>
-      args.text ? [{ type: "pane.sendText", target: target(args), text: String(args.text), submit: args.submit !== false }] : [],
+    toCommands: (args, ctx) =>
+      args.text ? perPane(args, ctx, (t) => ({ type: "pane.sendText", target: t, text: String(args.text), submit: args.submit !== false })) : [],
   },
   {
     id: "interrupt_agent",
@@ -466,7 +483,7 @@ export const TOOLS: ToolDef[] = [
     description: "Stop or interrupt what an agent is currently doing",
     risk: "safe",
     params: { target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets } },
-    toCommands: (args) => [{ type: "pane.interrupt", target: target(args) }],
+    toCommands: (args, ctx) => (args.target === "all" ? [{ type: "pane.interruptAll" }] : perPane(args, ctx, (t) => ({ type: "pane.interrupt", target: t }))),
     palette: () => [{ title: "Interrupt agent", args: { target: "focused" } }],
   },
   {
@@ -484,7 +501,7 @@ export const TOOLS: ToolDef[] = [
     description: "Approve or allow the permission an agent is asking for",
     risk: "confirm",
     params: { target: { kind: "enum", ask: "Which pane does the request refer to?", options: paneTargets } },
-    toCommands: (args) => [{ type: "pane.approve", target: target(args) }],
+    toCommands: (args, ctx) => perPane(args, ctx, (t) => ({ type: "pane.approve", target: t })),
     palette: () => [{ title: "Approve agent's request", args: { target: "focused" } }],
   },
   {
