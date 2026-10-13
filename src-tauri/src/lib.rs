@@ -1,3 +1,4 @@
+mod browser;
 mod env;
 mod hooks;
 #[cfg(target_os = "macos")]
@@ -25,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(pty::PtyManager::default())
+        .manage(browser::BrowserManager::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -44,7 +46,24 @@ pub fn run() {
             worktree::worktree_diff,
             worktree::worktree_merge,
             worktree::worktree_remove,
+            browser::browser_status,
+            browser::browser_install,
+            browser::browser_open,
+            browser::browser_new_tab,
+            browser::browser_close_tab,
+            browser::browser_navigate,
+            browser::browser_history,
+            browser::browser_attach,
+            browser::browser_detach,
+            browser::browser_resize,
+            browser::browser_input,
+            browser::browser_selection,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<browser::BrowserManager>().shutdown();
+            }
+        });
 }

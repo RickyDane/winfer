@@ -50,6 +50,7 @@ interface Entry {
   spawned: boolean;
   exited: boolean;
   lastOutput: number;
+  decoder: TextDecoder;
   observer?: ResizeObserver;
   frame?: number;
   resizeTimer?: number;
@@ -115,7 +116,7 @@ function create(pane: Pane): Entry {
   host.style.width = "100%";
   host.style.height = "100%";
 
-  return { pane, term, fit, host, opened: false, spawned: false, exited: false, lastOutput: 0 };
+  return { pane, term, fit, host, opened: false, spawned: false, exited: false, lastOutput: 0, decoder: new TextDecoder() };
 }
 
 /** Gives an agent pane its own git worktree before it starts (if the folder is a repo). */
@@ -142,6 +143,7 @@ async function spawn(entry: Entry) {
     entry.term.write(new Uint8Array(data));
     entry.lastOutput = Date.now();
     reportOutput(entry.pane.id);
+    detectDevServer(entry, data);
   };
   try {
     await invoke("pty_spawn", {
@@ -162,6 +164,19 @@ async function spawn(entry: Entry) {
     entry.term.write(`\x1b[31mFailed to start ${entry.pane.provider}: ${err}\x1b[0m\r\n`);
     useWorkspaces.getState().setPaneStatus(entry.pane.id, "error");
   }
+}
+
+// Dev servers print e.g. "Local: http://localhost:5173/" — often with color codes inside the URL.
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+const LOCAL_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d{2,5}(?:\/[^\s"'<>)\]]*)?/g;
+
+function detectDevServer(entry: Entry, data: ArrayBuffer) {
+  const text = entry.decoder.decode(data, { stream: true }).replace(ANSI, "");
+  const urls = text.match(LOCAL_URL);
+  if (!urls) return;
+  const url = urls.at(-1)!.replace("0.0.0.0", "localhost");
+  const pane = useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === entry.pane.id);
+  if (pane && pane.devUrl !== url) useWorkspaces.getState().updatePane(pane.id, { devUrl: url });
 }
 
 function scheduleFit(entry: Entry) {

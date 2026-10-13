@@ -17,6 +17,7 @@ import {
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
+import * as browser from "@/features/browser/browser";
 import { useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 
 export type Direction = "left" | "right" | "up" | "down";
@@ -45,6 +46,12 @@ export type Command =
   | { type: "workspace.create"; rootDir?: string; name?: string }
   | { type: "workspace.remove"; id: string }
   | { type: "workspace.toggleWorktrees" }
+  | { type: "browser.open"; url: string; newTab?: boolean }
+  | { type: "browser.newTab" }
+  | { type: "browser.closeTab" }
+  | { type: "browser.history"; delta: -1 | 0 | 1 }
+  | { type: "browser.device"; device: browser.Device | "toggle" }
+  | { type: "browser.focusUrl" }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   | { type: "ui.palette"; query?: string }
@@ -209,6 +216,22 @@ export function execute(cmd: Command): void {
     case "workspace.toggleWorktrees":
       s.updateActive((w) => ({ useWorktrees: !w.useWorktrees }));
       return;
+    case "browser.open":
+      void browser.openUrl(cmd.url, { newTab: cmd.newTab });
+      return;
+    case "browser.newTab":
+      void browser.newTab();
+      return;
+    case "browser.closeTab":
+      void browser.closeTab();
+      return;
+    case "browser.history":
+      void browser.history(cmd.delta);
+      return;
+    case "browser.device":
+      return browser.setDevice(cmd.device);
+    case "browser.focusUrl":
+      return browser.focusUrlBar();
     case "ui.toggleSidebar":
       return s.toggleSidebar();
     case "ui.toggleBrowser":

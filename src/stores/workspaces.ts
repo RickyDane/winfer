@@ -27,6 +27,8 @@ export interface Pane {
   resume: boolean;
   /** Status changed while the user wasn't looking at this pane. */
   unseen: boolean;
+  /** Latest local dev-server URL printed in this pane (e.g. http://localhost:5173/). */
+  devUrl: string | null;
 }
 
 export interface Workspace {
@@ -118,7 +120,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !resumed.has(key);
         resumed.add(key);
-        return { ...p, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false };
+        return { ...p, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -179,6 +181,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             wantsWorktree: provider !== "shell" && (opts?.worktree ?? w.useWorktrees),
             resume: false,
             unseen: false,
+            devUrl: null,
           },
         ],
         layout: insertDwindle(w.layout, id, opts?.splitFrom ?? focusedPaneId),

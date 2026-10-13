@@ -1,4 +1,4 @@
-import { GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -53,6 +53,17 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
           >
             <GitBranch size={11} />
             <span className="truncate">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
+          </button>
+        )}
+        {pane.devUrl && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => execute({ type: "browser.open", url: pane.devUrl! })}
+            title={`Open ${pane.devUrl} in the browser panel`}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-accent hover:bg-accent-soft"
+          >
+            {pane.devUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+            <ExternalLink size={10} />
           </button>
         )}
         <PaneMenu pane={pane} />

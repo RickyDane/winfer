@@ -31,6 +31,45 @@ index 3f2a1c0..9b8e7d1 100644
    }`;
 
 const channels = new Map<string, Channel<ArrayBuffer>>();
+const lines = new Map<string, string>();
+
+// Fake browser: one tab list per workspace, frames rendered on an OffscreenCanvas.
+type MockTab = { id: string; url: string; title: string; byAgent: boolean };
+const browserTabs = new Map<string, MockTab[]>();
+const screencasts = new Map<string, { tabId: string; channel: Channel<ArrayBuffer>; viewport: any }>();
+const inputs: unknown[] = [];
+let tabCounter = 0;
+
+async function renderFrame(workspaceId: string) {
+  const sc = screencasts.get(workspaceId);
+  const tab = browserTabs.get(workspaceId)?.find((t) => t.id === sc?.tabId);
+  if (!sc || !tab) return;
+  const { width, height, deviceScaleFactor } = sc.viewport;
+  const canvas = new OffscreenCanvas(width * deviceScaleFactor, height * deviceScaleFactor);
+  const ctx = canvas.getContext("2d")!;
+  ctx.scale(deviceScaleFactor, deviceScaleFactor);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#4f46e5";
+  ctx.fillRect(0, 0, width, 56);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "600 18px system-ui";
+  ctx.fillText("◆ orbit", 20, 35);
+  ctx.fillStyle = "#111827";
+  ctx.font = "600 24px system-ui";
+  ctx.fillText(tab.title || "Customer portal", 20, 110);
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "14px ui-monospace, monospace";
+  ctx.fillText(tab.url, 20, 140);
+  ctx.fillText(`${width}×${height} · ${inputs.length} input events`, 20, 166);
+  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+  sc.channel.onmessage(await blob.arrayBuffer());
+}
+
+function emitTabs(workspaceId: string) {
+  void emit("browser://tabs", { workspaceId, tabs: browserTabs.get(workspaceId) ?? [] });
+  void renderFrame(workspaceId);
+}
 let worktreeCounter = 0;
 
 mockWindows("main");
@@ -53,7 +92,18 @@ mockIPC(
       }
       case "pty_write": {
         const channel = channels.get(a.paneId);
-        if (channel) send(channel, String(a.data).replace(/\r/g, "\r\n$ ").replace(/\x7f/g, "\b \b"));
+        if (!channel) return null;
+        const line = (lines.get(a.paneId) ?? "") + String(a.data);
+        if (!String(a.data).includes("\r")) {
+          lines.set(a.paneId, line);
+          send(channel, String(a.data).replace(/\x7f/g, "\b \b"));
+          return null;
+        }
+        lines.set(a.paneId, "");
+        send(channel, "\r\n");
+        // Typing "npm run dev" pretends to start a Vite dev server.
+        if (/run dev/.test(line)) send(channel, "\r\n  \x1b[32mVITE\x1b[0m ready in 312 ms\r\n\r\n  ➜  Local:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[0m\r\n");
+        send(channel, "$ ");
         return null;
       }
       case "pty_resize":
@@ -70,6 +120,48 @@ mockIPC(
         return "Merge made by the 'ort' strategy.";
       case "worktree_remove":
         return null;
+      case "browser_status":
+        return { executable: { path: "mock-chrome", source: "system" } };
+      case "browser_open": {
+        if (!browserTabs.has(a.workspaceId)) browserTabs.set(a.workspaceId, [{ id: `t-${++tabCounter}`, url: "about:blank", title: "", byAgent: false }]);
+        return browserTabs.get(a.workspaceId);
+      }
+      case "browser_new_tab": {
+        const tab = { id: `t-${++tabCounter}`, url: a.url, title: "", byAgent: false };
+        browserTabs.get(a.workspaceId)!.push(tab);
+        emitTabs(a.workspaceId);
+        return tab.id;
+      }
+      case "browser_close_tab":
+        browserTabs.set(a.workspaceId, browserTabs.get(a.workspaceId)!.filter((t) => t.id !== a.targetId));
+        emitTabs(a.workspaceId);
+        return null;
+      case "browser_navigate": {
+        const tab = browserTabs.get(a.workspaceId)!.find((t) => t.id === a.targetId)!;
+        tab.url = a.url;
+        tab.title = new URL(a.url).host;
+        emitTabs(a.workspaceId);
+        return null;
+      }
+      case "browser_attach":
+        screencasts.set(a.workspaceId, { tabId: a.targetId, channel: a.onFrame, viewport: a.viewport });
+        void renderFrame(a.workspaceId);
+        return null;
+      case "browser_resize": {
+        const sc = screencasts.get(a.workspaceId);
+        if (sc) sc.viewport = a.viewport;
+        void renderFrame(a.workspaceId);
+        return null;
+      }
+      case "browser_input":
+        inputs.push(a);
+        if (a.params?.type === "mousePressed") void renderFrame(a.workspaceId);
+        return null;
+      case "browser_history":
+      case "browser_detach":
+        return null;
+      case "browser_selection":
+        return "";
       case "plugin:dialog|open":
         return "/Users/demo/Projects/bridgemind-api";
       case "plugin:dialog|message": {
@@ -91,5 +183,11 @@ mockIPC(
 
 /** Lets automated checks simulate hook events: `__winferMock.status("p-…", "needs-input")`. */
 (window as any).__winferMock = {
+  inputs,
+  /** Simulates an agent opening a tab through CDP. */
+  agentTab: (workspaceId: string, url: string) => {
+    browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard", byAgent: true });
+    emitTabs(workspaceId);
+  },
   status: (paneId: string, status: string, message?: string) => emit("agent://status", { paneId, status, message }),
 };

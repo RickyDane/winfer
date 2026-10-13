@@ -15,7 +15,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::env::{login_env, user_shell};
-use crate::hooks;
+use crate::{browser, hooks};
 use crate::providers;
 
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
@@ -101,7 +101,7 @@ pub(crate) fn resolve_cwd(cwd: Option<&str>) -> PathBuf {
     if path.is_dir() { path } else { home }
 }
 
-fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
+fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBuilder, String> {
     let provider = providers::find(&req.provider_id)
         .ok_or_else(|| format!("unknown provider: {}", req.provider_id))?;
 
@@ -110,6 +110,9 @@ fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
             let mut cmd = CommandBuilder::new(command);
             // Hook args first: Codex's `-c` must precede subcommands like `resume`.
             cmd.args(hooks::provider_args(&provider.id));
+            if let Some(url) = cdp_url {
+                cmd.args(browser::agent_mcp_args(&provider.id, url));
+            }
             cmd.args(&provider.args);
             if req.resume {
                 cmd.args(&provider.resume_args);
@@ -134,6 +137,9 @@ fn build_command(req: &SpawnRequest) -> Result<CommandBuilder, String> {
     if let Some(server) = hooks::server() {
         cmd.env("WINFER_HOOK", &server.addr);
         cmd.env("WINFER_TOKEN", &server.token);
+    }
+    if let Some(url) = cdp_url {
+        cmd.env("WINFER_CDP_URL", url);
     }
     if let Some(workspace) = &req.workspace_id {
         cmd.env("WINFER_WORKSPACE", workspace);
@@ -167,7 +173,12 @@ pub fn pty_spawn(
         });
     }
 
-    let cmd = build_command(&req)?;
+    // Agents share the workspace browser (started on demand if one is installed).
+    let cdp_url = match (&req.workspace_id, req.provider_id.as_str()) {
+        (Some(ws), provider) if provider != "shell" => app.state::<browser::BrowserManager>().cdp_url(&app, ws),
+        _ => None,
+    };
+    let cmd = build_command(&req, cdp_url.as_deref())?;
     let pair = native_pty_system()
         .openpty(size(req.cols, req.rows))
         .map_err(|e| e.to_string())?;
@@ -288,7 +299,7 @@ mod tests {
             cols: 80,
             rows: 24,
         };
-        let mut cmd = build_command(&req).unwrap();
+        let mut cmd = build_command(&req, None).unwrap();
         cmd.args([
             "-c",
             "echo \"[$WINFER_PANE_ID $WINFER_WORKSPACE $TERM $PWD]\"",
@@ -337,6 +348,6 @@ mod tests {
             cols: 80,
             rows: 24,
         };
-        assert!(build_command(&req).is_err());
+        assert!(build_command(&req, None).is_err());
     }
 }
