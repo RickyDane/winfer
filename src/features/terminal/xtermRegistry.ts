@@ -262,6 +262,14 @@ export function sendText(paneId: string, text: string) {
   if (text.includes("\r")) reportInput(paneId);
 }
 
+/**
+ * Pastes text into a pane using bracketed paste, so multi-line text lands in an agent's prompt
+ * as one block instead of each line being submitted.
+ */
+export function pasteText(paneId: string, text: string) {
+  sendText(paneId, `\x1b[200~${text}\x1b[201~`);
+}
+
 /** Milliseconds since the pane last produced output. */
 export function outputAge(paneId: string): number {
   const entry = entries.get(paneId);

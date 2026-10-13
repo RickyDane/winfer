@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { useWorkspaces } from "@/stores/workspaces";
+import { pasteText } from "@/features/terminal/xtermRegistry";
 
 export interface Tab {
   id: string;
@@ -15,6 +16,13 @@ export interface Tab {
 }
 
 export type Device = "desktop" | "mobile";
+
+export interface ConsoleEntry {
+  level: "error" | "warning" | "info" | "log";
+  text: string;
+  source: string | null;
+  timestamp: number;
+}
 export type Availability = "unknown" | "missing" | "installing" | "ready" | "error";
 
 interface BrowserState {
@@ -25,6 +33,12 @@ interface BrowserState {
   device: Record<string, Device>;
   /** Bumped to ask the URL bar to take focus (⌘L). */
   focusUrlBar: number;
+  /** Console/network entries per tab id. */
+  console: Record<string, ConsoleEntry[]>;
+  consoleOpen: boolean;
+  picking: boolean;
+  /** Short confirmation shown in the panel ("Sent to Claude Code"). */
+  notice: string | null;
 }
 
 export const useBrowser = create<BrowserState>(() => ({
@@ -34,6 +48,10 @@ export const useBrowser = create<BrowserState>(() => ({
   activeTab: {},
   device: {},
   focusUrlBar: 0,
+  console: {},
+  consoleOpen: false,
+  picking: false,
+  notice: null,
 }));
 
 const activeWorkspaceId = () => useWorkspaces.getState().activeWorkspaceId;
@@ -54,6 +72,102 @@ function listenForTabs() {
   if (listening) return;
   listening = true;
   void listen<{ workspaceId: string; tabs: Tab[] }>("browser://tabs", ({ payload }) => setTabs(payload.workspaceId, payload.tabs));
+  void listen<{ targetId: string; entry: ConsoleEntry }>("browser://console", ({ payload }) =>
+    useBrowser.setState((s) => ({ console: { ...s.console, [payload.targetId]: [...(s.console[payload.targetId] ?? []), payload.entry].slice(-200) } })),
+  );
+  void listen<Picked>("browser://picked", ({ payload }) => {
+    useBrowser.setState({ picking: false });
+    deliverPicked(payload);
+  });
+  void listen<string>("browser://pick-error", ({ payload }) => {
+    useBrowser.setState({ picking: false });
+    flash(`Couldn't read that element: ${payload}`);
+  });
+}
+
+interface Picked {
+  url: string;
+  selector: string;
+  html: string;
+  text: string;
+  screenshot: string | null;
+}
+
+let noticeTimer: number | undefined;
+function flash(notice: string) {
+  clearTimeout(noticeTimer);
+  useBrowser.setState({ notice });
+  noticeTimer = window.setTimeout(() => useBrowser.setState({ notice: null }), 4000);
+}
+
+/** The agent that should receive browser context: the focused agent pane, else the first one. */
+function targetAgent() {
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
+  const agents = ws?.panes.filter((p) => p.provider !== "shell") ?? [];
+  return agents.find((p) => p.id === s.focusedPaneId) ?? agents[0] ?? null;
+}
+
+function sendToAgent(text: string, what: string) {
+  const pane = targetAgent();
+  if (!pane) {
+    flash("Open an agent pane first");
+    return;
+  }
+  pasteText(pane.id, text);
+  useWorkspaces.getState().focusPane(pane.id);
+  const name = useWorkspaces.getState().providers.find((p) => p.id === pane.provider)?.name ?? pane.provider;
+  flash(`Sent ${what} to ${name}`);
+}
+
+function deliverPicked(p: Picked) {
+  const lines = [`Element on ${p.url}`, `selector: ${p.selector}`];
+  if (p.text) lines.push(`text: "${p.text.replace(/\s+/g, " ")}"`);
+  lines.push("html:", p.html);
+  if (p.screenshot) lines.push(`screenshot: ${p.screenshot}`);
+  sendToAgent(`${lines.join("\n")}\n`, p.selector);
+}
+
+export async function startPick() {
+  const targetId = activeTabId();
+  if (!targetId) return;
+  useBrowser.setState({ picking: true });
+  try {
+    await invoke("browser_pick_start", { workspaceId: activeWorkspaceId(), targetId });
+  } catch (err) {
+    useBrowser.setState({ picking: false });
+    flash(String(err));
+  }
+}
+
+export async function cancelPick() {
+  const targetId = activeTabId();
+  useBrowser.setState({ picking: false });
+  if (targetId) await invoke("browser_pick_cancel", { workspaceId: activeWorkspaceId(), targetId }).catch(() => {});
+}
+
+export function togglePick() {
+  return useBrowser.getState().picking ? cancelPick() : startPick();
+}
+
+/** Sends recent console errors/warnings of the active tab to the agent. */
+export function sendConsoleToAgent() {
+  const targetId = activeTabId();
+  const tab = (useBrowser.getState().tabs[activeWorkspaceId()] ?? []).find((t) => t.id === targetId);
+  const entries = (useBrowser.getState().console[targetId ?? ""] ?? []).filter((e) => e.level === "error" || e.level === "warning").slice(-20);
+  if (entries.length === 0) {
+    flash("No console errors to send");
+    return;
+  }
+  const body = entries.map((e) => `- [${e.level}] ${e.text}${e.source ? ` (${e.source})` : ""}`).join("\n");
+  sendToAgent(`Browser console errors on ${tab?.url ?? "the page"}:\n${body}\n`, `${entries.length} console error${entries.length === 1 ? "" : "s"}`);
+}
+
+export async function clearConsole() {
+  const targetId = activeTabId();
+  if (!targetId) return;
+  useBrowser.setState((s) => ({ console: { ...s.console, [targetId]: [] } }));
+  await invoke("browser_console_clear", { workspaceId: activeWorkspaceId(), targetId }).catch(() => {});
 }
 
 async function fail(err: unknown) {

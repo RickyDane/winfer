@@ -64,6 +64,9 @@ export type Command =
   | { type: "browser.history"; delta: -1 | 0 | 1 }
   | { type: "browser.device"; device: browser.Device | "toggle" }
   | { type: "browser.focusUrl" }
+  /** Element picker: click an element in the page to paste its details into the agent. */
+  | { type: "browser.pick" }
+  | { type: "browser.sendConsole" }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   | { type: "ui.palette"; query?: string }
@@ -282,6 +285,11 @@ export function execute(cmd: Command): void {
       return browser.setDevice(cmd.device);
     case "browser.focusUrl":
       return browser.focusUrlBar();
+    case "browser.pick":
+      void browser.togglePick();
+      return;
+    case "browser.sendConsole":
+      return browser.sendConsoleToAgent();
     case "ui.toggleSidebar":
       return s.toggleSidebar();
     case "ui.toggleBrowser":

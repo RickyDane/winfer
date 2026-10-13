@@ -5,8 +5,9 @@
 
 mod cdp;
 pub mod chrome;
+pub mod inspect;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex, Weak};
@@ -56,7 +57,10 @@ struct Instance {
     tabs: Mutex<Vec<Tab>>,
     created_by_ui: Mutex<HashSet<String>>,
     sessions: Mutex<HashMap<String, String>>,
+    /// One attach per target even when the UI and target discovery race for it.
+    attaching: Mutex<HashMap<String, Arc<OnceCell<String>>>>,
     screencast: Mutex<Option<Screencast>>,
+    console: Mutex<HashMap<String, VecDeque<inspect::ConsoleEntry>>>,
 }
 
 impl Drop for Instance {
@@ -106,6 +110,15 @@ impl Instance {
                     by_agent,
                     id: id.clone(),
                 };
+                // Attach to every page right away so its console errors are captured
+                // even before anyone looks at it (agents open tabs in the background).
+                if event.method == "Target.targetCreated" {
+                    let instance = self.clone();
+                    let target = id.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = instance.session(&target).await;
+                    });
+                }
                 {
                     let mut tabs = self.tabs.lock().unwrap();
                     match tabs.iter_mut().find(|t| t.id == id) {
@@ -124,7 +137,29 @@ impl Instance {
                 let id = event.params["targetId"].as_str().unwrap_or_default();
                 self.tabs.lock().unwrap().retain(|t| t.id != id);
                 self.sessions.lock().unwrap().remove(id);
+                self.attaching.lock().unwrap().remove(id);
+                self.console.lock().unwrap().remove(id);
                 self.emit_tabs();
+            }
+            "Overlay.inspectNodeRequested" => {
+                let (Some(session), Some(node)) = (event.session_id.clone(), event.params["backendNodeId"].as_i64()) else {
+                    return;
+                };
+                let instance = self.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = instance.clone().finish_pick(session, node).await {
+                        let _ = instance.app.emit("browser://pick-error", err);
+                    }
+                });
+            }
+            _ if event.method.starts_with("Runtime.") || event.method.starts_with("Log.") || event.method.starts_with("Network.") => {
+                let Some(entry) = inspect::console_entry(&event) else { return };
+                let target = event.session_id.as_deref().and_then(|session| {
+                    self.sessions.lock().unwrap().iter().find(|(_, s)| s.as_str() == session).map(|(t, _)| t.clone())
+                });
+                if let Some(target) = target {
+                    self.record_console(&target, entry);
+                }
             }
             "Page.screencastFrame" => {
                 let Some(session) = event.session_id.as_deref() else {
@@ -179,24 +214,24 @@ impl Instance {
         if let Some(session) = self.sessions.lock().unwrap().get(target_id) {
             return Ok(session.clone());
         }
-        let cdp = self.cdp().await?;
-        let res = cdp
-            .call(
-                "Target.attachToTarget",
-                json!({ "targetId": target_id, "flatten": true }),
-                None,
-            )
+        let cell = self.attaching.lock().unwrap().entry(target_id.to_string()).or_default().clone();
+        let session = cell
+            .get_or_try_init(|| async {
+                let cdp = self.cdp().await?;
+                let res = cdp
+                    .call("Target.attachToTarget", json!({ "targetId": target_id, "flatten": true }), None)
+                    .await?;
+                let session = res["sessionId"].as_str().ok_or("attach returned no session")?.to_string();
+                // Register before enabling domains so their first events map to this target.
+                self.sessions.lock().unwrap().insert(target_id.to_string(), session.clone());
+                cdp.call("Page.enable", json!({}), Some(&session)).await?;
+                for domain in ["Runtime.enable", "Log.enable", "Network.enable"] {
+                    let _ = cdp.call(domain, json!({}), Some(&session)).await;
+                }
+                Ok::<_, String>(session)
+            })
             .await?;
-        let session = res["sessionId"]
-            .as_str()
-            .ok_or("attach returned no session")?
-            .to_string();
-        cdp.call("Page.enable", json!({}), Some(&session)).await?;
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(target_id.to_string(), session.clone());
-        Ok(session)
+        Ok(session.clone())
     }
 }
 
@@ -246,7 +281,9 @@ impl BrowserManager {
             tabs: Mutex::default(),
             created_by_ui: Mutex::default(),
             sessions: Mutex::default(),
+            attaching: Mutex::default(),
             screencast: Mutex::default(),
+            console: Mutex::default(),
         });
         instances.insert(workspace_id.to_string(), instance.clone());
         Ok(instance)

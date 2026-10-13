@@ -1,8 +1,9 @@
-import { ArrowLeft, ArrowRight, Bot, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { useWorkspaces } from "@/stores/workspaces";
 import { BrowserView } from "./BrowserView";
+import { ConsoleList } from "./ConsoleList";
 import {
   closeTab,
   ensureBrowser,
@@ -12,6 +13,7 @@ import {
   openUrl,
   selectTab,
   setDevice,
+  togglePick,
   useBrowser,
   type Tab,
 } from "./browser";
@@ -34,10 +36,18 @@ const IconButton = ({ title, onClick, children }: { title: string; onClick: () =
 
 export function BrowserPanel() {
   const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
-  const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar } = useBrowser();
+  const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar, console: logs, consoleOpen, picking, notice } = useBrowser();
   const tabs = allTabs[workspaceId] ?? [];
   const active = tabs.find((t) => t.id === activeTab[workspaceId]) ?? null;
   const device = devices[workspaceId] ?? "desktop";
+  const errors = active ? (logs[active.id] ?? []).filter((e) => e.level === "error").length : 0;
+
+  useEffect(() => {
+    if (!picking) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && void togglePick();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [picking]);
 
   const [address, setAddress] = useState("");
   const [editing, setEditing] = useState(false);
@@ -120,10 +130,32 @@ export function BrowserPanel() {
           />
           <RotateCw size={12} className="cursor-pointer hover:text-fg" onClick={() => void history(0)} />
         </form>
+        <button
+          title="Pick an element and send it to the agent (⌘⇧C)"
+          onClick={() => void togglePick()}
+          className={cn("rounded p-1 hover:bg-hover hover:text-fg", picking ? "bg-accent-soft text-accent" : "text-fg-subtle")}
+        >
+          <Crosshair size={14} />
+        </button>
+        <button
+          title="Console and network errors"
+          onClick={() => useBrowser.setState({ consoleOpen: !consoleOpen })}
+          className={cn("relative rounded p-1 hover:bg-hover hover:text-fg", consoleOpen ? "text-fg" : "text-fg-subtle")}
+        >
+          <SquareTerminal size={14} />
+          {errors > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-danger px-0.5 text-center text-[9px] leading-3.5 font-semibold text-white">
+              {errors > 99 ? "99" : errors}
+            </span>
+          )}
+        </button>
         <IconButton title={device === "mobile" ? "Desktop view" : "Mobile view"} onClick={() => setDevice("toggle")}>
           {device === "mobile" ? <Smartphone size={14} /> : <Monitor size={14} />}
         </IconButton>
       </div>
+      {picking && <div className="shrink-0 bg-accent-soft px-3 py-1 text-[11px] text-accent">Click an element to send it to the agent · Esc to cancel</div>}
+      {notice && <div className="shrink-0 bg-success/10 px-3 py-1 text-[11px] text-success">{notice}</div>}
+      {consoleOpen && active && <ConsoleList tabId={active.id} />}
 
       {availability === "ready" && active ? (
         <BrowserView key={`${workspaceId}:${active.id}`} workspaceId={workspaceId} tabId={active.id} device={device} />

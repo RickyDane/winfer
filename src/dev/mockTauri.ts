@@ -38,6 +38,8 @@ type MockTab = { id: string; url: string; title: string; byAgent: boolean };
 const browserTabs = new Map<string, MockTab[]>();
 const screencasts = new Map<string, { tabId: string; channel: Channel<ArrayBuffer>; viewport: any }>();
 const inputs: unknown[] = [];
+const writes: { paneId: string; data: string }[] = [];
+let picking: { workspaceId: string; targetId: string } | null = null;
 
 // Fake voice: tests set what was "said" and what Clef "answers"; requests are kept for inspection.
 const voice = { said: "", mode: "command", answers: {} as Record<string, unknown>, requests: [] as unknown[] };
@@ -94,6 +96,7 @@ mockIPC(
         return { attached: false, pid: 1 };
       }
       case "pty_write": {
+        writes.push({ paneId: a.paneId, data: String(a.data) });
         const channel = channels.get(a.paneId);
         if (!channel) return null;
         const line = (lines.get(a.paneId) ?? "") + String(a.data);
@@ -144,6 +147,10 @@ mockIPC(
         tab.url = a.url;
         tab.title = new URL(a.url).host;
         emitTabs(a.workspaceId);
+        // Pretend the page logs an error and a failing API call.
+        const entry = (text: string, source: string | null) => ({ level: "error", text, source, timestamp: Date.now() });
+        void emit("browser://console", { workspaceId: a.workspaceId, targetId: tab.id, entry: entry("TypeError: Cannot read properties of undefined (reading 'plan')", `${a.url}assets/billing.js:42`) });
+        void emit("browser://console", { workspaceId: a.workspaceId, targetId: tab.id, entry: entry(`HTTP 500 ${a.url}api/billing (Fetch)`, null) });
         return null;
       }
       case "browser_attach":
@@ -156,8 +163,30 @@ mockIPC(
         void renderFrame(a.workspaceId);
         return null;
       }
+      case "browser_pick_start":
+        picking = { workspaceId: a.workspaceId, targetId: a.targetId };
+        return null;
+      case "browser_pick_cancel":
+        picking = null;
+        return null;
+      case "browser_console":
+        return [];
+      case "browser_console_clear":
+        return null;
       case "browser_input":
         inputs.push(a);
+        if (picking && a.params?.type === "mousePressed") {
+          const tab = browserTabs.get(picking.workspaceId)?.find((t) => t.id === picking!.targetId);
+          picking = null;
+          void emit("browser://picked", {
+            workspaceId: a.workspaceId,
+            url: tab?.url ?? "",
+            selector: "main > section.billing > button.upgrade",
+            html: '<button class="upgrade" disabled>Upgrade to Pro</button>',
+            text: "Upgrade to Pro",
+            screenshot: "/tmp/winfer/picks/element-1.png",
+          });
+        }
         if (a.params?.type === "mousePressed") void renderFrame(a.workspaceId);
         return null;
       case "browser_history":
@@ -215,6 +244,7 @@ mockIPC(
 /** Lets automated checks simulate hook events: `__winferMock.status("p-…", "needs-input")`. */
 (window as any).__winferMock = {
   inputs,
+  writes,
   voice,
   /** Simulates an agent opening a tab through CDP. */
   agentTab: (workspaceId: string, url: string) => {
