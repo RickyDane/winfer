@@ -168,6 +168,7 @@ pub fn run() {
             llm::llm_compose,
             chatgpt::chatgpt_status,
             chatgpt::chatgpt_sign_in,
+            chatgpt::chatgpt_cancel_sign_in,
             chatgpt::chatgpt_sign_out,
             chatgpt::chatgpt_models,
         ])

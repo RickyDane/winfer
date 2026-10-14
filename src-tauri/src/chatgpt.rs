@@ -70,13 +70,25 @@ fn save(account: &Account) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// A random (version 4) UUID as a URN, the form OpenAI expects for `ext_agent_host_id`.
+fn uuid_urn() -> String {
+    let mut b = rand::random::<[u8; 16]>();
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h = hex::encode(b);
+    format!("urn:uuid:{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
 /// A stable id for this installation, required by the registration flow.
 fn host_id() -> Result<String, String> {
     let entry = entry(HOST_KEY)?;
-    if let Ok(id) = entry.get_password() {
+    // Ids saved before they had to be URNs were rejected by OpenAI; replace them.
+    if let Ok(id) = entry.get_password()
+        && id.starts_with("urn:uuid:")
+    {
         return Ok(id);
     }
-    let id = format!("winfer-{}", hex::encode(rand::random::<[u8; 16]>()));
+    let id = uuid_urn();
     entry.set_password(&id).map_err(|e| e.to_string())?;
     Ok(id)
 }
@@ -216,7 +228,10 @@ fn fail_page(message: &str) -> String {
     format!("<!doctype html><meta charset=utf-8><title>winfer</title><body style=\"font:15px system-ui;margin:4em;text-align:center\"><h2>Sign-in didn't finish</h2><p>{}</p>", message.replace('<', "&lt;"))
 }
 
-/// Runs the whole browser sign-in; blocks until the user finishes (or 5 minutes pass).
+/// Set to stop a sign-in that's waiting for the browser.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Runs the whole browser sign-in; blocks until the user finishes, cancels, or 5 minutes pass.
 fn sign_in(open: impl Fn(&str) -> Result<(), String>) -> Result<Account, String> {
     let host = host_id()?;
     let previous = load();
@@ -251,6 +266,7 @@ fn sign_in(open: impl Fn(&str) -> Result<(), String>) -> Result<Account, String>
     if let Some(hint) = &hint {
         params.push(("id_token_hint", hint));
     }
+    CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
     open(&authorize_url(&params))?;
 
     let deadline = std::time::Instant::now() + Duration::from_secs(300);
@@ -259,7 +275,10 @@ fn sign_in(open: impl Fn(&str) -> Result<(), String>) -> Result<Account, String>
         if left.is_zero() {
             return Err("Sign-in timed out.".into());
         }
-        let Some(request) = server.recv_timeout(left).map_err(|e| e.to_string())? else {
+        if CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("Sign-in cancelled.".into());
+        }
+        let Some(request) = server.recv_timeout(left.min(Duration::from_millis(250))).map_err(|e| e.to_string())? else {
             continue;
         };
         let url = request.url().to_string();
@@ -495,6 +514,11 @@ pub async fn chatgpt_sign_in(app: tauri::AppHandle) -> Result<ChatGptStatus, Str
     Ok(ChatGptStatus { signed_in: true, email: account.email })
 }
 
+#[tauri::command]
+pub fn chatgpt_cancel_sign_in() {
+    CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Forgets the tokens; the app registration is kept so the next sign-in skips registering.
 /// (Disconnecting winfer from the ChatGPT account happens in ChatGPT's settings.)
 #[tauri::command]
@@ -518,6 +542,17 @@ mod tests {
     fn pkce_matches_the_rfc_example() {
         // RFC 7636, appendix B.
         assert_eq!(pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    }
+
+    #[test]
+    fn host_ids_are_uuid_urns() {
+        let id = uuid_urn();
+        let uuid = id.strip_prefix("urn:uuid:").unwrap();
+        let parts: Vec<&str> = uuid.split('-').collect();
+        assert_eq!(parts.iter().map(|p| p.len()).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
+        assert!(parts[2].starts_with('4'));
+        assert!(matches!(parts[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'));
+        assert_ne!(id, uuid_urn());
     }
 
     #[test]

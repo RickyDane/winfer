@@ -33,6 +33,9 @@ export async function signInWithChatGpt() {
   void loadModels();
 }
 
+/** Stops a sign-in that's waiting for the browser (e.g. after an error page there). */
+export const cancelChatGptSignIn = () => invoke("chatgpt_cancel_sign_in");
+
 export async function signOutOfChatGpt() {
   await invoke("chatgpt_sign_out");
   useChatGpt.setState({ signedIn: false, email: null, models: [] });

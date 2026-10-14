@@ -5,7 +5,7 @@ import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, 
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
-import { signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
+import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="space-y-3">
@@ -231,6 +231,11 @@ function VoiceSettings() {
             >
               {busy === "signin" && <Loader2 size={12} className="animate-spin" />}
               {busy === "signin" ? "Finish signing in in your browser…" : "Continue with ChatGPT"}
+            </button>
+          )}
+          {busy === "signin" && (
+            <button onClick={() => void cancelChatGptSignIn()} className="rounded-md px-2.5 py-1 text-xs text-fg-subtle hover:bg-hover hover:text-fg">
+              Cancel
             </button>
           )}
         </div>

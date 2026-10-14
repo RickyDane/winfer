@@ -381,6 +381,7 @@ mockIPC(
         return { device: "MacBook Pro Microphone", peak: 0.08 };
       case "voice_configure":
       case "chatgpt_sign_out":
+      case "chatgpt_cancel_sign_in":
         return null;
       case "chatgpt_status":
       case "chatgpt_sign_in":
