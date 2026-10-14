@@ -246,6 +246,8 @@ mockIPC(
         return null;
       case "browser_selection":
         return "";
+      case "plugin:app|version":
+        return "dev";
       case "voice_status":
         return {
           models: [

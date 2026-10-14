@@ -1,3 +1,6 @@
+import { getVersion } from "@tauri-apps/api/app";
+import { useEffect, useState } from "react";
+import logoUrl from "@/assets/logo.svg";
 import { Activity, ChevronDown, ChevronRight, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
 import { useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
@@ -65,6 +68,22 @@ function SessionsEntry() {
         </span>
       )}
     </button>
+  );
+}
+
+/** The logo and the running build's version, bottom left. */
+function AppVersion() {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    getVersion().then(setVersion, () => setVersion(null));
+  }, []);
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2" title={version ? `winfer ${version}` : "winfer"}>
+      <img src={logoUrl} alt="" className="size-6 shrink-0" draggable={false} />
+      <span className="truncate text-xs text-fg-muted">
+        winfer {version && <span className="font-mono text-[11px] text-fg-subtle">v{version}</span>}
+      </span>
+    </span>
   );
 }
 
@@ -166,10 +185,7 @@ export function Sidebar() {
       {menu && <ContextMenu x={menu.x} y={menu.y} title={menu.target.title} items={menu.target.items} onClose={closeMenu} />}
       <ActivityFeed />
       <footer className="flex items-center gap-2 border-t border-border px-4 py-3">
-        <span className="flex size-6 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">
-          W
-        </span>
-        <span className="flex-1 text-xs text-fg-muted">Local</span>
+        <AppVersion />
         <button
           onClick={toggleTheme}
           className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
