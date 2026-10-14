@@ -81,7 +81,7 @@ interface WorkspaceState {
   /** Browser panel width in px. */
   browserWidth: number;
   /** What the side panel shows: the browser or a mirrored Android device. */
-  sidePanel: "browser" | "device";
+  sidePanel: "browser" | "device" | "terminal";
   /** Device the Android panel mirrors (adb serial). */
   androidSerial: string | null;
   theme: Theme;
@@ -128,7 +128,7 @@ interface WorkspaceState {
   setShortcut: (id: string, chord: string | null) => void;
   resetShortcuts: () => void;
   setBrowserWidth: (width: number) => void;
-  setSidePanel: (panel: "browser" | "device") => void;
+  setSidePanel: (panel: "browser" | "device" | "terminal") => void;
   setAndroidSerial: (serial: string | null) => void;
   toggleTheme: () => void;
   setView: (view: "workspace" | "overview") => void;
@@ -432,7 +432,7 @@ interface Snapshot {
     defaultProvider?: ProviderId | null;
     shortcuts?: Record<string, string>;
     browserWidth?: number;
-    sidePanel?: "browser" | "device";
+    sidePanel?: "browser" | "device" | "terminal";
     androidSerial?: string | null;
     theme?: Theme;
     view?: "workspace" | "overview";

@@ -35,8 +35,8 @@ export function ModelPicker() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-center bg-black/40 pt-[14vh]" onMouseDown={close}>
-      <div className="flex h-fit max-h-[60vh] w-[480px] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[14vh]" onMouseDown={close}>
+      <div className="anim-dialog flex h-fit max-h-[60vh] w-[480px] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         {!pane || !provider?.modelArg ? (
           <div className="p-5 text-xs text-fg-muted">{pane ? `${providerName(providers, pane.provider)} can't switch models.` : "Focus an agent pane first."}</div>
         ) : (

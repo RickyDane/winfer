@@ -74,7 +74,7 @@ function Microphone({ selected }: { selected: string | null }) {
           </span>
         )}
       </label>
-      {result && <p className={`text-xs ${result.ok ? "text-success" : "text-danger"}`}>{result.text}</p>}
+      {result && <p className={`anim-fade text-xs ${result.ok ? "text-success" : "text-danger"}`}>{result.text}</p>}
     </div>
   );
 }
@@ -109,7 +109,12 @@ function VoiceSettings() {
     }
   };
 
-  if (!status) return <div className="text-xs text-fg-subtle">Loading…</div>;
+  if (!status)
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
+        <Loader2 size={12} className="animate-spin" /> Loading…
+      </div>
+    );
 
   return (
     <>
@@ -236,15 +241,17 @@ function VoiceSettings() {
                 return "Saved to the Keychain";
               })
             }
-            className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
           >
+            {busy === "save" && <Loader2 size={12} className="animate-spin" />}
             Save
           </button>
           <button
             disabled={!status.credentials || busy !== null}
             onClick={() => void act("test", async () => `Connected in ${await invoke<number>("voice_test_connection")} ms`)}
-            className="rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover disabled:opacity-40"
           >
+            {busy === "test" && <Loader2 size={12} className="animate-spin" />}
             {busy === "test" ? "Testing…" : "Test connection"}
           </button>
           {status.credentials && (
@@ -264,7 +271,7 @@ function VoiceSettings() {
             <option value="clef">clef (more precise)</option>
           </select>
         </div>
-        {result && <p className={result.ok ? "text-xs text-success" : "text-xs text-danger"}>{result.text}</p>}
+        {result && <p className={result.ok ? "anim-fade text-xs text-success" : "anim-fade text-xs text-danger"}>{result.text}</p>}
       </Section>
     </>
   );
@@ -424,8 +431,8 @@ export function SettingsModal() {
 
   if (!settingsOpen) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setSettings(false)}>
-      <div className="max-h-[85vh] w-[600px] space-y-6 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setSettings(false)}>
+      <div className="anim-dialog max-h-[85vh] w-[600px] space-y-6 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center">
           <h1 className="flex-1 text-sm font-semibold text-fg">Settings</h1>
           <button onClick={() => setSettings(false)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">

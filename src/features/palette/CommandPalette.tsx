@@ -56,9 +56,9 @@ function Palette({ initialQuery, onClose }: { initialQuery: string; onClose: () 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-center bg-black/40 pt-[12vh]" onMouseDown={close}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[12vh]" onMouseDown={close}>
       <div
-        className="flex h-fit max-h-[60vh] w-[560px] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex h-fit max-h-[60vh] w-[560px] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <input

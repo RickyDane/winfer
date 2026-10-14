@@ -12,6 +12,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { create as createStore } from "zustand";
 import { cleanAgentTitle, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
@@ -210,6 +211,23 @@ function create(pane: Pane): Entry {
   return { pane, term, fit, search, searchResults: { index: -1, count: 0 }, host, opened: false, spawned: false, exited: false, lastOutput: 0, decoder: new TextDecoder() };
 }
 
+/**
+ * Panes whose process is still starting, until it prints something: shown as a loading
+ * overlay on the pane ("Creating worktree…", "Starting Claude Code…").
+ */
+export const useStarting = createStore<Record<string, "worktree" | "process">>(() => ({}));
+
+function setStarting(paneId: string, phase: "worktree" | "process" | null) {
+  useStarting.setState((s) => {
+    if (phase === null) {
+      if (!(paneId in s)) return s;
+      const { [paneId]: _, ...rest } = s;
+      return rest;
+    }
+    return { ...s, [paneId]: phase };
+  }, true);
+}
+
 /** Gives an agent pane its own git worktree before it starts (if the folder is a repo). */
 async function prepareWorktree(entry: Entry) {
   const pane = entry.pane;
@@ -228,9 +246,18 @@ async function prepareWorktree(entry: Entry) {
 
 async function spawn(entry: Entry) {
   entry.spawned = true;
+  const id = entry.pane.id;
+  setStarting(id, entry.pane.wantsWorktree && !entry.pane.worktree ? "worktree" : "process");
+  // Some programs stay silent until they get input; don't leave the overlay up forever.
+  const giveUp = window.setTimeout(() => setStarting(id, null), 15_000);
   await prepareWorktree(entry);
+  if (entries.get(id) === entry) setStarting(id, "process");
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (data) => {
+    if (!entry.lastOutput) {
+      clearTimeout(giveUp);
+      setStarting(id, null);
+    }
     entry.term.write(new Uint8Array(data));
     entry.lastOutput = Date.now();
     reportOutput(entry.pane.id);
@@ -253,6 +280,8 @@ async function spawn(entry: Entry) {
     });
     useWorkspaces.getState().setPaneStatus(entry.pane.id, entry.pane.provider === "shell" ? "idle" : "working");
   } catch (err) {
+    clearTimeout(giveUp);
+    setStarting(id, null);
     entry.exited = true;
     entry.term.write(`\x1b[31mFailed to start ${entry.pane.provider}: ${err}\x1b[0m\r\n`);
     useWorkspaces.getState().setPaneStatus(entry.pane.id, "error");
@@ -391,10 +420,14 @@ export function restartTerminal(pane: Pane) {
   else startDetached(pane);
 }
 
+/** Id of a workspace's side-panel shell (it isn't one of the workspace's panes). */
+export const sideTerminalId = (workspaceId: string) => `side-terminal-${workspaceId}`;
+
 /** Kills the PTY and disposes the terminal. */
 export function closeTerminal(paneId: string) {
   const entry = entries.get(paneId);
   void invoke("pty_kill", { paneId });
+  setStarting(paneId, null);
   if (!entry) return;
   entry.observer?.disconnect();
   entry.term.dispose();

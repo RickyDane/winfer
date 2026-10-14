@@ -11,6 +11,7 @@ import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { removeWorktree } from "@/features/worktree/worktree";
 import { logActivity, relativeTime } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { withToast } from "@/stores/toasts";
 import { discardReviewed, mergeReviewed, removeReview, runTests, setReviewStatus, useReviews, type Review } from "./reviews";
 
 const button = "flex items-center gap-1 rounded-md px-2 py-1 text-xs disabled:opacity-40";
@@ -19,11 +20,15 @@ function Summary({ review }: { review: Review }) {
   const { summary } = review;
   if (summary.state === "loading" || summary.state === "idle")
     return (
-      <p className="flex items-center gap-1.5 text-xs text-fg-subtle">
-        <Loader2 size={12} className="animate-spin" /> Summarizing…
-      </p>
+      <div className="space-y-1.5">
+        <p className="flex items-center gap-1.5 text-xs text-fg-subtle">
+          <Loader2 size={12} className="animate-spin" /> Summarizing…
+        </p>
+        <span className="block h-2.5 w-11/12 animate-pulse rounded bg-hover" />
+        <span className="block h-2.5 w-2/3 animate-pulse rounded bg-hover" />
+      </div>
     );
-  if (summary.state === "done") return <p className="text-[13px] leading-relaxed text-fg">{summary.value}</p>;
+  if (summary.state === "done") return <p className="anim-fade text-[13px] leading-relaxed text-fg">{summary.value}</p>;
   // Writer off or failed: the agent's own last words are the next best summary.
   return (
     <div className="space-y-1">
@@ -89,7 +94,7 @@ function Screenshot({ review }: { review: Review }) {
   );
 }
 
-function ReviewCard({ review, index, pane, race }: { review: Review; index: number; pane: Pane | undefined; race?: Pane[] }) {
+function ReviewCard({ review, index, pane, race, workspaceName }: { review: Review; index: number; pane: Pane | undefined; race?: Pane[]; workspaceName?: string }) {
   const providers = useWorkspaces((s) => s.providers);
   const [reply, setReply] = useState("");
   const name = providerName(providers, review.provider);
@@ -113,17 +118,26 @@ function ReviewCard({ review, index, pane, race }: { review: Review; index: numb
     if (!ok) return;
     closeTerminal(pane.id);
     useWorkspaces.getState().removePane(pane.id);
-    await removeWorktree(pane.worktree, true).catch(() => {});
+    await withToast(removeWorktree(pane.worktree, true), {
+      loading: `Removing ${pane.worktree.branch}…`,
+      success: `Removed ${pane.worktree.branch}`,
+      error: "Couldn't remove worktree",
+    }).catch(() => {});
     removeReview(review.id);
   };
 
   return (
-    <article className={cn("space-y-2.5 rounded-lg border border-border bg-panel-raised p-3", !open && "opacity-60")}>
+    <article className={cn("anim-rise space-y-2.5 rounded-lg border border-border bg-panel-raised p-3 transition-opacity duration-300", !open && "opacity-60")}>
       <header className="flex items-center gap-2 text-xs">
         <span className="font-mono text-[11px] text-fg-subtle">{index}</span>
         {pane && <StatusDot status={pane.status} />}
         <ProviderIcon provider={review.provider} size={13} />
         <span className="font-medium text-fg">{name}</span>
+        {workspaceName && (
+          <span className="max-w-32 shrink-0 truncate rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium text-fg-muted" title={`Workspace ${workspaceName}`}>
+            {workspaceName}
+          </span>
+        )}
         {review.branch && (
           <span className="flex items-center gap-1 truncate font-mono text-[11px] text-fg-subtle">
             <GitBranch size={11} /> {review.branch.replace(/^winfer\//, "")}
@@ -262,8 +276,10 @@ function ReviewCard({ review, index, pane, race }: { review: Review; index: numb
 
 /** ⌘E: finished agent work, ready to merge, discard or send back. */
 export function ReviewInbox() {
-  const { overlay, setOverlay, activeWorkspaceId, workspaces } = useWorkspaces();
+  const { overlay, setOverlay, activeWorkspaceId, workspaces, view } = useWorkspaces();
   const all = useReviews((s) => s.reviews);
+  // The overview covers every workspace; the workspace view just its own.
+  const everywhere = view === "overview";
   const [, tick] = useState(0);
 
   useEffect(() => {
@@ -279,18 +295,21 @@ export function ReviewInbox() {
 
   if (overlay !== "review") return null;
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
-  const panes = new Map((workspace?.panes ?? []).map((p) => [p.id, p]));
+  const allPanes = workspaces.flatMap((w) => w.panes);
+  const panes = new Map(allPanes.map((p) => [p.id, p]));
+  const names = new Map(workspaces.map((w) => [w.id, w.name]));
   const reviews = all
-    .filter((r) => r.workspaceId === activeWorkspaceId)
+    .filter((r) => everywhere || r.workspaceId === activeWorkspaceId)
     .sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || b.finishedAt - a.finishedAt);
-  const racers = (raceId: string | null) => (raceId ? (workspace?.panes ?? []).filter((p) => p.raceId === raceId) : undefined);
+  const racers = (raceId: string | null) => (raceId ? allPanes.filter((p) => p.raceId === raceId) : undefined);
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="flex h-fit max-h-[84vh] w-[860px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
+      <div className="anim-dialog flex h-fit max-h-[84vh] w-[860px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2 border-b border-border px-5 py-3">
           <Inbox size={14} className="text-accent" />
-          <h1 className="flex-1 text-sm font-semibold text-fg">Review</h1>
+          <h1 className="text-sm font-semibold text-fg">Review</h1>
+          <span className="flex-1 truncate text-xs text-fg-subtle">{everywhere ? "All workspaces" : workspace?.name}</span>
           <span className="text-xs text-fg-subtle">Say “what's done?” to hear it · {keysFor({ type: "ui.overlay", overlay: "review" })}</span>
           <button onClick={() => setOverlay(null)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={14} />
@@ -303,7 +322,14 @@ export function ReviewInbox() {
             </p>
           )}
           {reviews.map((r, i) => (
-            <ReviewCard key={r.id} review={r} index={i + 1} pane={panes.get(r.paneId)} race={racers(r.raceId)} />
+            <ReviewCard
+              key={r.id}
+              review={r}
+              index={i + 1}
+              pane={panes.get(r.paneId)}
+              race={racers(r.raceId)}
+              workspaceName={everywhere ? names.get(r.workspaceId) : undefined}
+            />
           ))}
         </div>
       </div>

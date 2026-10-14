@@ -65,6 +65,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Give an agent a task: a thin bar under its pane header and a percent fill in within about a minute and only move forward; the sidebar shows "N working · X%"; Sessions (⌘O) lists every agent with task, bar and current step. Finishing jumps to 100%; a new task starts at 0%.
 - [ ] Say "how far are the agents?" → the overview opens and progress is read aloud.
 
+- [ ] In the Overview tab, Review shows cards from every workspace (with the workspace name), its sidebar count covers all workspaces, and History opens on "All workspaces"; in a workspace both stick to that workspace.
+
 ## 5. Browser
 - [ ] Address bar: `github.com` loads; clicking, scrolling and typing in the page work; back/forward/reload.
 - [ ] Phone icon toggles mobile view.
@@ -75,6 +77,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Android tab (next to Browser): with no adb installed it says how to get it; with a phone attached (USB debugging on, authorized) or an emulator running, it appears in the list and its screen mirrors live.
 - [ ] Click taps, drag swipes, scroll wheel scrolls, typing goes to the focused field; Back / Home / Recents / Power buttons work; Reconnect restarts the stream.
 - [ ] An emulator that isn't running shows a Start button that boots it.
+
+- [ ] Terminal tab (or Ctrl+`): a shell in the workspace folder; it keeps running when switching tabs or workspaces (each workspace has its own); the ↻ button restarts it. Ctrl+` again hides the panel.
 
 ## 6. Voice
 - [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
@@ -93,6 +97,14 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] "Open Claude with Opus" / "Switch Claude to Sonnet"; pane header shows the model; pane menu → Change model….
 - [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.
 - [ ] Optional: `CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice` reports accuracy (target ≥ 90%) and latency.
+
+## 6b. Feedback and motion
+- [ ] Dialogs (Settings, palette, review, history…) fade in; menus pop in; new panes grow in; switching workspace or Overview fades the content.
+- [ ] A new agent pane shows "Creating worktree…" then "Starting Claude Code…" until its first output.
+- [ ] Merge / discard / remove worktree show a toast with a spinner, then "Merged …" / "Removed …" (bottom right). Copy path / branch / commit SHA shows "Copied".
+- [ ] Waiting-for-input dots pulse a ring; a sidebar row flashes when its agent finishes; progress bars sweep while estimating.
+- [ ] Spinners on: diff loading and refresh, sessions refresh, settings Save / Test connection, "Starting browser…", worktree being removed; history shows placeholder cards while searching; review cards show a placeholder summary.
+- [ ] macOS "Reduce motion" turns the animations off (spinners keep turning).
 
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.

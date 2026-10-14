@@ -111,3 +111,106 @@ body.resizing * {
 .xterm .xterm-viewport {
   background-color: transparent !important;
 }
+
+/* Motion. Short and subtle: things appear from where they come from, nothing bounces. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+@keyframes grow-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+@keyframes flash {
+  from {
+    background-color: var(--color-accent-soft);
+  }
+}
+@keyframes ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+@layer utilities {
+  /* Modal backdrop and its dialog. */
+  .anim-backdrop {
+    animation: fade-in 140ms ease-out;
+  }
+  .anim-dialog {
+    animation: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  /* Menus, popovers. */
+  .anim-menu {
+    animation: pop-in 110ms ease-out;
+    transform-origin: top;
+  }
+  .anim-fade {
+    animation: fade-in 180ms ease-out;
+  }
+  .anim-rise {
+    animation: rise-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .anim-slide {
+    animation: slide-in 180ms ease-out;
+  }
+  .anim-grow {
+    animation: grow-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  /* Something changed here (a row that just finished): a short highlight that fades. */
+  .anim-flash {
+    animation: flash 1.2s ease-out;
+  }
+  /* Asks for attention (waiting for input): a ring that keeps expanding from the dot. */
+  .anim-ring {
+    animation: ring 1.6s ease-out infinite;
+  }
+  /* Indeterminate bar: a segment that sweeps across its track. */
+  .anim-indeterminate {
+    animation: indeterminate 1.3s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Spinners keep turning: they say "still working", not decoration. */
+  *:not(.animate-spin, .anim-indeterminate),
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

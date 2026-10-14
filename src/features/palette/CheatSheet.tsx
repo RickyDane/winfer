@@ -114,8 +114,8 @@ export function CheatSheet() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setCheatSheet(false)}>
-      <div className="flex max-h-[85vh] w-[820px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setCheatSheet(false)}>
+      <div className="anim-dialog flex max-h-[85vh] w-[820px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-border px-6 py-3">
           <h1 className="flex-1 text-sm font-semibold text-fg">Keyboard shortcuts</h1>
           <span className="text-xs text-fg-subtle">Click a shortcut to change it</span>

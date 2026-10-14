@@ -1,4 +1,4 @@
-import { GitBranch, GitMerge, RefreshCw, Trash2, X } from "lucide-react";
+import { GitBranch, GitMerge, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
@@ -11,11 +11,15 @@ export function DiffView() {
   const pane = workspaces.flatMap((w) => w.panes).find((p) => p.id === diffPaneId);
   const [data, setData] = useState<WorktreeDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(() => {
     if (!pane?.worktree) return;
     setError(null);
-    worktreeDiff(pane.worktree).then(setData, (e) => setError(String(e)));
+    setLoading(true);
+    worktreeDiff(pane.worktree)
+      .then(setData, (e) => setError(String(e)))
+      .finally(() => setLoading(false));
   }, [pane?.worktree]);
 
   useEffect(() => {
@@ -37,9 +41,9 @@ export function DiffView() {
   const target = { id: pane.id };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-10" onMouseDown={() => setDiffPane(null)}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-10" onMouseDown={() => setDiffPane(null)}>
       <div
-        className="flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-center gap-3 border-b border-border px-4 py-3">
@@ -55,8 +59,8 @@ export function DiffView() {
               {data.ahead} commit{data.ahead === 1 ? "" : "s"} ahead{data.dirty && " · uncommitted changes"}
             </span>
           )}
-          <button onClick={load} className="rounded p-1.5 text-fg-subtle hover:bg-hover hover:text-fg" title="Refresh">
-            <RefreshCw size={14} />
+          <button onClick={load} disabled={loading} className="rounded p-1.5 text-fg-subtle hover:bg-hover hover:text-fg" title="Refresh">
+            <RefreshCw size={14} className={cn(loading && "animate-spin")} />
           </button>
           <button
             onClick={() => execute({ type: "pane.mergeWorktree", target })}
@@ -81,7 +85,11 @@ export function DiffView() {
 
         <div className="flex-1 overflow-auto font-mono text-[12px] leading-[1.55] [font-variant-ligatures:none] select-text">
           {error && <div className="p-4 text-danger">{error}</div>}
-          {!data && !error && <div className="p-4 text-fg-subtle">Loading…</div>}
+          {!data && !error && (
+            <div className="flex items-center gap-2 p-4 text-fg-subtle">
+              <Loader2 size={13} className="animate-spin" /> Loading changes…
+            </div>
+          )}
           {data && files.length === 0 && data.untracked.length === 0 && <div className="p-4 text-fg-subtle">No changes yet.</div>}
           {data && data.untracked.length > 0 && (
             <section className="border-b border-border px-4 py-3">

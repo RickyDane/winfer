@@ -43,7 +43,7 @@ export function PaneMenu({ pane }: { pane: Pane }) {
         <Ellipsis size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 z-40 mt-1 w-56 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
+        <div className="anim-menu absolute right-0 z-40 mt-1 w-56 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
           {items.map((item) => (
             <button
               key={item.label}

@@ -9,17 +9,17 @@ import { relativeTime } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { estimate, useProgress, type Progress } from "./progress";
 
-/** Thin progress bar; indeterminate (pulsing) while there's no estimate yet. */
+/** Thin progress bar; indeterminate (a sweeping segment) while there's no estimate yet. */
 export function ProgressBar({ progress, status, className }: { progress: Progress | undefined; status: Pane["status"]; className?: string }) {
   const percent = progress?.percent;
   const done = status === "done" || percent === 100;
   return (
     <span className={cn("block h-1 overflow-hidden rounded-full bg-hover", className)}>
       {percent === null || percent === undefined ? (
-        status === "working" && <span className="block h-full w-1/4 animate-pulse rounded-full bg-accent/50" />
+        status === "working" && <span className="anim-indeterminate block h-full w-1/4 rounded-full bg-accent/60" />
       ) : (
         <span
-          className={cn("block h-full rounded-full transition-[width] duration-700", done ? "bg-success" : status === "needs-input" ? "bg-warning" : "bg-accent")}
+          className={cn("block h-full rounded-full transition-[width,background-color] duration-700 ease-out", done ? "bg-success" : status === "needs-input" ? "bg-warning" : "bg-accent")}
           style={{ width: `${Math.max(percent, 2)}%` }}
         />
       )}
@@ -43,6 +43,7 @@ export function SessionsOverview() {
   const { overlay, setOverlay, workspaces, providers, voiceConfig } = useWorkspaces();
   const byPane = useProgress((s) => s.byPane);
   const [, tick] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (overlay !== "progress") return;
@@ -66,18 +67,23 @@ export function SessionsOverview() {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="flex h-fit max-h-[80vh] w-[760px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
+      <div className="anim-dialog flex h-fit max-h-[80vh] w-[760px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2 border-b border-border px-5 py-3">
           <Activity size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">Sessions</h1>
           <span className="text-xs text-fg-subtle">Say “how far are the agents?” · {keysFor({ type: "ui.overlay", overlay: "progress" })}</span>
           <button
             title="Estimate again now"
-            onClick={() => groups.flatMap((g) => g.panes).filter((p) => p.status === "working").forEach((p) => void estimate(p))}
+            disabled={refreshing}
+            onClick={() => {
+              const working = groups.flatMap((g) => g.panes).filter((p) => p.status === "working");
+              setRefreshing(true);
+              void Promise.allSettled(working.map((p) => estimate(p))).finally(() => setRefreshing(false));
+            }}
             className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
           >
-            <RefreshCw size={13} />
+            <RefreshCw size={13} className={cn(refreshing && "animate-spin")} />
           </button>
           <button onClick={() => setOverlay(null)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={14} />

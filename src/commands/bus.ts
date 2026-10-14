@@ -16,8 +16,9 @@ import {
   type Preset,
   type SplitDir,
 } from "@/features/layout/tree";
-import { closeTerminal, pasteText, restartTerminal, sendText } from "@/features/terminal/xtermRegistry";
+import { closeTerminal, pasteText, restartTerminal, sendText, sideTerminalId } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
+import { withToast } from "@/stores/toasts";
 import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
 import { discardReviewed, mergeReviewed, readReviewsAloud } from "@/features/review/reviews";
 import { readProgressAloud, setTask } from "@/features/progress/progress";
@@ -83,6 +84,8 @@ export type Command =
   | { type: "browser.sendConsole" }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
+  /** Shows that tab of the side panel, or hides the panel if it's already showing it. */
+  | { type: "ui.sidePanel"; panel: "browser" | "device" | "terminal" }
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
@@ -388,6 +391,9 @@ export function execute(cmd: Command): void {
       return s.toggleSidebar();
     case "ui.toggleBrowser":
       return s.toggleBrowser();
+    case "ui.sidePanel":
+      if (s.browserOpen && s.sidePanel === cmd.panel) return s.toggleBrowser();
+      return s.setSidePanel(cmd.panel);
     case "ui.palette":
       return s.paletteQuery === null ? s.openPalette(cmd.query) : s.closePalette();
     case "ui.cheatSheet":
@@ -428,12 +434,14 @@ async function removeWorkspace(id: string) {
   });
   if (!ok) return;
   ws.panes.forEach((p) => closeTerminal(p.id));
+  closeTerminal(sideTerminalId(id));
   store().removeWorkspace(id);
 }
 
 function paneWithWorktree(target: PaneRef) {
   const id = resolvePane(target);
-  const pane = active().panes.find((p) => p.id === id);
+  // Any workspace's pane: the overview and the review inbox act across workspaces.
+  const pane = store().workspaces.flatMap((w) => w.panes).find((p) => p.id === id);
   if (pane?.worktree) return pane as typeof pane & { worktree: NonNullable<typeof pane.worktree> };
   if (pane) void message("This pane isn't running in its own worktree.", { title: "No worktree", kind: "info" });
   return null;
@@ -443,7 +451,7 @@ function paneWithWorktree(target: PaneRef) {
  * Merges an agent's branch into its base. Changes the agent left uncommitted are committed
  * first (as `commitMessage`), since agents often stop without committing. True if merged.
  */
-export async function mergePane(pane: { provider: string; worktree: WorktreeInfo }, commitMessage?: string): Promise<boolean> {
+export async function mergePane(pane: { provider: string; worktree: WorktreeInfo; workspaceId?: string }, commitMessage?: string): Promise<boolean> {
   const { branch, base } = pane.worktree;
   const dirty = await worktreeDiff(pane.worktree).then((d) => d.dirty, () => false);
   const ok = await ask(
@@ -451,10 +459,14 @@ export async function mergePane(pane: { provider: string; worktree: WorktreeInfo
     { title: "Merge worktree", okLabel: dirty ? "Commit and merge" : "Merge" },
   );
   if (!ok) return false;
-  try {
+  const work = (async () => {
     if (dirty) await commitWorktree(pane.worktree, commitMessage ?? `Changes by ${providerName(store().providers, pane.provider)}`);
     await mergeWorktree(pane.worktree);
-    logActivity(active().id, `Merged ${branch} into ${base}`);
+  })();
+  try {
+    // Failures get a dialog below: merge errors (conflicts) are long and need reading.
+    await withToast(work, { loading: `Merging ${branch} into ${base}…`, success: `Merged ${branch} into ${base}`, error: false });
+    logActivity(pane.workspaceId ?? active().id, `Merged ${branch} into ${base}`);
     return true;
   } catch (err) {
     await message(String(err), { title: "Merge not possible", kind: "error" });
@@ -463,7 +475,7 @@ export async function mergePane(pane: { provider: string; worktree: WorktreeInfo
 }
 
 /** Closes the pane and deletes its worktree and branch. True if discarded. */
-export async function discardPane(pane: { id: string; worktree: WorktreeInfo }): Promise<boolean> {
+export async function discardPane(pane: { id: string; worktree: WorktreeInfo; workspaceId?: string }): Promise<boolean> {
   const { branch, path } = pane.worktree;
   const ok = await ask(`Close this pane, delete ${path} and the branch ${branch}? Unmerged work is lost.`, {
     title: "Discard worktree",
@@ -473,9 +485,9 @@ export async function discardPane(pane: { id: string; worktree: WorktreeInfo }):
   if (!ok) return false;
   closeTerminal(pane.id);
   store().removePane(pane.id);
-  logActivity(active().id, `Discarded ${branch}`);
+  logActivity(pane.workspaceId ?? active().id, `Discarded ${branch}`);
   try {
-    await removeWorktree(pane.worktree, true);
+    await withToast(removeWorktree(pane.worktree, true), { loading: `Discarding ${branch}…`, success: `Discarded ${branch}`, error: false });
   } catch (err) {
     await message(String(err), { title: "Couldn't remove worktree", kind: "error" });
   }

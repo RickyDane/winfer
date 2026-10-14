@@ -40,7 +40,7 @@ export function VoiceHUD() {
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center">
-      <div className="pointer-events-auto flex max-w-[640px] min-w-[320px] flex-col gap-2 rounded-2xl border border-border-strong bg-panel-raised/95 px-4 py-3 shadow-2xl backdrop-blur">
+      <div className="anim-rise pointer-events-auto flex max-w-[640px] min-w-[320px] flex-col gap-2 rounded-2xl border border-border-strong bg-panel-raised/95 px-4 py-3 shadow-2xl backdrop-blur">
         <div className="flex items-center gap-3 text-[13px]">
           {phase === "listening" && (
             <>

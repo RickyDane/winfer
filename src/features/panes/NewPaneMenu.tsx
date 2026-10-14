@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Star } from "lucide-react";
+import { ChevronRight, Loader2, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -32,7 +32,7 @@ export function NewPaneMenu() {
         <span>New</span>
       </button>
       {open && (
-        <div className="absolute right-0 z-50 mt-1 w-64 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
+        <div className="anim-menu absolute right-0 z-50 mt-1 w-64 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
           {providers.map((p) => (
             <div key={p.id}>
               <div className="flex items-center">
@@ -88,7 +88,11 @@ export function NewPaneMenu() {
                       {m.label}
                     </button>
                   ))}
-                  {!models[p.id] && <div className="px-2 py-1 text-xs text-fg-subtle">Loading…</div>}
+                  {!models[p.id] && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-fg-subtle">
+                      <Loader2 size={11} className="animate-spin" /> Loading models…
+                    </div>
+                  )}
                 </div>
               )}
             </div>

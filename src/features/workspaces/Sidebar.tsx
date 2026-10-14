@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import logoUrl from "@/assets/logo.svg";
-import { Activity, ChevronDown, ChevronRight, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Activity, ChevronRight, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
 import { useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
@@ -87,10 +87,11 @@ function AppVersion() {
   );
 }
 
-/** Opens the review inbox; the count is finished work waiting in this workspace. */
+/** Opens the review inbox; the count is finished work waiting in this workspace (in the overview: in any). */
 function ReviewEntry() {
   const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
-  const count = useReviews((s) => s.reviews.filter((r) => r.workspaceId === workspaceId && r.status === "open").length);
+  const everywhere = useWorkspaces((s) => s.view === "overview");
+  const count = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
   return (
     <button
       onClick={() => execute({ type: "ui.overlay", overlay: "review" })}
@@ -99,7 +100,11 @@ function ReviewEntry() {
     >
       <Inbox size={14} />
       <span className="flex-1">Review</span>
-      {count > 0 && <span className="rounded bg-accent px-1.5 text-[11px] font-medium text-white">{count}</span>}
+      {count > 0 && (
+        <span key={count} className="anim-grow rounded bg-accent px-1.5 text-[11px] font-medium text-white">
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -109,7 +114,7 @@ export function Sidebar() {
   const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
 
   return (
-    <aside className="flex h-full w-60 shrink-0 flex-col rounded-[var(--radius-pane)] border border-border bg-panel">
+    <aside className="anim-slide flex h-full w-60 shrink-0 flex-col rounded-[var(--radius-pane)] border border-border bg-panel">
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <span className="text-xs font-medium tracking-wide text-fg-subtle">Workspaces</span>
         <button
@@ -133,16 +138,16 @@ export function Sidebar() {
                 onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
                 title={ws.rootDir}
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
                   active ? "bg-active font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
                 )}
               >
                 <span className="flex-1 truncate">{ws.name}</span>
-                {attention && <span className="size-1.5 rounded-full bg-warning" title="An agent needs attention" />}
+                {attention && <span className="anim-ring size-1.5 rounded-full bg-warning text-warning" title="An agent needs attention" />}
                 {count > 0 && (
                   <span className="rounded bg-hover px-1.5 text-[11px] font-normal text-fg-muted">{count}</span>
                 )}
-                {active ? <ChevronDown size={13} /> : count > 0 && <ChevronRight size={13} />}
+                {(active || count > 0) && <ChevronRight size={13} className={cn("transition-transform duration-200", active && "rotate-90")} />}
               </button>
 
               {active &&
@@ -152,10 +157,14 @@ export function Sidebar() {
                     onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
                     onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane) })}
                     className={cn(
-                      "relative flex w-full items-center gap-2 rounded-md py-1.5 pr-2 pl-5 text-left text-[13px]",
+                      "anim-slide relative flex w-full items-center gap-2 rounded-md py-1.5 pr-2 pl-5 text-left text-[13px] transition-colors duration-150",
                       pane.id === focusedPaneId ? "bg-hover text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
                     )}
                   >
+                    {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
+                    {(pane.status === "done" || pane.status === "needs-input") && (
+                      <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
+                    )}
                     <StatusDot status={pane.status} />
                     <ProviderIcon provider={pane.provider} size={12} />
                     <PaneName pane={pane} className={cn(pane.unseen && "font-semibold text-fg")} />
@@ -191,7 +200,9 @@ export function Sidebar() {
           className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
         >
-          {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+          <span key={theme} className="anim-grow block">
+            {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+          </span>
         </button>
         <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title={`Settings (${keysFor({ type: "ui.settings" })})`}>
           <Settings size={14} />

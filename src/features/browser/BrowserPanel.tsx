@@ -1,3 +1,4 @@
+import { SideTerminal } from "@/features/terminal/SideTerminal";
 import { DevicePanel } from "@/features/android/DevicePanel";
 import { keysFor } from "@/commands/keymap";
 import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
@@ -217,7 +218,11 @@ export function BrowserPanel() {
             </span>
           )}
           {availability === "error" && <span className="text-danger">{error}</span>}
-          {(availability === "unknown" || (availability === "ready" && !active)) && <span>Starting browser…</span>}
+          {(availability === "unknown" || (availability === "ready" && !active)) && (
+            <span className="flex items-center gap-2">
+              <Loader2 size={14} className="animate-spin" /> Starting browser…
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -230,9 +235,9 @@ export function SidePanel() {
   const panel = useWorkspaces((s) => s.sidePanel);
   const setPanel = useWorkspaces((s) => s.setSidePanel);
   const tab = (active: boolean) =>
-    cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
+    cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
-    <aside style={{ width }} className="flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+    <aside style={{ width }} className="anim-fade flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
       <div role="tablist" className="flex shrink-0 items-center gap-0.5 border-b border-border px-1.5 py-1">
         <button role="tab" aria-selected={panel === "browser"} onClick={() => setPanel("browser")} className={tab(panel === "browser")}>
           <Globe size={12} /> Browser
@@ -240,8 +245,11 @@ export function SidePanel() {
         <button role="tab" aria-selected={panel === "device"} onClick={() => setPanel("device")} className={tab(panel === "device")}>
           <Smartphone size={12} /> Android
         </button>
+        <button role="tab" aria-selected={panel === "terminal"} onClick={() => setPanel("terminal")} className={tab(panel === "terminal")}>
+          <SquareTerminal size={12} /> Terminal
+        </button>
       </div>
-      {panel === "device" ? <DevicePanel /> : <BrowserPanel />}
+      {panel === "device" ? <DevicePanel /> : panel === "terminal" ? <SideTerminal /> : <BrowserPanel />}
     </aside>
   );
 }

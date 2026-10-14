@@ -78,8 +78,8 @@ export function BranchDialog() {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="flex h-fit max-h-[78vh] w-[620px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
+      <div className="anim-dialog flex h-fit max-h-[78vh] w-[620px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2 border-b border-border px-5 py-3">
           <GitBranch size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">New worktree from a branch</h1>

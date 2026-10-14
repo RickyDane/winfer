@@ -85,6 +85,7 @@ const SPECS: BindingSpec[] = [
   { keys: "Mod+K", title: "Command palette", group: "App", command: { type: "ui.palette" } },
   { keys: "Mod+B", title: "Toggle sidebar", group: "App", command: { type: "ui.toggleSidebar" } },
   { keys: "Mod+Shift+B", win: "Ctrl+Shift+Alt+B", title: "Toggle browser", group: "App", command: { type: "ui.toggleBrowser" } },
+  { keys: "Ctrl+`", title: "Toggle side terminal", group: "App", command: { type: "ui.sidePanel", panel: "terminal" } },
   { keys: "Mod+Shift+C", win: "Ctrl+Shift+Alt+C", title: "Pick element for agent", group: "App", command: { type: "browser.pick" } },
   { keys: "Mod+L", title: "Browser address bar", group: "App", command: { type: "browser.focusUrl" } },
   { keys: "Mod+,", title: "Settings", group: "App", command: { type: "ui.settings" } },

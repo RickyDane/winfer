@@ -1,4 +1,5 @@
-import { ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { ExternalLink, GitBranch, Loader2, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
@@ -8,7 +9,8 @@ import { PaneMenu } from "./PaneMenu";
 import { PaneSearch } from "./PaneSearch";
 import { beginDrag, useDrag } from "@/features/layout/drag";
 import { TerminalHost } from "./TerminalHost";
-import { useWorkspaces, type Pane } from "@/stores/workspaces";
+import { useStarting } from "./xtermRegistry";
+import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 
@@ -22,6 +24,12 @@ const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: (
     {children}
   </button>
 );
+
+/**
+ * Panes already shown once. Layout changes remount frames, so only a pane's first
+ * appearance animates in.
+ */
+const seen = new Set<string>();
 
 interface Props {
   pane: Pane;
@@ -40,13 +48,18 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const beingDragged = useDrag((s) => s.paneId === pane.id);
   const progress = useProgress((s) => s.byPane[pane.id]);
   const showProgress = pane.provider !== "shell" && (pane.status === "working" || pane.status === "needs-input" || progress?.percent != null);
+  const starting = useStarting((s) => s[pane.id]);
+  const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
+  const [isNew] = useState(() => !seen.has(pane.id));
+  seen.add(pane.id);
 
   return (
     <section
       data-pane-id={pane.id}
       onMouseDown={onFocus}
       className={cn(
-        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel",
+        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel transition-[border-color,opacity] duration-150",
+        isNew && "anim-grow",
         focused ? "border-accent/70" : "border-border",
         beingDragged && "opacity-40",
       )}
@@ -134,6 +147,14 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
       <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
         <TerminalHost pane={pane} focused={focused} />
       </div>
+      {starting && (
+        <div className="anim-fade pointer-events-none absolute inset-x-0 top-8 bottom-0 flex items-center justify-center">
+          <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
+            <Loader2 size={13} className="animate-spin text-accent" />
+            {starting === "worktree" ? "Creating worktree…" : `Starting ${name}…`}
+          </span>
+        </div>
+      )}
     </section>
   );
 }

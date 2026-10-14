@@ -43,7 +43,7 @@ export function ContextMenu({ x, y, title, items, onClose }: { x: number; y: num
       role="menu"
       style={pos}
       onContextMenu={(e) => e.preventDefault()}
-      className="fixed z-[70] w-60 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl"
+      className="anim-menu fixed z-[70] w-60 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl"
     >
       {title && <div className="truncate px-2 py-1 text-[11px] text-fg-subtle">{title}</div>}
       {shown.map((item, i) =>

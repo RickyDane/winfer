@@ -15,10 +15,11 @@ import { restartTerminal } from "@/features/terminal/xtermRegistry";
 import { getHome } from "@/lib/home";
 import { defaultProviderId, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import type { ExistingWorktree } from "@/features/worktree/worktree";
+import { copyWithToast } from "@/stores/toasts";
 
 const REVEAL = IS_MAC ? "Reveal in Finder" : "Show in Explorer";
 const reveal = (path: string) => void revealItemInDir(path.replace(/^~(?=[/\\]|$)/, getHome())).catch(() => {});
-const copy = (text: string) => void navigator.clipboard.writeText(text);
+const copy = (text: string) => copyWithToast(text, "Copied to the clipboard");
 
 export function workspaceMenu(ws: Workspace): MenuItem[] {
   const agent = providerName(useWorkspaces.getState().providers, defaultProviderId());

@@ -1,8 +1,9 @@
-import { ask, message } from "@tauri-apps/plugin-dialog";
-import { FolderGit2, GitBranch, Play, Plus, Trash2 } from "lucide-react";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { FolderGit2, GitBranch, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { logActivity, relativeTime } from "@/stores/activity";
+import { withToast } from "@/stores/toasts";
 import { defaultProviderId, useWorkspaces, type Workspace } from "@/stores/workspaces";
 import { listWorktrees, removeWorktree, type ExistingWorktree } from "./worktree";
 import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
@@ -45,6 +46,7 @@ function WorktreeState({ wt }: { wt: ExistingWorktree }) {
 export function WorktreeList({ workspace }: { workspace: Workspace }) {
   const [found, setFound] = useState<ExistingWorktree[]>([]);
   const [menu, openMenu, closeMenu] = useContextMenu<ExistingWorktree>();
+  const [removing, setRemoving] = useState<Set<string>>(new Set());
   const inUse = useWorkspaces((s) => new Set(s.workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : [])))).size);
 
   const refresh = useCallback(() => {
@@ -85,13 +87,24 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
       { title: "Remove worktree", kind: "warning", okLabel: "Remove" },
     );
     if (!ok) return;
+    const path = wt.info.path;
+    setRemoving((s) => new Set(s).add(path));
     try {
       // Only winfer's own branches go too; a branch made by hand may still be wanted.
-      await removeWorktree(wt.info, wt.byWinfer);
+      await withToast(removeWorktree(wt.info, wt.byWinfer), {
+        loading: `Removing ${wt.info.branch}…`,
+        success: `Removed ${wt.info.branch}`,
+        error: "Couldn't remove worktree",
+      });
       logActivity(workspace.id, `Removed worktree ${wt.info.branch}`);
-    } catch (err) {
-      await message(String(err), { title: "Couldn't remove worktree", kind: "error" });
+    } catch {
+      // Shown in the toast.
     }
+    setRemoving((s) => {
+      const next = new Set(s);
+      next.delete(path);
+      return next;
+    });
     refresh();
   };
 
@@ -116,7 +129,7 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
         <div
           key={wt.info.path}
           onContextMenu={(e) => openMenu(e, wt)}
-          className="group flex items-center gap-1 rounded-md pr-1 hover:bg-hover"
+          className={cn("anim-slide group flex items-center gap-1 rounded-md pr-1 transition-opacity hover:bg-hover", removing.has(wt.info.path) && "pointer-events-none opacity-50")}
         >
           <button
             onClick={() => !wt.prunable && open(wt)}
@@ -144,7 +157,9 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
               <Play size={11} />
             </button>
           )}
-          {!wt.isMain && (
+          {removing.has(wt.info.path) ? (
+            <Loader2 size={11} className="mr-0.5 animate-spin text-fg-subtle" />
+          ) : !wt.isMain && (
             <button
               onClick={() => void remove(wt)}
               title="Remove this worktree"

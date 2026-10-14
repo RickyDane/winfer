@@ -21,7 +21,7 @@ export function PaneSearch({ paneId }: { paneId: string }) {
   const find = (direction: "next" | "previous", q = query) => setResult(searchTerminal(paneId, q, direction));
 
   return (
-    <div className="absolute top-9 right-3 z-20 flex items-center gap-1 rounded-md border border-border-strong bg-panel-raised px-2 py-1 shadow-lg" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-menu absolute top-9 right-3 z-20 flex items-center gap-1 rounded-md border border-border-strong bg-panel-raised px-2 py-1 shadow-lg" onMouseDown={(e) => e.stopPropagation()}>
       <input
         ref={input}
         value={query}

@@ -20,8 +20,8 @@ export function RecipesView() {
   const builtIn = saved.length === 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-center bg-black/40 pt-[14vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="h-fit w-[560px] space-y-4 rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[14vh]" onMouseDown={() => setOverlay(null)}>
+      <div className="anim-dialog h-fit w-[560px] space-y-4 rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
           <BookOpen size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">Recipes</h1>

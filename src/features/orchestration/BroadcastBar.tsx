@@ -31,8 +31,8 @@ export function BroadcastBar() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-center bg-black/40 pt-[18vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="h-fit w-[600px] space-y-3 rounded-xl border border-border-strong bg-panel-raised p-4 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[18vh]" onMouseDown={() => setOverlay(null)}>
+      <div className="anim-dialog h-fit w-[600px] space-y-3 rounded-xl border border-border-strong bg-panel-raised p-4 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <div className="text-xs font-medium tracking-wide text-fg-subtle uppercase">Send to agents</div>
         <textarea
           ref={input}

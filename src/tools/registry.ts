@@ -534,6 +534,25 @@ export const TOOLS: ToolDef[] = [
     palette: () => [{ title: "Toggle browser", args: {} }],
   },
   {
+    id: "show_side_panel",
+    title: "Show side panel tab",
+    description: "Show the browser, the Android device mirror or the terminal in the side panel (or hide it if that tab is already showing)",
+    risk: "safe",
+    params: {
+      panel: {
+        kind: "enum",
+        ask: "Which side panel tab: the web browser, the Android phone/emulator screen, or the terminal?",
+        options: () => ({ browser: "Browser", device: "Android device", terminal: "Terminal" }),
+      },
+    },
+    toCommands: (args) => [{ type: "ui.sidePanel", panel: args.panel as "browser" | "device" | "terminal" }],
+    palette: () => [
+      { title: "Side panel: terminal", args: { panel: "terminal" } },
+      { title: "Side panel: Android device", args: { panel: "device" } },
+      { title: "Side panel: browser", args: { panel: "browser" } },
+    ],
+  },
+  {
     id: "open_settings",
     title: "Settings",
     description: "Open winfer's settings",

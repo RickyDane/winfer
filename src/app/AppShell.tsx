@@ -22,6 +22,7 @@ import { RaceView } from "@/features/orchestration/RaceView";
 import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
+import { Toaster } from "@/components/Toaster";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -63,7 +64,7 @@ function ViewTabs({ workspace }: { workspace: string }) {
   const sessions = useWorkspaces((s) => s.workspaces).flatMap((w) => w.panes);
   const waiting = sessions.filter((p) => p.status === "needs-input").length;
   const tab = (active: boolean) =>
-    cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
+    cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
     <div role="tablist" className="flex items-center gap-0.5 rounded-lg border border-border bg-panel p-0.5">
       <button role="tab" aria-selected={view === "workspace"} onClick={() => execute({ type: "ui.view", view: "workspace" })} className={tab(view === "workspace")}>
@@ -80,7 +81,7 @@ function ViewTabs({ workspace }: { workspace: string }) {
         <Layers size={12} />
         Overview
         <span className="font-mono text-[10px] text-fg-subtle">{sessions.length}</span>
-        {waiting > 0 && <span className="size-1.5 rounded-full bg-warning" title={`${waiting} waiting for you`} />}
+        {waiting > 0 && <span className="anim-ring size-1.5 rounded-full bg-warning text-warning" title={`${waiting} waiting for you`} />}
       </button>
     </div>
   );
@@ -164,7 +165,8 @@ export function AppShell() {
           {view === "workspace" && workspace.panes.some((p) => p.provider !== "shell") && (
             <AgentBar panes={workspace.panes} scope={{ workspace: workspace.name }} />
           )}
-          <div className="flex min-h-0 min-w-0 flex-1">
+          {/* Keyed so switching workspace or view fades the new content in. */}
+          <div key={`${view}:${view === "overview" ? "" : workspace.id}`} className="anim-fade flex min-h-0 min-w-0 flex-1">
             {view === "overview" ? (
               <Overview />
             ) : workspace.layout && zoomed ? (
@@ -201,6 +203,7 @@ export function AppShell() {
       <ModelPicker />
       <DragLayer />
       <VoiceHUD />
+      <Toaster />
     </div>
   );
 }
