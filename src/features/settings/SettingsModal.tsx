@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Bot, Check, ChevronDown, Download, FolderOpen, Keyboard, Loader2, Mic, Moon, Puzzle, RefreshCw, SlidersHorizontal, Sparkles, Sun, X, type LucideIcon } from "lucide-react";
+import { Bot, Check, ChevronDown, Download, FolderOpen, Keyboard, Loader2, Mic, Moon, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, Sun, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
@@ -7,7 +7,8 @@ import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/v
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { loadPlugins, pluginsDir, setPluginEnabled, usePlugins, type PluginInfo } from "@/features/plugins/plugins";
+import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type CatalogEntry, type PluginInfo } from "@/features/plugins/plugins";
+import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 import { cn } from "@/lib/cn";
 
@@ -632,34 +633,92 @@ function contributions(plugin: PluginInfo): string {
   return [...count(m.tools.length, "tool"), ...count(m.providers.length, "agent"), ...count(m.recipes.length, "recipe"), ...(m.main ? ["code"] : [])].join(" · ");
 }
 
+const trustWarning = (name: string) =>
+  `“${name}” runs its own code with full access to your files, terminals and network. Only turn on plugins you trust.`;
+
 async function togglePlugin(plugin: PluginInfo, enabled: boolean) {
   // Plugin code and agent commands run with winfer's access to files, terminals and the network.
-  if (enabled && (plugin.manifest?.main || plugin.manifest?.providers.length)) {
-    const ok = await ask(`“${plugin.manifest.name}” runs its own code with full access to your files, terminals and network. Only turn on plugins you trust.`, {
-      title: "Turn on plugin",
-      kind: "warning",
-      okLabel: "Turn on",
-    });
+  if (enabled && !plugin.fromStore && (plugin.manifest?.main || plugin.manifest?.providers.length)) {
+    const ok = await ask(trustWarning(plugin.manifest.name), { title: "Turn on plugin", kind: "warning", okLabel: "Turn on" });
     if (!ok) return;
   }
   await setPluginEnabled(plugin.id, enabled);
 }
 
-/** Installed plugins: turn each on or off, open the folder, reload after editing. */
+// The store's catalog, kept while the app runs so reopening the page is instant.
+let catalogCache: CatalogEntry[] | null = null;
+
+/** The plugin store: search, install, update, turn on/off and uninstall plugins. */
 function PluginSettings() {
   const { plugins, runtimeErrors } = usePlugins();
+  const [catalog, setCatalog] = useState<CatalogEntry[] | null>(catalogCache);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const loadCatalog = () => {
+    setCatalogError(null);
+    fetchCatalog().then(
+      (list) => {
+        catalogCache = list;
+        setCatalog(list);
+      },
+      (err) => setCatalogError(String(err)),
+    );
+  };
+  useEffect(loadCatalog, []);
+
+  const run = async (id: string, work: () => Promise<void>) => {
+    setBusy(id);
+    try {
+      await work();
+    } catch (err) {
+      toast(String(err), "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+  const install = (entry: CatalogEntry, update: boolean) =>
+    run(entry.id, async () => {
+      if (!update && !(await ask(trustWarning(entry.name), { title: `Install ${entry.name}`, kind: "warning", okLabel: "Install" }))) return;
+      await installPlugin(entry.id);
+      toast(update ? `Updated ${entry.name} to ${entry.version}` : `Installed ${entry.name}`, "success");
+    });
+  const uninstall = (plugin: PluginInfo) =>
+    run(plugin.id, async () => {
+      const name = plugin.manifest?.name ?? plugin.id;
+      if (!(await ask(`Remove “${name}” and its files? Data it stored (like saved secrets) is kept for a reinstall.`, { title: "Uninstall plugin", kind: "warning", okLabel: "Uninstall" }))) return;
+      await uninstallPlugin(plugin.id);
+    });
+
+  const installed = plugins.filter((p) => matchesSearch(query, [p.id, p.manifest?.name, p.manifest?.description]));
+  const available = (catalog ?? []).filter(
+    (e) => !plugins.some((p) => p.id === e.id) && matchesSearch(query, [e.id, e.name, e.description, e.author, ...e.tags]),
+  );
+
   return (
     <>
-      <Card
-        title="Installed plugins"
-        description="Plugins add agents, recipes, commands and voice actions. Each one starts off; plugins with code ask before they run."
-      >
-        {plugins.length === 0 ? (
-          <Row label="No plugins yet" hint="Put a folder with a plugin.json in the plugins folder, then reload." />
+      <div className="relative">
+        <Search size={13} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-subtle" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search plugins"
+          autoFocus
+          className="h-8 w-full rounded-md border border-border-strong bg-panel pr-2.5 pl-8 text-xs text-fg outline-none focus:border-accent"
+        />
+      </div>
+
+      <Card title="Installed">
+        {installed.length === 0 ? (
+          <Row label={plugins.length === 0 ? "No plugins installed" : `No installed plugin matches “${query}”`} hint={plugins.length === 0 ? "Install one from the store below." : undefined} />
         ) : (
-          plugins.map((p) => {
+          installed.map((p) => {
             const error = p.error ?? (p.enabled ? runtimeErrors[p.id] : undefined);
             const name = p.manifest?.name ?? p.id;
+            const latest = catalog?.find((e) => e.id === p.id);
+            const outdated = p.fromStore && latest && latest.version !== p.manifest?.version;
             return (
               <Row
                 key={p.id}
@@ -667,6 +726,7 @@ function PluginSettings() {
                   <>
                     {name}
                     {p.manifest?.version && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{p.manifest.version}</span>}
+                    {!p.fromStore && <span className="ml-1.5 rounded bg-active px-1.5 py-0.5 text-[10px] text-fg-subtle">local</span>}
                   </>
                 }
                 hint={
@@ -677,14 +737,74 @@ function PluginSettings() {
                   </>
                 }
               >
+                {busy === p.id && <Loader2 size={13} className="animate-spin text-fg-subtle" />}
+                {outdated && (
+                  <button disabled={!!busy} onClick={() => void install(latest, true)} className={buttonClass}>
+                    <Download size={12} />
+                    Update to {latest.version}
+                  </button>
+                )}
+                <button disabled={!!busy} onClick={() => void uninstall(p)} className="h-7 rounded-md px-2 text-xs text-fg-subtle hover:bg-hover hover:text-danger disabled:opacity-50">
+                  Uninstall
+                </button>
                 {!p.error && <Toggle label={`Turn on ${name}`} checked={p.enabled} onChange={(enabled) => void togglePlugin(p, enabled)} />}
               </Row>
             );
           })
         )}
       </Card>
-      <Card title="Plugins folder">
-        <Row label="Add or edit plugins" hint="One folder per plugin. Reload after changing one.">
+
+      <Card title="Plugin store" description="Plugins add pages, agents, recipes, commands, voice actions and tools for your agents.">
+        {catalogError ? (
+          <Row label="Couldn't load the plugin store" hint={catalogError}>
+            <button onClick={loadCatalog} className={buttonClass}>
+              <RefreshCw size={12} />
+              Retry
+            </button>
+          </Row>
+        ) : catalog === null ? (
+          <Row label="Loading the plugin store…">
+            <Loader2 size={13} className="animate-spin text-fg-subtle" />
+          </Row>
+        ) : available.length === 0 ? (
+          <Row label={query ? `Nothing in the store matches “${query}”` : "You have every plugin from the store"} />
+        ) : (
+          available.map((e) => (
+            <Row
+              key={e.id}
+              label={
+                <>
+                  {e.name}
+                  <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{e.version}</span>
+                </>
+              }
+              hint={
+                <>
+                  <span className="block">{e.description}</span>
+                  {(e.tags.length > 0 || e.author) && (
+                    <span className="mt-1 flex flex-wrap items-center gap-1">
+                      {e.tags.map((t) => (
+                        <button key={t} onClick={() => setQuery(t)} className="rounded bg-active px-1.5 py-0.5 text-[10px] text-fg-muted hover:text-fg">
+                          {t}
+                        </button>
+                      ))}
+                      {e.author && <span className="text-[11px] text-fg-subtle">by {e.author}</span>}
+                    </span>
+                  )}
+                </>
+              }
+            >
+              <button disabled={!!busy} onClick={() => void install(e, false)} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:brightness-110 disabled:opacity-50">
+                {busy === e.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                Install
+              </button>
+            </Row>
+          ))
+        )}
+      </Card>
+
+      <Card title="Your own plugins" description="A folder with a plugin.json in the plugins folder shows up under Installed (off until you turn it on).">
+        <Row label="Plugins folder" hint="Reload after adding or changing a plugin.">
           <button onClick={() => void pluginsDir().then((dir) => revealItemInDir(dir)).catch(() => {})} className={buttonClass}>
             <FolderOpen size={12} />
             Open folder

@@ -65,7 +65,17 @@ pub struct TestRun {
     ms: u64,
 }
 
-fn run(dir: &Path, command: &str) -> Result<TestRun, String> {
+/// What a shell command printed (stdout and stderr) and how it ended.
+pub struct ShellRun {
+    /// None when it was stopped at the timeout.
+    pub status: Option<std::process::ExitStatus>,
+    pub output: String,
+    pub elapsed: Duration,
+}
+
+/// Runs `command` through the shell in `dir` with the login environment plus `env`, without
+/// stdin, killing it (and its children) after `timeout`.
+pub fn run_shell(dir: &Path, command: &str, env: &[(String, String)], timeout: Duration) -> Result<ShellRun, String> {
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.args(["/C", &format!("{command} 2>&1")]);
@@ -80,10 +90,11 @@ fn run(dir: &Path, command: &str) -> Result<TestRun, String> {
         .envs(login_env())
         // Keeps vitest/jest out of watch mode and tools out of interactive prompts.
         .env("CI", "1")
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    // Its own process group, so a timeout also stops the test runner's children.
+    // Its own process group, so a timeout also stops the command's children.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
 
@@ -99,7 +110,7 @@ fn run(dir: &Path, command: &str) -> Result<TestRun, String> {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break Some(status);
         }
-        if started.elapsed() > TIMEOUT {
+        if started.elapsed() > timeout {
             #[cfg(unix)]
             unsafe {
                 libc::kill(-(child.id() as i32), libc::SIGKILL);
@@ -110,19 +121,32 @@ fn run(dir: &Path, command: &str) -> Result<TestRun, String> {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let output = reader.join().unwrap_or_default();
-    let tail = match output.char_indices().nth_back(OUTPUT_TAIL) {
-        Some((i, _)) => format!("…{}", &output[i..]),
-        None => output,
-    };
+    Ok(ShellRun {
+        status,
+        output: reader.join().unwrap_or_default(),
+        elapsed: started.elapsed(),
+    })
+}
+
+/// The last `chars` characters of `text`, marked with … when cut.
+pub fn tail(text: String, chars: usize) -> String {
+    match text.char_indices().nth_back(chars) {
+        Some((i, _)) => format!("…{}", &text[i..]),
+        None => text,
+    }
+}
+
+fn run(dir: &Path, command: &str) -> Result<TestRun, String> {
+    let run = run_shell(dir, command, &[], TIMEOUT)?;
+    let output = tail(run.output, OUTPUT_TAIL);
     Ok(TestRun {
         command: command.to_string(),
-        ok: status.is_some_and(|s| s.success()),
-        output: match status {
-            Some(_) => tail,
-            None => format!("{tail}\n[stopped after {} minutes]", TIMEOUT.as_secs() / 60),
+        ok: run.status.is_some_and(|s| s.success()),
+        output: match run.status {
+            Some(_) => output,
+            None => format!("{output}\n[stopped after {} minutes]", TIMEOUT.as_secs() / 60),
         },
-        ms: started.elapsed().as_millis() as u64,
+        ms: run.elapsed.as_millis() as u64,
     })
 }
 

@@ -133,8 +133,15 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - No undo for voice actions.
 
 ## Plugins
-- [ ] Copy `docs/plugins/example-hello` into `~/Library/Application Support/dev.winfer.app/plugins/` → Settings → Plugins → Reload plugins → it's listed, off, with "1 tool · 1 agent · 1 recipe · code".
-- [ ] Turn it on → asks first → "Run tests", "Run lint", "Count agents by status" and "Recipe: Agent + tests" appear in ⌘K and work; Gemini CLI appears in the New menu (greyed out if not installed).
-- [ ] Say "run the linter" → runs the plugin tool.
-- [ ] With it on, an agent finishing shows "<agent> finished".
-- [ ] Turn it off → its palette entries, agent and recipe are gone. A plugin with a broken plugin.json shows the error and can't be turned on.
+- [ ] Settings → Plugins: the search box filters Installed and the store; clicking a tag searches it. The store lists Secrets and Example: hello (needs network; "Retry" if it fails).
+- [ ] Install Example: hello → asks first → it's under Installed, on: "Run tests", "Run lint", "Count agents by status" and "Recipe: Agent + tests" appear in ⌘K and work; Gemini CLI appears in the New menu (greyed out if not installed). Say "run the linter" → runs the plugin tool.
+- [ ] Turn it off → its palette entries, agent and recipe are gone. Uninstall → it's back in the store.
+- [ ] Copy a folder with a broken plugin.json into the plugins folder → Reload → it shows the error, marked "local".
+
+## Secrets plugin
+- [ ] Install Secrets → a "Secrets" tab appears in the title bar (and "Secrets: manage stored secrets" in ⌘K).
+- [ ] Add API_TOKEN (any value), a login with a username, and an env var with "Ask before agents use it" off. Show / Hide / Copy / Edit (empty value keeps it) / Delete work; the values are in Keychain Access under `dev.winfer.app.plugin.secrets`, not in `plugin-data/secrets/vault.json`.
+- [ ] Ask Claude Code "list my secrets": it calls list_secrets and sees names, descriptions and the username, no values.
+- [ ] Ask it to run `echo $API_TOKEN | tee out.txt`: winfer asks first (shows the command); the reply says `[secret API_TOKEN]`. Decline → the agent is told the user declined. The env var without approval runs without asking.
+- [ ] Open a login page in the browser panel and ask the agent to fill the password field with the login's secret: it's typed in without the agent seeing it.
+- [ ] Turn the plugin off → the tab and the agent tools are gone (new agents don't list them).

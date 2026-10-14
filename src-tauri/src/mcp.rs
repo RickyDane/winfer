@@ -97,7 +97,8 @@ pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
             text: "winfer isn't ready".into(),
         };
     }
-    let reply = rx.recv_timeout(Duration::from_secs(60)).unwrap_or(Reply {
+    // Long enough for the user to answer an approval dialog a plugin tool shows.
+    let reply = rx.recv_timeout(Duration::from_secs(300)).unwrap_or(Reply {
         ok: false,
         text: "winfer didn't answer in time".into(),
     });
@@ -117,7 +118,7 @@ pub fn mcp_respond(id: String, reply: Reply) {
 
 fn forward(hook: &str, token: &str, call: &Call) -> Reply {
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(90)))
+        .timeout_global(Some(Duration::from_secs(330)))
         .http_status_as_error(false)
         .build()
         .into();
@@ -133,6 +134,24 @@ fn forward(hook: &str, token: &str, call: &Call) -> Reply {
     })
 }
 
+/// Built-in tools plus those enabled plugins offer agents (asked from the app; built-ins only
+/// when it can't be reached).
+fn all_tools(env: &(String, String, String)) -> Value {
+    let mut list = tools();
+    let (hook, token, pane) = env;
+    let call = Call { id: String::new(), tool: LIST_PLUGIN_TOOLS.into(), args: json!({}), pane_id: pane.clone() };
+    let reply = forward(hook, token, &call);
+    if let (true, Ok(Value::Array(extra))) = (reply.ok, serde_json::from_str::<Value>(&reply.text)) {
+        let builtin: Vec<Value> = list.as_array().unwrap().iter().map(|t| t["name"].clone()).collect();
+        let extra = extra.into_iter().filter(|t| t["name"].is_string() && !builtin.contains(&t["name"]));
+        list.as_array_mut().unwrap().extend(extra);
+    }
+    list
+}
+
+/// Internal call the stdio server makes to list plugin tools (see agentApi.ts).
+const LIST_PLUGIN_TOOLS: &str = "__plugin_tools";
+
 fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
     let id = message.get("id").cloned()?; // notifications get no response
     let method = message["method"].as_str().unwrap_or_default();
@@ -144,7 +163,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user."
         }),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
+        "tools/list" => json!({ "tools": all_tools(env) }),
         "tools/call" => {
             let (hook, token, pane) = env;
             let call = Call {

@@ -7,6 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import pkg from "../../package.json";
 import { apiName } from "@/features/voice/decision";
+import storeCatalog from "../../plugins/catalog.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 
 const encoder = new TextEncoder();
@@ -21,44 +22,23 @@ const providers = [
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 
-// Fake plugins: one declarative, one with code, one broken.
-const mockPlugins = [
-  {
-    id: "test-runner",
-    dir: "~/Library/Application Support/dev.winfer.app/plugins/test-runner",
-    enabled: true,
-    error: null,
-    manifest: {
-      id: "test-runner",
-      name: "Test runner",
-      version: "1.0.0",
-      description: "Runs the project's tests in a new shell pane.",
-      providers: [],
-      recipes: [{ id: "review", name: "Review pair", panes: [{ provider: "claude" }, { provider: "shell" }], preset: "columns" }],
-      tools: [
-        {
-          id: "run_tests",
-          title: "Run tests",
-          description: "Run the project's test suite in a new shell pane",
-          palette: true,
-          commands: [{ type: "pane.spawn", provider: "shell", prompt: "pnpm test" }],
-        },
-      ],
-    },
-  },
-  {
-    id: "hello",
-    dir: "~/Library/Application Support/dev.winfer.app/plugins/hello",
-    enabled: false,
-    error: null,
-    manifest: { id: "hello", name: "Hello", version: "0.1.0", description: "Greets finished agents.", main: "index.js", providers: [], recipes: [], tools: [] },
-  },
-  { id: "broken", dir: "~/Library/Application Support/dev.winfer.app/plugins/broken", enabled: false, error: "invalid plugin.json: expected value at line 1 column 3", manifest: null },
+// Fake plugins: the store is the repo's plugins/ folder; one local plugin is broken.
+const storeManifests = import.meta.glob<Record<string, unknown>>("../../plugins/*/plugin.json", { eager: true, import: "default" });
+const storeSources = import.meta.glob<string>("../../plugins/*/*.js", { eager: true, query: "?raw", import: "default" });
+type MockPlugin = { id: string; dir: string; enabled: boolean; fromStore: boolean; error: string | null; manifest: Record<string, unknown> | null };
+const mockPlugins: MockPlugin[] = [
+  { id: "broken", dir: "~/Library/Application Support/dev.winfer.app/plugins/broken", enabled: false, fromStore: false, error: "invalid plugin.json: expected value at line 1 column 3", manifest: null },
 ];
-const MOCK_PLUGIN_SOURCE = `export function activate(api) {
-  api.registerTool({ id: "say_hello", title: "Say hello", description: "Show a greeting", palette: true, run: () => api.toast("Hello from a plugin") });
-  return api.on("pane.status", (e) => e.status === "done" && api.toast("An agent finished", "success"));
-}`;
+function installMockPlugin(id: string) {
+  const manifest = storeManifests[`../../plugins/${id}/plugin.json`];
+  if (!manifest) throw new Error(`“${id}” isn't in the plugin store`);
+  const plugin = { id, dir: `~/Library/Application Support/dev.winfer.app/plugins/${id}`, enabled: true, fromStore: true, error: null, manifest: { providers: [], recipes: [], tools: [], ...manifest } };
+  const i = mockPlugins.findIndex((p) => p.id === id);
+  if (i >= 0) mockPlugins[i] = plugin;
+  else mockPlugins.push(plugin);
+}
+// Fake keychain: the vault keeps values here.
+const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
 
 const SAMPLE_DIFF = `diff --git a/src/common/guards/subscription.guard.ts b/src/common/guards/subscription.guard.ts
 index 3f2a1c0..9b8e7d1 100644
@@ -196,7 +176,42 @@ mockIPC(
       case "providers_list":
         return providers;
       case "plugins_list":
-        return mockPlugins;
+        return structuredClone(mockPlugins);
+      case "plugins_catalog":
+        return new Promise((resolve) => setTimeout(() => resolve(storeCatalog.plugins), 300));
+      case "plugins_install":
+        return new Promise((resolve, reject) => setTimeout(() => {
+          try {
+            installMockPlugin(a.id);
+            resolve(null);
+          } catch (err) {
+            reject(String(err));
+          }
+        }, 500));
+      case "plugins_uninstall": {
+        const i = mockPlugins.findIndex((p) => p.id === a.id);
+        if (i >= 0) mockPlugins.splice(i, 1);
+        return null;
+      }
+      case "vault_list":
+        return [...vault.values()].map((v) => v.info).sort((x, y) => x.key.localeCompare(y.key));
+      case "vault_set": {
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(a.key)) throw new Error(`“${a.key}” isn't a valid name`);
+        const old = vault.get(a.key);
+        if (!old && a.value == null) throw new Error(`${a.key} needs a value`);
+        const info = { key: a.key, meta: a.meta ?? {}, updatedAt: a.value == null ? old!.info.updatedAt : Date.now() };
+        vault.set(a.key, { info, value: a.value ?? old!.value });
+        return info;
+      }
+      case "vault_delete":
+        vault.delete(a.key);
+        return null;
+      case "vault_reveal":
+        return vault.get(a.key)?.value ?? "";
+      case "vault_exec":
+        return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
+      case "browser_fill_secret":
+        return null;
       case "plugins_set_enabled": {
         const plugin = mockPlugins.find((p) => p.id === a.id);
         if (plugin) plugin.enabled = a.enabled;
@@ -204,8 +219,10 @@ mockIPC(
       }
       case "plugins_dir":
         return "~/Library/Application Support/dev.winfer.app/plugins";
-      case "plugins_source":
-        return MOCK_PLUGIN_SOURCE;
+      case "plugins_source": {
+        const manifest = storeManifests[`../../plugins/${a.id}/plugin.json`] as { main?: string } | undefined;
+        return storeSources[`../../plugins/${a.id}/${manifest?.main}`];
+      }
       case "state_load":
         if (SHOWCASE) return showcaseState();
         return JSON.parse(localStorage.getItem("winfer-mock-state") ?? '{"workspaces":[],"ui":null}');

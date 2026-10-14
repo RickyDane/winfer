@@ -37,6 +37,7 @@ import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar } from "@/features/workspaces/Sidebar";
 import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
+import { pageIcon, PluginPageView, usePluginPages } from "@/features/plugins/PluginPage";
 
 function TitleBar() {
   const { toggleSidebar, toggleBrowser } = useWorkspaces();
@@ -62,9 +63,10 @@ function TitleBar() {
   );
 }
 
-/** Title bar tabs: the active workspace's tiles, or the overview of every workspace's sessions. */
+/** Title bar tabs: the active workspace's tiles, the overview of every workspace's sessions, and plugin pages. */
 function ViewTabs({ workspace }: { workspace: string }) {
   const view = useWorkspaces((s) => s.view);
+  const pages = usePluginPages();
   const sessions = useWorkspaces((s) => s.workspaces).flatMap((w) => w.panes);
   const waiting = sessions.filter((p) => p.status === "needs-input").length;
   const tab = (active: boolean) =>
@@ -87,6 +89,16 @@ function ViewTabs({ workspace }: { workspace: string }) {
         <span className="font-mono text-[10px] text-fg-subtle">{sessions.length}</span>
         {waiting > 0 && <span className="anim-ring size-1.5 rounded-full bg-warning text-warning" title={`${waiting} waiting for you`} />}
       </button>
+      {pages.map((page) => {
+        const Icon = pageIcon(page);
+        const selected = view === `page:${page.key}`;
+        return (
+          <button key={page.key} role="tab" aria-selected={selected} onClick={() => execute({ type: "ui.view", view: `page:${page.key}` })} className={tab(selected)}>
+            <Icon size={12} />
+            {page.title}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -128,6 +140,9 @@ function EmptyWorkspace() {
 export function AppShell() {
   const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view } = useWorkspaces();
   useKeymap();
+  const pages = usePluginPages();
+  // A page whose plugin was turned off (or hasn't loaded yet) falls back to the workspace.
+  const page = view.startsWith("page:") ? pages.find((p) => `page:${p.key}` === view) : undefined;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -173,8 +188,10 @@ export function AppShell() {
             <AgentBar panes={workspace.panes} scope={{ workspace: workspace.name }} />
           )}
           {/* Keyed so switching workspace or view fades the new content in. */}
-          <div key={`${view}:${view === "overview" ? "" : workspace.id}`} className="anim-fade flex min-h-0 min-w-0 flex-1">
-            {view === "overview" ? (
+          <div key={page ? view : `${view}:${view === "overview" ? "" : workspace.id}`} className="anim-fade flex min-h-0 min-w-0 flex-1">
+            {page ? (
+              <PluginPageView page={page} />
+            ) : view === "overview" ? (
               <Overview />
             ) : workspace.layout && zoomed ? (
               renderLeaf(zoomed)

@@ -5,18 +5,22 @@
  * - `providers`: agent CLIs (handled in Rust; they show up in `providers_list`).
  * - `recipes`: agent setups, listed beside the user's own.
  * - `tools`: declarative actions for the palette and voice that run Command Bus commands.
- * - `main`: an ES module whose `activate(api)` registers tools and command handlers in code.
+ * - `main`: an ES module whose `activate(api)` registers tools, command handlers, pages (title
+ *   bar tabs), tools for agents (served by winfer's MCP server) and keeps secrets in a vault.
  *
- * Plugins start disabled; the user turns each one on in Settings.
+ * Plugins come from the store (the repo's plugins/ folder; installing turns them on) or are
+ * copied into the plugins folder by hand (those start off until the user turns them on).
  */
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import type { Command } from "@/commands/bus";
 import type { Args, ParamDef, ToolDef } from "@/tools/registry";
 import type { Recipe } from "@/features/recipes/recipes";
 import { PRESETS } from "@/features/layout/tree";
 import { toast } from "@/stores/toasts";
-import { useWorkspaces, type AgentStatus, type Pane, type Workspace } from "@/stores/workspaces";
+import { providerName, useWorkspaces, type AgentStatus, type Pane, type Workspace } from "@/stores/workspaces";
+import { leaves } from "@/features/layout/tree";
 
 /** Mirrors `Manifest` in src-tauri/src/plugins.rs. */
 export interface PluginManifest {
@@ -37,6 +41,8 @@ export interface PluginInfo {
   dir: string;
   manifest: PluginManifest | null;
   enabled: boolean;
+  /** Installed from the plugin store. */
+  fromStore: boolean;
   error: string | null;
 }
 
@@ -70,10 +76,76 @@ export type PluginEvent =
 
 type Disposer = () => void;
 
+/** A page shown as a title bar tab; `mount` renders into `el` and may return a cleanup. */
+export interface PageSpec {
+  id: string;
+  title: string;
+  /** One of PAGE_ICONS' names; defaults to a puzzle piece. */
+  icon?: string;
+  mount(el: HTMLElement): void | Disposer;
+}
+
+export interface PluginPage extends PageSpec {
+  /** `<plugin id>/<page id>`; the view is `page:<key>`. */
+  key: string;
+  pluginId: string;
+}
+
+/** The agent calling a plugin's agent tool. */
+export interface AgentCaller {
+  paneId: string;
+  workspaceId: string;
+  workspaceName: string;
+  /** The pane's working directory (its worktree, if it has one). */
+  cwd: string;
+  provider: string;
+  /** e.g. "pane 2 (Claude Code)". */
+  label: string;
+}
+
+/** A tool agents can call through winfer's MCP server. */
+export interface AgentToolSpec {
+  /** Letters, digits, _ and -; must not clash with winfer's own tools. */
+  name: string;
+  description: string;
+  /** JSON Schema of the arguments. */
+  inputSchema?: Record<string, unknown>;
+  /** Returns the text the agent sees; throw to report an error. */
+  run(args: Record<string, unknown>, caller: AgentCaller): string | Promise<string>;
+}
+
+/** Mirrors `SecretInfo` in src-tauri/src/vault.rs. */
+export interface SecretInfo {
+  key: string;
+  meta: Record<string, unknown>;
+  updatedAt: number;
+}
+
+/** A plugin's secrets in the OS keychain. Values never come back except through `reveal`. */
+export interface PluginVault {
+  list(): Promise<SecretInfo[]>;
+  /** Saves metadata, and the value unless it's undefined (then the stored one stays). */
+  set(key: string, value: string | undefined, meta?: Record<string, unknown>): Promise<SecretInfo>;
+  delete(key: string): Promise<void>;
+  /** The value, to show the user; never hand it to an agent. */
+  reveal(key: string): Promise<string>;
+  /** Runs a shell command with the secrets as environment variables; their values are redacted from the output. */
+  exec(opts: { command: string; cwd: string; keys: string[]; timeoutSec?: number }): Promise<{ code: number | null; timedOut: boolean; output: string }>;
+  /** Types a secret into a field of the workspace's browser tab (the active one, or the first whose URL contains `tab`). */
+  fill(opts: { workspaceId: string; key: string; selector: string; tab?: string }): Promise<string>;
+}
+
 /** What a plugin's `activate` receives. */
 export interface PluginApi {
   readonly id: string;
   registerTool(spec: ToolSpec): Disposer;
+  registerPage(spec: PageSpec): Disposer;
+  registerAgentTool(spec: AgentToolSpec): Disposer;
+  /** Shows one of this plugin's pages. */
+  openPage(id: string): void;
+  vault: PluginVault;
+  /** Asks the user; true if they agreed. */
+  confirm(message: string, opts?: { title?: string; okLabel?: string; kind?: "info" | "warning" }): Promise<boolean>;
   /** Handles `{ type: "plugin.run", plugin: <this id>, command: name, args }`. */
   registerCommand(name: string, handler: (args: Args) => void | Promise<void>): Disposer;
   /** Runs any Command Bus command. */
@@ -91,6 +163,8 @@ interface PluginModule {
 
 interface Runtime {
   tools: ToolDef[];
+  pages: PluginPage[];
+  agentTools: AgentToolSpec[];
   commands: Map<string, (args: Args) => void | Promise<void>>;
   listeners: Set<(e: PluginEvent) => void>;
   disposers: Disposer[];
@@ -214,6 +288,58 @@ export function pluginTools(): ToolDef[] {
   return enabledPlugins().flatMap((p) => runtimes.get(p.id)?.tools ?? []);
 }
 
+/** Pages from every enabled plugin, in plugin order. */
+export function pluginPages(): PluginPage[] {
+  return enabledPlugins().flatMap((p) => runtimes.get(p.id)?.pages ?? []);
+}
+
+const AGENT_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Agent tools of every enabled plugin; the first plugin to use a name keeps it. */
+function agentTools(): { pluginId: string; spec: AgentToolSpec }[] {
+  const seen = new Set<string>();
+  return enabledPlugins().flatMap((p) =>
+    (runtimes.get(p.id)?.agentTools ?? []).flatMap((spec) => {
+      if (seen.has(spec.name)) return [];
+      seen.add(spec.name);
+      return [{ pluginId: p.id, spec }];
+    }),
+  );
+}
+
+/** What `tools/list` adds for agents (MCP tool definitions). */
+export function pluginAgentToolList(): { name: string; description: string; inputSchema: Record<string, unknown> }[] {
+  return agentTools().map(({ spec }) => ({
+    name: spec.name,
+    description: spec.description,
+    inputSchema: spec.inputSchema ?? { type: "object", properties: {} },
+  }));
+}
+
+/** Runs an agent's call of a plugin tool; null if no plugin offers `name`. */
+export async function runPluginAgentTool(name: string, args: Record<string, unknown>, caller: AgentCaller): Promise<string | null> {
+  const found = agentTools().find((t) => t.spec.name === name);
+  if (!found) return null;
+  return String(await found.spec.run(args, caller));
+}
+
+/** Describes the pane `paneId` for plugin agent tools; null if it's gone. */
+export function agentCaller(paneId: string): AgentCaller | null {
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.panes.some((p) => p.id === paneId));
+  const pane = ws?.panes.find((p) => p.id === paneId);
+  if (!ws || !pane) return null;
+  const position = ws.layout ? leaves(ws.layout).indexOf(pane.id) + 1 : 0;
+  return {
+    paneId,
+    workspaceId: ws.id,
+    workspaceName: ws.name,
+    cwd: pane.worktree?.path ?? pane.cwd,
+    provider: pane.provider,
+    label: `${position ? `pane ${position}` : "a pane"} (${providerName(s.providers, pane.provider)})`,
+  };
+}
+
 /** Recipes from every enabled plugin; invalid ones are skipped. */
 export function pluginRecipes(): Recipe[] {
   return enabledPlugins().flatMap((p) =>
@@ -265,6 +391,27 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
         bump();
       });
     },
+    registerPage(spec) {
+      if (!spec?.id || !spec.title || typeof spec.mount !== "function") throw new Error("a page needs id, title and mount");
+      const page: PluginPage = { ...spec, key: `${id}/${spec.id}`, pluginId: id };
+      runtime.pages = [...runtime.pages.filter((p) => p.key !== page.key), page];
+      bump();
+      return track(() => {
+        runtime.pages = runtime.pages.filter((p) => p !== page);
+        bump();
+      });
+    },
+    registerAgentTool(spec) {
+      if (!AGENT_TOOL_NAME.test(spec?.name ?? "")) throw new Error(`agent tool name “${spec?.name}” must be letters, digits, _ or -`);
+      if (!spec.description || typeof spec.run !== "function") throw new Error(`agent tool ${spec.name} needs a description and run`);
+      runtime.agentTools = [...runtime.agentTools.filter((t) => t.name !== spec.name), spec];
+      return track(() => {
+        runtime.agentTools = runtime.agentTools.filter((t) => t !== spec);
+      });
+    },
+    openPage: (page) => dispatch({ type: "ui.view", view: `page:${id}/${page}` }),
+    vault: makeVault(id),
+    confirm: (message, opts = {}) => ask(message, { title: opts.title ?? manifestName(id), okLabel: opts.okLabel, kind: opts.kind ?? "warning" }),
     registerCommand(name, handler) {
       runtime.commands.set(name, handler);
       return track(() => runtime.commands.delete(name));
@@ -285,6 +432,28 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
   };
 }
 
+const manifestName = (id: string) => usePlugins.getState().plugins.find((p) => p.id === id)?.manifest?.name ?? id;
+
+function makeVault(plugin: string): PluginVault {
+  return {
+    list: () => invoke<SecretInfo[]>("vault_list", { plugin }),
+    set: (key, value, meta) => invoke<SecretInfo>("vault_set", { plugin, key, value: value ?? null, meta: meta ?? {} }),
+    delete: (key) => invoke("vault_delete", { plugin, key }),
+    reveal: (key) => invoke<string>("vault_reveal", { plugin, key }),
+    exec: ({ command, cwd, keys, timeoutSec }) => invoke("vault_exec", { plugin, command, cwd, keys, timeoutSec: timeoutSec ?? null }),
+    async fill({ workspaceId, key, selector, tab }) {
+      // Imported here: the browser module imports the Command Bus, which imports this one.
+      const { useBrowser } = await import("@/features/browser/browser");
+      const b = useBrowser.getState();
+      const tabs = b.tabs[workspaceId] ?? [];
+      const target = tab ? tabs.find((t) => t.url.includes(tab)) : (tabs.find((t) => t.id === b.activeTab[workspaceId]) ?? tabs[0]);
+      if (!target) throw new Error(tab ? `No browser tab matches “${tab}”.` : "The workspace has no browser tab open.");
+      await invoke("browser_fill_secret", { workspaceId, targetId: target.id, selector, plugin, key });
+      return target.url;
+    },
+  };
+}
+
 /** Imports a plugin's module from its source (it can't be served from disk). */
 async function importModule(id: string): Promise<PluginModule> {
   const source = await invoke<string>("plugins_source", { id });
@@ -294,7 +463,7 @@ async function importModule(id: string): Promise<PluginModule> {
 
 async function activate(plugin: PluginInfo) {
   const manifest = plugin.manifest!;
-  const runtime: Runtime = { tools: [], commands: new Map(), listeners: new Set(), disposers: [], module: null };
+  const runtime: Runtime = { tools: [], pages: [], agentTools: [], commands: new Map(), listeners: new Set(), disposers: [], module: null };
   runtimes.set(plugin.id, runtime);
   setRuntimeError(plugin.id, null);
   const problems: string[] = [];
@@ -356,6 +525,36 @@ export async function setPluginEnabled(id: string, enabled: boolean) {
 }
 
 export const pluginsDir = () => invoke<string>("plugins_dir");
+
+/** Mirrors `CatalogEntry` in src-tauri/src/plugins.rs. */
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author?: string | null;
+  tags: string[];
+  files: { path: string; sha256: string }[];
+}
+
+export const fetchCatalog = () => invoke<CatalogEntry[]>("plugins_catalog");
+
+/** Installs or updates a store plugin (it's turned on) and reloads plugins. */
+export async function installPlugin(id: string) {
+  await invoke("plugins_install", { id });
+  await loadPlugins();
+}
+
+export async function uninstallPlugin(id: string) {
+  await invoke("plugins_uninstall", { id });
+  await loadPlugins();
+}
+
+/** Matches a search against a plugin's name, id, description and tags (every word must hit). */
+export function matchesSearch(query: string, fields: (string | null | undefined)[]): boolean {
+  const haystack = fields.filter(Boolean).join(" ").toLowerCase();
+  return query.toLowerCase().split(/\s+/).filter(Boolean).every((word) => haystack.includes(word));
+}
 
 function emit(event: PluginEvent) {
   for (const runtime of runtimes.values()) {

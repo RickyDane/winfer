@@ -1,16 +1,29 @@
 # Plugins
 
-A plugin is a folder in winfer's plugins folder with a `plugin.json`:
+A plugin is a folder with a `plugin.json`. Installed plugins live in winfer's plugins folder:
 
 - macOS: `~/Library/Application Support/dev.winfer.app/plugins/<id>/plugin.json`
 - Windows: `%APPDATA%\dev.winfer.app\plugins\<id>\plugin.json`
 
-Settings → Plugins lists what's there, opens the folder and reloads after you edit a plugin.
-**Every plugin starts off**; turn it on in Settings. Plugins with code or agent CLIs ask first,
-because they run with winfer's access to your files, terminals and network.
+Settings → Plugins is the plugin store: search, install, update, turn on or off and uninstall.
+Plugins run with winfer's access to your files, terminals and network, so installing one asks
+first, and a folder copied in by hand stays off until you turn it on.
 
-See [`example-hello/`](example-hello) for a plugin that uses every feature; copy it into the
-plugins folder to try it.
+## The store
+
+The store is this repo's [`plugins/`](../../plugins) folder. `plugins/catalog.json` lists every
+plugin with the SHA-256 of each file; winfer downloads the files from GitHub
+(`raw.githubusercontent.com/RickyDane/winfer/main/plugins`) and refuses any that don't match.
+To try the store from a checkout, start winfer with `WINFER_PLUGIN_STORE=/path/to/winfer/plugins`.
+
+To add or change a store plugin:
+
+1. Create or edit `plugins/<id>/` (`id` must equal the folder name; set a `version` and bump it on
+   every change, so installed copies offer an update). Optional `tags` help search.
+2. Run `node scripts/plugin-catalog.mjs` to rebuild `catalog.json` (a test fails if you forget).
+
+[`plugins/example-hello`](../../plugins/example-hello) uses every manifest feature;
+[`plugins/secrets`](../../plugins/secrets) is a full plugin with a page and agent tools.
 
 ## plugin.json
 
@@ -18,7 +31,8 @@ plugins folder to try it.
 |---|---|
 | `id` | Required. Lowercase letters, digits, `-` `_` `.`; must equal the folder name. |
 | `name` | Required. Shown in Settings. |
-| `version`, `description`, `author` | Optional, shown in Settings. |
+| `version` | Required for store plugins; a different version in the catalog shows "Update". |
+| `description`, `author`, `tags` | Shown in the store; searched. |
 | `providers` | Agent CLIs, same shape as [`src-tauri/resources/providers.json`](../../src-tauri/resources/providers.json). Ids must not clash with built-in agents or other plugins. |
 | `recipes` | `{ id, name, panes: [{ provider, prompt? }], preset?, url? }`; listed after your own recipes. |
 | `tools` | Declarative actions for the ⌘K palette and voice (below). |
@@ -69,6 +83,34 @@ export function deactivate() {}  // optional
 | `on(type, handler)` | Events: `pane.opened`, `pane.closed`, `pane.status` (`status`, `previous`: idle / working / needs-input / done / error). |
 | `state()` | Snapshot of `workspaces` (with panes), `activeWorkspaceId`, `focusedPaneId`. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
+| `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
+| `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, database, file, globe, key, lock, puzzle, shield, star, terminal. |
+| `openPage(id)` | Shows one of the plugin's pages. |
+| `registerAgentTool({ name, description, inputSchema?, run(args, caller) })` | A tool agents started by winfer can call (served by winfer's MCP server). `caller` has `paneId`, `workspaceId`, `workspaceName`, `cwd`, `provider` and `label`; return the text the agent sees, or throw. |
+| `vault` | Secrets in the OS keychain, per plugin (below). |
 
 Each `register*` and `on` returns a function that undoes it; everything is undone when the plugin
 is turned off or reloaded. The module is a single file: bundle dependencies into it.
+
+### Vault
+
+Values are stored in the keychain and stay in winfer's Rust side; only names and the metadata you
+pass are on disk. Keys look like environment variables (`API_TOKEN`).
+
+| `api.vault.` | |
+|---|---|
+| `list()` | `[{ key, meta, updatedAt }]` |
+| `set(key, value \| undefined, meta?)` | Saves `meta`, and the value unless it's `undefined`. |
+| `delete(key)` | |
+| `reveal(key)` | The value, to show the user. Never give it to an agent. |
+| `exec({ command, cwd, keys, timeoutSec? })` | Runs a shell command with those secrets as environment variables; `{ code, timedOut, output }` with the values (also base64/URL-encoded) replaced by `[secret KEY]`. |
+| `fill({ workspaceId, key, selector, tab? })` | Types a secret into a field of the workspace's browser tab; resolves to the tab's URL. |
+
+### Page styles
+
+Pages can use the app's look through these classes (they follow light/dark mode): `wf-page`,
+`wf-header`, `wf-h1`, `wf-h2`, `wf-muted`, `wf-subtle`, `wf-mono`, `wf-card`, `wf-row` (with
+`wf-grow`), `wf-stack`, `wf-inline`, `wf-field`, `wf-input`, `wf-select`, `wf-button` (+
+`wf-primary`, `wf-danger`, `wf-ghost`), `wf-badge` (+ `wf-accent`), `wf-switch` (a checkbox),
+`wf-empty`, `wf-error`, `wf-dialog-backdrop` and `wf-dialog`. Colors are CSS variables such as
+`var(--color-fg)` and `var(--color-accent)`.

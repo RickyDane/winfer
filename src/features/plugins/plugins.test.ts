@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 
-import { fillTemplate, loadPlugins, pluginRecipes, pluginToolId, pluginTools, runPluginCommand, setPluginDispatch, toolFromSpec } from "./plugins";
+import { fillTemplate, loadPlugins, matchesSearch, pluginAgentToolList, pluginPages, runPluginAgentTool, pluginRecipes, pluginToolId, pluginTools, runPluginCommand, setPluginDispatch, toolFromSpec } from "./plugins";
 import { toast } from "@/stores/toasts";
 import { useWorkspaces } from "@/stores/workspaces";
 
@@ -19,6 +19,7 @@ const plugin = (id: string, manifest: Record<string, unknown>, enabled = true) =
   id,
   dir: `/plugins/${id}`,
   enabled,
+  fromStore: false,
   error: null,
   manifest: { id, name: id, providers: [], recipes: [], tools: [], ...manifest },
 });
@@ -117,5 +118,45 @@ describe("loading plugins", () => {
     expect(usePlugins.getState().runtimeErrors.crashy).toMatch(/boom/);
     expect(pluginTools().map((t) => t.id)).toEqual(["crashy__ok"]);
     expect(useWorkspaces.getState().providers).toEqual([]);
+  });
+
+  it("registers pages and tools for agents", async () => {
+    backend.source = `
+      export function activate(api) {
+        api.registerPage({ id: "main", title: "Vault", icon: "key", mount: (el) => { el.textContent = "hi"; } });
+        api.registerAgentTool({
+          name: "whoami",
+          description: "Says who called",
+          inputSchema: { type: "object", properties: { x: { type: "number" } } },
+          run: (args, caller) => caller.label + " in " + caller.workspaceName + " x=" + args.x,
+        });
+        api.registerAgentTool({ name: "bare", description: "No schema", run: () => "ok" });
+      }`;
+    backend.plugins = [plugin("pages", { main: "index.js" })];
+    await loadPlugins();
+
+    const [page] = pluginPages();
+    expect(page).toMatchObject({ key: "pages/main", title: "Vault", pluginId: "pages" });
+    expect(pluginAgentToolList()).toEqual([
+      { name: "whoami", description: "Says who called", inputSchema: { type: "object", properties: { x: { type: "number" } } } },
+      { name: "bare", description: "No schema", inputSchema: { type: "object", properties: {} } },
+    ]);
+    const caller = { paneId: "p1", workspaceId: "w1", workspaceName: "home", cwd: "/x", provider: "claude", label: "pane 1 (Claude Code)" };
+    expect(await runPluginAgentTool("whoami", { x: 2 }, caller)).toBe("pane 1 (Claude Code) in home x=2");
+    expect(await runPluginAgentTool("nope", {}, caller)).toBeNull();
+
+    backend.plugins = [plugin("pages", { main: "index.js" }, false)];
+    await loadPlugins();
+    expect(pluginPages()).toEqual([]);
+    expect(pluginAgentToolList()).toEqual([]);
+  });
+});
+
+describe("store search", () => {
+  it("needs every word to match some field", () => {
+    expect(matchesSearch("", ["Secrets"])).toBe(true);
+    expect(matchesSearch("key secr", ["Secrets", "Keep API keys"])).toBe(true);
+    expect(matchesSearch("passwords", ["Secrets", null, "security passwords"])).toBe(true);
+    expect(matchesSearch("docker", ["Secrets"])).toBe(false);
   });
 });

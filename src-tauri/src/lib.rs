@@ -14,6 +14,7 @@ mod pty;
 mod review;
 mod store;
 mod usage;
+mod vault;
 mod voice;
 mod worktree;
 
@@ -112,6 +113,15 @@ pub fn run() {
             plugins::plugins_set_enabled,
             plugins::plugins_dir,
             plugins::plugins_source,
+            plugins::plugins_catalog,
+            plugins::plugins_install,
+            plugins::plugins_uninstall,
+            vault::vault_list,
+            vault::vault_set,
+            vault::vault_delete,
+            vault::vault_reveal,
+            vault::vault_exec,
+            browser::browser_fill_secret,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

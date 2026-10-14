@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "example-hello",
+      "name": "Example: hello",
+      "version": "1.0.0",
+      "description": "Example of every plugin feature: an agent CLI (Gemini), a recipe, palette and voice tools, and code.",
+      "author": "winfer",
+      "tags": [
+        "example",
+        "agents",
+        "recipes"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "aaaff4aa247707971f40920a3b8daa243276e31d676d041793acef3f27361ba2"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "8c0247489f05df43d4be3471cc1dbb58c060f022ab4195f0c02a3a2dcd6a2927"
+        }
+      ]
+    },
+    {
+      "id": "secrets",
+      "name": "Secrets",
+      "version": "1.0.0",
+      "description": "Keep API keys, environment variables and logins in your keychain. Agents use them by name without ever seeing the values.",
+      "author": "winfer",
+      "tags": [
+        "security",
+        "env",
+        "passwords",
+        "agents"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "42a408d45c2efaceaa7cfa525604999c2e2ac8865671be3714f8eb5759220091"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "161c684ee4b23794d0a679d520018580ab955025cd9c51a0487aecf6f66b37c5"
+        }
+      ]
+    }
+  ]
+}
