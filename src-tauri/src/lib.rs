@@ -3,6 +3,7 @@ mod env;
 mod hooks;
 mod llm;
 mod mcp;
+mod notify;
 #[cfg(target_os = "macos")]
 mod menu;
 mod providers;
@@ -103,6 +104,7 @@ pub fn run() {
             worktree::worktree_remove,
             worktree::worktree_commit,
             worktree::worktree_list,
+            notify::notify_action,
             review::review_test_command,
             review::review_run_tests,
             browser::browser_screenshot,

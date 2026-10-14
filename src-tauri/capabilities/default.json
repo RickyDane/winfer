@@ -9,6 +9,9 @@
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-set-theme",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
+    "core:window:allow-show",
     "opener:default",
     "dialog:default",
     "notification:default"

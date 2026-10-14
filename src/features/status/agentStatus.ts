@@ -5,7 +5,11 @@
 import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { providerName, useWorkspaces, type AgentStatus, type Pane } from "@/stores/workspaces";
-import { outputAge } from "@/features/terminal/xtermRegistry";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
+import { execute } from "@/commands/bus";
+import { describeRequest } from "./request";
 import { logActivity } from "@/stores/activity";
 import { speak } from "@/features/voice/readback";
 import { agentFinished } from "@/features/review/reviews";
@@ -30,8 +34,49 @@ async function notify(pane: Pane, status: AgentStatus, message?: string) {
   if (!(await canNotify())) return;
   const workspace = s.workspaces.find((w) => w.id === pane.workspaceId)?.name ?? "";
   const name = providerName(s.providers, pane.provider);
+  if (status === "needs-input" && (await notifyRequest(pane, name, workspace, message))) return;
   const title = status === "needs-input" ? `${name} needs your input` : status === "error" ? `${name} exited with an error` : `${name} finished`;
   sendNotification({ title, body: message ? `${workspace}: ${message}` : workspace });
+}
+
+/**
+ * A notification with the agent's actual question and buttons to answer it (Approve /
+ * Decline, or a reply field for open questions on macOS). False if it couldn't be shown.
+ */
+async function notifyRequest(pane: Pane, name: string, workspace: string, hookMessage?: string): Promise<boolean> {
+  // The hook fires as the prompt appears; give the terminal a moment to draw it.
+  await new Promise((r) => setTimeout(r, 400));
+  const request = describeRequest(readTerminal(pane.id, 40) ?? "", hookMessage);
+  const title = `${name} ${request.kind === "approval" ? "asks for permission" : "is waiting for you"}${workspace ? ` · ${workspace}` : ""}`;
+  try {
+    await invoke("notify_action", { notification: { paneId: pane.id, title, body: request.text, kind: request.kind } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Runs what the user chose in an actionable notification. */
+function onNotificationAction({ paneId, action, text }: { paneId: string; action: "approve" | "decline" | "reply" | "open"; text: string | null }) {
+  const pane = findPane(paneId);
+  if (!pane) return;
+  const name = providerName(useWorkspaces.getState().providers, pane.provider);
+  const target = { id: paneId };
+  if (action === "approve") {
+    execute({ type: "pane.approve", target });
+    logActivity(pane.workspaceId, `Approved ${name} from a notification`, pane.provider);
+  } else if (action === "decline") {
+    // Esc cancels the pending request in Claude Code and Codex.
+    execute({ type: "pane.interrupt", target });
+    logActivity(pane.workspaceId, `Declined ${name} from a notification`, pane.provider);
+  } else if (action === "reply" && text) {
+    execute({ type: "pane.sendText", target, text, submit: true });
+    logActivity(pane.workspaceId, `Answered ${name}: ${text.slice(0, 80)}`, pane.provider);
+  } else {
+    const window = getCurrentWindow();
+    void window.unminimize().then(() => window.show()).then(() => window.setFocus());
+    execute({ type: "pane.focus", target });
+  }
 }
 
 /** Single entry point for status changes; notifies on transitions that need the user. */
@@ -78,6 +123,7 @@ let started = false;
 export function startStatusTracking() {
   if (started) return;
   started = true;
+  void listen<Parameters<typeof onNotificationAction>[0]>("notification://action", ({ payload }) => onNotificationAction(payload));
   void listen<{ paneId: string; status: AgentStatus; message?: string }>("agent://status", ({ payload }) =>
     reportStatus(payload.paneId, payload.status, payload.message ?? undefined),
   );

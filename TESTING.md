@@ -39,6 +39,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] An agent opened in a git repo shows a branch badge (`claude-1`); its terminal starts with a "worktree …" line.
 - [ ] Send Claude a prompt: its status dot turns green (working), then blue (done) when it stops.
 - [ ] While you're in another app, an agent finishing or asking permission shows a macOS notification.
+- [ ] While you're in another app, Claude asking for permission shows a notification with its actual question (e.g. "Bash command · rm -rf dist · Do you want to proceed?") and Approve / Decline; each answers in the pane without switching to winfer. An open question gets a reply field (macOS) whose text is sent to the agent; clicking the notification opens that session. macOS: set winfer's notification style to "Alerts" (System Settings › Notifications) to keep the buttons on screen; with "Banners" they appear on hover.
 - [ ] ⌘J jumps to the agent that needs you.
 - [ ] Sidebar → "Worktrees" under the active workspace lists the repo's worktrees no pane uses (closed agents' and hand-made ones, e.g. `git worktree add ../x -b x`); clicking one (or ▶) opens the default agent inside it with diff/merge/review working; 🗑 removes it (winfer's own branches are deleted too, others kept). New worktrees show up within 20 s or when winfer gets focus.
 - [ ] Click the branch badge: diff view shows the agent's changes; Merge works once the agent committed; Discard removes the worktree.
