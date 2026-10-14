@@ -10,7 +10,7 @@ import { Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
-import { BrowserPanel, BrowserResizer } from "@/features/browser/BrowserPanel";
+import { BrowserResizer, SidePanel } from "@/features/browser/BrowserPanel";
 import { NewPaneMenu } from "@/features/panes/NewPaneMenu";
 import { CheatSheet } from "@/features/palette/CheatSheet";
 import { CommandPalette } from "@/features/palette/CommandPalette";
@@ -183,7 +183,7 @@ export function AppShell() {
         {browserOpen && (
           <>
             <BrowserResizer />
-            <BrowserPanel />
+            <SidePanel />
           </>
         )}
       </main>

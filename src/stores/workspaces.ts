@@ -80,6 +80,10 @@ interface WorkspaceState {
   shortcuts: Record<string, string>;
   /** Browser panel width in px. */
   browserWidth: number;
+  /** What the side panel shows: the browser or a mirrored Android device. */
+  sidePanel: "browser" | "device";
+  /** Device the Android panel mirrors (adb serial). */
+  androidSerial: string | null;
   theme: Theme;
   /** Main area: the active workspace's tiles, or the overview of every workspace's sessions. */
   view: "workspace" | "overview";
@@ -124,6 +128,8 @@ interface WorkspaceState {
   setShortcut: (id: string, chord: string | null) => void;
   resetShortcuts: () => void;
   setBrowserWidth: (width: number) => void;
+  setSidePanel: (panel: "browser" | "device") => void;
+  setAndroidSerial: (serial: string | null) => void;
   toggleTheme: () => void;
   setView: (view: "workspace" | "overview") => void;
   setTerminalFontSize: (size: number) => void;
@@ -188,6 +194,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   defaultProvider: null,
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
+  sidePanel: "browser",
+  androidSerial: null,
   theme: "dark",
   view: "workspace",
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
@@ -234,6 +242,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       defaultProvider: ui.defaultProvider ?? null,
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
+      sidePanel: ui.sidePanel ?? "browser",
+      androidSerial: ui.androidSerial ?? null,
       theme: ui.theme ?? "dark",
       view: ui.view ?? "workspace",
       terminalFontSize: ui.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
@@ -383,6 +393,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     }),
   resetShortcuts: () => set({ shortcuts: {} }),
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
+  setSidePanel: (panel) => set({ sidePanel: panel, browserOpen: true }),
+  setAndroidSerial: (serial) => set({ androidSerial: serial }),
   toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
   setView: (view) => set({ view }),
   setTerminalFontSize: (size) =>
@@ -420,6 +432,8 @@ interface Snapshot {
     defaultProvider?: ProviderId | null;
     shortcuts?: Record<string, string>;
     browserWidth?: number;
+    sidePanel?: "browser" | "device";
+    androidSerial?: string | null;
     theme?: Theme;
     view?: "workspace" | "overview";
     terminalFontSize?: number;
@@ -444,7 +458,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 

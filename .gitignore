@@ -30,3 +30,6 @@ src-tauri/gen/schemas
 # Spike artifacts
 spikes/**/.api_key
 spikes/**/server.log
+
+# Dev mock video for the Android panel
+src/dev/test-stream.h264

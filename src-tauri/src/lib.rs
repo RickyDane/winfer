@@ -1,3 +1,4 @@
+mod android;
 mod browser;
 mod env;
 mod hooks;
@@ -78,6 +79,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(pty::PtyManager::default())
         .manage(browser::BrowserManager::default())
+        .manage(android::AndroidManager::default())
         .manage(voice::Voice::new())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -108,6 +110,12 @@ pub fn run() {
             worktree::worktree_from_branch,
             worktree::worktree_fetch,
             notify::notify_action,
+            android::android_status,
+            android::android_start_avd,
+            android::android_mirror_start,
+            android::android_mirror_stop,
+            android::android_screenshot,
+            android::android_input,
             store::history_add,
             store::history_search,
             store::history_delete,
@@ -150,6 +158,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 app.state::<browser::BrowserManager>().shutdown();
+                app.state::<android::AndroidManager>().shutdown();
                 voice::shutdown(app);
             }
         });

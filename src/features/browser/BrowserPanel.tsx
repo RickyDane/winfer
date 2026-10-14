@@ -1,3 +1,4 @@
+import { DevicePanel } from "@/features/android/DevicePanel";
 import { keysFor } from "@/commands/keymap";
 import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -74,7 +75,6 @@ export function BrowserResizer() {
 
 export function BrowserPanel() {
   const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
-  const width = useWorkspaces((s) => s.browserWidth);
   const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar, console: logs, consoleOpen, picking, notice } = useBrowser();
   const tabs = allTabs[workspaceId] ?? [];
   const active = tabs.find((t) => t.id === activeTab[workspaceId]) ?? null;
@@ -108,7 +108,7 @@ export function BrowserPanel() {
   }, [focusUrlBar]);
 
   return (
-    <aside style={{ width }} className="flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
           {tabs.map((tab) => (
@@ -220,6 +220,28 @@ export function BrowserPanel() {
           {(availability === "unknown" || (availability === "ready" && !active)) && <span>Starting browser…</span>}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The right-hand panel: the browser, or a mirrored Android device. */
+export function SidePanel() {
+  const width = useWorkspaces((s) => s.browserWidth);
+  const panel = useWorkspaces((s) => s.sidePanel);
+  const setPanel = useWorkspaces((s) => s.setSidePanel);
+  const tab = (active: boolean) =>
+    cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
+  return (
+    <aside style={{ width }} className="flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+      <div role="tablist" className="flex shrink-0 items-center gap-0.5 border-b border-border px-1.5 py-1">
+        <button role="tab" aria-selected={panel === "browser"} onClick={() => setPanel("browser")} className={tab(panel === "browser")}>
+          <Globe size={12} /> Browser
+        </button>
+        <button role="tab" aria-selected={panel === "device"} onClick={() => setPanel("device")} className={tab(panel === "device")}>
+          <Smartphone size={12} /> Android
+        </button>
+      </div>
+      {panel === "device" ? <DevicePanel /> : <BrowserPanel />}
     </aside>
   );
 }

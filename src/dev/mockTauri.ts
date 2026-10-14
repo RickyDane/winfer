@@ -44,6 +44,8 @@ let picking: { workspaceId: string; targetId: string } | null = null;
 // Fake voice: tests set what was "said" and what Clef "answers"; requests are kept for inspection.
 const voice = { said: "", mode: "command", answers: {} as Record<string, unknown>, requests: [] as unknown[] };
 let tabCounter = 0;
+let androidStopped = false;
+const androidInputs: unknown[] = [];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mergeHistory: any[] = [];
 
@@ -155,6 +157,33 @@ mockIPC(
       }
       case "history_delete":
         mergeHistory = mergeHistory.filter((m) => m.id !== a.id);
+        return null;
+      case "android_status":
+        return { adb: true, devices: [{ serial: "emulator-5554", state: "device", model: "Pixel 7 (test stream)", emulator: true }], avds: ["Pixel_7_API_35"] };
+      case "android_mirror_start": {
+        // Plays a real H.264 Annex B stream in adb-sized chunks. Not checked in; make one with
+        // ffmpeg -f lavfi -i testsrc2=size=576x1280:rate=30 -t 4 -c:v libx264 -profile:v baseline -f h264 src/dev/test-stream.h264
+        const channel = a.onData;
+        androidStopped = false;
+        return fetch("/src/dev/test-stream.h264").then((stream) => {
+          if (!stream.ok || stream.headers.get("content-type")?.includes("html")) throw "no test stream (src/dev/test-stream.h264)";
+          void stream.arrayBuffer().then(async (buf) => {
+            const bytes = new Uint8Array(buf);
+            for (let at = 0; at < bytes.length && !androidStopped; at += 16384) {
+              channel.onmessage(bytes.slice(at, at + 16384).buffer);
+              await new Promise((r) => setTimeout(r, 30));
+            }
+          });
+          return { width: 1080, height: 2400, videoWidth: 576, videoHeight: 1280 };
+        });
+      }
+      case "android_mirror_stop":
+        androidStopped = true;
+        return null;
+      case "android_screenshot":
+        return null;
+      case "android_input":
+        androidInputs.push(a.input);
         return null;
       case "worktree_branches":
         return [
@@ -328,6 +357,7 @@ mockIPC(
 
 /** Lets automated checks simulate hook events: `__winferMock.status("p-…", "needs-input")`. */
 (window as any).__winferMock = {
+  androidInputs,
   inputs,
   writes,
   voice,

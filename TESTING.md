@@ -72,6 +72,9 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Crosshair (⌘⇧C): hover highlights elements; click → element details are pasted into the agent's prompt (not sent).
 - [ ] Console icon shows a red count when the page logs errors; "Send errors to agent" pastes them.
 - [ ] Ask Claude to open a page with its browser (Playwright MCP): the tab appears with an **agent** badge.
+- [ ] Android tab (next to Browser): with no adb installed it says how to get it; with a phone attached (USB debugging on, authorized) or an emulator running, it appears in the list and its screen mirrors live.
+- [ ] Click taps, drag swipes, scroll wheel scrolls, typing goes to the focused field; Back / Home / Recents / Power buttons work; Reconnect restarts the stream.
+- [ ] An emulator that isn't running shows a Start button that boots it.
 
 ## 6. Voice
 - [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
