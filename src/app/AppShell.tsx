@@ -37,6 +37,7 @@ import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar } from "@/features/workspaces/Sidebar";
 import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { applyTheme, themeById } from "@/features/theme/themes";
 
 function TitleBar() {
   const { toggleSidebar, toggleBrowser } = useWorkspaces();
@@ -45,19 +46,22 @@ function TitleBar() {
   return (
     // On macOS the window controls (traffic lights) overlay the title bar's left edge
     // (titleBarStyle: Overlay); Windows draws its own title bar above, so no gap there.
-    <div data-tauri-drag-region className={cn("flex h-10 shrink-0 items-center gap-2 pr-3 text-fg-subtle", IS_MAC ? "pl-20" : "pl-2")}>
-      <button onClick={toggleSidebar} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle sidebar (${keysFor({ type: "ui.toggleSidebar" })})`}>
-        <PanelLeft size={15} />
-      </button>
-      <div data-tauri-drag-region className="flex flex-1 justify-center">
-        <ViewTabs workspace={workspace.name} />
+    // Equal 1fr side columns inside symmetric padding keep the tabs centered on the window.
+    <div data-tauri-drag-region className="grid h-10 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 text-fg-subtle">
+      <div data-tauri-drag-region className={cn("flex min-w-0 items-center", IS_MAC && "pl-[68px]")}>
+        <button onClick={toggleSidebar} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle sidebar (${keysFor({ type: "ui.toggleSidebar" })})`}>
+          <PanelLeft size={15} />
+        </button>
       </div>
-      <UsageMeter />
-      <NewPaneMenu />
-      <MicButton />
-      <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
-        <PanelRight size={15} />
-      </button>
+      <ViewTabs workspace={workspace.name} />
+      <div data-tauri-drag-region className="flex min-w-0 items-center justify-end gap-2">
+        <UsageMeter />
+        <NewPaneMenu />
+        <MicButton />
+        <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
+          <PanelRight size={15} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -130,9 +134,9 @@ export function AppShell() {
   useKeymap();
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    applyTheme(theme);
     // Native window chrome (Windows title bar, macOS controls) follows the app.
-    void getCurrentWindow().setTheme(theme).catch(() => {});
+    void getCurrentWindow().setTheme(themeById(theme).mode).catch(() => {});
   }, [theme]);
 
   useEffect(() => {

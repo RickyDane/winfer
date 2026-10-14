@@ -11,6 +11,7 @@ import type { ModelInfo, Provider } from "@/features/providers/providers";
 import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
 import { providerName, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
+import { isThemeId, THEMES } from "@/features/theme/themes";
 
 export interface ToolContext {
   providers: Provider[];
@@ -562,6 +563,15 @@ export const TOOLS: ToolDef[] = [
       { title: "Side panel: Android device", args: { panel: "device" } },
       { title: "Side panel: browser", args: { panel: "browser" } },
     ],
+  },
+  {
+    id: "set_theme",
+    title: "Color theme",
+    description: "Change winfer's color theme, e.g. dark, light, Catppuccin, Tokyo Night, Dracula",
+    risk: "safe",
+    params: { theme: { kind: "enum", ask: "Which color theme did the user ask for?", options: () => Object.fromEntries(THEMES.map((t) => [t.id, t.name])) } },
+    toCommands: (args) => (isThemeId(args.theme) ? [{ type: "ui.theme", theme: args.theme }] : []),
+    palette: () => THEMES.map((t) => ({ title: `Theme: ${t.name}`, args: { theme: t.id } })),
   },
   {
     id: "open_settings",

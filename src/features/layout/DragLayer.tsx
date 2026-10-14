@@ -30,7 +30,7 @@ export function DragLayer() {
           className="absolute rounded-[var(--radius-pane)] border-2 border-accent bg-accent/15 transition-all duration-75"
           style={zone}
         >
-          <span className="absolute top-2 left-2 rounded bg-accent px-1.5 py-0.5 text-[11px] font-medium text-white">
+          <span className="absolute top-2 left-2 rounded bg-accent px-1.5 py-0.5 text-[11px] font-medium text-on-accent">
             {target?.side === "center" ? "Swap" : `Place ${target?.side}`}
           </span>
         </div>

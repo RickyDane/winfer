@@ -43,7 +43,7 @@ export function RecipesView() {
                   setOverlay(null);
                   loadRecipe(r.id);
                 }}
-                className="flex items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-accent hover:bg-accent hover:text-white"
+                className="flex items-center gap-1 rounded-md bg-accent-soft px-2 py-1 text-accent hover:bg-accent hover:text-on-accent"
               >
                 <Play size={11} /> Load
               </button>

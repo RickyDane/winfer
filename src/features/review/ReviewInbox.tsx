@@ -228,7 +228,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
             <button
               disabled={!pane?.worktree}
               onClick={() => pane && void pickRaceWinner(pane, race).then((won) => won && setReviewStatus(review.id, "merged"))}
-              className={cn(button, "bg-accent text-white hover:opacity-90")}
+              className={cn(button, "bg-accent text-on-accent hover:opacity-90")}
               title="Merge this one and close the other racers"
             >
               <Trophy size={12} /> Pick
@@ -238,7 +238,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
               disabled={!pane?.worktree}
               title={pane?.worktree ? `Merge into ${pane.worktree.base}` : "Only agents in their own worktree can be merged"}
               onClick={() => pane?.worktree && void mergeReviewed(pane as Pane & { worktree: NonNullable<Pane["worktree"]> })}
-              className={cn(button, "bg-accent text-white hover:opacity-90")}
+              className={cn(button, "bg-accent text-on-accent hover:opacity-90")}
             >
               <GitMerge size={12} /> Merge
             </button>

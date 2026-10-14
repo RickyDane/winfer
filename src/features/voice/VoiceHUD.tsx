@@ -84,7 +84,7 @@ export function VoiceHUD() {
         {phase === "done" && transcript && <div className="truncate text-xs text-fg-subtle">“{transcript}”</div>}
         {phase === "confirm" && pending && (
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => confirmPending()} className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90">
+            <button onClick={() => confirmPending()} className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90">
               {message} <span className="opacity-70">↩</span>
             </button>
             {pending.decisions.length === 1 &&

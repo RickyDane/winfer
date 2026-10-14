@@ -7,6 +7,7 @@ import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/v
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
 import { checkForUpdates, installUpdate, useUpdates } from "@/features/updates/updater";
 import { UsageHistory } from "@/features/usage/UsageHistory";
+import { THEMES } from "@/features/theme/themes";
 import { cn } from "@/lib/cn";
 import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
@@ -233,7 +234,7 @@ function VoiceSettings() {
             <button
               disabled={busy !== null}
               onClick={() => void act("signin", async () => (await signInWithChatGpt(), "Signed in"))}
-              className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-40"
             >
               {busy === "signin" && <Loader2 size={12} className="animate-spin" />}
               {busy === "signin" ? "Finish signing in in your browser…" : "Continue with ChatGPT"}
@@ -316,6 +317,45 @@ function VoiceSettings() {
         )}
       </Section>
     </>
+  );
+}
+
+/** Color theme: a swatch per theme, showing its panel, text and terminal colors. */
+function AppearanceSettings() {
+  const { theme, setTheme } = useWorkspaces();
+  return (
+    <Section title="Theme">
+      <div className="grid grid-cols-3 gap-2">
+        {THEMES.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTheme(t.id)}
+            title={t.name}
+            className={cn(
+              "overflow-hidden rounded-md border text-left transition-colors",
+              t.id === theme ? "border-accent ring-1 ring-accent" : "border-border hover:border-border-strong",
+            )}
+          >
+            <div className="flex items-center gap-1 px-2 py-2" style={{ background: t.ui.panel }}>
+              <span className="font-mono text-[11px]" style={{ color: t.ui.fg }}>
+                Aa
+              </span>
+              <span className="ml-auto flex gap-0.5">
+                {[t.ansi[1], t.ansi[2], t.ansi[3], t.ansi[4], t.ansi[5]].map((c, i) => (
+                  <span key={i} className="size-2 rounded-full" style={{ background: c }} />
+                ))}
+              </span>
+              <span className="h-2 w-3 rounded-sm" style={{ background: t.ui.accent }} />
+            </div>
+            <div className="flex items-center gap-1 border-t border-border bg-panel px-2 py-1 text-[11px] text-fg-muted">
+              <span className="flex-1 truncate">{t.name}</span>
+              {t.id === theme && <Check size={11} className="shrink-0 text-accent" />}
+            </div>
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-fg-muted">Also from the command palette ({keysFor({ type: "ui.palette" })}, “Theme:”). The sun/moon button in the sidebar switches to the light or dark counterpart.</p>
+    </Section>
   );
 }
 
@@ -544,6 +584,7 @@ export function SettingsModal() {
                 </button>
               </div>
             </Section>
+            <AppearanceSettings />
             <TerminalSettings />
             <DefaultAgentSetting />
             <ReviewSettings />

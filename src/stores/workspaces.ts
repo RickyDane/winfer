@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { fetchModels, fetchProviders, type ModelInfo, type Provider, type ProviderId } from "@/features/providers/providers";
 import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
+import { DEFAULT_THEME, isThemeId, themeById } from "@/features/theme/themes";
 
 export type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
@@ -84,6 +85,7 @@ interface WorkspaceState {
   sidePanel: "browser" | "device" | "terminal";
   /** Device the Android panel mirrors (adb serial). */
   androidSerial: string | null;
+  /** Color theme id (see features/theme/themes.ts). */
   theme: Theme;
   /** Main area: the active workspace's tiles, or the overview of every workspace's sessions. */
   view: "workspace" | "overview";
@@ -130,6 +132,8 @@ interface WorkspaceState {
   setBrowserWidth: (width: number) => void;
   setSidePanel: (panel: "browser" | "device" | "terminal") => void;
   setAndroidSerial: (serial: string | null) => void;
+  setTheme: (theme: Theme) => void;
+  /** Switch to the theme's light/dark counterpart. */
   toggleTheme: () => void;
   setView: (view: "workspace" | "overview") => void;
   setTerminalFontSize: (size: number) => void;
@@ -173,7 +177,7 @@ export function overviewOrder(workspaces: Workspace[]): string[] {
   return workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : w.panes.map((p) => p.id)));
 }
 
-export type Theme = "dark" | "light";
+export type Theme = string;
 
 export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   hydrated: false,
@@ -196,7 +200,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   browserWidth: DEFAULT_BROWSER_WIDTH,
   sidePanel: "browser",
   androidSerial: null,
-  theme: "dark",
+  theme: DEFAULT_THEME,
   view: "workspace",
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   overview: { layout: null, zoomedPaneId: null, presetIndex: GRID },
@@ -244,7 +248,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       sidePanel: ui.sidePanel ?? "browser",
       androidSerial: ui.androidSerial ?? null,
-      theme: ui.theme ?? "dark",
+      theme: isThemeId(ui.theme) ? ui.theme : DEFAULT_THEME,
       view: ui.view ?? "workspace",
       terminalFontSize: ui.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
       overview: { layout: ui.overviewLayout ?? null, zoomedPaneId: null, presetIndex: GRID },
@@ -395,7 +399,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
   setSidePanel: (panel) => set({ sidePanel: panel, browserOpen: true }),
   setAndroidSerial: (serial) => set({ androidSerial: serial }),
-  toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
+  setTheme: (theme) => set({ theme: isThemeId(theme) ? theme : DEFAULT_THEME }),
+  toggleTheme: () => set((s) => ({ theme: themeById(s.theme).pair })),
   setView: (view) => set({ view }),
   setTerminalFontSize: (size) =>
     set({ terminalFontSize: Math.round(Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, size)) * 2) / 2 }),

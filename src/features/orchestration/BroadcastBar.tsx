@@ -76,7 +76,7 @@ export function BroadcastBar() {
           <button
             onClick={send}
             disabled={!text.trim() || targets.length === 0}
-            className="ml-auto flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
+            className="ml-auto flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-40"
           >
             <Send size={12} /> Send to {targets.length}
           </button>

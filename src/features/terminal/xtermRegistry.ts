@@ -10,7 +10,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal, type ITheme } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { create as createStore } from "zustand";
 import { cleanAgentTitle, useWorkspaces, type Pane } from "@/stores/workspaces";
@@ -18,63 +18,13 @@ import { reportInput, reportOutput, reportStatus } from "@/features/status/agent
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
+import { terminalTheme } from "@/features/theme/themes";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
-const DARK: ITheme = {
-  background: "#121215",
-  foreground: "#e6e6ea",
-  cursor: "#e6e6ea",
-  cursorAccent: "#121215",
-  selectionBackground: "#6d7cff55",
-  black: "#1d1d22",
-  red: "#f26d6d",
-  green: "#4ade80",
-  yellow: "#f5b544",
-  blue: "#6d9cff",
-  magenta: "#c08cff",
-  cyan: "#5fd4e0",
-  white: "#d4d4da",
-  brightBlack: "#6b6b74",
-  brightRed: "#ff8a8a",
-  brightGreen: "#7cf0a4",
-  brightYellow: "#ffd07a",
-  brightBlue: "#94b6ff",
-  brightMagenta: "#d6b0ff",
-  brightCyan: "#8ce6ee",
-  brightWhite: "#ffffff",
-};
-
-/** Same hues, darkened so agent output stays readable on white. */
-const LIGHT: ITheme = {
-  background: "#fbfbfc",
-  foreground: "#1b1b21",
-  cursor: "#1b1b21",
-  cursorAccent: "#fbfbfc",
-  selectionBackground: "#4f5ff033",
-  black: "#1b1b21",
-  red: "#c62f2f",
-  green: "#1f8a46",
-  yellow: "#9a6a00",
-  blue: "#2f5fd0",
-  magenta: "#8a3fc0",
-  cyan: "#0f7f8c",
-  white: "#d4d4da",
-  brightBlack: "#6b6b74",
-  brightRed: "#e04848",
-  brightGreen: "#2aa35a",
-  brightYellow: "#b88400",
-  brightBlue: "#4a78e8",
-  brightMagenta: "#a55ad8",
-  brightCyan: "#1897a6",
-  brightWhite: "#ffffff",
-};
-
-const themeFor = (theme: "dark" | "light") => (theme === "light" ? LIGHT : DARK);
-
 // Recolor every live terminal when the app theme changes; refit them all when zoomed.
 useWorkspaces.subscribe((s, prev) => {
-  if (s.theme !== prev.theme) for (const entry of entries.values()) entry.term.options.theme = themeFor(s.theme);
+  if (s.theme !== prev.theme) for (const entry of entries.values()) entry.term.options.theme = terminalTheme(s.theme);
   if (s.terminalFontSize !== prev.terminalFontSize) {
     for (const entry of entries.values()) {
       entry.term.options.fontSize = s.terminalFontSize;
@@ -126,7 +76,7 @@ function create(pane: Pane): Entry {
     scrollback: 10_000,
     macOptionIsMeta: true,
     allowProposedApi: true,
-    theme: themeFor(useWorkspaces.getState().theme),
+    theme: terminalTheme(useWorkspaces.getState().theme),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

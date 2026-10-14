@@ -132,7 +132,7 @@ export function CheatSheet() {
                 <span className="flex-1 text-warning">
                   {formatChord(pending.chord)} is used by {pending.clashes.map((c) => `“${c.title}”`).join(", ")}.
                 </span>
-                <button onClick={replace} className="rounded-md bg-accent px-2 py-1 text-white hover:opacity-90">
+                <button onClick={replace} className="rounded-md bg-accent px-2 py-1 text-on-accent hover:opacity-90">
                   Use it here instead
                 </button>
                 <button onClick={() => setPending(null)} className="rounded-md px-2 py-1 text-fg-muted hover:bg-hover">

@@ -64,7 +64,7 @@ export function DiffView() {
           </button>
           <button
             onClick={() => execute({ type: "pane.mergeWorktree", target })}
-            className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
+            className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90"
           >
             <GitMerge size={13} /> Merge into {base}
           </button>

@@ -67,7 +67,7 @@ function StartForm({ onStarted }: { onStarted: () => void }) {
             execute({ type: "race.start", counts, prompt: prompt.trim() });
             onStarted();
           }}
-          className="ml-auto flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
+          className="ml-auto flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-40"
           title={total < 2 ? "Pick at least two agents" : undefined}
         >
           <Flag size={12} /> Start race ({total})
@@ -178,7 +178,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
               <button
                 disabled={!pane.worktree}
                 onClick={() => void pickRaceWinner(pane, panes)}
-                className="flex items-center gap-1 rounded-md bg-accent-soft px-2 py-0.5 text-accent hover:bg-accent hover:text-white disabled:opacity-40"
+                className="flex items-center gap-1 rounded-md bg-accent-soft px-2 py-0.5 text-accent hover:bg-accent hover:text-on-accent disabled:opacity-40"
               >
                 <Trophy size={11} /> Pick
               </button>

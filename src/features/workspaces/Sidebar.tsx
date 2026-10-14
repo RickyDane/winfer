@@ -15,6 +15,7 @@ import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/work
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
+import { themeById } from "@/features/theme/themes";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
 function PaneName({ pane, className }: { pane: Pane; className?: string }) {
@@ -101,7 +102,7 @@ function ReviewEntry() {
       <Inbox size={14} />
       <span className="flex-1">Review</span>
       {count > 0 && (
-        <span key={count} className="anim-grow rounded bg-accent px-1.5 text-[11px] font-medium text-white">
+        <span key={count} className="anim-grow rounded bg-accent px-1.5 text-[11px] font-medium text-on-accent">
           {count}
         </span>
       )}
@@ -198,10 +199,10 @@ export function Sidebar() {
         <button
           onClick={toggleTheme}
           className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
-          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          title={`Switch to ${themeById(themeById(theme).pair).name} (more themes in Settings)`}
         >
           <span key={theme} className="anim-grow block">
-            {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            {themeById(theme).mode === "dark" ? <Sun size={14} /> : <Moon size={14} />}
           </span>
         </button>
         <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title={`Settings (${keysFor({ type: "ui.settings" })})`}>

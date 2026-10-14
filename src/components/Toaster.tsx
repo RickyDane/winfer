@@ -33,7 +33,7 @@ export function Toaster() {
                   dismissToast(t.id);
                   t.action!.run();
                 }}
-                className="mt-1.5 rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-white hover:opacity-90"
+                className="mt-1.5 rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-on-accent hover:opacity-90"
               >
                 {t.action.label}
               </button>

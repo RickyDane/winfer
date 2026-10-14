@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-/* Design tokens, taken from the reference screenshot (dark, low-contrast, mono). */
+/* Design tokens, taken from the reference screenshot (dark, low-contrast, mono). Defaults for
+   Winfer Dark; features/theme/themes.ts overrides them per theme. */
 @theme {
   --color-app: #0b0b0d;
   --color-panel: #121215;
@@ -16,6 +17,7 @@
 
   --color-accent: #6d7cff;
   --color-accent-soft: #6d7cff26;
+  --color-on-accent: #ffffff;
   --color-success: #4ade80;
   --color-warning: #f5b544;
   --color-danger: #f26d6d;
@@ -31,30 +33,11 @@
   --radius-pane: 10px;
 }
 
-/* Light mode (sidebar moon/sun button): same roles, light values. */
-:root[data-theme="light"] {
-  --color-app: #e9e9ee;
-  --color-panel: #fbfbfc;
-  --color-panel-raised: #ffffff;
-  --color-hover: #ececf1;
-  --color-active: #e2e2e9;
-  --color-border: #dcdce3;
-  --color-border-strong: #c9c9d2;
-
-  --color-fg: #1b1b21;
-  --color-fg-muted: #55555f;
-  --color-fg-subtle: #85858f;
-
-  --color-accent: #4f5ff0;
-  --color-accent-soft: #4f5ff022;
-  --color-success: #16a34a;
-  --color-warning: #b7791f;
-  --color-danger: #dc3b3b;
-  --color-claude: #c2603f;
+/* Chart series on light themes (themes.ts sets data-mode). */
+:root[data-mode="light"] {
   --color-series-claude: #c2603f;
   --color-series-codex: #4f5ff0;
   --color-series-opencode: #138a78;
-  color-scheme: light;
 }
 
 :root {

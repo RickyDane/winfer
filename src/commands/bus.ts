@@ -89,6 +89,7 @@ export type Command =
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
+  | { type: "ui.theme"; theme: string }
   | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
@@ -400,6 +401,8 @@ export function execute(cmd: Command): void {
       return s.setCheatSheet(!s.cheatSheetOpen);
     case "ui.settings":
       return s.setSettings(!s.settingsOpen);
+    case "ui.theme":
+      return s.setTheme(cmd.theme);
     case "recipe.load":
       return loadRecipe(cmd.id);
     case "ui.view":

@@ -185,7 +185,7 @@ export function BranchDialog() {
             <button
               onClick={() => void create("agent")}
               disabled={!selected || !!blocked || busy !== null || newBranch === ""}
-              className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-40"
             >
               {busy === "agent" ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Open {agent} in a worktree
             </button>

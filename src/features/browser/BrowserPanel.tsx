@@ -206,7 +206,7 @@ export function BrowserPanel() {
               <span>No Chrome, Edge or Chromium found. winfer can download a headless browser (~100 MB) for previews and agents.</span>
               <button
                 onClick={() => void installBrowser()}
-                className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+                className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:opacity-90"
               >
                 <Download size={13} /> Download browser
               </button>
