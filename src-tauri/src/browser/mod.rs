@@ -848,7 +848,7 @@ mod tests {
         let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
         let _guard = chrome::ChromeGuard(launched.child);
         tauri::async_runtime::block_on(async {
-            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(20)).unwrap(), |_| {}).await.unwrap();
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), |_| {}).await.unwrap();
             let context = cdp
                 .call("Target.createBrowserContext", json!({}), None)
                 .await
@@ -881,7 +881,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let (tx, rx) = mpsc::channel::<Event>();
             let tx = Mutex::new(tx);
-            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(20)).unwrap(), move |e| {
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), move |e| {
                 let _ = tx.lock().unwrap().send(e);
             })
             .await

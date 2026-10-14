@@ -191,6 +191,16 @@ pub struct ExistingWorktree {
     pub by_winfer: bool,
     /// Its folder is gone (`git worktree prune` would drop it).
     pub prunable: bool,
+    /// When the folder was created (ms since the epoch), if known.
+    pub created_at: Option<u64>,
+    /// When the branch was last committed to (ms since the epoch).
+    pub last_commit_at: Option<u64>,
+    /// Commits on the branch that aren't on the base.
+    pub ahead: u32,
+    /// Uncommitted changes in the folder.
+    pub dirty: bool,
+    /// Everything on the branch is already in the base: nothing is lost by removing it.
+    pub merged: bool,
 }
 
 /// The linked worktrees of the repo containing `dir` (not the main checkout itself).
@@ -209,7 +219,35 @@ pub fn list(dir: &Path) -> Result<Vec<ExistingWorktree>, String> {
         .unwrap_or(top);
     let base = git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .or_else(|_| git(&repo, &["rev-parse", "HEAD"]))?;
-    Ok(parse_worktree_list(&porcelain, &repo, &base))
+    let mut found = parse_worktree_list(&porcelain, &repo, &base);
+    for wt in &mut found {
+        describe(&repo, wt);
+    }
+    Ok(found)
+}
+
+/// Fills in age and state, for deciding whether a worktree can go.
+fn describe(repo: &Path, wt: &mut ExistingWorktree) {
+    let path = Path::new(&wt.info.path);
+    let to_ms = |t: std::time::SystemTime| t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64);
+    wt.created_at = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.created().or_else(|_| m.modified()).ok())
+        .and_then(to_ms);
+    if wt.prunable {
+        return;
+    }
+    let branch = &wt.info.branch;
+    wt.last_commit_at = git(repo, &["log", "-1", "--format=%ct", branch])
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|secs| secs * 1000);
+    wt.ahead = git(repo, &["rev-list", "--count", &format!("{}..{branch}", wt.info.base)])
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    wt.dirty = git(path, &["status", "--porcelain"]).is_ok_and(|s| !s.is_empty());
+    wt.merged = wt.ahead == 0 && !wt.dirty;
 }
 
 fn parse_worktree_list(porcelain: &str, repo: &Path, base: &str) -> Vec<ExistingWorktree> {
@@ -246,6 +284,11 @@ fn parse_worktree_list(porcelain: &str, repo: &Path, base: &str) -> Vec<Existing
             Some(ExistingWorktree {
                 by_winfer: branch.starts_with("winfer/"),
                 prunable,
+                created_at: None,
+                last_commit_at: None,
+                ahead: 0,
+                dirty: false,
+                merged: false,
                 info: WorktreeInfo {
                     repo: repo.to_string_lossy().into_owned(),
                     path: path.to_string_lossy().into_owned(),
@@ -410,6 +453,14 @@ mod tests {
         let branches: Vec<_> = found.iter().map(|w| (w.info.branch.as_str(), w.by_winfer)).collect();
         assert_eq!(branches, vec![("hotfix", false), ("winfer/codex-1", true)]);
         assert!(found.iter().all(|w| w.info.base == "main" && !w.prunable));
+        // Fresh worktrees have nothing new yet, so they count as merged (safe to remove)…
+        assert!(found.iter().all(|w| w.merged && w.ahead == 0 && w.last_commit_at.is_some() && w.created_at.is_some()));
+        // …until they get work: uncommitted first, then a commit the base doesn't have.
+        sh(Path::new(&ours.path), "echo more >> a.txt");
+        let state = |l: Vec<ExistingWorktree>| l.into_iter().find(|w| w.info.branch == ours.branch).map(|w| (w.dirty, w.ahead, w.merged)).unwrap();
+        assert_eq!(state(list(&repo).unwrap()), (true, 0, false));
+        sh(Path::new(&ours.path), "git -c user.email=t@t -c user.name=t commit -qam work");
+        assert_eq!(state(list(&repo).unwrap()), (false, 1, false));
         // Works from inside a worktree too, and hands back what create() made.
         let from_inside = list(Path::new(&ours.path)).unwrap();
         assert!(from_inside.iter().any(|w| w.info.branch == ours.branch));

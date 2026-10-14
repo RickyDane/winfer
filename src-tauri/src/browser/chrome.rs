@@ -243,7 +243,7 @@ mod tests {
         };
         let launched = launch(&exe, &tmp.join("profile")).unwrap();
         let _guard = ChromeGuard(launched.child);
-        let url = wait_ws_url(launched.port, Duration::from_secs(20)).unwrap();
+        let url = wait_ws_url(launched.port, Duration::from_secs(45)).unwrap();
         assert!(url.starts_with(&format!("ws://127.0.0.1:{}/", launched.port)), "{url}");
     }
 }

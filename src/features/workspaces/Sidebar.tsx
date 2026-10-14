@@ -11,6 +11,7 @@ import { useCallback, useState } from "react";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
+import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
 function PaneName({ pane, className }: { pane: Pane; className?: string }) {
@@ -21,6 +22,17 @@ function PaneName({ pane, className }: { pane: Pane; className?: string }) {
   return (
     <span className={cn("min-w-0 truncate", className)} title={label === name ? name : `${name}: ${label}`}>
       {label}
+    </span>
+  );
+}
+
+/** Thin progress bar along the bottom of an agent's sidebar row. */
+function PaneProgress({ pane }: { pane: Pane }) {
+  const progress = useProgress((s) => s.byPane[pane.id]);
+  if (pane.provider === "shell" || (progress?.percent == null && pane.status !== "working")) return null;
+  return (
+    <span className="absolute right-2 bottom-0.5 left-5" title={progressLabel(progress)}>
+      <ProgressBar progress={progress} status={pane.status} className="h-0.5" />
     </span>
   );
 }
@@ -125,7 +137,7 @@ export function Sidebar() {
                     key={pane.id}
                     onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md py-1.5 pr-2 pl-5 text-left text-[13px]",
+                      "relative flex w-full items-center gap-2 rounded-md py-1.5 pr-2 pl-5 text-left text-[13px]",
                       pane.id === focusedPaneId ? "bg-hover text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
                     )}
                   >
@@ -136,6 +148,7 @@ export function Sidebar() {
                       <span className="ml-auto truncate font-mono text-[10px] text-fg-subtle">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
                     )}
                     <PanePercent pane={pane} />
+                    <PaneProgress pane={pane} />
                   </button>
                 ))}
               {active && <WorktreeList workspace={ws} />}

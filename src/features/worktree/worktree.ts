@@ -14,6 +14,15 @@ export interface ExistingWorktree {
   byWinfer: boolean;
   /** Its folder is gone. */
   prunable: boolean;
+  /** Folder creation and last commit on the branch, ms since the epoch. */
+  createdAt: number | null;
+  lastCommitAt: number | null;
+  /** Commits not on the base yet. */
+  ahead: number;
+  /** Uncommitted changes in the folder. */
+  dirty: boolean;
+  /** Nothing on it that the base lacks: removing it loses nothing. */
+  merged: boolean;
 }
 
 /** Linked worktrees of the repo containing `dir` (not the main checkout). */

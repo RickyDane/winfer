@@ -2,11 +2,39 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 import { GitBranch, Play, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
-import { logActivity } from "@/stores/activity";
+import { logActivity, relativeTime } from "@/stores/activity";
 import { defaultProviderId, useWorkspaces, type Workspace } from "@/stores/workspaces";
 import { listWorktrees, removeWorktree, type ExistingWorktree } from "./worktree";
 
 const REFRESH_MS = 20_000;
+
+/** Last activity: the branch's last commit, else when the folder was made. */
+const lastActivity = (wt: ExistingWorktree) => wt.lastCommitAt ?? wt.createdAt;
+
+function describeState(wt: ExistingWorktree): string {
+  const parts = [];
+  if (wt.merged) parts.push("Nothing unmerged — safe to remove");
+  if (wt.ahead > 0) parts.push(`${wt.ahead} commit${wt.ahead === 1 ? "" : "s"} not on ${wt.info.base}`);
+  if (wt.dirty) parts.push("uncommitted changes");
+  if (wt.lastCommitAt) parts.push(`last commit ${new Date(wt.lastCommitAt).toLocaleString()}`);
+  if (wt.createdAt) parts.push(`created ${new Date(wt.createdAt).toLocaleString()}`);
+  return parts.join(" · ");
+}
+
+/** "2d · 3 ahead · uncommitted" or "✓ merged · 5d": how old it is and whether it can go. */
+function WorktreeState({ wt }: { wt: ExistingWorktree }) {
+  if (wt.prunable) return <span className="block text-[10px] text-fg-subtle">folder missing</span>;
+  const at = lastActivity(wt);
+  const age = at ? relativeTime(at) : null;
+  return (
+    <span className="flex flex-wrap items-center gap-x-1.5 text-[10px] whitespace-nowrap text-fg-subtle">
+      {wt.merged && <span className="text-success">✓ merged</span>}
+      {age && <span title={describeState(wt)}>{age === "now" ? "just now" : `${age} ago`}</span>}
+      {wt.ahead > 0 && <span>{wt.ahead} ahead</span>}
+      {wt.dirty && <span className="text-warning">uncommitted</span>}
+    </span>
+  );
+}
 
 /**
  * Worktrees of the workspace's repo that no pane is using: left behind by closed agents or
@@ -32,7 +60,10 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
   }, [refresh, inUse]);
 
   const used = new Set(useWorkspaces.getState().workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : []))));
-  const free = found.filter((w) => !used.has(w.info.path));
+  // Newest activity first; finished (merged) ones sink to the bottom, ready to clean up.
+  const free = found
+    .filter((w) => !used.has(w.info.path))
+    .sort((a, b) => Number(a.merged) - Number(b.merged) || (lastActivity(b) ?? 0) - (lastActivity(a) ?? 0));
   if (free.length === 0) return null;
 
   const open = (wt: ExistingWorktree) => {
@@ -68,11 +99,14 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
           <button
             onClick={() => !wt.prunable && open(wt)}
             disabled={wt.prunable}
-            title={wt.prunable ? `${wt.info.path} (folder missing)` : `${wt.info.path}\nClick to open an agent here`}
-            className={cn("flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-1 text-left text-[13px] text-fg-muted group-hover:text-fg", wt.prunable && "line-through")}
+            title={wt.prunable ? `${wt.info.path} (folder missing)` : `${wt.info.path}\n${describeState(wt)}\nClick to open an agent here`}
+            className="flex min-w-0 flex-1 items-start gap-2 py-1 pr-1 text-left text-[13px] text-fg-muted group-hover:text-fg"
           >
-            <GitBranch size={12} className="shrink-0 text-fg-subtle" />
-            <span className="truncate font-mono text-[12px]">{wt.info.branch.replace(/^winfer\//, "")}</span>
+            <GitBranch size={12} className="mt-1 shrink-0 text-fg-subtle" />
+            <span className="min-w-0 flex-1">
+              <span className={cn("block truncate font-mono text-[12px]", wt.prunable && "line-through")}>{wt.info.branch.replace(/^winfer\//, "")}</span>
+              <WorktreeState wt={wt} />
+            </span>
           </button>
           {!wt.prunable && (
             <button onClick={() => open(wt)} title="Open an agent in this worktree" className="rounded p-0.5 text-fg-subtle opacity-0 group-hover:opacity-100 hover:text-fg">
