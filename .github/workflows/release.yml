@@ -21,7 +21,36 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # One job creates the release; the bundle jobs only upload to it. (When each bundle job
+  # created it, two jobs raced and v0.1.2 ended up as two releases with split downloads.)
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - name: Create the release with this version's changes
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+            {
+              echo "### Changes"
+              # Commit subjects since the previous release, minus the version-bump commits.
+              git log --format='- %s' ${prev:+$prev..}"$TAG" | grep -v -E '^- Release [0-9.]+$' | sed -E 's/; release [0-9.]+$//'
+              cat .github/release-footer.md
+            } > notes.md
+            gh release create "$TAG" --title "winfer $TAG" --notes-file notes.md
+          fi
+          echo "id=$(gh release view "$TAG" --json databaseId -q .databaseId)" >> "$GITHUB_OUTPUT"
+
   bundle:
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -72,14 +101,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ env.TAG }}
-          releaseName: winfer ${{ env.TAG }}
-          releaseBody: |
-            Unsigned builds.
-
-            **macOS** — open the `.dmg` for your Mac (`aarch64` = Apple silicon, `x64` = Intel) and drag winfer to Applications. On first launch run `xattr -dr com.apple.quarantine /Applications/winfer.app` (or right-click → Open).
-
-            **Windows** — run the `-setup.exe` (or the `.msi`); SmartScreen will warn because the installer isn't signed: More info → Run anyway.
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.release.outputs.id }}
           args: --target ${{ matrix.target }}
