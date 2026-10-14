@@ -349,7 +349,7 @@ pub async fn usage_opencode() -> Option<Spend> {
 }
 
 /// OpenCode 2's database (sessions, messages, the models catalog), read-only.
-fn opencode_db() -> Option<rusqlite::Connection> {
+pub(crate) fn opencode_db() -> Option<rusqlite::Connection> {
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))?;
     let path = data.join("opencode/opencode.db");
     if !path.exists() {
@@ -434,7 +434,7 @@ pub async fn usage_opencode_context(cwd: String) -> Option<Context> {
 // Dates -----------------------------------------------------------------------------------------
 
 /// "2026-10-14T00:00:29.123Z" (or with an offset) → unix ms.
-fn parse_rfc3339(s: &str) -> Option<i64> {
+pub(crate) fn parse_rfc3339(s: &str) -> Option<i64> {
     let num = |a: usize, b: usize| s.get(a..b)?.parse::<i64>().ok();
     let (y, mo, d, h, mi, sec) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
     let rest = &s[19..];

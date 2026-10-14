@@ -230,6 +230,33 @@ mockIPC(
         return { usedPercent: 31, tokens: 81_265, window: 262_144, at: Date.now() };
       case "usage_opencode":
         return { tokens: 412_300, cost: 0.83, sessions: 14 };
+      case "usage_history": {
+        // Hourly rows for the range: busier in working hours, quiet weekends, deterministic.
+        const hour = 3600_000;
+        const end = Math.floor(Date.now() / hour) * hour;
+        const rows = [];
+        const models = [
+          { provider: "claude", model: "claude-opus-5-5", price: [4, 20, 0.2, 5], scale: 1 },
+          { provider: "codex", model: "gpt-6.1-sol", price: [2, 10, 0.1, 2.5], scale: 0.6 },
+          { provider: "opencode", model: "kimi-k3", price: [0.6, 2.5, 0.15, 0], scale: 0.25 },
+        ];
+        for (let at = end - Number(a.days) * 24 * hour; at <= end; at += hour) {
+          const d = new Date(at);
+          const work = d.getHours() >= 9 && d.getHours() < 20 && d.getDay() % 6 !== 0;
+          for (const [i, m] of models.entries()) {
+            const wave = (Math.sin(at / (hour * 7) + i * 2) + 1.2) / 2.2;
+            if (!work && wave < 0.8) continue;
+            const input = Math.round(40_000 * wave * m.scale);
+            const output = Math.round(9_000 * wave * m.scale);
+            const cacheRead = Math.round(900_000 * wave * m.scale);
+            const cacheWrite = Math.round(60_000 * wave * m.scale);
+            const [pi, po, pr, pw] = m.price;
+            const cost = (input * pi + output * po + cacheRead * pr + cacheWrite * pw) / 1e6;
+            rows.push({ hour: at, provider: m.provider, model: m.model, input, output, cacheRead, cacheWrite, cost, priced: true });
+          }
+        }
+        return rows;
+      }
       case "android_status":
         return { adb: true, devices: [{ serial: "emulator-5554", state: "device", model: "Pixel 7 (test stream)", emulator: true }], avds: ["Pixel_7_API_35"] };
       case "android_mirror_start": {

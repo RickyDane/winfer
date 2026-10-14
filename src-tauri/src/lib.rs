@@ -13,6 +13,7 @@ mod pty;
 mod review;
 mod store;
 mod usage;
+mod usage_history;
 mod voice;
 mod worktree;
 
@@ -100,6 +101,8 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
+            app.manage(usage_history::UsageHistory::open(&data_dir.join("usage.db"))?);
+            usage_history::start(app.handle());
             hooks::start(app.handle().clone(), &data_dir)?;
             browser::kill_orphans(app.handle());
             voice::preload(app.handle());
@@ -168,6 +171,7 @@ pub fn run() {
             usage::usage_codex_context,
             usage::usage_opencode,
             usage::usage_opencode_context,
+            usage_history::usage_history,
             llm::llm_compose,
             chatgpt::chatgpt_status,
             chatgpt::chatgpt_sign_in,
