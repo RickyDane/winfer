@@ -65,7 +65,7 @@ interface WorkspaceState {
   diffPaneId: string | null;
   settingsOpen: boolean;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | "model" | null;
+  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
   /** Models each provider offers (from its CLI), loaded in the background. */
@@ -79,6 +79,8 @@ interface WorkspaceState {
   /** Browser panel width in px. */
   browserWidth: number;
   theme: Theme;
+  /** Review inbox: run tests / take screenshots automatically when an agent finishes. */
+  reviewConfig: { autoTests?: boolean; screenshots?: boolean };
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
@@ -103,7 +105,7 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
@@ -113,6 +115,7 @@ interface WorkspaceState {
   resetShortcuts: () => void;
   setBrowserWidth: (width: number) => void;
   toggleTheme: () => void;
+  setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
@@ -156,6 +159,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
   theme: "dark",
+  reviewConfig: {},
   searchPaneId: null,
   voiceConfig: {},
 
@@ -197,6 +201,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       theme: ui.theme ?? "dark",
+      reviewConfig: ui.review ?? {},
     });
   },
 
@@ -338,6 +343,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   resetShortcuts: () => set({ shortcuts: {} }),
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
   toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
+  setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -369,6 +375,7 @@ interface Snapshot {
     shortcuts?: Record<string, string>;
     browserWidth?: number;
     theme?: Theme;
+    review?: { autoTests?: boolean; screenshots?: boolean };
   } | null;
 }
 
@@ -387,7 +394,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, review: s.reviewConfig },
   };
 }
 

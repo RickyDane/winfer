@@ -298,6 +298,24 @@ function DefaultAgentSetting() {
   );
 }
 
+/** What the review inbox does on its own when an agent finishes. */
+function ReviewSettings() {
+  const { reviewConfig, setReviewConfig } = useWorkspaces();
+  return (
+    <Section title="Review inbox">
+      <label className="flex items-center gap-2 text-[13px] text-fg">
+        <input type="checkbox" checked={reviewConfig.autoTests ?? false} onChange={(e) => setReviewConfig({ autoTests: e.target.checked })} />
+        Run the project's tests when an agent finishes (in its worktree)
+      </label>
+      <label className="flex items-center gap-2 text-[13px] text-fg">
+        <input type="checkbox" checked={reviewConfig.screenshots ?? true} onChange={(e) => setReviewConfig({ screenshots: e.target.checked })} />
+        Screenshot the agent's dev server for its card
+      </label>
+      <p className="text-xs text-fg-muted">Summaries use the prompt writer below; with it off, cards show the agent's last output instead.</p>
+    </Section>
+  );
+}
+
 /** Default model per agent for new panes. */
 function ModelSettings() {
   const { providers, models, agentModels, setAgentModel, loadModels } = useWorkspaces();
@@ -362,6 +380,7 @@ export function SettingsModal() {
           </button>
         </header>
         <DefaultAgentSetting />
+        <ReviewSettings />
         <ModelSettings />
         <VoiceSettings />
       </div>

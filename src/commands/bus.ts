@@ -18,7 +18,8 @@ import {
 } from "@/features/layout/tree";
 import { closeTerminal, pasteText, restartTerminal, sendText } from "@/features/terminal/xtermRegistry";
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
-import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
+import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
+import { discardReviewed, mergeReviewed, readReviewsAloud } from "@/features/review/reviews";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
 import { defaultProviderId, providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
@@ -84,7 +85,9 @@ export type Command =
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" }
+  /** Speaks the open review cards' summaries ("what's done?"). */
+  | { type: "review.readAloud" }
   | { type: "recipe.load"; id: string };
 
 const store = () => useWorkspaces.getState();
@@ -281,14 +284,16 @@ export function execute(cmd: Command): void {
     }
     case "pane.mergeWorktree": {
       const pane = paneWithWorktree(cmd.target);
-      if (pane) void mergePane(pane);
+      if (pane) void mergeReviewed(pane);
       return;
     }
     case "pane.discardWorktree": {
       const pane = paneWithWorktree(cmd.target);
-      if (pane) void discardPane(pane);
+      if (pane) void discardReviewed(pane);
       return;
     }
+    case "review.readAloud":
+      return readReviewsAloud();
     case "pane.nextAttention": {
       const all = s.workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : []).map((id) => w.panes.find((p) => p.id === id)!));
       const rank = (p: (typeof all)[number]) => (p.status === "needs-input" ? 0 : p.unseen ? 1 : 2);
@@ -405,27 +410,38 @@ function paneWithWorktree(target: PaneRef) {
   return null;
 }
 
-async function mergePane(pane: { worktree: WorktreeInfo }) {
+/**
+ * Merges an agent's branch into its base. Changes the agent left uncommitted are committed
+ * first (as `commitMessage`), since agents often stop without committing. True if merged.
+ */
+export async function mergePane(pane: { provider: string; worktree: WorktreeInfo }, commitMessage?: string): Promise<boolean> {
   const { branch, base } = pane.worktree;
-  const ok = await ask(`Merge ${branch} into ${base}?`, { title: "Merge worktree", okLabel: "Merge" });
-  if (!ok) return;
+  const dirty = await worktreeDiff(pane.worktree).then((d) => d.dirty, () => false);
+  const ok = await ask(
+    dirty ? `The agent left uncommitted changes in ${branch}. Commit them and merge into ${base}?` : `Merge ${branch} into ${base}?`,
+    { title: "Merge worktree", okLabel: dirty ? "Commit and merge" : "Merge" },
+  );
+  if (!ok) return false;
   try {
+    if (dirty) await commitWorktree(pane.worktree, commitMessage ?? `Changes by ${providerName(store().providers, pane.provider)}`);
     await mergeWorktree(pane.worktree);
     logActivity(active().id, `Merged ${branch} into ${base}`);
-    await message(`Merged ${branch} into ${base}.`, { title: "Merged", kind: "info" });
+    return true;
   } catch (err) {
     await message(String(err), { title: "Merge not possible", kind: "error" });
+    return false;
   }
 }
 
-async function discardPane(pane: { id: string; worktree: WorktreeInfo }) {
+/** Closes the pane and deletes its worktree and branch. True if discarded. */
+export async function discardPane(pane: { id: string; worktree: WorktreeInfo }): Promise<boolean> {
   const { branch, path } = pane.worktree;
   const ok = await ask(`Close this pane, delete ${path} and the branch ${branch}? Unmerged work is lost.`, {
     title: "Discard worktree",
     kind: "warning",
     okLabel: "Discard",
   });
-  if (!ok) return;
+  if (!ok) return false;
   closeTerminal(pane.id);
   store().removePane(pane.id);
   logActivity(active().id, `Discarded ${branch}`);
@@ -434,4 +450,5 @@ async function discardPane(pane: { id: string; worktree: WorktreeInfo }) {
   } catch (err) {
     await message(String(err), { title: "Couldn't remove worktree", kind: "error" });
   }
+  return true;
 }

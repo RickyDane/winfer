@@ -270,6 +270,18 @@ export const TOOLS: ToolDef[] = [
     palette: () => Object.entries(DIRECTIONS).map(([dir, label]) => ({ title: `Swap pane ${label.toLowerCase()}`, args: { dir } })),
   },
   {
+    id: "review_work",
+    title: "Review finished work",
+    description: "Show what finished agents did, ready to merge; answers “what's done?”, “anything to review?”",
+    risk: "safe",
+    params: { read_aloud: { kind: "bool", ask: "Did the user ask a question to be answered out loud, like “what's done?”" } },
+    toCommands: (args) => [{ type: "ui.overlay", overlay: "review" }, ...(args.read_aloud ? [{ type: "review.readAloud" } as const] : [])],
+    palette: () => [
+      { title: "Review finished work", args: {} },
+      { title: "Read finished work aloud", args: { read_aloud: true } },
+    ],
+  },
+  {
     id: "show_changes",
     title: "Show changes",
     description: "Show the code changes an agent made in its worktree",

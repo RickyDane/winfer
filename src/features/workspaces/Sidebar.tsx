@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronRight, Moon, Plus, Settings, Sun } from "lucide-react";
+import { ChevronDown, ChevronRight, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
@@ -7,6 +8,23 @@ import { ActivityFeed } from "./ActivityFeed";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useCallback, useState } from "react";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
+
+/** Opens the review inbox; the count is finished work waiting in this workspace. */
+function ReviewEntry() {
+  const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
+  const count = useReviews((s) => s.reviews.filter((r) => r.workspaceId === workspaceId && r.status === "open").length);
+  return (
+    <button
+      onClick={() => execute({ type: "ui.overlay", overlay: "review" })}
+      title={`Review finished work (${keysFor({ type: "ui.overlay", overlay: "review" })})`}
+      className="mx-2 mb-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-fg-muted hover:bg-hover hover:text-fg"
+    >
+      <Inbox size={14} />
+      <span className="flex-1">Review</span>
+      {count > 0 && <span className="rounded bg-accent px-1.5 text-[11px] font-medium text-white">{count}</span>}
+    </button>
+  );
+}
 
 export function Sidebar() {
   const { providers, workspaces, activeWorkspaceId, focusedPaneId, setActiveWorkspace, focusPane, theme, toggleTheme } = useWorkspaces();
@@ -78,6 +96,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      <ReviewEntry />
       {menu && menuWorkspace && <WorkspaceMenu ws={menuWorkspace} x={menu.x} y={menu.y} onClose={closeMenu} />}
       <ActivityFeed />
       <footer className="flex items-center gap-2 border-t border-border px-4 py-3">

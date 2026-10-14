@@ -71,6 +71,28 @@ async function renderFrame(workspaceId: string) {
   sc.channel.onmessage(await blob.arrayBuffer());
 }
 
+/** A fake app screenshot for review cards. */
+function frameDataUrl(): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 400;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 640, 400);
+  ctx.fillStyle = "#4f46e5";
+  ctx.fillRect(0, 0, 640, 48);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "600 18px system-ui";
+  ctx.fillText("◆ orbit", 18, 31);
+  ctx.fillStyle = "#111827";
+  ctx.font = "600 26px system-ui";
+  ctx.fillText("Subscription cancelled", 18, 110);
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "15px system-ui";
+  ctx.fillText("Your plan ends on 1 November.", 18, 140);
+  return canvas.toDataURL("image/jpeg", 0.8);
+}
+
 function emitTabs(workspaceId: string) {
   void emit("browser://tabs", { workspaceId, tabs: browserTabs.get(workspaceId) ?? [] });
   void renderFrame(workspaceId);
@@ -125,7 +147,16 @@ mockIPC(
       case "worktree_merge":
         return "Merge made by the 'ort' strategy.";
       case "worktree_remove":
+      case "worktree_commit":
         return null;
+      case "review_test_command":
+        return "pnpm test";
+      case "review_run_tests":
+        return new Promise((resolve) =>
+          setTimeout(() => resolve({ command: "pnpm test", ok: false, output: " FAIL  test/subscription.spec.ts > cancelled tier\n   expected 403, received 200", ms: 8400 }), 1200),
+        );
+      case "browser_screenshot":
+        return new Promise((resolve) => setTimeout(() => resolve(frameDataUrl()), 500));
       case "browser_status":
         return { executable: { path: "mock-chrome", source: "system" } };
       case "browser_open": {
@@ -227,6 +258,10 @@ mockIPC(
         setTimeout(() => void emit("voice://transcript", { mode: voice.mode, text: voice.said, ms: 142 }), 150);
         return null;
       case "llm_compose":
+        if (String(a.req.system).startsWith("You review"))
+          return new Promise((resolve) =>
+            setTimeout(() => resolve("Makes the cancelled-tier guard return 403 instead of 200 and adds an e2e test for it. The old 200 path is deleted, so check that no client relies on it."), 600),
+          );
         return new Promise((resolve) => setTimeout(() => resolve(`[written] ${String(a.req.user).match(/Instruction as heard: "([^"]*)"/)?.[1] ?? ""}`), 300));
       case "voice_decide":
         voice.requests.push(a.body);

@@ -8,6 +8,7 @@ import { providerName, useWorkspaces, type AgentStatus, type Pane } from "@/stor
 import { outputAge } from "@/features/terminal/xtermRegistry";
 import { logActivity } from "@/stores/activity";
 import { speak } from "@/features/voice/readback";
+import { agentFinished } from "@/features/review/reviews";
 
 const IDLE_AFTER_MS = 4000;
 
@@ -37,6 +38,8 @@ export function reportStatus(paneId: string, status: AgentStatus, message?: stri
   const pane = findPane(paneId);
   if (!pane || pane.status === status) return;
   useWorkspaces.getState().setPaneStatus(paneId, status);
+  // Hook agents report "done"; the others go quiet (working → idle).
+  if (status === "done" || (status === "idle" && pane.status === "working" && !hasHooks(pane))) agentFinished(paneId);
   if (status === "needs-input" || status === "done" || status === "error") {
     void notify(pane, status, message);
     const name = providerName(useWorkspaces.getState().providers, pane.provider);

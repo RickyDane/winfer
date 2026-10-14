@@ -7,6 +7,7 @@ mod mcp;
 mod menu;
 mod providers;
 mod pty;
+mod review;
 mod store;
 mod voice;
 mod worktree;
@@ -69,6 +70,10 @@ pub fn run() {
             worktree::worktree_diff,
             worktree::worktree_merge,
             worktree::worktree_remove,
+            worktree::worktree_commit,
+            review::review_test_command,
+            review::review_run_tests,
+            browser::browser_screenshot,
             browser::browser_status,
             browser::browser_install,
             browser::browser_open,

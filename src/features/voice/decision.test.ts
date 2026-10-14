@@ -134,6 +134,11 @@ describe("parseDecision", () => {
     expect(d.tool.toCommands(d.args, ctx)).toEqual([{ type: "pane.spawn", provider: "claude", count: 1, prompt: undefined }]);
   });
 
+  it("doesn't type a review request into an agent", () => {
+    const decisions = parseDecision({ answers: { action_1: choice("send_to_pane"), action_2: choice("review_work", 3), instruction: choice("show me the review inbox"), instruction_given: { type: "noul", noul: 0.9 } } }, ctx);
+    expect(decisions.map((d) => d.tool.id)).toEqual(["review_work"]);
+  });
+
   it("doesn't start a race next to telling the open agents", () => {
     const decisions = parseDecision({ answers: { action_1: choice("broadcast"), action_2: choice("race_agents", 3), instruction: choice("build a flappy bird clone"), instruction_given: { type: "noul", noul: 0.9 } } }, ctx);
     expect(decisions.map((d) => d.tool.id)).toEqual(["broadcast"]);

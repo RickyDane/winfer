@@ -61,6 +61,8 @@ struct Instance {
     attaching: Mutex<HashMap<String, Arc<OnceCell<String>>>>,
     screencast: Mutex<Option<Screencast>>,
     console: Mutex<HashMap<String, VecDeque<inspect::ConsoleEntry>>>,
+    /// Browser contexts used for review screenshots; their pages never show up as tabs.
+    hidden_contexts: Mutex<HashSet<String>>,
 }
 
 impl Drop for Instance {
@@ -100,6 +102,10 @@ impl Instance {
             "Target.targetCreated" | "Target.targetInfoChanged" => {
                 let info = &event.params["targetInfo"];
                 if info["type"] != "page" {
+                    return;
+                }
+                let context = info["browserContextId"].as_str().unwrap_or_default();
+                if self.hidden_contexts.lock().unwrap().contains(context) {
                     return;
                 }
                 let id = info["targetId"].as_str().unwrap_or_default().to_string();
@@ -313,6 +319,7 @@ impl BrowserManager {
             attaching: Mutex::default(),
             screencast: Mutex::default(),
             console: Mutex::default(),
+            hidden_contexts: Mutex::default(),
         });
         instances.insert(workspace_id.to_string(), instance.clone());
         Ok(instance)
@@ -480,6 +487,102 @@ pub async fn browser_new_tab(
     }
     instance.emit_tabs();
     Ok(id)
+}
+
+/// Loads `url` in a hidden, throwaway context of the workspace's browser and returns a JPEG
+/// screenshot as a data URL. Used by the review inbox to show what an agent's app looks like.
+#[tauri::command]
+pub async fn browser_screenshot(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    url: String,
+) -> Res<String> {
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let cdp = instance.cdp().await?;
+    let context = cdp
+        .call("Target.createBrowserContext", json!({}), None)
+        .await?["browserContextId"]
+        .as_str()
+        .ok_or("createBrowserContext returned no id")?
+        .to_string();
+    instance
+        .hidden_contexts
+        .lock()
+        .unwrap()
+        .insert(context.clone());
+    let shot = capture(&cdp, &context, &url).await;
+    // Disposing the context closes its page too.
+    let _ = cdp
+        .call(
+            "Target.disposeBrowserContext",
+            json!({ "browserContextId": context }),
+            None,
+        )
+        .await;
+    instance.hidden_contexts.lock().unwrap().remove(&context);
+    shot
+}
+
+async fn capture(cdp: &Cdp, context: &str, url: &str) -> Res<String> {
+    let target = cdp
+        .call(
+            "Target.createTarget",
+            json!({ "url": "about:blank", "browserContextId": context }),
+            None,
+        )
+        .await?["targetId"]
+        .as_str()
+        .ok_or("createTarget returned no id")?
+        .to_string();
+    let session = cdp
+        .call(
+            "Target.attachToTarget",
+            json!({ "targetId": target, "flatten": true }),
+            None,
+        )
+        .await?["sessionId"]
+        .as_str()
+        .ok_or("attach returned no session")?
+        .to_string();
+    let session = Some(session.as_str());
+    cdp.call(
+        "Emulation.setDeviceMetricsOverride",
+        json!({ "width": 1280, "height": 800, "deviceScaleFactor": 1, "mobile": false }),
+        session,
+    )
+    .await?;
+    let nav = cdp
+        .call("Page.navigate", json!({ "url": url }), session)
+        .await?;
+    if let Some(error) = nav["errorText"].as_str() {
+        return Err(format!("{url} didn't load ({error})"));
+    }
+    // Wait for the load, then a moment for client-side rendering.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let state = cdp
+            .call(
+                "Runtime.evaluate",
+                json!({ "expression": "document.readyState", "returnByValue": true }),
+                session,
+            )
+            .await?;
+        if state["result"]["value"] == "complete" || std::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    let shot = cdp
+        .call(
+            "Page.captureScreenshot",
+            json!({ "format": "jpeg", "quality": 70 }),
+            session,
+        )
+        .await?;
+    let data = shot["data"].as_str().ok_or("no screenshot data")?;
+    Ok(format!("data:image/jpeg;base64,{data}"))
 }
 
 #[tauri::command]
@@ -712,6 +815,36 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// Real Chrome: a review screenshot loads the page in a throwaway context and returns a JPEG.
+    #[test]
+    fn screenshots_a_page_in_a_hidden_context() {
+        let tmp = std::env::temp_dir().join(format!("winfer-shot-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
+        tauri::async_runtime::block_on(async {
+            let cdp = Cdp::connect(&launched.ws_url, |_| {}).await.unwrap();
+            let context = cdp
+                .call("Target.createBrowserContext", json!({}), None)
+                .await
+                .unwrap()["browserContextId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let shot = capture(&cdp, &context, "data:text/html,<h1 style='color:red'>winfer</h1>")
+                .await
+                .unwrap();
+            let jpeg = base64::engine::general_purpose::STANDARD
+                .decode(shot.strip_prefix("data:image/jpeg;base64,").unwrap())
+                .unwrap();
+            assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "JPEG magic");
+            assert!(capture(&cdp, &context, "http://127.0.0.1:9/").await.is_err(), "refused URL errors");
+        });
+    }
 
     /// Real Chrome: discover tabs, screencast a frame, type into a page. Skips without Chrome.
     #[test]

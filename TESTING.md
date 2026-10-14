@@ -43,6 +43,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Ask Claude: "use the winfer tools to list the panes" → it calls `list_panes` (it will ask permission). Try "start a codex agent and tell it to …".
 - [ ] Recipes: ⌘K → "Recipe: Full stack" sets up agents + layout + localhost:3000; "Recipes…" → save the current layout under a name.
 - [ ] Sidebar "Latest" shows what happened.
+- [ ] Review inbox (sidebar "Review", ⌘E): when an agent finishes work in its worktree, a card appears with a summary, changed files, "Run tests" and (if it started a dev server) a screenshot. Merge commits leftovers and merges; then "Close agent and delete worktree". Send back types your comment into the agent. Race cards show "Pick".
+- [ ] Say "what's done?" → the inbox opens and the summaries are read aloud.
 
 ## 5. Browser
 - [ ] Address bar: `github.com` loads; clicking, scrolling and typing in the page work; back/forward/reload.

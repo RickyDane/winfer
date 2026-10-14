@@ -15,5 +15,8 @@ export const worktreeDiff = (info: WorktreeInfo) => invoke<WorktreeDiff>("worktr
 
 export const mergeWorktree = (info: WorktreeInfo) => invoke<string>("worktree_merge", { info });
 
+/** Commits whatever the agent left uncommitted (no-op when clean). */
+export const commitWorktree = (info: WorktreeInfo, message: string) => invoke<void>("worktree_commit", { info, message });
+
 export const removeWorktree = (info: WorktreeInfo, deleteBranch: boolean) =>
   invoke<void>("worktree_remove", { info, deleteBranch });

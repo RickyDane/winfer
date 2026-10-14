@@ -34,7 +34,9 @@ const aliases: Record<string, string[]> = Object.fromEntries(
 const cases: Case[] = readFileSync(new URL("./cases.jsonl", import.meta.url), "utf8")
   .split("\n")
   .filter(Boolean)
-  .map((l: string) => JSON.parse(l));
+  .map((l: string) => JSON.parse(l) as Case)
+  // EVAL_ONLY=regex runs just the matching utterances.
+  .filter((c) => !process.env.EVAL_ONLY || new RegExp(process.env.EVAL_ONLY, "i").test(c.utterance));
 
 const provider = (id: string, name: string): Provider => ({ id, name, command: id, args: [], resumeArgs: [], aliases: aliases[id] ?? [], statusHooks: false, promptArg: false, approveInput: null, modelArg: id === "shell" ? null : "--model", modelCommand: null, installed: true });
 const pane = (id: string, p: string, status: "working" | "idle" | "needs-input") => ({

@@ -5,7 +5,7 @@ import { execute } from "@/commands/bus";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
-import { mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
+import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
 import { providerName, useActiveWorkspace, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 
@@ -77,6 +77,34 @@ function StartForm({ onStarted }: { onStarted: () => void }) {
   );
 }
 
+/** Merges the winner of a race and closes the other racers, deleting their worktrees. */
+export async function pickRaceWinner(winner: Pane, panes: Pane[]): Promise<boolean> {
+  const losers = panes.filter((p) => p.id !== winner.id);
+  if (!winner.worktree) return false;
+  const ok = await ask(
+    `Merge ${winner.worktree.branch} into ${winner.worktree.base}, then close the other ${losers.length} agent${losers.length === 1 ? "" : "s"} and delete their worktrees?`,
+    { title: "Pick winner", kind: "warning", okLabel: "Merge and clean up" },
+  );
+  if (!ok) return false;
+  try {
+    // Agents often stop without committing; their work would otherwise be left behind.
+    await commitWorktree(winner.worktree, `Changes by ${providerName(useWorkspaces.getState().providers, winner.provider)}`);
+    await mergeWorktree(winner.worktree);
+  } catch (err) {
+    await message(String(err), { title: "Merge not possible", kind: "error" });
+    return false;
+  }
+  const s = useWorkspaces.getState();
+  for (const loser of losers) {
+    closeTerminal(loser.id);
+    s.removePane(loser.id);
+    if (loser.worktree) await removeWorktree(loser.worktree, true).catch(() => {});
+  }
+  s.updatePane(winner.id, { raceId: null });
+  logActivity(winner.workspaceId, `Race won by ${providerName(s.providers, winner.provider)} (${winner.worktree.branch})`, winner.provider);
+  return true;
+}
+
 function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
   const providers = useWorkspaces((s) => s.providers);
   const [stats, setStats] = useState<Record<string, Stats | string>>({});
@@ -94,30 +122,6 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
   // Worktrees are created as each agent starts, so reload when their paths appear.
   const worktrees = panes.map((p) => p.worktree?.path ?? "").join("|");
   useEffect(load, [raceId, worktrees]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const pickWinner = async (winner: Pane) => {
-    const losers = panes.filter((p) => p.id !== winner.id);
-    if (!winner.worktree) return;
-    const ok = await ask(
-      `Merge ${winner.worktree.branch} into ${winner.worktree.base}, then close the other ${losers.length} agent${losers.length === 1 ? "" : "s"} and delete their worktrees?`,
-      { title: "Pick winner", kind: "warning", okLabel: "Merge and clean up" },
-    );
-    if (!ok) return;
-    try {
-      await mergeWorktree(winner.worktree);
-    } catch (err) {
-      await message(String(err), { title: "Merge not possible", kind: "error" });
-      return;
-    }
-    const s = useWorkspaces.getState();
-    for (const loser of losers) {
-      closeTerminal(loser.id);
-      s.removePane(loser.id);
-      if (loser.worktree) await removeWorktree(loser.worktree, true).catch(() => {});
-    }
-    s.updatePane(winner.id, { raceId: null });
-    logActivity(winner.workspaceId, `Race won by ${providerName(s.providers, winner.provider)} (${winner.worktree.branch})`, winner.provider);
-  };
 
   const isolated = panes.every((p) => p.worktree);
   return (
@@ -170,7 +174,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
               </button>
               <button
                 disabled={!pane.worktree}
-                onClick={() => void pickWinner(pane)}
+                onClick={() => void pickRaceWinner(pane, panes)}
                 className="flex items-center gap-1 rounded-md bg-accent-soft px-2 py-0.5 text-accent hover:bg-accent hover:text-white disabled:opacity-40"
               >
                 <Trophy size={11} /> Pick

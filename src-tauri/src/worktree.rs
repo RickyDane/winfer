@@ -182,6 +182,17 @@ pub fn merge(info: &WorktreeInfo) -> Result<String, String> {
     }
 }
 
+/// Commits everything the agent left uncommitted in its worktree (no-op when clean), so the
+/// branch can be merged.
+pub fn commit_all(info: &WorktreeInfo, message: &str) -> Result<(), String> {
+    let path = Path::new(&info.path);
+    if git(path, &["status", "--porcelain"])?.is_empty() {
+        return Ok(());
+    }
+    git(path, &["add", "-A"])?;
+    git(path, &["commit", "--no-verify", "-m", message]).map(|_| ())
+}
+
 pub fn remove(info: &WorktreeInfo, delete_branch: bool) -> Result<(), String> {
     let repo = Path::new(&info.repo);
     git(repo, &["worktree", "remove", "--force", &info.path])?;
@@ -216,6 +227,11 @@ pub async fn worktree_diff(info: WorktreeInfo) -> Result<WorktreeDiff, String> {
 #[tauri::command]
 pub async fn worktree_merge(info: WorktreeInfo) -> Result<String, String> {
     merge(&info)
+}
+
+#[tauri::command]
+pub async fn worktree_commit(info: WorktreeInfo, message: String) -> Result<(), String> {
+    commit_all(&info, &message)
 }
 
 #[tauri::command]

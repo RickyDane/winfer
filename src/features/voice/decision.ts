@@ -227,7 +227,7 @@ export function withoutLeadIn(text: string): string {
 
 /** Turns Clef's answers into up to two decisions (the second only if it's a different tool). */
 export function parseDecision(result: DecisionResult, ctx: ToolContext): Decision[] {
-  const decisions: Decision[] = [];
+  let decisions: Decision[] = [];
   for (const key of ["action_1", "action_2"]) {
     const answer = result.answers[key];
     if (answer?.type !== "choice") continue;
@@ -246,6 +246,11 @@ export function parseDecision(result: DecisionResult, ctx: ToolContext): Decisio
   // so a second "tell an agent" would type it into some other pane.
   if (decisions.some((d) => d.tool.id === "spawn_panes" && d.args.prompt)) {
     return decisions.filter((d) => d.tool.id !== "send_to_pane");
+  }
+  // "Show me the review inbox" is for winfer; a "tell an agent" next to it would type the
+  // sentence into a pane.
+  if (decisions.some((d) => d.tool.id === "review_work")) {
+    decisions = decisions.filter((d) => d.tool.id !== "send_to_pane");
   }
   // Telling the open agents and racing new ones both hand out the task; telling wins.
   if (decisions.some((d) => d.tool.id === "broadcast")) {

@@ -1,3 +1,4 @@
+import { ReviewInbox } from "@/features/review/ReviewInbox";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Mic, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
@@ -146,6 +147,7 @@ export function AppShell() {
       <DiffView />
       <SettingsModal />
       <RaceView />
+      <ReviewInbox />
       <BroadcastBar />
       <RecipesView />
       <ModelPicker />
