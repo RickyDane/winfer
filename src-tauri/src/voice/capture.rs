@@ -9,8 +9,16 @@ use cpal::{FromSample, SampleFormat, SizedSample};
 pub const WHISPER_RATE: u32 = 16_000;
 
 enum Msg {
-    Start(Sender<Result<(), String>>),
-    Stop(Sender<Vec<f32>>),
+    /// Opens the named input device, or the system default when `None`.
+    Start(Option<String>, Sender<Result<String, String>>),
+    Stop(Sender<Recording>),
+}
+
+/// A finished recording: mono 16 kHz samples plus the loudest callback's RMS, which tells
+/// "you were quiet" apart from "the device delivered nothing" (e.g. microphone access denied).
+pub struct Recording {
+    pub samples: Vec<f32>,
+    pub peak: f32,
 }
 
 #[derive(Default)]
@@ -19,6 +27,7 @@ struct Buffer {
     rate: u32,
     /// RMS of the most recent callback, for the level meter.
     level: f32,
+    peak: f32,
 }
 
 pub struct Recorder {
@@ -38,23 +47,28 @@ impl Recorder {
         }
     }
 
-    pub fn start(&self) -> Result<(), String> {
+    /// Starts recording; returns the name of the device in use.
+    pub fn start(&self, device: Option<String>) -> Result<String, String> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .lock()
             .unwrap()
-            .send(Msg::Start(reply))
+            .send(Msg::Start(device, reply))
             .map_err(|e| e.to_string())?;
         rx.recv().map_err(|e| e.to_string())?
     }
 
     /// Stops recording and returns mono 16 kHz samples.
-    pub fn stop(&self) -> Vec<f32> {
+    pub fn stop(&self) -> Recording {
         let (reply, rx) = mpsc::channel();
+        let empty = || Recording {
+            samples: Vec::new(),
+            peak: 0.0,
+        };
         if self.tx.lock().unwrap().send(Msg::Stop(reply)).is_err() {
-            return Vec::new();
+            return empty();
         }
-        rx.recv().unwrap_or_default()
+        rx.recv().unwrap_or_else(|_| empty())
     }
 
     pub fn level(&self) -> f32 {
@@ -66,34 +80,67 @@ fn run(rx: Receiver<Msg>, buffer: Arc<Mutex<Buffer>>) {
     let mut stream: Option<cpal::Stream> = None;
     for msg in rx {
         match msg {
-            Msg::Start(reply) => {
+            Msg::Start(device, reply) => {
                 stream = None;
-                let result = open(buffer.clone()).map(|s| stream = Some(s));
+                let result = open(device.as_deref(), buffer.clone()).map(|(s, name)| {
+                    stream = Some(s);
+                    name
+                });
                 let _ = reply.send(result);
             }
             Msg::Stop(reply) => {
                 stream = None; // dropping stops capture
                 let mut buf = buffer.lock().unwrap();
                 let samples = resample(&buf.samples, buf.rate, WHISPER_RATE);
+                let peak = buf.peak;
                 buf.samples.clear();
                 buf.level = 0.0;
-                let _ = reply.send(samples);
+                buf.peak = 0.0;
+                let _ = reply.send(Recording { samples, peak });
             }
         }
     }
     drop(stream);
 }
 
-fn open(buffer: Arc<Mutex<Buffer>>) -> Result<cpal::Stream, String> {
-    let device = cpal::default_host()
-        .default_input_device()
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_string())
+}
+
+/// Names of the available microphones and the system default.
+pub fn input_devices() -> (Vec<String>, Option<String>) {
+    let host = cpal::default_host();
+    let mut names: Vec<String> = host
+        .input_devices()
+        .map(|devices| devices.filter_map(|d| device_name(&d)).collect())
+        .unwrap_or_default();
+    names.dedup();
+    let default = host.default_input_device().and_then(|d| device_name(&d));
+    (names, default)
+}
+
+fn open(
+    wanted: Option<&str>,
+    buffer: Arc<Mutex<Buffer>>,
+) -> Result<(cpal::Stream, String), String> {
+    let host = cpal::default_host();
+    // A chosen device that's gone (unplugged headset) falls back to the system default.
+    let device = wanted
+        .and_then(|name| {
+            host.input_devices()
+                .ok()?
+                .find(|d| device_name(d).as_deref() == Some(name))
+        })
+        .or_else(|| host.default_input_device())
         .ok_or("no microphone found")?;
+    let name = device_name(&device).unwrap_or_else(|| "microphone".into());
     let config = device.default_input_config().map_err(|e| e.to_string())?;
     let channels = config.channels() as usize;
     {
         let mut buf = buffer.lock().unwrap();
         buf.samples.clear();
         buf.rate = config.sample_rate();
+        buf.peak = 0.0;
     }
 
     fn build<T>(
@@ -119,6 +166,7 @@ fn open(buffer: Arc<Mutex<Buffer>>) -> Result<cpal::Stream, String> {
                         buf.samples.push(mono);
                     }
                     buf.level = (sum / (data.len() / channels).max(1) as f32).sqrt();
+                    buf.peak = buf.peak.max(buf.level);
                 },
                 |err| eprintln!("microphone error: {err}"),
                 None,
@@ -135,7 +183,7 @@ fn open(buffer: Arc<Mutex<Buffer>>) -> Result<cpal::Stream, String> {
         other => Err(format!("unsupported microphone format {other}")),
     }?;
     stream.play().map_err(|e| e.to_string())?;
-    Ok(stream)
+    Ok((stream, name))
 }
 
 /// Linear-interpolation resampling; plenty for speech recognition.
@@ -170,5 +218,22 @@ mod tests {
         assert_eq!(out.len(), 16_000);
         assert!(out.iter().all(|s| s.abs() <= 1.0));
         assert_eq!(resample(&input[..10], 16_000, 16_000).len(), 10);
+    }
+
+    /// Records one second from every microphone and prints its level.
+    /// Run with: cargo test -- --ignored --nocapture records_each_microphone
+    #[test]
+    #[ignore]
+    fn records_each_microphone() {
+        let (names, default) = input_devices();
+        eprintln!("default: {default:?}");
+        let recorder = Recorder::new();
+        for name in names {
+            let device = recorder.start(Some(name.clone())).unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let r = recorder.stop();
+            eprintln!("{name} → {device}: {} samples, peak {:.5}", r.samples.len(), r.peak);
+            assert_eq!(device, name);
+        }
     }
 }

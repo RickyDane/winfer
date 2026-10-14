@@ -14,6 +14,70 @@ const Section = ({ title, children }: { title: string; children: React.ReactNode
 
 const inputClass = "h-8 w-full rounded-md border border-border bg-panel px-2.5 font-mono text-xs text-fg outline-none focus:border-accent";
 
+function Microphone({ selected }: { selected: string | null }) {
+  const level = useVoice((s) => s.level);
+  const [devices, setDevices] = useState<{ devices: string[]; default: string | null } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = () => void invoke<{ devices: string[]; default: string | null }>("voice_input_devices").then(setDevices, () => {});
+  useEffect(load, []);
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await invoke<{ device: string; peak: number }>("voice_test_microphone");
+      setResult(r.peak < 0.005 ? { ok: false, text: `Very quiet on “${r.device}”. Speak up or pick another microphone.` } : { ok: true, text: `Heard you on “${r.device}”.` });
+    } catch (err) {
+      setResult({ ok: false, text: String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // A saved device that isn't connected right now still shows, so the choice isn't lost.
+  const names = devices ? [...devices.devices, ...(selected && !devices.devices.includes(selected) ? [selected] : [])] : selected ? [selected] : [];
+  return (
+    <div className="space-y-1.5">
+      <label className="flex items-center gap-2 text-[13px] text-fg">
+        Microphone
+        <select
+          value={selected ?? ""}
+          onFocus={load}
+          onChange={(e) => {
+            setResult(null);
+            void configureVoice({ inputDevice: e.target.value });
+          }}
+          className="h-7 max-w-72 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+        >
+          <option value="">System default{devices?.default ? ` (${devices.default})` : ""}</option>
+          {names.map((name) => (
+            <option key={name} value={name}>
+              {name}
+              {devices && !devices.devices.includes(name) ? " — not connected" : ""}
+            </option>
+          ))}
+        </select>
+        <button
+          disabled={testing}
+          onClick={() => void test()}
+          className="flex items-center gap-1.5 rounded-md border border-border-strong px-2 py-1 text-xs hover:bg-hover disabled:opacity-50"
+        >
+          {testing && <Loader2 size={12} className="animate-spin" />}
+          {testing ? "Say something…" : "Test"}
+        </button>
+        {testing && (
+          <span className="h-1.5 w-24 overflow-hidden rounded-full bg-hover">
+            <span className="block h-full bg-success transition-[width] duration-75" style={{ width: `${Math.min(100, level * 1200)}%` }} />
+          </span>
+        )}
+      </label>
+      {result && <p className={`text-xs ${result.ok ? "text-success" : "text-danger"}`}>{result.text}</p>}
+    </div>
+  );
+}
+
 function VoiceSettings() {
   const status = useVoice((s) => s.status);
   const readback = useWorkspaces((s) => s.voiceConfig.readback ?? false);
@@ -64,6 +128,7 @@ function VoiceSettings() {
             <span className="text-xs text-warning">Pick a multilingual model below for {status.language === "de" ? "German" : "other languages"}.</span>
           )}
         </label>
+        <Microphone selected={status.inputDevice} />
         {status.models.map((m) => (
           <label key={m.id} className="flex items-center gap-3 text-[13px] text-fg">
             <input

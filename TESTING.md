@@ -48,6 +48,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 
 ## 6. Voice
 - [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
+- [ ] Settings → Microphone lists your devices (MacBook Pro Microphone, AirPods…); pick one → Test → "Heard you on …" with a moving meter. "System default" follows macOS.
 - [ ] Enter Cloudflare account ID + Workers AI token → Save → Test connection shows a latency.
 - [ ] Hold ⌥Space, say "open two new instances with Claude and Codex", release → two panes open. (First use asks for microphone access.)
 - [ ] "Create a new Claude instance and tell it to create a Flappy Bird clone" → Claude opens with that prompt.

@@ -31,6 +31,8 @@ export interface VoiceStatus {
   language: "en" | "de" | "auto";
   clefModel: string;
   credentials: boolean;
+  /** Chosen microphone; null follows the system default. */
+  inputDevice: string | null;
 }
 
 interface VoiceState {
@@ -243,7 +245,7 @@ export function startVoice() {
 export const startListening = (mode: Mode = "command") => void invoke("voice_start", { mode });
 export const stopListening = () => void invoke("voice_stop");
 
-export async function configureVoice(config: { sttModel?: string; clefModel?: string; language?: "en" | "de" | "auto" }) {
+export async function configureVoice(config: { sttModel?: string; clefModel?: string; language?: "en" | "de" | "auto"; inputDevice?: string }) {
   useWorkspaces.getState().setVoiceConfig(config);
   await invoke("voice_configure", { config });
   await refreshVoiceStatus();
