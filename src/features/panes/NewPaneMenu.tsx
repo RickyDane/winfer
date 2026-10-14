@@ -2,6 +2,7 @@ import { ChevronRight, Loader2, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { UsageHint } from "@/features/usage/UsageMeter";
 import { defaultProviderId, useWorkspaces } from "@/stores/workspaces";
 
 /** Provider picker for opening a new pane; the star marks (and sets) the default agent. */
@@ -51,6 +52,7 @@ export function NewPaneMenu() {
                   <span className="flex-1">{p.name}</span>
                   {!p.installed && <span className="text-[11px]">not installed</span>}
                   {p.installed && agentModels[p.id] && <span className="font-mono text-[10px] text-fg-subtle">{agentModels[p.id]}</span>}
+                  {p.installed && <UsageHint provider={p.id} />}
                 </button>
                 {p.installed && (
                   <button

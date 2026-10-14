@@ -23,6 +23,8 @@ import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
 import { Toaster } from "@/components/Toaster";
+import { UsageMeter } from "@/features/usage/UsageMeter";
+import { startUsageTracking } from "@/features/usage/usage";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -49,6 +51,7 @@ function TitleBar() {
       <div data-tauri-drag-region className="flex flex-1 justify-center">
         <ViewTabs workspace={workspace.name} />
       </div>
+      <UsageMeter />
       <NewPaneMenu />
       <MicButton />
       <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
@@ -140,6 +143,7 @@ export function AppShell() {
     startVoice();
     startAgentApi();
     startProgressTracking();
+    startUsageTracking();
   }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
   if (!workspace) return <div className="h-full" data-tauri-drag-region />;

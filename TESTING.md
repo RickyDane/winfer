@@ -100,6 +100,13 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.
 - [ ] Optional: `CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice` reports accuracy (target ≥ 90%) and latency.
 
+## 6a. Usage limits
+- [ ] After a Claude Code pane in winfer answers once, a ring with the Claude icon appears in the title bar; your own Claude status line still shows in the pane.
+- [ ] After a Codex turn, a Codex ring appears (read from ~/.codex/sessions). Rings drain with use: green, amber under 30% left, red under 10%.
+- [ ] Click the rings: 5-hour and weekly bars per agent, reset times, "at this pace runs out …" once there's ≥15 min of history; OpenCode shows today's tokens and cost.
+- [ ] The New menu shows "% left" next to Claude Code / Codex; pane headers show the ring around the agent icon.
+- [ ] Crossing 80% / 95% used shows a toast (native notification when winfer is in the background); at 100% the toast offers "Continue in Codex" (or the agent with most room), which opens it next to the pane in the same worktree with the task and last output.
+
 ## 6b. Feedback and motion
 - [ ] Dialogs (Settings, palette, review, history…) fade in; menus pop in; new panes grow in; switching workspace or Overview fades the content.
 - [ ] A new agent pane shows "Creating worktree…" then "Starting Claude Code…" until its first output.

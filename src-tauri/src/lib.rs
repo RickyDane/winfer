@@ -11,6 +11,7 @@ mod providers;
 mod pty;
 mod review;
 mod store;
+mod usage;
 mod voice;
 mod worktree;
 
@@ -19,6 +20,11 @@ use tauri::Manager;
 /// `winfer mcp-stdio`: the MCP server agents launch to talk to the running app.
 pub fn run_mcp_stdio() {
     mcp::run_stdio();
+}
+
+/// `winfer statusline`: reports Claude Code's usage limits, then runs the user's status line.
+pub fn run_statusline() {
+    usage::run_statusline();
 }
 
 /// `winfer hook <provider> <event> [json]`: forwards an agent hook event to the running app.
@@ -156,6 +162,8 @@ pub fn run() {
             voice::voice_start,
             voice::voice_stop,
             mcp::mcp_respond,
+            usage::usage_codex,
+            usage::usage_opencode,
             llm::llm_compose,
         ])
         .build(tauri::generate_context!())

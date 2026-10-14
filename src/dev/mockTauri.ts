@@ -97,6 +97,20 @@ function frameDataUrl(): string {
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
+// Claude Code reports its limits through the status line once a session answers.
+window.setTimeout(() => {
+  const now = Date.now();
+  void emit("usage://report", {
+    provider: "claude",
+    report: {
+      windows: [
+        { kind: "session", label: "5-hour", usedPercent: 38, resetsAt: now + 108 * 60_000 },
+        { kind: "week", label: "Weekly", usedPercent: 69, resetsAt: now + 2.5 * 86400_000 },
+      ],
+    },
+  });
+}, 2500);
+
 function emitTabs(workspaceId: string) {
   void emit("browser://tabs", { workspaceId, tabs: browserTabs.get(workspaceId) ?? [] });
   void renderFrame(workspaceId);
@@ -158,6 +172,19 @@ mockIPC(
       case "history_delete":
         mergeHistory = mergeHistory.filter((m) => m.id !== a.id);
         return null;
+      case "usage_codex": {
+        const now = Date.now();
+        return {
+          provider: "codex",
+          at: now - 60_000,
+          windows: [
+            { kind: "session", label: "5-hour", usedPercent: 81, resetsAt: now + 48 * 60_000 },
+            { kind: "week", label: "Weekly", usedPercent: 6, resetsAt: now + 5 * 86400_000 },
+          ],
+        };
+      }
+      case "usage_opencode":
+        return { tokens: 412_300, cost: 0.83, sessions: 14 };
       case "android_status":
         return { adb: true, devices: [{ serial: "emulator-5554", state: "device", model: "Pixel 7 (test stream)", emulator: true }], avds: ["Pixel_7_API_35"] };
       case "android_mirror_start": {

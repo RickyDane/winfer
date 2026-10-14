@@ -74,7 +74,9 @@ fn claude_settings(exe: &str) -> Value {
             "PostToolUse": [{ "matcher": "*", "hooks": [command("PostToolUse")] }],
             "Notification": hook("Notification"),
             "Stop": hook("Stop"),
-        }
+        },
+        // Reports the plan's usage limits, then shows the user's own status line.
+        "statusLine": crate::usage::claude_statusline_setting(exe),
     })
 }
 
@@ -130,7 +132,7 @@ pub fn run_hook(args: &[String]) {
     );
 }
 
-fn send_hook(hook: &str, token: &str, pane_id: &str, provider: &str, event: &str, body: String) {
+pub fn send_hook(hook: &str, token: &str, pane_id: &str, provider: &str, event: &str, body: String) {
     if hook.is_empty() || pane_id.is_empty() {
         return;
     }
@@ -153,12 +155,16 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
 
     let token = format!("{:032x}", rand::random::<u128>());
     let status_app = app.clone();
+    let usage_app = app.clone();
     let addr = serve(
         token.clone(),
         move |event| {
             let _ = status_app.emit("agent://status", event);
         },
         move |call| crate::mcp::dispatch(&app, call),
+        move |provider, body| {
+            let _ = usage_app.emit("usage://report", json!({ "provider": provider, "report": body }));
+        },
     )?;
     let _ = SERVER.set(HookServer {
         addr,
@@ -175,6 +181,7 @@ fn serve(
     token: String,
     emit: impl Fn(StatusEvent) + Send + 'static,
     on_mcp: impl Fn(crate::mcp::Call) -> crate::mcp::Reply + Send + Sync + 'static,
+    on_usage: impl Fn(&str, Value) + Send + 'static,
 ) -> std::io::Result<String> {
     let on_mcp = std::sync::Arc::new(on_mcp);
     let http = tiny_http::Server::http("127.0.0.1:0").map_err(std::io::Error::other)?;
@@ -202,7 +209,11 @@ fn serve(
                 (true, [hook, provider, pane_id, event]) if hook == "hook" => {
                     let mut body = String::new();
                     let _ = req.as_reader().take(64 * 1024).read_to_string(&mut body);
-                    if let Some(status) = status_for(provider, event) {
+                    if event == "usage" {
+                        if let Ok(report) = serde_json::from_str::<Value>(&body) {
+                            on_usage(provider, report);
+                        }
+                    } else if let Some(status) = status_for(provider, event) {
                         let message = serde_json::from_str::<Value>(&body).ok().and_then(|v| {
                             v.get("message").and_then(Value::as_str).map(String::from)
                         });
@@ -266,6 +277,7 @@ mod tests {
                 ok: true,
                 text: format!("{}:{}", call.tool, call.pane_id),
             },
+            |_, _| {},
         )
         .unwrap();
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -294,6 +306,7 @@ mod tests {
     #[test]
     fn hooks_reach_the_server() {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (usage_tx, usage_rx) = std::sync::mpsc::channel();
         let addr = serve(
             "secret".into(),
             move |e| tx.send(e).unwrap(),
@@ -301,9 +314,14 @@ mod tests {
                 ok: true,
                 text: format!("{} from {}", call.tool, call.pane_id),
             },
+            move |provider, report| usage_tx.send((provider.to_string(), report)).unwrap(),
         )
         .unwrap();
         let recv = || rx.recv_timeout(std::time::Duration::from_secs(5));
+
+        send_hook(&addr, "secret", "p-1", "claude", "usage", r#"{"windows":[]}"#.into());
+        let (provider, report) = usage_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!((provider.as_str(), &report["windows"]), ("claude", &json!([])));
 
         let body = r#"{"message":"Claude needs your permission"}"#.to_string();
         send_hook(&addr, "secret", "p-1", "claude", "Notification", body);

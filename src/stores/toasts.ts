@@ -8,6 +8,8 @@ export interface Toast {
   kind: ToastKind;
   text: string;
   detail?: string;
+  /** A button on the toast (it stays up longer). */
+  action?: { label: string; run: () => void };
 }
 
 interface ToastState {
@@ -27,18 +29,18 @@ export function dismissToast(id: number) {
   useToasts.setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 }
 
-function schedule(id: number, kind: ToastKind) {
+function schedule(id: number, kind: ToastKind, hasAction = false) {
   clearTimeout(timers.get(id));
-  const ms = LIFETIME[kind];
+  const ms = hasAction ? 20_000 : LIFETIME[kind];
   if (ms !== null) timers.set(id, window.setTimeout(() => dismissToast(id), ms));
 }
 
 /** Shows a toast; returns its id so a "loading" one can be updated or dismissed. */
-export function toast(text: string, kind: ToastKind = "info", detail?: string): number {
+export function toast(text: string, kind: ToastKind = "info", detail?: string, action?: Toast["action"]): number {
   const id = nextId++;
   // Keep the stack short; the oldest ones go first.
-  useToasts.setState((s) => ({ toasts: [...s.toasts, { id, kind, text, detail }].slice(-4) }));
-  schedule(id, kind);
+  useToasts.setState((s) => ({ toasts: [...s.toasts, { id, kind, text, detail, action }].slice(-4) }));
+  schedule(id, kind, !!action);
   return id;
 }
 

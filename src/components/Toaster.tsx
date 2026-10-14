@@ -27,6 +27,17 @@ export function Toaster() {
           <div className="min-w-0 flex-1">
             <div className="text-[13px] text-fg">{t.text}</div>
             {t.detail && <div className="mt-0.5 line-clamp-3 font-mono text-[11px] break-all text-fg-subtle select-text">{t.detail}</div>}
+            {t.action && (
+              <button
+                onClick={() => {
+                  dismissToast(t.id);
+                  t.action!.run();
+                }}
+                className="mt-1.5 rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-white hover:opacity-90"
+              >
+                {t.action.label}
+              </button>
+            )}
           </div>
           {t.kind !== "loading" && (
             <button onClick={() => dismissToast(t.id)} className="shrink-0 rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg" title="Dismiss">
