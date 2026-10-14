@@ -71,15 +71,18 @@ function questionKey(tool: ToolDef, param: string, option?: string) {
  */
 export function transcriptSpans(transcript: string): string[] {
   const words = transcript.replace(/[.,!?;]+(\s|$)/g, "$1").split(/\s+/).filter(Boolean);
+  // Endings always fit; in a long transcript short phrases would otherwise crowd them out,
+  // leaving no option that holds the whole instruction.
+  const endings = new Set(words.map((_, start) => words.slice(start).join(" ")));
   const spans = new Set<string>();
   for (let start = 0; start < words.length; start++) {
-    for (let len = 1; start + len <= words.length; len++) {
-      if (len <= MAX_SHORT_SPAN || start + len === words.length) spans.add(words.slice(start, start + len).join(" "));
-    }
+    for (let len = 1; len <= MAX_SHORT_SPAN && start + len < words.length; len++) spans.add(words.slice(start, start + len).join(" "));
   }
+  const room = Math.max(0, MAX_CHOICES - 1 - endings.size);
+  const short = [...spans].filter((s) => !endings.has(s)).sort((a, b) => a.length - b.length).slice(0, room);
   // Shortest first: when unsure the model leans toward earlier options, and a short
   // phrase is a safer default than the whole sentence.
-  return [...spans].sort((a, b) => a.length - b.length).slice(0, MAX_CHOICES - 1);
+  return [...short, ...endings].sort((a, b) => a.length - b.length).slice(0, MAX_CHOICES - 1);
 }
 
 function question(param: ParamDef, ctx: ToolContext, transcript: string, prefix: string): Question | Question[] | null {
@@ -244,7 +247,7 @@ export function parseDecision(result: DecisionResult, ctx: ToolContext): Decisio
   }
   // "Open Codex and ask it to …": the new agent already gets the instruction as its prompt,
   // so a second "tell an agent" would type it into some other pane.
-  if (decisions.some((d) => d.tool.id === "spawn_panes" && d.args.prompt)) {
+  if (decisions.some((d) => (d.tool.id === "spawn_panes" || d.tool.id === "start_features") && d.args.prompt)) {
     return decisions.filter((d) => d.tool.id !== "send_to_pane");
   }
   // "Show me the review inbox" is for winfer; a "tell an agent" next to it would type the

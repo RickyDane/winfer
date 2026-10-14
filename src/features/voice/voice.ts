@@ -123,7 +123,7 @@ async function run(decisions: Decision[], transcript: string) {
   for (const [i, d] of decisions.entries()) {
     // One new agent asked to do several separate things: one agent per task, each in its own
     // worktree, so every feature gets its own branch and pull request.
-    const order = d.tool.id === "spawn_panes" && d.args.prompt ? spawnOrder(d, transcript) : [];
+    const order = (d.tool.id === "spawn_panes" || d.tool.id === "start_features") && d.args.prompt ? spawnOrder(d, transcript) : [];
     if (order.length !== 1 || order[0] === "shell") continue;
     show("deciding", { transcript, message: "Writing the prompt…" });
     const tasks = await splitTasks(transcript, String(d.args.prompt), providerName(useWorkspaces.getState().providers, order[0]));
@@ -154,7 +154,7 @@ async function run(decisions: Decision[], transcript: string) {
   const commands = decisions.flatMap((d) => planned.get(d) ?? commandsFor([d], transcript));
   commands.forEach(execute);
   const perAgent = [...planned.values()].flat().length;
-  const split = [...planned.entries()].filter(([d]) => d.tool.id === "spawn_panes").map(([, c]) => c.length);
+  const split = [...planned.entries()].filter(([d]) => d.tool.id === "spawn_panes" || d.tool.id === "start_features").map(([, c]) => c.length);
   const written = perAgent ? `${perAgent} individual prompts` : decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
   const summary =
     decisions.map(describe).join(" · ") +

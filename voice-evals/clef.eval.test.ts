@@ -84,10 +84,12 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
         const got = decisions.map((d) => d.tool.id).join("+") || "none";
         // Two-action commands may come back in either order.
         let ok = decisions.length ? decisions.some((d) => c.expect.includes(d.tool.id)) : c.expect.includes("none");
-        const spawn = decisions.find((d) => d.tool.id === "spawn_panes");
+        const spawn = decisions.find((d) => d.tool.id === "spawn_panes" || d.tool.id === "start_features");
         if (ok && c.counts && spawn) {
-          const counts = spawn.args.counts as Record<string, number>;
-          ok = Object.entries(c.counts).every(([p, n]) => counts[p] === n);
+          // What actually opens, after the tool's own fix-ups.
+          const counts: Record<string, number> = {};
+          for (const cmd of spawn.tool.toCommands(spawn.args, ctx)) if (cmd.type === "pane.spawn") counts[cmd.provider] = (counts[cmd.provider] ?? 0) + (cmd.count ?? 1);
+          ok = Object.entries(c.counts).every(([p, n]) => (counts[p] ?? 0) === n);
         }
         // The prompt must contain the instruction and not start with a lead-in like "and tell them to".
         const prompt = String(spawn?.args.prompt ?? "").toLowerCase();

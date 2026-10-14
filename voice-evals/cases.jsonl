@@ -91,3 +91,6 @@
 {"utterance": "make the terminal text bigger", "expect": ["zoom_terminals"], "tags": ["zoom"]}
 {"utterance": "zoom out the terminals", "expect": ["zoom_terminals"], "tags": ["zoom"]}
 {"utterance": "mach die Schrift im Terminal gr\u00f6\u00dfer", "expect": ["zoom_terminals"], "tags": ["zoom"]}
+{"utterance":"We need four new features, one general plugin system, one graphify plugin for managing context and a general knowledge base for the agents, then another plug for storing secrets in an encrypted secret storage with a key/value pair to let the agents use them for like login or generl environment variables and we need to implement the openai decisions api with luna for the decision model","expect":["spawn_panes","start_features"],"prompt":"plugin"}
+
+{"utterance":"Erstelle eine neue Datei src/config/credentials.js mit Platzhaltern für API-Schlüssel. Implementiere die OpenAI Decisions API in src/api/openaiDecisions.js und exportiere eine Funktion decide. Passe die Luna-Komponente in src/components/Luna.vue an, sodass sie die neue API als Default nutzt, die Farbe auf Gelb setzt und clef entfernt. Starte anschließend das Projekt in Claude Code.","expect":["spawn_panes","start_features"],"prompt":"credentials"}

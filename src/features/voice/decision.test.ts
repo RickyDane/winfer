@@ -60,6 +60,14 @@ describe("buildRequest", () => {
     expect(spans.length).toBeLessThan(120);
   });
 
+  it("keeps the whole instruction as an option in a long transcript", () => {
+    const long = "We need four new features, one general plugin system, one graphify plugin for managing context and a general knowledge base for the agents, then another plug for storing secrets in an encrypted secret storage with a key/value pair to let the agents use them for like login or general environment variables and we need to implement the openai decisions api with luna for the decision model";
+    const spans = transcriptSpans(long);
+    expect(spans.length).toBeLessThanOrEqual(254);
+    expect(spans).toContain(long.replace(/,/g, ""));
+    expect(spans).toContain("we need to implement the openai decisions api with luna for the decision model");
+  });
+
   it("asks free text once per slot", () => {
     expect(Object.keys(req.questions).filter((k) => k === "instruction" || k === "address")).toEqual(["instruction", "address"]);
     expect(Object.keys(req.questions).some((k) => k.endsWith(".prompt") || k.endsWith(".text") || k.endsWith(".url"))).toBe(false);

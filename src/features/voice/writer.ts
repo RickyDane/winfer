@@ -48,6 +48,7 @@ function recipients(d: Decision): { names: string; panes: Pane[] } {
     const pane = ws.panes.find((p) => p.id === id);
     return pane ? { names: name(pane.provider), panes: [pane] } : { names: "an agent", panes: [] };
   }
+  if (d.tool.id === "start_features") return { names: "a new agent", panes: [] };
   if (d.tool.id === "spawn_panes" || d.tool.id === "race_agents") {
     const counts = (d.args.counts ?? {}) as Record<string, number>;
     return { names: Object.keys(counts).filter((p) => counts[p] > 0).map(name).join(", ") || "new agents", panes: [] };
@@ -63,7 +64,7 @@ function context(d: Decision, transcript: string, instruction: string): string {
   const parts = [
     `Spoken: "${transcript}"`,
     `Instruction as heard: "${instruction}"`,
-    `Recipient: ${names}${d.tool.id === "spawn_panes" ? " (new agent, starting fresh)" : ""}`,
+    `Recipient: ${names}${d.tool.id === "spawn_panes" || d.tool.id === "start_features" ? " (new agent, starting fresh)" : ""}`,
     `Workspace: ${ws.name} (${ws.rootDir})`,
   ];
   for (const pane of panes) {

@@ -145,6 +145,17 @@ export const TOOLS: ToolDef[] = [
         .map((p) => ({ title: `New pane: ${p.name}`, args: { counts: { [p.id]: 1 } } })),
   },
   {
+    id: "start_features",
+    title: "Start new features",
+    description: "The user lists new features, files to create or code changes to implement, in any language (“we need a plugin system, a secret store and …”, “Erstelle … Implementiere …”), without addressing an agent that is already open; starts new agents on them",
+    risk: "safe",
+    params: {
+      prompt: { kind: "span", slot: "instruction", ask: "What should be built or implemented?" },
+    },
+    // One default agent; the voice flow splits the work into one agent per feature.
+    toCommands: (args) => (args.prompt ? [{ type: "pane.spawn", provider: "default", count: 1, prompt: String(args.prompt) }] : []),
+  },
+  {
     id: "split_pane",
     title: "Split pane",
     description: "Split the focused pane in two; only when the user literally says split",
