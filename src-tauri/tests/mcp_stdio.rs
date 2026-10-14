@@ -10,27 +10,34 @@ fn stdio_server_forwards_tool_calls() {
     // Stand-in for the running app's hook server.
     let http = tiny_http::Server::http("127.0.0.1:0").unwrap();
     let addr = http.server_addr().to_ip().unwrap().to_string();
+    // tools/list first asks the app for plugin tools (answered with none), then the tool call.
     let server = std::thread::spawn(move || {
-        let mut req = http.recv().unwrap();
-        let token = req
-            .headers()
-            .iter()
-            .find(|h| h.field.equiv("X-Winfer-Token"))
-            .map(|h| h.value.to_string());
-        let mut body = String::new();
-        req.as_reader().read_to_string(&mut body).unwrap();
-        let call: Value = serde_json::from_str(&body).unwrap();
-        let text = format!(
-            "{}:{}:{}:{}",
-            token.unwrap_or_default(),
-            call["tool"],
-            call["paneId"],
-            call["args"]["pane"]
-        );
-        req.respond(tiny_http::Response::from_string(
-            json!({ "ok": true, "text": text }).to_string(),
-        ))
-        .unwrap();
+        for _ in 0..2 {
+            let mut req = http.recv().unwrap();
+            let token = req
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("X-Winfer-Token"))
+                .map(|h| h.value.to_string());
+            let mut body = String::new();
+            req.as_reader().read_to_string(&mut body).unwrap();
+            let call: Value = serde_json::from_str(&body).unwrap();
+            let text = if call["tool"] == "__plugin_tools" {
+                "[]".to_string()
+            } else {
+                format!(
+                    "{}:{}:{}:{}",
+                    token.unwrap_or_default(),
+                    call["tool"],
+                    call["paneId"],
+                    call["args"]["pane"]
+                )
+            };
+            req.respond(tiny_http::Response::from_string(
+                json!({ "ok": true, "text": text }).to_string(),
+            ))
+            .unwrap();
+        }
     });
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_winfer"))
