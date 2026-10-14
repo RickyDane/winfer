@@ -641,7 +641,9 @@ mod tests {
         sh(&origin, "git branch feature/login && git branch release");
         // A clone, so the origin's branches show up as remote ones.
         let clone = temp_dir("clone");
-        sh(&clone, &format!("git clone -q {} . && git config user.email t@t && git config user.name t", origin.display()));
+        // Quoted with forward slashes: sh would eat a Windows path's backslashes.
+        let origin_path = origin.display().to_string().replace('\\', "/");
+        sh(&clone, &format!("git clone -q '{origin_path}' . && git config user.email t@t && git config user.name t"));
         sh(&clone, "git branch local-only");
         let wts = temp_dir("wt");
 
