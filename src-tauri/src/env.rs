@@ -56,20 +56,35 @@ fn launcher_at(path: PathBuf) -> Launcher {
         .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
     if batch {
         let dir = path.parent().unwrap_or(std::path::Path::new("."));
-        if let Some(script) = std::fs::read_to_string(&path)
+        if let Some(target) = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| node_shim_script(&text))
+            .map(|rel| dir.join(rel))
+            .filter(|p| p.exists())
         {
-            let script = dir.join(script);
-            let node = Some(dir.join("node.exe"))
-                .filter(|p| p.exists())
-                .or_else(|| find_command("node"));
-            if let (Some(node), true) = (node, script.exists()) {
-                return Launcher {
-                    program: node,
-                    args: vec![script.to_string_lossy().into_owned()],
-                    batch: false,
-                };
+            match shim_target(&target) {
+                // Native CLIs (opencode ships opencode.exe): run them directly.
+                ShimTarget::Executable => {
+                    return Launcher {
+                        program: target,
+                        args: Vec::new(),
+                        batch: false,
+                    };
+                }
+                ShimTarget::Node => {
+                    let node = Some(dir.join("node.exe"))
+                        .filter(|p| p.exists())
+                        .or_else(|| find_command("node"));
+                    if let Some(node) = node {
+                        return Launcher {
+                            program: node,
+                            args: vec![target.to_string_lossy().into_owned()],
+                            batch: false,
+                        };
+                    }
+                }
+                // A shell script or something else: only the shim knows how to run it.
+                ShimTarget::Other => {}
             }
         }
     }
@@ -77,6 +92,40 @@ fn launcher_at(path: PathBuf) -> Launcher {
         program: path,
         args: Vec::new(),
         batch,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum ShimTarget {
+    Executable,
+    Node,
+    Other,
+}
+
+/// What an npm shim's target is: a native program, a Node script, or something else.
+fn shim_target(target: &std::path::Path) -> ShimTarget {
+    let ext = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(ext.as_str(), "exe" | "com") {
+        return ShimTarget::Executable;
+    }
+    if matches!(ext.as_str(), "js" | "cjs" | "mjs") {
+        return ShimTarget::Node;
+    }
+    // Extensionless bins say how they run in their first line ("#!/usr/bin/env node").
+    let mut head = [0u8; 128];
+    let n = std::fs::File::open(target)
+        .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+        .unwrap_or(0);
+    let first_line = String::from_utf8_lossy(&head[..n]);
+    let first_line = first_line.lines().next().unwrap_or("");
+    if first_line.starts_with("#!") && first_line.contains("node") {
+        ShimTarget::Node
+    } else {
+        ShimTarget::Other
     }
 }
 
@@ -190,6 +239,41 @@ mod tests {
         assert_eq!(node_shim_script(pnpm).unwrap(), ["..", "cli", "bin", "run.js"].join(sep));
         // Not a Node shim.
         assert_eq!(node_shim_script("@echo off\r\nsomething.exe %*\r\n"), None);
+    }
+
+    #[test]
+    fn tells_native_node_and_other_shim_targets_apart() {
+        use super::{shim_target, ShimTarget};
+        let dir = std::env::temp_dir().join(format!("winfer-target-{:x}", rand::random::<u32>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, body: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+        // opencode-ai's bin is its native binary.
+        assert_eq!(shim_target(&write("opencode.exe", b"MZ\x90\x00")), ShimTarget::Executable);
+        assert_eq!(shim_target(&write("codex.js", b"import x from 'y'")), ShimTarget::Node);
+        assert_eq!(shim_target(&write("claude", b"#!/usr/bin/env node\nrequire('x')")), ShimTarget::Node);
+        assert_eq!(shim_target(&write("tool", b"#!/bin/sh\nexec foo")), ShimTarget::Other);
+        assert_eq!(shim_target(&write("blob", b"\x7fELF")), ShimTarget::Other);
+    }
+
+    /// An npm shim for a native program (like opencode.exe) runs the program itself.
+    #[cfg(windows)]
+    #[test]
+    fn exe_shims_run_the_program_directly() {
+        let dir = std::env::temp_dir().join(format!("winfer-exe-shim-{:x}", rand::random::<u32>()));
+        let bin = dir.join("node_modules").join("fake").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("fake.exe");
+        std::fs::copy(r"C:\Windows\System32\whoami.exe", &exe).unwrap();
+        let shim = dir.join("fake.cmd");
+        std::fs::write(&shim, "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\fake\\bin\\fake.exe\"   %*\r\n").unwrap();
+        let launcher = super::launcher_at(shim);
+        assert_eq!(launcher.program, exe);
+        assert!(launcher.args.is_empty() && !launcher.batch, "{launcher:?}");
+        assert!(std::process::Command::new(&launcher.program).output().unwrap().status.success());
     }
 
     /// A real npm-style shim: unwrapped to Node, a multi-line argument full of cmd.exe
