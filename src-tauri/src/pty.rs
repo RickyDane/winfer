@@ -193,7 +193,7 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 (mcp::agent_args(&provider.id, &servers), hooks::provider_args(&provider.id))
             };
             cmd.args(agent_args(
-                provider,
+                &provider,
                 mcp,
                 hooks,
                 req.model.as_deref(),
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn mcp_config_never_swallows_the_prompt() {
-        let claude = providers::find("claude").unwrap();
+        let claude = &providers::find("claude").unwrap();
         let args = agent_args(
             claude,
             vec!["--mcp-config".into(), "{}".into()],
@@ -472,9 +472,9 @@ mod tests {
         let resumed = agent_args(claude, vec![], vec![], Some("opus"), true, Some("ignored"));
         assert_eq!(resumed, ["--model", "opus", "--continue"]);
         // OpenCode has no launch-time model flag and takes the prompt as an option.
-        let opencode = providers::find("opencode").unwrap();
+        let opencode = &providers::find("opencode").unwrap();
         assert_eq!(agent_args(opencode, vec![], vec![], Some("opencode/big-pickle"), false, Some("fix it")), ["--prompt", "fix it"]);
-        let codex = providers::find("codex").unwrap();
+        let codex = &providers::find("codex").unwrap();
         assert_eq!(
             agent_args(
                 codex,

@@ -6,6 +6,7 @@ mod hooks;
 mod llm;
 mod mcp;
 mod notify;
+mod plugins;
 #[cfg(target_os = "macos")]
 mod menu;
 mod providers;
@@ -96,6 +97,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            plugins::init(&data_dir);
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
             hooks::start(app.handle().clone(), &data_dir)?;
             browser::kill_orphans(app.handle());
@@ -106,6 +108,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             providers::providers_list,
             providers::providers_models,
+            plugins::plugins_list,
+            plugins::plugins_set_enabled,
+            plugins::plugins_dir,
+            plugins::plugins_source,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

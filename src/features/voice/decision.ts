@@ -10,7 +10,7 @@
  * format at the edge (`toApi` / `fromApi`).
  */
 import type { Command } from "@/commands/bus";
-import { TOOLS, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
+import { allTools, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
 import { leaves } from "@/features/layout/tree";
 import { providerName } from "@/stores/workspaces";
 
@@ -210,9 +210,10 @@ export function buildRequest(transcript: string, ctx: ToolContext, recent: strin
     },
   };
 
-  const tools = Object.fromEntries(TOOLS.map((t) => [t.id, t.description]));
+  const all = allTools();
+  const tools = Object.fromEntries(all.map((t) => [t.id, t.description]));
   // The second action only needs short labels; full descriptions are already in action_1.
-  const titles = Object.fromEntries(TOOLS.map((t) => [t.id, t.title]));
+  const titles = Object.fromEntries(all.map((t) => [t.id, t.title]));
   const questions: Record<string, Question> = {
     action_1: { type: "choice", instructions: "Which tool does the user's first requested action map to?", criteria: tools },
     action_2: {
@@ -222,7 +223,7 @@ export function buildRequest(transcript: string, ctx: ToolContext, recent: strin
     },
   };
 
-  for (const tool of TOOLS) {
+  for (const tool of all) {
     for (const [name, param] of Object.entries(tool.params)) {
       const key = questionKey(tool, name);
       if (questions[key]) continue;
@@ -254,7 +255,7 @@ export interface Decision {
   alternatives: { tool: ToolDef; probability: number }[];
 }
 
-const byId = (id: string) => TOOLS.find((t) => t.id === id);
+const byId = (id: string) => allTools().find((t) => t.id === id);
 
 function argsFor(tool: ToolDef, answers: Record<string, Answer>, ctx: ToolContext): Args {
   const args: Args = {};

@@ -26,6 +26,8 @@ import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
+import { runPluginCommand, setPluginDispatch } from "@/features/plugins/plugins";
+import type { Args } from "@/tools/registry";
 
 export type Direction = "left" | "right" | "up" | "down";
 
@@ -98,7 +100,9 @@ export type Command =
   | { type: "ui.view"; view: "workspace" | "overview" | "toggle" }
   /** Speaks the open review cards' summaries ("what's done?"). */
   | { type: "review.readAloud" }
-  | { type: "recipe.load"; id: string };
+  | { type: "recipe.load"; id: string }
+  /** Runs a command a plugin registered (see src/features/plugins/plugins.ts). */
+  | { type: "plugin.run"; plugin: string; command: string; args?: Args };
 
 const store = () => useWorkspaces.getState();
 const active = (): Workspace => {
@@ -402,12 +406,17 @@ export function execute(cmd: Command): void {
       return s.setSettings(!s.settingsOpen);
     case "recipe.load":
       return loadRecipe(cmd.id);
+    case "plugin.run":
+      void runPluginCommand(cmd.plugin, cmd.command, cmd.args);
+      return;
     case "ui.view":
       return s.setView(cmd.view === "toggle" ? (s.view === "overview" ? "workspace" : "overview") : cmd.view);
     case "ui.overlay":
       return s.setOverlay(s.overlay === cmd.overlay ? null : cmd.overlay);
   }
 }
+
+setPluginDispatch(execute);
 
 /** Sets the direction of the split that directly contains `paneId`. */
 function forceSplitDir(node: LayoutNode, paneId: string, dir: SplitDir): LayoutNode {

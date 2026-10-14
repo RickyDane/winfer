@@ -21,6 +21,45 @@ const providers = [
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 
+// Fake plugins: one declarative, one with code, one broken.
+const mockPlugins = [
+  {
+    id: "test-runner",
+    dir: "~/Library/Application Support/dev.winfer.app/plugins/test-runner",
+    enabled: true,
+    error: null,
+    manifest: {
+      id: "test-runner",
+      name: "Test runner",
+      version: "1.0.0",
+      description: "Runs the project's tests in a new shell pane.",
+      providers: [],
+      recipes: [{ id: "review", name: "Review pair", panes: [{ provider: "claude" }, { provider: "shell" }], preset: "columns" }],
+      tools: [
+        {
+          id: "run_tests",
+          title: "Run tests",
+          description: "Run the project's test suite in a new shell pane",
+          palette: true,
+          commands: [{ type: "pane.spawn", provider: "shell", prompt: "pnpm test" }],
+        },
+      ],
+    },
+  },
+  {
+    id: "hello",
+    dir: "~/Library/Application Support/dev.winfer.app/plugins/hello",
+    enabled: false,
+    error: null,
+    manifest: { id: "hello", name: "Hello", version: "0.1.0", description: "Greets finished agents.", main: "index.js", providers: [], recipes: [], tools: [] },
+  },
+  { id: "broken", dir: "~/Library/Application Support/dev.winfer.app/plugins/broken", enabled: false, error: "invalid plugin.json: expected value at line 1 column 3", manifest: null },
+];
+const MOCK_PLUGIN_SOURCE = `export function activate(api) {
+  api.registerTool({ id: "say_hello", title: "Say hello", description: "Show a greeting", palette: true, run: () => api.toast("Hello from a plugin") });
+  return api.on("pane.status", (e) => e.status === "done" && api.toast("An agent finished", "success"));
+}`;
+
 const SAMPLE_DIFF = `diff --git a/src/common/guards/subscription.guard.ts b/src/common/guards/subscription.guard.ts
 index 3f2a1c0..9b8e7d1 100644
 --- a/src/common/guards/subscription.guard.ts
@@ -156,6 +195,17 @@ mockIPC(
     switch (cmd) {
       case "providers_list":
         return providers;
+      case "plugins_list":
+        return mockPlugins;
+      case "plugins_set_enabled": {
+        const plugin = mockPlugins.find((p) => p.id === a.id);
+        if (plugin) plugin.enabled = a.enabled;
+        return null;
+      }
+      case "plugins_dir":
+        return "~/Library/Application Support/dev.winfer.app/plugins";
+      case "plugins_source":
+        return MOCK_PLUGIN_SOURCE;
       case "state_load":
         if (SHOWCASE) return showcaseState();
         return JSON.parse(localStorage.getItem("winfer-mock-state") ?? '{"workspaces":[],"ui":null}');

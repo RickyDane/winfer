@@ -131,3 +131,10 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - Windows untested; status hooks there are unlikely to work yet.
 - Browser tabs aren't restored after restart; IME/composed input in the browser isn't supported.
 - No undo for voice actions.
+
+## Plugins
+- [ ] Copy `docs/plugins/example-hello` into `~/Library/Application Support/dev.winfer.app/plugins/` → Settings → Plugins → Reload plugins → it's listed, off, with "1 tool · 1 agent · 1 recipe · code".
+- [ ] Turn it on → asks first → "Run tests", "Run lint", "Count agents by status" and "Recipe: Agent + tests" appear in ⌘K and work; Gemini CLI appears in the New menu (greyed out if not installed).
+- [ ] Say "run the linter" → runs the plugin tool.
+- [ ] With it on, an agent finishing shows "<agent> finished".
+- [ ] Turn it off → its palette entries, agent and recipe are gone. A plugin with a broken plugin.json shows the error and can't be turned on.

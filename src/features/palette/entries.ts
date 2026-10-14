@@ -1,6 +1,6 @@
 import { execute } from "@/commands/bus";
 import { bindingFor, formatKeys } from "@/commands/keymap";
-import { TOOLS, type ToolContext } from "@/tools/registry";
+import { allTools, type ToolContext } from "@/tools/registry";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { findAddresses } from "@/features/browser/addresses";
@@ -63,7 +63,7 @@ export function toolContext(lastCommands: ToolContext["lastCommands"] = []): Too
 
 export function paletteEntries(): Entry[] {
   const ctx = toolContext();
-  return TOOLS.flatMap((tool) =>
+  return allTools().flatMap((tool) =>
     (tool.palette?.(ctx) ?? []).map((entry, i) => {
       const commands = tool.toCommands(entry.args, ctx);
       const binding = commands.length === 1 ? bindingFor(commands[0]) : undefined;

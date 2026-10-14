@@ -17,6 +17,7 @@ Cross-platform (macOS + Windows) desktop app for orchestrating coding agents (Cl
 | Voice requirements | Network + Sign in with ChatGPT (the user's ChatGPT plan; tokens in the OS keychain). Without it, voice commands are off unless Claude Code is installed for the planner; keyboard and palette still work. |
 | Git worktree per agent | On by default |
 | Voice auto-run | Confident, safe commands run immediately, with undo |
+| Plugins | Folders with a `plugin.json` in the app data dir: agent CLIs, recipes, declarative palette/voice tools, and an optional JS module (`activate(api)`). Off until enabled in Settings. See `docs/plugins/README.md`. |
 
 ## Architecture
 

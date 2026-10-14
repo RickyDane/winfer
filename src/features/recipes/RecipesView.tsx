@@ -47,7 +47,7 @@ export function RecipesView() {
               >
                 <Play size={11} /> Load
               </button>
-              {!builtIn && (
+              {saved.some((own) => own.id === r.id) && (
                 <button onClick={() => deleteRecipe(r.id)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-danger" title="Delete">
                   <Trash2 size={12} />
                 </button>

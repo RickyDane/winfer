@@ -36,6 +36,7 @@ import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar } from "@/features/workspaces/Sidebar";
 import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
 
 function TitleBar() {
   const { toggleSidebar, toggleBrowser } = useWorkspaces();
@@ -144,6 +145,8 @@ export function AppShell() {
     startAgentApi();
     startProgressTracking();
     startUsageTracking();
+    startPluginEvents();
+    void loadPlugins().catch((err) => console.error("plugins failed to load", err));
   }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
   if (!workspace) return <div className="h-full" data-tauri-drag-region />;

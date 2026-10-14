@@ -5,6 +5,9 @@ import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, 
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { loadPlugins, pluginsDir, setPluginEnabled, usePlugins, type PluginInfo } from "@/features/plugins/plugins";
 import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
@@ -458,6 +461,76 @@ function ModelSettings() {
   );
 }
 
+/** What a plugin adds, e.g. "2 tools · 1 agent · code". */
+function contributions(plugin: PluginInfo): string {
+  const m = plugin.manifest;
+  if (!m) return "";
+  const count = (n: number, one: string) => (n ? [`${n} ${one}${n === 1 ? "" : "s"}`] : []);
+  return [...count(m.tools.length, "tool"), ...count(m.providers.length, "agent"), ...count(m.recipes.length, "recipe"), ...(m.main ? ["code"] : [])].join(" · ");
+}
+
+async function togglePlugin(plugin: PluginInfo, enabled: boolean) {
+  // Plugin code and agent commands run with winfer's access to files, terminals and the network.
+  if (enabled && (plugin.manifest?.main || plugin.manifest?.providers.length)) {
+    const ok = await ask(`“${plugin.manifest.name}” runs its own code with full access to your files, terminals and network. Only turn on plugins you trust.`, {
+      title: "Turn on plugin",
+      kind: "warning",
+      okLabel: "Turn on",
+    });
+    if (!ok) return;
+  }
+  await setPluginEnabled(plugin.id, enabled);
+}
+
+/** Installed plugins: turn each on or off, open the folder, reload after editing. */
+function PluginSettings() {
+  const { plugins, runtimeErrors } = usePlugins();
+  return (
+    <Section title="Plugins">
+      {plugins.length === 0 ? (
+        <p className="text-xs text-fg-muted">No plugins yet. Put a folder with a plugin.json in the plugins folder, then reload.</p>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {plugins.map((p) => {
+            const error = p.error ?? (p.enabled ? runtimeErrors[p.id] : undefined);
+            return (
+              <label key={p.id} className="flex items-start gap-3 px-3 py-2 text-xs">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={p.enabled}
+                  disabled={!!p.error}
+                  onChange={(e) => void togglePlugin(p, e.target.checked)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-fg">
+                    {p.manifest?.name ?? p.id}
+                    {p.manifest?.version && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{p.manifest.version}</span>}
+                  </div>
+                  {p.manifest?.description && <div className="text-fg-muted">{p.manifest.description}</div>}
+                  <div className="text-fg-subtle">{contributions(p)}</div>
+                  {error && <div className="text-danger">{error}</div>}
+                </div>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => void pluginsDir().then((dir) => revealItemInDir(dir)).catch(() => {})}
+          className="rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover"
+        >
+          Open plugins folder
+        </button>
+        <button onClick={() => void loadPlugins()} className="rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover">
+          Reload plugins
+        </button>
+      </div>
+    </Section>
+  );
+}
+
 export function SettingsModal() {
   const { settingsOpen, setSettings } = useWorkspaces();
 
@@ -494,6 +567,7 @@ export function SettingsModal() {
         <ReviewSettings />
         <ProgressSettings />
         <ModelSettings />
+        <PluginSettings />
         <VoiceSettings />
       </div>
     </div>
