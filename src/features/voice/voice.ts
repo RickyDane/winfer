@@ -124,7 +124,7 @@ async function run(decisions: Decision[], transcript: string) {
     // One new agent asked to do several separate things: one agent per task, each in its own
     // worktree, so every feature gets its own branch and pull request.
     const order = d.tool.id === "spawn_panes" && d.args.prompt ? spawnOrder(d, transcript) : [];
-    if (order.length !== 1) continue;
+    if (order.length !== 1 || order[0] === "shell") continue;
     show("deciding", { transcript, message: "Writing the prompt…" });
     const tasks = await splitTasks(transcript, String(d.args.prompt), providerName(useWorkspaces.getState().providers, order[0]));
     if (!tasks) continue;
