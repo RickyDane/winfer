@@ -1,3 +1,4 @@
+import { AgentBar } from "@/features/overview/AgentBar";
 import { Overview } from "@/features/overview/Overview";
 import { SessionsOverview } from "@/features/progress/SessionsOverview";
 import { startProgressTracking } from "@/features/progress/progress";
@@ -157,20 +158,25 @@ export function AppShell() {
       <TitleBar />
       <main className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {sidebarOpen && <Sidebar />}
-        <div className="flex min-h-0 min-w-0 flex-1">
-          {view === "overview" ? (
-            <Overview />
-          ) : workspace.layout && zoomed ? (
-            renderLeaf(zoomed)
-          ) : workspace.layout ? (
-            <TileView
-              node={workspace.layout}
-              renderLeaf={renderLeaf}
-              onResize={(path, sizes) => updateActive((w) => ({ layout: w.layout && setSizesAt(w.layout, path, sizes) }))}
-            />
-          ) : (
-            <EmptyWorkspace />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {view === "workspace" && workspace.panes.some((p) => p.provider !== "shell") && (
+            <AgentBar panes={workspace.panes} scope={{ workspace: workspace.name }} />
           )}
+          <div className="flex min-h-0 min-w-0 flex-1">
+            {view === "overview" ? (
+              <Overview />
+            ) : workspace.layout && zoomed ? (
+              renderLeaf(zoomed)
+            ) : workspace.layout ? (
+              <TileView
+                node={workspace.layout}
+                renderLeaf={renderLeaf}
+                onResize={(path, sizes) => updateActive((w) => ({ layout: w.layout && setSizesAt(w.layout, path, sizes) }))}
+              />
+            ) : (
+              <EmptyWorkspace />
+            )}
+          </div>
         </div>
         {browserOpen && (
           <>

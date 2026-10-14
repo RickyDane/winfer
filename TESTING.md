@@ -31,6 +31,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 
 - [ ] Title bar tabs: "<workspace>" | "Overview" (⌘⇧O / Ctrl+Shift+Alt+O). Overview tiles every session of every workspace like a workspace (same headers, gutters, zoom, drag and drop, ⌘1–9), each labeled with its workspace; rearranging it doesn't touch the workspaces' own layouts.
 - [ ] In the overview, click a session from another workspace and press ⌘T → the new agent opens in that workspace. The bar on top messages / approves / interrupts all, working or waiting agents across workspaces.
+- [ ] Workspace view: the bar above the panes ("Message N agents in <workspace>") reaches all, working or waiting agents of that workspace only; Approve / Interrupt too. It's hidden in workspaces without agents.
 - [ ] Windows: the sidebar toggle sits at the left edge of the title bar (no gap for macOS window buttons).
 
 ## 3. Agents, status and worktrees
