@@ -8,6 +8,17 @@ export interface WorktreeDiff {
   dirty: boolean;
 }
 
+export interface ExistingWorktree {
+  info: WorktreeInfo;
+  /** Created by winfer (branch winfer/…). */
+  byWinfer: boolean;
+  /** Its folder is gone. */
+  prunable: boolean;
+}
+
+/** Linked worktrees of the repo containing `dir` (not the main checkout). */
+export const listWorktrees = (dir: string) => invoke<ExistingWorktree[]>("worktree_list", { dir });
+
 export const createWorktree = (dir: string, provider: string) =>
   invoke<WorktreeInfo | null>("worktree_create", { dir, provider });
 

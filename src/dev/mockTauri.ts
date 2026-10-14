@@ -142,6 +142,13 @@ mockIPC(
         worktreeCounter += 1;
         return { repo: a.dir, path: `${a.dir}/.worktrees/${a.provider}-${worktreeCounter}`, branch: `winfer/${a.provider}-${worktreeCounter}`, base: "main" };
       }
+      case "worktree_list":
+        return String(a.dir).includes("bridgemind")
+          ? [
+              { info: { repo: a.dir, path: `${a.dir}/.worktrees/claude-7`, branch: "winfer/claude-7", base: "main" }, byWinfer: true, prunable: false },
+              { info: { repo: a.dir, path: "/Users/demo/hotfix-login", branch: "hotfix/login-redirect", base: "main" }, byWinfer: false, prunable: false },
+            ]
+          : [];
       case "worktree_diff":
         return { diff: SAMPLE_DIFF, untracked: ["test/subscription.e2e-spec.ts"], ahead: 2, dirty: false };
       case "worktree_merge":

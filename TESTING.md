@@ -40,6 +40,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Send Claude a prompt: its status dot turns green (working), then blue (done) when it stops.
 - [ ] While you're in another app, an agent finishing or asking permission shows a macOS notification.
 - [ ] ⌘J jumps to the agent that needs you.
+- [ ] Sidebar → "Worktrees" under the active workspace lists the repo's worktrees no pane uses (closed agents' and hand-made ones, e.g. `git worktree add ../x -b x`); clicking one (or ▶) opens the default agent inside it with diff/merge/review working; 🗑 removes it (winfer's own branches are deleted too, others kept). New worktrees show up within 20 s or when winfer gets focus.
 - [ ] Click the branch badge: diff view shows the agent's changes; Merge works once the agent committed; Discard removes the worktree.
 - [ ] ⌘. interrupts the focused agent.
 

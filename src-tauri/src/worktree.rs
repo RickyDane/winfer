@@ -182,6 +182,81 @@ pub fn merge(info: &WorktreeInfo) -> Result<String, String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExistingWorktree {
+    /// What a pane needs to work in it (diff, merge, review use `base`).
+    pub info: WorktreeInfo,
+    /// Created by winfer (`winfer/<provider>-<n>`), as opposed to by hand or another tool.
+    pub by_winfer: bool,
+    /// Its folder is gone (`git worktree prune` would drop it).
+    pub prunable: bool,
+}
+
+/// The linked worktrees of the repo containing `dir` (not the main checkout itself).
+/// Their base for diffs and merges is the main checkout's current branch.
+pub fn list(dir: &Path) -> Result<Vec<ExistingWorktree>, String> {
+    let Some(top) = repo_root(dir) else {
+        return Ok(Vec::new());
+    };
+    let porcelain = git(&top, &["worktree", "list", "--porcelain"])?;
+    // The main checkout is always listed first, even when `dir` is inside a linked worktree.
+    let repo = porcelain
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .unwrap_or(top);
+    let base = git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .or_else(|_| git(&repo, &["rev-parse", "HEAD"]))?;
+    Ok(parse_worktree_list(&porcelain, &repo, &base))
+}
+
+fn parse_worktree_list(porcelain: &str, repo: &Path, base: &str) -> Vec<ExistingWorktree> {
+    let same = |a: &Path, b: &Path| {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        canon(a) == canon(b)
+    };
+    porcelain
+        .split("\n\n")
+        .filter_map(|block| {
+            let mut path = None;
+            let mut branch = None;
+            let mut detached_head = None;
+            let mut prunable = false;
+            let mut bare = false;
+            for line in block.lines() {
+                if let Some(p) = line.strip_prefix("worktree ") {
+                    path = Some(PathBuf::from(p));
+                } else if let Some(b) = line.strip_prefix("branch ") {
+                    branch = Some(b.trim_start_matches("refs/heads/").to_string());
+                } else if let Some(h) = line.strip_prefix("HEAD ") {
+                    detached_head = Some(h.chars().take(8).collect::<String>());
+                } else if line.starts_with("prunable") {
+                    prunable = true;
+                } else if line == "bare" {
+                    bare = true;
+                }
+            }
+            let path = path?;
+            if bare || same(&path, repo) {
+                return None;
+            }
+            let branch = branch.or(detached_head)?;
+            Some(ExistingWorktree {
+                by_winfer: branch.starts_with("winfer/"),
+                prunable,
+                info: WorktreeInfo {
+                    repo: repo.to_string_lossy().into_owned(),
+                    path: path.to_string_lossy().into_owned(),
+                    branch,
+                    base: base.to_string(),
+                },
+            })
+        })
+        .collect()
+}
+
 /// Commits everything the agent left uncommitted in its worktree (no-op when clean), so the
 /// branch can be merged.
 pub fn commit_all(info: &WorktreeInfo, message: &str) -> Result<(), String> {
@@ -227,6 +302,11 @@ pub async fn worktree_diff(info: WorktreeInfo) -> Result<WorktreeDiff, String> {
 #[tauri::command]
 pub async fn worktree_merge(info: WorktreeInfo) -> Result<String, String> {
     merge(&info)
+}
+
+#[tauri::command]
+pub async fn worktree_list(dir: String) -> Result<Vec<ExistingWorktree>, String> {
+    list(&resolve_cwd(Some(&dir)))
 }
 
 #[tauri::command]
@@ -314,6 +394,28 @@ mod tests {
         assert!(!path.exists());
         assert!(!branch_exists(&repo, "winfer/claude-1"));
         remove(&b, true).unwrap();
+    }
+
+    #[test]
+    fn lists_existing_worktrees_but_not_the_main_checkout() {
+        let repo = repo();
+        let wts = temp_dir("wt");
+        let ours = create(&wts, &repo, "codex").unwrap().unwrap();
+        // One made by hand, outside winfer.
+        let manual = wts.join("hotfix");
+        git(&repo, &["worktree", "add", "-b", "hotfix", &manual.to_string_lossy()]).unwrap();
+
+        let mut found = list(&repo).unwrap();
+        found.sort_by(|a, b| a.info.branch.cmp(&b.info.branch));
+        let branches: Vec<_> = found.iter().map(|w| (w.info.branch.as_str(), w.by_winfer)).collect();
+        assert_eq!(branches, vec![("hotfix", false), ("winfer/codex-1", true)]);
+        assert!(found.iter().all(|w| w.info.base == "main" && !w.prunable));
+        // Works from inside a worktree too, and hands back what create() made.
+        let from_inside = list(Path::new(&ours.path)).unwrap();
+        assert!(from_inside.iter().any(|w| w.info.branch == ours.branch));
+
+        remove(&ours, true).unwrap();
+        assert!(list(&repo).unwrap().iter().all(|w| w.info.branch != ours.branch));
     }
 
     #[test]

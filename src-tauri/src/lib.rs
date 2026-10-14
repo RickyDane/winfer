@@ -102,6 +102,7 @@ pub fn run() {
             worktree::worktree_merge,
             worktree::worktree_remove,
             worktree::worktree_commit,
+            worktree::worktree_list,
             review::review_test_command,
             review::review_run_tests,
             browser::browser_screenshot,

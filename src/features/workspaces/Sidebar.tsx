@@ -10,6 +10,7 @@ import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useCallback, useState } from "react";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { WorktreeList } from "@/features/worktree/WorktreeList";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
 function PaneName({ pane, className }: { pane: Pane; className?: string }) {
@@ -137,6 +138,7 @@ export function Sidebar() {
                     <PanePercent pane={pane} />
                   </button>
                 ))}
+              {active && <WorktreeList workspace={ws} />}
             </div>
           );
         })}

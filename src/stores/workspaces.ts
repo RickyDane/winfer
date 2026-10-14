@@ -103,7 +103,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo },
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
@@ -297,10 +297,10 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             workspaceId: w.id,
             provider,
             title: w.name,
-            cwd: w.rootDir,
+            cwd: opts?.existingWorktree?.path ?? w.rootDir,
             status: "idle",
-            worktree: null,
-            wantsWorktree: provider !== "shell" && (opts?.worktree ?? w.useWorktrees),
+            worktree: opts?.existingWorktree ?? null,
+            wantsWorktree: !opts?.existingWorktree && provider !== "shell" && (opts?.worktree ?? w.useWorktrees),
             resume: false,
             unseen: false,
             devUrl: null,
