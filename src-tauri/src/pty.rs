@@ -137,26 +137,38 @@ fn agent_args(
     args
 }
 
-fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBuilder, String> {
+/// The command for a pane, and whether its start prompt has to be typed in rather than passed
+/// as an argument.
+fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBuilder, bool), String> {
     let provider = providers::find(&req.provider_id)
         .ok_or_else(|| format!("unknown provider: {}", req.provider_id))?;
 
+    let mut type_prompt = false;
     let mut cmd = match &provider.command {
         Some(command) => {
             let servers: Vec<_> = mcp::winfer_server(&req.pane_id)
                 .into_iter()
                 .chain(cdp_url.map(browser::playwright_server))
                 .collect();
-            let program = crate::env::find_command(command)
+            let launcher = crate::env::launcher(command)
                 .ok_or_else(|| format!("{} isn't installed (no `{command}` on PATH)", provider.name))?;
-            let mut cmd = CommandBuilder::new(program);
+            let mut cmd = CommandBuilder::new(&launcher.program);
+            cmd.args(&launcher.args);
+            // A batch file we couldn't unwrap passes arguments through cmd.exe: only simple ones
+            // survive, so JSON configs are left out and the prompt is typed in instead.
+            type_prompt = launcher.batch;
+            let (mcp, hooks) = if launcher.batch {
+                (Vec::new(), Vec::new())
+            } else {
+                (mcp::agent_args(&provider.id, &servers), hooks::provider_args(&provider.id))
+            };
             cmd.args(agent_args(
                 provider,
-                mcp::agent_args(&provider.id, &servers),
-                hooks::provider_args(&provider.id),
+                mcp,
+                hooks,
                 req.model.as_deref(),
                 req.resume,
-                req.prompt.as_deref(),
+                req.prompt.as_deref().filter(|_| !launcher.batch),
             ));
             cmd
         }
@@ -186,7 +198,7 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBui
         cmd.env("WINFER_WORKSPACE", workspace);
     }
     cmd.cwd(resolve_cwd(req.cwd.as_deref()));
-    Ok(cmd)
+    Ok((cmd, type_prompt))
 }
 
 #[tauri::command]
@@ -221,7 +233,7 @@ pub fn pty_spawn(
         }
         _ => None,
     };
-    let cmd = build_command(&req, cdp_url.as_deref())?;
+    let (cmd, type_prompt) = build_command(&req, cdp_url.as_deref())?;
     let pair = native_pty_system()
         .openpty(size(req.cols, req.rows))
         .map_err(|e| e.to_string())?;
@@ -279,7 +291,8 @@ pub fn pty_spawn(
 
     // CLIs without a prompt argument get the prompt typed in once they've had time to start.
     let typed_prompt = req.prompt.clone().filter(|_| {
-        !req.resume && !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg || p.prompt_flag.is_some())
+        !req.resume
+            && (type_prompt || !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg || p.prompt_flag.is_some()))
     });
     if let Some(prompt) = typed_prompt {
         let pane_id = req.pane_id.clone();
@@ -289,7 +302,14 @@ pub fn pty_spawn(
             let manager = app.state::<PtyManager>();
             let mut sessions = manager.sessions.lock().unwrap();
             if let Some(session) = sessions.get_mut(&pane_id) {
-                let _ = session.writer.write_all(format!("{prompt}\r").as_bytes());
+                // Multi-line prompts go in as one bracketed paste so the agent doesn't submit
+                // at the first line break.
+                let text = if prompt.contains('\n') {
+                    format!("\x1b[200~{prompt}\x1b[201~\r")
+                } else {
+                    format!("{prompt}\r")
+                };
+                let _ = session.writer.write_all(text.as_bytes());
             }
         });
     }
@@ -362,7 +382,7 @@ mod tests {
             cols: 80,
             rows: 24,
         };
-        let mut cmd = build_command(&req, None).unwrap();
+        let (mut cmd, _) = build_command(&req, None).unwrap();
         cmd.args([
             "-c",
             "echo \"[$WINFER_PANE_ID $WINFER_WORKSPACE $TERM $PWD]\"",

@@ -31,6 +31,70 @@ pub fn find_command(command: &str) -> Option<PathBuf> {
     which::which_in(command, Some(path_var()), cwd).ok()
 }
 
+/// How to start a CLI found on PATH.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Launcher {
+    pub program: PathBuf,
+    /// Arguments that go before the CLI's own (the script, when a shim was unwrapped).
+    pub args: Vec<String>,
+    /// Still a `.cmd`/`.bat`: arguments pass through cmd.exe, which mangles newlines, quotes
+    /// and `& | % < >`, and Rust refuses ones it can't escape. Pass only simple arguments.
+    pub batch: bool,
+}
+
+/// Resolves `command` for spawning. On Windows, npm installs CLIs (codex, claude, opencode…)
+/// as `.cmd` shims that just run `node <script> %*`; those are unwrapped to run Node directly,
+/// so prompts and JSON arguments reach the CLI intact instead of going through cmd.exe.
+pub fn launcher(command: &str) -> Option<Launcher> {
+    find_command(command).map(launcher_at)
+}
+
+fn launcher_at(path: PathBuf) -> Launcher {
+    let batch = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    if batch {
+        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+        if let Some(script) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| node_shim_script(&text))
+        {
+            let script = dir.join(script);
+            let node = Some(dir.join("node.exe"))
+                .filter(|p| p.exists())
+                .or_else(|| find_command("node"));
+            if let (Some(node), true) = (node, script.exists()) {
+                return Launcher {
+                    program: node,
+                    args: vec![script.to_string_lossy().into_owned()],
+                    batch: false,
+                };
+            }
+        }
+    }
+    Launcher {
+        program: path,
+        args: Vec::new(),
+        batch,
+    }
+}
+
+/// The script an npm/pnpm `.cmd` shim hands to Node, relative to the shim's folder:
+/// the last `"%dp0%\…"` (or `"%~dp0\…"`) path before `%*` that isn't node.exe itself.
+fn node_shim_script(text: &str) -> Option<String> {
+    let line = text.lines().rev().find(|l| l.contains("%*"))?;
+    line.split('"')
+        .filter_map(|part| {
+            part.strip_prefix("%dp0%\\")
+                .or_else(|| part.strip_prefix("%~dp0\\"))
+                .or_else(|| part.strip_prefix("%~dp0"))
+        })
+        .filter(|rel| !rel.eq_ignore_ascii_case("node.exe") && !rel.is_empty())
+        .last()
+        .map(|rel| rel.replace('\\', std::path::MAIN_SEPARATOR_STR))
+}
+
 /// Console programs started from the GUI app (curl, git, the headless browser…) would each
 /// open a console window on Windows; closing one kills the program.
 pub fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
@@ -106,4 +170,53 @@ fn resolve() -> Option<HashMap<String, String>> {
 #[cfg(windows)]
 fn resolve() -> Option<HashMap<String, String>> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::node_shim_script;
+
+    #[test]
+    fn reads_the_script_from_npm_and_pnpm_shims() {
+        // npm's cmd-shim (e.g. %APPDATA%\\npm\\codex.cmd).
+        let npm = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
+        let sep = std::path::MAIN_SEPARATOR_STR;
+        assert_eq!(
+            node_shim_script(npm).unwrap(),
+            ["node_modules", "@openai", "codex", "bin", "codex.js"].join(sep)
+        );
+        // pnpm-style shim.
+        let pnpm = "@SETLOCAL\r\n@IF EXIST \"%~dp0\\node.exe\" (\r\n  \"%~dp0\\node.exe\"  \"%~dp0\\..\\cli\\bin\\run.js\" %*\r\n) ELSE (\r\n  node  \"%~dp0\\..\\cli\\bin\\run.js\" %*\r\n)\r\n";
+        assert_eq!(node_shim_script(pnpm).unwrap(), ["..", "cli", "bin", "run.js"].join(sep));
+        // Not a Node shim.
+        assert_eq!(node_shim_script("@echo off\r\nsomething.exe %*\r\n"), None);
+    }
+
+    /// A real npm-style shim: unwrapped to Node, a multi-line argument full of cmd.exe
+    /// metacharacters arrives intact (through the .cmd it would be refused or mangled).
+    #[cfg(windows)]
+    #[test]
+    fn unwrapped_shim_passes_arguments_intact() {
+        let dir = std::env::temp_dir().join(format!("winfer-shim-{:x}", rand::random::<u32>()));
+        let bin = dir.join("node_modules").join("fake").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("fake.js"), "process.stdout.write(JSON.stringify(process.argv.slice(2)))").unwrap();
+        let shim = dir.join("fake.cmd");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\fake\\bin\\fake.js\" %*\r\n",
+        )
+        .unwrap();
+
+        let launcher = super::launcher_at(shim);
+        assert!(!launcher.batch, "{launcher:?}");
+        let tricky = "line one\nline \"two\" & echo pwned | more %PATH% <x>";
+        let out = std::process::Command::new(&launcher.program)
+            .args(&launcher.args)
+            .arg(tricky)
+            .output()
+            .unwrap();
+        let args: Vec<String> = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(args, vec![tricky.to_string()]);
+    }
 }

@@ -73,21 +73,39 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("winfer-llm-{:x}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let out = dir.join("answer.txt");
-    let codex = crate::env::find_command("codex").ok_or("Codex CLI isn't installed.")?;
-    let mut cmd = std::process::Command::new(codex);
+    let codex = crate::env::launcher("codex").ok_or("Codex CLI isn't installed.")?;
+    let mut cmd = std::process::Command::new(&codex.program);
     crate::env::no_window(&mut cmd);
-    cmd.envs(login_env())
+    cmd.args(&codex.args)
+        .envs(login_env())
         .current_dir(&dir)
         .args(["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-o"])
         .arg(&out);
     if !model.is_empty() {
         cmd.args(["-m", model]);
     }
-    cmd.arg(format!("{system}\n\n{user}"))
-        .stdin(std::process::Stdio::null())
+    // The prompt goes in on stdin ("-"): it's multi-line, which a command-line argument can't
+    // carry through Windows' .cmd shims.
+    cmd.arg("-")
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("couldn't run codex: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(format!("{system}\n\n{user}").as_bytes());
+        // Dropping stdin closes it, so codex knows the prompt is complete.
+    }
+    // Codex logs progress on stderr; keep reading it so a full pipe never blocks it.
+    let stderr = child.stderr.take();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut stderr) = stderr {
+            use std::io::Read;
+            let _ = stderr.read_to_string(&mut text);
+        }
+        text
+    });
     let deadline = std::time::Instant::now() + Duration::from_secs(90);
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
@@ -102,12 +120,9 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     let answer = std::fs::read_to_string(&out).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
     if !status.success() || answer.trim().is_empty() {
-        let mut err = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            use std::io::Read;
-            let _ = stderr.read_to_string(&mut err);
-        }
-        return Err(format!("codex failed: {}", err.lines().last().unwrap_or("no answer")));
+        let err = stderr_reader.join().unwrap_or_default();
+        let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no answer");
+        return Err(format!("codex failed: {last}"));
     }
     Ok(answer.trim().to_string())
 }
