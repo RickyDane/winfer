@@ -5,6 +5,8 @@ import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, 
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
+import { UsageHistory } from "@/features/usage/UsageHistory";
+import { cn } from "@/lib/cn";
 import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
@@ -460,6 +462,11 @@ function ModelSettings() {
 
 export function SettingsModal() {
   const { settingsOpen, setSettings } = useWorkspaces();
+  const [tab, setTab] = useState<"general" | "usage">("general");
+
+  useEffect(() => {
+    if (settingsOpen) setTab("general");
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -473,28 +480,45 @@ export function SettingsModal() {
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setSettings(false)}>
       <div className="anim-dialog max-h-[85vh] w-[600px] space-y-6 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center">
-          <h1 className="flex-1 text-sm font-semibold text-fg">Settings</h1>
+          <h1 className="text-sm font-semibold text-fg">Settings</h1>
+          <nav className="ml-4 flex flex-1 gap-1">
+            {(["general", "usage"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={cn("rounded-md px-2.5 py-1 text-xs", tab === t ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg")}
+              >
+                {t === "general" ? "General" : "Usage"}
+              </button>
+            ))}
+          </nav>
           <button onClick={() => setSettings(false)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={14} />
           </button>
         </header>
-        <Section title="Keyboard shortcuts">
-          <div className="flex items-center gap-3">
-            <p className="flex-1 text-xs text-fg-muted">See every shortcut and change any of them, including the push-to-talk keys.</p>
-            <button
-              onClick={() => useWorkspaces.getState().setCheatSheet(true)}
-              className="shrink-0 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover"
-            >
-              Edit shortcuts ({keysFor({ type: "ui.cheatSheet" })})
-            </button>
-          </div>
-        </Section>
-        <TerminalSettings />
-        <DefaultAgentSetting />
-        <ReviewSettings />
-        <ProgressSettings />
-        <ModelSettings />
-        <VoiceSettings />
+        {tab === "usage" ? (
+          <UsageHistory />
+        ) : (
+          <>
+            <Section title="Keyboard shortcuts">
+              <div className="flex items-center gap-3">
+                <p className="flex-1 text-xs text-fg-muted">See every shortcut and change any of them, including the push-to-talk keys.</p>
+                <button
+                  onClick={() => useWorkspaces.getState().setCheatSheet(true)}
+                  className="shrink-0 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover"
+                >
+                  Edit shortcuts ({keysFor({ type: "ui.cheatSheet" })})
+                </button>
+              </div>
+            </Section>
+            <TerminalSettings />
+            <DefaultAgentSetting />
+            <ReviewSettings />
+            <ProgressSettings />
+            <ModelSettings />
+            <VoiceSettings />
+          </>
+        )}
       </div>
     </div>
   );

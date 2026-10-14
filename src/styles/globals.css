@@ -20,6 +20,10 @@
   --color-warning: #f5b544;
   --color-danger: #f26d6d;
   --color-claude: #d97757;
+  /* Chart series per agent (validated for colorblind separation on the panel surface). */
+  --color-series-claude: #cf6e4e;
+  --color-series-codex: #6d7cff;
+  --color-series-opencode: #25a28f;
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
@@ -47,6 +51,9 @@
   --color-warning: #b7791f;
   --color-danger: #dc3b3b;
   --color-claude: #c2603f;
+  --color-series-claude: #c2603f;
+  --color-series-codex: #4f5ff0;
+  --color-series-opencode: #138a78;
   color-scheme: light;
 }
 
