@@ -806,6 +806,42 @@ pub async fn browser_input(
     Ok(())
 }
 
+/// Types a plugin's secret into the field matching `selector` (replacing its contents) without
+/// the value passing through the webview or the agent that asked for it.
+#[tauri::command]
+pub async fn browser_fill_secret(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    target_id: String,
+    selector: String,
+    plugin: String,
+    key: String,
+) -> Res<()> {
+    let value = crate::vault::value(&plugin, &key)?;
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let session = instance.session(&target_id).await?;
+    let cdp = instance.cdp().await?;
+    let selector = serde_json::to_string(&selector).map_err(|e| e.to_string())?;
+    let focus = format!(
+        "(() => {{ const el = document.querySelector({selector}); if (!el) return 'missing'; \
+         const editable = el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['button','submit','checkbox','radio','file','hidden'].includes(el.type)); \
+         if (!editable) return 'not-editable'; el.scrollIntoView({{ block: 'center' }}); el.focus(); \
+         if (el.select) el.select(); else document.execCommand('selectAll'); return 'ok'; }})()"
+    );
+    let res = cdp
+        .call("Runtime.evaluate", json!({ "expression": focus, "returnByValue": true }), Some(&session))
+        .await?;
+    match res["result"]["value"].as_str() {
+        Some("ok") => {}
+        Some("missing") => return Err(format!("no element matches {selector} on this page")),
+        Some("not-editable") => return Err(format!("{selector} isn't a text field")),
+        _ => return Err("couldn't reach the page".into()),
+    }
+    cdp.call("Input.insertText", json!({ "text": value }), Some(&session)).await?;
+    Ok(())
+}
+
 /// Selected text in the page (for ⌘C).
 #[tauri::command]
 pub async fn browser_selection(

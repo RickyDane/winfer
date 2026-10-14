@@ -5,6 +5,9 @@ import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNod
 import type { Recipe } from "@/features/recipes/recipes";
 import { DEFAULT_THEME, isThemeId, themeById } from "@/features/theme/themes";
 
+/** Main area: workspace tiles, the overview, or a plugin page (`page:<plugin>/<page>`). */
+export type View = "workspace" | "overview" | `page:${string}`;
+
 export type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
 export interface WorktreeInfo {
@@ -88,7 +91,7 @@ interface WorkspaceState {
   /** Color theme id (see features/theme/themes.ts). */
   theme: Theme;
   /** Main area: the active workspace's tiles, or the overview of every workspace's sessions. */
-  view: "workspace" | "overview";
+  view: View;
   /** Terminal font size in px (zoom with Mod+= / Mod+- / Mod+0 or Ctrl+wheel). */
   terminalFontSize: number;
   /** The overview tiles every session of every workspace; same shape as a workspace's layout. */
@@ -135,7 +138,7 @@ interface WorkspaceState {
   setTheme: (theme: Theme) => void;
   /** Switch to the theme's light/dark counterpart. */
   toggleTheme: () => void;
-  setView: (view: "workspace" | "overview") => void;
+  setView: (view: View) => void;
   setTerminalFontSize: (size: number) => void;
   updateOverview: (fn: (o: OverviewLayout) => Partial<OverviewLayout>) => void;
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
@@ -440,7 +443,7 @@ interface Snapshot {
     sidePanel?: "browser" | "device" | "terminal";
     androidSerial?: string | null;
     theme?: Theme;
-    view?: "workspace" | "overview";
+    view?: View;
     terminalFontSize?: number;
     overviewLayout?: LayoutNode | null;
     review?: { autoTests?: boolean; screenshots?: boolean };

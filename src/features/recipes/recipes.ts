@@ -3,6 +3,7 @@ import { PRESETS, buildPreset, leaves, type Preset } from "@/features/layout/tre
 import { openUrl, useBrowser } from "@/features/browser/browser";
 import { logActivity } from "@/stores/activity";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { pluginRecipes } from "@/features/plugins/plugins";
 
 export interface Recipe {
   id: string;
@@ -24,9 +25,10 @@ export const BUILT_IN: Recipe[] = [
   },
 ];
 
+/** The user's recipes (or the built-in ones until they save one), then plugins' recipes. */
 export function allRecipes(): Recipe[] {
   const saved = useWorkspaces.getState().recipes;
-  return saved.length ? saved : BUILT_IN;
+  return [...(saved.length ? saved : BUILT_IN), ...pluginRecipes()];
 }
 
 export function describeRecipe(recipe: Recipe): string {

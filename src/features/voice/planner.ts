@@ -12,7 +12,7 @@ import { llmCompose, llmEnabled } from "@/features/llm/llm";
 import { leaves } from "@/features/layout/tree";
 import { readTerminal } from "@/features/terminal/xtermRegistry";
 import { providerName } from "@/stores/workspaces";
-import { TOOLS, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
+import { allTools, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
 import type { Decision } from "./decision";
 
 /** Decision-model helpers: the planner starts agents per feature itself. */
@@ -98,7 +98,7 @@ export function plannerPrompt(transcript: string, ctx: ToolContext, recent: stri
   ];
   if (recent.length) parts.push(`Recent voice commands:\n${recent.map((r) => `  ${r}`).join("\n")}`);
   if (focusedOutput) parts.push(`Recent output of the focused pane:\n${focusedOutput}`);
-  parts.push(`Tools:\n${TOOLS.filter((t) => !HIDDEN.has(t.id)).map((t) => describeTool(t, ctx)).join("\n")}`);
+  parts.push(`Tools:\n${allTools().filter((t) => !HIDDEN.has(t.id)).map((t) => describeTool(t, ctx)).join("\n")}`);
   parts.push(`Voice command: "${transcript}"`);
   return parts.join("\n\n");
 }
@@ -159,7 +159,7 @@ export function parsePlan(answer: string, ctx: ToolContext): Decision[] | null {
   if (!Array.isArray(actions)) return null;
   return actions.flatMap((action) => {
     const id = (action as { tool?: unknown })?.tool;
-    const tool = TOOLS.find((t) => t.id === id && !HIDDEN.has(t.id));
+    const tool = allTools().find((t) => t.id === id && !HIDDEN.has(t.id));
     if (!tool) return [];
     const raw = (action as { args?: unknown }).args;
     const args = validArgs(tool, raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}, ctx);

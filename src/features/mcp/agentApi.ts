@@ -11,6 +11,7 @@ import { pasteText, readTerminal, sendText, startDetached } from "@/features/ter
 import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 import { setTask } from "@/features/progress/progress";
+import { agentCaller, pluginAgentToolList, runPluginAgentTool } from "@/features/plugins/plugins";
 
 interface Call {
   id: string;
@@ -36,6 +37,8 @@ function resolve(ws: Workspace, ref: unknown): Pane {
 const describe = (ws: Workspace, pane: Pane) => `pane ${order(ws).indexOf(pane) + 1} (${providerName(useWorkspaces.getState().providers, pane.provider)})`;
 
 export async function runTool(call: Call): Promise<string> {
+  // Asked by `tools/list` in src-tauri/src/mcp.rs.
+  if (call.tool === "__plugin_tools") return JSON.stringify(pluginAgentToolList());
   const s = useWorkspaces.getState();
   const ws = s.workspaces.find((w) => w.panes.some((p) => p.id === call.paneId));
   if (!ws) throw new ToolError("The calling pane isn't open in winfer anymore.");
@@ -104,8 +107,12 @@ export async function runTool(call: Call): Promise<string> {
       reportStatus(self.id, "needs-input", String(a.message ?? "An agent needs you"));
       return "The user has been notified.";
     }
-    default:
-      throw new ToolError(`Unknown tool ${call.tool}`);
+    default: {
+      const caller = agentCaller(self.id)!;
+      const result = await runPluginAgentTool(call.tool, a, caller);
+      if (result === null) throw new ToolError(`Unknown tool ${call.tool}`);
+      return result;
+    }
   }
 }
 

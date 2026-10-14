@@ -12,6 +12,7 @@ import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
 import { providerName, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
 import { isThemeId, THEMES } from "@/features/theme/themes";
+import { pluginTools } from "@/features/plugins/plugins";
 
 export interface ToolContext {
   providers: Provider[];
@@ -683,3 +684,8 @@ export const TOOLS: ToolDef[] = [
     toCommands: () => [],
   },
 ];
+
+/** Built-in tools followed by those from enabled plugins. */
+export function allTools(): ToolDef[] {
+  return [...TOOLS, ...pluginTools()];
+}

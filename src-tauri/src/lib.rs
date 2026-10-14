@@ -6,6 +6,7 @@ mod hooks;
 mod llm;
 mod mcp;
 mod notify;
+mod plugins;
 #[cfg(target_os = "macos")]
 mod menu;
 mod providers;
@@ -14,6 +15,7 @@ mod review;
 mod store;
 mod usage;
 mod usage_history;
+mod vault;
 mod voice;
 mod worktree;
 
@@ -100,6 +102,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            plugins::init(&data_dir);
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
             app.manage(usage_history::UsageHistory::open(&data_dir.join("usage.db"))?);
             usage_history::start(app.handle());
@@ -112,6 +115,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             providers::providers_list,
             providers::providers_models,
+            plugins::plugins_list,
+            plugins::plugins_set_enabled,
+            plugins::plugins_dir,
+            plugins::plugins_source,
+            plugins::plugins_catalog,
+            plugins::plugins_install,
+            plugins::plugins_uninstall,
+            vault::vault_list,
+            vault::vault_set,
+            vault::vault_delete,
+            vault::vault_reveal,
+            vault::vault_exec,
+            browser::browser_fill_secret,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

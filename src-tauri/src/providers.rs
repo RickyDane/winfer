@@ -160,7 +160,7 @@ fn run_with_timeout(
 #[tauri::command]
 pub async fn providers_models(id: String) -> Result<Vec<ModelInfo>, String> {
     let provider = find(&id).ok_or("unknown provider")?;
-    tauri::async_runtime::spawn_blocking(move || models(provider))
+    tauri::async_runtime::spawn_blocking(move || models(&provider))
         .await
         .map_err(|e| e.to_string())
 }
@@ -215,15 +215,23 @@ pub struct ProviderInfo {
 
 static PROVIDERS: OnceLock<Vec<Provider>> = OnceLock::new();
 
-pub fn all() -> &'static [Provider] {
+/// The agents winfer ships with (resources/providers.json).
+pub fn builtin() -> &'static [Provider] {
     PROVIDERS.get_or_init(|| {
         serde_json::from_str(include_str!("../resources/providers.json"))
             .expect("resources/providers.json is valid")
     })
 }
 
-pub fn find(id: &str) -> Option<&'static Provider> {
-    all().iter().find(|p| p.id == id)
+/// Built-in agents followed by those from enabled plugins.
+pub fn all() -> Vec<Provider> {
+    let mut list = builtin().to_vec();
+    list.extend(crate::plugins::providers());
+    list
+}
+
+pub fn find(id: &str) -> Option<Provider> {
+    all().into_iter().find(|p| p.id == id)
 }
 
 pub fn is_installed(provider: &Provider) -> bool {
@@ -236,10 +244,10 @@ pub fn is_installed(provider: &Provider) -> bool {
 #[tauri::command]
 pub fn providers_list() -> Vec<ProviderInfo> {
     all()
-        .iter()
+        .into_iter()
         .map(|p| ProviderInfo {
-            installed: is_installed(p),
-            provider: p.clone(),
+            installed: is_installed(&p),
+            provider: p,
         })
         .collect()
 }
@@ -252,10 +260,10 @@ mod live {
     fn live_model_lists() {
         for id in ["claude", "agy", "cursor", "opencode", "codex"] {
             let p = super::find(id).unwrap();
-            if !super::is_installed(p) {
+            if !super::is_installed(&p) {
                 continue;
             }
-            let models = super::models(p);
+            let models = super::models(&p);
             eprintln!(
                 "{id}: {} models, e.g. {:?}",
                 models.len(),
