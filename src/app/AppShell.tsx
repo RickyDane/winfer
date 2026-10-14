@@ -25,6 +25,7 @@ import { DragLayer } from "@/features/layout/DragLayer";
 import { Toaster } from "@/components/Toaster";
 import { UsageMeter } from "@/features/usage/UsageMeter";
 import { startUsageTracking } from "@/features/usage/usage";
+import { startUpdateChecks } from "@/features/updates/updater";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -144,6 +145,7 @@ export function AppShell() {
     startAgentApi();
     startProgressTracking();
     startUsageTracking();
+    startUpdateChecks();
   }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
   if (!workspace) return <div className="h-full" data-tauri-drag-region />;

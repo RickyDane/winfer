@@ -5,6 +5,7 @@ import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, 
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
+import { checkForUpdates, installUpdate, useUpdates } from "@/features/updates/updater";
 import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
@@ -458,6 +459,38 @@ function ModelSettings() {
   );
 }
 
+function UpdateSettings() {
+  const { version, checking, installing, available } = useUpdates();
+  return (
+    <Section title="Updates">
+      <div className="flex items-center gap-3">
+        <p className="flex-1 text-xs text-fg-muted">
+          {available ? `winfer ${available.version} is available (you have ${version ?? "?"}).` : `winfer ${version ?? ""}`}
+        </p>
+        {available ? (
+          <button
+            onClick={() => void installUpdate()}
+            disabled={installing}
+            className="flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+            Install and restart
+          </button>
+        ) : (
+          <button
+            onClick={() => void checkForUpdates()}
+            disabled={checking}
+            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover disabled:opacity-50"
+          >
+            {checking && <Loader2 size={12} className="animate-spin" />}
+            Check for updates
+          </button>
+        )}
+      </div>
+    </Section>
+  );
+}
+
 export function SettingsModal() {
   const { settingsOpen, setSettings } = useWorkspaces();
 
@@ -495,6 +528,7 @@ export function SettingsModal() {
         <ProgressSettings />
         <ModelSettings />
         <VoiceSettings />
+        <UpdateSettings />
       </div>
     </div>
   );

@@ -41,6 +41,18 @@
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist",
       "minimumSystemVersion": "11.0"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3Q0JGNzdGRTU5MDdBMDcKUldRSGVwRGxmL2ZMQjVZRzJ6TUR5ZjdueVhsaHFVdjJHWElObHczZ0UvRkQ1ckNFZmc2Sk1QYjcK",
+      "endpoints": [
+        "https://github.com/RickyDane/winfer/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -109,6 +109,53 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater bundles (.app.tar.gz, -setup.exe, .msi) with the key whose public
+          # half is plugins.updater.pubkey in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.release.outputs.id }}
           args: --target ${{ matrix.target }}
+          # The updater-json job writes it once every bundle is up; three jobs merging into
+          # one file at once could drop a platform.
+          uploadUpdaterJson: false
+
+  # latest.json is what installed apps poll (releases/latest/download/latest.json): the newest
+  # version and, per platform, the signed bundle's URL and signature.
+  updater-json:
+    needs: [release, bundle]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Write latest.json from the release's signatures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir sigs && cd sigs
+          gh release download "$TAG" --pattern '*.sig'
+          base="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          entry() { jq -n --arg sig "$(cat "$1")" --arg url "$base/${1%.sig}" '{signature: $sig, url: $url}'; }
+          platforms='{}'
+          add() { platforms=$(jq --arg k "$1" --argjson v "$(entry "$2")" '.[$k] = $v' <<<"$platforms"); }
+          for f in *.sig; do
+            case "$f" in
+              *aarch64*.app.tar.gz.sig) add darwin-aarch64 "$f" ;;
+              *.app.tar.gz.sig) add darwin-x86_64 "$f" ;;
+              *-setup.exe.sig) add windows-x86_64-nsis "$f"; add windows-x86_64 "$f" ;;
+              *.msi.sig) add windows-x86_64-msi "$f" ;;
+            esac
+          done
+          for k in darwin-aarch64 darwin-x86_64 windows-x86_64; do
+            jq -e --arg k "$k" 'has($k)' <<<"$platforms" >/dev/null || { echo "::error::No signed bundle for $k"; exit 1; }
+          done
+          cd ..
+          jq -n \
+            --arg version "${TAG#v}" \
+            --arg notes "$(gh release view "$TAG" --json body -q .body)" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber
