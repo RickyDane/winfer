@@ -342,7 +342,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
 
   openPalette: (query = "") => set({ paletteQuery: query, cheatSheetOpen: false }),
   closePalette: () => set({ paletteQuery: null }),
-  setCheatSheet: (open) => set({ cheatSheetOpen: open, paletteQuery: null }),
+  // One modal at a time: they share a layer, so a later one would hide behind an earlier one.
+  setCheatSheet: (open) => set(open ? { cheatSheetOpen: true, paletteQuery: null, settingsOpen: false, overlay: null } : { cheatSheetOpen: false }),
   setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
   setSettings: (open) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false }),
   setOverlay: (overlay) => set({ overlay, paletteQuery: null, cheatSheetOpen: false }),

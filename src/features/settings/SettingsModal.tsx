@@ -403,6 +403,17 @@ export function SettingsModal() {
             <X size={14} />
           </button>
         </header>
+        <Section title="Keyboard shortcuts">
+          <div className="flex items-center gap-3">
+            <p className="flex-1 text-xs text-fg-muted">See every shortcut and change any of them, including the push-to-talk keys.</p>
+            <button
+              onClick={() => useWorkspaces.getState().setCheatSheet(true)}
+              className="shrink-0 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover"
+            >
+              Edit shortcuts ({keysFor({ type: "ui.cheatSheet" })})
+            </button>
+          </div>
+        </Section>
         <DefaultAgentSetting />
         <ReviewSettings />
         <ProgressSettings />
