@@ -27,6 +27,33 @@
   --radius-pane: 10px;
 }
 
+/* Light mode (sidebar moon/sun button): same roles, light values. */
+:root[data-theme="light"] {
+  --color-app: #e9e9ee;
+  --color-panel: #fbfbfc;
+  --color-panel-raised: #ffffff;
+  --color-hover: #ececf1;
+  --color-active: #e2e2e9;
+  --color-border: #dcdce3;
+  --color-border-strong: #c9c9d2;
+
+  --color-fg: #1b1b21;
+  --color-fg-muted: #55555f;
+  --color-fg-subtle: #85858f;
+
+  --color-accent: #4f5ff0;
+  --color-accent-soft: #4f5ff022;
+  --color-success: #16a34a;
+  --color-warning: #b7791f;
+  --color-danger: #dc3b3b;
+  --color-claude: #c2603f;
+  color-scheme: light;
+}
+
+:root {
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body,
@@ -53,4 +80,15 @@
     scrollbar-width: thin;
     scrollbar-color: var(--color-border-strong) transparent;
   }
+}
+
+/* While a panel edge is dragged, the page canvas and terminals must not swallow pointer events. */
+body.resizing * {
+  pointer-events: none;
+}
+
+/* xterm's stylesheet paints the viewport black; at fractional sizes its edges show as a frame
+   around the terminal, which is visible in light mode. */
+.xterm .xterm-viewport {
+  background-color: transparent !important;
 }

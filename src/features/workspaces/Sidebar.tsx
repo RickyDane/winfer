@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Moon, Plus, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Moon, Plus, Settings, Sun } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
@@ -9,7 +9,7 @@ import { useCallback, useState } from "react";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 
 export function Sidebar() {
-  const { providers, workspaces, activeWorkspaceId, focusedPaneId, setActiveWorkspace, focusPane } = useWorkspaces();
+  const { providers, workspaces, activeWorkspaceId, focusedPaneId, setActiveWorkspace, focusPane, theme, toggleTheme } = useWorkspaces();
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const menuWorkspace = menu && workspaces.find((w) => w.id === menu.id);
@@ -85,8 +85,12 @@ export function Sidebar() {
           W
         </span>
         <span className="flex-1 text-xs text-fg-muted">Local</span>
-        <button className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Theme">
-          <Moon size={14} />
+        <button
+          onClick={toggleTheme}
+          className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
         </button>
         <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title={`Settings (${keysFor({ type: "ui.settings" })})`}>
           <Settings size={14} />

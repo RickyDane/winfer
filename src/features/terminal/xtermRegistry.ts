@@ -19,7 +19,7 @@ import { isAppChord } from "@/commands/keymap";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
-const THEME: ITheme = {
+const DARK: ITheme = {
   background: "#121215",
   foreground: "#e6e6ea",
   cursor: "#e6e6ea",
@@ -42,6 +42,39 @@ const THEME: ITheme = {
   brightCyan: "#8ce6ee",
   brightWhite: "#ffffff",
 };
+
+/** Same hues, darkened so agent output stays readable on white. */
+const LIGHT: ITheme = {
+  background: "#fbfbfc",
+  foreground: "#1b1b21",
+  cursor: "#1b1b21",
+  cursorAccent: "#fbfbfc",
+  selectionBackground: "#4f5ff033",
+  black: "#1b1b21",
+  red: "#c62f2f",
+  green: "#1f8a46",
+  yellow: "#9a6a00",
+  blue: "#2f5fd0",
+  magenta: "#8a3fc0",
+  cyan: "#0f7f8c",
+  white: "#d4d4da",
+  brightBlack: "#6b6b74",
+  brightRed: "#e04848",
+  brightGreen: "#2aa35a",
+  brightYellow: "#b88400",
+  brightBlue: "#4a78e8",
+  brightMagenta: "#a55ad8",
+  brightCyan: "#1897a6",
+  brightWhite: "#ffffff",
+};
+
+const themeFor = (theme: "dark" | "light") => (theme === "light" ? LIGHT : DARK);
+
+// Recolor every live terminal when the app theme changes.
+useWorkspaces.subscribe((s, prev) => {
+  if (s.theme === prev.theme) return;
+  for (const entry of entries.values()) entry.term.options.theme = themeFor(s.theme);
+});
 
 interface Entry {
   pane: Pane;
@@ -86,7 +119,7 @@ function create(pane: Pane): Entry {
     scrollback: 10_000,
     macOptionIsMeta: true,
     allowProposedApi: true,
-    theme: THEME,
+    theme: themeFor(useWorkspaces.getState().theme),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

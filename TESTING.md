@@ -26,6 +26,9 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Settings → New panes → Default agent (or the ★ in the New menu): ⌘T and "open a new window" start that agent.
 - [ ] ⌘F searches a pane's scrollback (Enter / ⇧Enter to step).
 
+- [ ] Drag the gap left of the browser panel to resize it (double-click resets); the width survives a restart.
+- [ ] Sun/moon button next to the gear switches light/dark mode, terminals included; the choice survives a restart.
+
 ## 3. Agents, status and worktrees
 - [ ] An agent opened in a git repo shows a branch badge (`claude-1`); its terminal starts with a "worktree …" line.
 - [ ] Send Claude a prompt: its status dot turns green (working), then blue (done) when it stops.

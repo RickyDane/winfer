@@ -34,9 +34,9 @@ export const fetchModels = (id: ProviderId) => invoke<ModelInfo[]>("providers_mo
 /** Pane icon color per provider; unknown providers fall back to the muted foreground. */
 export const PROVIDER_COLORS: Record<string, string> = {
   claude: "var(--color-claude)",
-  codex: "#e6e6ea",
+  codex: "var(--color-fg)",
   agy: "#4f8cff",
-  grok: "#c9c9d1",
+  grok: "var(--color-fg-muted)",
   opencode: "#f5b544",
   cursor: "#a0a0ff",
 };

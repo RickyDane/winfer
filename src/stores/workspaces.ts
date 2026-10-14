@@ -76,6 +76,9 @@ interface WorkspaceState {
   defaultProvider: ProviderId | null;
   /** Shortcut overrides by binding id (see src/commands/keymap.ts); "" = switched off. */
   shortcuts: Record<string, string>;
+  /** Browser panel width in px. */
+  browserWidth: number;
+  theme: Theme;
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
@@ -108,6 +111,8 @@ interface WorkspaceState {
   /** Sets a binding's chord; null restores the default. */
   setShortcut: (id: string, chord: string | null) => void;
   resetShortcuts: () => void;
+  setBrowserWidth: (width: number) => void;
+  toggleTheme: () => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
@@ -127,6 +132,10 @@ const updateWorkspace = (workspaces: Workspace[], id: string, fn: (w: Workspace)
 
 const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null);
 
+export const DEFAULT_BROWSER_WIDTH = 420;
+
+export type Theme = "dark" | "light";
+
 export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   hydrated: false,
   providers: [],
@@ -145,6 +154,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   agentModels: {},
   defaultProvider: null,
   shortcuts: {},
+  browserWidth: DEFAULT_BROWSER_WIDTH,
+  theme: "dark",
   searchPaneId: null,
   voiceConfig: {},
 
@@ -184,6 +195,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       agentModels: ui.agentModels ?? {},
       defaultProvider: ui.defaultProvider ?? null,
       shortcuts: ui.shortcuts ?? {},
+      browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
+      theme: ui.theme ?? "dark",
     });
   },
 
@@ -323,6 +336,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       return { shortcuts };
     }),
   resetShortcuts: () => set({ shortcuts: {} }),
+  setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
+  toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -352,6 +367,8 @@ interface Snapshot {
     agentModels?: Record<ProviderId, string>;
     defaultProvider?: ProviderId | null;
     shortcuts?: Record<string, string>;
+    browserWidth?: number;
+    theme?: Theme;
   } | null;
 }
 
@@ -370,7 +387,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme },
   };
 }
 

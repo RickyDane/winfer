@@ -2,7 +2,7 @@ import { keysFor } from "@/commands/keymap";
 import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
-import { useWorkspaces } from "@/stores/workspaces";
+import { DEFAULT_BROWSER_WIDTH, useWorkspaces } from "@/stores/workspaces";
 import { BrowserView } from "./BrowserView";
 import { ConsoleList } from "./ConsoleList";
 import {
@@ -35,8 +35,46 @@ const IconButton = ({ title, onClick, children }: { title: string; onClick: () =
   </button>
 );
 
+const MIN_WIDTH = 280;
+/** Room the terminals keep when the browser is dragged wide. */
+const MIN_TERMINALS = 360;
+
+/** The gap left of the browser panel: drag to resize, double-click for the default width. */
+export function BrowserResizer() {
+  const setWidth = useWorkspaces((s) => s.setBrowserWidth);
+  const start = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const initial = useWorkspaces.getState().browserWidth;
+    const max = window.innerWidth - MIN_TERMINALS;
+    const move = (ev: PointerEvent) => setWidth(Math.min(Math.max(initial + startX - ev.clientX, MIN_WIDTH), Math.max(max, MIN_WIDTH)));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      document.body.classList.remove("resizing");
+    };
+    document.body.style.cursor = "col-resize";
+    // Keeps the page canvas and terminals from eating pointer events mid-drag.
+    document.body.classList.add("resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div
+      onPointerDown={start}
+      onDoubleClick={() => setWidth(DEFAULT_BROWSER_WIDTH)}
+      title="Drag to resize · double-click to reset"
+      className="group relative -mx-2 w-2 shrink-0 cursor-col-resize"
+    >
+      <div className="absolute inset-y-2 left-[3px] w-0.5 rounded-full bg-accent opacity-0 transition-opacity group-hover:opacity-60" />
+    </div>
+  );
+}
+
 export function BrowserPanel() {
   const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
+  const width = useWorkspaces((s) => s.browserWidth);
   const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar, console: logs, consoleOpen, picking, notice } = useBrowser();
   const tabs = allTabs[workspaceId] ?? [];
   const active = tabs.find((t) => t.id === activeTab[workspaceId]) ?? null;
@@ -70,7 +108,7 @@ export function BrowserPanel() {
   }, [focusUrlBar]);
 
   return (
-    <aside className="flex h-full w-[420px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+    <aside style={{ width }} className="flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
           {tabs.map((tab) => (

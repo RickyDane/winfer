@@ -1,7 +1,8 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Mic, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
-import { BrowserPanel } from "@/features/browser/BrowserPanel";
+import { BrowserPanel, BrowserResizer } from "@/features/browser/BrowserPanel";
 import { NewPaneMenu } from "@/features/panes/NewPaneMenu";
 import { CheatSheet } from "@/features/palette/CheatSheet";
 import { CommandPalette } from "@/features/palette/CommandPalette";
@@ -82,8 +83,14 @@ function EmptyWorkspace() {
 }
 
 export function AppShell() {
-  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate } = useWorkspaces();
+  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme } = useWorkspaces();
   useKeymap();
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    // Native window chrome (Windows title bar, macOS controls) follows the app.
+    void getCurrentWindow().setTheme(theme).catch(() => {});
+  }, [theme]);
 
   useEffect(() => {
     void loadProviders();
@@ -127,7 +134,12 @@ export function AppShell() {
             <EmptyWorkspace />
           )}
         </div>
-        {browserOpen && <BrowserPanel />}
+        {browserOpen && (
+          <>
+            <BrowserResizer />
+            <BrowserPanel />
+          </>
+        )}
       </main>
       <CommandPalette />
       <CheatSheet />
