@@ -1,6 +1,6 @@
 /**
  * The prompt writer: an LLM turns what the user said into the message an agent receives,
- * using context (the agent, the workspace, the agent's recent output). Clef already chose the
+ * using context (the agent, the workspace, the agent's recent output). The decision model already chose the
  * action; this only rewrites its instruction text. Falls back to the spoken words on failure.
  */
 import { llmCompose, llmEnabled } from "@/features/llm/llm";

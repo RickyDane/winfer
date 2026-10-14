@@ -12,6 +12,9 @@ vi.mock("@/features/terminal/xtermRegistry", () => ({
 
 const { collectReview, diffStats, useReviews } = await import("./reviews");
 const { useWorkspaces } = await import("@/stores/workspaces");
+const { useChatGpt } = await import("@/features/llm/chatgpt");
+// The LLM runs on the ChatGPT sign-in.
+useChatGpt.setState({ signedIn: true });
 
 const DIFF = ["diff --git a/src/app.ts b/src/app.ts", "--- a/src/app.ts", "+++ b/src/app.ts", "+one", "+two", "-old"].join("\n");
 const worktree = { repo: "/repo", path: "/wt/claude-1", branch: "winfer/claude-1", base: "main" };
@@ -28,7 +31,7 @@ function setPane(devUrl: string | null) {
       },
     ] as never,
     activeWorkspaceId: "w1",
-    voiceConfig: { writer: "claude" },
+    voiceConfig: { writer: "chatgpt" },
     reviewConfig: {},
   });
 }

@@ -1,10 +1,9 @@
 //! Voice control: hold ⌥Space (commands) or ⌥⇧Space (dictation) anywhere, speak, release.
 //! Both keys can be changed in the app (`voice_set_shortcuts`).
-//! Audio is transcribed locally with whisper; the frontend then asks Clef (via `voice_decide`)
-//! which tool to run.
+//! Audio is transcribed locally with whisper; the frontend then asks the OpenAI Decisions API
+//! (GPT-6 Luna, via `voice_decide`) which tool to run.
 
 mod capture;
-pub mod cloud;
 pub mod model;
 mod stt;
 
@@ -21,7 +20,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
-    /// Spoken commands routed through Clef.
+    /// Spoken commands, decided by the Decisions API.
     Command,
     /// Spoken text typed into the focused pane.
     Dictation,
@@ -29,7 +28,6 @@ pub enum Mode {
 
 struct Config {
     stt_model: String,
-    clef_model: String,
     vocabulary: String,
     /// "en", "de" or "auto" (detect). English-only models always use "en".
     language: String,
@@ -58,7 +56,6 @@ impl Voice {
             transcribing: AtomicBool::new(false),
             config: Mutex::new(Config {
                 stt_model: model::DEFAULT_MODEL.into(),
-                clef_model: "clef-flash".into(),
                 vocabulary: String::new(),
                 language: "en".into(),
                 input_device: None,
@@ -336,7 +333,6 @@ pub struct VoiceStatus {
     models: Vec<ModelStatus>,
     stt_model: String,
     language: String,
-    clef_model: String,
     credentials: bool,
     input_device: Option<String>,
     shortcut_error: Option<String>,
@@ -356,8 +352,7 @@ pub fn voice_status(app: AppHandle, voice: State<'_, Voice>) -> Result<VoiceStat
             .collect(),
         stt_model: config.stt_model.clone(),
         language: config.language.clone(),
-        clef_model: config.clef_model.clone(),
-        credentials: cloud::load().is_some(),
+        credentials: crate::chatgpt::chatgpt_status().signed_in(),
         input_device: config.input_device.clone(),
         shortcut_error: voice.shortcut_error.lock().unwrap().clone(),
     })
@@ -377,7 +372,6 @@ pub async fn voice_download_model(app: AppHandle, id: String) -> Result<(), Stri
 #[serde(rename_all = "camelCase")]
 pub struct VoiceConfig {
     stt_model: Option<String>,
-    clef_model: Option<String>,
     /// Words to bias recognition toward (providers, workspaces, panes).
     vocabulary: Option<Vec<String>>,
     language: Option<String>,
@@ -394,12 +388,6 @@ pub fn voice_configure(app: AppHandle, voice: State<'_, Voice>, config: VoiceCon
     {
         c.stt_model = m;
         preload(&app);
-    }
-    if let Some(m) = config
-        .clef_model
-        .filter(|m| m == "clef-flash" || m == "clef")
-    {
-        c.clef_model = m;
     }
     if let Some(lang) = config
         .language
@@ -465,38 +453,23 @@ pub async fn voice_test_microphone(app: AppHandle) -> Result<MicTest, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Sends a Decisions API request with the ChatGPT sign-in and returns the answers.
 #[tauri::command]
-pub fn voice_set_credentials(account_id: String, token: String) -> Result<(), String> {
-    cloud::save(&account_id, &token)
-}
-
-#[tauri::command]
-pub fn voice_clear_credentials() -> Result<(), String> {
-    cloud::clear()
-}
-
-/// Sends a System One request to Clef and returns the answers.
-#[tauri::command]
-pub async fn voice_decide(voice: State<'_, Voice>, body: Value) -> Result<Value, String> {
-    let creds = cloud::load()
-        .ok_or("Add your Cloudflare account ID and API token in Settings to use voice commands.")?;
-    let model = voice.config.lock().unwrap().clef_model.clone();
-    let mut body = body;
-    body["model"] = json!(model);
-    tauri::async_runtime::spawn_blocking(move || cloud::decide(&creds, &model, &body))
+pub async fn voice_decide(body: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::chatgpt::decide(&body))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Round-trips a tiny request; returns latency in ms.
 #[tauri::command]
-pub async fn voice_test_connection(voice: State<'_, Voice>) -> Result<u64, String> {
+pub async fn voice_test_connection() -> Result<u64, String> {
     let started = Instant::now();
     let body = json!({
-        "state": "The user said: open a new terminal",
-        "questions": { "is_command": { "type": "noul", "instructions": "Is this a request to do something?" } }
+        "input": "The user said: open a new terminal",
+        "questions": [{ "type": "predicate", "name": "is_command", "instructions": "Is this a request to do something?" }]
     });
-    voice_decide(voice, body).await?;
+    voice_decide(body).await?;
     Ok(started.elapsed().as_millis() as u64)
 }
 

@@ -35,7 +35,7 @@ const ctx: ToolContext = {
 };
 
 describe("isComplex", () => {
-  it("sends short commands to Clef", () => {
+  it("sends short commands to the decision model", () => {
     expect(isComplex("open two codex panes")).toBe(false);
     expect(isComplex("tell claude to run the tests")).toBe(false);
     expect(isComplex("open codex and ask it to add dark mode to the settings page")).toBe(false);

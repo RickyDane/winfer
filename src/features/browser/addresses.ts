@@ -4,7 +4,7 @@
  */
 export interface FoundAddress {
   url: string;
-  /** Where it came from, for Clef's option text. */
+  /** Where it came from, for the decision model's option text. */
   label: string;
 }
 

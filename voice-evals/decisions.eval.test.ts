@@ -1,15 +1,17 @@
 /**
- * Accuracy/latency eval against the real Clef API. Skipped unless CF_ACCOUNT_ID and
- * CF_API_TOKEN are set:  CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice [clef-flash|clef]
+ * Accuracy/latency eval against the real OpenAI Decisions API (GPT-6 Luna). Skipped unless
+ * OPENAI_TOKEN is set (an API key or a Sign in with ChatGPT access token):
+ *   OPENAI_TOKEN=… pnpm eval:voice
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ToolContext } from "@/tools/registry";
 import type { Provider } from "@/features/providers/providers";
 import type { Workspace } from "@/stores/workspaces";
-import { buildRequest, parseDecision, type DecisionResult } from "@/features/voice/decision";
+import { buildRequest, fromApi, parseDecision, toApi, type DecisionResult } from "@/features/voice/decision";
 
-const { CF_ACCOUNT_ID, CF_API_TOKEN, CLEF_MODEL = "clef-flash" } = process.env;
+const { OPENAI_TOKEN } = process.env;
+const MODEL = "gpt-6-luna";
 
 interface Case {
   utterance: string;
@@ -26,7 +28,7 @@ interface Case {
   url?: string;
 }
 
-// Real aliases, since they're part of what Clef sees.
+// Real aliases, since they're part of what the model sees.
 const aliases: Record<string, string[]> = Object.fromEntries(
   JSON.parse(readFileSync(new URL("../src-tauri/resources/providers.json", import.meta.url), "utf8")).map((p: { id: string; aliases?: string[] }) => [p.id, p.aliases ?? []]),
 );
@@ -61,25 +63,26 @@ const ctx: ToolContext = {
   models: { claude: [{ id: "fable", label: "Fable (latest)" }, { id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }, { id: "haiku", label: "Haiku (latest)" }] },
 };
 
-async function ask(utterance: string): Promise<{ result: DecisionResult; ms: number }> {
+async function ask(utterance: string): Promise<{ result: DecisionResult; ms: number; tokens: number }> {
+  const request = buildRequest(utterance, ctx);
   const started = performance.now();
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/cloudflare/${CLEF_MODEL}`, {
+  const res = await fetch("https://api.openai.com/v1/decisions", {
     method: "POST",
-    headers: { Authorization: `Bearer ${CF_API_TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: CLEF_MODEL, ...buildRequest(utterance, ctx) }),
+    headers: { Authorization: `Bearer ${OPENAI_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: MODEL, ...toApi(request) }),
   });
   const json = await res.json();
-  if (!json.success) throw new Error(JSON.stringify(json.errors));
-  return { result: json.result, ms: performance.now() - started };
+  if (!res.ok) throw new Error(JSON.stringify(json.error ?? json));
+  return { result: fromApi(json, request), ms: performance.now() - started, tokens: json.usage?.input_tokens ?? 0 };
 }
 
-describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, () => {
+describe.skipIf(!OPENAI_TOKEN)(`voice eval (${MODEL})`, () => {
   it(
     "routes utterances to the expected tools",
     async () => {
       const rows: { utterance: string; got: string; ok: boolean; confidence: number; ms: number; top: number; margin: number; ratio: number; tokens: number; text: string }[] = [];
       for (const c of cases) {
-        const { result, ms } = await ask(c.utterance);
+        const { result, ms, tokens } = await ask(c.utterance);
         const decisions = parseDecision(result, ctx);
         const got = decisions.map((d) => d.tool.id).join("+") || "none";
         // Two-action commands may come back in either order.
@@ -113,7 +116,7 @@ describe.skipIf(!CF_ACCOUNT_ID || !CF_API_TOKEN)(`voice eval (${CLEF_MODEL})`, (
           top: probs[0] ?? 0,
           margin: (probs[0] ?? 0) - (probs[1] ?? 0),
           ratio: (probs[0] ?? 0) / Math.max(probs[1] ?? 0, 1e-6),
-          tokens: (result as { usage?: { input_tokens?: number } }).usage?.input_tokens ?? 0,
+          tokens,
           text: String(
             decisions.find((d) => d.args.prompt)?.args.prompt ??
               decisions.find((d) => d.args.text)?.args.text ??

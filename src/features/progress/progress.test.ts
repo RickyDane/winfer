@@ -7,13 +7,16 @@ vi.mock("@/features/terminal/xtermRegistry", () => ({ readTerminal: vi.fn(() => 
 
 const { estimate, markFinished, parseEstimate, setTask, useProgress } = await import("./progress");
 const { useWorkspaces } = await import("@/stores/workspaces");
+const { useChatGpt } = await import("@/features/llm/chatgpt");
+// The LLM runs on the ChatGPT sign-in.
+useChatGpt.setState({ signedIn: true });
 
 const pane = { id: "p1", workspaceId: "w1", provider: "claude", cwd: "/repo", worktree: null, prompt: "Build a Flappy Bird clone", status: "working" } as never;
 
 describe("session progress", () => {
   beforeEach(() => {
     useProgress.setState({ byPane: {} });
-    useWorkspaces.setState({ voiceConfig: { writer: "claude" } });
+    useWorkspaces.setState({ voiceConfig: { writer: "chatgpt" } });
     invoke.mockReset();
     output = "";
   });

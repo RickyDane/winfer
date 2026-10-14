@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolContext } from "@/tools/registry";
 import type { Provider } from "@/features/providers/providers";
 import type { Workspace } from "@/stores/workspaces";
-import { buildRequest, orderByMention, parseDecision, transcriptSpans, verdict, withoutLeadIn, type DecisionResult } from "./decision";
+import { apiName, buildRequest, fromApi, orderByMention, parseDecision, toApi, transcriptSpans, verdict, withoutLeadIn, type ApiResponse, type DecisionResult } from "./decision";
 
 const provider = (id: string, name: string, aliases: string[] = []): Provider => ({
   id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true,
@@ -232,4 +232,48 @@ describe("withoutLeadIn", () => {
     ["Claude er soll die Tests ausführen", "die Tests ausführen"],
     ["sag ihm, er soll die Tests ausführen", "die Tests ausführen"],
   ])("%s → %s", (input, expected) => expect(withoutLeadIn(input)).toBe(expected));
+});
+
+describe("Decisions API format", () => {
+  const request = buildRequest("open two codex panes", ctx);
+  const api = toApi(request);
+
+  it("sends every question once, with names the API accepts", () => {
+    expect(api.questions).toHaveLength(Object.keys(request.questions).length);
+    const names = api.questions.map((q) => q.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.every((n) => /^[A-Za-z0-9_-]+$/.test(n))).toBe(true);
+    expect(api.input).toContain("open two codex panes");
+  });
+
+  it("maps choice, yes/no and level questions", () => {
+    const action = api.questions.find((q) => q.name === "action_1")!;
+    expect(action.type).toBe("choice");
+    expect(action.type === "choice" && action.choices.find((c) => c.value === "spawn_panes")?.description).toMatch(/Open, start/);
+    const counts = api.questions.find((q) => q.name === apiName("spawn_panes.counts.codex"))!;
+    expect(counts.type === "choice" && counts.choices.find((c) => c.value === "two")?.description).toBe("two");
+    expect(api.questions.find((q) => q.name === "instruction_given")?.type).toBe("predicate");
+    const level = api.questions.find((q) => q.type === "score");
+    expect(level?.type === "score" && level.levels.map((l) => l.label)).toEqual(["slightly", "moderately", "a lot"]);
+  });
+
+  it("reads the answers back under the original keys", () => {
+    const response: ApiResponse = {
+      answers: [
+        { type: "choice", name: "action_1", choice: "spawn_panes", confidence: 0.9, probabilities: [{ value: "spawn_panes", probability: 0.8 }, { value: "close_pane", probability: 0.1 }] },
+        { type: "choice", name: apiName("spawn_panes.counts.codex"), choice: "two", probabilities: [{ value: "two", probability: 0.9 }] },
+        { type: "predicate", name: "instruction_given", probability: 0.1 },
+        { type: "refusal", name: "action_2" },
+        { type: "choice", name: "not_asked", choice: "x" },
+      ],
+    };
+    const result = fromApi(response, request);
+    expect(result.answers.action_1).toEqual({ type: "choice", choice: "spawn_panes", confidence: 0.9, probabilities: { spawn_panes: 0.8, close_pane: 0.1 } });
+    expect(result.answers["spawn_panes.counts.codex"]).toMatchObject({ choice: "two" });
+    expect(result.answers.instruction_given).toEqual({ type: "noul", noul: 0.1 });
+    expect(result.answers).not.toHaveProperty("action_2");
+    expect(result.answers).not.toHaveProperty("not_asked");
+    const [d] = parseDecision(result, ctx);
+    expect(d.tool.toCommands(d.args, ctx)).toEqual([expect.objectContaining({ type: "pane.spawn", provider: "codex", count: 2 })]);
+  });
 });

@@ -1,6 +1,8 @@
 /**
  * Live check of the LLM planner on long/complex commands, through the logged-in CLI:
- *   PLANNER=claude|codex [PLANNER_MODEL=sonnet] pnpm eval:planner
+ *   PLANNER=claude [PLANNER_MODEL=sonnet] pnpm eval:planner
+ *   PLANNER=openai OPENAI_TOKEN=… [PLANNER_MODEL=gpt-6-luna] pnpm eval:planner   (Responses API; an
+ *     API key or a Sign in with ChatGPT access token)
  * Skipped unless PLANNER is set.
  */
 import { execFileSync } from "node:child_process";
@@ -57,6 +59,29 @@ const ctx: ToolContext = {
   models: { claude: [{ id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }] },
 };
 
+/** The Responses API, as src-tauri/src/chatgpt.rs calls it (streamed, not stored). */
+async function respond(user: string): Promise<string> {
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.OPENAI_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: PLANNER_MODEL || "gpt-6-luna",
+      instructions: PLANNER_SYSTEM,
+      input: [{ role: "user", content: [{ type: "input_text", text: user }] }],
+      store: false,
+      stream: true,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  let text = "";
+  for (const line of (await res.text()).split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const event = JSON.parse(line.slice(5));
+    if (event.type === "response.output_text.delta") text += event.delta;
+  }
+  return text;
+}
+
 /** Same flags as src-tauri/src/llm.rs. */
 async function plan(utterance: string) {
   const started = performance.now();
@@ -64,12 +89,8 @@ async function plan(utterance: string) {
   const user = plannerPrompt(utterance, ctx);
   let text: string;
   try {
-    if (PLANNER === "codex") {
-      const out = join(dir, "answer.txt");
-      execFileSync("codex", ["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-o", out, ...(PLANNER_MODEL ? ["-m", PLANNER_MODEL] : []), "-"], {
-        cwd: dir, input: `${PLANNER_SYSTEM}\n\n${user}`, stdio: ["pipe", "ignore", "ignore"],
-      });
-      text = readFileSync(out, "utf8");
+    if (PLANNER === "openai") {
+      text = await respond(user);
     } else {
       writeFileSync(join(dir, "system.txt"), PLANNER_SYSTEM);
       text = execFileSync(

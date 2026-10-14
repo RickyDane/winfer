@@ -6,6 +6,7 @@ import type { Channel } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import pkg from "../../package.json";
+import { apiName } from "@/features/voice/decision";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 
 const encoder = new TextEncoder();
@@ -44,13 +45,28 @@ const inputs: unknown[] = [];
 const writes: { paneId: string; data: string }[] = [];
 let picking: { workspaceId: string; targetId: string } | null = null;
 
-// Fake voice: tests set what was "said" and what Clef "answers"; requests are kept for inspection.
+// Fake voice: tests set what was "said" and what the decision model "answers" (internal form,
+// keyed like DecisionRequest questions); requests are kept for inspection.
 const voice = { said: "", mode: "command", answers: {} as Record<string, unknown>, requests: [] as unknown[] };
 let tabCounter = 0;
 let androidStopped = false;
 const androidInputs: unknown[] = [];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mergeHistory: any[] = [];
+
+/** Internal-form answers as the Decisions API would return them. */
+function asApiResponse(answers: Record<string, unknown>) {
+  const probs = (p: unknown) => Object.entries((p ?? {}) as Record<string, number>);
+  return {
+    answers: Object.entries(answers).map(([key, raw]) => {
+      const a = raw as { type: string; choice?: string; noul?: number; score?: number; probabilities?: Record<string, number>; confidence?: number };
+      const name = apiName(key);
+      if (a.type === "noul") return { type: "predicate", name, probability: a.noul };
+      if (a.type === "score") return { type: "score", name, score: a.score, confidence: a.confidence, probabilities: probs(a.probabilities).map(([label, probability]) => ({ label, probability })) };
+      return { type: "choice", name, choice: a.choice, confidence: a.confidence, probabilities: a.probabilities && probs(a.probabilities).map(([value, probability]) => ({ value, probability })) };
+    }),
+  };
+}
 
 async function renderFrame(workspaceId: string) {
   const sc = screencasts.get(workspaceId);
@@ -355,7 +371,6 @@ mockIPC(
           ],
           sttModel: "base.en",
           language: "en",
-          clefModel: "clef-flash",
           credentials: true,
           inputDevice: null,
           shortcutError: null,
@@ -365,9 +380,13 @@ mockIPC(
       case "voice_test_microphone":
         return { device: "MacBook Pro Microphone", peak: 0.08 };
       case "voice_configure":
-      case "voice_set_credentials":
-      case "voice_clear_credentials":
+      case "chatgpt_sign_out":
         return null;
+      case "chatgpt_status":
+      case "chatgpt_sign_in":
+        return { signedIn: true, email: "you@example.com" };
+      case "chatgpt_models":
+        return ["gpt-6-luna", "gpt-6.1-sol"];
       case "voice_test_connection":
         return 187;
       case "voice_start":
@@ -391,7 +410,7 @@ mockIPC(
         return new Promise((resolve) => setTimeout(() => resolve(`[written] ${String(a.req.user).match(/Instruction as heard: "([^"]*)"/)?.[1] ?? ""}`), 300));
       case "voice_decide":
         voice.requests.push(a.body);
-        return new Promise((resolve) => setTimeout(() => resolve({ answers: voice.answers }), 200));
+        return new Promise((resolve) => setTimeout(() => resolve(asApiResponse(voice.answers)), 200));
       case "plugin:dialog|open":
         return "/Users/demo/Projects/bridgemind-api";
       case "plugin:dialog|message": {

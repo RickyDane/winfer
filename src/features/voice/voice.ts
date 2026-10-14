@@ -1,6 +1,7 @@
 /**
- * Voice flow in the UI: push-to-talk events from src-tauri/src/voice, then Clef decides which
- * tools to run (decision.ts) and the policy gate runs, confirms or rejects.
+ * Voice flow in the UI: push-to-talk events from src-tauri/src/voice, then the OpenAI Decisions
+ * API (short commands, decision.ts) or the LLM planner (long or complex ones, planner.ts) decides
+ * which tools to run, and the policy gate runs, confirms or rejects.
  */
 import { applyVoiceShortcuts, isCustomized, VOICE_BINDINGS } from "@/commands/keymap";
 import { invoke } from "@tauri-apps/api/core";
@@ -13,9 +14,10 @@ import { defaultProviderId, providerName, useWorkspaces } from "@/stores/workspa
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
 import { needsWriting, planPerRecipient, recipientsOf, splitTasks, writeInstructions } from "./writer";
-import { buildRequest, orderByMention, parseDecision, verdict, type Decision, type DecisionResult } from "./decision";
+import { buildRequest, fromApi, orderByMention, parseDecision, toApi, verdict, type ApiResponse, type Decision, type DecisionResult } from "./decision";
 import { isComplex, planWithLlm } from "./planner";
 import { llmEnabled } from "@/features/llm/llm";
+import { refreshChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
 export type Mode = "command" | "dictation";
@@ -32,7 +34,7 @@ export interface VoiceStatus {
   models: ModelStatus[];
   sttModel: string;
   language: "en" | "de" | "auto";
-  clefModel: string;
+  /** Whether winfer is signed in with ChatGPT. */
   credentials: boolean;
   /** Chosen microphone; null follows the system default. */
   inputDevice: string | null;
@@ -185,32 +187,47 @@ export function cancelPending() {
   show("idle", { pending: null });
 }
 
+/** Plans with the LLM; false when it's off or failed, so the caller can try something else. */
+async function decideWithLlm(transcript: string, ctx: ReturnType<typeof toolContext>): Promise<boolean> {
+  show("deciding", { transcript, message: "Planning…" });
+  const started = performance.now();
+  const decisions = await planWithLlm(transcript, ctx, useVoice.getState().recent);
+  if (!decisions) return false;
+  useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
+  if (decisions.length === 0) show("error", { message: `No winfer command in “${transcript}”` }, 4000);
+  else if (useWorkspaces.getState().voiceConfig.confirm && decisions.some((d) => d.tool.risk === "confirm")) {
+    show("confirm", { pending: { decisions, transcript, planned: true }, message: decisions.map(describe).join(" · ") });
+  } else void run(decisions, transcript, { planned: true });
+  return true;
+}
+
 async function decide(transcript: string) {
   show("deciding", { transcript, message: "" });
   const ctx = toolContext(useVoice.getState().lastCommands);
-  const config = useWorkspaces.getState().voiceConfig;
-  const planner = config.planner ?? "auto";
-  // Long or complex commands go to the full LLM; Clef only picks from short questions.
-  if (planner !== "off" && llmEnabled() && (planner === "always" || isComplex(transcript))) {
-    show("deciding", { transcript, message: "Planning…" });
-    const started = performance.now();
-    const decisions = await planWithLlm(transcript, ctx, useVoice.getState().recent);
-    if (decisions) {
-      useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
-      if (decisions.length === 0) return show("error", { message: `No winfer command in “${transcript}”` }, 4000);
-      if (config.confirm && decisions.some((d) => d.tool.risk === "confirm")) {
-        return show("confirm", { pending: { decisions, transcript, planned: true }, message: decisions.map(describe).join(" · ") });
-      }
-      return run(decisions, transcript, { planned: true });
-    }
+  const planner = useWorkspaces.getState().voiceConfig.planner ?? "auto";
+  const { signedIn, decisionsUnavailable } = useChatGpt.getState();
+  // The Decisions API needs the ChatGPT sign-in and a plan that allows it; without either,
+  // every command is planned by the LLM.
+  const decisionsUsable = signedIn && !decisionsUnavailable;
+  // Long or complex commands go to the full LLM; the decision model only picks from short questions.
+  const plan = planner !== "off" && (planner === "always" || isComplex(transcript) || !decisionsUsable);
+  if (plan && llmEnabled() && (await decideWithLlm(transcript, ctx))) return;
+  if (!decisionsUsable) {
+    return show("error", { message: signedIn ? "Couldn't plan that command; check the LLM in Settings → Voice." : "Sign in with ChatGPT in Settings → Voice to use voice commands." }, 6000);
   }
+
   const request = buildRequest(transcript, ctx, useVoice.getState().recent);
   const started = performance.now();
   let result: DecisionResult;
   try {
-    result = await invoke<DecisionResult>("voice_decide", { body: request });
+    result = fromApi(await invoke<ApiResponse>("voice_decide", { body: toApi(request) }), request);
   } catch (err) {
-    show("error", { message: String(err) }, 6000);
+    // The plan doesn't cover the Decisions API: plan with the LLM from now on.
+    if (String(err).includes("decisions-unavailable")) {
+      useChatGpt.setState({ decisionsUnavailable: true });
+      if (llmEnabled() && (await decideWithLlm(transcript, ctx))) return;
+    }
+    show("error", { message: String(err).replace(/^decisions-unavailable: /, "") }, 6000);
     return;
   }
   useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
@@ -253,6 +270,7 @@ let started = false;
 export function startVoice() {
   if (started) return;
   started = true;
+  void refreshChatGpt();
   // Restore saved model choices once the workspace state has loaded.
   const applySaved = () => {
     const saved = useWorkspaces.getState().voiceConfig;
@@ -299,7 +317,7 @@ export function startVoice() {
 export const startListening = (mode: Mode = "command") => void invoke("voice_start", { mode });
 export const stopListening = () => void invoke("voice_stop");
 
-export async function configureVoice(config: { sttModel?: string; clefModel?: string; language?: "en" | "de" | "auto"; inputDevice?: string }) {
+export async function configureVoice(config: { sttModel?: string; language?: "en" | "de" | "auto"; inputDevice?: string }) {
   useWorkspaces.getState().setVoiceConfig(config);
   await invoke("voice_configure", { config });
   await refreshVoiceStatus();

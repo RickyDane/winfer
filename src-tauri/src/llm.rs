@@ -1,9 +1,9 @@
 //! The LLM behind voice "smart moves": plans long or complex voice commands, turns what the user
 //! said into the message an agent receives, estimates progress and summarizes finished work.
 //!
-//! It runs the user's own coding-agent CLI headless, with its own login: Claude Code
-//! (`claude -p`, no tools, no settings or MCP servers) or Codex (`codex exec`, read-only and
-//! ephemeral). Nothing else is called.
+//! Two backends, both with the user's own subscription: ChatGPT through winfer's Sign in with
+//! ChatGPT (the Responses API, see chatgpt.rs), or Claude Code run headless (`claude -p`, no
+//! tools, no settings or MCP servers).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -17,9 +17,9 @@ use crate::env::login_env;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeRequest {
-    /// "claude" or "codex".
+    /// "chatgpt" or "claude".
     provider: String,
-    /// Model for the CLI (e.g. "sonnet", "gpt-5"); empty uses its default.
+    /// Model (e.g. "gpt-6-luna", "sonnet"); empty uses the default.
     #[serde(default)]
     model: String,
     system: String,
@@ -120,35 +120,11 @@ fn claude(model: &str, system: &str, user: &str) -> Result<String, String> {
     Ok(answer.to_string())
 }
 
-/// Codex with the user's ChatGPT login, read-only and ephemeral.
-fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
-    let launcher = crate::env::launcher("codex").ok_or("Codex CLI isn't installed.")?;
-    let dir = scratch_dir()?;
-    let out = dir.join("answer.txt");
-    let mut cmd = Command::new(&launcher.program);
-    cmd.args(&launcher.args)
-        .current_dir(&dir)
-        .args(["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-o"])
-        .arg(&out);
-    if !model.is_empty() {
-        cmd.args(["-m", model]);
-    }
-    cmd.arg("-");
-    let result = run(cmd, &format!("{system}\n\n{user}"), "Codex");
-    let answer = std::fs::read_to_string(&out).unwrap_or_default();
-    let _ = std::fs::remove_dir_all(&dir);
-    result?;
-    if answer.trim().is_empty() {
-        return Err("Codex gave no answer".into());
-    }
-    Ok(answer.trim().to_string())
-}
-
 #[tauri::command]
 pub async fn llm_compose(req: ComposeRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || match req.provider.as_str() {
         "claude" => claude(&req.model, &req.system, &req.user),
-        "codex" => codex(&req.model, &req.system, &req.user),
+        "chatgpt" => crate::chatgpt::respond(&req.model, &req.system, &req.user),
         other => Err(format!("unknown LLM provider {other}")),
     })
     .await
@@ -172,13 +148,13 @@ mod tests {
         assert!(!claude_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
     }
 
-    /// Live: a logged-in Claude Code and Codex.
+    /// Live: a logged-in Claude Code, and a ChatGPT sign-in made in winfer.
     /// cargo test --lib -- --ignored --nocapture live_compose
     #[test]
     #[ignore]
     fn live_compose() {
         let system = "Rewrite as a one-sentence instruction for a coding agent. Output only it.";
-        for (provider, run) in [("claude", claude as fn(&str, &str, &str) -> Result<String, String>), ("codex", codex)] {
+        for (provider, run) in [("claude", claude as fn(&str, &str, &str) -> Result<String, String>), ("chatgpt", crate::chatgpt::respond)] {
             let started = Instant::now();
             let result = run("", system, "Spoken: make the button blue");
             eprintln!("{provider}: {result:?} in {:?}", started.elapsed());

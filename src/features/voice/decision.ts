@@ -1,10 +1,13 @@
 /**
- * Voice → Clef (System One) → tools.
+ * Voice → OpenAI Decisions API (GPT-6 Luna) → tools.
  *
- * The request asks Clef to pick tools from the Tool Registry (their descriptions are the option
- * text) and to fill every parameter as a typed question. Clef can only choose among the options we
- * give it, so it can't invent commands. Free text (URLs, prompts) is picked from spans of the
- * transcript. No grammar parsing happens anywhere.
+ * The request asks the decision model to pick tools from the Tool Registry (their descriptions are
+ * the option text) and to fill every parameter as a typed question. It can only choose among the
+ * options we give it, so it can't invent commands. Free text (URLs, prompts) is picked from spans
+ * of the transcript. No grammar parsing happens anywhere.
+ *
+ * Questions are built in a compact internal form (`DecisionRequest`) and translated to the API's
+ * format at the edge (`toApi` / `fromApi`).
  */
 import type { Command } from "@/commands/bus";
 import { TOOLS, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
@@ -15,9 +18,10 @@ const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "sev
 const MAX_CHOICES = 255;
 
 /**
- * Gate on how clearly the chosen tool beats the runner-up (top probability ÷ second). Clef's own
- * `confidence` doesn't separate right from wrong on the Workers AI model; this ratio does
- * (voice-evals, Oct 2026: correct median ≈ 8, wrong answers ≤ 1.12 apart from argument mistakes).
+ * Gate on how clearly the chosen tool beats the runner-up (top probability ÷ second). A model's
+ * own `confidence` doesn't separate right from wrong reliably; this ratio does (voice-evals,
+ * Oct 2026: correct median ≈ 8, wrong answers ≤ 1.12 apart from argument mistakes). Measured on
+ * the previous decision model; re-check with `pnpm eval:voice` when the model changes.
  */
 export const AUTO_RUN = 2;
 export const CONFIRM = 1.05;
@@ -39,6 +43,81 @@ type Answer =
 
 export interface DecisionResult {
   answers: Record<string, Answer>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Decisions API's wire format (POST /v1/decisions).
+
+type ApiQuestion =
+  | { type: "choice"; name: string; instructions: string; choices: { value: string; description: string }[] }
+  | { type: "predicate"; name: string; instructions: string }
+  | { type: "score"; name: string; instructions: string; levels: { label: string; description: string }[] };
+
+export interface ApiRequest {
+  input: string;
+  questions: ApiQuestion[];
+}
+
+type ApiAnswer =
+  | { type: "choice"; name: string; choice: string; probabilities?: { value: string; probability: number }[]; confidence?: number }
+  | { type: "predicate"; name: string; probability: number }
+  | { type: "score"; name: string; score: number; probabilities?: { value?: number; label: string; probability: number }[]; confidence?: number }
+  | { type: "refusal"; name: string };
+
+export interface ApiResponse {
+  answers: ApiAnswer[];
+}
+
+/** Question names the API accepts: internal keys like "spawn_panes.counts.claude" use dots. */
+export const apiName = (key: string) => key.replace(/[^A-Za-z0-9_-]/g, "_");
+
+/** Translates a request to the API's format. */
+export function toApi(request: DecisionRequest): ApiRequest {
+  const questions = Object.entries(request.questions).map(([key, q]): ApiQuestion => {
+    const name = apiName(key);
+    switch (q.type) {
+      case "choice":
+        return { type: "choice", name, instructions: q.instructions, choices: Object.entries(q.criteria).map(([value, d]) => ({ value, description: d ?? value })) };
+      case "noul":
+        return { type: "predicate", name, instructions: q.instructions };
+      case "score":
+        return { type: "score", name, instructions: q.instructions, levels: q.criteria.map((label) => ({ label, description: label })) };
+    }
+  });
+  return { input: `What the user said and the app's current state:\n${JSON.stringify(request.state, null, 1)}`, questions };
+}
+
+/** Translates the API's answers back to the internal form, keyed like the request's questions. */
+export function fromApi(response: ApiResponse, request: DecisionRequest): DecisionResult {
+  const keys = new Map(Object.keys(request.questions).map((k) => [apiName(k), k]));
+  const answers: Record<string, Answer> = {};
+  for (const a of response.answers ?? []) {
+    const key = keys.get(a.name);
+    if (!key) continue;
+    switch (a.type) {
+      case "choice":
+        answers[key] = {
+          type: "choice",
+          choice: a.choice,
+          probabilities: a.probabilities && Object.fromEntries(a.probabilities.map((p) => [p.value, p.probability])),
+          confidence: a.confidence,
+        };
+        break;
+      case "predicate":
+        answers[key] = { type: "noul", noul: a.probability };
+        break;
+      case "score":
+        answers[key] = {
+          type: "score",
+          score: a.score,
+          probabilities: a.probabilities && Object.fromEntries(a.probabilities.map((p) => [p.label, p.probability])),
+          confidence: a.confidence,
+        };
+        break;
+      // Refusals leave the question unanswered, like an argument that wasn't given.
+    }
+  }
+  return { answers };
 }
 
 /** Pane targets are shared by many tools, so they're asked once. */
@@ -213,9 +292,9 @@ function argsFor(tool: ToolDef, answers: Record<string, Answer>, ctx: ToolContex
 }
 
 /**
- * Clef sometimes picks the instruction together with how it was addressed ("ask it to add
- * dark mode", "Claude to run the tests"). Trims that framing from the extracted text only;
- * which tool runs is still decided entirely by Clef.
+ * The decision model sometimes picks the instruction together with how it was addressed ("ask it
+ * to add dark mode", "Claude to run the tests"). Trims that framing from the extracted text only;
+ * which tool runs is still decided entirely by the model.
  */
 export function withoutLeadIn(text: string): string {
   const trimmed = text
@@ -228,7 +307,7 @@ export function withoutLeadIn(text: string): string {
   return trimmed || text;
 }
 
-/** Turns Clef's answers into up to two decisions (the second only if it's a different tool). */
+/** Turns the decision model's answers into up to two decisions (the second only if it's a different tool). */
 export function parseDecision(result: DecisionResult, ctx: ToolContext): Decision[] {
   let decisions: Decision[] = [];
   for (const key of ["action_1", "action_2"]) {

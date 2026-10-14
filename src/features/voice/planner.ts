@@ -1,7 +1,8 @@
 /**
- * The LLM planner: long or complex voice commands are planned by a full LLM instead of Clef.
+ * The LLM planner: long or complex voice commands are planned by a full LLM instead of the
+ * decision model.
  *
- * Clef picks options from short multiple-choice questions, which works for "open two Codex
+ * The decision model picks options from short multiple-choice questions, which works for "open two Codex
  * panes" but not for "we need four features: …, and tell the one in pane 2 to …". The planner
  * sees the same Tool Registry (ids, descriptions, allowed values) plus the app state, and answers
  * with a JSON plan of tool calls whose prompts it writes itself. Every call is validated against
@@ -14,7 +15,7 @@ import { providerName } from "@/stores/workspaces";
 import { TOOLS, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
 import type { Decision } from "./decision";
 
-/** Clef-only helpers: the planner starts agents per feature itself. */
+/** Decision-model helpers: the planner starts agents per feature itself. */
 const HIDDEN = new Set(["none", "start_features"]);
 
 export type PlannerMode = "auto" | "always" | "off";
@@ -23,7 +24,7 @@ export type PlannerMode = "auto" | "always" | "off";
 const LONG_WORDS = 18;
 const SENTENCES_WORDS = 10;
 
-/** Whether a command is too long or complex for Clef's multiple-choice questions. */
+/** Whether a command is too long or complex for the decision model's multiple-choice questions. */
 export function isComplex(transcript: string): boolean {
   const words = transcript.split(/\s+/).filter(Boolean).length;
   const sentences = transcript.split(/[.!?;:]+(?:\s|$)/).filter((s) => s.trim().split(/\s+/).length >= 3).length;
@@ -166,7 +167,7 @@ export function parsePlan(answer: string, ctx: ToolContext): Decision[] | null {
   });
 }
 
-/** Asks the LLM for a plan; null when the LLM is off or fails (the caller falls back to Clef). */
+/** Asks the LLM for a plan; null when the LLM is off or fails (the caller falls back to the decision model). */
 export async function planWithLlm(transcript: string, ctx: ToolContext, recent: string[]): Promise<Decision[] | null> {
   if (!llmEnabled()) return null;
   const focusedOutput = ctx.focusedPaneId ? (readTerminal(ctx.focusedPaneId, 40) ?? "").slice(-2000).trim() : "";
@@ -174,7 +175,7 @@ export async function planWithLlm(transcript: string, ctx: ToolContext, recent: 
     const answer = await llmCompose(PLANNER_SYSTEM, plannerPrompt(transcript, ctx, recent, focusedOutput));
     return parsePlan(answer, ctx);
   } catch (err) {
-    console.warn("LLM planner failed, falling back to Clef", err);
+    console.warn("LLM planner failed, falling back to the decision model", err);
     return null;
   }
 }

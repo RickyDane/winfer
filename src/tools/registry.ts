@@ -1,7 +1,7 @@
 /**
  * Tool Registry: every user-facing action, described once.
  *
- * - `description` is what the Clef decision model sees as the option text (keep ~10–15 words).
+ * - `description` is what the decision model (OpenAI Decisions API) sees as the option text (keep ~10–15 words).
  * - `params` map to System One question types (choice / noul / score) when voice lands in M5.
  * - `palette` expands a tool into concrete ⌘K entries.
  * - `toCommands` turns resolved arguments into Command Bus commands.

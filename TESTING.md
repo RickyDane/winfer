@@ -85,13 +85,14 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 ## 6. Voice
 - [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
 - [ ] Settings → Microphone lists your devices (MacBook Pro Microphone, AirPods…); pick one → Test → "Heard you on …" with a moving meter. "System default" follows macOS.
-- [ ] Enter Cloudflare account ID + Workers AI token → Save → Test connection shows a latency.
+- [ ] Settings → Voice → "Continue with ChatGPT" → the browser asks you to sign in, name the agent and allow winfer to use your plan → back in winfer: "Signed in as you@…". Test connection shows a latency, or says your plan can't use the Decisions API (then every command is planned by the LLM). Sign out → voice commands ask you to sign in again; signing in again skips the naming step. Declining in the browser → "You declined the sign-in."
+- [ ] Restart winfer → still signed in. After an hour of use the token renews silently (no sign-in prompt).
 - [ ] Hold ⌥Space, say "open two new instances with Claude and Codex", release → two panes open. (First use asks for microphone access.)
 - [ ] "Create a new Claude instance and tell it to create a Flappy Bird clone" → Claude opens with that prompt.
 - [ ] "Type hello world into Claude" → text is typed into Claude's prompt, not sent.
-- [ ] LLM (Settings → Voice): Claude Code by default (Codex if only Codex is installed; the other is greyed out when missing). "tell Claude to make the page nicer" → Claude receives a concrete prompt (shown in the HUD). Switch to Codex and repeat; type a model (e.g. "haiku") and it's used. Off → spoken words go through unchanged, progress estimates and review summaries are off.
+- [ ] LLM (Settings → Voice): ChatGPT once signed in (Claude Code if not; an option is greyed out until it's available). "tell Claude to make the page nicer" → Claude receives a concrete prompt (shown in the HUD). Pick another ChatGPT model, then switch to Claude Code (type a model like "haiku") and repeat. Off → spoken words go through unchanged, progress estimates and review summaries are off.
 - [ ] Long or complex commands are planned by the LLM (HUD "Planning…"): "Open Codex and have it fix the login bug where the session expires too early, then run the auth tests" → one new Codex pane with one prompt; "Tell the Claude pane to stop and write unit tests for the payment service, and ask Codex to answer yes" → stops Claude, sends both messages. Short commands ("open two codex panes") still go to Clef. Settings → "Who decides what runs" switches between auto, always LLM and always Clef.
-- [ ] Optional: `PLANNER=claude pnpm eval:planner` (or `PLANNER=codex`, `PLANNER_MODEL=haiku`) checks the planner on long commands.
+- [ ] Optional: `PLANNER=claude pnpm eval:planner` (or `PLANNER=openai OPENAI_TOKEN=…`, `PLANNER_MODEL=…`) checks the planner on long commands; `OPENAI_TOKEN=… pnpm eval:voice` checks the Decisions API on short ones.
 - [ ] Several features for one new agent ("Open Claude: create credentials.js with placeholders, implement decide() in openaiDecisions.js and make Luna.vue use it") → one pane per feature, each in its own worktree with a standalone prompt; the HUD says "split into 3 tasks". Same with Codex, OpenCode or no agent named (default agent). One feature with follow-up steps ("fix the login bug, then run the tests") stays in one pane.
 - [ ] Features without "open" ("We need four new features: a plugin system, a graphify plugin, an encrypted secret store and the OpenAI decisions API") → one default-agent pane per feature, each with its prompt, even while other agents are open. "Tell Claude to run the tests" still goes to the open Claude.
 - [ ] After an agent created a page: "Öffne die erstellte Seite im Browser" / "open the page you just made" opens that file; "show me the dev server" opens localhost.
@@ -102,7 +103,6 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Settings → Language "Deutsch" + download a multilingual model → "Öffne ein neues Fenster mit Codex" works.
 - [ ] "Open Claude with Opus" / "Switch Claude to Sonnet"; pane header shows the model; pane menu → Change model….
 - [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.
-- [ ] Optional: `CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice` reports accuracy (target ≥ 90%) and latency.
 
 ## 6a. Usage limits
 - [ ] After a Claude Code pane in winfer answers once, a ring with the Claude icon appears in the title bar; your own Claude status line still shows in the pane.

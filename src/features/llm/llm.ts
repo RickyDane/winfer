@@ -1,38 +1,46 @@
 /**
  * The LLM winfer thinks with (voice planner, prompt writer, progress estimates, review
- * summaries): the user's own Claude Code or Codex CLI, run headless with its own login.
+ * summaries): the user's ChatGPT plan through Sign in with ChatGPT, or their Claude Code CLI run
+ * headless with its own login.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { useWorkspaces } from "@/stores/workspaces";
+import { useChatGpt } from "./chatgpt";
 
-export type LlmProvider = "claude" | "codex";
+export type LlmProvider = "chatgpt" | "claude";
 export type LlmChoice = LlmProvider | "off";
 
 export const LLM_PROVIDERS: { id: LlmProvider; label: string }[] = [
-  { id: "claude", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
+  { id: "chatgpt", label: "ChatGPT (your plan, Sign in with ChatGPT)" },
+  { id: "claude", label: "Claude Code (your Claude login)" },
 ];
 
-/** The CLI to use: the chosen one if installed, else whichever is; null when off or none is installed. */
+/** Which LLMs can run right now: ChatGPT once signed in, Claude Code once installed. */
+export function availableLlms(): LlmProvider[] {
+  const { providers } = useWorkspaces.getState();
+  const available: LlmProvider[] = [];
+  if (useChatGpt.getState().signedIn) available.push("chatgpt");
+  if (providers.some((p) => p.id === "claude" && p.installed)) available.push("claude");
+  return available;
+}
+
+/** The LLM to use: the chosen one if available, else the first that is; null when off or none is. */
 export function llmProvider(): LlmProvider | null {
-  const { voiceConfig, providers } = useWorkspaces.getState();
-  const choice = voiceConfig.writer as string | undefined;
+  const choice = useWorkspaces.getState().voiceConfig.writer as string | undefined;
   if (choice === "off") return null;
-  // Before the provider list has loaded, trust the choice.
-  if (providers.length === 0) return choice === "codex" ? "codex" : "claude";
-  const installed = LLM_PROVIDERS.map((p) => p.id).filter((id) => providers.some((p) => p.id === id && p.installed));
-  // Older settings may name a backend that no longer exists; they fall back to what's installed.
-  return installed.find((id) => id === choice) ?? installed[0] ?? null;
+  const available = availableLlms();
+  // Older settings may name a backend that no longer exists; they fall back to what's available.
+  return available.find((id) => id === choice) ?? available[0] ?? null;
 }
 
 export const llmEnabled = () => llmProvider() !== null;
 
-/** One question to the LLM; rejects when it's off or the CLI fails. */
+/** One question to the LLM; rejects when it's off or the call fails. */
 export async function llmCompose(system: string, user: string): Promise<string> {
   const provider = llmProvider();
-  if (!provider) throw new Error("No LLM: install Claude Code or Codex, or turn it on in Settings");
+  if (!provider) throw new Error("No LLM: sign in with ChatGPT or install Claude Code (Settings → Voice)");
   const { writer, writerModel } = useWorkspaces.getState().voiceConfig;
-  // A model typed for the other CLI doesn't apply.
+  // A model picked for the other backend doesn't apply.
   const model = writer === provider ? (writerModel ?? "") : "";
   return invoke<string>("llm_compose", { req: { provider, model, system, user } });
 }

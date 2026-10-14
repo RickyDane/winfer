@@ -61,7 +61,8 @@ an agent that still has room — same worktree, with the task and its progress.
   Pick an element with the crosshair to hand it to an agent; send console errors with one click.
 - **Android mirroring.** See and control a phone or emulator over adb, next to the browser.
 - **Voice.** Hold <kbd>⌥ Space</kbd> and say "open two Claude panes and ask them to fix the
-  login bug" — or dictate a prompt. Speech runs locally (whisper).
+  login bug" — or dictate a prompt. Speech runs locally (whisper); commands run on your ChatGPT
+  plan (Sign in with ChatGPT), with long or complex ones planned by the LLM.
 - **Worktrees without the bookkeeping.** Existing worktrees and branches show up in the sidebar
   with their age and whether they're merged; start an agent on any branch.
 - **A terminal tab** next to the browser for quick commands, and plain shell panes anywhere.

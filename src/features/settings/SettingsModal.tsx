@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
-import { LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
+import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
+import { signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="space-y-3">
@@ -83,14 +84,13 @@ function VoiceSettings() {
   const status = useVoice((s) => s.status);
   const readback = useWorkspaces((s) => s.voiceConfig.readback ?? false);
   const confirm = useWorkspaces((s) => s.voiceConfig.confirm ?? false);
-  // What actually runs: the choice, or the installed CLI it falls back to.
+  const chatgpt = useChatGpt();
+  // What actually runs: the choice, or what it falls back to. Recomputed when the sign-in changes.
   const writer = useWorkspaces(() => llmProvider() ?? "off");
-  const providers = useWorkspaces((s) => s.providers);
+  const available = useWorkspaces(() => availableLlms().join(","));
   const writerModel = useWorkspaces((s) => s.voiceConfig.writerModel ?? "");
   const planner = useWorkspaces((s) => s.voiceConfig.planner ?? "auto");
   const shortcuts = useWorkspaces((s) => s.shortcuts);
-  const [accountId, setAccountId] = useState("");
-  const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -184,34 +184,104 @@ function VoiceSettings() {
         Ask before running uncertain or risky voice commands
       </label>
 
+      <Section title="ChatGPT account">
+        <p className="text-xs text-fg-muted">
+          Sign in with ChatGPT to run voice commands and the prompt writer on your ChatGPT plan (Plus or Pro); no API key needed. Voice
+          commands send the transcript and a short summary of your panes; terminal output, file paths and environment variables aren't sent
+          to pick an action. You can set a weekly limit for winfer or disconnect it in ChatGPT's settings.
+        </p>
+        <div className="flex items-center gap-2">
+          {chatgpt.signedIn ? (
+            <>
+              <span className="flex items-center gap-1.5 text-[13px] text-fg">
+                <Check size={13} className="text-success" />
+                Signed in{chatgpt.email ? ` as ${chatgpt.email}` : ""}
+              </span>
+              <button
+                disabled={busy !== null}
+                onClick={() =>
+                  void act("test", async () => {
+                    try {
+                      return `Connected in ${await invoke<number>("voice_test_connection")} ms`;
+                    } catch (err) {
+                      if (!String(err).includes("decisions-unavailable")) throw err;
+                      useChatGpt.setState({ decisionsUnavailable: true });
+                      return "Signed in. Your plan can't use the Decisions API, so every voice command is planned by the LLM.";
+                    }
+                  })
+                }
+                className="flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover disabled:opacity-40"
+              >
+                {busy === "test" && <Loader2 size={12} className="animate-spin" />}
+                {busy === "test" ? "Testing…" : "Test connection"}
+              </button>
+              <button
+                disabled={busy !== null}
+                onClick={() => void act("signout", async () => (await signOutOfChatGpt(), "Signed out"))}
+                className="rounded-md px-2.5 py-1 text-xs text-fg-subtle hover:bg-hover hover:text-danger"
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <button
+              disabled={busy !== null}
+              onClick={() => void act("signin", async () => (await signInWithChatGpt(), "Signed in"))}
+              className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-xs font-medium text-bg hover:opacity-90 disabled:opacity-40"
+            >
+              {busy === "signin" && <Loader2 size={12} className="animate-spin" />}
+              {busy === "signin" ? "Finish signing in in your browser…" : "Continue with ChatGPT"}
+            </button>
+          )}
+        </div>
+        {chatgpt.decisionsUnavailable && (
+          <p className="text-[11px] text-fg-subtle">Your plan can't use the Decisions API; every voice command is planned by the LLM below.</p>
+        )}
+        {result && <p className={result.ok ? "anim-fade text-xs text-success" : "anim-fade text-xs text-danger"}>{result.text}</p>}
+      </Section>
+
       <Section title="LLM (planner and prompt writer)">
         <p className="text-xs text-fg-muted">
           Plans long or complex commands (“we need four features: …”) with its full reasoning, and turns what you say into a clear prompt
-          for the agent, using its recent output as context. Short commands go to Clef. “Type … into Claude” stays word for word.
+          for the agent, using its recent output as context. Short commands go to the Decisions API (GPT-6 Luna). “Type … into Claude”
+          stays word for word. Also used for progress estimates and review summaries.
         </p>
         <div className="flex items-center gap-2">
           <select
             value={writer}
-            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | "claude" | "codex", writerModel: "" })}
+            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | "chatgpt" | "claude", writerModel: "" })}
             className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
           >
             {LLM_PROVIDERS.map((p) => {
-              const installed = providers.some((x) => x.id === p.id && x.installed);
+              const ready = available.split(",").includes(p.id);
               return (
-                <option key={p.id} value={p.id} disabled={!installed}>
+                <option key={p.id} value={p.id} disabled={!ready}>
                   {p.label}
-                  {installed ? "" : " (not installed)"}
+                  {ready ? "" : p.id === "chatgpt" ? " (sign in above)" : " (not installed)"}
                 </option>
               );
             })}
             <option value="off">Off (send my words as spoken)</option>
           </select>
-          {writer !== "off" && (
+          {writer === "chatgpt" && chatgpt.models.length > 0 && (
+            <select
+              value={writerModel || "gpt-6-luna"}
+              onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer, writerModel: e.target.value })}
+              className="h-7 max-w-56 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+            >
+              {[...new Set(["gpt-6-luna", ...chatgpt.models])].map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
+          {writer === "claude" && (
             <input
               key={writer}
               defaultValue={writerModel}
               onBlur={(e) => useWorkspaces.getState().setVoiceConfig({ writer, writerModel: e.target.value.trim() })}
-              placeholder={writer === "claude" ? "Model (default, e.g. sonnet)" : "Model (Codex default)"}
+              placeholder="Model (default, e.g. sonnet)"
               className={inputClass + " w-48"}
             />
           )}
@@ -224,73 +294,15 @@ function VoiceSettings() {
               onChange={(e) => useWorkspaces.getState().setVoiceConfig({ planner: e.target.value as "auto" | "always" | "off" })}
               className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
             >
-              <option value="auto">LLM for long or complex commands, Clef for short ones</option>
+              <option value="auto">LLM for long or complex commands, Decisions API for short ones</option>
               <option value="always">LLM for every command (slower)</option>
-              <option value="off">Clef for every command</option>
+              <option value="off">Decisions API for every command</option>
             </select>
           </label>
         )}
-        {writer !== "off" && (
-          <p className="text-[11px] text-fg-subtle">
-            {writer === "claude"
-              ? "Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings."
-              : "Runs Codex headless with your Codex login (“codex login” → Sign in with ChatGPT), read-only."}{" "}
-            Also used for progress estimates and review summaries.
-          </p>
+        {writer === "claude" && (
+          <p className="text-[11px] text-fg-subtle">Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings.</p>
         )}
-      </Section>
-
-      <Section title="Voice commands (Cloudflare Clef)">
-        <p className="text-xs text-fg-muted">
-          The transcript and a short summary of your panes are sent to Cloudflare Workers AI to pick the action. Terminal output, file paths and
-          environment variables are never sent. {status.credentials ? "Credentials are saved in the Keychain." : "Add credentials to enable."}
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <input className={inputClass} placeholder="Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} />
-          <input className={inputClass} placeholder="API token (Workers AI)" type="password" value={token} onChange={(e) => setToken(e.target.value)} />
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            disabled={!accountId || !token || busy !== null}
-            onClick={() =>
-              void act("save", async () => {
-                await invoke("voice_set_credentials", { accountId, token });
-                setAccountId("");
-                setToken("");
-                return "Saved to the Keychain";
-              })
-            }
-            className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
-          >
-            {busy === "save" && <Loader2 size={12} className="animate-spin" />}
-            Save
-          </button>
-          <button
-            disabled={!status.credentials || busy !== null}
-            onClick={() => void act("test", async () => `Connected in ${await invoke<number>("voice_test_connection")} ms`)}
-            className="flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover disabled:opacity-40"
-          >
-            {busy === "test" && <Loader2 size={12} className="animate-spin" />}
-            {busy === "test" ? "Testing…" : "Test connection"}
-          </button>
-          {status.credentials && (
-            <button
-              onClick={() => void act("clear", async () => (await invoke("voice_clear_credentials"), "Removed"))}
-              className="rounded-md px-2.5 py-1 text-xs text-fg-subtle hover:bg-hover hover:text-danger"
-            >
-              Remove
-            </button>
-          )}
-          <select
-            value={status.clefModel}
-            onChange={(e) => void configureVoice({ clefModel: e.target.value })}
-            className="ml-auto h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
-          >
-            <option value="clef-flash">clef-flash (fast)</option>
-            <option value="clef">clef (more precise)</option>
-          </select>
-        </div>
-        {result && <p className={result.ok ? "anim-fade text-xs text-success" : "anim-fade text-xs text-danger"}>{result.text}</p>}
       </Section>
     </>
   );

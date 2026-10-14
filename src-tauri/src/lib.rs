@@ -1,5 +1,6 @@
 mod android;
 mod browser;
+mod chatgpt;
 mod env;
 mod hooks;
 mod llm;
@@ -155,8 +156,6 @@ pub fn run() {
             voice::voice_input_devices,
             voice::voice_set_shortcuts,
             voice::voice_test_microphone,
-            voice::voice_set_credentials,
-            voice::voice_clear_credentials,
             voice::voice_decide,
             voice::voice_test_connection,
             voice::voice_start,
@@ -167,6 +166,10 @@ pub fn run() {
             usage::usage_opencode,
             usage::usage_opencode_context,
             llm::llm_compose,
+            chatgpt::chatgpt_status,
+            chatgpt::chatgpt_sign_in,
+            chatgpt::chatgpt_sign_out,
+            chatgpt::chatgpt_models,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
