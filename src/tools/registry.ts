@@ -312,6 +312,15 @@ export const TOOLS: ToolDef[] = [
     ],
   },
   {
+    id: "show_history",
+    title: "History of merged features",
+    description: "Show the history of features and changes that were merged earlier, to look something up",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "ui.overlay", overlay: "history" }],
+    palette: () => [{ title: "History of merged features", args: {} }],
+  },
+  {
     id: "review_work",
     title: "Review finished work",
     description: "Open the review inbox: what finished agents did, ready to merge; answers “what's done?”, “anything to review?”",

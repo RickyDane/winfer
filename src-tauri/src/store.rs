@@ -30,6 +30,9 @@ pub struct PaneRecord {
     /// Model the agent was launched with.
     #[serde(default)]
     pub model: Option<String>,
+    /// Title the agent gave its terminal.
+    #[serde(default)]
+    pub agent_title: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,7 +85,55 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE panes ADD COLUMN model TEXT;
 "#,
+    r#"
+    ALTER TABLE panes ADD COLUMN agent_title TEXT;
+    CREATE TABLE merges (
+        id TEXT PRIMARY KEY,
+        merged_at INTEGER NOT NULL,
+        workspace_id TEXT,
+        workspace TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        base TEXT NOT NULL,
+        commit_sha TEXT,
+        provider TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT,
+        task TEXT,
+        files TEXT NOT NULL,
+        adds INTEGER NOT NULL DEFAULT 0,
+        dels INTEGER NOT NULL DEFAULT 0,
+        tests TEXT
+    );
+    CREATE INDEX merges_by_time ON merges (merged_at DESC);
+"#,
 ];
+
+/// A merged feature in the history (from the review inbox, the pane menu, voice or a race).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeRecord {
+    pub id: String,
+    /// Milliseconds since the epoch.
+    pub merged_at: i64,
+    pub workspace_id: Option<String>,
+    pub workspace: String,
+    pub repo: String,
+    pub branch: String,
+    pub base: String,
+    /// The merge commit on `base` (filled in when recorded).
+    #[serde(default)]
+    pub commit_sha: Option<String>,
+    pub provider: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub task: Option<String>,
+    pub files: Vec<String>,
+    pub adds: i64,
+    pub dels: i64,
+    /// e.g. "pnpm test passed".
+    pub tests: Option<String>,
+}
 
 impl Store {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
@@ -129,7 +180,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut panes = conn.prepare(
-            "SELECT id, provider, title, cwd, worktree, race_id, model FROM panes WHERE workspace_id = ?1 ORDER BY sort",
+            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title FROM panes WHERE workspace_id = ?1 ORDER BY sort",
         )?;
         for ws in &mut workspaces {
             ws.panes = panes
@@ -142,6 +193,7 @@ impl Store {
                         worktree: json(r.get(4)?),
                         race_id: r.get(5)?,
                         model: r.get(6)?,
+                        agent_title: r.get(7)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -180,8 +232,8 @@ impl Store {
             )?;
             for (j, pane) in ws.panes.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         pane.id,
                         ws.id,
@@ -192,6 +244,7 @@ impl Store {
                         j as i64,
                         pane.race_id,
                         pane.model,
+                        pane.agent_title,
                     ],
                 )?;
             }
@@ -202,6 +255,78 @@ impl Store {
             [snapshot.ui.to_string()],
         )?;
         tx.commit()
+    }
+}
+
+impl Store {
+    pub fn add_merge(&self, m: &MergeRecord) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO merges (id, merged_at, workspace_id, workspace, repo, branch, base, commit_sha,
+                provider, title, summary, task, files, adds, dels, tests)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![
+                m.id, m.merged_at, m.workspace_id, m.workspace, m.repo, m.branch, m.base, m.commit_sha,
+                m.provider, m.title, m.summary, m.task, serde_json::to_string(&m.files).unwrap_or_default(),
+                m.adds, m.dels, m.tests,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Newest first. Every word of `query` must appear (case-insensitive) in the title, summary,
+    /// task, branch, workspace, provider, commit or file names.
+    pub fn search_merges(&self, query: &str, workspace_id: Option<&str>, limit: i64) -> rusqlite::Result<Vec<MergeRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut sql = String::from(
+            "SELECT id, merged_at, workspace_id, workspace, repo, branch, base, commit_sha, provider, title, summary,
+                    task, files, adds, dels, tests FROM merges WHERE 1 = 1",
+        );
+        let mut args: Vec<String> = Vec::new();
+        if let Some(ws) = workspace_id {
+            args.push(ws.to_string());
+            sql.push_str(&format!(" AND workspace_id = ?{}", args.len()));
+        }
+        for word in query.split_whitespace().take(8) {
+            // LIKE wildcards in the search text are matched literally.
+            let escaped = word.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            args.push(format!("%{escaped}%"));
+            let n = args.len();
+            sql.push_str(&format!(
+                " AND (title LIKE ?{n} ESCAPE '\\' OR summary LIKE ?{n} ESCAPE '\\' OR task LIKE ?{n} ESCAPE '\\'
+                   OR branch LIKE ?{n} ESCAPE '\\' OR workspace LIKE ?{n} ESCAPE '\\' OR provider LIKE ?{n} ESCAPE '\\'
+                   OR commit_sha LIKE ?{n} ESCAPE '\\' OR files LIKE ?{n} ESCAPE '\\')"
+            ));
+        }
+        sql.push_str(&format!(" ORDER BY merged_at DESC LIMIT {}", limit.clamp(1, 500)));
+        let rows = conn
+            .prepare(&sql)?
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(MergeRecord {
+                    id: r.get(0)?,
+                    merged_at: r.get(1)?,
+                    workspace_id: r.get(2)?,
+                    workspace: r.get(3)?,
+                    repo: r.get(4)?,
+                    branch: r.get(5)?,
+                    base: r.get(6)?,
+                    commit_sha: r.get(7)?,
+                    provider: r.get(8)?,
+                    title: r.get(9)?,
+                    summary: r.get(10)?,
+                    task: r.get(11)?,
+                    files: serde_json::from_str(&r.get::<_, String>(12)?).unwrap_or_default(),
+                    adds: r.get(13)?,
+                    dels: r.get(14)?,
+                    tests: r.get(15)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_merge(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM merges WHERE id = ?1", [id])?;
+        Ok(())
     }
 }
 
@@ -222,6 +347,31 @@ pub fn state_load(store: State<'_, Store>) -> Result<Snapshot, String> {
 #[tauri::command]
 pub fn state_save(store: State<'_, Store>, snapshot: Snapshot) -> Result<(), String> {
     store.save(&snapshot).map_err(|e| e.to_string())
+}
+
+/// Records a merge; the merge commit is read from the repo (it's HEAD of the base right after).
+#[tauri::command]
+pub fn history_add(store: State<'_, Store>, mut merge: MergeRecord) -> Result<(), String> {
+    if merge.commit_sha.is_none() {
+        merge.commit_sha = crate::env::no_window(&mut std::process::Command::new("git"))
+            .args(["-C", &merge.repo, "rev-parse", "--short=10", "HEAD"])
+            .envs(crate::env::login_env())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    }
+    store.add_merge(&merge).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn history_search(store: State<'_, Store>, query: String, workspace_id: Option<String>) -> Result<Vec<MergeRecord>, String> {
+    store.search_merges(&query, workspace_id.as_deref(), 200).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn history_delete(store: State<'_, Store>, id: String) -> Result<(), String> {
+    store.delete_merge(&id).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -255,5 +405,57 @@ mod tests {
         // A second save replaces, not appends.
         store.save(&snapshot).unwrap();
         assert_eq!(store.load().unwrap().workspaces.len(), 2);
+    }
+
+    #[test]
+    fn keeps_agent_titles() {
+        let store = Store::in_memory();
+        let snapshot: Snapshot = serde_json::from_value(json!({
+            "workspaces": [{ "id": "ws-1", "name": "api", "rootDir": "~", "layout": null, "zoomedPaneId": null,
+                "presetIndex": 0, "useWorktrees": true,
+                "panes": [{ "id": "p-1", "provider": "claude", "title": "api", "cwd": "~", "worktree": null,
+                            "agentTitle": "Fix the login redirect" }] }],
+            "ui": null
+        }))
+        .unwrap();
+        store.save(&snapshot).unwrap();
+        assert_eq!(store.load().unwrap().workspaces[0].panes[0].agent_title.as_deref(), Some("Fix the login redirect"));
+    }
+
+    #[test]
+    fn searches_merges_by_every_word() {
+        let store = Store::in_memory();
+        let merge = |id: &str, at: i64, ws: &str, title: &str, files: &[&str]| MergeRecord {
+            id: id.into(),
+            merged_at: at,
+            workspace_id: Some(ws.into()),
+            workspace: ws.into(),
+            repo: "/repo".into(),
+            branch: format!("winfer/claude-{id}"),
+            base: "main".into(),
+            commit_sha: Some(format!("abc{id}")),
+            provider: "claude".into(),
+            title: title.into(),
+            summary: Some("Adds a guard; 100% covered".into()),
+            task: None,
+            files: files.iter().map(|f| f.to_string()).collect(),
+            adds: 10,
+            dels: 2,
+            tests: None,
+        };
+        store.add_merge(&merge("1", 1, "api", "Fix the login redirect", &["src/auth/login.ts"])).unwrap();
+        store.add_merge(&merge("2", 2, "api", "Rate limit billing webhooks", &["src/billing/hooks.ts"])).unwrap();
+        store.add_merge(&merge("3", 3, "web", "Login page dark mode", &["app/login.tsx"])).unwrap();
+
+        let ids = |q: &str, ws: Option<&str>| store.search_merges(q, ws, 50).unwrap().into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids("", None), ["3", "2", "1"], "newest first");
+        assert_eq!(ids("login", None), ["3", "1"]);
+        assert_eq!(ids("LOGIN redirect", None), ["1"], "every word must match");
+        assert_eq!(ids("billing/hooks", None), ["2"], "file names are searched");
+        assert_eq!(ids("login", Some("web")), ["3"], "workspace filter");
+        assert_eq!(ids("100%", None).len(), 3, "% is literal");
+        assert_eq!(ids("50%", None), Vec::<String>::new());
+        store.delete_merge("2").unwrap();
+        assert_eq!(ids("", None), ["3", "1"]);
     }
 }

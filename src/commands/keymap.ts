@@ -65,6 +65,7 @@ const SPECS: BindingSpec[] = [
   { keys: "Mod+Ctrl+Up", title: "Make pane shorter", group: "Layout", repeat: true, command: { type: "pane.resize", target: "focused", axis: "col", delta: -RESIZE_STEP } },
   { keys: "Mod+Shift+O", win: "Ctrl+Shift+Alt+O", title: "Overview of all workspaces", group: "Workspaces", command: { type: "ui.view", view: "toggle" } },
   { keys: "Mod+O", title: "Session progress", group: "Panes", command: { type: "ui.overlay", overlay: "progress" } },
+  { keys: "Mod+Shift+H", win: "Ctrl+Shift+Alt+H", title: "History of merged features", group: "Panes", command: { type: "ui.overlay", overlay: "history" } },
   { keys: "Mod+E", title: "Review finished work", group: "Panes", command: { type: "ui.overlay", overlay: "review" } },
   { keys: "Mod+J", title: "Next agent needing attention", group: "Panes", command: { type: "pane.nextAttention" } },
   { keys: "Mod+Shift+I", win: "Ctrl+Shift+Alt+I", title: "Broadcast to all agents", group: "Panes", command: { type: "ui.overlay", overlay: "broadcast" } },

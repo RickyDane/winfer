@@ -86,7 +86,7 @@ export type Command =
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
   /** Terminal text size: bigger, smaller or back to the default. */

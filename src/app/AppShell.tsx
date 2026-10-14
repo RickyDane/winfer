@@ -1,3 +1,4 @@
+import { HistoryView } from "@/features/history/HistoryView";
 import { AgentBar } from "@/features/overview/AgentBar";
 import { Overview } from "@/features/overview/Overview";
 import { SessionsOverview } from "@/features/progress/SessionsOverview";
@@ -191,6 +192,7 @@ export function AppShell() {
       <SettingsModal />
       <RaceView />
       <ReviewInbox />
+      <HistoryView />
       <SessionsOverview />
       <BroadcastBar />
       <RecipesView />

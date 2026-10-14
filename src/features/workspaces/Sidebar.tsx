@@ -1,4 +1,4 @@
-import { Activity, ChevronDown, ChevronRight, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
 import { useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
@@ -146,6 +146,14 @@ export function Sidebar() {
 
       <SessionsEntry />
       <ReviewEntry />
+      <button
+        onClick={() => execute({ type: "ui.overlay", overlay: "history" })}
+        title={`Merged features (${keysFor({ type: "ui.overlay", overlay: "history" })})`}
+        className="mx-2 mb-2 -mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-fg-muted hover:bg-hover hover:text-fg"
+      >
+        <History size={14} />
+        <span className="flex-1">History</span>
+      </button>
       {menu && menuWorkspace && <WorkspaceMenu ws={menuWorkspace} x={menu.x} y={menu.y} onClose={closeMenu} />}
       <ActivityFeed />
       <footer className="flex items-center gap-2 border-t border-border px-4 py-3">

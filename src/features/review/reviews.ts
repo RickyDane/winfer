@@ -10,6 +10,7 @@ import { worktreeDiff, type WorktreeDiff } from "@/features/worktree/worktree";
 import { speak } from "@/features/voice/readback";
 import { providerName, useWorkspaces, type Pane, type WorktreeInfo } from "@/stores/workspaces";
 import { discardPane, mergePane } from "@/commands/bus";
+import { recordMerge, snapshotForHistory } from "@/features/history/history";
 
 export interface DiffStats {
   files: string[];
@@ -254,8 +255,12 @@ function commitMessage(review: Review | undefined): string | undefined {
 /** Merge from a card, the pane menu or voice; the card (if any) shows the result. */
 export async function mergeReviewed(pane: { id: string; provider: string; worktree: WorktreeInfo }) {
   const review = reviewFor(pane.id);
+  // Taken before merging: afterwards the branch has no diff left to describe.
+  const full = paneById(pane.id);
+  const snapshot = full?.worktree ? await snapshotForHistory(full as Pane & { worktree: WorktreeInfo }) : null;
   if (await mergePane(pane, commitMessage(review))) {
     if (review) setReviewStatus(review.id, "merged");
+    if (snapshot) void recordMerge(snapshot);
   }
 }
 

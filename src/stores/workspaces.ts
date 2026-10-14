@@ -67,7 +67,7 @@ interface WorkspaceState {
   diffPaneId: string | null;
   settingsOpen: boolean;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | null;
+  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
   /** Models each provider offers (from its CLI), loaded in the background. */
@@ -115,7 +115,7 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;

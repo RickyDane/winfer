@@ -44,6 +44,8 @@ let picking: { workspaceId: string; targetId: string } | null = null;
 // Fake voice: tests set what was "said" and what Clef "answers"; requests are kept for inspection.
 const voice = { said: "", mode: "command", answers: {} as Record<string, unknown>, requests: [] as unknown[] };
 let tabCounter = 0;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mergeHistory: any[] = [];
 
 async function renderFrame(workspaceId: string) {
   const sc = screencasts.get(workspaceId);
@@ -142,6 +144,18 @@ mockIPC(
         worktreeCounter += 1;
         return { repo: a.dir, path: `${a.dir}/.worktrees/${a.provider}-${worktreeCounter}`, branch: `winfer/${a.provider}-${worktreeCounter}`, base: "main" };
       }
+      case "history_add":
+        mergeHistory.unshift({ ...a.merge, commitSha: "3f9c2e1a7b" });
+        return null;
+      case "history_search": {
+        const words = String(a.query).toLowerCase().split(/\s+/).filter(Boolean);
+        return mergeHistory.filter(
+          (m) => (!a.workspaceId || m.workspaceId === a.workspaceId) && words.every((w) => JSON.stringify(m).toLowerCase().includes(w)),
+        );
+      }
+      case "history_delete":
+        mergeHistory = mergeHistory.filter((m) => m.id !== a.id);
+        return null;
       case "worktree_list":
         return String(a.dir).includes("bridgemind")
           ? [

@@ -1,3 +1,4 @@
+import { recordMerge, snapshotForHistory } from "@/features/history/history";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { Flag, GitBranch, Minus, Plus, RefreshCw, Trophy, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -86,6 +87,7 @@ export async function pickRaceWinner(winner: Pane, panes: Pane[]): Promise<boole
     { title: "Pick winner", kind: "warning", okLabel: "Merge and clean up" },
   );
   if (!ok) return false;
+  const snapshot = await snapshotForHistory(winner as Pane & { worktree: NonNullable<Pane["worktree"]> });
   try {
     // Agents often stop without committing; their work would otherwise be left behind.
     await commitWorktree(winner.worktree, `Changes by ${providerName(useWorkspaces.getState().providers, winner.provider)}`);
@@ -94,6 +96,7 @@ export async function pickRaceWinner(winner: Pane, panes: Pane[]): Promise<boole
     await message(String(err), { title: "Merge not possible", kind: "error" });
     return false;
   }
+  void recordMerge(snapshot);
   const s = useWorkspaces.getState();
   for (const loser of losers) {
     closeTerminal(loser.id);

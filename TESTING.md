@@ -52,6 +52,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Recipes: ⌘K → "Recipe: Full stack" sets up agents + layout + localhost:3000; "Recipes…" → save the current layout under a name.
 - [ ] Sidebar "Latest" shows what happened.
 - [ ] Review inbox (sidebar "Review", ⌘E): when an agent finishes work in its worktree, a card appears with a summary, changed files, "Run tests" and (if it started a dev server) a screenshot. Merge commits leftovers and merges; then "Close agent and delete worktree". Send back types your comment into the agent. Race cards show "Pick".
+- [ ] History (sidebar, ⌘⇧H): every merge (review card, pane menu, voice, race winner) appears with title, summary, task, files, branch → base, +/− lines, tests and the merge commit (copy). Search matches all words in titles, summaries, tasks, branches and file names; switch between this workspace and all; entries survive restarts.
 - [ ] Say "what's done?" → the inbox opens and the summaries are read aloud.
 - [ ] Sidebar and pane headers show what each agent works on (Claude Code's terminal title, else the task), with its CLI's icon; hover shows the CLI name.
 - [ ] Start OpenCode/Codex without a task: no progress bar or percent. Give a task: estimates appear; while it works the bar stays below 100; when it stops after finishing, it can reach 100.
