@@ -51,7 +51,6 @@ struct Instance {
     app: AppHandle,
     child: Mutex<Child>,
     port: u16,
-    ws_url: String,
     cdp: OnceCell<Arc<Cdp>>,
     /// Page targets in creation order.
     tabs: Mutex<Vec<Tab>>,
@@ -207,10 +206,10 @@ impl Instance {
 
     async fn cdp(self: &Arc<Self>) -> Result<Arc<Cdp>, String> {
         let weak: Weak<Self> = Arc::downgrade(self);
-        let ws_url = self.ws_url.clone();
         let cdp = self
             .cdp
             .get_or_try_init(|| async move {
+                let ws_url = self.wait_ws_url().await?;
                 let cdp = Cdp::connect(&ws_url, move |event| {
                     if let Some(instance) = weak.upgrade() {
                         instance.on_event(event);
@@ -227,6 +226,27 @@ impl Instance {
             })
             .await?;
         Ok(cdp.clone())
+    }
+
+    /// Polls the DevTools endpoint until the browser is up (it was started without waiting).
+    async fn wait_ws_url(&self) -> Result<String, String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let port = self.port;
+            let url = tauri::async_runtime::spawn_blocking(move || chrome::ws_url(port))
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Some(url) = url {
+                return Ok(url);
+            }
+            if let Some(status) = self.child.lock().unwrap().try_wait().ok().flatten() {
+                return Err(format!("the browser quit while starting ({status})"));
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("the browser didn't start in time".into());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
     }
 
     async fn session(self: &Arc<Self>, target_id: &str) -> Result<String, String> {
@@ -311,7 +331,6 @@ impl BrowserManager {
             app: app.clone(),
             child: Mutex::new(launched.child),
             port: launched.port,
-            ws_url: launched.ws_url,
             cdp: OnceCell::new(),
             tabs: Mutex::default(),
             created_by_ui: Mutex::default(),
@@ -352,13 +371,15 @@ pub fn kill_orphans(app: &AppHandle) {
     }
     #[cfg(windows)]
     {
-        let filter = format!(
-            "CommandLine like '%--user-data-dir={}%'",
-            profiles.display().to_string().replace('\\', "\\\\")
+        // wmic is gone from current Windows 11; PowerShell's CIM cmdlets do the same job.
+        let pattern = format!("*--user-data-dir={}*", profiles.display()).replace('\'', "''");
+        let script = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '{pattern}' }} | Invoke-CimMethod -MethodName Terminate | Out-Null"
         );
-        let _ = std::process::Command::new("wmic")
-            .args(["process", "where", &filter, "call", "terminate"])
-            .status();
+        let _ = crate::env::no_window(
+            std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]),
+        )
+        .status();
     }
 }
 
@@ -827,7 +848,7 @@ mod tests {
         let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
         let _guard = chrome::ChromeGuard(launched.child);
         tauri::async_runtime::block_on(async {
-            let cdp = Cdp::connect(&launched.ws_url, |_| {}).await.unwrap();
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(20)).unwrap(), |_| {}).await.unwrap();
             let context = cdp
                 .call("Target.createBrowserContext", json!({}), None)
                 .await
@@ -860,7 +881,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let (tx, rx) = mpsc::channel::<Event>();
             let tx = Mutex::new(tx);
-            let cdp = Cdp::connect(&launched.ws_url, move |e| {
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(20)).unwrap(), move |e| {
                 let _ = tx.lock().unwrap().send(e);
             })
             .await

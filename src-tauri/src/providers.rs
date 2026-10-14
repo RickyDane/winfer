@@ -131,7 +131,7 @@ fn run_with_timeout(
 ) -> Option<String> {
     use std::io::Read;
     let program = crate::env::find_command(command)?;
-    let mut child = std::process::Command::new(program)
+    let mut child = crate::env::no_window(&mut std::process::Command::new(program))
         .args(args)
         .envs(login_env())
         .stdin(std::process::Stdio::null())

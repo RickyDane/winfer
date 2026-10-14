@@ -462,7 +462,7 @@ mod chrome_tests {
         tauri::async_runtime::block_on(async {
             let (tx, rx) = mpsc::channel::<Event>();
             let tx = Mutex::new(tx);
-            let cdp = Cdp::connect(&launched.ws_url, move |e| {
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, std::time::Duration::from_secs(20)).unwrap(), move |e| {
                 let _ = tx.lock().unwrap().send(e);
             })
             .await

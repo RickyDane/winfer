@@ -20,7 +20,38 @@ pub fn run_mcp_stdio() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Release builds abort on panic with no console to print to (especially on Windows), so the
+/// message goes to `crash.log` in the app data folder for bug reports.
+fn log_panics() {
+    let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app")) else {
+        return;
+    };
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = std::fs::create_dir_all(&dir);
+        let entry = format!(
+            "[{}] winfer {} {}: {info}\n{}\n\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::backtrace::Backtrace::force_capture(),
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("crash.log"))
+        {
+            use std::io::Write;
+            let _ = file.write_all(entry.as_bytes());
+        }
+        default(info);
+    }));
+}
+
 pub fn run() {
+    log_panics();
     // Resolve the login-shell environment off the main thread so the first spawn is fast.
     std::thread::spawn(|| {
         env::login_env();

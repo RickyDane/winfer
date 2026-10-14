@@ -75,7 +75,8 @@ fn run(dir: &Path, command: &str) -> Result<TestRun, String> {
         c.args(["-c", &format!("{command} 2>&1")]);
         c
     };
-    cmd.current_dir(dir)
+    crate::env::no_window(&mut cmd)
+        .current_dir(dir)
         .envs(login_env())
         // Keeps vitest/jest out of watch mode and tools out of interactive prompts.
         .env("CI", "1")

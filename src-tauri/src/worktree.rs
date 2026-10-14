@@ -36,7 +36,7 @@ pub struct WorktreeDiff {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::env::no_window(&mut Command::new("git"))
         .arg("-C")
         .arg(dir)
         .args(args)

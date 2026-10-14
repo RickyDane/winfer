@@ -4,10 +4,8 @@
 //! Chrome/Edge/Chromium/Brave run with `--headless=new`. If none exists the UI offers to download
 //! the headless shell (~100 MB) from Google's Chrome for Testing feed.
 
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -98,7 +96,7 @@ pub fn find(managed_dir: &Path) -> Option<Executable> {
 }
 
 fn run(cmd: &mut Command) -> Result<String, String> {
-    let out = cmd.output().map_err(|e| e.to_string())?;
+    let out = crate::env::no_window(cmd).output().map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -150,14 +148,24 @@ pub fn install(managed_dir: &Path) -> Result<Executable, String> {
 pub struct Launched {
     pub child: Child,
     pub port: u16,
-    pub ws_url: String,
 }
 
-/// Starts the browser with a random debugging port bound to 127.0.0.1.
+/// A free port on 127.0.0.1 for the browser's DevTools endpoint.
+fn free_port() -> Result<u16, String> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .map_err(|e| format!("no free port for the browser: {e}"))
+}
+
+/// Starts the browser with its DevTools endpoint on a port chosen up front. Returns as soon as
+/// the process runs: callers (terminal spawns on the UI thread) must never wait for the
+/// browser. Use `ws_url` to get the endpoint once it's up.
 pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> {
     std::fs::create_dir_all(profile_dir).map_err(|e| e.to_string())?;
+    let port = free_port()?;
     let mut cmd = Command::new(&exe.path);
-    cmd.arg("--remote-debugging-port=0")
+    cmd.arg(format!("--remote-debugging-port={port}"))
         .arg("--remote-debugging-address=127.0.0.1")
         .arg(format!("--user-data-dir={}", profile_dir.display()))
         .args([
@@ -172,46 +180,41 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
     cmd.arg("about:blank")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd
+        .stderr(Stdio::null());
+    crate::env::no_window(&mut cmd);
+    let child = cmd
         .spawn()
         .map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
-    let stderr = child.stderr.take().expect("piped stderr");
+    Ok(Launched { child, port })
+}
 
-    // Chrome prints "DevTools listening on ws://127.0.0.1:PORT/devtools/browser/<id>" on stderr.
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut sent = false;
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if !sent {
-                if let Some(url) = line.split("DevTools listening on ").nth(1) {
-                    let _ = tx.send(url.trim().to_string());
-                    sent = true;
-                }
-            }
-            // Keep draining so Chrome never blocks on a full pipe.
-        }
-    });
+/// One attempt at reading the browser-level WebSocket URL from `/json/version`.
+pub fn ws_url(port: u16) -> Option<String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .build()
+        .into();
+    let mut res = agent
+        .get(&format!("http://127.0.0.1:{port}/json/version"))
+        .call()
+        .ok()?;
+    let json: serde_json::Value = res.body_mut().read_json().ok()?;
+    json["webSocketDebuggerUrl"].as_str().map(String::from)
+}
 
-    let ws_url = match rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(url) => url,
-        Err(_) => {
-            let _ = child.kill();
-            return Err("the browser didn't report a DevTools endpoint".into());
+/// Waits (blocking) until the endpoint answers.
+#[cfg(test)]
+pub fn wait_ws_url(port: u16, timeout: Duration) -> Result<String, String> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Some(url) = ws_url(port) {
+            return Ok(url);
         }
-    };
-    let port = ws_url
-        .split("127.0.0.1:")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .and_then(|p| p.parse().ok())
-        .ok_or_else(|| format!("unexpected DevTools URL: {ws_url}"))?;
-    Ok(Launched {
-        child,
-        port,
-        ws_url,
-    })
+        if std::time::Instant::now() > deadline {
+            return Err("the browser didn't open its DevTools endpoint".into());
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
 }
 
 /// Kills a test's browser even when an assertion panics, so failed runs don't leak Chrome.
@@ -240,7 +243,7 @@ mod tests {
         };
         let launched = launch(&exe, &tmp.join("profile")).unwrap();
         let _guard = ChromeGuard(launched.child);
-        assert!(launched.ws_url.starts_with("ws://127.0.0.1:"));
-        assert!(launched.port > 0);
+        let url = wait_ws_url(launched.port, Duration::from_secs(20)).unwrap();
+        assert!(url.starts_with(&format!("ws://127.0.0.1:{}/", launched.port)), "{url}");
     }
 }

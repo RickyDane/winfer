@@ -95,7 +95,7 @@ pub fn download(dir: &Path, spec: &ModelSpec) -> Result<PathBuf, String> {
         spec.file
     );
 
-    let status = Command::new("curl")
+    let status = crate::env::no_window(&mut Command::new("curl"))
         .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
         .arg(&part)
         .arg(&url)

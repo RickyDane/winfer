@@ -72,6 +72,25 @@
     user-select: none;
   }
 
+  /* Tailwind v4 gives buttons the default arrow; everything clickable shows the hand. In the
+     base layer, so utilities like cursor-grab or cursor-col-resize still win. */
+  button:not(:disabled),
+  [role="button"],
+  [role="tab"],
+  a[href],
+  select:not(:disabled),
+  summary,
+  label:has(> input[type="checkbox"], > input[type="radio"]),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled {
+    cursor: not-allowed;
+  }
+
   ::selection {
     background: var(--color-accent-soft);
   }

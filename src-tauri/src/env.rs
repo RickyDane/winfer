@@ -31,6 +31,18 @@ pub fn find_command(command: &str) -> Option<PathBuf> {
     which::which_in(command, Some(path_var()), cwd).ok()
 }
 
+/// Console programs started from the GUI app (curl, git, the headless browser…) would each
+/// open a console window on Windows; closing one kills the program.
+pub fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// The user's shell (used for the "shell" provider).
 pub fn user_shell() -> String {
     #[cfg(unix)]

@@ -75,6 +75,7 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     let out = dir.join("answer.txt");
     let codex = crate::env::find_command("codex").ok_or("Codex CLI isn't installed.")?;
     let mut cmd = std::process::Command::new(codex);
+    crate::env::no_window(&mut cmd);
     cmd.envs(login_env())
         .current_dir(&dir)
         .args(["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-o"])

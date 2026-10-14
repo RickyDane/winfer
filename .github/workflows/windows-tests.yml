@@ -1,0 +1,34 @@
+name: windows tests
+
+# Rust tests on Windows, including the real-Chrome browser tests (the runner has Chrome):
+# platform code there can't be exercised from a Mac.
+on:
+  push:
+    branches: [main]
+    paths: ["src-tauri/**", ".github/workflows/windows-tests.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: pnpm install --frozen-lockfile
+      # tauri::generate_context! embeds the built frontend.
+      - run: pnpm build
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --lib -- --nocapture
