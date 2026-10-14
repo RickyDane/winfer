@@ -67,7 +67,7 @@ interface WorkspaceState {
   diffPaneId: string | null;
   settingsOpen: boolean;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | null;
+  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
   /** Models each provider offers (from its CLI), loaded in the background. */
@@ -103,7 +103,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string },
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
@@ -115,7 +115,7 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
@@ -297,7 +297,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             workspaceId: w.id,
             provider,
             title: w.name,
-            cwd: opts?.existingWorktree?.path ?? w.rootDir,
+            cwd: opts?.existingWorktree?.path ?? opts?.cwd ?? w.rootDir,
             status: "idle",
             worktree: opts?.existingWorktree ?? null,
             wantsWorktree: !opts?.existingWorktree && provider !== "shell" && (opts?.worktree ?? w.useWorktrees),

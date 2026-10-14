@@ -45,6 +45,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] ⌘J jumps to the agent that needs you.
 - [ ] Sidebar agent rows show a thin progress bar under the name (with the percent on the right).
 - [ ] Worktree rows show how old they are (last commit, else folder), "N ahead", "uncommitted", or "✓ merged" when nothing on them is missing from the base (safe to remove); merged ones are listed last; hover for details.
+- [ ] Sidebar → "Branches" starts with the project folder itself (badge "project", its branch, age, uncommitted): clicking it opens an agent directly in the project folder (no worktree).
+- [ ] "+" next to "Branches" (or right-click a workspace/branch → New worktree from a branch…, or the palette): search local and remote branches (Fetch updates them), pick one or start a new branch from it, then "Open <agent> in a worktree" or "New workspace from it" (a workspace rooted in that worktree, worktrees off). Branches checked out elsewhere say where.
 - [ ] Sidebar → "Worktrees" under the active workspace lists the repo's worktrees no pane uses (closed agents' and hand-made ones, e.g. `git worktree add ../x -b x`); clicking one (or ▶) opens the default agent inside it with diff/merge/review working; 🗑 removes it (winfer's own branches are deleted too, others kept). New worktrees show up within 20 s or when winfer gets focus.
 - [ ] Click the branch badge: diff view shows the agent's changes; Merge works once the agent committed; Discard removes the worktree.
 - [ ] ⌘. interrupts the focused agent.

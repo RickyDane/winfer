@@ -1,3 +1,4 @@
+import { BranchDialog } from "@/features/worktree/BranchDialog";
 import { HistoryView } from "@/features/history/HistoryView";
 import { AgentBar } from "@/features/overview/AgentBar";
 import { Overview } from "@/features/overview/Overview";
@@ -193,6 +194,7 @@ export function AppShell() {
       <RaceView />
       <ReviewInbox />
       <HistoryView />
+      <BranchDialog />
       <SessionsOverview />
       <BroadcastBar />
       <RecipesView />

@@ -156,9 +156,23 @@ mockIPC(
       case "history_delete":
         mergeHistory = mergeHistory.filter((m) => m.id !== a.id);
         return null;
+      case "worktree_branches":
+        return [
+          { name: "main", remote: false, lastCommitAt: Date.now() - 3600e3, checkedOutAt: a.dir },
+          { name: "feature/billing-webhooks", remote: false, lastCommitAt: Date.now() - 2 * 86400e3, checkedOutAt: null },
+          { name: "hotfix/login-redirect", remote: false, lastCommitAt: Date.now() - 40 * 60e3, checkedOutAt: "/Users/demo/hotfix-login" },
+          { name: "origin/feature/plan-upgrades", remote: true, lastCommitAt: Date.now() - 5 * 86400e3, checkedOutAt: null },
+        ];
+      case "worktree_fetch":
+        return new Promise((resolve) => setTimeout(() => resolve(null), 600));
+      case "worktree_from_branch": {
+        const branch = a.newBranch ?? String(a.branch).replace(/^origin\//, "");
+        return { repo: a.dir, path: `${a.dir}/.worktrees/${branch.replace(/\//g, "-")}`, branch, base: "main" };
+      }
       case "worktree_list":
         return String(a.dir).includes("bridgemind")
           ? [
+              { info: { repo: a.dir, path: a.dir, branch: "main", base: "main" }, byWinfer: false, prunable: false, createdAt: null, lastCommitAt: Date.now() - 3600e3, ahead: 0, dirty: true, merged: false, isMain: true },
               { info: { repo: a.dir, path: `${a.dir}/.worktrees/claude-7`, branch: "winfer/claude-7", base: "main" }, byWinfer: true, prunable: false, createdAt: Date.now() - 5 * 86400e3, lastCommitAt: Date.now() - 4 * 86400e3, ahead: 0, dirty: false, merged: true },
               { info: { repo: a.dir, path: "/Users/demo/hotfix-login", branch: "hotfix/login-redirect", base: "main" }, byWinfer: false, prunable: false, createdAt: Date.now() - 2 * 3600e3, lastCommitAt: Date.now() - 40 * 60e3, ahead: 3, dirty: true, merged: false },
             ]

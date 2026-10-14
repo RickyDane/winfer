@@ -1,12 +1,12 @@
 import { ask, message } from "@tauri-apps/plugin-dialog";
-import { GitBranch, Play, Trash2 } from "lucide-react";
+import { FolderGit2, GitBranch, Play, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { logActivity, relativeTime } from "@/stores/activity";
 import { defaultProviderId, useWorkspaces, type Workspace } from "@/stores/workspaces";
 import { listWorktrees, removeWorktree, type ExistingWorktree } from "./worktree";
 import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
-import { openInWorktree, worktreeMenu } from "@/features/workspaces/sidebarMenus";
+import { openBranchDialog, openInWorktree, worktreeMenu } from "@/features/workspaces/sidebarMenus";
 
 const REFRESH_MS = 20_000;
 
@@ -64,10 +64,13 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
 
   const used = new Set(useWorkspaces.getState().workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : []))));
   // Newest activity first; finished (merged) ones sink to the bottom, ready to clean up.
+  // The project folder (main checkout) always comes first; worktrees no pane uses follow.
+  const main = found.find((w) => w.isMain);
   const free = found
-    .filter((w) => !used.has(w.info.path))
+    .filter((w) => !w.isMain && !used.has(w.info.path))
     .sort((a, b) => Number(a.merged) - Number(b.merged) || (lastActivity(b) ?? 0) - (lastActivity(a) ?? 0));
-  if (free.length === 0) return null;
+  const rows = main ? [main, ...free] : free;
+  if (rows.length === 0) return null;
 
   const open = (wt: ExistingWorktree) => {
     openInWorktree(workspace, wt, defaultProviderId());
@@ -103,8 +106,13 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
           onClose={closeMenu}
         />
       )}
-      <div className="px-0 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">Worktrees</div>
-      {free.map((wt) => (
+      <div className="flex items-center pt-1 pb-0.5 pr-1">
+        <span className="flex-1 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">Branches</span>
+        <button onClick={() => openBranchDialog(workspace)} title="New worktree from a branch…" className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
+          <Plus size={12} />
+        </button>
+      </div>
+      {rows.map((wt) => (
         <div
           key={wt.info.path}
           onContextMenu={(e) => openMenu(e, wt)}
@@ -113,12 +121,21 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
           <button
             onClick={() => !wt.prunable && open(wt)}
             disabled={wt.prunable}
-            title={wt.prunable ? `${wt.info.path} (folder missing)` : `${wt.info.path}\n${describeState(wt)}\nClick to open an agent here`}
+            title={
+              wt.isMain
+                ? `${wt.info.path}\nThe project folder itself, on ${wt.info.branch}\nClick to open an agent here (no worktree)`
+                : wt.prunable
+                  ? `${wt.info.path} (folder missing)`
+                  : `${wt.info.path}\n${describeState(wt)}\nClick to open an agent here`
+            }
             className="flex min-w-0 flex-1 items-start gap-2 py-1 pr-1 text-left text-[13px] text-fg-muted group-hover:text-fg"
           >
-            <GitBranch size={12} className="mt-1 shrink-0 text-fg-subtle" />
+            {wt.isMain ? <FolderGit2 size={12} className="mt-1 shrink-0 text-accent" /> : <GitBranch size={12} className="mt-1 shrink-0 text-fg-subtle" />}
             <span className="min-w-0 flex-1">
-              <span className={cn("block truncate font-mono text-[12px]", wt.prunable && "line-through")}>{wt.info.branch.replace(/^winfer\//, "")}</span>
+              <span className="flex items-center gap-1.5">
+                <span className={cn("truncate font-mono text-[12px]", wt.prunable && "line-through")}>{wt.info.branch.replace(/^winfer\//, "")}</span>
+                {wt.isMain && <span className="shrink-0 rounded bg-accent-soft px-1 text-[9px] font-medium text-accent uppercase">project</span>}
+              </span>
               <WorktreeState wt={wt} />
             </span>
           </button>
@@ -127,13 +144,15 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
               <Play size={11} />
             </button>
           )}
-          <button
-            onClick={() => void remove(wt)}
-            title="Remove this worktree"
-            className="rounded p-0.5 text-fg-subtle opacity-0 group-hover:opacity-100 hover:text-danger"
-          >
-            <Trash2 size={11} />
-          </button>
+          {!wt.isMain && (
+            <button
+              onClick={() => void remove(wt)}
+              title="Remove this worktree"
+              className="rounded p-0.5 text-fg-subtle opacity-0 group-hover:opacity-100 hover:text-danger"
+            >
+              <Trash2 size={11} />
+            </button>
+          )}
         </div>
       ))}
     </div>

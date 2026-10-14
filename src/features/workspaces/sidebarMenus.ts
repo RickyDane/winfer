@@ -1,4 +1,11 @@
 /** Right-click menus for the sidebar's workspaces, agents and worktrees. */
+/** Opens the branch picker for `workspace`'s repo (it works on the active workspace). */
+export function openBranchDialog(workspace: Workspace) {
+  const s = useWorkspaces.getState();
+  if (s.activeWorkspaceId !== workspace.id) s.setActiveWorkspace(workspace.id);
+  s.setOverlay("branch");
+}
+
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { execute } from "@/commands/bus";
 import { IS_MAC, keysFor } from "@/commands/keymap";
@@ -24,6 +31,7 @@ export function workspaceMenu(ws: Workspace): MenuItem[] {
         execute({ type: "pane.spawn", provider: "default" });
       },
     },
+    { label: "New worktree from a branch…", run: () => openBranchDialog(ws) },
     "separator",
     { label: REVEAL, run: () => reveal(ws.rootDir) },
     { label: "Copy folder path", run: () => copy(ws.rootDir) },
@@ -92,7 +100,9 @@ export function paneMenu(pane: Pane): MenuItem[] {
 export function openInWorktree(workspace: Workspace, wt: ExistingWorktree, provider: string) {
   const s = useWorkspaces.getState();
   if (s.activeWorkspaceId !== workspace.id) s.setActiveWorkspace(workspace.id);
-  s.addPane(provider, { workspaceId: workspace.id, existingWorktree: wt.info });
+  // In the project folder itself the agent works directly on its branch, without a worktree.
+  if (wt.isMain) s.addPane(provider, { workspaceId: workspace.id, worktree: false, cwd: wt.info.path });
+  else s.addPane(provider, { workspaceId: workspace.id, existingWorktree: wt.info });
 }
 
 export function worktreeMenu(workspace: Workspace, wt: ExistingWorktree, remove: () => void): MenuItem[] {
@@ -107,6 +117,7 @@ export function worktreeMenu(workspace: Workspace, wt: ExistingWorktree, remove:
     { label: "Copy worktree path", run: () => copy(wt.info.path) },
     { label: "Copy branch name", run: () => copy(wt.info.branch) },
     "separator",
-    { label: missing ? "Forget missing worktree…" : "Remove worktree…", run: remove, danger: true },
+    { label: "New worktree from a branch…", run: () => openBranchDialog(workspace) },
+    ...(wt.isMain ? [] : ["separator" as const, { label: missing ? "Forget missing worktree…" : "Remove worktree…", run: remove, danger: true }]),
   ];
 }

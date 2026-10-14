@@ -312,6 +312,15 @@ export const TOOLS: ToolDef[] = [
     ],
   },
   {
+    id: "worktree_from_branch",
+    title: "New worktree from a branch",
+    description: "Check out an existing git branch (or a new branch) in a new worktree or workspace",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "ui.overlay", overlay: "branch" }],
+    palette: () => [{ title: "New worktree from a branch…", args: {} }],
+  },
+  {
     id: "show_history",
     title: "History of merged features",
     description: "Show the history of features and changes that were merged earlier, to look something up",
