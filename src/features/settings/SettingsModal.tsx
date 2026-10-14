@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Bot, ChartColumn, Check, ChevronDown, Download, FolderOpen, Keyboard, Loader2, Mic, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, X, type LucideIcon } from "lucide-react";
+import { Bot, ChartColumn, Check, ChevronDown, Download, FolderOpen, Keyboard, Loader2, Mic, Palette, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
@@ -644,13 +644,13 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
     icon: SlidersHorizontal,
     render: () => (
       <>
-        <AppearanceSettings />
         <TerminalSettings />
         <ShortcutSettings />
         <UpdateSettings />
       </>
     ),
   },
+  { id: "theme", label: "Theme", icon: Palette, render: () => <AppearanceSettings /> },
   {
     id: "agents",
     label: "Agents",
