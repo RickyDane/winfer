@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
-import { duration, leftNow, levelColor, runsOutAt, tightest, useUsage, when, type UsageWindow } from "./usage";
+import { contextColor, duration, leftNow, levelColor, runsOutAt, tightest, tokens, useUsage, when, type UsageWindow } from "./usage";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
 export function UsageRing({ provider, size = 22, className }: { provider: string; size?: number; className?: string }) {
@@ -76,10 +76,6 @@ function WindowBar({ provider, window }: { provider: string; window: UsageWindow
   );
 }
 
-function compact(n: number) {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
-}
-
 /** Title bar: one ring per agent with known limits; click for the details. */
 export function UsageMeter() {
   const snapshots = useUsage((s) => s.snapshots);
@@ -150,7 +146,7 @@ export function UsageMeter() {
               <ProviderIcon provider="opencode" />
               <span className="flex-1 font-medium text-fg">{providerName(providers, "opencode")}</span>
               <span className="font-mono text-[11px] text-fg-muted">
-                today {compact(opencode.tokens)} tokens · ${opencode.cost.toFixed(2)}
+                today {tokens(opencode.tokens)} tokens · ${opencode.cost.toFixed(2)}
               </span>
             </section>
           )}
@@ -160,5 +156,28 @@ export function UsageMeter() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Pane header: how full the agent's context window is, as a short bar and a percentage. */
+export function ContextMeter({ paneId }: { paneId: string }) {
+  const context = useUsage((s) => s.context[paneId]);
+  if (!context) return null;
+  const used = Math.min(100, Math.max(0, context.usedPercent));
+  return (
+    <span
+      className="flex shrink-0 items-center gap-1"
+      title={`Context: ${tokens(context.tokens)} of ${tokens(context.window)} tokens (${Math.round(used)}% used)`}
+    >
+      <span className="h-1 w-8 overflow-hidden rounded-full bg-hover">
+        <span
+          className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out"
+          style={{ width: `${Math.max(used, 3)}%`, background: contextColor(used) }}
+        />
+      </span>
+      <span className="hidden font-mono text-[10px] @[15rem]:inline" style={{ color: used >= 60 ? contextColor(used) : "var(--color-fg-subtle)" }}>
+        {Math.round(used)}%
+      </span>
+    </span>
   );
 }

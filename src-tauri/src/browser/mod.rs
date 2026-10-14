@@ -929,11 +929,22 @@ mod tests {
             .await
             .unwrap();
 
-            // Discovery reported the page, and a JPEG frame arrives.
-            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            // Discovery reported the page, and a JPEG frame arrives. Frames only come when the
+            // page paints, which a background tab on a slow CI machine may not do by itself:
+            // repaint now and then until one shows up.
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
             let (mut saw_target, mut frame) = (false, None);
+            let mut repaints = 0u32;
             while std::time::Instant::now() < deadline && (!saw_target || frame.is_none()) {
                 let Ok(e) = rx.recv_timeout(Duration::from_millis(200)) else {
+                    if frame.is_none() {
+                        repaints += 1;
+                        cdp.send(
+                            "Runtime.evaluate",
+                            json!({ "expression": format!("document.documentElement.style.background = 'hsl({}, 50%, 50%)'", repaints * 37 % 360) }),
+                            Some(&session),
+                        );
+                    }
                     continue;
                 };
                 if e.method == "Target.targetCreated"

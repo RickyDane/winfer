@@ -183,6 +183,11 @@ mockIPC(
           ],
         };
       }
+      case "usage_codex_context": {
+        // Deterministic per folder, so each mock Codex pane shows its own fill.
+        const used = 20 + ([...String(a.cwd)].reduce((n, c) => n + c.charCodeAt(0), 0) % 70);
+        return { usedPercent: used, tokens: Math.round(475_000 * used / 100), window: 475_000, at: Date.now() };
+      }
       case "usage_opencode":
         return { tokens: 412_300, cost: 0.83, sessions: 14 };
       case "android_status":

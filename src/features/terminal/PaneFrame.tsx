@@ -13,7 +13,7 @@ import { useStarting } from "./xtermRegistry";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
-import { UsageRing } from "@/features/usage/UsageMeter";
+import { ContextMeter, UsageRing } from "@/features/usage/UsageMeter";
 import { tightest, useUsage } from "@/features/usage/usage";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
@@ -70,7 +70,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
       <header
         onPointerDown={(e) => beginDrag(e, pane.id)}
         title="Drag to move this pane"
-        className="relative flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
+        className="@container relative flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
       >
         {showProgress && (
           <span title={progressLabel(progress)} className="absolute inset-x-0 -bottom-px">
@@ -88,6 +88,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
         <span className="flex-1 truncate font-mono text-xs text-fg-muted" title={pane.agentTitle ?? pane.title}>
           {pane.agentTitle ?? pane.title}
         </span>
+        <ContextMeter paneId={pane.id} />
         {showProgress && progress?.percent != null && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">
             {progress.percent}%

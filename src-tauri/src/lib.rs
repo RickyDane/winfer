@@ -163,6 +163,7 @@ pub fn run() {
             voice::voice_stop,
             mcp::mcp_respond,
             usage::usage_codex,
+            usage::usage_codex_context,
             usage::usage_opencode,
             llm::llm_compose,
         ])

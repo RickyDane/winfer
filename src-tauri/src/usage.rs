@@ -41,7 +41,29 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// How full an agent session's context window is.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Context {
+    pub used_percent: f64,
+    /// Tokens in the context now.
+    pub tokens: u64,
+    /// The model's context window.
+    pub window: u64,
+    /// Unix ms.
+    pub at: i64,
+}
+
 // Claude Code ------------------------------------------------------------------------------------
+
+/// The status line input's `context_window`.
+pub fn claude_context(input: &Value) -> Option<Context> {
+    let c = &input["context_window"];
+    let window = c["context_window_size"].as_u64().filter(|w| *w > 0)?;
+    let tokens = c["total_input_tokens"].as_u64().unwrap_or(0);
+    let used_percent = c["used_percentage"].as_f64().unwrap_or(tokens as f64 * 100.0 / window as f64);
+    Some(Context { used_percent, tokens, window, at: now_ms() })
+}
 
 const CLAUDE_WINDOWS: [(&str, &str, &str); 4] = [
     ("five_hour", "session", "5-hour"),
@@ -81,8 +103,9 @@ pub fn run_statusline() {
     let parsed: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
 
     let windows = claude_windows(&parsed);
-    let report = (!windows.is_empty()).then(|| {
-        let body = json!({ "windows": windows }).to_string();
+    let context = claude_context(&parsed);
+    let report = (!windows.is_empty() || context.is_some()).then(|| {
+        let body = json!({ "windows": windows, "context": context }).to_string();
         std::thread::spawn(move || {
             let var = |k: &str| std::env::var(k).unwrap_or_default();
             crate::hooks::send_hook(&var("WINFER_HOOK"), &var("WINFER_TOKEN"), &var("WINFER_PANE_ID"), "claude", "usage", body);
@@ -233,6 +256,48 @@ pub fn codex_snapshot_in(log: &str) -> Option<Snapshot> {
     })
 }
 
+/// A session's context use at its last turn (from the newest `token_count` event).
+pub fn codex_context_in(log: &str) -> Option<Context> {
+    log.lines().rev().filter(|l| l.contains("\"model_context_window\"")).find_map(|line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        let info = &v["payload"]["info"];
+        let window = info["model_context_window"].as_u64().filter(|w| *w > 0)?;
+        let tokens = info["last_token_usage"]["total_tokens"].as_u64()?;
+        let at = v["timestamp"].as_str().and_then(parse_rfc3339).unwrap_or_else(now_ms);
+        Some(Context { used_percent: tokens as f64 * 100.0 / window as f64, tokens, window, at })
+    })
+}
+
+/// The session log for a pane: by session id (Codex's `thread-id`, the end of the log's file
+/// name) when known, else the newest session started in `cwd`.
+fn codex_log_for(root: &Path, session: Option<&str>, cwd: &str) -> Option<PathBuf> {
+    let logs = newest_logs(root, 40);
+    if let Some(id) = session.filter(|s| !s.is_empty()) {
+        if let Some(log) = logs.iter().find(|p| p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.ends_with(id))) {
+            return Some(log.clone());
+        }
+    }
+    let wanted = Path::new(cwd);
+    logs.into_iter().find(|log| {
+        let Ok(file) = std::fs::File::open(log) else { return false };
+        let mut first = String::new();
+        let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(file.take(64 * 1024)), &mut first);
+        serde_json::from_str::<Value>(&first).ok().and_then(|v| v["payload"]["cwd"].as_str().map(|c| Path::new(c) == wanted)).unwrap_or(false)
+    })
+}
+
+#[tauri::command]
+pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option<Context> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = codex_sessions()?;
+        let log = codex_log_for(&root, session.as_deref(), &cwd)?;
+        codex_context_in(&tail(&log, 1024 * 1024)?)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 #[tauri::command]
 pub async fn usage_codex() -> Option<Snapshot> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -344,6 +409,18 @@ mod tests {
     }
 
     #[test]
+    fn reads_context_use() {
+        let input = json!({ "context_window": { "total_input_tokens": 84000, "context_window_size": 200000, "used_percentage": 42 } });
+        let c = claude_context(&input).unwrap();
+        assert_eq!((c.used_percent, c.tokens, c.window), (42.0, 84000, 200000));
+        assert!(claude_context(&json!({})).is_none());
+
+        let log = r#"{"timestamp":"2026-10-14T00:10:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":47500},"model_context_window":475000}}}"#;
+        let c = codex_context_in(log).unwrap();
+        assert_eq!((c.used_percent, c.tokens), (10.0, 47500));
+    }
+
+    #[test]
     fn reads_the_last_codex_rate_limits() {
         let log = [
             r#"{"timestamp":"2026-10-14T00:00:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":5.0,"window_minutes":300,"resets_at":1791929188},"secondary":{"used_percent":1.0,"window_minutes":10080,"resets_at":1792515988}}}}"#,
@@ -364,5 +441,7 @@ mod tests {
         let root = codex_sessions().unwrap();
         let snapshot = newest_logs(&root, 4).iter().find_map(|log| codex_snapshot_in(&tail(log, 512 * 1024)?));
         println!("{snapshot:#?}");
+        let log = codex_log_for(&root, None, "/Users/rickyperlick/Coding");
+        println!("{log:?} {:#?}", log.as_ref().and_then(|l| codex_context_in(&tail(l, 1024 * 1024)?)));
     }
 }

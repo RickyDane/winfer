@@ -8,7 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notification";
 import { create } from "zustand";
 import { toast } from "@/stores/toasts";
-import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { continueIn, handoffTarget, paneToHandOff } from "./handoff";
 
 export interface UsageWindow {
@@ -27,6 +27,14 @@ export interface Snapshot {
   at: number;
 }
 
+/** How full a pane's context window is. */
+export interface Context {
+  usedPercent: number;
+  tokens: number;
+  window: number;
+  at: number;
+}
+
 export interface Spend {
   tokens: number;
   cost: number;
@@ -38,22 +46,28 @@ interface UsageState {
   opencode: Spend | null;
   /** Measurements per window ("codex:session:<resetsAt>") for the projection: [at, used%]. */
   samples: Record<string, [number, number][]>;
+  /** Context use per pane. */
+  context: Record<string, Context>;
+  /** Codex session (thread) id per pane, from its turn-complete hook. */
+  codexSessions: Record<string, string>;
 }
 
 const STORAGE = "winfer.usage";
 
-function load(): Pick<UsageState, "snapshots" | "samples"> {
+function load(): Omit<UsageState, "opencode"> {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE) ?? "{}");
-    return { snapshots: saved.snapshots ?? {}, samples: saved.samples ?? {} };
+    return { snapshots: saved.snapshots ?? {}, samples: saved.samples ?? {}, context: saved.context ?? {}, codexSessions: saved.codexSessions ?? {} };
   } catch {
-    return { snapshots: {}, samples: {} };
+    return { snapshots: {}, samples: {}, context: {}, codexSessions: {} };
   }
 }
 
 export const useUsage = create<UsageState>(() => ({ ...load(), opencode: null }));
 
-useUsage.subscribe((s) => localStorage.setItem(STORAGE, JSON.stringify({ snapshots: s.snapshots, samples: s.samples })));
+useUsage.subscribe((s) =>
+  localStorage.setItem(STORAGE, JSON.stringify({ snapshots: s.snapshots, samples: s.samples, context: s.context, codexSessions: s.codexSessions })),
+);
 
 const windowKey = (provider: string, w: UsageWindow) => `${provider}:${w.kind}:${w.resetsAt ?? ""}`;
 
@@ -167,6 +181,31 @@ export async function refreshCodex() {
   if (snapshot && (!current || snapshot.at >= current.at)) record(snapshot);
 }
 
+function setContext(paneId: string, context: Context) {
+  useUsage.setState((s) => ({ context: { ...s.context, [paneId]: context } }));
+}
+
+/** Reads a Codex pane's context use from its session log. */
+export async function refreshCodexContext(pane: Pane) {
+  const session = useUsage.getState().codexSessions[pane.id] ?? null;
+  const context = await invoke<Context | null>("usage_codex_context", { session, cwd: pane.cwd }).catch(() => null);
+  if (context) setContext(pane.id, context);
+}
+
+const codexPanes = () => useWorkspaces.getState().workspaces.flatMap((w) => w.panes).filter((p) => p.provider === "codex");
+
+/** Context colour: fine until it gets full enough for the agent to start compacting. */
+export function contextColor(used: number): string {
+  if (used >= 85) return "var(--color-danger)";
+  if (used >= 60) return "var(--color-warning)";
+  return "var(--color-accent)";
+}
+
+/** "84k", "1.2M". */
+export function tokens(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
 export async function refreshOpencode() {
   const spend = await invoke<Spend | null>("usage_opencode").catch(() => null);
   useUsage.setState({ opencode: spend });
@@ -177,13 +216,23 @@ let started = false;
 export function startUsageTracking() {
   if (started) return;
   started = true;
-  void listen<{ provider: string; report: { windows: UsageWindow[] } }>("usage://report", ({ payload }) => {
+  void listen<{ provider: string; paneId: string; report: { windows?: UsageWindow[]; context?: Context | null } }>("usage://report", ({ payload }) => {
     if (payload.report.windows?.length) record({ provider: payload.provider, windows: payload.report.windows, at: Date.now() });
+    if (payload.report.context) setContext(payload.paneId, payload.report.context);
   });
   // Codex writes its numbers after each turn; a turn ending is the moment to look.
-  void listen<{ provider: string; status: string }>("agent://status", ({ payload }) => {
-    if (payload.provider === "codex") window.setTimeout(() => void refreshCodex(), 1500);
+  void listen<{ provider: string; paneId: string; session?: string | null }>("agent://status", ({ payload }) => {
+    if (payload.provider !== "codex") return;
+    if (payload.session) useUsage.setState((s) => ({ codexSessions: { ...s.codexSessions, [payload.paneId]: payload.session! } }));
+    window.setTimeout(() => {
+      void refreshCodex();
+      const pane = codexPanes().find((p) => p.id === payload.paneId);
+      if (pane) void refreshCodexContext(pane);
+    }, 1500);
   });
+  // Codex also logs token counts during a turn: follow working panes, and read all at startup.
+  window.setTimeout(() => codexPanes().forEach((p) => void refreshCodexContext(p)), 3000);
+  window.setInterval(() => codexPanes().filter((p) => p.status === "working").forEach((p) => void refreshCodexContext(p)), 30_000);
   const installed = (id: string) => useWorkspaces.getState().providers.some((p) => p.id === id && p.installed);
   // Just a look at a few log files (nothing if Codex was never used), so no need to wait for
   // the provider list.

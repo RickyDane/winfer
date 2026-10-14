@@ -503,6 +503,18 @@ mod chrome_tests {
             }
             assert_eq!(found.expect("no console error captured").text, "boom 42");
 
+            // The page may still be loading (slow CI machines): wait for its last element.
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                let ready = cdp
+                    .call("Runtime.evaluate", json!({ "expression": "!!document.querySelector('button')", "returnByValue": true }), Some(&session))
+                    .await
+                    .unwrap();
+                if ready["result"]["value"] == true || std::time::Instant::now() > deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             for (query, expected) in [
                 ("li.item", "li.item"),
                 ("button", r#"button[data-testid="save"]"#),
