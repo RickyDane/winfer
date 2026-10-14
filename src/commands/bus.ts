@@ -21,7 +21,7 @@ import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { mergeWorktree, removeWorktree } from "@/features/worktree/worktree";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
-import { providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
+import { defaultProviderId, providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 
 export type Direction = "left" | "right" | "up" | "down";
@@ -93,10 +93,9 @@ const active = (): Workspace => {
   return s.workspaces.find((w) => w.id === s.activeWorkspaceId)!;
 };
 
-/** Default provider for ⌘T: Claude Code if installed, else the shell. */
+/** "default" is the agent chosen in Settings (see `defaultProviderId`). */
 function resolveProvider(provider: ProviderId | "default"): ProviderId {
-  if (provider !== "default") return provider;
-  return store().providers.find((p) => p.id === "claude" && p.installed) ? "claude" : "shell";
+  return provider === "default" ? defaultProviderId() : provider;
 }
 
 /** Multi-line text goes in as one paste; a typed newline would make agents submit early. */

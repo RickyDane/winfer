@@ -72,6 +72,8 @@ interface WorkspaceState {
   models: Record<ProviderId, ModelInfo[]>;
   /** Default model per provider for new panes (persisted). */
   agentModels: Record<ProviderId, string>;
+  /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
+  defaultProvider: ProviderId | null;
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
@@ -100,6 +102,7 @@ interface WorkspaceState {
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
+  setDefaultProvider: (provider: ProviderId | null) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
@@ -135,6 +138,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   recipes: [],
   models: {},
   agentModels: {},
+  defaultProvider: null,
   searchPaneId: null,
   voiceConfig: {},
 
@@ -172,6 +176,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       voiceConfig: ui.voice ?? {},
       recipes: ui.recipes ?? [],
       agentModels: ui.agentModels ?? {},
+      defaultProvider: ui.defaultProvider ?? null,
     });
   },
 
@@ -302,6 +307,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       else delete agentModels[provider];
       return { agentModels };
     }),
+  setDefaultProvider: (provider) => set({ defaultProvider: provider }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -329,6 +335,7 @@ interface Snapshot {
     voice?: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string };
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
+    defaultProvider?: ProviderId | null;
   } | null;
 }
 
@@ -347,7 +354,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider },
   };
 }
 
@@ -365,3 +372,10 @@ useWorkspaces.subscribe((s) => {
     invoke("state_save", { snapshot }).catch((err) => console.error("state_save failed", err));
   }, 400);
 });
+
+/** The agent new panes open with: the chosen default if it's installed, else Claude Code, else the shell. */
+export function defaultProviderId(s: Pick<WorkspaceState, "providers" | "defaultProvider"> = useWorkspaces.getState()): ProviderId {
+  const installed = (id: ProviderId | null) => id !== null && s.providers.some((p) => p.id === id && p.installed);
+  if (installed(s.defaultProvider)) return s.defaultProvider!;
+  return installed("claude") ? "claude" : "shell";
+}

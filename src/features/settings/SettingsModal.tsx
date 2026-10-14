@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Download, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useWorkspaces } from "@/stores/workspaces";
-import { VOICE_KEYS } from "@/commands/keymap";
+import { defaultProviderId, useWorkspaces } from "@/stores/workspaces";
+import { keysFor, VOICE_KEYS } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { WORKERS_MODELS } from "@/features/voice/writer";
 
@@ -265,6 +265,34 @@ function VoiceSettings() {
   );
 }
 
+/** Which agent ⌘T, splits and "open a new window" start. */
+function DefaultAgentSetting() {
+  const { providers, defaultProvider, setDefaultProvider } = useWorkspaces();
+  const current = defaultProviderId({ providers, defaultProvider });
+  return (
+    <Section title="New panes">
+      <label className="flex items-center gap-2 text-[13px] text-fg">
+        Default agent
+        <select
+          value={current}
+          onChange={(e) => setDefaultProvider(e.target.value)}
+          className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id} disabled={!p.installed}>
+              {p.name}
+              {p.installed ? "" : " (not installed)"}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-fg-subtle">
+          {keysFor({ type: "pane.spawn", provider: "default" })}, split and “open a new window” start this agent.
+        </span>
+      </label>
+    </Section>
+  );
+}
+
 /** Default model per agent for new panes. */
 function ModelSettings() {
   const { providers, models, agentModels, setAgentModel, loadModels } = useWorkspaces();
@@ -328,6 +356,7 @@ export function SettingsModal() {
             <X size={14} />
           </button>
         </header>
+        <DefaultAgentSetting />
         <ModelSettings />
         <VoiceSettings />
       </div>

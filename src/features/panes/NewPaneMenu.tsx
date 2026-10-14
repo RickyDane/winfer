@@ -1,12 +1,13 @@
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
-import { useWorkspaces } from "@/stores/workspaces";
+import { defaultProviderId, useWorkspaces } from "@/stores/workspaces";
 
-/** Provider picker for opening a new pane. M2 replaces this with ⌘T / ⌘⇧T and the palette. */
+/** Provider picker for opening a new pane; the star marks (and sets) the default agent. */
 export function NewPaneMenu() {
-  const { providers, addPane, models, loadModels, agentModels } = useWorkspaces();
+  const { providers, addPane, models, loadModels, agentModels, defaultProvider, setDefaultProvider } = useWorkspaces();
+  const defaultId = defaultProviderId({ providers, defaultProvider });
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -51,6 +52,15 @@ export function NewPaneMenu() {
                   {!p.installed && <span className="text-[11px]">not installed</span>}
                   {p.installed && agentModels[p.id] && <span className="font-mono text-[10px] text-fg-subtle">{agentModels[p.id]}</span>}
                 </button>
+                {p.installed && (
+                  <button
+                    title={p.id === defaultId ? "Default agent for new panes" : "Make this the default agent for new panes"}
+                    onClick={() => setDefaultProvider(p.id)}
+                    className={cn("rounded p-1 hover:bg-hover", p.id === defaultId ? "text-accent" : "text-fg-subtle/40 hover:text-fg")}
+                  >
+                    <Star size={12} fill={p.id === defaultId ? "currentColor" : "none"} />
+                  </button>
+                )}
                 {p.installed && p.modelArg && (models[p.id]?.length ?? 1) > 0 && (
                   <button
                     title="Choose a model"

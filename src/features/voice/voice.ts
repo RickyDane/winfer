@@ -8,7 +8,7 @@ import { create } from "zustand";
 import { execute, type Command } from "@/commands/bus";
 import { sendText } from "@/features/terminal/xtermRegistry";
 import { toolContext } from "@/features/palette/entries";
-import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { defaultProviderId, providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
 import { needsWriting, planPerRecipient, recipientsOf, writeInstructions } from "./writer";
@@ -109,7 +109,7 @@ function commandsFor(decisions: Decision[], transcript: string): Command[] {
 function spawnOrder(d: Decision, transcript: string): string[] {
   const ctx = toolContext();
   return orderByMention(d.tool.toCommands(d.args, ctx), transcript, ctx).flatMap((c) =>
-    c.type === "pane.spawn" ? Array(c.count ?? 1).fill(c.provider === "default" ? "claude" : c.provider) : [],
+    c.type === "pane.spawn" ? Array(c.count ?? 1).fill(c.provider === "default" ? defaultProviderId() : c.provider) : [],
   );
 }
 
