@@ -210,6 +210,8 @@ mockIPC(
         const used = 20 + ([...String(a.cwd)].reduce((n, c) => n + c.charCodeAt(0), 0) % 70);
         return { usedPercent: used, tokens: Math.round(475_000 * used / 100), window: 475_000, at: Date.now() };
       }
+      case "usage_opencode_context":
+        return { usedPercent: 31, tokens: 81_265, window: 262_144, at: Date.now() };
       case "usage_opencode":
         return { tokens: 412_300, cost: 0.83, sessions: 14 };
       case "android_status":

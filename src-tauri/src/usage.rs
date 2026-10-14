@@ -348,6 +348,89 @@ pub async fn usage_opencode() -> Option<Spend> {
     .flatten()
 }
 
+/// OpenCode 2's database (sessions, messages, the models catalog), read-only.
+fn opencode_db() -> Option<rusqlite::Connection> {
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))?;
+    let path = data.join("opencode/opencode.db");
+    if !path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    Some(conn)
+}
+
+fn same_dir(a: &str, b: &str) -> bool {
+    let norm = |p: &str| p.trim_end_matches(['/', '\\']).replace('\\', "/");
+    if cfg!(windows) { norm(a).eq_ignore_ascii_case(&norm(b)) } else { norm(a) == norm(b) }
+}
+
+/// Tokens in the context after an assistant message: everything the model saw and wrote.
+fn opencode_message_tokens(data: &Value) -> Option<u64> {
+    let t = &data["tokens"];
+    let n = |v: &Value| v.as_u64().unwrap_or(0);
+    let total = n(&t["input"]) + n(&t["output"]) + n(&t["reasoning"]) + n(&t["cache"]["read"]) + n(&t["cache"]["write"]);
+    (total > 0).then_some(total)
+}
+
+/// A model's context window from OpenCode's cached models.dev catalog. Parsed once (it's large).
+fn opencode_model_window(conn: &rusqlite::Connection, provider: &str, model: &str) -> Option<u64> {
+    static CATALOG: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> = std::sync::Mutex::new(None);
+    let mut catalog = CATALOG.lock().ok()?;
+    if catalog.is_none() {
+        let raw: String = conn.query_row("select value from kv where key = 'models-dev:catalog'", [], |r| r.get(0)).ok()?;
+        let outer: Value = serde_json::from_str(&raw).ok()?;
+        let body: Value = match &outer["body"] {
+            Value::String(s) => serde_json::from_str(s).ok()?,
+            v => v.clone(),
+        };
+        let mut windows = std::collections::HashMap::new();
+        for (pid, p) in body.as_object()? {
+            for (mid, m) in p["models"].as_object().into_iter().flatten() {
+                if let Some(ctx) = m["limit"]["context"].as_u64() {
+                    windows.insert(format!("{pid}/{mid}"), ctx);
+                }
+            }
+        }
+        *catalog = Some(windows);
+    }
+    catalog.as_ref()?.get(&format!("{provider}/{model}")).copied()
+}
+
+/// Context use of the newest OpenCode session (not a subagent's) started in `cwd`.
+fn opencode_context_at(conn: &rusqlite::Connection, cwd: &str) -> Option<Context> {
+    let mut stmt = conn
+        .prepare("select id, directory, model from session_v2 where parent_id is null order by time_updated desc limit 200")
+        .ok()?;
+    let (session, model): (String, Option<String>) = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))
+        .ok()?
+        .flatten()
+        .find(|(_, dir, _)| same_dir(dir, cwd))
+        .map(|(id, _, model)| (id, model))?;
+    let mut stmt = conn
+        .prepare("select data, time_updated from session_message where session_id = ?1 and type = 'assistant' order by seq desc limit 20")
+        .ok()?;
+    let (tokens, data, at) = stmt
+        .query_map([&session], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .ok()?
+        .flatten()
+        .find_map(|(raw, at)| {
+            let data: Value = serde_json::from_str(&raw).ok()?;
+            Some((opencode_message_tokens(&data)?, data, at))
+        })?;
+    // The message names its model; the session's model is the fallback.
+    let model = Some(data["model"].clone()).filter(|m| m.is_object()).or_else(|| model.and_then(|m| serde_json::from_str(&m).ok()))?;
+    let window = opencode_model_window(conn, model["providerID"].as_str()?, model["id"].as_str()?)?;
+    Some(Context { used_percent: tokens as f64 * 100.0 / window as f64, tokens, window, at })
+}
+
+/// Context use of the OpenCode session in a pane's folder (OpenCode 2; older versions: None).
+#[tauri::command]
+pub async fn usage_opencode_context(cwd: String) -> Option<Context> {
+    tauri::async_runtime::spawn_blocking(move || opencode_context_at(&opencode_db()?, &cwd)).await.ok().flatten()
+}
+
 // Dates -----------------------------------------------------------------------------------------
 
 /// "2026-10-14T00:00:29.123Z" (or with an offset) → unix ms.
@@ -434,6 +517,29 @@ mod tests {
         assert_eq!(s.windows[1].kind, "week");
     }
 
+    #[test]
+    fn reads_opencode_context() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"create table kv (key text primary key, value text);
+            create table session_v2 (id text, parent_id text, directory text, model text, time_updated integer);
+            create table session_message (session_id text, type text, seq integer, time_updated integer, data text);
+            insert into kv values ('models-dev:catalog', '{"updatedAt":1,"body":"{\"opencode\":{\"models\":{\"big\":{\"limit\":{\"context\":200000}}}}}"}');
+            insert into session_v2 values ('s1', null, '/w/a', '{"id":"big","providerID":"opencode"}', 2);
+            insert into session_v2 values ('s0', null, '/w/b', null, 3);
+            insert into session_message values ('s1', 'assistant', 1, 10, '{"tokens":{"input":100,"output":0,"cache":{"read":0,"write":0}}}');
+            insert into session_message values ('s1', 'assistant', 2, 20, '{"model":{"id":"big","providerID":"opencode"},"tokens":{"input":1000,"output":500,"reasoning":500,"cache":{"read":48000,"write":0}}}');"#,
+        )
+        .unwrap();
+        let c = opencode_context_at(&conn, "/w/a/").unwrap();
+        assert_eq!((c.tokens, c.window, c.used_percent, c.at), (50000, 200000, 25.0, 20));
+        assert!(opencode_context_at(&conn, "/w/c").is_none());
+    }
+
+    fn opendb_context(dir: &str) -> Option<Context> {
+        opencode_context_at(&opencode_db()?, dir)
+    }
+
     /// Reads this machine's real Codex logs: `cargo test codex_logs -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -442,6 +548,8 @@ mod tests {
         let snapshot = newest_logs(&root, 4).iter().find_map(|log| codex_snapshot_in(&tail(log, 512 * 1024)?));
         println!("{snapshot:#?}");
         let log = codex_log_for(&root, None, "/Users/rickyperlick/Coding");
+        let dir = "/Users/rickyperlick/Library/Application Support/dev.winfer.app/worktrees/cleadger-8999bec3/opencode-1";
+        println!("opencode: {:#?}", opendb_context(dir));
         println!("{log:?} {:#?}", log.as_ref().and_then(|l| codex_context_in(&tail(l, 1024 * 1024)?)));
     }
 }

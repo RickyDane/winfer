@@ -107,7 +107,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] The New menu shows "% left" next to Claude Code / Codex; pane headers show the ring around the agent icon.
 - [ ] Crossing 80% / 95% used shows a toast (native notification when winfer is in the background); at 100% the toast offers "Continue in Codex" (or the agent with most room), which opens it next to the pane in the same worktree with the task and last output.
 
-- [ ] Context: Claude Code and Codex pane headers show a small bar with how full the context window is (number hidden in narrow panes; tooltip "84k of 200k tokens"); amber from 60%, red from 85%. Claude updates with its status line, Codex after each turn (and every 30 s while working).
+- [ ] Context: Claude Code, Codex and OpenCode pane headers show a small bar with how full the context window is (number hidden in narrow panes; tooltip "84k of 200k tokens"); amber from 60%, red from 85%. Claude updates with its status line, Codex after each turn (and every 30 s while working), OpenCode 2.x every 20 s (from its session database).
 
 ## 6b. Feedback and motion
 - [ ] Dialogs (Settings, palette, review, history…) fade in; menus pop in; new panes grow in; switching workspace or Overview fades the content.

@@ -192,7 +192,14 @@ export async function refreshCodexContext(pane: Pane) {
   if (context) setContext(pane.id, context);
 }
 
-const codexPanes = () => useWorkspaces.getState().workspaces.flatMap((w) => w.panes).filter((p) => p.provider === "codex");
+/** Reads an OpenCode pane's context use from OpenCode's session database. */
+export async function refreshOpencodeContext(pane: Pane) {
+  const context = await invoke<Context | null>("usage_opencode_context", { cwd: pane.cwd }).catch(() => null);
+  if (context) setContext(pane.id, context);
+}
+
+const panesOf = (provider: string) => useWorkspaces.getState().workspaces.flatMap((w) => w.panes).filter((p) => p.provider === provider);
+const codexPanes = () => panesOf("codex");
 
 /** Context colour: fine until it gets full enough for the agent to start compacting. */
 export function contextColor(used: number): string {
@@ -232,6 +239,10 @@ export function startUsageTracking() {
   });
   // Codex also logs token counts during a turn: follow working panes, and read all at startup.
   window.setTimeout(() => codexPanes().forEach((p) => void refreshCodexContext(p)), 3000);
+  // OpenCode has no hooks: look at its sessions now and then (one small database query each).
+  const pollOpencodeContext = () => panesOf("opencode").forEach((p) => void refreshOpencodeContext(p));
+  window.setTimeout(pollOpencodeContext, 3000);
+  window.setInterval(pollOpencodeContext, 20_000);
   window.setInterval(() => codexPanes().filter((p) => p.status === "working").forEach((p) => void refreshCodexContext(p)), 30_000);
   const installed = (id: string) => useWorkspaces.getState().providers.some((p) => p.id === id && p.installed);
   // Just a look at a few log files (nothing if Codex was never used), so no need to wait for

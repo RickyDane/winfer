@@ -165,6 +165,7 @@ pub fn run() {
             usage::usage_codex,
             usage::usage_codex_context,
             usage::usage_opencode,
+            usage::usage_opencode_context,
             llm::llm_compose,
         ])
         .build(tauri::generate_context!())
