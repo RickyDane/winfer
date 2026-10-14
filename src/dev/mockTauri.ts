@@ -5,6 +5,8 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import pkg from "../../package.json";
+import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
@@ -14,6 +16,7 @@ const providers = [
   { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: false },
+  { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 
@@ -57,6 +60,12 @@ async function renderFrame(workspaceId: string) {
   const canvas = new OffscreenCanvas(width * deviceScaleFactor, height * deviceScaleFactor);
   const ctx = canvas.getContext("2d")!;
   ctx.scale(deviceScaleFactor, deviceScaleFactor);
+  if (SHOWCASE) {
+    drawApp(ctx, width, height);
+    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+    sc.channel.onmessage(await blob.arrayBuffer());
+    return;
+  }
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, width, height);
   ctx.fillStyle = "#4f46e5";
@@ -97,6 +106,13 @@ function frameDataUrl(): string {
   return canvas.toDataURL("image/jpeg", 0.8);
 }
 
+if (SHOWCASE) {
+  window.setTimeout(async () => {
+    await seedShowcase();
+    window.setTimeout(() => void stageScene(), 1500);
+  }, 1200);
+}
+
 // Claude Code reports its limits through the status line once a session answers.
 window.setTimeout(() => {
   const now = Date.now();
@@ -125,13 +141,19 @@ mockIPC(
       case "providers_list":
         return providers;
       case "state_load":
+        if (SHOWCASE) return showcaseState();
         return JSON.parse(localStorage.getItem("winfer-mock-state") ?? '{"workspaces":[],"ui":null}');
       case "state_save":
+        if (SHOWCASE) return null;
         localStorage.setItem("winfer-mock-state", JSON.stringify(a.snapshot));
         return null;
       case "pty_spawn": {
         const { paneId, providerId, cwd, resume, prompt } = a.req;
         channels.set(paneId, a.onData);
+        if (SHOWCASE && transcript(paneId)) {
+          send(a.onData, transcript(paneId)!);
+          return { attached: false, pid: 1 };
+        }
         send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}${prompt ? ` · prompt: ${prompt}` : ""}\x1b[0m\r\n$ `);
         return { attached: false, pid: 1 };
       }
@@ -322,7 +344,7 @@ mockIPC(
       case "browser_selection":
         return "";
       case "plugin:app|version":
-        return "dev";
+        return SHOWCASE ? pkg.version : "dev";
       case "voice_status":
         return {
           models: [
