@@ -150,14 +150,14 @@ export const PLAN_SYSTEM = [
   'Output only JSON: an array with exactly one string per recipient, in list order, e.g. ["…", "…"].',
 ].join(" ");
 
-/** Parses the first JSON string array in the model's answer. */
-export function parseMessages(answer: string, expected: number): string[] | null {
+/** Parses the first JSON string array in the model's answer; with `expected`, it must have that many. */
+export function parseMessages(answer: string, expected?: number): string[] | null {
   const start = answer.indexOf("[");
   const end = answer.lastIndexOf("]");
   if (start < 0 || end <= start) return null;
   try {
     const list = JSON.parse(answer.slice(start, end + 1));
-    return Array.isArray(list) && list.length === expected && list.every((m) => typeof m === "string" && m.trim())
+    return Array.isArray(list) && list.length > 0 && (expected === undefined || list.length === expected) && list.every((m) => typeof m === "string" && m.trim())
       ? list.map((m: string) => m.trim())
       : null;
   } catch {
@@ -184,6 +184,45 @@ export async function planPerRecipient(transcript: string, instruction: string, 
     return messages ? recipients.map((r, i) => r.deliver(messages[i])) : null;
   } catch (err) {
     console.warn("per-pane planning failed", err);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task splitting: "create X, implement Y and change Z" for one new agent becomes one agent per
+// feature, each in its own worktree, so the work can be reviewed and merged separately.
+
+export const SPLIT_SYSTEM = [
+  "The user gave a voice command that starts a new coding agent. Split it into separate tasks: each task goes to its own agent,",
+  "working in its own git worktree, and is merged later through its own pull request.",
+  "When the user lists several features or changes (separate sentences, files or components), make one task per feature or change,",
+  "even if one later uses another. Keep it as one task only when it is a single feature, when the user asks for one agent to do everything,",
+  "Follow-up steps of a change (run the tests, check it, commit it) belong to that change's task, never a task of their own.",
+  "Instructions about winfer itself ('start it in Claude Code', 'open Codex') are not tasks; leave them out.",
+  "Each message must stand alone: the agent doesn't know about the others. Only when there are several tasks and one uses something another creates",
+  "(a file, a function), say what it can expect and to create a minimal version if it doesn't exist yet.",
+  "Keep the user's intent; don't add requirements they didn't ask for. Be concrete, 1–4 sentences each, in the user's language.",
+  'Output only JSON: an array with one string per task, e.g. ["…", "…"].',
+].join(" ");
+
+/** Splits an instruction into one message per separate task; null if the writer is off or fails. */
+export async function splitTasks(transcript: string, instruction: string, agent: string): Promise<string[] | null> {
+  const config = useWorkspaces.getState().voiceConfig;
+  const provider = config.writer ?? "workers";
+  if (provider === "off") return null;
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId)!;
+  const user = [
+    `Spoken: "${transcript}"`,
+    `Instruction as heard: "${instruction}"`,
+    `Agent: ${agent} (new agent, starting fresh)`,
+    `Workspace: ${ws.name} (${ws.rootDir})`,
+  ].join("\n");
+  try {
+    const answer = await invoke<string>("llm_compose", { req: { provider, model: config.writerModel ?? "", system: SPLIT_SYSTEM, user } });
+    return parseMessages(answer)?.slice(0, 6) ?? null;
+  } catch (err) {
+    console.warn("task splitting failed", err);
     return null;
   }
 }

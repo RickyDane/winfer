@@ -12,7 +12,7 @@ import { toolContext } from "@/features/palette/entries";
 import { defaultProviderId, providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
-import { needsWriting, planPerRecipient, recipientsOf, writeInstructions } from "./writer";
+import { needsWriting, planPerRecipient, recipientsOf, splitTasks, writeInstructions } from "./writer";
 import { buildRequest, orderByMention, parseDecision, verdict, type Decision, type DecisionResult } from "./decision";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
@@ -117,7 +117,27 @@ function spawnOrder(d: Decision, transcript: string): string[] {
 async function run(decisions: Decision[], transcript: string) {
   // Commands that reach several agents get one planned message per agent.
   const planned = new Map<Decision, Command[]>();
+  // Prompts that are already written (by the task splitter) and shouldn't be rewritten.
+  const ready = new Set<Decision>();
+  decisions = [...decisions];
+  for (const [i, d] of decisions.entries()) {
+    // One new agent asked to do several separate things: one agent per task, each in its own
+    // worktree, so every feature gets its own branch and pull request.
+    const order = d.tool.id === "spawn_panes" && d.args.prompt ? spawnOrder(d, transcript) : [];
+    if (order.length !== 1) continue;
+    show("deciding", { transcript, message: "Writing the prompt…" });
+    const tasks = await splitTasks(transcript, String(d.args.prompt), providerName(useWorkspaces.getState().providers, order[0]));
+    if (!tasks) continue;
+    if (tasks.length === 1) {
+      decisions[i] = { ...d, args: { ...d.args, prompt: tasks[0] } };
+      ready.add(decisions[i]);
+      continue;
+    }
+    const model = d.args.model && d.args.model !== "default" ? String(d.args.model) : undefined;
+    planned.set(d, tasks.map((prompt) => ({ type: "pane.spawn", provider: order[0], count: 1, prompt, model, worktree: true })));
+  }
   for (const d of decisions) {
+    if (planned.has(d) || ready.has(d)) continue;
     const recipients = recipientsOf(d, d.tool.id === "spawn_panes" ? spawnOrder(d, transcript) : []);
     const instruction = String(d.args.prompt ?? d.args.text ?? "");
     if (!recipients || !instruction) continue;
@@ -125,17 +145,21 @@ async function run(decisions: Decision[], transcript: string) {
     const commands = await planPerRecipient(transcript, instruction, recipients);
     if (commands) planned.set(d, commands);
   }
-  const single = decisions.filter((d) => !planned.has(d));
+  const single = decisions.filter((d) => !planned.has(d) && !ready.has(d));
   if (needsWriting(single)) {
     show("deciding", { transcript, message: "Writing the prompt…" });
     const written = await writeInstructions(single, transcript);
-    decisions = decisions.map((d) => (planned.has(d) ? d : written[single.indexOf(d)]));
+    decisions = decisions.map((d) => (single.includes(d) ? written[single.indexOf(d)] : d));
   }
   const commands = decisions.flatMap((d) => planned.get(d) ?? commandsFor([d], transcript));
   commands.forEach(execute);
   const perAgent = [...planned.values()].flat().length;
+  const split = [...planned.entries()].filter(([d]) => d.tool.id === "spawn_panes").map(([, c]) => c.length);
   const written = perAgent ? `${perAgent} individual prompts` : decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
-  const summary = decisions.map(describe).join(" · ") + (written ? ` — “${String(written).slice(0, 140)}”` : "");
+  const summary =
+    decisions.map(describe).join(" · ") +
+    (split.length ? ` — split into ${split.join(" + ")} tasks` : "") +
+    (written ? ` — “${String(written).slice(0, 140)}”` : "");
   useVoice.setState((s) => ({
     recent: [...s.recent, `${transcript} → ${summary}`].slice(-3),
     lastCommands: decisions.some((d) => d.tool.id === "repeat_last") ? s.lastCommands : commands,

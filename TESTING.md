@@ -90,6 +90,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] "Create a new Claude instance and tell it to create a Flappy Bird clone" → Claude opens with that prompt.
 - [ ] "Type hello world into Claude" → text is typed into Claude's prompt, not sent.
 - [ ] Prompt writer (Settings, Workers AI by default): "tell Claude to make the page nicer" → Claude receives a concrete prompt (shown in the HUD). Try "OpenAI via your ChatGPT plan" too.
+- [ ] Several features for one new agent ("Open Claude: create credentials.js with placeholders, implement decide() in openaiDecisions.js and make Luna.vue use it") → one Claude pane per feature, each in its own worktree with a standalone prompt; the HUD says "split into 3 tasks". One feature with follow-up steps ("fix the login bug, then run the tests") stays in one pane.
 - [ ] After an agent created a page: "Öffne die erstellte Seite im Browser" / "open the page you just made" opens that file; "show me the dev server" opens localhost.
 - [ ] "Close all windows" closes every pane in the workspace.
 - [ ] With several agents open: "Sag allen, sie sollen einen Flappy Bird Klon erstellen, bis auf das letzte Fenster, das soll einen Super Mario Klon erstellen" → each pane gets its own prompt (HUD: "Writing 4 prompts…").

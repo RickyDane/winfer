@@ -15,4 +15,9 @@ describe("parseMessages", () => {
     expect(parseMessages("no json here", 1)).toBeNull();
     expect(parseMessages('["a", ""]', 2)).toBeNull();
   });
+
+  it("takes any non-empty list when no count is expected", () => {
+    expect(parseMessages('["Create credentials.js.", "Add decide()."]')).toHaveLength(2);
+    expect(parseMessages("[]")).toBeNull();
+  });
 });
