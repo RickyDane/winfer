@@ -135,6 +135,17 @@ mod tests {
     }
 
     /// Live: CF creds in the Keychain/env (workers) and a logged-in Codex (codex).
+    /// Tries a prompt from files against Workers AI:
+    /// WINFER_SYSTEM=sys.txt WINFER_USER=user.txt cargo test -- --ignored --nocapture live_prompt
+    #[test]
+    #[ignore]
+    fn live_prompt() {
+        let read = |var: &str| std::fs::read_to_string(std::env::var(var).expect(var)).unwrap();
+        let started = std::time::Instant::now();
+        let answer = workers("", &read("WINFER_SYSTEM"), &read("WINFER_USER")).unwrap();
+        eprintln!("{:?}\n{answer}", started.elapsed());
+    }
+
     #[test]
     #[ignore]
     fn live_compose() {

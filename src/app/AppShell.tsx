@@ -1,3 +1,5 @@
+import { SessionsOverview } from "@/features/progress/SessionsOverview";
+import { startProgressTracking } from "@/features/progress/progress";
 import { ReviewInbox } from "@/features/review/ReviewInbox";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Mic, PanelLeft, PanelRight } from "lucide-react";
@@ -101,6 +103,7 @@ export function AppShell() {
     startStatusTracking();
     startVoice();
     startAgentApi();
+    startProgressTracking();
   }, [loadProviders, hydrate]);
   const workspace = useActiveWorkspace();
   if (!workspace) return <div className="h-full" data-tauri-drag-region />;
@@ -148,6 +151,7 @@ export function AppShell() {
       <SettingsModal />
       <RaceView />
       <ReviewInbox />
+      <SessionsOverview />
       <BroadcastBar />
       <RecipesView />
       <ModelPicker />

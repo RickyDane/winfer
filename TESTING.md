@@ -45,6 +45,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Sidebar "Latest" shows what happened.
 - [ ] Review inbox (sidebar "Review", ⌘E): when an agent finishes work in its worktree, a card appears with a summary, changed files, "Run tests" and (if it started a dev server) a screenshot. Merge commits leftovers and merges; then "Close agent and delete worktree". Send back types your comment into the agent. Race cards show "Pick".
 - [ ] Say "what's done?" → the inbox opens and the summaries are read aloud.
+- [ ] Give an agent a task: a thin bar under its pane header and a percent fill in within about a minute and only move forward; the sidebar shows "N working · X%"; Sessions (⌘O) lists every agent with task, bar and current step. Finishing jumps to 100%; a new task starts at 0%.
+- [ ] Say "how far are the agents?" → the overview opens and progress is read aloud.
 
 ## 5. Browser
 - [ ] Address bar: `github.com` loads; clicking, scrolling and typing in the page work; back/forward/reload.

@@ -249,7 +249,7 @@ export function parseDecision(result: DecisionResult, ctx: ToolContext): Decisio
   }
   // "Show me the review inbox" is for winfer; a "tell an agent" next to it would type the
   // sentence into a pane.
-  if (decisions.some((d) => d.tool.id === "review_work")) {
+  if (decisions.some((d) => d.tool.id === "review_work" || d.tool.id === "show_progress")) {
     decisions = decisions.filter((d) => d.tool.id !== "send_to_pane");
   }
   // Telling the open agents and racing new ones both hand out the task; telling wins.

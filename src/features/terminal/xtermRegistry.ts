@@ -16,6 +16,7 @@ import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
+import { setTask } from "@/features/progress/progress";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
@@ -135,10 +136,21 @@ function create(pane: Pane): Entry {
   // the app, not the PTY. Returning false skips xterm only; the browser still fires copy/paste events.
   term.attachCustomKeyEventHandler((e) => !((IS_MAC ? e.metaKey : e.ctrlKey && e.shiftKey) || isAppChord(e)));
 
+  // What the user types, line by line: a submitted line is the agent's new task (progress bars).
+  let typed = "";
   term.onData((data) => {
     const entry = entries.get(pane.id);
     if (!entry?.spawned || entry.exited) return;
     void invoke("pty_write", { paneId: pane.id, data });
+    if (!data.startsWith("\x1b")) {
+      for (const ch of data) {
+        if (ch === "\r") {
+          if (pane.provider !== "shell") setTask(pane.id, typed);
+          typed = "";
+        } else if (ch === "\x7f") typed = typed.slice(0, -1);
+        else if (ch >= " " || ch === "\n") typed += ch;
+      }
+    }
     if (data.includes("\r")) reportInput(pane.id);
   });
 

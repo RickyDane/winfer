@@ -20,6 +20,7 @@ import { closeTerminal, pasteText, restartTerminal, sendText } from "@/features/
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
 import { discardReviewed, mergeReviewed, readReviewsAloud } from "@/features/review/reviews";
+import { readProgressAloud, setTask } from "@/features/progress/progress";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
 import { defaultProviderId, providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
@@ -85,7 +86,9 @@ export type Command =
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   | { type: "ui.settings" }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" }
+  /** Speaks how far each working agent is ("how far are the agents?"). */
+  | { type: "progress.readAloud" }
   /** Speaks the open review cards' summaries ("what's done?"). */
   | { type: "review.readAloud" }
   | { type: "recipe.load"; id: string };
@@ -105,7 +108,10 @@ function resolveProvider(provider: ProviderId | "default"): ProviderId {
 function typeInto(paneId: string, text: string, submit: boolean) {
   if (text.includes("\n")) pasteText(paneId, text);
   else sendText(paneId, text);
-  if (submit) sendText(paneId, "\r");
+  if (submit) {
+    sendText(paneId, "\r");
+    setTask(paneId, text);
+  }
 }
 
 const paneById = (id: string | null) => (id ? active().panes.find((p) => p.id === id) : undefined);
@@ -294,6 +300,8 @@ export function execute(cmd: Command): void {
     }
     case "review.readAloud":
       return readReviewsAloud();
+    case "progress.readAloud":
+      return readProgressAloud();
     case "pane.nextAttention": {
       const all = s.workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : []).map((id) => w.panes.find((p) => p.id === id)!));
       const rank = (p: (typeof all)[number]) => (p.status === "needs-input" ? 0 : p.unseen ? 1 : 2);

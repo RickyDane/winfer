@@ -270,6 +270,18 @@ export const TOOLS: ToolDef[] = [
     palette: () => Object.entries(DIRECTIONS).map(([dir, label]) => ({ title: `Swap pane ${label.toLowerCase()}`, args: { dir } })),
   },
   {
+    id: "show_progress",
+    title: "Session progress",
+    description: "Show how far the working agents are with their tasks, in percent; answers “how far are the agents?”",
+    risk: "safe",
+    params: { read_aloud: { kind: "bool", ask: "Did the user ask a question to be answered out loud, like “how far are they?”" } },
+    toCommands: (args) => [{ type: "ui.overlay", overlay: "progress" }, ...(args.read_aloud ? [{ type: "progress.readAloud" } as const] : [])],
+    palette: () => [
+      { title: "Session progress", args: {} },
+      { title: "Read session progress aloud", args: { read_aloud: true } },
+    ],
+  },
+  {
     id: "review_work",
     title: "Review finished work",
     description: "Show what finished agents did, ready to merge; answers “what's done?”, “anything to review?”",

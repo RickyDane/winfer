@@ -65,7 +65,7 @@ interface WorkspaceState {
   diffPaneId: string | null;
   settingsOpen: boolean;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | null;
+  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
   /** Models each provider offers (from its CLI), loaded in the background. */
@@ -81,6 +81,8 @@ interface WorkspaceState {
   theme: Theme;
   /** Review inbox: run tests / take screenshots automatically when an agent finishes. */
   reviewConfig: { autoTests?: boolean; screenshots?: boolean };
+  /** LLM progress estimates for working agents. */
+  progressConfig: { enabled?: boolean; intervalSec?: number };
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
@@ -105,7 +107,7 @@ interface WorkspaceState {
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
   setSettings: (open: boolean) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
@@ -116,6 +118,7 @@ interface WorkspaceState {
   setBrowserWidth: (width: number) => void;
   toggleTheme: () => void;
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
+  setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
@@ -160,6 +163,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   browserWidth: DEFAULT_BROWSER_WIDTH,
   theme: "dark",
   reviewConfig: {},
+  progressConfig: {},
   searchPaneId: null,
   voiceConfig: {},
 
@@ -202,6 +206,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       theme: ui.theme ?? "dark",
       reviewConfig: ui.review ?? {},
+      progressConfig: ui.progress ?? {},
     });
   },
 
@@ -344,6 +349,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
   toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
   setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
+  setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -376,6 +382,7 @@ interface Snapshot {
     browserWidth?: number;
     theme?: Theme;
     review?: { autoTests?: boolean; screenshots?: boolean };
+    progress?: { enabled?: boolean; intervalSec?: number };
   } | null;
 }
 
@@ -394,7 +401,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, review: s.reviewConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 

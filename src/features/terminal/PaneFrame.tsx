@@ -9,6 +9,8 @@ import { PaneSearch } from "./PaneSearch";
 import { beginDrag, useDrag } from "@/features/layout/drag";
 import { TerminalHost } from "./TerminalHost";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
+import { useProgress } from "@/features/progress/progress";
+import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -34,6 +36,8 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
   const target = { id: pane.id };
   const searching = useWorkspaces((s) => s.searchPaneId === pane.id);
   const beingDragged = useDrag((s) => s.paneId === pane.id);
+  const progress = useProgress((s) => s.byPane[pane.id]);
+  const showProgress = pane.provider !== "shell" && (pane.status === "working" || pane.status === "needs-input" || progress?.percent != null);
 
   return (
     <section
@@ -48,12 +52,22 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
       <header
         onPointerDown={(e) => beginDrag(e, pane.id)}
         title="Drag to move this pane"
-        className="flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
+        className="relative flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
       >
+        {showProgress && (
+          <span title={progressLabel(progress)} className="absolute inset-x-0 -bottom-px">
+            <ProgressBar progress={progress} status={pane.status} className="h-0.5 rounded-none bg-transparent" />
+          </span>
+        )}
         <span className="min-w-3 font-mono text-[11px] text-fg-subtle">{index}</span>
         <StatusDot status={pane.status} />
         <ProviderIcon provider={pane.provider} />
         <span className="flex-1 truncate font-mono text-xs text-fg-muted">{pane.title}</span>
+        {showProgress && progress?.percent != null && (
+          <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">
+            {progress.percent}%
+          </span>
+        )}
         {pane.worktree && (
           <button
             onMouseDown={(e) => e.stopPropagation()}

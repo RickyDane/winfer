@@ -258,6 +258,10 @@ mockIPC(
         setTimeout(() => void emit("voice://transcript", { mode: voice.mode, text: voice.said, ms: 142 }), 150);
         return null;
       case "llm_compose":
+        if (String(a.req.system).startsWith("You estimate"))
+          return new Promise((resolve) =>
+            setTimeout(() => resolve(JSON.stringify({ percent: 20 + Math.floor(Math.random() * 60), step: "Adding the 403 guard test", title: "Cancelled-tier 403" })), 400),
+          );
         if (String(a.req.system).startsWith("You review"))
           return new Promise((resolve) =>
             setTimeout(() => resolve("Makes the cancelled-tier guard return 403 instead of 200 and adds an e2e test for it. The old 200 path is deleted, so check that no client relies on it."), 600),

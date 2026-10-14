@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronRight, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
@@ -7,7 +8,38 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useCallback, useState } from "react";
-import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+
+/** Percent done of a working agent, from the progress estimates. */
+function PanePercent({ pane }: { pane: Pane }) {
+  const percent = useProgress((s) => s.byPane[pane.id]?.percent);
+  if (pane.provider === "shell" || percent == null || pane.status === "idle") return null;
+  return <span className={cn("font-mono text-[10px]", !pane.worktree && "ml-auto", percent === 100 ? "text-success" : "text-fg-subtle")}>{percent}%</span>;
+}
+
+/** Opens the sessions overview; shows how many agents are working, with their average progress. */
+function SessionsEntry() {
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  const byPane = useProgress((s) => s.byPane);
+  const working = workspaces.flatMap((w) => w.panes).filter((p) => p.provider !== "shell" && p.status === "working");
+  const known = working.map((p) => byPane[p.id]?.percent).filter((n): n is number => n != null);
+  const average = known.length ? Math.round(known.reduce((a, b) => a + b, 0) / known.length) : null;
+  return (
+    <button
+      onClick={() => execute({ type: "ui.overlay", overlay: "progress" })}
+      title={`Session progress (${keysFor({ type: "ui.overlay", overlay: "progress" })})`}
+      className="mx-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-fg-muted hover:bg-hover hover:text-fg"
+    >
+      <Activity size={14} />
+      <span className="flex-1">Sessions</span>
+      {working.length > 0 && (
+        <span className="font-mono text-[11px] text-fg-subtle">
+          {working.length} working{average !== null && ` · ${average}%`}
+        </span>
+      )}
+    </button>
+  );
+}
 
 /** Opens the review inbox; the count is finished work waiting in this workspace. */
 function ReviewEntry() {
@@ -89,6 +121,7 @@ export function Sidebar() {
                     {pane.worktree && (
                       <span className="ml-auto truncate font-mono text-[10px] text-fg-subtle">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
                     )}
+                    <PanePercent pane={pane} />
                   </button>
                 ))}
             </div>
@@ -96,6 +129,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      <SessionsEntry />
       <ReviewEntry />
       {menu && menuWorkspace && <WorkspaceMenu ws={menuWorkspace} x={menu.x} y={menu.y} onClose={closeMenu} />}
       <ActivityFeed />

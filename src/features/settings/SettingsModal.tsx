@@ -298,6 +298,30 @@ function DefaultAgentSetting() {
   );
 }
 
+/** How often the LLM re-estimates working agents' progress. */
+function ProgressSettings() {
+  const { progressConfig, setProgressConfig } = useWorkspaces();
+  return (
+    <Section title="Session progress">
+      <label className="flex items-center gap-2 text-[13px] text-fg">
+        <input type="checkbox" checked={progressConfig.enabled ?? true} onChange={(e) => setProgressConfig({ enabled: e.target.checked })} />
+        Estimate how far working agents are, every
+        <select
+          value={progressConfig.intervalSec ?? 60}
+          onChange={(e) => setProgressConfig({ intervalSec: Number(e.target.value) })}
+          className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+        >
+          <option value={30}>30 seconds</option>
+          <option value={60}>minute</option>
+          <option value={120}>2 minutes</option>
+          <option value={300}>5 minutes</option>
+        </select>
+      </label>
+      <p className="text-xs text-fg-muted">Uses the prompt writer LLM below. Agents whose output hasn't changed aren't re-checked.</p>
+    </Section>
+  );
+}
+
 /** What the review inbox does on its own when an agent finishes. */
 function ReviewSettings() {
   const { reviewConfig, setReviewConfig } = useWorkspaces();
@@ -381,6 +405,7 @@ export function SettingsModal() {
         </header>
         <DefaultAgentSetting />
         <ReviewSettings />
+        <ProgressSettings />
         <ModelSettings />
         <VoiceSettings />
       </div>

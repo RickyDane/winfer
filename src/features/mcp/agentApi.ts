@@ -10,6 +10,7 @@ import { reportStatus } from "@/features/status/agentStatus";
 import { pasteText, readTerminal, sendText, startDetached } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
+import { setTask } from "@/features/progress/progress";
 
 interface Call {
   id: string;
@@ -65,7 +66,10 @@ export async function runTool(call: Call): Promise<string> {
       if (!text) throw new ToolError("text is empty");
       if (text.includes("\n")) pasteText(pane.id, text);
       else sendText(pane.id, text);
-      if (a.submit !== false) sendText(pane.id, "\r");
+      if (a.submit !== false) {
+        sendText(pane.id, "\r");
+        setTask(pane.id, text);
+      }
       logActivity(ws.id, `${describe(ws, self)} → ${describe(ws, pane)}: ${text.split("\n")[0].slice(0, 80)}`, self.provider);
       return `Sent to ${describe(ws, pane)}.`;
     }
