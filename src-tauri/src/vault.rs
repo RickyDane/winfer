@@ -61,8 +61,39 @@ mod values {
     pub fn delete(service: &str, key: &str) -> Result<(), String> {
         match entry(service, key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            #[cfg(target_os = "macos")]
+            Err(e) => delete_foreign(service, key).map_err(|_| e.to_string()),
+            #[cfg(not(target_os = "macos"))]
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// An item another build of winfer created (each dev build or re-signed release is a
+    /// different app to the keychain) refuses SecItemDelete with "Invalid attempt to change
+    /// the owner of this item". The legacy SecKeychainItemDelete still removes it, the way
+    /// Keychain Access and `security delete-generic-password` do, without reading the value.
+    #[cfg(target_os = "macos")]
+    fn delete_foreign(service: &str, key: &str) -> Result<(), ()> {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Reference, SearchResult};
+        let found = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(key)
+            .load_refs(true)
+            .search()
+            .map_err(|_| ())?;
+        for result in found {
+            if let SearchResult::Ref(Reference::KeychainItem(item)) = result {
+                item.delete();
+            }
+        }
+        // SecKeychainItemDelete's status isn't returned, so check the item is gone.
+        let left = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(key)
+            .search();
+        if left.is_ok_and(|r| !r.is_empty()) { Err(()) } else { Ok(()) }
     }
 }
 

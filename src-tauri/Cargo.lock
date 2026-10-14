@@ -6242,6 +6242,7 @@ dependencies = [
  "portable-pty",
  "rand 0.10.3",
  "rusqlite",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2 0.11.1",
