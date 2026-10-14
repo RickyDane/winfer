@@ -104,7 +104,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] After a Claude Code pane in winfer answers once, a ring with the Claude icon appears in the title bar; your own Claude status line still shows in the pane.
 - [ ] After a Codex turn, a Codex ring appears (read from ~/.codex/sessions). Rings drain with use: green, amber under 30% left, red under 10%.
 - [ ] Click the rings: 5-hour and weekly bars per agent, reset times, "at this pace runs out …" once there's ≥15 min of history; OpenCode shows today's tokens and cost.
-- [ ] The New menu shows "% left" next to Claude Code / Codex; pane headers show the ring around the agent icon.
+- [ ] The New menu shows "% left" next to Claude Code / Codex; pane headers show only the context bar, not the usage limits.
 - [ ] Crossing 80% / 95% used shows a toast (native notification when winfer is in the background); at 100% the toast offers "Continue in Codex" (or the agent with most room), which opens it next to the pane in the same worktree with the task and last output.
 
 - [ ] Context: Claude Code, Codex and OpenCode pane headers show a small bar with how full the context window is (number hidden in narrow panes; tooltip "84k of 200k tokens"); amber from 60%, red from 85%. Claude updates with its status line, Codex after each turn (and every 30 s while working), OpenCode 2.x every 20 s (from its session database).

@@ -13,8 +13,7 @@ import { useStarting } from "./xtermRegistry";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
-import { ContextMeter, UsageRing } from "@/features/usage/UsageMeter";
-import { tightest, useUsage } from "@/features/usage/usage";
+import { ContextMeter } from "@/features/usage/UsageMeter";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -51,7 +50,6 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const progress = useProgress((s) => s.byPane[pane.id]);
   const showProgress = pane.provider !== "shell" && (pane.status === "working" || pane.status === "needs-input" || progress?.percent != null);
   const starting = useStarting((s) => s[pane.id]);
-  const hasUsage = useUsage((s) => tightest(s.snapshots[pane.provider]) !== null);
   const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
   const [isNew] = useState(() => !seen.has(pane.id));
   seen.add(pane.id);
@@ -79,7 +77,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
         )}
         <span className="min-w-3 font-mono text-[11px] text-fg-subtle">{index}</span>
         <StatusDot status={pane.status} />
-        {hasUsage ? <UsageRing provider={pane.provider} size={20} /> : <ProviderIcon provider={pane.provider} />}
+        <ProviderIcon provider={pane.provider} />
         {workspaceName && (
           <span className="max-w-32 shrink-0 truncate rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium text-fg-muted" title={`Workspace ${workspaceName}`}>
             {workspaceName}
