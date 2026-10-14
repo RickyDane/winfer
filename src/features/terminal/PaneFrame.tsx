@@ -30,9 +30,11 @@ interface Props {
   focused: boolean;
   zoomed: boolean;
   onFocus: () => void;
+  /** Shown in the overview, where panes from every workspace sit side by side. */
+  workspaceName?: string;
 }
 
-export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
+export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName }: Props) {
   const target = { id: pane.id };
   const searching = useWorkspaces((s) => s.searchPaneId === pane.id);
   const beingDragged = useDrag((s) => s.paneId === pane.id);
@@ -62,6 +64,11 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
         <span className="min-w-3 font-mono text-[11px] text-fg-subtle">{index}</span>
         <StatusDot status={pane.status} />
         <ProviderIcon provider={pane.provider} />
+        {workspaceName && (
+          <span className="max-w-32 shrink-0 truncate rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium text-fg-muted" title={`Workspace ${workspaceName}`}>
+            {workspaceName}
+          </span>
+        )}
         <span className="flex-1 truncate font-mono text-xs text-fg-muted">{pane.title}</span>
         {showProgress && progress?.percent != null && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">

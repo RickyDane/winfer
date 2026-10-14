@@ -1,10 +1,12 @@
+import { Overview } from "@/features/overview/Overview";
 import { SessionsOverview } from "@/features/progress/SessionsOverview";
 import { startProgressTracking } from "@/features/progress/progress";
 import { ReviewInbox } from "@/features/review/ReviewInbox";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Mic, PanelLeft, PanelRight } from "lucide-react";
+import { Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
+import { execute } from "@/commands/bus";
 import { BrowserPanel, BrowserResizer } from "@/features/browser/BrowserPanel";
 import { NewPaneMenu } from "@/features/panes/NewPaneMenu";
 import { CheatSheet } from "@/features/palette/CheatSheet";
@@ -18,7 +20,7 @@ import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
-import { keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
+import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
@@ -34,18 +36,48 @@ function TitleBar() {
   const workspace = useActiveWorkspace();
   if (!workspace) return null;
   return (
-    // pl-20 leaves room for the macOS traffic lights (titleBarStyle: Overlay).
-    <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pr-3 pl-20 text-fg-subtle">
+    // On macOS the window controls (traffic lights) overlay the title bar's left edge
+    // (titleBarStyle: Overlay); Windows draws its own title bar above, so no gap there.
+    <div data-tauri-drag-region className={cn("flex h-10 shrink-0 items-center gap-2 pr-3 text-fg-subtle", IS_MAC ? "pl-20" : "pl-2")}>
       <button onClick={toggleSidebar} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle sidebar (${keysFor({ type: "ui.toggleSidebar" })})`}>
         <PanelLeft size={15} />
       </button>
-      <span data-tauri-drag-region className="flex-1 text-center text-xs text-fg-muted">
-        {workspace.name}
-      </span>
+      <div data-tauri-drag-region className="flex flex-1 justify-center">
+        <ViewTabs workspace={workspace.name} />
+      </div>
       <NewPaneMenu />
       <MicButton />
       <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
         <PanelRight size={15} />
+      </button>
+    </div>
+  );
+}
+
+/** Title bar tabs: the active workspace's tiles, or the overview of every workspace's sessions. */
+function ViewTabs({ workspace }: { workspace: string }) {
+  const view = useWorkspaces((s) => s.view);
+  const sessions = useWorkspaces((s) => s.workspaces).flatMap((w) => w.panes);
+  const waiting = sessions.filter((p) => p.status === "needs-input").length;
+  const tab = (active: boolean) =>
+    cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
+  return (
+    <div role="tablist" className="flex items-center gap-0.5 rounded-lg border border-border bg-panel p-0.5">
+      <button role="tab" aria-selected={view === "workspace"} onClick={() => execute({ type: "ui.view", view: "workspace" })} className={tab(view === "workspace")}>
+        <LayoutGrid size={12} />
+        <span className="max-w-48 truncate">{workspace}</span>
+      </button>
+      <button
+        role="tab"
+        aria-selected={view === "overview"}
+        onClick={() => execute({ type: "ui.view", view: "overview" })}
+        className={tab(view === "overview")}
+        title={`All workspaces and sessions (${keysFor({ type: "ui.view", view: "toggle" })})`}
+      >
+        <Layers size={12} />
+        Overview
+        <span className="font-mono text-[10px] text-fg-subtle">{sessions.length}</span>
+        {waiting > 0 && <span className="size-1.5 rounded-full bg-warning" title={`${waiting} waiting for you`} />}
       </button>
     </div>
   );
@@ -86,7 +118,7 @@ function EmptyWorkspace() {
 }
 
 export function AppShell() {
-  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme } = useWorkspaces();
+  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view } = useWorkspaces();
   useKeymap();
 
   useEffect(() => {
@@ -126,7 +158,9 @@ export function AppShell() {
       <main className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {sidebarOpen && <Sidebar />}
         <div className="flex min-h-0 min-w-0 flex-1">
-          {workspace.layout && zoomed ? (
+          {view === "overview" ? (
+            <Overview />
+          ) : workspace.layout && zoomed ? (
             renderLeaf(zoomed)
           ) : workspace.layout ? (
             <TileView

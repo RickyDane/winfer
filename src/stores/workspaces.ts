@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { fetchModels, fetchProviders, type ModelInfo, type Provider, type ProviderId } from "@/features/providers/providers";
-import { insertDwindle, leaves, removeLeaf, type LayoutNode } from "@/features/layout/tree";
+import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
 
 export type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
@@ -79,6 +79,10 @@ interface WorkspaceState {
   /** Browser panel width in px. */
   browserWidth: number;
   theme: Theme;
+  /** Main area: the active workspace's tiles, or the overview of every workspace's sessions. */
+  view: "workspace" | "overview";
+  /** The overview tiles every session of every workspace; same shape as a workspace's layout. */
+  overview: OverviewLayout;
   /** Review inbox: run tests / take screenshots automatically when an agent finishes. */
   reviewConfig: { autoTests?: boolean; screenshots?: boolean };
   /** LLM progress estimates for working agents. */
@@ -117,6 +121,8 @@ interface WorkspaceState {
   resetShortcuts: () => void;
   setBrowserWidth: (width: number) => void;
   toggleTheme: () => void;
+  setView: (view: "workspace" | "overview") => void;
+  updateOverview: (fn: (o: OverviewLayout) => Partial<OverviewLayout>) => void;
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setSearchPane: (id: string | null) => void;
@@ -140,6 +146,19 @@ const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null)
 
 export const DEFAULT_BROWSER_WIDTH = 420;
 
+export interface OverviewLayout {
+  layout: LayoutNode | null;
+  zoomedPaneId: string | null;
+  presetIndex: number;
+}
+
+const GRID = PRESETS.indexOf("grid");
+
+/** Every session, grouped by workspace, each workspace in its own tile order. */
+export function overviewOrder(workspaces: Workspace[]): string[] {
+  return workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : w.panes.map((p) => p.id)));
+}
+
 export type Theme = "dark" | "light";
 
 export const useWorkspaces = create<WorkspaceState>((set, get) => ({
@@ -162,6 +181,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
   theme: "dark",
+  view: "workspace",
+  overview: { layout: null, zoomedPaneId: null, presetIndex: GRID },
   reviewConfig: {},
   progressConfig: {},
   searchPaneId: null,
@@ -205,6 +226,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       theme: ui.theme ?? "dark",
+      view: ui.view ?? "workspace",
+      overview: { layout: ui.overviewLayout ?? null, zoomedPaneId: null, presetIndex: GRID },
       reviewConfig: ui.review ?? {},
       progressConfig: ui.progress ?? {},
     });
@@ -240,6 +263,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     // In a zoomed workspace the focused pane must be the visible one, so the zoom follows.
     set((s) => ({
       focusedPaneId: id,
+      overview: s.overview.zoomedPaneId && s.overview.zoomedPaneId !== id ? { ...s.overview, zoomedPaneId: id } : s.overview,
       workspaces: s.workspaces.map((w) =>
         w.zoomedPaneId && w.zoomedPaneId !== id && w.panes.some((p) => p.id === id) ? { ...w, zoomedPaneId: id } : w,
       ),
@@ -348,6 +372,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   resetShortcuts: () => set({ shortcuts: {} }),
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
   toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
+  setView: (view) => set({ view }),
+  updateOverview: (fn) => set((s) => ({ overview: { ...s.overview, ...fn(s.overview) } })),
   setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
   setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
   setSearchPane: (id) => set({ searchPaneId: id }),
@@ -381,6 +407,8 @@ interface Snapshot {
     shortcuts?: Record<string, string>;
     browserWidth?: number;
     theme?: Theme;
+    view?: "workspace" | "overview";
+    overviewLayout?: LayoutNode | null;
     review?: { autoTests?: boolean; screenshots?: boolean };
     progress?: { enabled?: boolean; intervalSec?: number };
   } | null;
@@ -401,7 +429,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, view: s.view, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 
@@ -426,3 +454,20 @@ export function defaultProviderId(s: Pick<WorkspaceState, "providers" | "default
   if (installed(s.defaultProvider)) return s.defaultProvider!;
   return installed("claude") ? "claude" : "shell";
 }
+
+/**
+ * Keeps the overview's tiles in step with the sessions: closed ones leave (other tiles keep
+ * their sizes); when sessions are added, the overview re-tiles with its current preset.
+ */
+useWorkspaces.subscribe((s, prev) => {
+  if (s.workspaces === prev.workspaces && s.overview === prev.overview) return;
+  const ids = overviewOrder(s.workspaces);
+  const current = s.overview.layout ? leaves(s.overview.layout) : [];
+  if (ids.length === current.length && ids.every((id) => current.includes(id))) return;
+  const added = ids.some((id) => !current.includes(id));
+  const layout = added
+    ? buildPreset(PRESETS[s.overview.presetIndex], ids)
+    : current.filter((id) => !ids.includes(id)).reduce<LayoutNode | null>((tree, id) => removeLeaf(tree, id), s.overview.layout);
+  const zoomedPaneId = s.overview.zoomedPaneId && ids.includes(s.overview.zoomedPaneId) ? s.overview.zoomedPaneId : null;
+  useWorkspaces.setState({ overview: { ...s.overview, layout, zoomedPaneId } });
+});

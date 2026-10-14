@@ -89,6 +89,8 @@ export type Command =
   | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
+  /** Title bar tabs: the active workspace or the overview of all workspaces' sessions. */
+  | { type: "ui.view"; view: "workspace" | "overview" | "toggle" }
   /** Speaks the open review cards' summaries ("what's done?"). */
   | { type: "review.readAloud" }
   | { type: "recipe.load"; id: string };
@@ -104,6 +106,12 @@ function resolveProvider(provider: ProviderId | "default"): ProviderId {
   return provider === "default" ? defaultProviderId() : provider;
 }
 
+/** Applies a layout change to what's on screen: the active workspace, or the overview. */
+function updateLayout(fn: (l: { layout: LayoutNode | null; zoomedPaneId: string | null; presetIndex: number }) => Partial<{ layout: LayoutNode | null; zoomedPaneId: string | null; presetIndex: number }>) {
+  if (store().view === "overview") store().updateOverview(fn);
+  else store().updateActive(fn);
+}
+
 /** Multi-line text goes in as one paste; a typed newline would make agents submit early. */
 function typeInto(paneId: string, text: string, submit: boolean) {
   if (text.includes("\n")) pasteText(paneId, text);
@@ -114,13 +122,14 @@ function typeInto(paneId: string, text: string, submit: boolean) {
   }
 }
 
-const paneById = (id: string | null) => (id ? active().panes.find((p) => p.id === id) : undefined);
+const paneById = (id: string | null) => (id ? store().workspaces.flatMap((w) => w.panes).find((p) => p.id === id) : undefined);
 
+/** "focused" and positions refer to the active workspace; ids work in any workspace (the overview). */
 export function resolvePane(target: PaneRef): string | null {
-  const ws = active();
-  const ids = ws.layout ? leaves(ws.layout) : [];
+  const layout = store().view === "overview" ? store().overview.layout : active().layout;
+  const ids = layout ? leaves(layout) : [];
   if (target === "focused") return store().focusedPaneId && ids.includes(store().focusedPaneId!) ? store().focusedPaneId : null;
-  if ("id" in target) return ids.includes(target.id) ? target.id : null;
+  if ("id" in target) return store().workspaces.some((w) => w.panes.some((p) => p.id === target.id)) ? target.id : null;
   return ids[target.index - 1] ?? null;
 }
 
@@ -245,8 +254,11 @@ export function execute(cmd: Command): void {
       return;
     }
     case "pane.focus": {
-      const id = resolvePane(cmd.target);
-      if (id) s.focusPane(id);
+      const pane = paneById(resolvePane(cmd.target));
+      if (!pane) return;
+      // The pane's workspace becomes active, so new panes and "focused" commands go there.
+      if (pane.workspaceId !== s.activeWorkspaceId) s.setActiveWorkspace(pane.workspaceId);
+      store().focusPane(pane.id);
       return;
     }
     case "pane.focusDir": {
@@ -262,20 +274,20 @@ export function execute(cmd: Command): void {
       return;
     }
     case "pane.move": {
-      s.updateActive((w) => ({ layout: w.layout && movePane(w.layout, cmd.paneId, cmd.targetId, cmd.side), zoomedPaneId: null }));
+      updateLayout((w) => ({ layout: w.layout && movePane(w.layout, cmd.paneId, cmd.targetId, cmd.side), zoomedPaneId: null }));
       s.focusPane(cmd.paneId);
       return;
     }
     case "pane.resize": {
       const id = resolvePane(cmd.target);
-      if (id) s.updateActive((w) => ({ layout: w.layout && resizePane(w.layout, id, cmd.axis, cmd.delta) }));
+      if (id) updateLayout((w) => ({ layout: w.layout && resizePane(w.layout, id, cmd.axis, cmd.delta) }));
       return;
     }
     case "pane.zoom": {
       const id = resolvePane(cmd.target);
       if (!id) return;
       s.focusPane(id);
-      s.updateActive((w) => ({ zoomedPaneId: w.zoomedPaneId === id ? null : id }));
+      updateLayout((w) => ({ zoomedPaneId: w.zoomedPaneId === id ? null : id }));
       return;
     }
     case "pane.sendText": {
@@ -317,10 +329,10 @@ export function execute(cmd: Command): void {
       return;
     }
     case "layout.equalize":
-      s.updateActive((w) => ({ layout: w.layout && equalize(w.layout) }));
+      updateLayout((w) => ({ layout: w.layout && equalize(w.layout) }));
       return;
     case "layout.preset":
-      s.updateActive((w) => {
+      updateLayout((w) => {
         const presetIndex = cmd.name === "next" ? (w.presetIndex + 1) % PRESETS.length : PRESETS.indexOf(cmd.name);
         return {
           presetIndex,
@@ -332,7 +344,10 @@ export function execute(cmd: Command): void {
     case "workspace.switch": {
       const target = cmd.target;
       const ws = "id" in target ? s.workspaces.find((w) => w.id === target.id) : s.workspaces[target.index - 1];
-      if (ws) s.setActiveWorkspace(ws.id);
+      if (ws) {
+        s.setActiveWorkspace(ws.id);
+        s.setView("workspace");
+      }
       return;
     }
     case "workspace.create":
@@ -377,6 +392,8 @@ export function execute(cmd: Command): void {
       return s.setSettings(!s.settingsOpen);
     case "recipe.load":
       return loadRecipe(cmd.id);
+    case "ui.view":
+      return s.setView(cmd.view === "toggle" ? (s.view === "overview" ? "workspace" : "overview") : cmd.view);
     case "ui.overlay":
       return s.setOverlay(s.overlay === cmd.overlay ? null : cmd.overlay);
   }

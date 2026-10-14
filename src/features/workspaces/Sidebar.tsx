@@ -59,7 +59,7 @@ function ReviewEntry() {
 }
 
 export function Sidebar() {
-  const { providers, workspaces, activeWorkspaceId, focusedPaneId, setActiveWorkspace, focusPane, theme, toggleTheme } = useWorkspaces();
+  const { providers, workspaces, activeWorkspaceId, focusedPaneId, theme, toggleTheme } = useWorkspaces();
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const menuWorkspace = menu && workspaces.find((w) => w.id === menu.id);
@@ -85,7 +85,7 @@ export function Sidebar() {
           return (
             <div key={ws.id} className="mb-0.5">
               <button
-                onClick={() => setActiveWorkspace(ws.id)}
+                onClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setMenu({ id: ws.id, x: e.clientX, y: e.clientY });
@@ -108,7 +108,7 @@ export function Sidebar() {
                 ws.panes.map((pane) => (
                   <button
                     key={pane.id}
-                    onClick={() => focusPane(pane.id)}
+                    onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-md py-1.5 pr-2 pl-5 text-left text-[13px]",
                       pane.id === focusedPaneId ? "bg-hover text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",

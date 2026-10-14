@@ -29,6 +29,10 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Drag the gap left of the browser panel to resize it (double-click resets); the width survives a restart.
 - [ ] Sun/moon button next to the gear switches light/dark mode, terminals included; the choice survives a restart.
 
+- [ ] Title bar tabs: "<workspace>" | "Overview" (⌘⇧O / Ctrl+Shift+Alt+O). Overview tiles every session of every workspace like a workspace (same headers, gutters, zoom, drag and drop, ⌘1–9), each labeled with its workspace; rearranging it doesn't touch the workspaces' own layouts.
+- [ ] In the overview, click a session from another workspace and press ⌘T → the new agent opens in that workspace. The bar on top messages / approves / interrupts all, working or waiting agents across workspaces.
+- [ ] Windows: the sidebar toggle sits at the left edge of the title bar (no gap for macOS window buttons).
+
 ## 3. Agents, status and worktrees
 - [ ] An agent opened in a git repo shows a branch badge (`claude-1`); its terminal starts with a "worktree …" line.
 - [ ] Send Claude a prompt: its status dot turns green (working), then blue (done) when it stops.

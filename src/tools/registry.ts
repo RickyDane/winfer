@@ -270,6 +270,18 @@ export const TOOLS: ToolDef[] = [
     palette: () => Object.entries(DIRECTIONS).map(([dir, label]) => ({ title: `Swap pane ${label.toLowerCase()}`, args: { dir } })),
   },
   {
+    id: "show_overview",
+    title: "Overview of all workspaces",
+    description: "Switch to the overview tab showing every workspace and all their sessions at once; or back to the workspace",
+    risk: "safe",
+    params: { back: { kind: "bool", ask: "Does the user want to leave the overview and go back to the workspace view?" } },
+    toCommands: (args) => [{ type: "ui.view", view: args.back ? "workspace" : "overview" }],
+    palette: () => [
+      { title: "Overview of all workspaces", args: {} },
+      { title: "Back to the workspace view", args: { back: true } },
+    ],
+  },
+  {
     id: "show_progress",
     title: "Session progress",
     description: "Show how far the working agents are with their tasks, in percent; answers “how far are the agents?”",
@@ -284,7 +296,7 @@ export const TOOLS: ToolDef[] = [
   {
     id: "review_work",
     title: "Review finished work",
-    description: "Show what finished agents did, ready to merge; answers “what's done?”, “anything to review?”",
+    description: "Open the review inbox: what finished agents did, ready to merge; answers “what's done?”, “anything to review?”",
     risk: "safe",
     params: { read_aloud: { kind: "bool", ask: "Did the user ask a question to be answered out loud, like “what's done?”" } },
     toCommands: (args) => [{ type: "ui.overlay", overlay: "review" }, ...(args.read_aloud ? [{ type: "review.readAloud" } as const] : [])],

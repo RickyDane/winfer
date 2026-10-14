@@ -85,3 +85,6 @@
 {"utterance": "read me what the agents finished", "expect": ["review_work"], "tags": ["review"]}
 {"utterance": "zeig mir, was fertig ist", "expect": ["review_work"], "tags": ["review"]}
 {"utterance": "show me the review inbox", "expect": ["review_work"], "tags": ["review"]}
+{"utterance": "show me all sessions across workspaces", "expect": ["show_overview"], "tags": ["overview"]}
+{"utterance": "open the overview", "expect": ["show_overview"], "tags": ["overview"]}
+{"utterance": "zeig mir die \u00dcbersicht aller Workspaces", "expect": ["show_overview"], "tags": ["overview"]}
