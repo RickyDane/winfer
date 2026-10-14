@@ -14,12 +14,29 @@ interface ChatGptState {
   decisionsUnavailable: boolean;
 }
 
+/** Accounts whose plan refused the Decisions API, so later sessions skip straight to the LLM. */
+const REFUSED_KEY = "winfer.decisionsRefused";
+const refused = (): string[] => {
+  try {
+    return JSON.parse(localStorage.getItem(REFUSED_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+};
+
 export const useChatGpt = create<ChatGptState>(() => ({ signedIn: false, email: null, models: [], decisionsUnavailable: false }));
+
+/** Records that this account's plan can't use the Decisions API. */
+export function markDecisionsUnavailable() {
+  const { email } = useChatGpt.getState();
+  useChatGpt.setState({ decisionsUnavailable: true });
+  if (email && !refused().includes(email)) localStorage.setItem(REFUSED_KEY, JSON.stringify([...refused(), email]));
+}
 
 export async function refreshChatGpt() {
   try {
     const status = await invoke<{ signedIn: boolean; email: string | null }>("chatgpt_status");
-    useChatGpt.setState(status);
+    useChatGpt.setState({ ...status, decisionsUnavailable: !!status.email && refused().includes(status.email) });
     if (status.signedIn && useChatGpt.getState().models.length === 0) void loadModels();
   } catch (err) {
     console.error("chatgpt_status failed", err);
@@ -29,7 +46,7 @@ export async function refreshChatGpt() {
 /** Opens the browser sign-in and waits for it to finish. */
 export async function signInWithChatGpt() {
   const status = await invoke<{ signedIn: boolean; email: string | null }>("chatgpt_sign_in");
-  useChatGpt.setState({ ...status, decisionsUnavailable: false });
+  useChatGpt.setState({ ...status, decisionsUnavailable: !!status.email && refused().includes(status.email) });
   void loadModels();
 }
 

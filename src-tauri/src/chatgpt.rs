@@ -438,6 +438,15 @@ pub const DEFAULT_MODEL: &str = "gpt-6-luna";
 /// Marker in errors when the plan can't use the Decisions API, so the UI can plan with the LLM.
 pub const DECISIONS_UNAVAILABLE: &str = "decisions-unavailable";
 
+/// Whether OpenAI refused the Decisions route for this sign-in (as opposed to a broken token).
+/// A ChatGPT plan token is rejected with 401 `rejected_by_access_enforcement` /
+/// `no_matching_rule` (seen Oct 2026), or the documented `subscription_sharing_route_not_supported`.
+fn decisions_refused(status: u16, code: &str, body: &Value) -> bool {
+    matches!(code, "subscription_sharing_route_not_supported" | "subscription_sharing_unsupported_capability" | "no_matching_rule")
+        || body["error"]["type"].as_str() == Some("rejected_by_access_enforcement")
+        || status == 404
+}
+
 /// A Decisions API call (`POST /v1/decisions`, GPT-6 Luna) with the user's ChatGPT plan.
 pub fn decide(body: &Value) -> Result<Value, String> {
     let token = access_token()?;
@@ -452,7 +461,7 @@ pub fn decide(body: &Value) -> Result<Value, String> {
     let json: Value = res.body_mut().read_json().unwrap_or(Value::Null);
     if !(200..300).contains(&status) {
         let (code, message) = api_error(status, &json);
-        if code == "subscription_sharing_route_not_supported" || code == "subscription_sharing_unsupported_capability" || status == 404 {
+        if decisions_refused(status, &code, &json) {
             return Err(format!("{DECISIONS_UNAVAILABLE}: {message}"));
         }
         return Err(message);
@@ -473,15 +482,20 @@ pub fn models() -> Result<Vec<String>, String> {
     if !(200..300).contains(&status) {
         return Err(api_error(status, &json).1);
     }
-    Ok(json["data"]
-        .as_array()
-        .map(|list| {
-            list.iter()
-                .filter(|m| m["visibility"].as_str().is_none_or(|v| v == "list"))
-                .filter_map(|m| m["id"].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default())
+    Ok(listed_models(&json))
+}
+
+/// Model ids from `/v1/models`: `{ models: [{ slug, visibility }] }` for a ChatGPT plan (or the
+/// API's `{ data: [{ id }] }`), without hidden ones.
+fn listed_models(json: &Value) -> Vec<String> {
+    let list = json["models"].as_array().or_else(|| json["data"].as_array());
+    list.map(|list| {
+        list.iter()
+            .filter(|m| m["visibility"].as_str().is_none_or(|v| v == "list"))
+            .filter_map(|m| m["slug"].as_str().or_else(|| m["id"].as_str()).map(str::to_string))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 #[derive(Debug, Serialize)]
@@ -598,6 +612,23 @@ mod tests {
         let failed = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}}\n";
         assert!(read_stream(failed.as_bytes()).unwrap_err().contains("limit"));
         assert!(read_stream("data: {\"type\":\"response.output_text.delta\",\"delta\":\"cut\"}\n".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn tells_a_refused_route_from_a_broken_token() {
+        let refused = json!({ "error": { "message": "Unauthorized", "type": "rejected_by_access_enforcement", "code": "no_matching_rule" } });
+        assert!(decisions_refused(401, "no_matching_rule", &refused));
+        let documented = json!({ "error": { "code": "subscription_sharing_route_not_supported" } });
+        assert!(decisions_refused(403, "subscription_sharing_route_not_supported", &documented));
+        let bad_token = json!({ "error": { "code": "subscription_sharing_invalid_user" } });
+        assert!(!decisions_refused(401, "subscription_sharing_invalid_user", &bad_token));
+    }
+
+    #[test]
+    fn lists_visible_models() {
+        let plan = json!({ "models": [{ "slug": "gpt-6-luna", "visibility": "list" }, { "slug": "gpt-reserve", "visibility": "hide" }] });
+        assert_eq!(listed_models(&plan), ["gpt-6-luna"]);
+        assert_eq!(listed_models(&json!({ "data": [{ "id": "gpt-6-sol" }] })), ["gpt-6-sol"]);
     }
 
     #[test]

@@ -5,7 +5,7 @@ import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, 
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
-import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
+import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="space-y-3">
@@ -205,9 +205,12 @@ function VoiceSettings() {
                       return `Connected in ${await invoke<number>("voice_test_connection")} ms`;
                     } catch (err) {
                       if (!String(err).includes("decisions-unavailable")) throw err;
-                      useChatGpt.setState({ decisionsUnavailable: true });
-                      return "Signed in. Your plan can't use the Decisions API, so every voice command is planned by the LLM.";
+                      markDecisionsUnavailable();
                     }
+                    // The plan can't use the Decisions API; voice commands go to the LLM, so check that.
+                    const started = performance.now();
+                    await invoke("llm_compose", { req: { provider: "chatgpt", model: "", system: "Reply with OK.", user: "ping" } });
+                    return `Connected in ${Math.round(performance.now() - started)} ms. Your plan can't use the Decisions API, so voice commands are planned by the LLM.`;
                   })
                 }
                 className="flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover disabled:opacity-40"

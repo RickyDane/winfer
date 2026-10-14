@@ -85,7 +85,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 ## 6. Voice
 - [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
 - [ ] Settings → Microphone lists your devices (MacBook Pro Microphone, AirPods…); pick one → Test → "Heard you on …" with a moving meter. "System default" follows macOS.
-- [ ] Settings → Voice → "Continue with ChatGPT" → the browser asks you to sign in, name the agent and allow winfer to use your plan → back in winfer: "Signed in as you@…". Test connection shows a latency, or says your plan can't use the Decisions API (then every command is planned by the LLM). Sign out → voice commands ask you to sign in again; signing in again skips the naming step. Declining in the browser → "You declined the sign-in."
+- [ ] Settings → Voice → "Continue with ChatGPT" → the browser asks you to sign in, name the agent and allow winfer to use your plan → back in winfer: "Signed in as you@…". Test connection shows a latency. On a ChatGPT plan it adds that the plan can't use the Decisions API (OpenAI refuses that route for plan tokens), so every voice command is planned by the LLM; this is remembered across restarts. The LLM model picker lists your account's models (gpt-6-luna, gpt-6-sol, …). Sign out → voice commands ask you to sign in again; signing in again skips the naming step. Declining in the browser → "You declined the sign-in."
 - [ ] Restart winfer → still signed in. After an hour of use the token renews silently (no sign-in prompt).
 - [ ] Hold ⌥Space, say "open two new instances with Claude and Codex", release → two panes open. (First use asks for microphone access.)
 - [ ] "Create a new Claude instance and tell it to create a Flappy Bird clone" → Claude opens with that prompt.

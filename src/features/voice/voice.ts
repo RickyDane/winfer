@@ -17,7 +17,7 @@ import { needsWriting, planPerRecipient, recipientsOf, splitTasks, writeInstruct
 import { buildRequest, fromApi, orderByMention, parseDecision, toApi, verdict, type ApiResponse, type Decision, type DecisionResult } from "./decision";
 import { isComplex, planWithLlm } from "./planner";
 import { llmEnabled } from "@/features/llm/llm";
-import { refreshChatGpt, useChatGpt } from "@/features/llm/chatgpt";
+import { markDecisionsUnavailable, refreshChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
 export type Mode = "command" | "dictation";
@@ -224,7 +224,7 @@ async function decide(transcript: string) {
   } catch (err) {
     // The plan doesn't cover the Decisions API: plan with the LLM from now on.
     if (String(err).includes("decisions-unavailable")) {
-      useChatGpt.setState({ decisionsUnavailable: true });
+      markDecisionsUnavailable();
       if (llmEnabled() && (await decideWithLlm(transcript, ctx))) return;
     }
     show("error", { message: String(err).replace(/^decisions-unavailable: /, "") }, 6000);
