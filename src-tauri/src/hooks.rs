@@ -2,7 +2,8 @@
 //!
 //! A tiny HTTP server on 127.0.0.1 (random port, random token) receives events from
 //! Claude Code hooks and the Codex `notify` program, and forwards them to the webview as
-//! `agent://status`. PTYs get `WINFER_HOOK` / `WINFER_TOKEN` so the hook commands can reach it.
+//! `agent://status`. PTYs get `WINFER_HOOK` / `WINFER_TOKEN` so the hook program
+//! (`winfer hook`, see [`run_hook`]) can reach it.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -47,21 +48,30 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
     }
 }
 
-/// curl ships with macOS and Windows 10+, so hooks need no helper binary.
-fn hook_command(provider: &str, event: &str, body_arg: &str) -> String {
-    format!(
-        "curl -s -m 2 -X POST -H \"X-Winfer-Token: $WINFER_TOKEN\" --data-binary {body_arg} \
-         \"http://$WINFER_HOOK/hook/{provider}/$WINFER_PANE_ID/{event}\" >/dev/null 2>&1 || true"
-    )
+/// The hook program: `winfer hook <provider> <event>`, run without a shell (Claude Code's
+/// exec form, Codex's `notify` argv). A shell command wouldn't work everywhere: on Windows,
+/// Claude Code runs hooks in PowerShell when Git Bash isn't installed, and Codex uses no shell.
+fn hook_argv(exe: &str, provider: &str, event: &str) -> Vec<String> {
+    vec![exe.into(), "hook".into(), provider.into(), event.into()]
 }
 
-fn claude_settings() -> Value {
-    let hook = |event: &str| json!([{ "hooks": [{ "type": "command", "command": hook_command("claude", event, "@-") }] }]);
+fn current_exe() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "winfer".into())
+}
+
+fn claude_settings(exe: &str) -> Value {
+    let command = |event: &str| {
+        let argv = hook_argv(exe, "claude", event);
+        json!({ "type": "command", "command": argv[0], "args": argv[1..] })
+    };
+    let hook = |event: &str| json!([{ "hooks": [command(event)] }]);
     json!({
         "hooks": {
             "SessionStart": hook("SessionStart"),
             "UserPromptSubmit": hook("UserPromptSubmit"),
-            "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": hook_command("claude", "PostToolUse", "@-") }] }],
+            "PostToolUse": [{ "matcher": "*", "hooks": [command("PostToolUse")] }],
             "Notification": hook("Notification"),
             "Stop": hook("Stop"),
         }
@@ -78,24 +88,67 @@ pub fn provider_args(provider_id: &str) -> Vec<String> {
             "--settings".into(),
             server.claude_settings.to_string_lossy().into_owned(),
         ],
-        // Codex runs `notify` with the event JSON as the last argument (through sh, so not on
-        // Windows).
-        "codex" if cfg!(not(windows)) => {
-            let script = hook_command("codex", "turn-complete", "\"$1\"");
-            vec![
-                "-c".into(),
-                format!("notify=['sh','-c','{script}','winfer']"),
-            ]
+        // Codex runs `notify` with the event JSON appended as the last argument.
+        "codex" => {
+            let argv: Vec<String> = hook_argv(&current_exe(), "codex", "turn-complete")
+                .iter()
+                .map(|a| toml_string(a))
+                .collect();
+            vec!["-c".into(), format!("notify=[{}]", argv.join(","))]
         }
         _ => Vec::new(),
     }
+}
+
+/// A TOML basic string (Windows paths are full of backslashes).
+fn toml_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Entry point for `winfer hook <provider> <event> [json]`: forwards the event JSON (the
+/// last argument, else stdin) to the running app. Always succeeds so it never blocks an agent.
+pub fn run_hook(args: &[String]) {
+    let [provider, event, rest @ ..] = args else {
+        return;
+    };
+    let body = match rest.last() {
+        Some(json) => json.clone(),
+        None => {
+            let mut body = String::new();
+            let _ = std::io::stdin().take(64 * 1024).read_to_string(&mut body);
+            body
+        }
+    };
+    let var = |k: &str| std::env::var(k).unwrap_or_default();
+    send_hook(
+        &var("WINFER_HOOK"),
+        &var("WINFER_TOKEN"),
+        &var("WINFER_PANE_ID"),
+        provider,
+        event,
+        body,
+    );
+}
+
+fn send_hook(hook: &str, token: &str, pane_id: &str, provider: &str, event: &str, body: String) {
+    if hook.is_empty() || pane_id.is_empty() {
+        return;
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(2)))
+        .build()
+        .into();
+    let _ = agent
+        .post(&format!("http://{hook}/hook/{provider}/{pane_id}/{event}"))
+        .header("X-Winfer-Token", token)
+        .send(body);
 }
 
 pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> {
     let settings_path = data_dir.join("claude-hooks.json");
     std::fs::write(
         &settings_path,
-        serde_json::to_vec_pretty(&claude_settings())?,
+        serde_json::to_vec_pretty(&claude_settings(&current_exe()))?,
     )?;
 
     let token = format!("{:032x}", rand::random::<u128>());
@@ -237,10 +290,9 @@ mod tests {
         assert_eq!(denied.status(), 401);
     }
 
-    /// Runs the real hook commands through `sh` + curl against the server.
-    #[cfg(unix)]
+    /// Sends hook events the way `winfer hook` does.
     #[test]
-    fn hook_commands_reach_the_server() {
+    fn hooks_reach_the_server() {
         let (tx, rx) = std::sync::mpsc::channel();
         let addr = serve(
             "secret".into(),
@@ -251,25 +303,10 @@ mod tests {
             },
         )
         .unwrap();
-        let run = |script: &str, token: &str, args: &[&str]| {
-            std::process::Command::new("sh")
-                .args(["-c", script, "winfer"])
-                .args(args)
-                .env("WINFER_HOOK", &addr)
-                .env("WINFER_TOKEN", token)
-                .env("WINFER_PANE_ID", "p-1")
-                .stdin(std::process::Stdio::null())
-                .status()
-                .unwrap();
-        };
         let recv = || rx.recv_timeout(std::time::Duration::from_secs(5));
 
-        // Claude: JSON on stdin.
-        let claude = format!(
-            "echo '{{\"message\":\"Claude needs your permission\"}}' | {}",
-            hook_command("claude", "Notification", "@-")
-        );
-        run(&claude, "secret", &[]);
+        let body = r#"{"message":"Claude needs your permission"}"#.to_string();
+        send_hook(&addr, "secret", "p-1", "claude", "Notification", body);
         let event = recv().unwrap();
         assert_eq!(
             (event.pane_id.as_str(), event.status),
@@ -280,22 +317,19 @@ mod tests {
             Some("Claude needs your permission")
         );
 
-        // Codex: JSON as the last argument.
-        run(
-            &hook_command("codex", "turn-complete", "\"$1\""),
-            "secret",
-            &[r#"{"type":"agent-turn-complete"}"#],
-        );
+        let body = r#"{"type":"agent-turn-complete"}"#.to_string();
+        send_hook(&addr, "secret", "p-1", "codex", "turn-complete", body);
         assert_eq!(recv().unwrap().status, "done");
 
         // Wrong token is rejected.
-        run(&hook_command("claude", "Stop", "@-"), "wrong", &[]);
+        send_hook(&addr, "wrong", "p-1", "claude", "Stop", String::new());
         assert!(recv().is_err());
     }
 
     #[test]
-    fn claude_settings_wire_every_event() {
-        let settings = claude_settings();
+    fn claude_settings_run_winfer_without_a_shell() {
+        let exe = r"C:\Program Files\winfer\winfer.exe";
+        let settings = claude_settings(exe);
         for event in [
             "SessionStart",
             "UserPromptSubmit",
@@ -303,13 +337,17 @@ mod tests {
             "Notification",
             "Stop",
         ] {
-            let command = settings["hooks"][event][0]["hooks"][0]["command"]
-                .as_str()
-                .unwrap();
-            assert!(
-                command.contains(&format!("/hook/claude/$WINFER_PANE_ID/{event}")),
-                "{event}: {command}"
-            );
+            let hook = &settings["hooks"][event][0]["hooks"][0];
+            assert_eq!(hook["command"], exe, "{event}");
+            assert_eq!(hook["args"], json!(["hook", "claude", event]), "{event}");
         }
+    }
+
+    #[test]
+    fn toml_strings_keep_windows_paths() {
+        assert_eq!(
+            toml_string(r#"C:\a "b"\winfer.exe"#),
+            r#""C:\\a \"b\"\\winfer.exe""#
+        );
     }
 }

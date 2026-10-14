@@ -237,17 +237,9 @@ pub fn is_installed(provider: &Provider) -> bool {
 pub fn providers_list() -> Vec<ProviderInfo> {
     all()
         .iter()
-        .map(|p| {
-            let mut provider = p.clone();
-            // Codex's notify hook runs through `sh`, which Windows doesn't have: there, Codex
-            // is tracked by its output like agents without hooks.
-            if cfg!(windows) && provider.id == "codex" {
-                provider.status_hooks = false;
-            }
-            ProviderInfo {
-                installed: is_installed(p),
-                provider,
-            }
+        .map(|p| ProviderInfo {
+            installed: is_installed(p),
+            provider: p.clone(),
         })
         .collect()
 }

@@ -21,6 +21,11 @@ pub fn run_mcp_stdio() {
     mcp::run_stdio();
 }
 
+/// `winfer hook <provider> <event> [json]`: forwards an agent hook event to the running app.
+pub fn run_hook(args: &[String]) {
+    hooks::run_hook(args);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Release builds abort on panic with no console to print to (especially on Windows), so the
 /// message goes to `crash.log` in the app data folder for bug reports.
