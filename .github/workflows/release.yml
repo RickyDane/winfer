@@ -118,7 +118,7 @@ jobs:
           args: --target ${{ matrix.target }}
           # The updater-json job writes it once every bundle is up; three jobs merging into
           # one file at once could drop a platform.
-          uploadUpdaterJson: false
+          includeUpdaterJson: false
 
   # latest.json is what installed apps poll (releases/latest/download/latest.json): the newest
   # version and, per platform, the signed bundle's URL and signature.
