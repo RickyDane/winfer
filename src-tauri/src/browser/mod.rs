@@ -357,12 +357,17 @@ pub fn kill_orphans(app: &AppHandle) {
 
 /// Playwright MCP server attached to the workspace browser.
 pub fn playwright_server(cdp_url: &str) -> crate::mcp::Server {
+    let npx_args = ["-y", "@playwright/mcp@latest", "--cdp-endpoint", cdp_url].map(String::from);
+    // npx is a .cmd shim on Windows, which agents can only start through cmd.
+    let (command, args) = if cfg!(windows) {
+        ("cmd", [vec!["/c".into(), "npx".into()], npx_args.to_vec()].concat())
+    } else {
+        ("npx", npx_args.to_vec())
+    };
     crate::mcp::Server {
         name: "winfer-browser",
-        command: "npx".into(),
-        args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", cdp_url]
-            .map(String::from)
-            .to_vec(),
+        command: command.into(),
+        args,
         env: Vec::new(),
     }
 }

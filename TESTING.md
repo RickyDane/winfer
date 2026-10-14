@@ -64,6 +64,11 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.
 - [ ] Optional: `CF_ACCOUNT_ID=… CF_API_TOKEN=… pnpm eval:voice` reports accuracy (target ≥ 90%) and latency.
 
+## 7. Windows
+- [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.
+- [ ] Shortcuts use Ctrl+Shift (Ctrl+Shift+T new pane, Ctrl+Shift+K palette, Ctrl+Shift+/ shortcuts); tooltips and the empty screen show the same keys.
+- [ ] Hold Alt+Space to talk; if another app owns it, Settings says so and the mic button still works.
+
 ## Known gaps
 - Unsigned build; no auto-update yet.
 - Windows untested; status hooks there are unlikely to work yet.

@@ -147,7 +147,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<CommandBui
                 .into_iter()
                 .chain(cdp_url.map(browser::playwright_server))
                 .collect();
-            let mut cmd = CommandBuilder::new(command);
+            let program = crate::env::find_command(command)
+                .ok_or_else(|| format!("{} isn't installed (no `{command}` on PATH)", provider.name))?;
+            let mut cmd = CommandBuilder::new(program);
             cmd.args(agent_args(
                 provider,
                 mcp::agent_args(&provider.id, &servers),

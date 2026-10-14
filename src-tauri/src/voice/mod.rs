@@ -42,6 +42,8 @@ pub struct Voice {
     recording: Mutex<Option<(Mode, Instant, String)>>,
     transcribing: AtomicBool,
     config: Mutex<Config>,
+    /// Why the global push-to-talk keys couldn't be registered, shown in Settings.
+    shortcut_error: Mutex<Option<String>>,
 }
 
 impl Voice {
@@ -58,6 +60,7 @@ impl Voice {
                 language: "en".into(),
                 input_device: None,
             }),
+            shortcut_error: Mutex::new(None),
         }
     }
 }
@@ -203,8 +206,23 @@ pub fn stop(app: &AppHandle) {
     });
 }
 
-/// Registers ⌥Space / ⌥⇧Space as global push-to-talk shortcuts.
-pub fn register_shortcuts(app: &AppHandle) -> Result<(), String> {
+const COMMAND_KEYS: &str = if cfg!(target_os = "macos") { "⌥Space" } else { "Alt+Space" };
+const DICTATION_KEYS: &str = if cfg!(target_os = "macos") {
+    "⌥⇧Space"
+} else {
+    "Alt+Shift+Space"
+};
+
+/// Registers the global push-to-talk shortcuts; a failure is kept for Settings to show.
+pub fn register_shortcuts(app: &AppHandle) {
+    if let Err(err) = try_register_shortcuts(app) {
+        eprintln!("voice shortcuts unavailable: {err}");
+        *app.state::<Voice>().shortcut_error.lock().unwrap() = Some(err);
+    }
+}
+
+/// Registers ⌥Space / ⌥⇧Space (Alt+Space / Alt+Shift+Space) as global push-to-talk shortcuts.
+fn try_register_shortcuts(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{
         Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
     };
@@ -230,10 +248,10 @@ pub fn register_shortcuts(app: &AppHandle) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
     shortcuts
         .register(command)
-        .map_err(|e| format!("⌥Space is taken by another app: {e}"))?;
+        .map_err(|e| format!("{COMMAND_KEYS} is taken by another app ({e})."))?;
     shortcuts
         .register(dictation)
-        .map_err(|e| format!("⌥⇧Space is taken by another app: {e}"))?;
+        .map_err(|e| format!("{DICTATION_KEYS} is taken by another app ({e})."))?;
     Ok(())
 }
 
@@ -257,6 +275,7 @@ pub struct VoiceStatus {
     clef_model: String,
     credentials: bool,
     input_device: Option<String>,
+    shortcut_error: Option<String>,
 }
 
 #[tauri::command]
@@ -276,6 +295,7 @@ pub fn voice_status(app: AppHandle, voice: State<'_, Voice>) -> Result<VoiceStat
         clef_model: config.clef_model.clone(),
         credentials: cloud::load().is_some(),
         input_device: config.input_device.clone(),
+        shortcut_error: voice.shortcut_error.lock().unwrap().clone(),
     })
 }
 

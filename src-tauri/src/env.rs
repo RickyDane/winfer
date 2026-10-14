@@ -5,6 +5,7 @@
 //! We run the login shell once and capture its environment.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 static LOGIN_ENV: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -12,6 +13,22 @@ static LOGIN_ENV: OnceLock<HashMap<String, String>> = OnceLock::new();
 /// Environment of an interactive login shell, falling back to this process's env.
 pub fn login_env() -> &'static HashMap<String, String> {
     LOGIN_ENV.get_or_init(|| resolve().unwrap_or_else(|| std::env::vars().collect()))
+}
+
+/// The login PATH. Looked up case-insensitively: Windows spells it `Path`.
+pub fn path_var() -> String {
+    login_env()
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default()
+}
+
+/// Full path of a program on the login PATH. On Windows this also finds npm shims like
+/// `codex.cmd`, which `Command::new("codex")` would miss.
+pub fn find_command(command: &str) -> Option<PathBuf> {
+    let cwd = dirs::home_dir().unwrap_or_default();
+    which::which_in(command, Some(path_var()), cwd).ok()
 }
 
 /// The user's shell (used for the "shell" provider).

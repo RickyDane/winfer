@@ -136,6 +136,15 @@ export function bindingFor(cmd: Command): Binding | undefined {
   return BINDINGS.find((b) => typeof b.command !== "function" && JSON.stringify(b.command) === json);
 }
 
+/** Shortcut label for a command in this platform's notation ("⌘T" / "Ctrl+Shift+T"), or "". */
+export function keysFor(cmd: Command): string {
+  const binding = bindingFor(cmd);
+  return binding ? formatKeys(binding) : "";
+}
+
+/** Global push-to-talk keys (registered in src-tauri/src/voice/mod.rs). */
+export const VOICE_KEYS = IS_MAC ? { command: "⌥Space", dictation: "⌥⇧Space" } : { command: "Alt+Space", dictation: "Alt+Shift+Space" };
+
 /** Installs the global shortcut handler. Runs in capture phase so terminals never see app chords. */
 export function useKeymap() {
   useEffect(() => {

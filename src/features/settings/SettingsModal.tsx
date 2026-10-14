@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Download, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useWorkspaces } from "@/stores/workspaces";
+import { VOICE_KEYS } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { WORKERS_MODELS } from "@/features/voice/writer";
 
@@ -112,7 +113,10 @@ function VoiceSettings() {
   return (
     <>
       <Section title="Speech recognition (on this Mac)">
-        <p className="text-xs text-fg-muted">Hold ⌥Space to give a command, ⌥⇧Space to dictate into the focused pane. Audio never leaves your machine.</p>
+        <p className="text-xs text-fg-muted">
+          Hold {VOICE_KEYS.command} to give a command, {VOICE_KEYS.dictation} to dictate into the focused pane. Audio never leaves your machine.
+        </p>
+        {status.shortcutError && <p className="text-xs text-warning">{status.shortcutError} Use the mic button in the title bar instead.</p>}
         <label className="flex items-center gap-2 text-[13px] text-fg">
           Language
           <select

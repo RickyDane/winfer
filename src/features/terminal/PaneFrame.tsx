@@ -1,5 +1,6 @@
 import { ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import { execute } from "@/commands/bus";
+import { keysFor } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
@@ -89,11 +90,11 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
           </button>
         )}
         <PaneMenu pane={pane} />
-        <HeaderButton title={zoomed ? "Restore (⌘↩)" : "Zoom (⌘↩)"} onClick={() => execute({ type: "pane.zoom", target })}>
+        <HeaderButton title={`${zoomed ? "Restore" : "Zoom"} (${keysFor({ type: "pane.zoom", target: "focused" })})`} onClick={() => execute({ type: "pane.zoom", target })}>
           {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </HeaderButton>
         <HeaderButton
-          title="Split right (⌘D)"
+          title={`Split right (${keysFor({ type: "pane.split", dir: "row" })})`}
           onClick={() => {
             onFocus();
             execute({ type: "pane.split", dir: "row" });
@@ -101,7 +102,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus }: Props) {
         >
           <Plus size={14} />
         </HeaderButton>
-        <HeaderButton title="Close (⌘W)" onClick={() => execute({ type: "pane.close", target })}>
+        <HeaderButton title={`Close (${keysFor({ type: "pane.close", target: "focused" })})`} onClick={() => execute({ type: "pane.close", target })}>
           <X size={14} />
         </HeaderButton>
       </header>

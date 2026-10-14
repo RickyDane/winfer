@@ -33,6 +33,8 @@ export interface VoiceStatus {
   credentials: boolean;
   /** Chosen microphone; null follows the system default. */
   inputDevice: string | null;
+  /** Why the global push-to-talk keys couldn't be registered, if they couldn't. */
+  shortcutError: string | null;
 }
 
 interface VoiceState {

@@ -1,3 +1,4 @@
+import { keysFor } from "@/commands/keymap";
 import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
@@ -124,14 +125,14 @@ export function BrowserPanel() {
             onFocus={() => setEditing(true)}
             onBlur={() => setEditing(false)}
             onKeyDown={(e) => e.key === "Escape" && urlInput.current?.blur()}
-            placeholder="Search or enter address (⌘L)"
+            placeholder={`Search or enter address (${keysFor({ type: "browser.focusUrl" })})`}
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg-muted outline-none placeholder:text-fg-subtle"
           />
           <RotateCw size={12} className="cursor-pointer hover:text-fg" onClick={() => void history(0)} />
         </form>
         <button
-          title="Pick an element and send it to the agent (⌘⇧C)"
+          title={`Pick an element and send it to the agent (${keysFor({ type: "browser.pick" })})`}
           onClick={() => void togglePick()}
           className={cn("rounded p-1 hover:bg-hover hover:text-fg", picking ? "bg-accent-soft text-accent" : "text-fg-subtle")}
         >

@@ -205,6 +205,7 @@ mockIPC(
           clefModel: "clef-flash",
           credentials: true,
           inputDevice: null,
+          shortcutError: null,
         };
       case "voice_input_devices":
         return { devices: ["MacBook Pro Microphone", "AirPods Pro"], default: "MacBook Pro Microphone" };

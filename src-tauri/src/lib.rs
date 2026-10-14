@@ -53,9 +53,7 @@ pub fn run() {
             hooks::start(app.handle().clone(), &data_dir)?;
             browser::kill_orphans(app.handle());
             voice::preload(app.handle());
-            if let Err(err) = voice::register_shortcuts(app.handle()) {
-                eprintln!("voice shortcuts unavailable: {err}");
-            }
+            voice::register_shortcuts(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

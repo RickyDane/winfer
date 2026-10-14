@@ -130,7 +130,8 @@ fn run_with_timeout(
     timeout: std::time::Duration,
 ) -> Option<String> {
     use std::io::Read;
-    let mut child = std::process::Command::new(command)
+    let program = crate::env::find_command(command)?;
+    let mut child = std::process::Command::new(program)
         .args(args)
         .envs(login_env())
         .stdin(std::process::Stdio::null())
@@ -228,9 +229,7 @@ pub fn is_installed(provider: &Provider) -> bool {
     let Some(command) = &provider.command else {
         return true;
     };
-    let path = login_env().get("PATH").cloned().unwrap_or_default();
-    let cwd = dirs::home_dir().unwrap_or_default();
-    which::which_in(command, Some(path), cwd).is_ok()
+    crate::env::find_command(command).is_some()
 }
 
 #[tauri::command]

@@ -73,7 +73,8 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("winfer-llm-{:x}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let out = dir.join("answer.txt");
-    let mut cmd = std::process::Command::new("codex");
+    let codex = crate::env::find_command("codex").ok_or("Codex CLI isn't installed.")?;
+    let mut cmd = std::process::Command::new(codex);
     cmd.envs(login_env())
         .current_dir(&dir)
         .args(["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-o"])

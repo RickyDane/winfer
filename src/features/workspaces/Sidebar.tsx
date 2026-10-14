@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, Moon, Plus, Settings } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
+import { keysFor } from "@/commands/keymap";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { WorkspaceMenu } from "./WorkspaceMenu";
@@ -87,7 +88,7 @@ export function Sidebar() {
         <button className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Theme">
           <Moon size={14} />
         </button>
-        <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Settings (⌘,)">
+        <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title={`Settings (${keysFor({ type: "ui.settings" })})`}>
           <Settings size={14} />
         </button>
       </footer>

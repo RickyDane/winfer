@@ -14,7 +14,7 @@ import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
-import { useKeymap } from "@/commands/keymap";
+import { keysFor, useKeymap, VOICE_KEYS } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
@@ -32,7 +32,7 @@ function TitleBar() {
   return (
     // pl-20 leaves room for the macOS traffic lights (titleBarStyle: Overlay).
     <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pr-3 pl-20 text-fg-subtle">
-      <button onClick={toggleSidebar} className="rounded p-1 hover:bg-hover hover:text-fg" title="Toggle sidebar (⌘B)">
+      <button onClick={toggleSidebar} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle sidebar (${keysFor({ type: "ui.toggleSidebar" })})`}>
         <PanelLeft size={15} />
       </button>
       <span data-tauri-drag-region className="flex-1 text-center text-xs text-fg-muted">
@@ -40,16 +40,17 @@ function TitleBar() {
       </span>
       <NewPaneMenu />
       <MicButton />
-      <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title="Toggle browser (⌘⇧B)">
+      <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
         <PanelRight size={15} />
       </button>
     </div>
   );
 }
 
-/** Hold to talk (same as holding ⌥Space). */
+/** Hold to talk (same as holding the push-to-talk keys). */
 function MicButton() {
   const listening = useVoice((s) => s.phase === "listening");
+  const shortcutError = useVoice((s) => s.status?.shortcutError);
   return (
     <button
       onMouseDown={() => startListening()}
@@ -59,10 +60,10 @@ function MicButton() {
         "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs hover:bg-hover hover:text-fg",
         listening ? "border-accent text-accent" : "border-border",
       )}
-      title="Hold to talk (or hold ⌥Space anywhere; ⌥⇧Space to dictate)"
+      title={shortcutError ?? `Hold to talk (or hold ${VOICE_KEYS.command} anywhere; ${VOICE_KEYS.dictation} to dictate)`}
     >
       <Mic size={13} />
-      <span>⌥Space</span>
+      <span className={cn(shortcutError && "line-through")}>{VOICE_KEYS.command}</span>
     </button>
   );
 }
@@ -71,7 +72,10 @@ function EmptyWorkspace() {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-pane)] border border-dashed border-border text-fg-subtle">
       <span className="text-sm text-fg-muted">No agents running</span>
-      <span className="text-xs">⌘T new pane · ⌘⇧T pick provider · ⌘K commands · ⌘/ shortcuts</span>
+      <span className="text-xs">
+        {keysFor({ type: "pane.spawn", provider: "default" })} new pane · {keysFor({ type: "ui.palette", query: "New pane: " })} pick provider ·{" "}
+        {keysFor({ type: "ui.palette" })} commands · {keysFor({ type: "ui.cheatSheet" })} shortcuts
+      </span>
     </div>
   );
 }
