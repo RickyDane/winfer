@@ -6,8 +6,8 @@ import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
-import { WorkspaceMenu } from "./WorkspaceMenu";
-import { useCallback, useState } from "react";
+import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
+import { paneMenu, workspaceMenu } from "./sidebarMenus";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
@@ -87,9 +87,7 @@ function ReviewEntry() {
 
 export function Sidebar() {
   const { workspaces, activeWorkspaceId, focusedPaneId, theme, toggleTheme } = useWorkspaces();
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const closeMenu = useCallback(() => setMenu(null), []);
-  const menuWorkspace = menu && workspaces.find((w) => w.id === menu.id);
+  const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col rounded-[var(--radius-pane)] border border-border bg-panel">
@@ -113,10 +111,7 @@ export function Sidebar() {
             <div key={ws.id} className="mb-0.5">
               <button
                 onClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setMenu({ id: ws.id, x: e.clientX, y: e.clientY });
-                }}
+                onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
                 title={ws.rootDir}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
@@ -136,6 +131,7 @@ export function Sidebar() {
                   <button
                     key={pane.id}
                     onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
+                    onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane) })}
                     className={cn(
                       "relative flex w-full items-center gap-2 rounded-md py-1.5 pr-2 pl-5 text-left text-[13px]",
                       pane.id === focusedPaneId ? "bg-hover text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
@@ -167,7 +163,7 @@ export function Sidebar() {
         <History size={14} />
         <span className="flex-1">History</span>
       </button>
-      {menu && menuWorkspace && <WorkspaceMenu ws={menuWorkspace} x={menu.x} y={menu.y} onClose={closeMenu} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} title={menu.target.title} items={menu.target.items} onClose={closeMenu} />}
       <ActivityFeed />
       <footer className="flex items-center gap-2 border-t border-border px-4 py-3">
         <span className="flex size-6 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">

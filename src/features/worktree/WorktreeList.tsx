@@ -5,6 +5,8 @@ import { cn } from "@/lib/cn";
 import { logActivity, relativeTime } from "@/stores/activity";
 import { defaultProviderId, useWorkspaces, type Workspace } from "@/stores/workspaces";
 import { listWorktrees, removeWorktree, type ExistingWorktree } from "./worktree";
+import { ContextMenu, useContextMenu } from "@/components/ContextMenu";
+import { openInWorktree, worktreeMenu } from "@/features/workspaces/sidebarMenus";
 
 const REFRESH_MS = 20_000;
 
@@ -42,6 +44,7 @@ function WorktreeState({ wt }: { wt: ExistingWorktree }) {
  */
 export function WorktreeList({ workspace }: { workspace: Workspace }) {
   const [found, setFound] = useState<ExistingWorktree[]>([]);
+  const [menu, openMenu, closeMenu] = useContextMenu<ExistingWorktree>();
   const inUse = useWorkspaces((s) => new Set(s.workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : [])))).size);
 
   const refresh = useCallback(() => {
@@ -67,9 +70,7 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
   if (free.length === 0) return null;
 
   const open = (wt: ExistingWorktree) => {
-    const s = useWorkspaces.getState();
-    if (s.activeWorkspaceId !== workspace.id) s.setActiveWorkspace(workspace.id);
-    s.addPane(defaultProviderId(), { workspaceId: workspace.id, existingWorktree: wt.info });
+    openInWorktree(workspace, wt, defaultProviderId());
     logActivity(workspace.id, `Opened worktree ${wt.info.branch}`);
   };
 
@@ -93,9 +94,22 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="mt-1 mb-1 pl-5">
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          title={menu.target.info.path}
+          items={worktreeMenu(workspace, menu.target, () => void remove(menu.target))}
+          onClose={closeMenu}
+        />
+      )}
       <div className="px-0 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">Worktrees</div>
       {free.map((wt) => (
-        <div key={wt.info.path} className="group flex items-center gap-1 rounded-md pr-1 hover:bg-hover">
+        <div
+          key={wt.info.path}
+          onContextMenu={(e) => openMenu(e, wt)}
+          className="group flex items-center gap-1 rounded-md pr-1 hover:bg-hover"
+        >
           <button
             onClick={() => !wt.prunable && open(wt)}
             disabled={wt.prunable}

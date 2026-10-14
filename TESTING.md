@@ -8,7 +8,9 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 ## 1. Basics
 - [ ] App opens; window has the sidebar, a `home` workspace and the browser panel.
 - [ ] Sidebar **+** → pick a git repo folder → a new workspace appears and is selected.
-- [ ] Right-click a workspace → small menu (Open, Reveal folder, Remove workspace…); removing asks first.
+- [ ] Right-click a workspace → Open, New <default agent> here, Reveal, Copy path, Remove workspace… (asks first).
+- [ ] Right-click an agent in the sidebar → Focus, Zoom, Show in overview, Approve (when waiting), Interrupt, Restart agent, Change model…, Show changes / Open its review / Merge…, Reveal, Copy path/branch, Discard worktree…, Close; each works.
+- [ ] Right-click a worktree in the sidebar → Open <any installed agent> here / Open a shell here, Reveal, Copy path/branch, Remove worktree….
 - [ ] ⌘T opens Claude Code in that workspace (or a shell if Claude isn't installed).
 - [ ] "New" menu lists providers; uninstalled ones are greyed out.
 - [ ] Typing in a terminal works; colors, links (click) and copy/paste (⌘C/⌘V) work.
