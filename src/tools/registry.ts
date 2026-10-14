@@ -270,6 +270,24 @@ export const TOOLS: ToolDef[] = [
     palette: () => Object.entries(DIRECTIONS).map(([dir, label]) => ({ title: `Swap pane ${label.toLowerCase()}`, args: { dir } })),
   },
   {
+    id: "zoom_terminals",
+    title: "Terminal text size",
+    description: "Make the terminal text bigger or smaller, or reset its size (zoom in / zoom out)",
+    risk: "safe",
+    params: { change: { kind: "enum", ask: "Bigger, smaller, or back to normal?", options: () => ({ bigger: "Bigger", smaller: "Smaller", reset: "Normal size" }) } },
+    toCommands: (args) => {
+      const steps = args.change === "reset" ? 0 : 2;
+      return args.change === "reset"
+        ? [{ type: "terminal.zoom", delta: 0 }]
+        : Array.from({ length: steps }, () => ({ type: "terminal.zoom", delta: args.change === "smaller" ? -1 : 1 }) as const);
+    },
+    palette: () => [
+      { title: "Bigger terminal text", args: { change: "bigger" } },
+      { title: "Smaller terminal text", args: { change: "smaller" } },
+      { title: "Default terminal text size", args: { change: "reset" } },
+    ],
+  },
+  {
     id: "show_overview",
     title: "Overview of all workspaces",
     description: "Switch to the overview tab showing every workspace and all their sessions at once; or back to the workspace",

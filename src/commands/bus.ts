@@ -23,7 +23,7 @@ import { discardReviewed, mergeReviewed, readReviewsAloud } from "@/features/rev
 import { readProgressAloud, setTask } from "@/features/progress/progress";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
-import { defaultProviderId, providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
+import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, providerName, useWorkspaces, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 
 export type Direction = "left" | "right" | "up" | "down";
@@ -89,6 +89,8 @@ export type Command =
   | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
+  /** Terminal text size: bigger, smaller or back to the default. */
+  | { type: "terminal.zoom"; delta: 1 | -1 | 0 }
   /** Title bar tabs: the active workspace or the overview of all workspaces' sessions. */
   | { type: "ui.view"; view: "workspace" | "overview" | "toggle" }
   /** Speaks the open review cards' summaries ("what's done?"). */
@@ -314,6 +316,8 @@ export function execute(cmd: Command): void {
       return readReviewsAloud();
     case "progress.readAloud":
       return readProgressAloud();
+    case "terminal.zoom":
+      return s.setTerminalFontSize(cmd.delta === 0 ? DEFAULT_TERMINAL_FONT_SIZE : s.terminalFontSize + cmd.delta);
     case "pane.nextAttention": {
       const all = s.workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : []).map((id) => w.panes.find((p) => p.id === id)!));
       const rank = (p: (typeof all)[number]) => (p.status === "needs-input" ? 0 : p.unseen ? 1 : 2);

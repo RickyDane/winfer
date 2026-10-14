@@ -81,6 +81,8 @@ interface WorkspaceState {
   theme: Theme;
   /** Main area: the active workspace's tiles, or the overview of every workspace's sessions. */
   view: "workspace" | "overview";
+  /** Terminal font size in px (zoom with Mod+= / Mod+- / Mod+0 or Ctrl+wheel). */
+  terminalFontSize: number;
   /** The overview tiles every session of every workspace; same shape as a workspace's layout. */
   overview: OverviewLayout;
   /** Review inbox: run tests / take screenshots automatically when an agent finishes. */
@@ -122,6 +124,7 @@ interface WorkspaceState {
   setBrowserWidth: (width: number) => void;
   toggleTheme: () => void;
   setView: (view: "workspace" | "overview") => void;
+  setTerminalFontSize: (size: number) => void;
   updateOverview: (fn: (o: OverviewLayout) => Partial<OverviewLayout>) => void;
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
@@ -145,6 +148,9 @@ const updateWorkspace = (workspaces: Workspace[], id: string, fn: (w: Workspace)
 const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null);
 
 export const DEFAULT_BROWSER_WIDTH = 420;
+export const DEFAULT_TERMINAL_FONT_SIZE = 12.5;
+export const MIN_TERMINAL_FONT_SIZE = 8;
+export const MAX_TERMINAL_FONT_SIZE = 28;
 
 export interface OverviewLayout {
   layout: LayoutNode | null;
@@ -182,6 +188,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   browserWidth: DEFAULT_BROWSER_WIDTH,
   theme: "dark",
   view: "workspace",
+  terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   overview: { layout: null, zoomedPaneId: null, presetIndex: GRID },
   reviewConfig: {},
   progressConfig: {},
@@ -227,6 +234,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       theme: ui.theme ?? "dark",
       view: ui.view ?? "workspace",
+      terminalFontSize: ui.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
       overview: { layout: ui.overviewLayout ?? null, zoomedPaneId: null, presetIndex: GRID },
       reviewConfig: ui.review ?? {},
       progressConfig: ui.progress ?? {},
@@ -374,6 +382,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
   toggleTheme: () => set((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })),
   setView: (view) => set({ view }),
+  setTerminalFontSize: (size) =>
+    set({ terminalFontSize: Math.round(Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, size)) * 2) / 2 }),
   updateOverview: (fn) => set((s) => ({ overview: { ...s.overview, ...fn(s.overview) } })),
   setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
   setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
@@ -409,6 +419,7 @@ interface Snapshot {
     browserWidth?: number;
     theme?: Theme;
     view?: "workspace" | "overview";
+    terminalFontSize?: number;
     overviewLayout?: LayoutNode | null;
     review?: { autoTests?: boolean; screenshots?: boolean };
     progress?: { enabled?: boolean; intervalSec?: number };
@@ -430,7 +441,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, view: s.view, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 

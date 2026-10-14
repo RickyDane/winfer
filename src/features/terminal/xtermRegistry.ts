@@ -71,10 +71,15 @@ const LIGHT: ITheme = {
 
 const themeFor = (theme: "dark" | "light") => (theme === "light" ? LIGHT : DARK);
 
-// Recolor every live terminal when the app theme changes.
+// Recolor every live terminal when the app theme changes; refit them all when zoomed.
 useWorkspaces.subscribe((s, prev) => {
-  if (s.theme === prev.theme) return;
-  for (const entry of entries.values()) entry.term.options.theme = themeFor(s.theme);
+  if (s.theme !== prev.theme) for (const entry of entries.values()) entry.term.options.theme = themeFor(s.theme);
+  if (s.terminalFontSize !== prev.terminalFontSize) {
+    for (const entry of entries.values()) {
+      entry.term.options.fontSize = s.terminalFontSize;
+      scheduleFit(entry); // new rows/cols reach the agent through onResize
+    }
+  }
 });
 
 interface Entry {
@@ -114,7 +119,7 @@ export function startTerminalEvents() {
 function create(pane: Pane): Entry {
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace',
-    fontSize: 12.5,
+    fontSize: useWorkspaces.getState().terminalFontSize,
     lineHeight: 1.2,
     cursorBlink: true,
     scrollback: 10_000,
@@ -177,6 +182,22 @@ function create(pane: Pane): Entry {
   const host = document.createElement("div");
   host.style.width = "100%";
   host.style.height = "100%";
+  // Ctrl/⌘ + wheel (and trackpad pinch, which arrives as Ctrl + wheel) zooms every terminal.
+  let pinch = 0;
+  host.addEventListener(
+    "wheel",
+    (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pinch -= e.deltaY;
+      if (Math.abs(pinch) < 40) return;
+      const s = useWorkspaces.getState();
+      s.setTerminalFontSize(s.terminalFontSize + Math.sign(pinch) * 0.5);
+      pinch = 0;
+    },
+    { passive: false, capture: true },
+  );
 
   return { pane, term, fit, search, searchResults: { index: -1, count: 0 }, host, opened: false, spawned: false, exited: false, lastOutput: 0, decoder: new TextDecoder() };
 }

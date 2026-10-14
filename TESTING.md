@@ -25,6 +25,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Change the voice keys in the same sheet (Voice section) → holding the new keys records.
 - [ ] Settings → New panes → Default agent (or the ★ in the New menu): ⌘T and "open a new window" start that agent.
 - [ ] ⌘F searches a pane's scrollback (Enter / ⇧Enter to step).
+- [ ] ⌘= / ⌘- / ⌘0 (Ctrl+Shift+= / - / 0 on Windows), ⌘/Ctrl + scroll or pinch over a terminal, or Settings → Terminals → Text size change every terminal's text; agents re-wrap to the new width; the size survives a restart. "Make the terminal text bigger" works by voice.
 
 - [ ] Drag the gap left of the browser panel to resize it (double-click resets); the width survives a restart.
 - [ ] Sun/moon button next to the gear switches light/dark mode, terminals included; the choice survives a restart.

@@ -88,3 +88,6 @@
 {"utterance": "show me all sessions across workspaces", "expect": ["show_overview"], "tags": ["overview"]}
 {"utterance": "open the overview", "expect": ["show_overview"], "tags": ["overview"]}
 {"utterance": "zeig mir die \u00dcbersicht aller Workspaces", "expect": ["show_overview"], "tags": ["overview"]}
+{"utterance": "make the terminal text bigger", "expect": ["zoom_terminals"], "tags": ["zoom"]}
+{"utterance": "zoom out the terminals", "expect": ["zoom_terminals"], "tags": ["zoom"]}
+{"utterance": "mach die Schrift im Terminal gr\u00f6\u00dfer", "expect": ["zoom_terminals"], "tags": ["zoom"]}

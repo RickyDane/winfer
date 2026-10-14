@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Download, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { defaultProviderId, useWorkspaces } from "@/stores/workspaces";
-import { keysFor, voiceKeys } from "@/commands/keymap";
+import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
+import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { WORKERS_MODELS } from "@/features/voice/writer";
 
@@ -270,6 +270,35 @@ function VoiceSettings() {
   );
 }
 
+/** Text size of every terminal. */
+function TerminalSettings() {
+  const { terminalFontSize, setTerminalFontSize } = useWorkspaces();
+  return (
+    <Section title="Terminals">
+      <label className="flex items-center gap-3 text-[13px] text-fg">
+        Text size
+        <input
+          type="range"
+          min={MIN_TERMINAL_FONT_SIZE}
+          max={MAX_TERMINAL_FONT_SIZE}
+          step={0.5}
+          value={terminalFontSize}
+          onChange={(e) => setTerminalFontSize(Number(e.target.value))}
+          className="flex-1 accent-[var(--color-accent)]"
+        />
+        <span className="w-12 text-right font-mono text-xs text-fg-muted">{terminalFontSize}px</span>
+        <button onClick={() => setTerminalFontSize(DEFAULT_TERMINAL_FONT_SIZE)} className="rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg">
+          Reset
+        </button>
+      </label>
+      <p className="text-xs text-fg-muted">
+        Also {keysFor({ type: "terminal.zoom", delta: 1 })} / {keysFor({ type: "terminal.zoom", delta: -1 })} / {keysFor({ type: "terminal.zoom", delta: 0 })}, or{" "}
+        {IS_MAC ? "⌘" : "Ctrl"} + scroll (pinch on a trackpad) over a terminal.
+      </p>
+    </Section>
+  );
+}
+
 /** Which agent ⌘T, splits and "open a new window" start. */
 function DefaultAgentSetting() {
   const { providers, defaultProvider, setDefaultProvider } = useWorkspaces();
@@ -414,6 +443,7 @@ export function SettingsModal() {
             </button>
           </div>
         </Section>
+        <TerminalSettings />
         <DefaultAgentSetting />
         <ReviewSettings />
         <ProgressSettings />

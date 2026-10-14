@@ -73,6 +73,9 @@ const SPECS: BindingSpec[] = [
   { keys: "Mod+.", title: "Interrupt agent", group: "Panes", command: { type: "pane.interrupt", target: "focused" } },
   { keys: "Mod+F", title: "Search scrollback", group: "Panes", command: { type: "pane.search" } },
   { keys: "Mod+Enter", title: "Zoom pane", group: "Layout", command: { type: "pane.zoom", target: "focused" } },
+  { keys: "Mod+=", title: "Bigger terminal text", group: "Layout", repeat: true, command: { type: "terminal.zoom", delta: 1 } },
+  { keys: "Mod+-", title: "Smaller terminal text", group: "Layout", repeat: true, command: { type: "terminal.zoom", delta: -1 } },
+  { keys: "Mod+0", title: "Default terminal text size", group: "Layout", command: { type: "terminal.zoom", delta: 0 } },
   { keys: "Mod+Ctrl+=", title: "Equalize panes", group: "Layout", command: { type: "layout.equalize" } },
   { keys: "Mod+Ctrl+L", title: "Next layout preset", group: "Layout", command: { type: "layout.preset", name: "next" } },
   ...DIGITS.map(
