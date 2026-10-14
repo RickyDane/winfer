@@ -3,7 +3,7 @@
  * agent's task and recent output and estimates how far along it is, for the progress bars in
  * pane headers, the sidebar and the overview.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { llmCompose, llmEnabled } from "@/features/llm/llm";
 import { create } from "zustand";
 import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
 import { worktreeDiff } from "@/features/worktree/worktree";
@@ -105,9 +105,7 @@ export function estimateNow(paneId: string) {
 const lastEstimate = new Map<string, string>();
 
 export async function estimate(pane: Pane) {
-  const config = useWorkspaces.getState().voiceConfig;
-  const provider = config.writer ?? "workers";
-  if (provider === "off" || get(pane.id).estimating) return;
+  if (!llmEnabled() || get(pane.id).estimating) return;
   const progress = get(pane.id);
   // Without a task there's nothing to measure: a freshly started agent's welcome screen would
   // only get a made-up estimate.
@@ -135,7 +133,7 @@ export async function estimate(pane: Pane) {
 
   patch(pane.id, { estimating: true });
   try {
-    const answer = await invoke<string>("llm_compose", { req: { provider, model: config.writerModel ?? "", system: SYSTEM, user } });
+    const answer = await llmCompose(SYSTEM, user);
     const result = parseEstimate(answer);
     if (!result) throw new Error("no estimate in the answer");
     const current = get(pane.id);

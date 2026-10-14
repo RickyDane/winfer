@@ -3,6 +3,7 @@
  * summary, test results and a screenshot of its dev server — so the user can merge, discard or
  * send it back without visiting each pane.
  */
+import { llmCompose, llmEnabled } from "@/features/llm/llm";
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { readTerminal } from "@/features/terminal/xtermRegistry";
@@ -112,9 +113,7 @@ const SUMMARY_SYSTEM = [
 ].join(" ");
 
 async function summarize(review: Review, diff: string) {
-  const config = useWorkspaces.getState().voiceConfig;
-  const provider = config.writer ?? "workers";
-  if (provider === "off") return update(review.id, { summary: { state: "off" } });
+  if (!llmEnabled()) return update(review.id, { summary: { state: "off" } });
   update(review.id, { summary: { state: "loading" } });
   const user = [
     review.prompt && `Task: ${review.prompt}`,
@@ -125,7 +124,7 @@ async function summarize(review: Review, diff: string) {
     .filter(Boolean)
     .join("\n\n");
   try {
-    const text = await invoke<string>("llm_compose", { req: { provider, model: config.writerModel ?? "", system: SUMMARY_SYSTEM, user } });
+    const text = await llmCompose(SUMMARY_SYSTEM, user);
     update(review.id, { summary: { state: "done", value: text.trim() } });
   } catch (err) {
     update(review.id, { summary: { state: "error", error: String(err) } });

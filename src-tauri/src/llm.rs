@@ -1,128 +1,145 @@
-//! A text-writing LLM for voice "smart moves": turns what the user said (plus context) into the
-//! message an agent receives. Clef still decides which action runs; this only writes text.
+//! The LLM behind voice "smart moves": plans long or complex voice commands, turns what the user
+//! said into the message an agent receives, estimates progress and summarizes finished work.
 //!
-//! Providers: Cloudflare Workers AI (reuses the voice credentials) or OpenAI through the user's
-//! ChatGPT plan via the official Codex CLI (`codex exec`, which uses its own ChatGPT login).
+//! It runs the user's own coding-agent CLI headless, with its own login: Claude Code
+//! (`claude -p`, no tools, no settings or MCP servers) or Codex (`codex exec`, read-only and
+//! ephemeral). Nothing else is called.
 
-use std::time::Duration;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
 
 use crate::env::login_env;
-use crate::voice::cloud;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeRequest {
-    /// "workers" or "codex".
+    /// "claude" or "codex".
     provider: String,
-    /// Workers AI model id (e.g. "@cf/openai/gpt-oss-20b") or Codex model (empty = its default).
+    /// Model for the CLI (e.g. "sonnet", "gpt-5"); empty uses its default.
     #[serde(default)]
     model: String,
     system: String,
     user: String,
 }
 
-/// Pulls the text out of a Workers AI response (chat-completions or legacy `response` shape)
-/// and drops reasoning blocks some models emit.
-fn workers_text(result: &Value) -> Option<String> {
-    let text = result["choices"][0]["message"]["content"]
-        .as_str()
-        .or_else(|| result["response"].as_str())?;
-    let text = match (text.find("<think>"), text.find("</think>")) {
-        (Some(_), Some(end)) => &text[end + "</think>".len()..],
-        _ => text,
-    };
-    let text = text.trim().trim_matches('"').trim();
-    (!text.is_empty()).then(|| text.to_string())
-}
-
-fn workers(model: &str, system: &str, user: &str) -> Result<String, String> {
-    let creds = cloud::load().ok_or("Add your Cloudflare credentials in Settings to use the prompt writer.")?;
-    let model = if model.is_empty() { "@cf/openai/gpt-oss-20b" } else { model };
-    let url = format!("https://api.cloudflare.com/client/v4/accounts/{}/ai/run/{model}", creds.account_id);
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(20)))
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let body = json!({
-        "messages": [{ "role": "system", "content": system }, { "role": "user", "content": user }],
-        "max_tokens": 600,
-        "temperature": 0.3
-    });
-    let mut res = agent
-        .post(&url)
-        .header("Authorization", &format!("Bearer {}", creds.token))
-        .send_json(&body)
-        .map_err(|e| format!("couldn't reach Cloudflare: {e}"))?;
-    let text = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
-    // Models occasionally put raw control characters in strings; parse leniently.
-    let json: Value = serde_json::from_str(&text)
-        .or_else(|_| serde_json::from_str(&text.replace(['\n', '\r', '\t'], " ")))
-        .map_err(|e| format!("bad response from Workers AI: {e}"))?;
-    if json["success"] == false {
-        return Err(format!("Workers AI: {}", json["errors"][0]["message"].as_str().unwrap_or("request failed")));
+/// Runs a prepared CLI command with `input` on stdin, in a scratch directory, and waits for it.
+/// Returns stdout. The prompt goes in on stdin: it's multi-line, which a command-line argument
+/// can't carry through Windows' .cmd shims.
+fn run(mut cmd: Command, input: &str, name: &str) -> Result<String, String> {
+    crate::env::no_window(&mut cmd);
+    cmd.envs(login_env())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("couldn't run {name}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input.as_bytes());
+        // Dropping stdin closes it, so the CLI knows the prompt is complete.
     }
-    workers_text(&json["result"]).ok_or_else(|| "Workers AI returned no text".into())
+    // Keep reading both pipes so a full pipe never blocks the CLI.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            return Err(format!("{name} took too long"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let out = stdout.join().unwrap_or_default();
+    if !status.success() {
+        let err = stderr.join().unwrap_or_default();
+        let last = err.lines().chain(out.lines()).rev().find(|l| !l.trim().is_empty()).unwrap_or("no answer");
+        return Err(format!("{name} failed: {last}"));
+    }
+    Ok(out)
 }
 
-/// OpenAI through the user's ChatGPT plan: the official Codex CLI, read-only and ephemeral.
-fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
+fn scratch_dir() -> Result<std::path::PathBuf, String> {
     let dir = std::env::temp_dir().join(format!("winfer-llm-{:x}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Claude Code in print mode with the user's Claude login: no tools, no MCP servers, no
+/// user/project settings (so their hooks and output styles don't shape the answer).
+fn claude_args(dir: &Path, model: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-p",
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+        "--system-prompt-file",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    args.push(dir.join("system.txt").to_string_lossy().into_owned());
+    if !model.is_empty() {
+        args.extend(["--model".into(), model.into()]);
+    }
+    args
+}
+
+fn claude(model: &str, system: &str, user: &str) -> Result<String, String> {
+    let launcher = crate::env::launcher("claude").ok_or("Claude Code isn't installed.")?;
+    let dir = scratch_dir()?;
+    let result = std::fs::write(dir.join("system.txt"), system).map_err(|e| e.to_string()).and_then(|_| {
+        let mut cmd = Command::new(&launcher.program);
+        cmd.args(&launcher.args).args(claude_args(&dir, model)).current_dir(&dir);
+        run(cmd, user, "Claude Code")
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    let answer = result?;
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err("Claude Code gave no answer".into());
+    }
+    Ok(answer.to_string())
+}
+
+/// Codex with the user's ChatGPT login, read-only and ephemeral.
+fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
+    let launcher = crate::env::launcher("codex").ok_or("Codex CLI isn't installed.")?;
+    let dir = scratch_dir()?;
     let out = dir.join("answer.txt");
-    let codex = crate::env::launcher("codex").ok_or("Codex CLI isn't installed.")?;
-    let mut cmd = std::process::Command::new(&codex.program);
-    crate::env::no_window(&mut cmd);
-    cmd.args(&codex.args)
-        .envs(login_env())
+    let mut cmd = Command::new(&launcher.program);
+    cmd.args(&launcher.args)
         .current_dir(&dir)
         .args(["exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-o"])
         .arg(&out);
     if !model.is_empty() {
         cmd.args(["-m", model]);
     }
-    // The prompt goes in on stdin ("-"): it's multi-line, which a command-line argument can't
-    // carry through Windows' .cmd shims.
-    cmd.arg("-")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("couldn't run codex: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(format!("{system}\n\n{user}").as_bytes());
-        // Dropping stdin closes it, so codex knows the prompt is complete.
-    }
-    // Codex logs progress on stderr; keep reading it so a full pipe never blocks it.
-    let stderr = child.stderr.take();
-    let stderr_reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(mut stderr) = stderr {
-            use std::io::Read;
-            let _ = stderr.read_to_string(&mut text);
-        }
-        text
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(90);
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            return Err("codex took too long".into());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    cmd.arg("-");
+    let result = run(cmd, &format!("{system}\n\n{user}"), "Codex");
     let answer = std::fs::read_to_string(&out).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
-    if !status.success() || answer.trim().is_empty() {
-        let err = stderr_reader.join().unwrap_or_default();
-        let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no answer");
-        return Err(format!("codex failed: {last}"));
+    result?;
+    if answer.trim().is_empty() {
+        return Err("Codex gave no answer".into());
     }
     Ok(answer.trim().to_string())
 }
@@ -130,7 +147,7 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
 #[tauri::command]
 pub async fn llm_compose(req: ComposeRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || match req.provider.as_str() {
-        "workers" => workers(&req.model, &req.system, &req.user),
+        "claude" => claude(&req.model, &req.system, &req.user),
         "codex" => codex(&req.model, &req.system, &req.user),
         other => Err(format!("unknown LLM provider {other}")),
     })
@@ -143,34 +160,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_both_response_shapes() {
-        let chat = json!({ "choices": [{ "message": { "content": "<think>hmm</think>\n\"Add a dark mode.\"" } }] });
-        assert_eq!(workers_text(&chat).as_deref(), Some("Add a dark mode."));
-        assert_eq!(workers_text(&json!({ "response": "Run the tests." })).as_deref(), Some("Run the tests."));
-        assert_eq!(workers_text(&json!({ "response": "  " })), None);
+    fn claude_runs_without_tools_settings_or_mcp() {
+        let args = claude_args(Path::new("/tmp/x"), "sonnet");
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].as_str());
+        assert_eq!(args[0], "-p");
+        assert_eq!(after("--tools"), Some(""));
+        assert_eq!(after("--setting-sources"), Some(""));
+        assert_eq!(after("--model"), Some("sonnet"));
+        assert!(args.contains(&"--strict-mcp-config".to_string()));
+        assert!(after("--system-prompt-file").unwrap().ends_with("system.txt"));
+        assert!(!claude_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
     }
 
-    /// Live: CF creds in the Keychain/env (workers) and a logged-in Codex (codex).
-    /// Tries a prompt from files against Workers AI:
-    /// WINFER_SYSTEM=sys.txt WINFER_USER=user.txt cargo test -- --ignored --nocapture live_prompt
-    #[test]
-    #[ignore]
-    fn live_prompt() {
-        let read = |var: &str| std::fs::read_to_string(std::env::var(var).expect(var)).unwrap();
-        let started = std::time::Instant::now();
-        let answer = workers("", &read("WINFER_SYSTEM"), &read("WINFER_USER")).unwrap();
-        eprintln!("{:?}\n{answer}", started.elapsed());
-    }
-
+    /// Live: a logged-in Claude Code and Codex.
+    /// cargo test --lib -- --ignored --nocapture live_compose
     #[test]
     #[ignore]
     fn live_compose() {
-        for (provider, model) in [("workers", ""), ("codex", "")] {
-            let started = std::time::Instant::now();
-            let result = match provider {
-                "workers" => workers(model, "Rewrite as a one-sentence instruction for a coding agent. Output only it.", "Spoken: make the button blue"),
-                _ => codex(model, "Rewrite as a one-sentence instruction for a coding agent. Output only it.", "Spoken: make the button blue"),
-            };
+        let system = "Rewrite as a one-sentence instruction for a coding agent. Output only it.";
+        for (provider, run) in [("claude", claude as fn(&str, &str, &str) -> Result<String, String>), ("codex", codex)] {
+            let started = Instant::now();
+            let result = run("", system, "Spoken: make the button blue");
             eprintln!("{provider}: {result:?} in {:?}", started.elapsed());
             assert!(result.is_ok());
         }

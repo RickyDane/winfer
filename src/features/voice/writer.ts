@@ -3,22 +3,13 @@
  * using context (the agent, the workspace, the agent's recent output). Clef already chose the
  * action; this only rewrites its instruction text. Falls back to the spoken words on failure.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { llmCompose, llmEnabled } from "@/features/llm/llm";
 import { leaves } from "@/features/layout/tree";
 import { readTerminal } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import type { Command } from "@/commands/bus";
 import type { ProviderId } from "@/features/providers/providers";
 import type { Decision } from "./decision";
-
-export type WriterProvider = "off" | "workers" | "codex";
-
-export const WORKERS_MODELS = [
-  { id: "@cf/openai/gpt-oss-20b", label: "GPT-OSS 20B (fastest)" },
-  { id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", label: "Llama 3.3 70B" },
-  { id: "@cf/qwen/qwen3-30b-a3b-fp8", label: "Qwen3 30B" },
-  { id: "@cf/google/gemma-4-26b-a4b-it", label: "Gemma 4 26B" },
-];
 
 const SYSTEM = [
   "You write the exact message a coding agent (Claude Code, Codex, …) will receive, from what the user said by voice.",
@@ -74,24 +65,17 @@ function context(d: Decision, transcript: string, instruction: string): string {
   return parts.join("\n");
 }
 
-export function writerEnabled(): boolean {
-  const provider = useWorkspaces.getState().voiceConfig.writer ?? "workers";
-  return provider !== "off";
-}
+export const writerEnabled = llmEnabled;
 
 /** Rewrites the instruction of each decision that has one. */
 export async function writeInstructions(decisions: Decision[], transcript: string): Promise<Decision[]> {
-  const config = useWorkspaces.getState().voiceConfig;
-  const provider = config.writer ?? "workers";
-  if (provider === "off") return decisions;
+  if (!llmEnabled()) return decisions;
   return Promise.all(
     decisions.map(async (d) => {
       const field = instructionField(d);
       if (!field) return d;
       try {
-        const text = await invoke<string>("llm_compose", {
-          req: { provider, model: config.writerModel ?? "", system: SYSTEM, user: context(d, transcript, String(d.args[field])) },
-        });
+        const text = await llmCompose(SYSTEM, context(d, transcript, String(d.args[field])));
         return { ...d, args: { ...d.args, [field]: text } };
       } catch (err) {
         console.warn("prompt writer failed, using the spoken words", err);
@@ -168,9 +152,7 @@ export function parseMessages(answer: string, expected?: number): string[] | nul
 
 /** Asks the LLM for one message per recipient; null if the writer is off or the plan doesn't fit. */
 export async function planPerRecipient(transcript: string, instruction: string, recipients: Recipient[]): Promise<Command[] | null> {
-  const config = useWorkspaces.getState().voiceConfig;
-  const provider = config.writer ?? "workers";
-  if (provider === "off") return null;
+  if (!llmEnabled()) return null;
   const s = useWorkspaces.getState();
   const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId)!;
   const user = [
@@ -180,7 +162,7 @@ export async function planPerRecipient(transcript: string, instruction: string, 
     `Recipients, in order:\n${recipients.map((r, i) => `${i + 1}. ${r.label}`).join("\n")}`,
   ].join("\n");
   try {
-    const answer = await invoke<string>("llm_compose", { req: { provider, model: config.writerModel ?? "", system: PLAN_SYSTEM, user } });
+    const answer = await llmCompose(PLAN_SYSTEM, user);
     const messages = parseMessages(answer, recipients.length);
     return messages ? recipients.map((r, i) => r.deliver(messages[i])) : null;
   } catch (err) {
@@ -208,9 +190,7 @@ export const SPLIT_SYSTEM = [
 
 /** Splits an instruction into one message per separate task; null if the writer is off or fails. */
 export async function splitTasks(transcript: string, instruction: string, agent: string): Promise<string[] | null> {
-  const config = useWorkspaces.getState().voiceConfig;
-  const provider = config.writer ?? "workers";
-  if (provider === "off") return null;
+  if (!llmEnabled()) return null;
   const s = useWorkspaces.getState();
   const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId)!;
   const user = [
@@ -220,7 +200,7 @@ export async function splitTasks(transcript: string, instruction: string, agent:
     `Workspace: ${ws.name} (${ws.rootDir})`,
   ].join("\n");
   try {
-    const answer = await invoke<string>("llm_compose", { req: { provider, model: config.writerModel ?? "", system: SPLIT_SYSTEM, user } });
+    const answer = await llmCompose(SPLIT_SYSTEM, user);
     return parseMessages(answer)?.slice(0, 6) ?? null;
   } catch (err) {
     console.warn("task splitting failed", err);

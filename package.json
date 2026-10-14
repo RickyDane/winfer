@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "eval:voice": "vitest run voice-evals/clef.eval.test.ts"
+    "eval:voice": "vitest run voice-evals/clef.eval.test.ts",
+    "eval:planner": "vitest run voice-evals/planner.eval.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

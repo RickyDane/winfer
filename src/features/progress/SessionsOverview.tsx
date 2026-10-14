@@ -1,4 +1,5 @@
 import { Activity, Loader2, RefreshCw, X } from "lucide-react";
+import { llmEnabled } from "@/features/llm/llm";
 import { useEffect, useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
@@ -40,7 +41,7 @@ export function trackedSessions(panes: Pane[], byPane: Record<string, Progress>)
 
 /** Mod+O: how far each running agent is with its task, across workspaces. */
 export function SessionsOverview() {
-  const { overlay, setOverlay, workspaces, providers, voiceConfig } = useWorkspaces();
+  const { overlay, setOverlay, workspaces, providers } = useWorkspaces();
   const byPane = useProgress((s) => s.byPane);
   const [, tick] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -58,7 +59,7 @@ export function SessionsOverview() {
 
   if (overlay !== "progress") return null;
   const groups = workspaces.map((w) => ({ workspace: w, panes: trackedSessions(w.panes, byPane) })).filter((g) => g.panes.length > 0);
-  const writerOff = (voiceConfig.writer ?? "workers") === "off";
+  const writerOff = !llmEnabled();
 
   const focus = (pane: Pane) => {
     setOverlay(null);

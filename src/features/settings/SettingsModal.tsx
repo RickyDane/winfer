@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
-import { WORKERS_MODELS } from "@/features/voice/writer";
+import { LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="space-y-3">
@@ -83,8 +83,11 @@ function VoiceSettings() {
   const status = useVoice((s) => s.status);
   const readback = useWorkspaces((s) => s.voiceConfig.readback ?? false);
   const confirm = useWorkspaces((s) => s.voiceConfig.confirm ?? false);
-  const writer = useWorkspaces((s) => s.voiceConfig.writer ?? "workers");
+  // What actually runs: the choice, or the installed CLI it falls back to.
+  const writer = useWorkspaces(() => llmProvider() ?? "off");
+  const providers = useWorkspaces((s) => s.providers);
   const writerModel = useWorkspaces((s) => s.voiceConfig.writerModel ?? "");
+  const planner = useWorkspaces((s) => s.voiceConfig.planner ?? "auto");
   const shortcuts = useWorkspaces((s) => s.shortcuts);
   const [accountId, setAccountId] = useState("");
   const [token, setToken] = useState("");
@@ -181,44 +184,60 @@ function VoiceSettings() {
         Ask before running uncertain or risky voice commands
       </label>
 
-      <Section title="Prompt writer (LLM)">
+      <Section title="LLM (planner and prompt writer)">
         <p className="text-xs text-fg-muted">
-          Turns what you say into a clear prompt for the agent, using its recent output as context (“tell Claude to make the page nicer” →
-          a concrete task). Clef still decides which action runs. “Type … into Claude” stays word for word.
+          Plans long or complex commands (“we need four features: …”) with its full reasoning, and turns what you say into a clear prompt
+          for the agent, using its recent output as context. Short commands go to Clef. “Type … into Claude” stays word for word.
         </p>
         <div className="flex items-center gap-2">
           <select
             value={writer}
-            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | "workers" | "codex", writerModel: "" })}
+            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | "claude" | "codex", writerModel: "" })}
             className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
           >
-            <option value="workers">Cloudflare Workers AI (fast, uses the token below)</option>
-            <option value="codex">OpenAI via your ChatGPT plan (Codex CLI, slower)</option>
+            {LLM_PROVIDERS.map((p) => {
+              const installed = providers.some((x) => x.id === p.id && x.installed);
+              return (
+                <option key={p.id} value={p.id} disabled={!installed}>
+                  {p.label}
+                  {installed ? "" : " (not installed)"}
+                </option>
+              );
+            })}
             <option value="off">Off (send my words as spoken)</option>
           </select>
-          {writer === "workers" && (
-            <select
-              value={writerModel || WORKERS_MODELS[0].id}
-              onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writerModel: e.target.value })}
-              className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
-            >
-              {WORKERS_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          )}
-          {writer === "codex" && (
+          {writer !== "off" && (
             <input
+              key={writer}
               defaultValue={writerModel}
-              onBlur={(e) => useWorkspaces.getState().setVoiceConfig({ writerModel: e.target.value.trim() })}
-              placeholder="Model (Codex default)"
+              onBlur={(e) => useWorkspaces.getState().setVoiceConfig({ writer, writerModel: e.target.value.trim() })}
+              placeholder={writer === "claude" ? "Model (default, e.g. sonnet)" : "Model (Codex default)"}
               className={inputClass + " w-48"}
             />
           )}
         </div>
-        {writer === "codex" && <p className="text-[11px] text-fg-subtle">Uses your Codex login (“codex login” → Sign in with ChatGPT); runs read-only.</p>}
+        {writer !== "off" && (
+          <label className="flex items-center gap-2 text-[13px] text-fg">
+            Who decides what runs
+            <select
+              value={planner}
+              onChange={(e) => useWorkspaces.getState().setVoiceConfig({ planner: e.target.value as "auto" | "always" | "off" })}
+              className="h-7 rounded-md border border-border bg-panel px-2 text-xs text-fg"
+            >
+              <option value="auto">LLM for long or complex commands, Clef for short ones</option>
+              <option value="always">LLM for every command (slower)</option>
+              <option value="off">Clef for every command</option>
+            </select>
+          </label>
+        )}
+        {writer !== "off" && (
+          <p className="text-[11px] text-fg-subtle">
+            {writer === "claude"
+              ? "Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings."
+              : "Runs Codex headless with your Codex login (“codex login” → Sign in with ChatGPT), read-only."}{" "}
+            Also used for progress estimates and review summaries.
+          </p>
+        )}
       </Section>
 
       <Section title="Voice commands (Cloudflare Clef)">

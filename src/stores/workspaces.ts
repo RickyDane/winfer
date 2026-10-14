@@ -98,7 +98,7 @@ interface WorkspaceState {
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
-  voiceConfig: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string };
+  voiceConfig: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "claude" | "codex"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string };
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -137,7 +137,7 @@ interface WorkspaceState {
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setSearchPane: (id: string | null) => void;
-  setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string }) => void;
+  setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "claude" | "codex"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -426,7 +426,7 @@ interface Snapshot {
     activeWorkspaceId?: string;
     sidebarOpen?: boolean;
     browserOpen?: boolean;
-    voice?: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string };
+    voice?: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "claude" | "codex"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string };
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
     defaultProvider?: ProviderId | null;

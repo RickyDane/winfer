@@ -13,7 +13,7 @@ const pane = { id: "p1", workspaceId: "w1", provider: "claude", cwd: "/repo", wo
 describe("session progress", () => {
   beforeEach(() => {
     useProgress.setState({ byPane: {} });
-    useWorkspaces.setState({ voiceConfig: { writer: "workers" } });
+    useWorkspaces.setState({ voiceConfig: { writer: "claude" } });
     invoke.mockReset();
     output = "";
   });

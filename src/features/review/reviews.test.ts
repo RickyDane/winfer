@@ -28,7 +28,7 @@ function setPane(devUrl: string | null) {
       },
     ] as never,
     activeWorkspaceId: "w1",
-    voiceConfig: { writer: "workers" },
+    voiceConfig: { writer: "claude" },
     reviewConfig: {},
   });
 }

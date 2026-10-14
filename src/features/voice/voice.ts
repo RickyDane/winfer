@@ -14,6 +14,8 @@ import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
 import { needsWriting, planPerRecipient, recipientsOf, splitTasks, writeInstructions } from "./writer";
 import { buildRequest, orderByMention, parseDecision, verdict, type Decision, type DecisionResult } from "./decision";
+import { isComplex, planWithLlm } from "./planner";
+import { llmEnabled } from "@/features/llm/llm";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
 export type Mode = "command" | "dictation";
@@ -44,7 +46,8 @@ interface VoiceState {
   level: number;
   transcript: string;
   message: string;
-  pending: { decisions: Decision[]; transcript: string } | null;
+  /** `planned`: from the LLM planner, whose prompts are already written. */
+  pending: { decisions: Decision[]; transcript: string; planned?: boolean } | null;
   timings: { sttMs?: number; decideMs?: number };
   recent: string[];
   lastCommands: Command[];
@@ -103,7 +106,10 @@ function describe(d: Decision): string {
 
 function commandsFor(decisions: Decision[], transcript: string): Command[] {
   const ctx = toolContext(useVoice.getState().lastCommands);
-  return orderByMention(decisions.flatMap((d) => d.tool.toCommands(d.args, ctx)), transcript, ctx);
+  const commands = decisions.flatMap((d) =>
+    d.tool.toCommands(d.args, ctx).map((c) => (c.type === "pane.spawn" && d.args.worktree === true ? { ...c, worktree: true } : c)),
+  );
+  return orderByMention(commands, transcript, ctx);
 }
 
 /** Spawn order for a decision: one entry per new agent, in the order they were named. */
@@ -114,13 +120,14 @@ function spawnOrder(d: Decision, transcript: string): string[] {
   );
 }
 
-async function run(decisions: Decision[], transcript: string) {
+async function run(decisions: Decision[], transcript: string, opts: { planned?: boolean } = {}) {
   // Commands that reach several agents get one planned message per agent.
   const planned = new Map<Decision, Command[]>();
-  // Prompts that are already written (by the task splitter) and shouldn't be rewritten.
-  const ready = new Set<Decision>();
+  // Prompts that are already written (by the planner or task splitter) and shouldn't be rewritten.
+  const ready = new Set<Decision>(opts.planned ? decisions : []);
   decisions = [...decisions];
   for (const [i, d] of decisions.entries()) {
+    if (ready.has(d)) continue;
     // One new agent asked to do several separate things: one agent per task, each in its own
     // worktree, so every feature gets its own branch and pull request.
     const order = (d.tool.id === "spawn_panes" || d.tool.id === "start_features") && d.args.prompt ? spawnOrder(d, transcript) : [];
@@ -171,7 +178,7 @@ async function run(decisions: Decision[], transcript: string) {
 export function confirmPending(alternative?: Decision) {
   const pending = useVoice.getState().pending;
   if (!pending) return;
-  void run(alternative ? [alternative] : pending.decisions, pending.transcript);
+  void run(alternative ? [alternative] : pending.decisions, pending.transcript, { planned: pending.planned && !alternative });
 }
 
 export function cancelPending() {
@@ -181,6 +188,22 @@ export function cancelPending() {
 async function decide(transcript: string) {
   show("deciding", { transcript, message: "" });
   const ctx = toolContext(useVoice.getState().lastCommands);
+  const config = useWorkspaces.getState().voiceConfig;
+  const planner = config.planner ?? "auto";
+  // Long or complex commands go to the full LLM; Clef only picks from short questions.
+  if (planner !== "off" && llmEnabled() && (planner === "always" || isComplex(transcript))) {
+    show("deciding", { transcript, message: "Planning…" });
+    const started = performance.now();
+    const decisions = await planWithLlm(transcript, ctx, useVoice.getState().recent);
+    if (decisions) {
+      useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
+      if (decisions.length === 0) return show("error", { message: `No winfer command in “${transcript}”` }, 4000);
+      if (config.confirm && decisions.some((d) => d.tool.risk === "confirm")) {
+        return show("confirm", { pending: { decisions, transcript, planned: true }, message: decisions.map(describe).join(" · ") });
+      }
+      return run(decisions, transcript, { planned: true });
+    }
+  }
   const request = buildRequest(transcript, ctx, useVoice.getState().recent);
   const started = performance.now();
   let result: DecisionResult;
