@@ -91,8 +91,22 @@ pub fn shutdown(app: &AppHandle) {
     app.state::<Voice>().stt.unload();
 }
 
+/// Release builds compile whisper.cpp for AVX2 (see .github/workflows); on an x86 CPU without it
+/// loading the model would kill the process with an illegal instruction.
+fn cpu_supported() -> Result<(), String> {
+    #[cfg(target_arch = "x86_64")]
+    if !(std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")) {
+        return Err("Voice needs a CPU with AVX2 (most CPUs since 2013); this one doesn't have it.".into());
+    }
+    Ok(())
+}
+
 /// Warms up the configured speech model in the background, if it's installed.
 pub fn preload(app: &AppHandle) {
+    if let Err(err) = cpu_supported() {
+        eprintln!("{err}");
+        return;
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         let voice = app.state::<Voice>();
@@ -134,6 +148,9 @@ pub fn start(app: &AppHandle, mode: Mode) {
     let Some(spec) = model::spec(&stt_model) else {
         return emit_error(app, "Unknown speech model");
     };
+    if let Err(err) = cpu_supported() {
+        return emit_error(app, err);
+    }
     if !models_dir(app).is_ok_and(|dir| model::installed(&dir, spec)) {
         return emit_error(app, "Download the speech model in Settings to use voice.");
     }
