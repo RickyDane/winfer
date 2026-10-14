@@ -12,7 +12,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { useWorkspaces, type Pane } from "@/stores/workspaces";
+import { cleanAgentTitle, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
@@ -170,6 +170,14 @@ function create(pane: Pane): Entry {
     return true;
   });
   // Shells beep on tab completion; only agents' bells mean "look at me".
+  // Agents name their terminal after what they're doing (Claude Code: the session topic).
+  term.onTitleChange((raw) => {
+    const s = useWorkspaces.getState();
+    const provider = s.providers.find((p) => p.id === pane.provider);
+    const title = cleanAgentTitle(raw, [provider?.name ?? "", provider?.command ?? "", pane.provider]);
+    const current = s.workspaces.flatMap((w) => w.panes).find((p) => p.id === pane.id);
+    if (title && current && current.agentTitle !== title) s.updatePane(pane.id, { agentTitle: title });
+  });
   term.onBell(() => pane.provider !== "shell" && reportStatus(pane.id, "needs-input"));
 
   term.onResize(({ cols, rows }) => {

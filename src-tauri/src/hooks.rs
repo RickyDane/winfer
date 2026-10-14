@@ -78,8 +78,9 @@ pub fn provider_args(provider_id: &str) -> Vec<String> {
             "--settings".into(),
             server.claude_settings.to_string_lossy().into_owned(),
         ],
-        // Codex runs `notify` with the event JSON as the last argument.
-        "codex" => {
+        // Codex runs `notify` with the event JSON as the last argument (through sh, so not on
+        // Windows).
+        "codex" if cfg!(not(windows)) => {
             let script = hook_command("codex", "turn-complete", "\"$1\"");
             vec![
                 "-c".into(),

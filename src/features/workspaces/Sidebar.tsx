@@ -8,7 +8,21 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useCallback, useState } from "react";
-import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
+
+/** The agent's own title (or its task), with the CLI's name in the tooltip. */
+function PaneName({ pane, className }: { pane: Pane; className?: string }) {
+  const providers = useWorkspaces((s) => s.providers);
+  const task = useProgress((s) => s.byPane[pane.id]?.title ?? s.byPane[pane.id]?.task);
+  const label = paneLabel(pane, providers, task);
+  const name = providerName(providers, pane.provider);
+  return (
+    <span className={cn("min-w-0 truncate", className)} title={label === name ? name : `${name}: ${label}`}>
+      {label}
+    </span>
+  );
+}
 
 /** Percent done of a working agent, from the progress estimates. */
 function PanePercent({ pane }: { pane: Pane }) {
@@ -59,7 +73,7 @@ function ReviewEntry() {
 }
 
 export function Sidebar() {
-  const { providers, workspaces, activeWorkspaceId, focusedPaneId, theme, toggleTheme } = useWorkspaces();
+  const { workspaces, activeWorkspaceId, focusedPaneId, theme, toggleTheme } = useWorkspaces();
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const menuWorkspace = menu && workspaces.find((w) => w.id === menu.id);
@@ -115,9 +129,8 @@ export function Sidebar() {
                     )}
                   >
                     <StatusDot status={pane.status} />
-                    <span className={cn("truncate", pane.unseen && "font-semibold text-fg")}>
-                      {providerName(providers, pane.provider)}
-                    </span>
+                    <ProviderIcon provider={pane.provider} size={12} />
+                    <PaneName pane={pane} className={cn(pane.unseen && "font-semibold text-fg")} />
                     {pane.worktree && (
                       <span className="ml-auto truncate font-mono text-[10px] text-fg-subtle">{pane.worktree.branch.replace(/^winfer\//, "")}</span>
                     )}

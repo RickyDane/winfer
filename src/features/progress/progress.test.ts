@@ -58,6 +58,30 @@ describe("session progress", () => {
     expect(useProgress.getState().byPane.p1).toMatchObject({ task: "Now add a high score table", percent: 0, title: null });
   });
 
+  it("doesn't estimate an agent that has no task yet (just started)", async () => {
+    output = "OpenCode v1.0 — ask anything";
+    await estimate({ ...pane, prompt: null } as never);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(useProgress.getState().byPane.p1).toBeUndefined();
+  });
+
+  it("keeps a working agent below 100 but lets a stopped one finish", async () => {
+    const setStatus = (status: string) =>
+      useWorkspaces.setState({ workspaces: [{ id: "w1", panes: [{ ...(pane as object), status }] }] as never });
+    setStatus("working");
+    output = "all tests pass";
+    invoke.mockResolvedValueOnce('{"percent": 100, "step": "Done"}');
+    await estimate(pane);
+    expect(useProgress.getState().byPane.p1.percent).toBe(99);
+
+    setStatus("idle");
+    output += "\n> ";
+    invoke.mockResolvedValueOnce('{"percent": 100, "step": "Done"}');
+    await estimate(pane);
+    expect(useProgress.getState().byPane.p1.percent).toBe(100);
+    expect((invoke.mock.calls[1][1] as { req: { user: string } }).req.user).toContain("Agent state: stopped");
+  });
+
   it("doesn't call the LLM with the prompt writer off", async () => {
     useWorkspaces.setState({ voiceConfig: { writer: "off" } });
     output = "working";

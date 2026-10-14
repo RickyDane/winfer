@@ -36,6 +36,8 @@ export interface Pane {
   prompt: string | null;
   /** Model the agent runs with; null means the CLI's default. */
   model: string | null;
+  /** Title the agent gave its terminal (Claude Code: the session's topic), cleaned up. */
+  agentTitle: string | null;
 }
 
 export interface Workspace {
@@ -214,7 +216,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !resumed.has(key);
         resumed.add(key);
-        return { ...p, raceId: p.raceId ?? null, model: p.model ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, raceId: p.raceId ?? null, model: p.model ?? null, agentTitle: p.agentTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -302,6 +304,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             resume: false,
             unseen: false,
             devUrl: null,
+            agentTitle: null,
             raceId: opts?.raceId ?? null,
             prompt: opts?.prompt ?? null,
             model: opts?.model ?? get().agentModels[provider] ?? null,
@@ -403,7 +406,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null; agentTitle?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -439,7 +442,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle })),
     })),
     ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
@@ -483,3 +486,21 @@ useWorkspaces.subscribe((s, prev) => {
   const zoomedPaneId = s.overview.zoomedPaneId && ids.includes(s.overview.zoomedPaneId) ? s.overview.zoomedPaneId : null;
   useWorkspaces.setState({ overview: { ...s.overview, layout, zoomedPaneId } });
 });
+
+/**
+ * Cleans a terminal title set by an agent: drops spinner/status glyphs ("✳ ", "⠂ ") and titles
+ * that only repeat the CLI's name. Null when nothing useful is left.
+ */
+export function cleanAgentTitle(raw: string, providerNames: string[]): string | null {
+  const title = raw.replace(/^[^\p{L}\p{N}]+/u, "").replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!title) return null;
+  const lower = title.toLowerCase();
+  if (providerNames.some((n) => n.toLowerCase() === lower)) return null;
+  return title;
+}
+
+/** What to call a pane in lists: the agent's own title, else its task, else its CLI's name. */
+export function paneLabel(pane: Pane, providers: Provider[], task?: string | null): string {
+  const fallback = task ?? pane.prompt;
+  return pane.agentTitle ?? (fallback ? fallback.split("\n")[0].slice(0, 80) : providerName(providers, pane.provider));
+}

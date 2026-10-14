@@ -40,7 +40,7 @@ const cases: Case[] = readFileSync(new URL("./cases.jsonl", import.meta.url), "u
 
 const provider = (id: string, name: string): Provider => ({ id, name, command: id, args: [], resumeArgs: [], aliases: aliases[id] ?? [], statusHooks: false, promptArg: false, approveInput: null, modelArg: id === "shell" ? null : "--model", modelCommand: null, installed: true });
 const pane = (id: string, p: string, status: "working" | "idle" | "needs-input") => ({
-  id, workspaceId: "ws", provider: p, title: "api", cwd: "~", status, worktree: null, wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null,
+  id, workspaceId: "ws", provider: p, title: "api", cwd: "~", status, worktree: null, wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null, agentTitle: null,
 });
 const ws: Workspace = {
   id: "ws", name: "bridgemind", rootDir: "~", zoomedPaneId: null, presetIndex: 0, useWorktrees: true,

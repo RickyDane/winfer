@@ -66,6 +66,7 @@ const SYSTEM = [
   "You estimate how far a coding agent is with its current task, from the task and the agent's recent terminal output.",
   "Evidence: its plan or todo list (count checked items), files it edited, tests or builds it ran and their results, what it says it is doing.",
   "100 only when the task is complete and the agent stopped; exploring and planning is early (5–20), implementing is the middle, testing and fixing is late.",
+  "An agent that stopped to ask a question or wait for approval isn't done. If the output shows no work on the task yet, answer 0.",
   'Reply with JSON only: {"percent": <integer 0-100>, "step": "<what it is doing now, max 8 words>", "title": "<the task, max 6 words>"}.',
   "Write step and title in the language of the task.",
 ].join(" ");
@@ -85,6 +86,21 @@ export function parseEstimate(answer: string): { percent: number; step: string |
   }
 }
 
+const status = (paneId: string) =>
+  useWorkspaces
+    .getState()
+    .workspaces.flatMap((w) => w.panes)
+    .find((p) => p.id === paneId)?.status;
+
+/** Estimates right away (an agent without completion hooks just went quiet). */
+export function estimateNow(paneId: string) {
+  const pane = useWorkspaces
+    .getState()
+    .workspaces.flatMap((w) => w.panes)
+    .find((p) => p.id === paneId);
+  if (pane && useWorkspaces.getState().progressConfig.enabled !== false) void estimate(pane);
+}
+
 /** Output the last estimate was based on, so unchanged panes aren't re-asked. */
 const lastEstimate = new Map<string, string>();
 
@@ -92,12 +108,15 @@ export async function estimate(pane: Pane) {
   const config = useWorkspaces.getState().voiceConfig;
   const provider = config.writer ?? "workers";
   if (provider === "off" || get(pane.id).estimating) return;
+  const progress = get(pane.id);
+  // Without a task there's nothing to measure: a freshly started agent's welcome screen would
+  // only get a made-up estimate.
+  const task = progress.task ?? pane.prompt;
+  if (!task) return;
   const output = (readTerminal(pane.id, 120) ?? "").slice(-3500).trim();
   if (!output || lastEstimate.get(pane.id) === output) return;
   lastEstimate.set(pane.id, output);
 
-  const progress = get(pane.id);
-  const task = progress.task ?? pane.prompt;
   let changes = "";
   if (pane.worktree) {
     const diff = await worktreeDiff(pane.worktree).catch(() => null);
@@ -105,8 +124,9 @@ export async function estimate(pane: Pane) {
     if (diff) changes = `Files changed so far: ${[...files, ...diff.untracked].join(", ") || "none"}`;
   }
   const user = [
-    task ? `Task: ${task}` : "Task: unknown — infer it from the output.",
+    `Task: ${task}`,
     `Agent: ${providerName(useWorkspaces.getState().providers, pane.provider)}`,
+    `Agent state: ${status(pane.id) === "working" ? "working" : "stopped, waiting for input"}`,
     changes,
     `Recent output:\n${output}`,
   ]
@@ -119,8 +139,10 @@ export async function estimate(pane: Pane) {
     const result = parseEstimate(answer);
     if (!result) throw new Error("no estimate in the answer");
     const current = get(pane.id);
-    // Estimates are noisy; within one task the bar only moves forward (and 100 waits for "done").
-    const percent = Math.min(99, Math.max(current.percent ?? 0, result.percent));
+    // Estimates are noisy: within one task the bar only moves forward, and a working agent
+    // isn't finished. A stopped one may be (agents without completion hooks only stop).
+    const cap = status(pane.id) === "working" ? 99 : 100;
+    const percent = Math.min(cap, Math.max(current.percent ?? 0, result.percent));
     patch(pane.id, { percent, step: result.step, title: result.title ?? current.title, updatedAt: Date.now(), estimating: false, error: null });
   } catch (err) {
     patch(pane.id, { estimating: false, error: String(err) });

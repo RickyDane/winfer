@@ -69,7 +69,9 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
             {workspaceName}
           </span>
         )}
-        <span className="flex-1 truncate font-mono text-xs text-fg-muted">{pane.title}</span>
+        <span className="flex-1 truncate font-mono text-xs text-fg-muted" title={pane.agentTitle ?? pane.title}>
+          {pane.agentTitle ?? pane.title}
+        </span>
         {showProgress && progress?.percent != null && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">
             {progress.percent}%
