@@ -89,6 +89,7 @@ pub fn run() {
             voice::voice_download_model,
             voice::voice_configure,
             voice::voice_input_devices,
+            voice::voice_set_shortcuts,
             voice::voice_test_microphone,
             voice::voice_set_credentials,
             voice::voice_clear_credentials,

@@ -1,4 +1,5 @@
 //! Voice control: hold ⌥Space (commands) or ⌥⇧Space (dictation) anywhere, speak, release.
+//! Both keys can be changed in the app (`voice_set_shortcuts`).
 //! Audio is transcribed locally with whisper; the frontend then asks Clef (via `voice_decide`)
 //! which tool to run.
 
@@ -15,6 +16,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +46,7 @@ pub struct Voice {
     config: Mutex<Config>,
     /// Why the global push-to-talk keys couldn't be registered, shown in Settings.
     shortcut_error: Mutex<Option<String>>,
+    keys: Mutex<PushToTalk>,
 }
 
 impl Voice {
@@ -61,6 +64,7 @@ impl Voice {
                 input_device: None,
             }),
             shortcut_error: Mutex::new(None),
+            keys: Mutex::new(PushToTalk::default()),
         }
     }
 }
@@ -206,36 +210,44 @@ pub fn stop(app: &AppHandle) {
     });
 }
 
-const COMMAND_KEYS: &str = if cfg!(target_os = "macos") { "⌥Space" } else { "Alt+Space" };
-const DICTATION_KEYS: &str = if cfg!(target_os = "macos") {
-    "⌥⇧Space"
-} else {
-    "Alt+Shift+Space"
-};
+/// Default push-to-talk chords, in the frontend keymap's notation (src/commands/keymap.ts).
+const DEFAULT_COMMAND_KEYS: &str = "Alt+Space";
+const DEFAULT_DICTATION_KEYS: &str = "Alt+Shift+Space";
 
-/// Registers the global push-to-talk shortcuts; a failure is kept for Settings to show.
-pub fn register_shortcuts(app: &AppHandle) {
-    if let Err(err) = try_register_shortcuts(app) {
-        eprintln!("voice shortcuts unavailable: {err}");
-        *app.state::<Voice>().shortcut_error.lock().unwrap() = Some(err);
-    }
+/// The registered push-to-talk shortcuts; `None` is switched off.
+#[derive(Default)]
+struct PushToTalk {
+    command: Option<Shortcut>,
+    dictation: Option<Shortcut>,
 }
 
-/// Registers ⌥Space / ⌥⇧Space (Alt+Space / Alt+Shift+Space) as global push-to-talk shortcuts.
-fn try_register_shortcuts(app: &AppHandle) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::{
-        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-    };
+/// Parses a keymap chord like "Ctrl+Shift+Space" ("Meta" is ⌘ / the Windows key).
+fn parse_chord(chord: &str) -> Result<Shortcut, String> {
+    let keys = chord
+        .split('+')
+        .map(|part| if part == "Meta" { "Super" } else { part })
+        .collect::<Vec<_>>()
+        .join("+");
+    keys.parse::<Shortcut>()
+        .map_err(|e| format!("{chord} can't be used as a global shortcut ({e})."))
+}
 
-    let command = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-    let dictation = Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::Space);
-    app.plugin(
+/// Installs the global shortcut handler and registers the default push-to-talk keys; the
+/// frontend applies the user's own keys with `voice_set_shortcuts` once its state has loaded.
+pub fn register_shortcuts(app: &AppHandle) {
+    let installed = app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(move |app, shortcut, event| {
-                let mode = if *shortcut == dictation {
-                    Mode::Dictation
-                } else {
-                    Mode::Command
+            .with_handler(|app, shortcut, event| {
+                let voice = app.state::<Voice>();
+                let mode = {
+                    let keys = voice.keys.lock().unwrap();
+                    if keys.dictation.as_ref() == Some(shortcut) {
+                        Mode::Dictation
+                    } else if keys.command.as_ref() == Some(shortcut) {
+                        Mode::Command
+                    } else {
+                        return;
+                    }
                 };
                 match event.state() {
                     ShortcutState::Pressed => start(app, mode),
@@ -243,16 +255,51 @@ fn try_register_shortcuts(app: &AppHandle) -> Result<(), String> {
                 }
             })
             .build(),
-    )
-    .map_err(|e| e.to_string())?;
+    );
+    let result = installed
+        .map_err(|e| e.to_string())
+        .and_then(|_| set_shortcuts(app, DEFAULT_COMMAND_KEYS, DEFAULT_DICTATION_KEYS));
+    if let Err(err) = result {
+        eprintln!("voice shortcuts unavailable: {err}");
+    }
+}
+
+/// Replaces the push-to-talk keys ("" switches one off). Failures are kept for Settings.
+fn set_shortcuts(app: &AppHandle, command: &str, dictation: &str) -> Result<(), String> {
+    let voice = app.state::<Voice>();
     let shortcuts = app.global_shortcut();
-    shortcuts
-        .register(command)
-        .map_err(|e| format!("{COMMAND_KEYS} is taken by another app ({e})."))?;
-    shortcuts
-        .register(dictation)
-        .map_err(|e| format!("{DICTATION_KEYS} is taken by another app ({e})."))?;
-    Ok(())
+    let mut keys = voice.keys.lock().unwrap();
+    for old in [keys.command.take(), keys.dictation.take()].into_iter().flatten() {
+        let _ = shortcuts.unregister(old);
+    }
+    let mut errors = Vec::new();
+    let mut register = |chord: &str| -> Option<Shortcut> {
+        if chord.is_empty() {
+            return None;
+        }
+        match parse_chord(chord).and_then(|shortcut| {
+            shortcuts
+                .register(shortcut)
+                .map(|_| shortcut)
+                .map_err(|e| format!("{chord} is taken by another app ({e})."))
+        }) {
+            Ok(shortcut) => Some(shortcut),
+            Err(err) => {
+                errors.push(err);
+                None
+            }
+        }
+    };
+    keys.command = register(command);
+    keys.dictation = register(dictation);
+    let error = (!errors.is_empty()).then(|| errors.join(" "));
+    *voice.shortcut_error.lock().unwrap() = error.clone();
+    error.map_or(Ok(()), Err)
+}
+
+#[tauri::command]
+pub fn voice_set_shortcuts(app: AppHandle, command: String, dictation: String) -> Result<(), String> {
+    set_shortcuts(&app, &command, &dictation)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -444,4 +491,15 @@ pub fn voice_start(app: AppHandle, mode: Mode) {
 #[tauri::command]
 pub fn voice_stop(app: AppHandle) {
     stop(&app);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses_keymap_chords() {
+        for chord in ["Alt+Space", "Alt+Shift+Space", "Ctrl+Meta+F5", "Ctrl+Alt+K", "Meta+/"] {
+            assert!(super::parse_chord(chord).is_ok(), "{chord}");
+        }
+        assert!(super::parse_chord("Alt+Nope").is_err());
+    }
 }

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Download, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { defaultProviderId, useWorkspaces } from "@/stores/workspaces";
-import { keysFor, VOICE_KEYS } from "@/commands/keymap";
+import { keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { WORKERS_MODELS } from "@/features/voice/writer";
 
@@ -85,6 +85,7 @@ function VoiceSettings() {
   const confirm = useWorkspaces((s) => s.voiceConfig.confirm ?? false);
   const writer = useWorkspaces((s) => s.voiceConfig.writer ?? "workers");
   const writerModel = useWorkspaces((s) => s.voiceConfig.writerModel ?? "");
+  const shortcuts = useWorkspaces((s) => s.shortcuts);
   const [accountId, setAccountId] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -114,7 +115,11 @@ function VoiceSettings() {
     <>
       <Section title="Speech recognition (on this Mac)">
         <p className="text-xs text-fg-muted">
-          Hold {VOICE_KEYS.command} to give a command, {VOICE_KEYS.dictation} to dictate into the focused pane. Audio never leaves your machine.
+          Hold {voiceKeys(shortcuts).command} to give a command, {voiceKeys(shortcuts).dictation} to dictate into the focused pane (change them under{" "}
+          <button onClick={() => useWorkspaces.getState().setCheatSheet(true)} className="text-accent hover:underline">
+            Keyboard shortcuts
+          </button>
+          ). Audio never leaves your machine.
         </p>
         {status.shortcutError && <p className="text-xs text-warning">{status.shortcutError} Use the mic button in the title bar instead.</p>}
         <label className="flex items-center gap-2 text-[13px] text-fg">

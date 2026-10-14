@@ -15,6 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
+import { isAppChord } from "@/commands/keymap";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
@@ -97,9 +98,9 @@ function create(pane: Pane): Entry {
   });
   term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)));
 
-  // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows) must reach the app, not the PTY.
-  // Returning false skips xterm only; the browser still fires copy/paste events.
-  term.attachCustomKeyEventHandler((e) => !(IS_MAC ? e.metaKey : e.ctrlKey && e.shiftKey));
+  // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows, plus any the user assigned) must reach
+  // the app, not the PTY. Returning false skips xterm only; the browser still fires copy/paste events.
+  term.attachCustomKeyEventHandler((e) => !((IS_MAC ? e.metaKey : e.ctrlKey && e.shiftKey) || isAppChord(e)));
 
   term.onData((data) => {
     const entry = entries.get(pane.id);

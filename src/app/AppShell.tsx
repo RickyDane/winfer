@@ -14,7 +14,7 @@ import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
-import { keysFor, useKeymap, VOICE_KEYS } from "@/commands/keymap";
+import { keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
@@ -51,6 +51,7 @@ function TitleBar() {
 function MicButton() {
   const listening = useVoice((s) => s.phase === "listening");
   const shortcutError = useVoice((s) => s.status?.shortcutError);
+  const keys = voiceKeys(useWorkspaces((s) => s.shortcuts));
   return (
     <button
       onMouseDown={() => startListening()}
@@ -60,10 +61,10 @@ function MicButton() {
         "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs hover:bg-hover hover:text-fg",
         listening ? "border-accent text-accent" : "border-border",
       )}
-      title={shortcutError ?? `Hold to talk (or hold ${VOICE_KEYS.command} anywhere; ${VOICE_KEYS.dictation} to dictate)`}
+      title={shortcutError ?? `Hold to talk (or hold ${keys.command} anywhere; ${keys.dictation} to dictate)`}
     >
       <Mic size={13} />
-      <span className={cn(shortcutError && "line-through")}>{VOICE_KEYS.command}</span>
+      <span className={cn(shortcutError && "line-through")}>{keys.command}</span>
     </button>
   );
 }

@@ -2,6 +2,7 @@
  * Voice flow in the UI: push-to-talk events from src-tauri/src/voice, then Clef decides which
  * tools to run (decision.ts) and the policy gate runs, confirms or rejects.
  */
+import { applyVoiceShortcuts, isCustomized, VOICE_BINDINGS } from "@/commands/keymap";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
@@ -209,6 +210,10 @@ export function startVoice() {
   const applySaved = () => {
     const saved = useWorkspaces.getState().voiceConfig;
     void invoke("voice_configure", { config: saved }).then(refreshVoiceStatus, () => {});
+    if (VOICE_BINDINGS.some((v) => isCustomized(v.id))) void applyVoiceShortcuts().catch(() => {}).finally(refreshVoiceStatus);
+    useWorkspaces.subscribe((s, prev) => {
+      if (VOICE_BINDINGS.some((v) => s.shortcuts[v.id] !== prev.shortcuts[v.id])) void applyVoiceShortcuts(s.shortcuts).catch(() => {}).finally(refreshVoiceStatus);
+    });
   };
   if (useWorkspaces.getState().hydrated) applySaved();
   else {

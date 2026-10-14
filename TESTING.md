@@ -21,6 +21,9 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] ⌘↩ zooms a pane and back; ⌘⌃L cycles layouts; ⌘⌃= equalizes.
 - [ ] Drag a pane by its header onto another pane: edges place it beside (left/right/top/bottom), the middle swaps; Esc cancels.
 - [ ] ⌘K palette: type "grid", Enter → grid layout.
+- [ ] ⌘/ → click a shortcut → press new keys → it works right away and survives a restart; a taken chord offers "Use it here instead"; ↺ restores; ⌫ switches it off; "Reset all".
+- [ ] Change the voice keys in the same sheet (Voice section) → holding the new keys records.
+- [ ] Settings → New panes → Default agent (or the ★ in the New menu): ⌘T and "open a new window" start that agent.
 - [ ] ⌘F searches a pane's scrollback (Enter / ⇧Enter to step).
 
 ## 3. Agents, status and worktrees

@@ -74,6 +74,8 @@ interface WorkspaceState {
   agentModels: Record<ProviderId, string>;
   /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
   defaultProvider: ProviderId | null;
+  /** Shortcut overrides by binding id (see src/commands/keymap.ts); "" = switched off. */
+  shortcuts: Record<string, string>;
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
@@ -103,6 +105,9 @@ interface WorkspaceState {
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
   setDefaultProvider: (provider: ProviderId | null) => void;
+  /** Sets a binding's chord; null restores the default. */
+  setShortcut: (id: string, chord: string | null) => void;
+  resetShortcuts: () => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; clefModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "workers" | "codex"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
@@ -139,6 +144,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   models: {},
   agentModels: {},
   defaultProvider: null,
+  shortcuts: {},
   searchPaneId: null,
   voiceConfig: {},
 
@@ -177,6 +183,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       recipes: ui.recipes ?? [],
       agentModels: ui.agentModels ?? {},
       defaultProvider: ui.defaultProvider ?? null,
+      shortcuts: ui.shortcuts ?? {},
     });
   },
 
@@ -308,6 +315,14 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       return { agentModels };
     }),
   setDefaultProvider: (provider) => set({ defaultProvider: provider }),
+  setShortcut: (id, chord) =>
+    set((s) => {
+      const shortcuts = { ...s.shortcuts };
+      if (chord === null) delete shortcuts[id];
+      else shortcuts[id] = chord;
+      return { shortcuts };
+    }),
+  resetShortcuts: () => set({ shortcuts: {} }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -336,6 +351,7 @@ interface Snapshot {
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
     defaultProvider?: ProviderId | null;
+    shortcuts?: Record<string, string>;
   } | null;
 }
 
@@ -354,7 +370,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model }) => ({ id, provider, title, cwd, worktree, raceId, model })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts },
   };
 }
 
