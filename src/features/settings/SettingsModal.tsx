@@ -227,7 +227,7 @@ function VoiceSettings() {
             <button
               disabled={busy !== null}
               onClick={() => void act("signin", async () => (await signInWithChatGpt(), "Signed in"))}
-              className="flex items-center gap-1.5 rounded-md bg-fg px-3 py-1.5 text-xs font-medium text-bg hover:opacity-90 disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40"
             >
               {busy === "signin" && <Loader2 size={12} className="animate-spin" />}
               {busy === "signin" ? "Finish signing in in your browser…" : "Continue with ChatGPT"}
