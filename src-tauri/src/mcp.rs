@@ -215,7 +215,7 @@ pub fn winfer_server(pane_id: &str) -> Option<Server> {
     })
 }
 
-/// CLI arguments that register `servers` with an agent (Claude Code or Codex).
+/// CLI arguments that register `servers` with an agent (Claude Code or Codex; OpenCode: [`agent_env`]).
 pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
     if servers.is_empty() {
         return Vec::new();
@@ -267,9 +267,58 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
     }
 }
 
+/// Environment that registers `servers` with an agent configured through its environment
+/// (OpenCode reads extra config from `OPENCODE_CONFIG_CONTENT`). `existing` is the variable's
+/// current value, if the user set one: our servers are added to it.
+pub fn agent_env(provider_id: &str, servers: &[Server], existing: Option<&str>) -> Vec<(String, String)> {
+    if servers.is_empty() || provider_id != "opencode" {
+        return Vec::new();
+    }
+    let mut config = existing
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    if !config["mcp"].is_object() {
+        config["mcp"] = json!({});
+    }
+    for s in servers {
+        let environment: serde_json::Map<String, Value> = s
+            .env
+            .iter()
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
+        let command: Vec<&str> = std::iter::once(s.command.as_str()).chain(s.args.iter().map(String::as_str)).collect();
+        config["mcp"][s.name] = json!({
+            "type": "local",
+            "command": command,
+            "environment": environment,
+            "enabled": true,
+        });
+    }
+    vec![("OPENCODE_CONFIG_CONTENT".into(), config.to_string())]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_gets_servers_through_its_config_env() {
+        let servers = [Server {
+            name: "winfer",
+            command: "/app/winfer".into(),
+            args: vec!["mcp-stdio".into()],
+            env: vec![("WINFER_PANE_ID", "p-1".into())],
+        }];
+        let env = agent_env("opencode", &servers, Some(r#"{"theme":"dark","mcp":{"mine":{"type":"remote"}}}"#));
+        assert_eq!(env[0].0, "OPENCODE_CONFIG_CONTENT");
+        let config: Value = serde_json::from_str(&env[0].1).unwrap();
+        assert_eq!(config["theme"], "dark");
+        assert_eq!(config["mcp"]["mine"]["type"], "remote");
+        assert_eq!(config["mcp"]["winfer"]["command"], json!(["/app/winfer", "mcp-stdio"]));
+        assert_eq!(config["mcp"]["winfer"]["environment"]["WINFER_PANE_ID"], "p-1");
+        assert!(agent_env("claude", &servers, None).is_empty());
+    }
 
     fn env() -> (String, String, String) {
         ("127.0.0.1:1".into(), "t".into(), "p-1".into())

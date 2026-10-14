@@ -80,6 +80,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 
 - [ ] Terminal tab (or Ctrl+`): a shell in the workspace folder; it keeps running when switching tabs or workspaces (each workspace has its own); the ↻ button restarts it. Ctrl+` again hides the panel.
 
+- [ ] OpenCode pane: ask it to open a page and click something / take a screenshot (tools `winfer-browser_*`), and to "notify me when you're done" (`winfer_notify_user`); a native notification appears. Works with OpenCode 1.x and 2.x (2.x is started with `--standalone`).
+
 ## 6. Voice
 - [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
 - [ ] Settings → Microphone lists your devices (MacBook Pro Microphone, AirPods…); pick one → Test → "Heard you on …" with a moving meter. "System default" follows macOS.

@@ -107,6 +107,27 @@ pub(crate) fn resolve_cwd(cwd: Option<&str>) -> PathBuf {
     if path.is_dir() { path } else { home }
 }
 
+/// Whether the installed OpenCode is version 2 or later (which has `--standalone`). Asked once.
+fn opencode_has_shared_server(launcher: &crate::env::Launcher) -> bool {
+    static V2: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V2.get_or_init(|| {
+        let output = crate::env::no_window(
+            std::process::Command::new(&launcher.program)
+                .args(&launcher.args)
+                .arg("--version")
+                .env("PATH", crate::env::path_var()),
+        )
+        .output();
+        output.is_ok_and(|o| opencode_major(&String::from_utf8_lossy(&o.stdout)) >= Some(2))
+    })
+}
+
+/// Major version from `opencode --version` ("opencode v2.0.28", "0.15.3").
+fn opencode_major(text: &str) -> Option<u32> {
+    let start = text.find(|c: char| c.is_ascii_digit())?;
+    text[start..].split('.').next()?.parse().ok()
+}
+
 /// Orders an agent's CLI arguments. MCP args come first: Claude's `--mcp-config` is variadic and
 /// would swallow a following positional prompt, and the single-value `--settings` after it ends
 /// the list. Codex's `-c` overrides must precede subcommands like `resume`.
@@ -144,6 +165,8 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
         .ok_or_else(|| format!("unknown provider: {}", req.provider_id))?;
 
     let mut type_prompt = false;
+    // Set after the login environment, which they'd otherwise be overwritten by.
+    let mut agent_env = Vec::new();
     let mut cmd = match &provider.command {
         Some(command) => {
             let servers: Vec<_> = mcp::winfer_server(&req.pane_id)
@@ -154,6 +177,13 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 .ok_or_else(|| format!("{} isn't installed (no `{command}` on PATH)", provider.name))?;
             let mut cmd = CommandBuilder::new(&launcher.program);
             cmd.args(&launcher.args);
+            // Environment variables don't pass through cmd.exe, so these work even for a batch file.
+            agent_env = mcp::agent_env(&provider.id, &servers, login_env().get("OPENCODE_CONFIG_CONTENT").map(String::as_str));
+            // OpenCode 2 runs sessions in a shared background server that never sees this
+            // process's environment (so our MCP servers); its own private server does.
+            if provider.id == "opencode" && !agent_env.is_empty() && opencode_has_shared_server(&launcher) {
+                cmd.arg("--standalone");
+            }
             // A batch file we couldn't unwrap passes arguments through cmd.exe: only simple ones
             // survive, so JSON configs are left out and the prompt is typed in instead.
             type_prompt = launcher.batch;
@@ -181,6 +211,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
     };
 
     for (key, value) in login_env() {
+        cmd.env(key, value);
+    }
+    for (key, value) in agent_env {
         cmd.env(key, value);
     }
     cmd.env("TERM", "xterm-256color");
@@ -453,6 +486,14 @@ mod tests {
             ),
             ["-c", "a=1", "--model", "gpt-5.5", "resume", "--last"]
         );
+    }
+
+    #[test]
+    fn reads_opencode_major_version() {
+        assert_eq!(opencode_major("opencode v2.0.28\n"), Some(2));
+        assert_eq!(opencode_major("0.15.3"), Some(0));
+        assert_eq!(opencode_major("1.4.0"), Some(1));
+        assert_eq!(opencode_major(""), None);
     }
 
     #[test]
