@@ -132,6 +132,16 @@ export function BrowserPanel() {
                 <button
                   key={tab.id}
                   onClick={() => selectTab(tab.id, workspace.id)}
+                  // Middle-click closes, like a real browser. preventDefault on mousedown
+                  // stops the platform autoscroll cursor from kicking in.
+                  onMouseDown={(e) => {
+                    if (e.button === 1) e.preventDefault();
+                  }}
+                  onAuxClick={(e) => {
+                    if (e.button !== 1) return;
+                    e.preventDefault();
+                    void closeTab(tab.id, workspace.id);
+                  }}
                   title={`${tab.url}\n${workspace.name}`}
                   className={cn(
                     "group flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs",
