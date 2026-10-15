@@ -188,6 +188,7 @@ pub fn run() {
             usage::usage_codex_context,
             usage::usage_opencode,
             usage::usage_opencode_context,
+            usage::usage_opencode_model,
             usage_history::usage_history,
             llm::llm_compose,
             chatgpt::chatgpt_status,

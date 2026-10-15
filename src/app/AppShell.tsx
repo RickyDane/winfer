@@ -25,6 +25,7 @@ import { DragLayer } from "@/features/layout/DragLayer";
 import { Toaster } from "@/components/Toaster";
 import { UsageMeter } from "@/features/usage/UsageMeter";
 import { startUsageTracking } from "@/features/usage/usage";
+import { startWakes } from "@/features/usage/agentUsage";
 import { startUpdateChecks } from "@/features/updates/updater";
 import { WhatsNew } from "@/features/updates/WhatsNew";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
@@ -168,6 +169,7 @@ export function AppShell() {
     startAgentApi();
     startProgressTracking();
     startUsageTracking();
+    startWakes();
     startUpdateChecks();
     startPluginEvents();
     void loadPlugins().catch((err) => console.error("plugins failed to load", err));

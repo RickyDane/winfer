@@ -11,6 +11,10 @@ vi.mock("@/features/terminal/xtermRegistry", () => ({
   readTerminal: vi.fn((id: string) => (id === "p-2" ? "$ npm test\n12 passing" : null)),
 }));
 
+const storage = new Map<string, string>();
+vi.stubGlobal("localStorage", { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v) });
+vi.mock("@tauri-apps/plugin-notification", () => ({ isPermissionGranted: vi.fn(async () => false), sendNotification: vi.fn() }));
+
 const { runTool } = await import("./agentApi");
 const { useWorkspaces } = await import("@/stores/workspaces");
 const terminal = await import("@/features/terminal/xtermRegistry");
@@ -66,5 +70,71 @@ describe("agent MCP tools", () => {
     const spawned = ws.panes.at(-1)!;
     expect(spawned).toMatchObject({ provider: "codex", prompt: "write tests", wantsWorktree: true });
     await expect(call("spawn_agent", { provider: "grok" })).rejects.toThrow("Available: claude, codex");
+  });
+});
+
+describe("usage tools", async () => {
+  const { useUsage } = await import("@/features/usage/usage");
+  const { deliverWakes, pendingWake } = await import("@/features/usage/agentUsage");
+  const now = Date.now();
+
+  beforeEach(() => {
+    useUsage.setState({
+      samples: {},
+      snapshots: {
+        claude: {
+          provider: "claude",
+          at: now,
+          windows: [
+            { kind: "session", label: "5-hour", usedPercent: 92, resetsAt: now + 90 * 60_000 },
+            { kind: "week", label: "Weekly", usedPercent: 40, resetsAt: now + 3 * 86_400_000 },
+          ],
+        },
+      },
+    });
+  });
+
+  it("reports what is left of each window", async () => {
+    const text = await call("usage_status");
+    expect(text).toContain("5-hour: 92% used, 8% left, resets");
+    expect(text).toContain("(in 1h 30m)");
+    expect(text).toContain("Weekly: 40% used, 60% left");
+    expect(text).toContain("Least left: 5-hour, 8%.");
+    expect(await runTool({ id: "1", tool: "usage_status", args: {}, paneId: "p-2" })).toContain("no usage numbers for Codex yet");
+  });
+
+  it("wakes the agent after the low window resets", async () => {
+    expect(await call("wait_for_usage_reset", { message: "Continue building xyz" })).toContain("when the 5-hour limit resets");
+    const wake = pendingWake("p-1")!;
+    expect(wake.at).toBe(now + 91 * 60_000);
+    deliverWakes(wake.at - 1000);
+    expect(terminal.sendText).not.toHaveBeenCalled();
+    deliverWakes(wake.at);
+    expect(terminal.sendText).toHaveBeenCalledWith("p-1", "Continue building xyz");
+    expect(terminal.sendText).toHaveBeenCalledWith("p-1", "\r");
+    expect(pendingWake("p-1")).toBeNull();
+  });
+
+  it("gives OpenCode the limits of the plan its model is signed in to", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const ws = useWorkspaces.getState().workspaces[0];
+    useWorkspaces.setState({ workspaces: [{ ...ws, panes: [...ws.panes, pane("p-3", "opencode")] }] });
+    useUsage.setState((s) => ({ snapshots: { ...s.snapshots, codex: { ...s.snapshots.claude, provider: "codex" } } }));
+    const asOpencode = () => runTool({ id: "1", tool: "usage_status", args: {}, paneId: "p-3" });
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "usage_opencode_model" ? { provider: "openai", model: "gpt-5.5", plan: true } : null));
+    const text = await asOpencode();
+    expect(text).toContain("through your ChatGPT sign-in, so Codex's plan limits apply");
+    expect(text).toContain("5-hour: 92% used");
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "usage_opencode_model" ? { provider: "openai", model: "gpt-5.5", plan: false } : null));
+    expect(await asOpencode()).toContain("with an API key");
+    vi.mocked(invoke).mockImplementation(async () => null);
+  });
+
+  it("can wait a fixed time, or be cancelled", async () => {
+    await call("wait_for_usage_reset", { minutes: 10 });
+    expect(pendingWake("p-1")!.at).toBeGreaterThanOrEqual(now + 10 * 60_000);
+    expect(await call("wait_for_usage_reset", { cancel: true })).toContain("Cancelled");
+    expect(pendingWake("p-1")).toBeNull();
+    await expect(runTool({ id: "1", tool: "wait_for_usage_reset", args: {}, paneId: "p-2" })).rejects.toThrow("doesn't know when");
   });
 });

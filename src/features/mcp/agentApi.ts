@@ -12,6 +12,7 @@ import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores
 import { logActivity } from "@/stores/activity";
 import { setTask } from "@/features/progress/progress";
 import { agentCaller, pluginAgentToolList, runPluginAgentTool } from "@/features/plugins/plugins";
+import { cancelWake, limitsOf, pendingWake, refreshLimits, scheduleWake, usageReport } from "@/features/usage/agentUsage";
 
 interface Call {
   id: string;
@@ -109,6 +110,28 @@ export async function runTool(call: Call): Promise<string> {
     case "notify_user": {
       reportStatus(self.id, "needs-input", String(a.message ?? "An agent needs you"));
       return "The user has been notified.";
+    }
+    case "usage_status": {
+      const { provider, note } = await limitsOf(self);
+      await refreshLimits(provider);
+      const lines = [note, usageReport(provider)];
+      const wake = pendingWake(self.id);
+      if (wake) lines.push(`You are paused: winfer will wake you at ${new Date(wake.at).toLocaleString()}.`);
+      return lines.filter(Boolean).join("\n");
+    }
+    case "wait_for_usage_reset": {
+      if (a.cancel === true) return cancelWake(self.id) ? "Cancelled: winfer won't wake you." : "You had no wake-up scheduled.";
+      const { provider } = await limitsOf(self);
+      if (a.minutes === undefined) await refreshLimits(provider);
+      try {
+        return scheduleWake(self.id, provider, {
+          below: a.below === undefined ? undefined : Number(a.below),
+          minutes: a.minutes === undefined ? undefined : Number(a.minutes),
+          message: typeof a.message === "string" ? a.message : undefined,
+        });
+      } catch (err) {
+        throw new ToolError(err instanceof Error ? err.message : String(err));
+      }
     }
     default: {
       const caller = agentCaller(self.id)!;

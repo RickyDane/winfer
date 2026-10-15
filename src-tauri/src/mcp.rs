@@ -72,6 +72,21 @@ fn tools() -> Value {
             "name": "notify_user",
             "description": "Get the user's attention with a short message (desktop notification and pane highlight), e.g. when you need a decision.",
             "inputSchema": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"] }
+        },
+        {
+            "name": "usage_status",
+            "description": "How much of your plan's usage limits is left right now: each window (5-hour session, weekly, …) with percent used and left, when it resets, and when it runs out at the current pace. Check it before and during long tasks, e.g. when told to pause if usage runs low.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "wait_for_usage_reset",
+            "description": "Pause until your usage limits reset: winfer types a message into your pane when they do, so you can continue. Call it when usage_status shows you are running low, then end your turn and don't work, poll or sleep until the message arrives. It waits for the windows with less than `below` percent left (or, if none, the one with least left).",
+            "inputSchema": { "type": "object", "properties": {
+                "below": { "type": "number", "description": "Wait for the reset of windows with less than this percent left (default 20)" },
+                "minutes": { "type": "number", "description": "Wait this many minutes instead of until a reset" },
+                "message": { "type": "string", "description": "What winfer types to wake you, e.g. a reminder of what to continue with (default: usage has reset, continue where you left off)" },
+                "cancel": { "type": "boolean", "description": "Cancel your pending wake-up instead" }
+            } }
         }
     ])
 }
@@ -160,7 +175,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "winfer", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user."
+            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets."
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": all_tools(env) }),
@@ -406,7 +421,9 @@ mod tests {
                 "send_to_pane",
                 "spawn_agent",
                 "open_url",
-                "notify_user"
+                "notify_user",
+                "usage_status",
+                "wait_for_usage_reset"
             ]
         );
 

@@ -192,13 +192,20 @@ const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// The account's limits right now, from the endpoint Codex's `/status` reads. Needs a ChatGPT
 /// sign-in (API-key users have no plan limits); None when signed out or the token has expired
 /// (Codex refreshes it on its next run).
+/// Falls back to OpenCode's ChatGPT sign-in: the same plan limits, used through OpenCode.
 fn codex_live() -> Option<Snapshot> {
-    let auth: Value = serde_json::from_str(&std::fs::read_to_string(codex_home()?.join("auth.json")).ok()?).ok()?;
-    let token = auth["tokens"]["access_token"].as_str().filter(|t| !t.is_empty())?;
+    let codex = codex_home()
+        .and_then(|home| std::fs::read_to_string(home.join("auth.json")).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|auth| {
+            let token = auth["tokens"]["access_token"].as_str().filter(|t| !t.is_empty())?.to_string();
+            Some((token, auth["tokens"]["account_id"].as_str().map(String::from)))
+        });
+    let (token, account) = codex.or_else(opencode_chatgpt_token)?;
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
     let mut req = agent.get(CODEX_USAGE_URL).header("Authorization", &format!("Bearer {token}")).header("User-Agent", "codex-cli");
-    if let Some(account) = auth["tokens"]["account_id"].as_str() {
-        req = req.header("ChatGPT-Account-Id", account);
+    if let Some(account) = account {
+        req = req.header("ChatGPT-Account-Id", &account);
     }
     let body: Value = req.call().ok()?.body_mut().read_json().ok()?;
     codex_usage_snapshot(&body, now_ms())
@@ -411,10 +418,83 @@ pub async fn usage_opencode() -> Option<Spend> {
     .flatten()
 }
 
+fn opencode_data() -> Option<PathBuf> {
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))?;
+    Some(data.join("opencode"))
+}
+
+/// OpenCode's sign-ins per model provider (`auth.json`).
+fn opencode_auth() -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(opencode_data()?.join("auth.json")).ok()?).ok()
+}
+
+/// Whether OpenCode signs in to a model provider with an account (a plan with usage limits,
+/// like ChatGPT or Claude) rather than an API key.
+fn opencode_signed_in(auth: &Value, provider: &str) -> bool {
+    auth[provider]["type"].as_str() == Some("oauth")
+}
+
+/// OpenCode's ChatGPT access token and account, unless it has expired (OpenCode refreshes it
+/// on its next run).
+fn opencode_chatgpt_token() -> Option<(String, Option<String>)> {
+    let auth = opencode_auth()?;
+    let openai = &auth["openai"];
+    if !opencode_signed_in(&auth, "openai") || openai["expires"].as_i64().is_some_and(|e| e <= now_ms()) {
+        return None;
+    }
+    let token = openai["access"].as_str().filter(|t| !t.is_empty())?.to_string();
+    Some((token, openai["accountId"].as_str().map(String::from)))
+}
+
+/// The model an OpenCode session uses and whether its provider is signed in with a plan.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeModel {
+    pub provider: String,
+    pub model: String,
+    pub plan: bool,
+}
+
+/// The model of the newest OpenCode session (not a subagent's) started in `cwd`: its last
+/// answer's model, else the session's.
+fn opencode_model_at(conn: &rusqlite::Connection, cwd: &str) -> Option<Value> {
+    let mut stmt = conn
+        .prepare("select id, directory, model from session_v2 where parent_id is null order by time_updated desc limit 200")
+        .ok()?;
+    let (session, model): (String, Option<String>) = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))
+        .ok()?
+        .flatten()
+        .find(|(_, dir, _)| same_dir(dir, cwd))
+        .map(|(id, _, model)| (id, model))?;
+    let mut stmt = conn
+        .prepare("select data from session_message where session_id = ?1 and type = 'assistant' order by seq desc limit 1")
+        .ok()?;
+    let last = stmt
+        .query_map([&session], |r| r.get::<_, String>(0))
+        .ok()?
+        .flatten()
+        .find_map(|raw| serde_json::from_str::<Value>(&raw).ok().map(|d| d["model"].clone()).filter(Value::is_object));
+    last.or_else(|| model.and_then(|m| serde_json::from_str(&m).ok()))
+}
+
+/// Which model the OpenCode session in a pane's folder uses (OpenCode 2; older versions: None).
+#[tauri::command]
+pub async fn usage_opencode_model(cwd: String) -> Option<OpencodeModel> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let model = opencode_model_at(&opencode_db()?, &cwd)?;
+        let provider = model["providerID"].as_str()?.to_string();
+        let plan = opencode_auth().is_some_and(|auth| opencode_signed_in(&auth, &provider));
+        Some(OpencodeModel { provider, model: model["id"].as_str().unwrap_or_default().into(), plan })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// OpenCode 2's database (sessions, messages, the models catalog), read-only.
 pub(crate) fn opencode_db() -> Option<rusqlite::Connection> {
-    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))?;
-    let path = data.join("opencode/opencode.db");
+    let path = opencode_data()?.join("opencode.db");
     if !path.exists() {
         return None;
     }
@@ -631,9 +711,19 @@ mod tests {
             insert into session_message values ('s1', 'assistant', 2, 20, '{"model":{"id":"big","providerID":"opencode"},"tokens":{"input":1000,"output":500,"reasoning":500,"cache":{"read":48000,"write":0}}}');"#,
         )
         .unwrap();
+        assert_eq!(opencode_model_at(&conn, "/w/a").unwrap()["id"], "big");
+        assert!(opencode_model_at(&conn, "/w/c").is_none());
         let c = opencode_context_at(&conn, "/w/a/").unwrap();
         assert_eq!((c.tokens, c.window, c.used_percent, c.at), (50000, 200000, 25.0, 20));
         assert!(opencode_context_at(&conn, "/w/c").is_none());
+    }
+
+    #[test]
+    fn tells_plan_sign_ins_from_api_keys() {
+        let auth = json!({ "openai": { "type": "oauth", "access": "a", "refresh": "r", "expires": 1 }, "anthropic": { "type": "api", "key": "k" } });
+        assert!(opencode_signed_in(&auth, "openai"));
+        assert!(!opencode_signed_in(&auth, "anthropic"));
+        assert!(!opencode_signed_in(&auth, "opencode"));
     }
 
     fn opendb_context(dir: &str) -> Option<Context> {

@@ -288,6 +288,8 @@ mockIPC(
       }
       case "usage_opencode_context":
         return { usedPercent: 31, tokens: 81_265, window: 262_144, at: Date.now() };
+      case "usage_opencode_model":
+        return { provider: "openai", model: "gpt-5.5", plan: true };
       case "usage_opencode":
         return { tokens: 412_300, cost: 0.83, sessions: 14 };
       case "usage_history": {
