@@ -296,6 +296,8 @@ async function gzipBase64(text: string) {
 /** Answers one `vault_exec` call of the knowledge-base plugin. */
 export function knowledgeBaseExec(command: string): Promise<{ code: number; timedOut: boolean; output: string }> | { code: number; timedOut: boolean; output: string } {
   if (command.startsWith("command -v graphify")) return ok("/Users/maya/.local/bin/graphify\ngraphify 0.8.18\n");
+  if (command === 'echo "$HOME"') return ok("/Users/maya\n");
+  if (/^\[ -f '[^']+' \] && echo @@YES \|\| echo @@NO$/.test(command)) return ok(exists ? "@@YES\n" : "@@NO\n");
   const noGraph = command.includes("@@NOGRAPH") && !exists;
   if (noGraph) return ok("@@NOGRAPH\n");
   if (command.includes("@@NONE")) {

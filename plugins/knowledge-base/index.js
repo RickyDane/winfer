@@ -505,7 +505,8 @@ const STAMP = IS_WIN
 /** Runs `command` only if the project has a graph; otherwise prints @@NOGRAPH. */
 const ifGraph = (command) =>
   IS_WIN ? `if exist ${OUT}\\graph.json (${command}) else (echo @@NOGRAPH)` : `if [ -f ${OUT}/graph.json ]; then ${command}; else echo @@NOGRAPH; fi`;
-const openCommand = (file) => (IS_WIN ? `start "" ${q(file)}` : `(open ${q(file)} 2>/dev/null || xdg-open ${q(file)})`);
+const fileExists = (rel) => (IS_WIN ? `if exist ${q(rel.replace(/\//g, "\\"))} (echo @@YES) else (echo @@NO)` : `[ -f ${q(rel)} ] && echo @@YES || echo @@NO`);
+const fileUrl = (absolute) => (IS_WIN ? `file:///${encodeURI(absolute.replace(/\\/g, "/"))}` : `file://${encodeURI(absolute)}`);
 
 function snapshotKey(name) {
   const match = SNAPSHOT.exec(name);
@@ -532,7 +533,20 @@ function createStore(api) {
 
   const changed = () => listeners.forEach((fn) => fn());
   const save = () => localStorage.setItem(STORAGE, JSON.stringify({ settings }));
-  const exec = (cwd, command, timeoutSec = 120, keys = []) => api.vault.exec({ command, cwd, keys, timeoutSec });
+  let home = null;
+  /** The home folder, for workspaces rooted at "~" (vault.exec takes "" as home but not "~"). */
+  async function homeDir() {
+    if (home === null) {
+      const r = await api.vault.exec({ command: IS_WIN ? "echo %USERPROFILE%" : 'echo "$HOME"', cwd: "", keys: [], timeoutSec: 15 });
+      home = r.output.trim();
+    }
+    return home;
+  }
+  async function absolute(dir) {
+    if (dir !== "~" && !dir.startsWith("~/") && !dir.startsWith("~\\")) return dir;
+    return (await homeDir()) + dir.slice(1);
+  }
+  const exec = async (cwd, command, timeoutSec = 120, keys = []) => api.vault.exec({ command, cwd: await absolute(cwd), keys, timeoutSec });
   const anyRoot = () => {
     const s = api.state();
     return s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.rootDir ?? s.workspaces[0]?.rootDir ?? ".";
@@ -797,6 +811,7 @@ function createStore(api) {
     reloadIfChanged,
     snapshotIds,
     readText,
+    absolute,
     build,
     cancelBuild,
     agentFinished,
@@ -3661,6 +3676,29 @@ function mountPage(el, store, api) {
 
   // Menus --------------------------------------------------------------------------------------
 
+  /**
+   * Shows a file of graphify-out in winfer's browser panel. `make` writes it when it's missing
+   * (or every time with `always`): graphify skips graph.html for graphs over 5,000 nodes, and
+   * `graphify export html` then writes a view of the communities instead.
+   */
+  async function openOutput(k, file, make, always = false) {
+    const rel = `${OUT}/${file}`;
+    try {
+      const check = await store.exec(k.root, fileExists(rel), 15);
+      if (always || !check.output.includes("@@YES")) {
+        if (!make) throw new Error(`${rel} doesn't exist. Update the graph to write it.`);
+        api.toast(`Writing ${file}…`);
+        const r = await store.exec(k.root, headOf(make), 600);
+        const again = await store.exec(k.root, fileExists(rel), 15);
+        if (r.code !== 0 || !again.output.includes("@@YES")) throw new Error(lastLines(r.output, 4) || `graphify didn't write ${rel}.`);
+      }
+      const root = (await store.absolute(k.root)).replace(/[\\/]$/, "");
+      api.execute({ type: "browser.open", url: fileUrl(`${root}/${rel}`), newTab: true });
+    } catch (err) {
+      api.toast(`Couldn't open ${file}: ${String(err?.message ?? err)}`, "error");
+    }
+  }
+
   function toggleMenu(name) {
     ui.menu = ui.menu === name ? null : name;
     renderTop();
@@ -3697,16 +3735,9 @@ function mountPage(el, store, api) {
           item("key", "Deep build in the background", ui.hasKey ? "Uses your Anthropic API key" : "Add an API key in settings first", () => void store.build(k.root, "headless"), !!k.building || !ui.hasKey),
           item("alert", "Force update", "Keep the new graph even if it's smaller", () => void store.build(k.root, "quick", { force: true }), !!k.building || !k.graph),
           h("div", { class: "kb-menu-sep" }),
-          item("external", "Open graph.html", "graphify's own 2D view in your browser", () => void store.exec(k.root, openCommand(pathJoin(OUT, "graph.html")), 15), !k.graph),
-          item(
-            "layers",
-            "Open tree view",
-            "Collapsible file tree with each symbol's links",
-            () =>
-              void store.exec(k.root, `graphify tree && ${openCommand(pathJoin(OUT, "GRAPH_TREE.html"))}`, 120).then((r) => r.code !== 0 && api.toast("graphify tree failed", "error")),
-            !k.graph,
-          ),
-          item("file", "Open the report", "GRAPH_REPORT.md", () => void store.exec(k.root, openCommand(pathJoin(OUT, "GRAPH_REPORT.md")), 15), !k.graph),
+          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", "graphify export html"), !k.graph),
+          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", "graphify tree", true), !k.graph),
+          item("file", "Open the report", "GRAPH_REPORT.md, in the browser panel", () => void openOutput(k, "GRAPH_REPORT.md"), !k.graph),
         ),
       );
       return;
