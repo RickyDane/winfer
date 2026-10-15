@@ -1,5 +1,6 @@
 import { Gauge } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
@@ -181,19 +182,24 @@ export function UsageMeter() {
 
 /** Sidebar footer: opens the Usage page in settings; hovering previews the limits. */
 export function UsageButton({ onOpen, title }: { onOpen: () => void; title: string }) {
-  const [hover, setHover] = useState(false);
+  // Anchor point (button's top-left) while the preview is shown.
+  const [hover, setHover] = useState<{ left: number; bottom: number } | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  const anchor = useRef<HTMLDivElement>(null);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const enter = () => {
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setHover(true), 250);
+    timer.current = window.setTimeout(() => {
+      const r = anchor.current?.getBoundingClientRect();
+      if (r) setHover({ left: r.left, bottom: window.innerHeight - r.top });
+    }, 250);
   };
   const leave = () => {
     window.clearTimeout(timer.current);
-    setHover(false);
+    setHover(null);
   };
   return (
-    <div className="relative" onMouseEnter={enter} onMouseLeave={leave}>
+    <div ref={anchor} className="relative" onMouseEnter={enter} onMouseLeave={leave}>
       <button
         onClick={() => {
           leave();
@@ -204,14 +210,17 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
       >
         <Gauge size={14} />
       </button>
-      {hover && (
-        // pb bridges the gap so moving onto the preview doesn't close it.
-        <div className="absolute bottom-full left-0 z-50 pb-1">
-          <UsageDetails className="anim-menu">
-            <p className="border-t border-border pt-3 text-[11px] text-fg-subtle">Click for usage history</p>
-          </UsageDetails>
-        </div>
-      )}
+      {hover &&
+        // Portaled so the sidebar can't clip it or the main area paint over it; still a React child,
+        // so hovering it keeps the preview open. pb bridges the gap to the button.
+        createPortal(
+          <div className="fixed z-[1000] pb-1" style={{ left: hover.left, bottom: hover.bottom }}>
+            <UsageDetails className="anim-menu">
+              <p className="border-t border-border pt-3 text-[11px] text-fg-subtle">Click for usage history</p>
+            </UsageDetails>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
