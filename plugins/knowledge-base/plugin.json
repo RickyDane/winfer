@@ -1,7 +1,7 @@
 {
   "id": "knowledge-base",
   "name": "Knowledge Base",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy. Agents query it with tools and you watch what they look at.",
   "author": "winfer",
   "main": "index.js",

@@ -76,11 +76,17 @@ pub struct ShellRun {
 /// Runs `command` through the shell in `dir` with the login environment plus `env`, without
 /// stdin, killing it (and its children) after `timeout`.
 pub fn run_shell(dir: &Path, command: &str, env: &[(String, String)], timeout: Duration) -> Result<ShellRun, String> {
-    let mut cmd = if cfg!(windows) {
+    // The command line goes to cmd as written: /S strips just the outer quotes. (args() escapes
+    // inner quotes as \" for the MSVC runtime, which cmd doesn't understand, so a quoted program
+    // path such as "C:\...\uv.exe" wasn't found.)
+    #[cfg(windows)]
+    let mut cmd = {
         let mut c = Command::new("cmd");
-        c.args(["/C", &format!("{command} 2>&1")]);
+        std::os::windows::process::CommandExt::raw_arg(&mut c, format!("/S /C \"{command} 2>&1\""));
         c
-    } else {
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
         let mut c = Command::new("sh");
         c.args(["-c", &format!("{command} 2>&1")]);
         c
@@ -172,6 +178,14 @@ pub async fn review_run_tests(dir: String) -> Result<Option<TestRun>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runs_quoted_programs() {
+        // Like a plugin running "C:\Users\me\.local\bin\uv.exe": the quotes must reach the shell.
+        let command = if cfg!(windows) { "\"cmd\" /C echo ok" } else { "\"echo\" ok" };
+        let run = run_shell(&std::env::temp_dir(), command, &[], Duration::from_secs(30)).unwrap();
+        assert_eq!(run.output.trim(), "ok");
+    }
 
     fn project(files: &[(&str, &str)]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("winfer-review-{:x}", rand::random::<u64>()));

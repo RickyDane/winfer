@@ -91,14 +91,33 @@ function icon(name, cls = "kb-i") {
   return svg;
 }
 
-/** Quotes one shell argument; on Windows (cmd) characters it would interpret are dropped. */
+/**
+ * Quotes one argument for the shell: sh on macOS and Linux; PowerShell on Windows, where every
+ * command is a PowerShell script (see `powershell`).
+ */
 function q(value) {
   const s = String(value ?? "").replace(/\0/g, "");
-  if (IS_WIN) return `"${s.replace(/["%^&|<>!\r\n]/g, " ")}"`;
+  if (IS_WIN) return `'${s.replace(/['\u2018\u2019\u201a\u201b]/g, (m) => m + m)}'`;
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-const pathJoin = (...parts) => parts.join(IS_WIN ? "\\" : "/");
+/**
+ * Wraps a PowerShell script so it reaches PowerShell intact. winfer runs commands through
+ * `cmd /C`, and on Windows any double quote in them gets escaped in a way cmd doesn't read
+ * (a quoted path came out as `"\"C:\...\uv.exe""`). An encoded command has no quotes at all.
+ */
+function powershell(script) {
+  const text = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'\n${script}`;
+  let bytes = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    bytes += String.fromCharCode(c & 0xff, c >> 8);
+  }
+  return `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${btoa(bytes)}`;
+}
+
+/** Runs a program and passes on its exit code (PowerShell otherwise exits 0). */
+const run = (command) => (IS_WIN ? `${command}; exit $LASTEXITCODE` : command);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 const baseName = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() ?? String(p);
@@ -499,9 +518,13 @@ const CHUNK = 19_000;
  * Keeps the start of a command's output (what an agent needs most) and its exit code, since
  * vault.exec would keep the end.
  */
-const headOf = (command, max = CHUNK) => (IS_WIN ? command : `__o=$(${command} 2>&1); __c=$?; printf '%s\n' "$__o" | head -c ${max}; exit $__c`);
+const headOf = (command, max = CHUNK) =>
+  IS_WIN
+    ? `$__o = ((${command}) 2>&1 | ForEach-Object { "$_" }) -join "\`n"; $__c = $LASTEXITCODE; if ($__o.Length -gt ${max}) { $__o = $__o.Substring(0, ${max}) }; $__o; exit $__c`
+    : `__o=$(${command} 2>&1); __c=$?; printf '%s\n' "$__o" | head -c ${max}; exit $__c`;
+/** graph.json's modification time in seconds. */
 const STAMP = IS_WIN
-  ? `powershell -NoProfile -Command "if (Test-Path ${OUT}/graph.json) { (Get-Item ${OUT}/graph.json).LastWriteTimeUtc.Ticks }"`
+  ? `if (Test-Path '${OUT}/graph.json') { [DateTimeOffset]::new((Get-Item '${OUT}/graph.json').LastWriteTimeUtc).ToUnixTimeSeconds() }`
   : `date -r ${OUT}/graph.json +%s 2>/dev/null`;
 const UV_INSTALLER = "https://astral.sh/uv/install.sh";
 const UV_INSTALLER_WIN = "https://astral.sh/uv/install.ps1";
@@ -516,14 +539,35 @@ const DETECT_UNIX = [
   `py=$(head -n 1 "$b" | sed 's/^#! *//')`,
   `echo "@@SKILLS $($py -c 'import graphify, os; print(os.path.dirname(graphify.__file__))' 2>/dev/null)"`,
 ].join("; ");
-const DETECT_WIN =
-  'powershell -NoProfile -Command "$c = Get-Command graphify -ErrorAction SilentlyContinue; $b = if ($c) { $c.Source } else { $p = Join-Path $env:USERPROFILE \'.local\\bin\\graphify.exe\'; if (Test-Path $p) { $p } }; if (-not $b) { \'@@MISSING\' } else { \'@@BIN \' + $b; \'@@ONPATH \' + [int][bool]$c; \'@@VERSION \' + (& $b --version | Select-Object -First 1) }"';
+const DETECT_WIN = [
+  "$c = Get-Command graphify -ErrorAction SilentlyContinue",
+  "$b = if ($c) { $c.Source } else { $null }",
+  // Not on winfer's PATH yet (it updates when winfer restarts): where uv, pipx and pip put it.
+  'if (-not $b) { $cands = @("$env:USERPROFILE\\.local\\bin\\graphify.exe") + @(Get-ChildItem "$env:APPDATA\\Python\\*\\Scripts\\graphify.exe", "$env:LOCALAPPDATA\\Programs\\Python\\*\\Scripts\\graphify.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }); foreach ($p in $cands) { if ($p -and (Test-Path $p)) { $b = $p; break } } }',
+  "if (-not $b) { '@@MISSING'; exit 0 }",
+  "'@@BIN ' + $b",
+  "'@@ONPATH ' + [int][bool]$c",
+  "'@@VERSION ' + [string](& $b --version 2>&1 | Select-Object -First 1)",
+  // The Python next to it (a venv, or a pip install) knows where graphify's skill files are.
+  '$pys = @((Join-Path (Split-Path $b) "python.exe"), (Join-Path (Split-Path (Split-Path $b)) "python.exe"), "$env:APPDATA\\uv\\tools\\graphifyy\\Scripts\\python.exe")',
+  "foreach ($py in $pys) { if (Test-Path $py) { $d = & $py -c 'import graphify, os; print(os.path.dirname(graphify.__file__))' 2>$null; if ($d) { '@@SKILLS ' + $d; break } } }",
+].join("\n");
 const FIND_UV_UNIX = 'command -v uv 2>/dev/null || for p in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do if [ -x "$p" ]; then echo "$p"; break; fi; done';
-const FIND_UV_WIN = 'where uv 2>nul || if exist "%USERPROFILE%\\.local\\bin\\uv.exe" echo %USERPROFILE%\\.local\\bin\\uv.exe';
+const FIND_UV_WIN =
+  '$c = Get-Command uv -ErrorAction SilentlyContinue; if ($c) { $c.Source } else { foreach ($p in @("$env:USERPROFILE\\.local\\bin\\uv.exe", "$env:USERPROFILE\\.cargo\\bin\\uv.exe")) { if (Test-Path $p) { $p; break } } }';
+/** META_UNIX for Windows. */
+const META_WIN = [
+  `if (-not (Test-Path '${OUT}/graph.json')) { '@@NONE'; exit 0 }`,
+  `'@@STAMP ' + [DateTimeOffset]::new((Get-Item '${OUT}/graph.json').LastWriteTimeUtc).ToUnixTimeSeconds()`,
+  "'@@HEAD ' + (git rev-parse HEAD 2>$null)",
+  `git check-ignore -q ${OUT} 2>$null; '@@IGNORED ' + $LASTEXITCODE`,
+  "'@@SNAPSHOTS'",
+  `Get-ChildItem -Name '${OUT}'`,
+].join("\n");
 /** Runs `command` only if the project has a graph; otherwise prints @@NOGRAPH. */
 const ifGraph = (command) =>
-  IS_WIN ? `if exist ${OUT}\\graph.json (${command}) else (echo @@NOGRAPH)` : `if [ -f ${OUT}/graph.json ]; then ${command}; else echo @@NOGRAPH; fi`;
-const fileExists = (rel) => (IS_WIN ? `if exist ${q(rel.replace(/\//g, "\\"))} (echo @@YES) else (echo @@NO)` : `[ -f ${q(rel)} ] && echo @@YES || echo @@NO`);
+  IS_WIN ? `if (Test-Path '${OUT}/graph.json') { ${command} } else { '@@NOGRAPH' }` : `if [ -f ${OUT}/graph.json ]; then ${command}; else echo @@NOGRAPH; fi`;
+const fileExists = (rel) => (IS_WIN ? `if (Test-Path -LiteralPath ${q(rel)}) { '@@YES' } else { '@@NO' }` : `[ -f ${q(rel)} ] && echo @@YES || echo @@NO`);
 const fileUrl = (absolute) => (IS_WIN ? `file:///${encodeURI(absolute.replace(/\\/g, "/"))}` : `file://${encodeURI(absolute)}`);
 
 function snapshotKey(name) {
@@ -582,7 +626,11 @@ function createStore(api) {
     if (dir !== "~" && !dir.startsWith("~/") && !dir.startsWith("~\\")) return dir;
     return (await homeDir()) + dir.slice(1);
   }
-  const exec = async (cwd, command, timeoutSec = 120, keys = []) => api.vault.exec({ command, cwd: await absolute(cwd), keys, timeoutSec });
+  /** Runs a command in `cwd`: sh on macOS and Linux, a PowerShell script on Windows. */
+  const exec = async (cwd, command, timeoutSec = 120, keys = []) => {
+    const r = await api.vault.exec({ command: IS_WIN ? powershell(command) : command, cwd: await absolute(cwd), keys, timeoutSec });
+    return { ...r, output: r.output.replace(/\r\n/g, "\n") };
+  };
   const anyRoot = () => {
     const s = api.state();
     return s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.rootDir ?? s.workspaces[0]?.rootDir ?? ".";
@@ -626,7 +674,7 @@ function createStore(api) {
   }
 
   /** The graphify command, quoted, for building shell commands. */
-  const bin = () => (graphify.bin ? q(graphify.bin) : "graphify");
+  const bin = () => (graphify.bin ? `${IS_WIN ? "& " : ""}${q(graphify.bin)}` : "graphify");
 
   /**
    * Installs graphify with uv, installing uv first when it's missing (with its official
@@ -643,20 +691,20 @@ function createStore(api) {
       if (update && !/[\\/]uv[\\/]tools[\\/]/.test(where)) {
         if (!/[\\/]pipx[\\/]/.test(where)) throw new Error(`graphify at ${graphify.bin} wasn't installed with uv or pipx; update it the way you installed it.`);
         step("Updating graphify…");
-        const r = await exec("", "pipx upgrade graphifyy", 900);
+        const r = await exec("", run("pipx upgrade graphifyy"), 900);
         if (r.code !== 0) throw new Error(lastLines(r.output, 8));
       } else {
         step("Looking for uv…");
         let uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
         if (!uv) {
           step("Installing uv…");
-          const r = await exec("", IS_WIN ? `powershell -NoProfile -ExecutionPolicy ByPass -c "irm ${UV_INSTALLER_WIN} | iex"` : `curl -LsSf ${UV_INSTALLER} | sh`, 600);
+          const r = await exec("", IS_WIN ? `irm ${UV_INSTALLER_WIN} | iex` : `curl -LsSf ${UV_INSTALLER} | sh`, 600);
           if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing uv failed.");
           uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
           if (!uv) throw new Error("uv was installed but winfer can't find it. Restart winfer and try again.");
         }
         step(update ? "Updating graphify…" : "Installing graphify…");
-        const r = await exec("", `${q(uv)} tool install --upgrade graphifyy`, 900);
+        const r = await exec("", run(`${IS_WIN ? "& " : ""}${q(uv)} tool install --upgrade graphifyy`), 900);
         if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing graphify failed.");
       }
       const was = graphify.version;
@@ -706,7 +754,7 @@ function createStore(api) {
    */
   async function readText(root, rel) {
     const prepare = IS_WIN
-      ? `powershell -NoProfile -Command "$b=[IO.File]::ReadAllBytes((Join-Path (Get-Location) '${rel.replace(/'/g, "''")}')); $m=New-Object IO.MemoryStream; $z=New-Object IO.Compression.GZipStream($m,[IO.Compression.CompressionMode]::Compress); $z.Write($b,0,$b.Length); $z.Close(); $s=[Convert]::ToBase64String($m.ToArray()); $f=[IO.Path]::GetTempFileName(); [IO.File]::WriteAllText($f,$s); Write-Output ([string]$s.Length + ' ' + $f)"`
+      ? `$b = [IO.File]::ReadAllBytes((Join-Path (Get-Location) ${q(rel)})); $m = New-Object IO.MemoryStream; $z = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Compress); $z.Write($b, 0, $b.Length); $z.Close(); $s = [Convert]::ToBase64String($m.ToArray()); $f = [IO.Path]::GetTempFileName(); [IO.File]::WriteAllText($f, $s); [string]$s.Length + ' ' + $f`
       : `f=$(mktemp) && gzip -c ${q(rel)} | base64 | tr -d '\\n' > "$f" && echo "$(wc -c < "$f" | tr -d ' ') $f"`;
     const r = await exec(root, prepare, 120);
     const match = /^(\d+) (.+)$/m.exec(r.output.trim());
@@ -715,7 +763,7 @@ function createStore(api) {
     const file = match[2].trim();
     const chunk = (offset) =>
       IS_WIN
-        ? `powershell -NoProfile -Command "[IO.File]::ReadAllText('${file}').Substring(${offset}, ${Math.min(CHUNK, size - offset)})"`
+        ? `[IO.File]::ReadAllText(${q(file)}).Substring(${offset}, ${Math.min(CHUNK, size - offset)})`
         : `tail -c +${offset + 1} ${q(file)} | head -c ${CHUNK}`;
     try {
       const offsets = [];
@@ -736,15 +784,8 @@ function createStore(api) {
       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
     } finally {
-      void exec(root, IS_WIN ? `del ${q(file)}` : `rm -f ${q(file)}`, 15).catch(() => {});
+      void exec(root, IS_WIN ? `Remove-Item -LiteralPath ${q(file)} -ErrorAction SilentlyContinue` : `rm -f ${q(file)}`, 15).catch(() => {});
     }
-  }
-
-  async function metaWindows(root) {
-    const has = await exec(root, ifGraph("echo yes"), 30);
-    if (has.output.includes("@@NOGRAPH")) return { NONE: "" };
-    const [list, head, stamp] = await Promise.all([exec(root, `dir /b ${OUT}`, 30), exec(root, "git rev-parse HEAD", 30), exec(root, STAMP, 30)]);
-    return { SNAPSHOTS: list.output, HEAD: head.code === 0 ? head.output : "", STAMP: stamp.output };
   }
 
   /** (Re)loads a project's graph; concurrent calls share one load. */
@@ -755,13 +796,9 @@ function createStore(api) {
       if (!k.graph) k.status = "loading";
       changed();
       try {
-        let parts;
-        if (IS_WIN) parts = await metaWindows(root);
-        else {
-          const r = await exec(root, META_UNIX, 60);
-          if (r.timedOut) throw new Error("Reading the graph took too long");
-          parts = splitMarked(r.output);
-        }
+        const r = await exec(root, IS_WIN ? META_WIN : META_UNIX, 60);
+        if (r.timedOut) throw new Error("Reading the graph took too long");
+        const parts = splitMarked(r.output);
         if ("NONE" in parts) {
           k.status = "none";
           k.graph = null;
@@ -833,7 +870,7 @@ function createStore(api) {
     k.needsForce = false;
     changed();
     try {
-      const r = await exec(root, `${bin()} update .${force ? " --force" : ""}`, 900);
+      const r = await exec(root, run(`${bin()} update .${force ? " --force" : ""}`), 900);
       k.log = r.output;
       if (r.timedOut) throw new Error("graphify took too long and was stopped.");
       if (r.code !== 0) throw new Error(lastLines(r.output) || `graphify exited with code ${r.code}.`);
@@ -2642,7 +2679,7 @@ function mountPage(el, store, api) {
     ui.answer = { question, busy: true, text: "", nodes: [] };
     renderAnswer();
     try {
-      const r = await store.exec(k.root, `${store.bin} query ${q(question)} --budget 2000`, 90);
+      const r = await store.exec(k.root, run(`${store.bin} query ${q(question)} --budget 2000`), 90);
       if (r.code !== 0) throw new Error(lastLines(r.output) || "graphify query failed");
       const nodes = nodesInOutput(k.graph, r.output);
       ui.answer = { question, busy: false, text: r.output.trim(), nodes };
@@ -3889,7 +3926,7 @@ function mountPage(el, store, api) {
             {
               class: "kb-menu-item",
               onclick: async () => {
-                const r = await store.exec(k.root, IS_WIN ? `echo ${OUT}/>> .gitignore` : `printf '\\n%s\\n' '${OUT}/' >> .gitignore`, 15);
+                const r = await store.exec(k.root, IS_WIN ? `Add-Content -LiteralPath '.gitignore' -Value @('', '${OUT}/')` : `printf '\\n%s\\n' '${OUT}/' >> .gitignore`, 15);
                 if (r.code === 0) {
                   k.ignored = true;
                   api.toast(`Added ${OUT}/ to .gitignore`, "success");
@@ -4623,7 +4660,7 @@ export function activate(api) {
     inputSchema: { type: "object", properties: {} },
     run: async (_args, caller) => {
       const root = rootOf(caller.workspaceId) ?? caller.cwd;
-      const r = await store.exec(root, ifGraph(IS_WIN ? `type ${OUT}\\GRAPH_REPORT.md` : `echo "@@HEAD $(git rev-parse HEAD 2>/dev/null)"; sed -n '1,16p' ${OUT}/GRAPH_REPORT.md`), 30);
+      const r = await store.exec(root, ifGraph(IS_WIN ? `'@@HEAD ' + (git rev-parse HEAD 2>$null); Get-Content -LiteralPath '${OUT}/GRAPH_REPORT.md' -TotalCount 16` : `echo "@@HEAD $(git rev-parse HEAD 2>/dev/null)"; sed -n '1,16p' ${OUT}/GRAPH_REPORT.md`), 30);
       if (r.output.includes("@@NOGRAPH")) return noGraph(root);
       const head = /@@HEAD ([0-9a-f]+)/.exec(r.output)?.[1];
       const report = r.output.replace(/^@@HEAD.*\n/m, "");

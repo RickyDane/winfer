@@ -26,7 +26,7 @@
     {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -40,11 +40,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "e5420e6044c4344c874c1b0b027054de80a209314b139347b8fd911347481ef4"
+          "sha256": "9f7254603f876875ea674619609b7e0f567985e9896ca81d426cbfc2b3ae70f3"
         },
         {
           "path": "plugin.json",
-          "sha256": "58d729ab1577cde23eff81723c537dbd0f1ef21aaa409a5ec5af7e5ab6e4c664"
+          "sha256": "a5a854501a3d6f7a8bfbec76d87e95178f2ab406d9be64cc2f71c65600d16b96"
         }
       ]
     },
