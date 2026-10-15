@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { leaves } from "@/features/layout/tree";
-import { openUrl } from "@/features/browser/browser";
+import { openUrl, shownWorkspaceId } from "@/features/browser/browser";
 import { reportStatus } from "@/features/status/agentStatus";
 import { pasteText, readTerminal, sendText, startDetached } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
@@ -98,7 +98,10 @@ export async function runTool(call: Call): Promise<string> {
     case "open_url": {
       const url = String(a.url ?? "");
       if (!url) throw new ToolError("url is empty");
-      if (ws.id === s.activeWorkspaceId) await openUrl(url, { newTab: Boolean(a.new_tab) });
+      // Shown when the panel already shows this workspace or it's on screen; otherwise the tab
+      // opens in the background and is listed in the panel without taking it over.
+      const onScreen = s.view === "workspace" && ws.id === s.activeWorkspaceId;
+      if (onScreen || ws.id === shownWorkspaceId()) await openUrl(url, { newTab: Boolean(a.new_tab), workspaceId: ws.id });
       else await invoke("browser_new_tab", { workspaceId: ws.id, url });
       logActivity(ws.id, `${describe(ws, self)} opened ${url}`, self.provider);
       return `Opened ${url} in the browser panel.`;

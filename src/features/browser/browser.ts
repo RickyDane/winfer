@@ -1,6 +1,8 @@
 /**
  * Browser panel state and actions. Each workspace has its own headless Chromium
  * (src-tauri/src/browser); tabs come from CDP target discovery, so tabs agents open show up too.
+ * The panel lists every workspace's tabs and shows one of them; it doesn't follow the active
+ * workspace, so switching workspaces (or working in the overview) leaves the page in place.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -42,6 +44,8 @@ interface BrowserState {
   picking: boolean;
   /** Short confirmation shown in the panel ("Sent to Claude Code"). */
   notice: string | null;
+  /** The workspace whose tab the panel shows; null until the panel first opens. */
+  shown: string | null;
 }
 
 export const useBrowser = create<BrowserState>(() => ({
@@ -55,17 +59,33 @@ export const useBrowser = create<BrowserState>(() => ({
   consoleOpen: false,
   picking: false,
   notice: null,
+  shown: null,
 }));
 
 const activeWorkspaceId = () => useWorkspaces.getState().activeWorkspaceId;
+
+/** The workspace whose browser the panel shows (the active one until a tab is picked). */
+export function shownWorkspaceId() {
+  const s = useWorkspaces.getState();
+  const shown = useBrowser.getState().shown;
+  return shown && s.workspaces.some((w) => w.id === shown) ? shown : s.activeWorkspaceId;
+}
+
+/** Where new tabs go: the workspace on screen, or in the overview and plugin pages, the one the panel shows. */
+function targetWorkspaceId() {
+  return useWorkspaces.getState().view === "workspace" ? activeWorkspaceId() : shownWorkspaceId();
+}
 
 function setTabs(workspaceId: string, tabs: Tab[]) {
   useBrowser.setState((s) => {
     const current = s.activeTab[workspaceId];
     const stillOpen = tabs.some((t) => t.id === current);
+    // The shown workspace's last tab closed: show another workspace's tab instead of nothing.
+    const other = tabs.length === 0 && s.shown === workspaceId ? Object.keys(s.tabs).find((id) => id !== workspaceId && s.tabs[id].length > 0) : undefined;
     return {
       tabs: { ...s.tabs, [workspaceId]: tabs },
       activeTab: { ...s.activeTab, [workspaceId]: stillOpen ? current! : (tabs.at(-1)?.id ?? null) },
+      shown: other ?? s.shown,
     };
   });
 }
@@ -103,10 +123,10 @@ function flash(notice: string) {
   noticeTimer = window.setTimeout(() => useBrowser.setState({ notice: null }), 4000);
 }
 
-/** The agent that should receive browser context: the focused agent pane, else the first one. */
+/** The agent that should receive browser context: the shown tab's workspace's focused agent pane, else its first one. */
 function targetAgent() {
   const s = useWorkspaces.getState();
-  const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
+  const ws = s.workspaces.find((w) => w.id === shownWorkspaceId());
   const agents = ws?.panes.filter((p) => p.provider !== "shell") ?? [];
   return agents.find((p) => p.id === s.focusedPaneId) ?? agents[0] ?? null;
 }
@@ -136,7 +156,7 @@ export async function startPick() {
   if (!targetId) return;
   useBrowser.setState({ picking: true });
   try {
-    await invoke("browser_pick_start", { workspaceId: activeWorkspaceId(), targetId });
+    await invoke("browser_pick_start", { workspaceId: shownWorkspaceId(), targetId });
   } catch (err) {
     useBrowser.setState({ picking: false });
     flash(String(err));
@@ -146,7 +166,7 @@ export async function startPick() {
 export async function cancelPick() {
   const targetId = activeTabId();
   useBrowser.setState({ picking: false });
-  if (targetId) await invoke("browser_pick_cancel", { workspaceId: activeWorkspaceId(), targetId }).catch(() => {});
+  if (targetId) await invoke("browser_pick_cancel", { workspaceId: shownWorkspaceId(), targetId }).catch(() => {});
 }
 
 export function togglePick() {
@@ -156,7 +176,7 @@ export function togglePick() {
 /** Sends recent console errors/warnings of the active tab to the agent. */
 export function sendConsoleToAgent() {
   const targetId = activeTabId();
-  const tab = (useBrowser.getState().tabs[activeWorkspaceId()] ?? []).find((t) => t.id === targetId);
+  const tab = (useBrowser.getState().tabs[shownWorkspaceId()] ?? []).find((t) => t.id === targetId);
   const entries = (useBrowser.getState().console[targetId ?? ""] ?? []).filter((e) => e.level === "error" || e.level === "warning").slice(-20);
   if (entries.length === 0) {
     flash("No console errors to send");
@@ -170,7 +190,7 @@ export async function clearConsole() {
   const targetId = activeTabId();
   if (!targetId) return;
   useBrowser.setState((s) => ({ console: { ...s.console, [targetId]: [] } }));
-  await invoke("browser_console_clear", { workspaceId: activeWorkspaceId(), targetId }).catch(() => {});
+  await invoke("browser_console_clear", { workspaceId: shownWorkspaceId(), targetId }).catch(() => {});
 }
 
 async function fail(err: unknown) {
@@ -178,7 +198,7 @@ async function fail(err: unknown) {
 }
 
 /** Checks for a browser and starts the workspace's instance. */
-export async function ensureBrowser(workspaceId = activeWorkspaceId()): Promise<boolean> {
+export async function ensureBrowser(workspaceId = shownWorkspaceId()): Promise<boolean> {
   listenForTabs();
   const s = useBrowser.getState();
   if (s.availability === "unknown" || s.availability === "error") {
@@ -221,31 +241,39 @@ const sameOrigin = (a: string, b: string) => {
   }
 };
 
-export function activeTabId(workspaceId = activeWorkspaceId()) {
+export function activeTabId(workspaceId = shownWorkspaceId()) {
   return useBrowser.getState().activeTab[workspaceId] ?? null;
 }
 
-export function selectTab(tabId: string, workspaceId = activeWorkspaceId()) {
-  useBrowser.setState((s) => ({ activeTab: { ...s.activeTab, [workspaceId]: tabId } }));
+/** Shows a tab in the panel (and its workspace's browser). */
+export function selectTab(tabId: string, workspaceId = shownWorkspaceId()) {
+  useBrowser.setState((s) => ({ activeTab: { ...s.activeTab, [workspaceId]: tabId }, shown: workspaceId }));
 }
 
-/** Opens a URL: reuses a tab already on that origin unless `newTab`, else the active tab. */
-export async function openUrl(input: string, opts: { newTab?: boolean } = {}) {
+/**
+ * Opens a URL in a workspace's browser (by default the one on screen) and shows it:
+ * reuses a tab already on that origin unless `newTab`, else the active tab.
+ */
+export async function openUrl(input: string, opts: { newTab?: boolean; workspaceId?: string } = {}) {
   if (!input.trim()) return focusUrlBar();
   const ws = useWorkspaces.getState();
   if (!ws.browserOpen) ws.toggleBrowser();
-  if (!(await ensureBrowser())) return;
+  const workspaceId = opts.workspaceId ?? targetWorkspaceId();
+  if (!(await ensureBrowser(workspaceId))) return;
   const url = normalizeUrl(input);
-  const workspaceId = activeWorkspaceId();
   const tabs = useBrowser.getState().tabs[workspaceId] ?? [];
   const existing = tabs.find((t) => sameOrigin(t.url, url));
   const current = activeTabId(workspaceId);
   const blank = tabs.find((t) => t.id === current && (t.url === "about:blank" || t.url === ""));
 
-  if (!opts.newTab && existing) {
+  if (opts.newTab && url === "about:blank" && blank) {
+    // A browser that just started already has a blank tab; show it instead of adding another.
+    selectTab(blank.id, workspaceId);
+  } else if (!opts.newTab && existing) {
     selectTab(existing.id, workspaceId);
     if (existing.url !== url) await invoke("browser_navigate", { workspaceId, targetId: existing.id, url });
   } else if (!opts.newTab && blank) {
+    selectTab(blank.id, workspaceId);
     await invoke("browser_navigate", { workspaceId, targetId: blank.id, url });
   } else {
     const id = await invoke<string>("browser_new_tab", { workspaceId, url });
@@ -258,18 +286,18 @@ export async function newTab() {
   useBrowser.setState((s) => ({ focusUrlBar: s.focusUrlBar + 1 }));
 }
 
-export async function closeTab(tabId = activeTabId()) {
-  if (tabId) await invoke("browser_close_tab", { workspaceId: activeWorkspaceId(), targetId: tabId });
+export async function closeTab(tabId = activeTabId(), workspaceId = shownWorkspaceId()) {
+  if (tabId) await invoke("browser_close_tab", { workspaceId, targetId: tabId });
 }
 
 /** -1 back, +1 forward, 0 reload. */
 export async function history(delta: -1 | 0 | 1) {
   const targetId = activeTabId();
-  if (targetId) await invoke("browser_history", { workspaceId: activeWorkspaceId(), targetId, delta });
+  if (targetId) await invoke("browser_history", { workspaceId: shownWorkspaceId(), targetId, delta });
 }
 
 export function setDevice(device: Device | "toggle") {
-  const workspaceId = activeWorkspaceId();
+  const workspaceId = shownWorkspaceId();
   useBrowser.setState((s) => {
     const current = s.device[workspaceId] ?? "desktop";
     const next = device === "toggle" ? (current === "desktop" ? "mobile" : "desktop") : device;

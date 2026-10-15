@@ -16,6 +16,7 @@ import {
   openUrl,
   selectTab,
   setDevice,
+  shownWorkspaceId,
   togglePick,
   useBrowser,
   type Tab,
@@ -75,8 +76,13 @@ export function BrowserResizer() {
 }
 
 export function BrowserPanel() {
-  const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
-  const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar, console: logs, consoleOpen, picking, notice } = useBrowser();
+  const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar, console: logs, consoleOpen, picking, notice, shown } = useBrowser();
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  // Re-read on workspace switches until a tab pins the panel to a workspace.
+  useWorkspaces((s) => s.activeWorkspaceId);
+  const workspaceId = shownWorkspaceId();
+  // Every workspace's tabs, so switching workspaces doesn't swap the page out.
+  const groups = workspaces.map((w) => ({ workspace: w, tabs: allTabs[w.id] ?? [] })).filter((g) => g.tabs.length > 0);
   const tabs = allTabs[workspaceId] ?? [];
   const active = tabs.find((t) => t.id === activeTab[workspaceId]) ?? null;
   const device = devices[workspaceId] ?? "desktop";
@@ -94,8 +100,10 @@ export function BrowserPanel() {
   const urlInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Pins the panel to the workspace it first shows.
+    if (!shown) useBrowser.setState({ shown: workspaceId });
     void ensureBrowser(workspaceId);
-  }, [workspaceId, availability]);
+  }, [workspaceId, shown, availability]);
 
   useEffect(() => {
     if (!editing) setAddress(active?.url === "about:blank" ? "" : (active?.url ?? ""));
@@ -111,29 +119,39 @@ export function BrowserPanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
-        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => selectTab(tab.id)}
-              title={tab.url}
-              className={cn(
-                "group flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs",
-                tab.id === active?.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover",
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          {groups.map(({ workspace, tabs }, i) => (
+            <div key={workspace.id} className="flex shrink-0 items-center gap-1">
+              {i > 0 && <div className="mx-0.5 h-4 w-px shrink-0 bg-border" />}
+              {groups.length > 1 && (
+                <span title={workspace.rootDir} className="max-w-24 shrink-0 truncate px-0.5 text-[10px] font-medium text-fg-subtle">
+                  {workspace.name}
+                </span>
               )}
-            >
-              {tab.byAgent ? <Bot size={12} className="text-accent" /> : <Globe size={12} />}
-              <span className="truncate">{label(tab)}</span>
-              {tab.byAgent && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent">agent</span>}
-              <X
-                size={11}
-                className="shrink-0 opacity-0 group-hover:opacity-60 hover:opacity-100"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void closeTab(tab.id);
-                }}
-              />
-            </button>
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => selectTab(tab.id, workspace.id)}
+                  title={`${tab.url}\n${workspace.name}`}
+                  className={cn(
+                    "group flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs",
+                    workspace.id === workspaceId && tab.id === active?.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover",
+                  )}
+                >
+                  {tab.byAgent ? <Bot size={12} className="text-accent" /> : <Globe size={12} />}
+                  <span className="truncate">{label(tab)}</span>
+                  {tab.byAgent && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent">agent</span>}
+                  <X
+                    size={11}
+                    className="shrink-0 opacity-0 group-hover:opacity-60 hover:opacity-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void closeTab(tab.id, workspace.id);
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
           ))}
         </div>
         <IconButton title="New tab" onClick={() => void newTab()}>
@@ -152,7 +170,7 @@ export function BrowserPanel() {
           className="mx-1 flex h-7 flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 text-fg-subtle"
           onSubmit={(e) => {
             e.preventDefault();
-            if (address.trim()) void openUrl(address, { newTab: !active });
+            if (address.trim()) void openUrl(address, { newTab: !active, workspaceId });
             urlInput.current?.blur();
           }}
         >
