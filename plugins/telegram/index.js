@@ -43,6 +43,33 @@ function h(tag, attrs = {}, ...children) {
 
 const esc = (text) => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** Longest agent reply quoted in a message; Telegram caps a message at 4096 characters. */
+const MAX_REPLY = 3300;
+
+/** An agent's Markdown reply as Telegram HTML: code blocks, inline code, bold and headings. */
+function replyHtml(markdown) {
+  let text = markdown.trim().replace(/\n{3,}/g, "\n\n");
+  if (text.length > MAX_REPLY) text = `${text.slice(0, MAX_REPLY).trimEnd()}…`;
+  // Splitting on fences keeps them balanced even when the cut lands inside a block.
+  return text
+    .split(/```[^\n]*\n?/)
+    .map((part, i) =>
+      i % 2
+        ? `<pre>${esc(part.replace(/\n$/, ""))}</pre>`
+        : part
+            .split(/`([^`\n]+)`/)
+            .map((bit, j) =>
+              j % 2
+                ? `<code>${esc(bit)}</code>`
+                : esc(bit)
+                    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+                    .replace(/^#{1,6} +(.+)$/gm, "<b>$1</b>"),
+            )
+            .join(""),
+    )
+    .join("");
+}
+
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 const sleep = (ms, signal) =>
   new Promise((resolve) => {
@@ -150,9 +177,11 @@ export function activate(api) {
     if (!who) return;
     const seq = nextSeq++;
     const html = `${STATUS_ICON[status]} ${title(who)} ${status === "done" ? "finished" : "stopped with an error"}`;
-    const msg = await say(`${html}\n\n<i>Reply to give it a new instruction.</i>`, {
-      reply_markup: { inline_keyboard: [[{ text: "🖥 Show screen", callback_data: `s:${seq}` }]] },
-    });
+    const reply = status === "done" ? api.lastReply(paneId) : null;
+    const extra = { reply_markup: { inline_keyboard: [[{ text: "🖥 Show screen", callback_data: `s:${seq}` }]] } };
+    const send = (body) => say(`${body}\n\n<i>Reply to give it a new instruction.</i>`, extra);
+    // Telegram refuses the whole message if it can't parse the converted reply; send it without.
+    const msg = reply ? await send(`${html}\n\n${replyHtml(reply)}`).catch(() => send(html)) : await send(html);
     remember({ seq, messageId: msg.message_id, paneId, kind: "finished", html, open: false });
   }
 

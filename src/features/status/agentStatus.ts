@@ -10,6 +10,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
 import { execute } from "@/commands/bus";
 import { describeRequest } from "./request";
+import { setLastReply } from "./replies";
 import { logActivity } from "@/stores/activity";
 import { speak } from "@/features/voice/readback";
 import { agentFinished } from "@/features/review/reviews";
@@ -124,9 +125,11 @@ export function startStatusTracking() {
   if (started) return;
   started = true;
   void listen<Parameters<typeof onNotificationAction>[0]>("notification://action", ({ payload }) => onNotificationAction(payload));
-  void listen<{ paneId: string; status: AgentStatus; message?: string }>("agent://status", ({ payload }) =>
-    reportStatus(payload.paneId, payload.status, payload.message ?? undefined),
-  );
+  void listen<{ paneId: string; status: AgentStatus; message?: string; reply?: string | null }>("agent://status", ({ payload }) => {
+    // Set before the status change so plugins see the reply with the "done" event.
+    if (payload.status === "done") setLastReply(payload.paneId, payload.reply);
+    reportStatus(payload.paneId, payload.status, payload.message ?? undefined);
+  });
 
   // Agents without hooks: quiet output means they're waiting.
   window.setInterval(() => {

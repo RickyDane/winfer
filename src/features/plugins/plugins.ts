@@ -22,6 +22,7 @@ import { toast } from "@/stores/toasts";
 import { providerName, useWorkspaces, type AgentStatus, type Pane, type Workspace } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { describeRequest, type AgentRequest } from "@/features/status/request";
+import { lastReply } from "@/features/status/replies";
 
 /** Mirrors `Manifest` in src-tauri/src/plugins.rs. */
 export interface PluginManifest {
@@ -160,6 +161,8 @@ export interface PluginApi {
   readPane(paneId: string, lines?: number): Promise<string | null>;
   /** What an agent waiting for input asks, read from its screen; null if the pane is gone. */
   paneRequest(paneId: string): Promise<AgentRequest | null>;
+  /** The agent's final reply from its last finished turn, when its hooks report it; else null. */
+  lastReply(paneId: string): string | null;
   toast(text: string, kind?: "info" | "success" | "error"): void;
 }
 
@@ -441,6 +444,7 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
       const screen = await readPane(paneId, 40);
       return screen === null ? null : describeRequest(screen);
     },
+    lastReply: (paneId) => lastReply(paneId),
     toast: (text, kind = "info") => void toast(text, kind),
   };
 }

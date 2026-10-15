@@ -25,6 +25,9 @@ pub struct HookServer {
 
 static SERVER: OnceLock<HookServer> = OnceLock::new();
 
+/// Largest hook body read; a Stop event carries the whole final reply.
+const MAX_BODY: u64 = 1024 * 1024;
+
 pub fn server() -> Option<&'static HookServer> {
     SERVER.get()
 }
@@ -39,6 +42,8 @@ struct StatusEvent {
     message: Option<String>,
     /// The agent's session id, when the event names it (Codex's `thread-id`).
     session: Option<String>,
+    /// The agent's final reply of the turn, on "done" events that carry it.
+    reply: Option<String>,
 }
 
 /// Maps a provider hook event to a pane status.
@@ -57,6 +62,47 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
         ("opencode", "session.execution.interrupted") => Some("idle"),
         _ => None,
     }
+}
+
+/// The agent's last reply from a turn-complete event: Claude Code's `last_assistant_message`
+/// (else the last assistant text in its transcript), Codex's `last-assistant-message`.
+fn last_reply(json: &Value) -> Option<String> {
+    let text = |key: &str| {
+        let text = json.get(key)?.as_str()?.trim();
+        (!text.is_empty()).then(|| text.to_string())
+    };
+    text("last_assistant_message")
+        .or_else(|| text("last-assistant-message"))
+        .or_else(|| transcript_reply(json.get("transcript_path")?.as_str()?))
+}
+
+/// The text of the last assistant message in a Claude Code transcript (JSONL), from the
+/// current turn only: the search stops at the user's prompt.
+fn transcript_reply(path: &str) -> Option<String> {
+    let file = std::fs::read_to_string(path).ok()?;
+    for entry in file.lines().rev().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
+        let content = &entry["message"]["content"];
+        let texts = || {
+            content
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|c| c["type"] == "text")
+                .filter_map(|c| c["text"].as_str())
+        };
+        match entry["type"].as_str() {
+            Some("assistant") => {
+                let text = texts().collect::<Vec<_>>().join("\n\n").trim().to_string();
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+            // Tool results come back as user entries too; a prompt has text.
+            Some("user") if content.is_string() || texts().next().is_some() => return None,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The hook program: `winfer hook <provider> <event>`, run without a shell (Claude Code's
@@ -128,7 +174,7 @@ pub fn run_hook(args: &[String]) {
         Some(json) => json.clone(),
         None => {
             let mut body = String::new();
-            let _ = std::io::stdin().take(64 * 1024).read_to_string(&mut body);
+            let _ = std::io::stdin().take(MAX_BODY).read_to_string(&mut body);
             body
         }
     };
@@ -230,7 +276,7 @@ fn serve(
                 (false, _) => 401,
                 (true, [hook, provider, pane_id, event]) if hook == "hook" => {
                     let mut body = String::new();
-                    let _ = req.as_reader().take(64 * 1024).read_to_string(&mut body);
+                    let _ = req.as_reader().take(MAX_BODY).read_to_string(&mut body);
                     if event == "usage" {
                         if let Ok(report) = serde_json::from_str::<Value>(&body) {
                             on_usage(provider, pane_id, report);
@@ -240,6 +286,7 @@ fn serve(
                         let field = |key: &str| json.as_ref().and_then(|v| v.get(key)).and_then(Value::as_str).map(String::from);
                         let message = field("message");
                         let session = field("thread-id").or_else(|| field("session_id"));
+                        let reply = if status == "done" { json.as_ref().and_then(last_reply) } else { None };
                         emit(StatusEvent {
                             pane_id: pane_id.clone(),
                             provider: provider.clone(),
@@ -247,6 +294,7 @@ fn serve(
                             status,
                             message,
                             session,
+                            reply,
                         });
                     }
                     204
@@ -362,13 +410,37 @@ mod tests {
             Some("Claude needs your permission")
         );
 
-        let body = r#"{"type":"agent-turn-complete"}"#.to_string();
+        let body = r#"{"type":"agent-turn-complete","last-assistant-message":"All done."}"#.to_string();
         send_hook(&addr, "secret", "p-1", "codex", "turn-complete", body);
-        assert_eq!(recv().unwrap().status, "done");
+        let event = recv().unwrap();
+        assert_eq!((event.status, event.reply.as_deref()), ("done", Some("All done.")));
 
         // Wrong token is rejected.
         send_hook(&addr, "wrong", "p-1", "claude", "Stop", String::new());
         assert!(recv().is_err());
+    }
+
+    #[test]
+    fn last_reply_falls_back_to_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("winfer-hooks-{:x}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let reply = || last_reply(&json!({ "transcript_path": path.to_string_lossy() }));
+        let transcript = [
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Older" }] } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Fixed it." }, { "type": "tool_use" }] } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use" }] } }),
+            json!({ "type": "user", "message": { "content": [{ "type": "tool_result" }] } }),
+        ]
+        .map(|l| l.to_string())
+        .join("\n");
+        std::fs::write(&path, &transcript).unwrap();
+        assert_eq!(reply().as_deref(), Some("Fixed it."));
+        // A new prompt with no reply yet: nothing from the earlier turn.
+        std::fs::write(&path, format!("{transcript}\n{}", json!({ "type": "user", "message": { "content": "thanks" } }))).unwrap();
+        assert_eq!(reply(), None);
+        assert_eq!(last_reply(&json!({ "last_assistant_message": " Hi " })).as_deref(), Some("Hi"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

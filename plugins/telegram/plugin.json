@@ -1,7 +1,7 @@
 {
   "id": "telegram",
   "name": "Telegram",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
   "author": "winfer",
   "main": "index.js",
