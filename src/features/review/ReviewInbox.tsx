@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Check, CornerDownLeft, FlaskConical, GitBranch, GitMerge, Inbox, Loader2, Trash2, Trophy, X } from "lucide-react";
+import { AlertTriangle, Check, CornerDownLeft, FlaskConical, GitBranch, GitMerge, Inbox, ListOrdered, ListPlus, Loader2, RotateCcw, Trash2, Trophy, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
@@ -12,6 +12,10 @@ import { removeWorktree } from "@/features/worktree/worktree";
 import { logActivity, relativeTime } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { withToast } from "@/stores/toasts";
+import { TaskCost } from "@/features/usage/TaskCostChip";
+import { refreshTaskCosts } from "@/features/usage/taskCost";
+import { conflictsFor, refreshConflicts, useConflicts } from "./conflicts";
+import { askAgentToResolve, clearFinished, dequeue, enqueue, isPending, retry, setQueueTests, useMergeQueue, type QueueItem } from "./mergeQueue";
 import { discardReviewed, mergeReviewed, removeReview, runTests, setReviewStatus, useReviews, type Review } from "./reviews";
 
 const button = "flex items-center gap-1 rounded-md px-2 py-1 text-xs disabled:opacity-40";
@@ -94,12 +98,152 @@ function Screenshot({ review }: { review: Review }) {
   );
 }
 
+const short = (branch: string) => branch.replace(/^winfer\//, "");
+
+/** "Codex · codex-2" for the agent working in a worktree, else the folder's name. */
+function worktreeLabel(path: string, panes: Pane[], providers: Parameters<typeof providerName>[0]): string {
+  const pane = panes.find((p) => p.worktree?.path === path);
+  if (!pane?.worktree) return path.split(/[\\/]/).pop() ?? path;
+  return `${pane.customTitle ?? providerName(providers, pane.provider)} · ${short(pane.worktree.branch)}`;
+}
+
+const fileList = (files: string[]) => (files.length > 3 ? `${files.slice(0, 3).join(", ")} +${files.length - 3} more` : files.join(", "));
+
+/** Whether this branch collides with its base now, or with another agent's worktree. */
+function ConflictNotes({ pane }: { pane: Pane | undefined }) {
+  const report = useConflicts((s) => s.report);
+  const providers = useWorkspaces((s) => s.providers);
+  const panes = useWorkspaces((s) => s.workspaces.flatMap((w) => w.panes));
+  if (!pane?.worktree) return null;
+  const { item, others } = conflictsFor(report, pane.worktree.path);
+  const base = pane.worktree.base;
+  const notes: { tone: "danger" | "warn" | "muted"; text: string; title?: string }[] = [];
+  if (item?.baseConflicts.length) notes.push({ tone: "danger", text: `Conflicts with ${base} in ${fileList(item.baseConflicts)}`, title: item.baseConflicts.join("\n") });
+  else if (item && item.behind > 0) notes.push({ tone: "muted", text: `${base} moved ${item.behind} commit${item.behind === 1 ? "" : "s"} ahead · merges cleanly` });
+  for (const o of others) {
+    const who = worktreeLabel(o.other, panes, providers);
+    if (o.conflicts.length) notes.push({ tone: "danger", text: `Conflicts with ${who} in ${fileList(o.conflicts)}`, title: o.conflicts.join("\n") });
+    else notes.push({ tone: "warn", text: `${who} also edits ${fileList(o.overlap)}`, title: `Both changed:\n${o.overlap.join("\n")}\nNo conflicting lines in what's committed so far.` });
+  }
+  if (notes.length === 0) return null;
+  return (
+    <ul className="space-y-0.5">
+      {notes.map((n) => (
+        <li
+          key={n.text}
+          title={n.title}
+          className={cn("flex items-center gap-1.5 text-[11px]", n.tone === "danger" ? "text-danger" : n.tone === "warn" ? "text-warning" : "text-fg-subtle")}
+        >
+          {n.tone !== "muted" && <AlertTriangle size={11} className="shrink-0" />}
+          <span className="truncate">{n.text}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const STATE_LABEL: Record<QueueItem["state"], string> = {
+  queued: "Queued",
+  syncing: "Syncing",
+  testing: "Testing",
+  merging: "Merging",
+  merged: "Merged",
+  conflict: "Conflict",
+  failed: "Stopped",
+};
+
+/** Where a branch is in the merge queue, with what can be done about it when it stopped. */
+function QueueStatus({ item, position }: { item: QueueItem; position: number | null }) {
+  const busy = item.state === "syncing" || item.state === "testing" || item.state === "merging";
+  const stopped = item.state === "conflict" || item.state === "failed";
+  return (
+    <div className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-xs", stopped ? "bg-danger/10 text-danger" : "bg-hover text-fg-muted")}>
+      {busy ? <Loader2 size={12} className="shrink-0 animate-spin" /> : stopped ? <AlertTriangle size={12} className="shrink-0" /> : <ListOrdered size={12} className="shrink-0" />}
+      <span className="min-w-0 flex-1 truncate" title={item.detail ?? undefined}>
+        {item.state === "queued" ? `Queued to merge${position ? ` · #${position}` : ""}` : (item.detail ?? STATE_LABEL[item.state])}
+        {item.state === "conflict" && item.files.length > 0 && <span className="font-mono"> · {fileList(item.files)}</span>}
+      </span>
+      {item.state === "conflict" && (
+        <button onClick={() => askAgentToResolve(item.reviewId)} className={cn(button, "bg-accent text-on-accent hover:opacity-90")} title={`Ask the agent to merge ${item.base} in and resolve the conflicts`}>
+          Ask agent to resolve
+        </button>
+      )}
+      {stopped && (
+        <button onClick={() => retry(item.reviewId)} className={cn(button, "text-fg-muted hover:bg-hover hover:text-fg")} title="Try again">
+          <RotateCcw size={12} />
+        </button>
+      )}
+      {(item.state === "queued" || stopped) && (
+        <button onClick={() => dequeue(item.reviewId)} className={cn(button, "text-fg-muted hover:bg-hover hover:text-fg")} title="Take out of the queue">
+          <X size={12} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The queue across the inbox: order, progress, and whether tests gate each merge. */
+function QueuePanel({ items }: { items: QueueItem[] }) {
+  const runTestsFirst = useMergeQueue((s) => s.runTests);
+  const reviews = useReviews((s) => s.reviews);
+  if (items.length === 0) return null;
+  const done = items.filter((i) => i.state === "merged").length;
+  const pending = items.filter(isPending).length;
+  return (
+    <section className="space-y-2 rounded-lg border border-border bg-panel-raised p-3">
+      <header className="flex items-center gap-2 text-xs">
+        <ListOrdered size={13} className="text-accent" />
+        <span className="font-medium text-fg">Merge queue</span>
+        <span className="text-fg-subtle">
+          {done} of {items.length} merged{pending ? ` · ${pending} to go` : ""}
+        </span>
+        <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-fg-muted" title="Run the project's tests on each branch, with the base's new commits brought in, before merging it">
+          <input type="checkbox" checked={runTestsFirst} onChange={(e) => setQueueTests(e.target.checked)} className="accent-accent" />
+          Test before each merge
+        </label>
+        {items.length > pending && (
+          <button onClick={clearFinished} className="text-fg-subtle hover:text-fg">
+            Clear finished
+          </button>
+        )}
+      </header>
+      <ol className="space-y-1">
+        {items.map((i, n) => {
+          const review = reviews.find((r) => r.id === i.reviewId);
+          return (
+            <li key={i.reviewId} className="flex items-center gap-2 text-[11px]">
+              <span className="w-4 text-right font-mono text-fg-subtle">{n + 1}</span>
+              {review && <ProviderIcon provider={review.provider} size={11} />}
+              <span className="truncate font-mono text-fg-muted">
+                {short(i.branch)} → {i.base}
+              </span>
+              <span
+                className={cn(
+                  "ml-auto shrink-0",
+                  i.state === "merged" ? "text-success" : i.state === "conflict" || i.state === "failed" ? "text-danger" : isPending(i) && i.state !== "queued" ? "text-accent" : "text-fg-subtle",
+                )}
+                title={i.detail ?? undefined}
+              >
+                {STATE_LABEL[i.state]}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 function ReviewCard({ review, index, pane, race, workspaceName }: { review: Review; index: number; pane: Pane | undefined; race?: Pane[]; workspaceName?: string }) {
   const providers = useWorkspaces((s) => s.providers);
   const [reply, setReply] = useState("");
   const name = providerName(providers, review.provider);
   const stats = review.stats;
   const open = review.status === "open";
+  const queue = useMergeQueue((s) => s.items);
+  const queued = queue.find((i) => i.reviewId === review.id);
+  const waiting = queue.filter((i) => i.state === "queued");
+  const position = queued?.state === "queued" ? waiting.indexOf(queued) + 1 : null;
 
   const sendBack = () => {
     const text = reply.trim();
@@ -151,7 +295,8 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
             {stats.dirty && <span className="text-fg-subtle"> · uncommitted</span>}
           </span>
         )}
-        <span className="ml-auto text-[11px] text-fg-subtle">{relativeTime(review.finishedAt)}</span>
+        <TaskCost dir={review.stats ? review.dir : null} className="ml-auto" />
+        <span className={cn("text-[11px] text-fg-subtle", !review.stats && "ml-auto")}>{relativeTime(review.finishedAt)}</span>
         <button title="Remove from inbox" onClick={() => removeReview(review.id)} className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
           <X size={12} />
         </button>
@@ -175,6 +320,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
           <div className="flex items-center gap-2">
             <Tests review={review} />
           </div>
+          <ConflictNotes pane={pane} />
         </div>
         <Screenshot review={review} />
       </div>
@@ -185,6 +331,8 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
           <pre className="mt-1 max-h-40 overflow-y-auto font-mono whitespace-pre-wrap text-fg-muted">{review.lastOutput}</pre>
         </details>
       )}
+
+      {queued && open && <QueueStatus item={queued} position={position} />}
 
       {open ? (
         <footer className="flex items-center gap-1.5">
@@ -234,14 +382,24 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
               <Trophy size={12} /> Pick
             </button>
           ) : (
+            <>
             <button
-              disabled={!pane?.worktree}
+              disabled={!pane?.worktree || isPending(queued)}
+              title={pane?.worktree ? `Add to the merge queue: brings in ${pane.worktree.base}'s new commits, runs the tests, then merges. Uncommitted changes are committed.` : "Only agents in their own worktree can be merged"}
+              onClick={() => enqueue([review.id])}
+              className={cn(button, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}
+            >
+              <ListPlus size={12} /> Queue
+            </button>
+            <button
+              disabled={!pane?.worktree || isPending(queued)}
               title={pane?.worktree ? `Merge into ${pane.worktree.base}` : "Only agents in their own worktree can be merged"}
               onClick={() => pane?.worktree && void mergeReviewed(pane as Pane & { worktree: NonNullable<Pane["worktree"]> })}
               className={cn(button, "bg-accent text-on-accent hover:opacity-90")}
             >
               <GitMerge size={12} /> Merge
             </button>
+            </>
           )}
           <button
             disabled={!pane?.worktree}
@@ -281,6 +439,24 @@ export function ReviewInbox() {
   // The overview covers every workspace; the workspace view just its own.
   const everywhere = view === "overview";
   const [, tick] = useState(0);
+  const queue = useMergeQueue((s) => s.items);
+  const queueRunning = useMergeQueue((s) => s.running);
+
+  // Fresh conflict and cost numbers whenever the inbox opens, a card comes or goes, or the queue
+  // merged something (the base moved).
+  const openKey = all
+    .filter((r) => r.status === "open")
+    .map((r) => r.id)
+    .join();
+  const mergedCount = queue.filter((i) => i.state === "merged").length;
+  useEffect(() => {
+    if (overlay !== "review") return;
+    const ws = useWorkspaces.getState().workspaces;
+    const shown = useReviews.getState().reviews.filter((r) => everywhere || r.workspaceId === activeWorkspaceId);
+    const worktrees = shown.flatMap((r) => ws.flatMap((w) => w.panes).find((p) => p.id === r.paneId)?.worktree ?? []);
+    void refreshConflicts(worktrees.map((w) => w.repo));
+    void refreshTaskCosts(worktrees.map((w) => w.path));
+  }, [overlay, openKey, mergedCount, everywhere, activeWorkspaceId]);
 
   useEffect(() => {
     if (overlay !== "review") return;
@@ -302,6 +478,11 @@ export function ReviewInbox() {
     .filter((r) => everywhere || r.workspaceId === activeWorkspaceId)
     .sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || b.finishedAt - a.finishedAt);
   const racers = (raceId: string | null) => (raceId ? allPanes.filter((p) => p.raceId === raceId) : undefined);
+  // Race entries are picked, not merged one after another.
+  const mergeable = reviews
+    .filter((r) => r.status === "open" && !r.raceId && panes.get(r.paneId)?.worktree && !isPending(queue.find((i) => i.reviewId === r.id)))
+    .sort((a, b) => a.finishedAt - b.finishedAt);
+  const shownQueue = queue.filter((i) => everywhere || i.workspaceId === activeWorkspaceId);
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
@@ -311,11 +492,21 @@ export function ReviewInbox() {
           <h1 className="text-sm font-semibold text-fg">Review</h1>
           <span className="flex-1 truncate text-xs text-fg-subtle">{everywhere ? "All workspaces" : workspace?.name}</span>
           <span className="text-xs text-fg-subtle">Say “what's done?” to hear it · {keysFor({ type: "ui.overlay", overlay: "review" })}</span>
+          {mergeable.length > 1 && (
+            <button
+              onClick={() => enqueue(mergeable.map((r) => r.id))}
+              title="Queue every open branch, oldest first: each brings in the base's new commits, runs the tests and merges; one that conflicts or fails stops without holding up the rest"
+              className={cn(button, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}
+            >
+              {queueRunning ? <Loader2 size={12} className="animate-spin" /> : <ListOrdered size={12} />} Merge all ({mergeable.length})
+            </button>
+          )}
           <button onClick={() => setOverlay(null)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={14} />
           </button>
         </header>
         <div className="space-y-3 overflow-y-auto p-4">
+          <QueuePanel items={shownQueue} />
           {reviews.length === 0 && (
             <p className="py-10 text-center text-xs text-fg-subtle">
               Nothing to review yet. When an agent finishes work, its changes, a summary, tests and a screenshot of its app show up here.

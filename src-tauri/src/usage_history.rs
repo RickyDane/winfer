@@ -5,6 +5,9 @@
 //! incrementally into `usage.db` (one row per model call), so the history survives the
 //! agents cleaning up their logs (Claude Code deletes transcripts after 30 days). Rows older
 //! than 90 days are dropped.
+//!
+//! Each call also keeps the folder the agent worked in, so spend can be told per task: an
+//! agent's worktree is its task (see `dir_usage`).
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -21,6 +24,8 @@ const HOUR_MS: i64 = 3_600_000;
 
 pub struct UsageHistory {
     conn: Mutex<Connection>,
+    /// When the logs were last read, so frequent lookups don't walk them every time.
+    scanned: Mutex<Option<std::time::Instant>>,
 }
 
 /// One model call's tokens.
@@ -38,6 +43,8 @@ pub struct Event {
     pub cache_write: u64,
     /// The cost the agent reported itself (OpenCode), used over the price table.
     pub cost: Option<f64>,
+    /// Folder the agent ran in (forward slashes, no trailing slash), if the log says.
+    pub cwd: Option<String>,
 }
 
 /// Tokens and cost of one provider/model in one hour.
@@ -86,7 +93,16 @@ impl UsageHistory {
             CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, offset INTEGER NOT NULL, state TEXT);
             CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
-        Ok(Self { conn: Mutex::new(conn) })
+        if conn.prepare("SELECT cwd FROM events LIMIT 0").is_err() {
+            // Added later: read every log again so the rows still there get their folder.
+            conn.execute_batch(
+                "ALTER TABLE events ADD COLUMN cwd TEXT;
+                 DELETE FROM files;
+                 DELETE FROM kv WHERE key = 'opencode';",
+            )?;
+        }
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS events_by_cwd ON events (cwd, at);")?;
+        Ok(Self { conn: Mutex::new(conn), scanned: Mutex::new(None) })
     }
 
     #[cfg(test)]
@@ -96,11 +112,11 @@ impl UsageHistory {
 
     fn insert(conn: &Connection, events: &[Event]) -> rusqlite::Result<()> {
         let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO events (id, at, provider, model, input, output, cache_read, cache_write, cost)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT OR REPLACE INTO events (id, at, provider, model, input, output, cache_read, cache_write, cost, cwd)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
         for e in events {
-            stmt.execute(params![e.id, e.at, e.provider, e.model, e.input as i64, e.output as i64, e.cache_read as i64, e.cache_write as i64, e.cost])?;
+            stmt.execute(params![e.id, e.at, e.provider, e.model, e.input as i64, e.output as i64, e.cache_read as i64, e.cache_write as i64, e.cost, e.cwd])?;
         }
         Ok(())
     }
@@ -121,6 +137,47 @@ impl UsageHistory {
         }
         let _ = scan_opencode(&mut conn, cutoff);
         let _ = conn.execute("DELETE FROM events WHERE at < ?1", [cutoff]);
+        *self.scanned.lock().unwrap() = Some(std::time::Instant::now());
+    }
+
+    /// Scans unless that happened less than `max_age` ago.
+    pub fn scan_if_stale(&self, max_age: std::time::Duration) {
+        let fresh = self.scanned.lock().unwrap().is_some_and(|t| t.elapsed() < max_age);
+        if !fresh {
+            self.scan();
+        }
+    }
+
+    /// Spend in `dir` (and folders under it) since `since` (unix ms).
+    pub fn dir_usage(&self, dir: &str, since: i64, prices: &Prices) -> rusqlite::Result<DirUsage> {
+        let dir = norm_dir(dir);
+        let under = format!("{}/%", dir.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT ?1, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost), COUNT(cost),
+                    MIN(at), MAX(at), COUNT(*)
+             FROM events WHERE (cwd = ?1 OR cwd LIKE ?2 ESCAPE '\\') AND at >= ?3 GROUP BY provider, model",
+        )?;
+        let rows = stmt.query_map(params![dir, under, since], dir_row)?;
+        let mut out = fold_dirs(rows, prices)?;
+        Ok(out.pop().unwrap_or_else(|| DirUsage { dir, ..Default::default() }))
+    }
+
+    /// Spend per checkout (repo or worktree) since `since`, most expensive first, for telling
+    /// which tasks cost the most.
+    pub fn by_dir(&self, since: i64, prices: &Prices) -> rusqlite::Result<Vec<DirUsage>> {
+        self.by_dir_with(since, prices, checkout_root)
+    }
+
+    fn by_dir_with(&self, since: i64, prices: &Prices, root: impl Fn(&str) -> String) -> rusqlite::Result<Vec<DirUsage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT cwd, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost), COUNT(cost),
+                    MIN(at), MAX(at), COUNT(*)
+             FROM events WHERE cwd IS NOT NULL AND at >= ?1 GROUP BY cwd, provider, model",
+        )?;
+        let rows = stmt.query_map(params![since], dir_row)?;
+        Ok(group_by_checkout(fold_dirs(rows, prices)?, root))
     }
 
     /// Hourly totals per model since `since` (unix ms).
@@ -144,16 +201,153 @@ impl UsageHistory {
         let mut out = Vec::new();
         for row in rows {
             let (hour, provider, model, [input, output, cache_read, cache_write], reported, reported_rows) = row?;
-            let price = prices.get(&model);
-            // OpenCode reports a cost per call; elsewhere it comes from the price table.
-            let (cost, priced) = match (reported_rows > 0, price) {
-                (true, _) => (reported.unwrap_or(0.0), true),
-                (false, Some(p)) => (p.cost(input, output, cache_read, cache_write), true),
-                (false, None) => (0.0, false),
-            };
+            let (cost, priced) = cost_of(prices, &model, reported_rows > 0, reported, [input, output, cache_read, cache_write]);
             out.push(Bucket { hour, provider, model, input, output, cache_read, cache_write, cost, priced });
         }
         Ok(out)
+    }
+}
+
+/// Tokens and cost of one model within a folder's spend.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsage {
+    pub provider: String,
+    pub model: String,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost: f64,
+    pub priced: bool,
+}
+
+/// What the agents spent working in one folder (an agent's worktree is its task).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DirUsage {
+    pub dir: String,
+    pub cost: f64,
+    /// False when a model has no known price (its cost counts as 0).
+    pub priced: bool,
+    pub tokens: u64,
+    /// Model calls.
+    pub calls: u64,
+    /// First and last call (unix ms).
+    pub first_at: Option<i64>,
+    pub last_at: Option<i64>,
+    /// Most expensive first.
+    pub models: Vec<ModelUsage>,
+}
+
+impl Default for DirUsage {
+    fn default() -> Self {
+        Self { dir: String::new(), cost: 0.0, priced: true, tokens: 0, calls: 0, first_at: None, last_at: None, models: Vec::new() }
+    }
+}
+
+type DirRow = (String, String, String, [u64; 4], Option<f64>, i64, [i64; 3]);
+
+/// dir, provider, model, token sums, reported cost sum and count, first, last, calls.
+fn dir_row(r: &rusqlite::Row) -> rusqlite::Result<DirRow> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        [r.get::<_, i64>(3)? as u64, r.get::<_, i64>(4)? as u64, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64],
+        r.get(7)?,
+        r.get(8)?,
+        [r.get(9)?, r.get(10)?, r.get(11)?],
+    ))
+}
+
+/// Rows per folder and model into one total per folder, most expensive first.
+fn fold_dirs(rows: impl Iterator<Item = rusqlite::Result<DirRow>>, prices: &Prices) -> rusqlite::Result<Vec<DirUsage>> {
+    let mut by: HashMap<String, DirUsage> = HashMap::new();
+    for row in rows {
+        let (dir, provider, model, [input, output, cache_read, cache_write], reported, reported_rows, [first, last, calls]) = row?;
+        let (cost, priced) = cost_of(prices, &model, reported_rows > 0, reported, [input, output, cache_read, cache_write]);
+        let d = by.entry(dir.clone()).or_insert_with(|| DirUsage { dir, ..Default::default() });
+        d.cost += cost;
+        d.priced &= priced;
+        d.tokens += input + output + cache_read + cache_write;
+        d.calls += calls as u64;
+        d.first_at = Some(d.first_at.map_or(first, |f| f.min(first)));
+        d.last_at = Some(d.last_at.map_or(last, |l| l.max(last)));
+        d.models.push(ModelUsage { provider, model, input, output, cache_read, cache_write, cost, priced });
+    }
+    let mut out: Vec<DirUsage> = by.into_values().collect();
+    for d in &mut out {
+        d.models.sort_by(|a, b| b.cost.total_cmp(&a.cost));
+    }
+    out.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(b.tokens.cmp(&a.tokens)));
+    Ok(out)
+}
+
+/// The checkout a folder belongs to (the nearest folder above it with a `.git`, so a repo or a
+/// worktree), or the folder itself when there's none (or it's gone).
+fn checkout_root(dir: &str) -> String {
+    let mut path = Some(Path::new(dir));
+    while let Some(p) = path {
+        if p.join(".git").exists() {
+            return norm_dir(&p.to_string_lossy());
+        }
+        path = p.parent();
+    }
+    dir.to_string()
+}
+
+/// Merges folders of the same checkout: an agent that `cd`s into `src` is still on the same task.
+fn group_by_checkout(dirs: Vec<DirUsage>, root: impl Fn(&str) -> String) -> Vec<DirUsage> {
+    let mut by: HashMap<String, DirUsage> = HashMap::new();
+    for d in dirs {
+        let key = root(&d.dir);
+        let Some(p) = by.get_mut(&key) else {
+            by.insert(key.clone(), DirUsage { dir: key, ..d });
+            continue;
+        };
+        p.cost += d.cost;
+        p.priced &= d.priced;
+        p.tokens += d.tokens;
+        p.calls += d.calls;
+        p.first_at = [p.first_at, d.first_at].into_iter().flatten().min();
+        p.last_at = p.last_at.max(d.last_at);
+        for m in d.models {
+            match p.models.iter_mut().find(|x| x.provider == m.provider && x.model == m.model) {
+                Some(x) => {
+                    x.input += m.input;
+                    x.output += m.output;
+                    x.cache_read += m.cache_read;
+                    x.cache_write += m.cache_write;
+                    x.cost += m.cost;
+                }
+                None => p.models.push(m),
+            }
+        }
+    }
+    let mut out: Vec<DirUsage> = by.into_values().collect();
+    for d in &mut out {
+        d.models.sort_by(|a, b| b.cost.total_cmp(&a.cost));
+    }
+    out.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(b.tokens.cmp(&a.tokens)));
+    out
+}
+
+/// OpenCode reports a cost per call; elsewhere it comes from the price table.
+fn cost_of(prices: &Prices, model: &str, reported: bool, reported_cost: Option<f64>, [input, output, cache_read, cache_write]: [u64; 4]) -> (f64, bool) {
+    match (reported, prices.get(model)) {
+        (true, _) => (reported_cost.unwrap_or(0.0), true),
+        (false, Some(p)) => (p.cost(input, output, cache_read, cache_write), true),
+        (false, None) => (0.0, false),
+    }
+}
+
+/// Folders compare with forward slashes and without a trailing slash.
+pub fn norm_dir(dir: &str) -> String {
+    let d = dir.replace('\\', "/");
+    match d.trim_end_matches('/') {
+        "" => d,
+        trimmed => trimmed.to_string(),
     }
 }
 
@@ -266,6 +460,7 @@ fn claude_events(line: &str, _path: &Path, _at: u64, _state: &mut Value) -> Opti
         cache_read: n(&u["cache_read_input_tokens"]),
         cache_write: n(&u["cache_creation_input_tokens"]),
         cost: None,
+        cwd: v["cwd"].as_str().map(norm_dir),
     })
     .filter(|e| e.input + e.output + e.cache_read + e.cache_write > 0)
 }
@@ -281,10 +476,13 @@ fn codex_sessions() -> Option<PathBuf> {
 /// rate limit updates), so a turn counts only when the session's running total grew. The
 /// model comes from the latest `turn_context`. `state` carries both across scans.
 fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<Event> {
-    if line.contains("\"turn_context\"") {
+    if line.contains("\"turn_context\"") || line.contains("\"session_meta\"") {
         let v: Value = serde_json::from_str(line).ok()?;
         if let Some(model) = v["payload"]["model"].as_str() {
             state["model"] = model.into();
+        }
+        if let Some(cwd) = v["payload"]["cwd"].as_str() {
+            state["cwd"] = norm_dir(cwd).into();
         }
         return None;
     }
@@ -313,6 +511,7 @@ fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<E
         cache_read,
         cache_write,
         cost: None,
+        cwd: state["cwd"].as_str().map(String::from),
     })
 }
 
@@ -327,14 +526,24 @@ fn scan_opencode(conn: &mut Connection, cutoff: i64) -> rusqlite::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let since = cutoff.max(mark - DAY_MS);
-    let mut stmt = db.prepare("SELECT id, time_created, time_updated, data FROM session_message WHERE type = 'assistant' AND time_updated >= ?1")?;
+    // The folder is the session's; databases without the sessions table go without.
+    let mut stmt = db
+        .prepare(
+            "SELECT m.id, m.time_created, m.time_updated, m.data, s.directory FROM session_message m
+             LEFT JOIN session_v2 s ON s.id = m.session_id WHERE m.type = 'assistant' AND m.time_updated >= ?1",
+        )
+        .or_else(|_| db.prepare("SELECT id, time_created, time_updated, data, NULL FROM session_message WHERE type = 'assistant' AND time_updated >= ?1"))?;
     let mut newest = mark;
     let events: Vec<Event> = stmt
-        .query_map([since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?)))?
+        .query_map([since], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
+        })?
         .flatten()
-        .filter_map(|(id, created, updated, data)| {
+        .filter_map(|(id, created, updated, data, dir)| {
             newest = newest.max(updated);
-            opencode_event(&id, created, &serde_json::from_str(&data).ok()?)
+            let mut e = opencode_event(&id, created, &serde_json::from_str(&data).ok()?)?;
+            e.cwd = dir.as_deref().map(norm_dir);
+            Some(e)
         })
         .filter(|e| e.at >= cutoff)
         .collect();
@@ -357,6 +566,7 @@ fn opencode_event(id: &str, at: i64, data: &Value) -> Option<Event> {
         cache_read: n(&t["cache"]["read"]),
         cache_write: n(&t["cache"]["write"]),
         cost: data["cost"].as_f64().filter(|c| *c > 0.0),
+        cwd: None,
     };
     (e.input + e.output + e.cache_read + e.cache_write > 0).then_some(e)
 }
@@ -501,9 +711,88 @@ pub async fn usage_history(app: tauri::AppHandle, days: i64) -> Result<Vec<Bucke
     .map_err(|e| e.to_string())?
 }
 
+/// When a folder was made (unix ms). A removed worktree's folder name is reused by a later task,
+/// so a folder's spend only counts from then on.
+fn created_at(dir: &str) -> Option<i64> {
+    let t = std::fs::metadata(dir).ok()?.created().ok()?;
+    t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+}
+
+/// What the agents spent in each of `dirs` (worktrees, typically) since the folder was made.
+#[tauri::command]
+pub async fn usage_dirs(app: tauri::AppHandle, dirs: Vec<String>) -> Result<Vec<DirUsage>, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let history = app.state::<UsageHistory>();
+        history.scan_if_stale(std::time::Duration::from_secs(20));
+        let prices = Prices::load();
+        let floor = now_ms() - KEEP_DAYS * DAY_MS;
+        dirs.iter()
+            // A minute's margin: the agent can start before the folder's timestamp settles.
+            .map(|d| history.dir_usage(d, created_at(d).map_or(floor, |c| (c - 60_000).max(floor)), &prices))
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Spend per folder over the last `days`, most expensive first.
+#[tauri::command]
+pub async fn usage_by_dir(app: tauri::AppHandle, days: i64) -> Result<Vec<DirUsage>, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let history = app.state::<UsageHistory>();
+        history.scan_if_stale(std::time::Duration::from_secs(20));
+        let since = now_ms() - days.clamp(1, KEEP_DAYS) * DAY_MS;
+        history.by_dir(since, &Prices::load()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spend_per_folder_counts_subfolders_but_not_siblings() {
+        let h = UsageHistory::in_memory();
+        let ev = |id: &str, at: i64, cwd: Option<&str>, out: u64| Event {
+            id: id.into(),
+            at,
+            provider: "claude".into(),
+            model: "claude-opus-5-5".into(),
+            output: out,
+            cwd: cwd.map(norm_dir),
+            ..Default::default()
+        };
+        UsageHistory::insert(
+            &h.conn.lock().unwrap(),
+            &[
+                ev("a", 10, Some("/wt/claude-1"), 1_000_000),
+                ev("b", 20, Some("/wt/claude-1/src/"), 1_000_000),
+                ev("c", 30, Some("/wt/claude-10"), 1_000_000),
+                ev("d", 5, Some("/wt/claude-1"), 1_000_000),
+                ev("e", 40, None, 1_000_000),
+            ],
+        )
+        .unwrap();
+        let prices = Prices { catalog: HashMap::new() };
+        let d = h.dir_usage("/wt/claude-1/", 10, &prices).unwrap();
+        // "a" and "b" (subfolder); not the sibling "claude-10", nor "d" from before the folder was made.
+        assert_eq!((d.calls, d.tokens, d.first_at, d.last_at), (2, 2_000_000, Some(10), Some(20)));
+        assert!((d.cost - 40.0).abs() < 1e-9, "{}", d.cost);
+        assert_eq!(h.dir_usage("/nowhere", 0, &prices).unwrap().calls, 0);
+
+        // Per checkout: claude-1 (with its src), claude-10, and none for no folder.
+        let as_checkout = |d: &str| if d.starts_with("/wt/claude-1/") { "/wt/claude-1".to_string() } else { d.to_string() };
+        let all = h.by_dir_with(0, &prices, as_checkout).unwrap();
+        let dirs: Vec<_> = all.iter().map(|d| (d.dir.as_str(), d.calls, d.models.len())).collect();
+        assert_eq!(dirs, vec![("/wt/claude-1", 3, 1), ("/wt/claude-10", 1, 1)]);
+        assert_eq!((all[0].first_at, all[0].last_at), (Some(5), Some(20)));
+        assert_eq!(norm_dir(r"C:\wt\x\"), "C:/wt/x");
+    }
 
     #[test]
     fn reads_claude_transcripts_once_per_message() {
@@ -543,9 +832,12 @@ mod tests {
                 r#"{{"timestamp":"2026-10-14T10:01:00.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"total_tokens":{total}}},"last_token_usage":{{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50}}}}}}}}"#
             )
         };
+        let meta = r#"{"timestamp":"2026-10-14T10:00:00.000Z","type":"session_meta","payload":{"cwd":"/w/codex-1/"}}"#;
+        assert!(codex_events(meta, path, 0, &mut state).is_none());
         assert!(codex_events(ctx, path, 0, &mut state).is_none());
         let e = codex_events(&count(1050), path, 10, &mut state).unwrap();
         assert_eq!((e.model.as_str(), e.input, e.cache_read, e.output), ("gpt-6.1-sol", 200, 800, 50));
+        assert_eq!(e.cwd.as_deref(), Some("/w/codex-1"));
         assert!(codex_events(&count(1050), path, 20, &mut state).is_none());
         assert!(codex_events(&count(2100), path, 30, &mut state).is_some());
     }
@@ -586,5 +878,8 @@ mod machine {
             e.2 = b.priced;
         }
         println!("{by_model:#?}");
+        for d in h.by_dir(0, &Prices::load()).unwrap().iter().take(8) {
+            println!("{:>9.2} $ {:>12} tok  {}", d.cost, d.tokens, d.dir);
+        }
     }
 }

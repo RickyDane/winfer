@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { copyWithToast } from "@/stores/toasts";
+import { formatCost, formatTokens } from "@/features/usage/history";
 import { deleteHistoryEntry, searchHistory, type MergeRecord } from "./history";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -52,6 +53,11 @@ function Entry({ merge, words, onDeleted }: { merge: MergeRecord; words: string[
               {merge.files.length} files <span className="text-success">+{merge.adds}</span> <span className="text-danger">−{merge.dels}</span>
             </span>
             {merge.tests && <span className={merge.tests.endsWith("passed") ? "text-success" : "text-danger"}>{merge.tests}</span>}
+            {merge.cost !== null && merge.cost !== undefined && (
+              <span className="font-mono" title={`What the agents spent on it at API prices${merge.tokens ? ` (${formatTokens(merge.tokens)} tokens)` : ""}`}>
+                {formatCost(merge.cost)}
+              </span>
+            )}
           </div>
         </div>
         <span className="shrink-0 text-[11px] text-fg-subtle">{dateFormat.format(merge.mergedAt)}</span>
