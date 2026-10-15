@@ -226,7 +226,7 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
           </button>
         );
       })}
-      {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "pane.spawn", provider: "default" })} starts one</span>}
+      {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "ui.overlay", overlay: "newPane" })} starts one</span>}
       <WorktreeList workspace={ws} />
     </div>
   );

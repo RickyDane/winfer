@@ -247,7 +247,7 @@ function AgentSettings() {
   return (
     <>
       <Card title="New panes">
-        <Row label="Default agent" hint={`${keysFor({ type: "pane.spawn", provider: "default" })}, split and “open a new window” start this agent.`}>
+        <Row label="Default agent" hint={`${keysFor({ type: "ui.overlay", overlay: "newPane" })}, split and “open a new window” start this agent.`}>
           <Select value={current} onChange={(e) => setDefaultProvider(e.target.value)} className="w-44">
             {providers.map((p) => (
               <option key={p.id} value={p.id} disabled={!p.installed}>

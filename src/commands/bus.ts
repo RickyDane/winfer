@@ -96,7 +96,7 @@ export type Command =
   /** Toggles settings; with a page, opens settings on that page. */
   | { type: "ui.settings"; page?: string }
   | { type: "ui.theme"; theme: string }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
   /** Terminal text size: bigger, smaller or back to the default. */
@@ -425,6 +425,8 @@ export function execute(cmd: Command): void {
     case "ui.view":
       return s.setView(cmd.view === "toggle" ? (s.view === "overview" ? "workspace" : "overview") : cmd.view);
     case "ui.overlay":
+      // Nothing to choose without worktrees: the new pane opens straight away.
+      if (cmd.overlay === "newPane" && s.overlay !== "newPane" && !active().useWorktrees) return execute({ type: "pane.spawn", provider: "default" });
       return s.setOverlay(s.overlay === cmd.overlay ? null : cmd.overlay);
   }
 }

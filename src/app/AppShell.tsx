@@ -1,4 +1,5 @@
 import { BranchDialog } from "@/features/worktree/BranchDialog";
+import { NewPaneDialog } from "@/features/worktree/NewPaneDialog";
 import { HistoryView } from "@/features/history/HistoryView";
 import { AgentBar } from "@/features/overview/AgentBar";
 import { Overview } from "@/features/overview/Overview";
@@ -138,7 +139,7 @@ function EmptyWorkspace() {
     <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-pane)] border border-dashed border-border text-fg-subtle">
       <span className="text-sm text-fg-muted">No agents running</span>
       <span className="text-xs">
-        {keysFor({ type: "pane.spawn", provider: "default" })} new pane · {keysFor({ type: "ui.palette", query: "New pane: " })} pick provider ·{" "}
+        {keysFor({ type: "ui.overlay", overlay: "newPane" })} new pane · {keysFor({ type: "ui.palette", query: "New pane: " })} pick provider ·{" "}
         {keysFor({ type: "ui.palette" })} commands · {keysFor({ type: "ui.cheatSheet" })} shortcuts
       </span>
     </div>
@@ -233,6 +234,7 @@ export function AppShell() {
       <ReviewInbox />
       <HistoryView />
       <BranchDialog />
+      <NewPaneDialog />
       <SessionsOverview />
       <BroadcastBar />
       <RecipesView />

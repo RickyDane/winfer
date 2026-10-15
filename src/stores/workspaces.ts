@@ -75,7 +75,7 @@ interface WorkspaceState {
   /** Settings page shown; kept after closing so reopening lands where you left off. */
   settingsPage: string;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | null;
+  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
   /** Models each provider offers (from its CLI), loaded in the background. */
@@ -138,7 +138,7 @@ interface WorkspaceState {
   setDiffPane: (id: string | null) => void;
   /** Opens or closes settings, optionally on a given page. */
   setSettings: (open: boolean, page?: string) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;

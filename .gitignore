@@ -33,3 +33,4 @@ spikes/**/server.log
 
 # Dev mock video for the Android panel
 src/dev/test-stream.h264
+graphify-out/
