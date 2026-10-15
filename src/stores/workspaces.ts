@@ -42,6 +42,8 @@ export interface Pane {
   model: string | null;
   /** Title the agent gave its terminal (Claude Code: the session's topic), cleaned up. */
   agentTitle: string | null;
+  /** Name the user gave the session; replaces the agent's title wherever the pane is shown. */
+  customTitle: string | null;
 }
 
 export interface Workspace {
@@ -129,6 +131,8 @@ interface WorkspaceState {
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
+  /** Names a session; an empty name goes back to the agent's own title. */
+  renamePane: (id: string, name: string) => void;
   setPaneStatus: (id: string, status: AgentStatus) => void;
   /** Applies a change to the active workspace. */
   updateActive: (fn: (w: Workspace) => Partial<Workspace>) => void;
@@ -260,7 +264,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !resumed.has(key);
         resumed.add(key);
-        return { ...p, raceId: p.raceId ?? null, model: p.model ?? null, agentTitle: p.agentTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, raceId: p.raceId ?? null, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -365,6 +369,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             unseen: false,
             devUrl: null,
             agentTitle: null,
+            customTitle: null,
             raceId: opts?.raceId ?? null,
             prompt: opts?.prompt ?? null,
             model: opts?.model ?? get().agentModels[provider] ?? null,
@@ -394,6 +399,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         s.focusedPaneId === id ? (active?.layout ? leaves(active.layout).at(-1)! : null) : s.focusedPaneId;
       return { workspaces, focusedPaneId };
     }),
+
+  renamePane: (id, name) => get().updatePane(id, { customTitle: name.replace(/\s+/g, " ").trim().slice(0, 80) || null }),
 
   updatePane: (id, patch) =>
     set((s) => ({
@@ -471,7 +478,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null; agentTitle?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null; agentTitle?: string | null; customTitle?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -512,7 +519,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle })),
     })),
     ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
@@ -569,8 +576,11 @@ export function cleanAgentTitle(raw: string, providerNames: string[]): string | 
   return title;
 }
 
-/** What to call a pane in lists: the agent's own title, else its task, else its CLI's name. */
+/** The pane's title: the user's name for it, else the agent's own title. */
+export const paneTitle = (pane: Pane): string | null => pane.customTitle ?? pane.agentTitle;
+
+/** What to call a pane in lists: its title, else its task, else its CLI's name. */
 export function paneLabel(pane: Pane, providers: Provider[], task?: string | null): string {
   const fallback = task ?? pane.prompt;
-  return pane.agentTitle ?? (fallback ? fallback.split("\n")[0].slice(0, 80) : providerName(providers, pane.provider));
+  return paneTitle(pane) ?? (fallback ? fallback.split("\n")[0].slice(0, 80) : providerName(providers, pane.provider));
 }

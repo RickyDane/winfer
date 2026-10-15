@@ -262,7 +262,7 @@ export function activate(api) {
       lines.push(`<b>${esc(ws.name)}</b>`);
       for (const pane of agents) {
         const who = api.describePane(pane.id);
-        lines.push(`${STATUS_ICON[pane.status] ?? "⚪"} ${esc(who?.label ?? pane.provider)}${pane.agentTitle ? ` — ${esc(pane.agentTitle)}` : ""}`);
+        lines.push(`${STATUS_ICON[pane.status] ?? "⚪"} ${esc(who?.label ?? pane.provider)}${pane.customTitle || pane.agentTitle ? ` — ${esc(pane.customTitle || pane.agentTitle)}` : ""}`);
       }
     }
     return lines.length ? lines.join("\n") : "No agents are running.";

@@ -33,6 +33,9 @@ pub struct PaneRecord {
     /// Title the agent gave its terminal.
     #[serde(default)]
     pub agent_title: Option<String>,
+    /// Name the user gave the session; shown instead of the agent's title.
+    #[serde(default)]
+    pub custom_title: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,6 +110,9 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX merges_by_time ON merges (merged_at DESC);
 "#,
+    r#"
+    ALTER TABLE panes ADD COLUMN custom_title TEXT;
+"#,
 ];
 
 /// A merged feature in the history (from the review inbox, the pane menu, voice or a race).
@@ -180,7 +186,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut panes = conn.prepare(
-            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title FROM panes WHERE workspace_id = ?1 ORDER BY sort",
+            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title, custom_title FROM panes WHERE workspace_id = ?1 ORDER BY sort",
         )?;
         for ws in &mut workspaces {
             ws.panes = panes
@@ -194,6 +200,7 @@ impl Store {
                         race_id: r.get(5)?,
                         model: r.get(6)?,
                         agent_title: r.get(7)?,
+                        custom_title: r.get(8)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -232,8 +239,8 @@ impl Store {
             )?;
             for (j, pane) in ws.panes.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title, custom_title)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![
                         pane.id,
                         ws.id,
@@ -245,6 +252,7 @@ impl Store {
                         pane.race_id,
                         pane.model,
                         pane.agent_title,
+                        pane.custom_title,
                     ],
                 )?;
             }
@@ -414,12 +422,14 @@ mod tests {
             "workspaces": [{ "id": "ws-1", "name": "api", "rootDir": "~", "layout": null, "zoomedPaneId": null,
                 "presetIndex": 0, "useWorktrees": true,
                 "panes": [{ "id": "p-1", "provider": "claude", "title": "api", "cwd": "~", "worktree": null,
-                            "agentTitle": "Fix the login redirect" }] }],
+                            "agentTitle": "Fix the login redirect", "customTitle": "Login bug" }] }],
             "ui": null
         }))
         .unwrap();
         store.save(&snapshot).unwrap();
-        assert_eq!(store.load().unwrap().workspaces[0].panes[0].agent_title.as_deref(), Some("Fix the login redirect"));
+        let pane = &store.load().unwrap().workspaces[0].panes[0];
+        assert_eq!(pane.agent_title.as_deref(), Some("Fix the login redirect"));
+        assert_eq!(pane.custom_title.as_deref(), Some("Login bug"));
     }
 
     #[test]

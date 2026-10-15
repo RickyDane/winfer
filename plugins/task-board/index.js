@@ -276,7 +276,7 @@ export function activate(api) {
     if (id === undefined) return;
     const pane = api.state().workspaces.flatMap((w) => w.panes).find((p) => p.id === e.paneId);
     try {
-      store.claim(e.workspaceId, id, { paneId: e.paneId, label: pane?.agentTitle || `new ${e.provider} pane` });
+      store.claim(e.workspaceId, id, { paneId: e.paneId, label: pane?.customTitle || pane?.agentTitle || `new ${e.provider} pane` });
     } catch {
       // Someone else took it in the meantime; the new agent will see that on the board.
     }

@@ -74,7 +74,7 @@
     {
       "id": "task-board",
       "name": "Task Board",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "description": "A shared board per workspace where agents post, claim and finish tasks and leave notes for each other, so several agents work as a team.",
       "author": "winfer",
       "tags": [
@@ -86,18 +86,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "4eb7ccb4e1fd6d57987f60e6c9fc22e18af337e38c6678cad13c95e575938039"
+          "sha256": "23232c8400513687d1d760521faf223a9cc9838c6a02fd62ea356d30308882a6"
         },
         {
           "path": "plugin.json",
-          "sha256": "ec500ca905bb72416be221afa1e9d979ac4f27c7475c254bd240bd1f2a87b745"
+          "sha256": "d68f6799af060ad03ae489e28ce6f4490a30c499ab9c1384d8c6c3ddf40120bd"
         }
       ]
     },
     {
       "id": "telegram",
       "name": "Telegram",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
       "author": "winfer",
       "tags": [
@@ -110,11 +110,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "3c694c19346bc8a74a59709d567d794bd0c9b8de7026ec662d766c150d5138e0"
+          "sha256": "6639217d74392a3f1d861e7a3ae608d1af6d3a02cfa874a46ab783c860c969a2"
         },
         {
           "path": "plugin.json",
-          "sha256": "f34f438395c5c89903551465f6a1043790554beefe9dc4160e8f181bf564755f"
+          "sha256": "aadd10f8a1fb171f56605a44d5633dba9ae9f9cb1a03415c6c492f88de14a22f"
         }
       ]
     }

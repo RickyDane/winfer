@@ -14,6 +14,7 @@ import { paneMenu, workspaceMenu } from "./sidebarMenus";
 import { paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { useSortable } from "./useSortable";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { PaneTitleInput } from "@/features/terminal/PaneTitleInput";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { themeById } from "@/features/theme/themes";
@@ -186,6 +187,7 @@ type OpenMenu = (e: React.MouseEvent, target: { title: string; items: MenuItem[]
 function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace: Workspace; focusedPaneId: string | null; openMenu: OpenMenu }) {
   const movePaneInList = useWorkspaces((s) => s.movePaneInList);
   const { drag, begin, dropLine } = useSortable(movePaneInList);
+  const [renaming, setRenaming] = useState<string | null>(null);
   return (
     <div className="relative pr-1 pb-1.5 pl-[17px]">
       {/* Guide line tying the sessions to their workspace. */}
@@ -194,14 +196,23 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
         const focused = pane.id === focusedPaneId;
         const line = dropLine(i, ws.panes.length);
         return (
-          <button
+          // Not a <button>: the rename field sits inside the row, and WebKit won't focus inputs in buttons.
+          <div
             key={pane.id}
+            role="button"
+            tabIndex={0}
             data-sort-id={pane.id}
             onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+              e.preventDefault();
+              execute({ type: "pane.focus", target: { id: pane.id } });
+            }}
             onPointerDown={(e) => begin(e, pane.id)}
-            onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane) })}
+            onDoubleClick={() => setRenaming(pane.id)}
+            onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane, () => setRenaming(pane.id)) })}
             className={cn(
-              "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+              "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] cursor-default rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
               focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
               drag?.id === pane.id && "opacity-50",
             )}
@@ -216,14 +227,18 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
             <span className="flex items-center gap-2">
               <StatusDot status={pane.status} />
               <ProviderIcon provider={pane.provider} size={12} />
-              <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
+              {renaming === pane.id ? (
+                <PaneTitleInput pane={pane} onDone={() => setRenaming(null)} className="h-5 flex-1 text-[13px]" />
+              ) : (
+                <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
+              )}
               <PanePercent pane={pane} />
             </span>
             <span className="block pl-[26px]">
               <PaneDetail pane={pane} />
               <PaneProgress pane={pane} />
             </span>
-          </button>
+          </div>
         );
       })}
       {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "ui.overlay", overlay: "newPane" })} starts one</span>}

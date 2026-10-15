@@ -65,7 +65,7 @@ export function workspaceMenu(ws: Workspace): MenuItem[] {
   ];
 }
 
-export function paneMenu(pane: Pane): MenuItem[] {
+export function paneMenu(pane: Pane, rename: () => void): MenuItem[] {
   const s = useWorkspaces.getState();
   const provider = s.providers.find((p) => p.id === pane.provider);
   const target = { id: pane.id };
@@ -82,6 +82,8 @@ export function paneMenu(pane: Pane): MenuItem[] {
         execute({ type: "ui.view", view: "overview" });
       },
     },
+    { label: "Rename…", run: rename },
+    ...(pane.customTitle ? [{ label: "Reset name", run: () => useWorkspaces.getState().renamePane(pane.id, "") }] : []),
     "separator",
     ...(pane.status === "needs-input" ? [{ label: "Approve request", run: () => execute({ type: "pane.approve", target }) }] : []),
     { label: isAgent ? "Interrupt" : "Interrupt (Ctrl-C)", hint: keysFor({ type: "pane.interrupt", target: "focused" }), run: () => execute({ type: "pane.interrupt", target }) },

@@ -52,7 +52,7 @@ export async function snapshotForHistory(pane: Pane & { worktree: WorktreeInfo }
     branch: pane.worktree.branch,
     base: pane.worktree.base,
     provider: pane.provider,
-    title: pane.agentTitle ?? progress?.title ?? (summary ? headline(summary) : null) ?? task?.split("\n")[0].slice(0, 120) ?? pane.worktree.branch,
+    title: pane.customTitle ?? pane.agentTitle ?? progress?.title ?? (summary ? headline(summary) : null) ?? task?.split("\n")[0].slice(0, 120) ?? pane.worktree.branch,
     summary,
     task,
     files: stats?.files ?? [],

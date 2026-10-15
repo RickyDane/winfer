@@ -14,7 +14,7 @@ const provider = (id: string, name: string, aliases: string[] = []): Provider =>
 
 const pane = (id: string, provider: string) => ({
   id, workspaceId: "ws", provider, title: "api", cwd: "~", status: "idle" as const, worktree: null,
-  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null, agentTitle: null,
+  wantsWorktree: false, resume: false, unseen: false, devUrl: null, raceId: null, prompt: null, model: null, agentTitle: null, customTitle: null,
 });
 
 const workspace: Workspace = {

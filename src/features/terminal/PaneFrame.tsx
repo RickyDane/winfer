@@ -6,11 +6,12 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { PaneMenu } from "./PaneMenu";
+import { PaneTitleInput } from "./PaneTitleInput";
 import { PaneSearch } from "./PaneSearch";
 import { beginDrag, useDrag } from "@/features/layout/drag";
 import { TerminalHost } from "./TerminalHost";
 import { useStarting } from "./xtermRegistry";
-import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { paneTitle, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { ContextMeter } from "@/features/usage/UsageMeter";
@@ -51,6 +52,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const showProgress = pane.provider !== "shell" && progress?.percent != null;
   const starting = useStarting((s) => s[pane.id]);
   const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
+  const [renaming, setRenaming] = useState(false);
   const [isNew] = useState(() => !seen.has(pane.id));
   seen.add(pane.id);
 
@@ -83,9 +85,17 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
             {workspaceName}
           </span>
         )}
-        <span className="flex-1 truncate font-mono text-xs text-fg-muted" title={pane.agentTitle ?? pane.title}>
-          {pane.agentTitle ?? pane.title}
-        </span>
+        {renaming ? (
+          <PaneTitleInput pane={pane} onDone={() => setRenaming(false)} className="h-5 flex-1 font-mono text-xs" />
+        ) : (
+          <span
+            className="flex-1 truncate font-mono text-xs text-fg-muted"
+            title={`${paneTitle(pane) ?? pane.title}\nDouble-click to rename`}
+            onDoubleClick={() => setRenaming(true)}
+          >
+            {paneTitle(pane) ?? pane.title}
+          </span>
+        )}
         <ContextMeter paneId={pane.id} />
         {showProgress && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">
@@ -127,7 +137,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
             <ExternalLink size={10} />
           </button>
         )}
-        <PaneMenu pane={pane} />
+        <PaneMenu pane={pane} onRename={() => setRenaming(true)} />
         <HeaderButton title={`${zoomed ? "Restore" : "Zoom"} (${keysFor({ type: "pane.zoom", target: "focused" })})`} onClick={() => execute({ type: "pane.zoom", target })}>
           {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </HeaderButton>

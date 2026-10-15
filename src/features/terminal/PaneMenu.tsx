@@ -6,7 +6,7 @@ import { preferredEditor } from "@/features/editors/editors";
 import type { Pane } from "@/stores/workspaces";
 
 /** Per-pane actions behind the "…" button. */
-export function PaneMenu({ pane }: { pane: Pane }) {
+export function PaneMenu({ pane, onRename }: { pane: Pane; onRename: () => void }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
@@ -20,6 +20,7 @@ export function PaneMenu({ pane }: { pane: Pane }) {
   const target = { id: pane.id };
   const editor = preferredEditor();
   const items: { label: string; run: () => void; danger?: boolean }[] = [
+    { label: "Rename…", run: onRename },
     ...(pane.worktree
       ? [
           { label: "Show changes", run: () => execute({ type: "pane.showChanges", target }) },
