@@ -223,6 +223,7 @@ async function spawn(entry: Entry) {
         resume: entry.pane.resume,
         prompt: entry.pane.prompt,
         model: entry.pane.model,
+        autoApprove: useWorkspaces.getState().autoApprove.includes(entry.pane.provider),
         cols: entry.term.cols,
         rows: entry.term.rows,
       },

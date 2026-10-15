@@ -265,7 +265,24 @@ function AgentSettings() {
           })}
         </Card>
       )}
+      <AutoApproveSettings />
     </>
+  );
+}
+
+/** Agents that start with their permission prompts skipped (each provider's `autoApproveArgs`). */
+function AutoApproveSettings() {
+  const { providers, autoApprove, setAutoApprove } = useWorkspaces();
+  const agents = providers.filter((p) => p.installed && p.autoApproveArgs?.length);
+  if (!agents.length) return null;
+  return (
+    <Card title="Permissions" description="Applies to agents started (or restarted) after the change.">
+      {agents.map((p) => (
+        <Row key={p.id} label={`Start ${p.name} in auto-approve mode`} hint="Runs tools and edits without asking, except what its config explicitly denies.">
+          <Toggle label={`Start ${p.name} in auto-approve mode`} checked={autoApprove.includes(p.id)} onChange={(on) => setAutoApprove(p.id, on)} />
+        </Row>
+      ))}
+    </Card>
   );
 }
 

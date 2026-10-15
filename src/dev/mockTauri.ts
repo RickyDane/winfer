@@ -18,7 +18,7 @@ const providers = [
   { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: false },
-  { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
+  { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--auto"], installed: true },
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 

@@ -78,6 +78,8 @@ interface WorkspaceState {
   models: Record<ProviderId, ModelInfo[]>;
   /** Default model per provider for new panes (persisted). */
   agentModels: Record<ProviderId, string>;
+  /** Agents started with their permission prompts skipped (persisted). */
+  autoApprove: ProviderId[];
   /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
   defaultProvider: ProviderId | null;
   /** Shortcut overrides by binding id (see src/commands/keymap.ts); "" = switched off. */
@@ -128,6 +130,7 @@ interface WorkspaceState {
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
+  setAutoApprove: (provider: ProviderId, on: boolean) => void;
   setDefaultProvider: (provider: ProviderId | null) => void;
   /** Sets a binding's chord; null restores the default. */
   setShortcut: (id: string, chord: string | null) => void;
@@ -198,6 +201,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   recipes: [],
   models: {},
   agentModels: {},
+  autoApprove: [],
   defaultProvider: null,
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
@@ -246,6 +250,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       voiceConfig: ui.voice ?? {},
       recipes: ui.recipes ?? [],
       agentModels: ui.agentModels ?? {},
+      autoApprove: ui.autoApprove ?? [],
       defaultProvider: ui.defaultProvider ?? null,
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
@@ -390,6 +395,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       else delete agentModels[provider];
       return { agentModels };
     }),
+  setAutoApprove: (provider, on) => set((s) => ({ autoApprove: [...s.autoApprove.filter((p) => p !== provider), ...(on ? [provider] : [])] })),
   setDefaultProvider: (provider) => set({ defaultProvider: provider }),
   setShortcut: (id, chord) =>
     set((s) => {
@@ -437,6 +443,7 @@ interface Snapshot {
     voice?: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "claude"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string };
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
+    autoApprove?: ProviderId[];
     defaultProvider?: ProviderId | null;
     shortcuts?: Record<string, string>;
     browserWidth?: number;
@@ -466,7 +473,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 

@@ -67,6 +67,9 @@ pub struct SpawnRequest {
     /// Model to launch with (the provider's `modelArg`); `None` uses the CLI's default.
     #[serde(default)]
     model: Option<String>,
+    /// Skip the agent's permission prompts (its `autoApproveArgs`), from settings.
+    #[serde(default)]
+    auto_approve: bool,
     cols: u16,
     rows: u16,
 }
@@ -140,7 +143,7 @@ fn agent_args(
 /// The command for a pane, and whether its start prompt has to be typed in rather than passed
 /// as an argument.
 fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBuilder, bool), String> {
-    let provider = providers::find(&req.provider_id)
+    let mut provider = providers::find(&req.provider_id)
         .ok_or_else(|| format!("unknown provider: {}", req.provider_id))?;
 
     let mut type_prompt = false;
@@ -157,6 +160,12 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             let mut cmd = CommandBuilder::new(&launcher.program);
             cmd.args(&launcher.args);
             let opencode_v2 = provider.id == "opencode" && providers::opencode_v2(&launcher);
+            // OpenCode 1 has no `--auto`; its config allows everything instead (see agent_env).
+            let config_approve = req.auto_approve && provider.id == "opencode" && !opencode_v2;
+            if req.auto_approve && !config_approve {
+                let extra = std::mem::take(&mut provider.auto_approve_args);
+                provider.args.extend(extra);
+            }
             // Only OpenCode 2 plugins have the API ours uses (and OpenCode 1 reads `plugin`).
             let plugin = hooks::server().filter(|_| opencode_v2).map(|s| s.opencode_plugin.to_string_lossy().into_owned());
             // Environment variables don't pass through cmd.exe, so these work even for a batch file.
@@ -164,6 +173,7 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 &provider.id,
                 &servers,
                 plugin.as_deref(),
+                config_approve,
                 login_env().get("OPENCODE_CONFIG_CONTENT").map(String::as_str),
             );
             // OpenCode 2 runs sessions in a shared background server that never sees this
@@ -399,6 +409,7 @@ mod tests {
             resume: false,
             prompt: None,
             model: None,
+            auto_approve: false,
             cols: 80,
             rows: 24,
         };
@@ -491,6 +502,7 @@ mod tests {
             resume: false,
             prompt: None,
             model: None,
+            auto_approve: false,
             cols: 80,
             rows: 24,
         };

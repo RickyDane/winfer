@@ -290,8 +290,8 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
 /// agent configured through its environment (OpenCode reads extra config from
 /// `OPENCODE_CONFIG_CONTENT`). `existing` is the variable's current value, if the user set one:
 /// ours are added to it.
-pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, existing: Option<&str>) -> Vec<(String, String)> {
-    if (servers.is_empty() && plugin.is_none()) || provider_id != "opencode" {
+pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, auto_approve: bool, existing: Option<&str>) -> Vec<(String, String)> {
+    if (servers.is_empty() && plugin.is_none() && !auto_approve) || provider_id != "opencode" {
         return Vec::new();
     }
     let mut config = existing
@@ -321,6 +321,17 @@ pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, ex
         }
         config["plugins"].as_array_mut().expect("an array").push(json!(plugin));
     }
+    // Like OpenCode 2's `--auto`: allow what the user's config doesn't explicitly set.
+    if auto_approve {
+        if !config["permission"].is_object() && !config["permission"].is_string() {
+            config["permission"] = json!({});
+        }
+        if let Some(permission) = config["permission"].as_object_mut() {
+            for tool in ["edit", "bash", "webfetch"] {
+                permission.entry(tool).or_insert(json!("allow"));
+            }
+        }
+    }
     vec![("OPENCODE_CONFIG_CONTENT".into(), config.to_string())]
 }
 
@@ -336,7 +347,7 @@ mod tests {
             args: vec!["mcp-stdio".into()],
             env: vec![("WINFER_PANE_ID", "p-1".into())],
         }];
-        let env = agent_env("opencode", &servers, Some("/data/opencode-plugin"), Some(r#"{"theme":"dark","mcp":{"mine":{"type":"remote"}},"plugins":["mine"]}"#));
+        let env = agent_env("opencode", &servers, Some("/data/opencode-plugin"), false, Some(r#"{"theme":"dark","mcp":{"mine":{"type":"remote"}},"plugins":["mine"]}"#));
         assert_eq!(env[0].0, "OPENCODE_CONFIG_CONTENT");
         let config: Value = serde_json::from_str(&env[0].1).unwrap();
         assert_eq!(config["theme"], "dark");
@@ -344,9 +355,19 @@ mod tests {
         assert_eq!(config["mcp"]["winfer"]["command"], json!(["/app/winfer", "mcp-stdio"]));
         assert_eq!(config["mcp"]["winfer"]["environment"]["WINFER_PANE_ID"], "p-1");
         assert_eq!(config["plugins"], json!(["mine", "/data/opencode-plugin"]));
-        assert!(agent_env("claude", &servers, None, None).is_empty());
-        let env = agent_env("opencode", &servers, None, None);
-        assert!(serde_json::from_str::<Value>(&env[0].1).unwrap().get("plugins").is_none());
+        assert!(agent_env("claude", &servers, None, false, None).is_empty());
+        let env = agent_env("opencode", &servers, None, false, None);
+        let config: Value = serde_json::from_str(&env[0].1).unwrap();
+        assert!(config.get("plugins").is_none());
+        assert!(config.get("permission").is_none());
+    }
+
+    #[test]
+    fn opencode_1_auto_approves_through_its_config() {
+        let env = agent_env("opencode", &[], None, true, Some(r#"{"permission":{"bash":"ask"}}"#));
+        let config: Value = serde_json::from_str(&env[0].1).unwrap();
+        assert_eq!(config["permission"], json!({"bash": "ask", "edit": "allow", "webfetch": "allow"}));
+        assert!(agent_env("opencode", &[], None, false, None).is_empty());
     }
 
     fn env() -> (String, String, String) {

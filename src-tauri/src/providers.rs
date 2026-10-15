@@ -42,6 +42,9 @@ pub struct Provider {
     /// Typed into a running session to switch models; `{model}` is replaced.
     #[serde(default)]
     pub model_command: Option<String>,
+    /// Launch flags that skip permission prompts, added when auto-approve is on in settings.
+    #[serde(default)]
+    pub auto_approve_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
