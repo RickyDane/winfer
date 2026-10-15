@@ -59,6 +59,9 @@ pub struct PluginInfo {
     pub enabled: bool,
     /// Installed from the store (so it can be updated and uninstalled from there).
     pub from_store: bool,
+    /// The catalog version installed from the store, which may differ from `manifest.version`;
+    /// updates are offered when the catalog's version differs from this one.
+    pub store_version: Option<String>,
     /// Why the plugin can't load (bad manifest, id clash, …).
     pub error: Option<String>,
 }
@@ -204,9 +207,11 @@ fn scan(root: &Path, enabled: &BTreeSet<String>) -> Vec<PluginInfo> {
                     provider_ids.extend(m.providers.iter().map(|p| p.id.clone()));
                 }
             }
+            let marker = dir.join(STORE_MARKER);
             Some(PluginInfo {
                 enabled: enabled.contains(&id),
-                from_store: dir.join(STORE_MARKER).exists(),
+                from_store: marker.exists(),
+                store_version: store_version(&marker),
                 dir: dir.to_string_lossy().into_owned(),
                 id,
                 manifest,
@@ -214,6 +219,13 @@ fn scan(root: &Path, enabled: &BTreeSet<String>) -> Vec<PluginInfo> {
             })
         })
         .collect()
+}
+
+/// The `version` a store install recorded in its marker file.
+fn store_version(marker: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(marker).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    value.get("version")?.as_str().map(str::to_string)
 }
 
 fn registry() -> Result<&'static RwLock<Registry>, String> {
@@ -476,6 +488,7 @@ mod tests {
         if tamper {
             std::fs::write(base.join("demo/lib/index.js"), "alert('evil')").unwrap();
         }
+        // The catalog's version needn't match plugin.json's (which has none here).
         let catalog = serde_json::json!({ "plugins": [{ "id": "demo", "name": "Demo", "version": "1.0.0", "files": entries }] });
         std::fs::write(base.join("catalog.json"), catalog.to_string()).unwrap();
         base
@@ -490,6 +503,8 @@ mod tests {
         let plugins = scan(&root, &BTreeSet::new());
         assert_eq!(plugins.len(), 1);
         assert!(plugins[0].from_store && plugins[0].error.is_none());
+        assert_eq!(plugins[0].store_version.as_deref(), Some("1.0.0"));
+        assert_eq!(plugins[0].manifest.as_ref().unwrap().version, None);
         assert!(root.join("demo/lib/index.js").exists());
         // Reinstalling (an update) replaces the folder and leaves no staging copy behind.
         install(&root, base.to_str().unwrap(), "demo").unwrap();

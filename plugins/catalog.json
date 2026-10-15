@@ -92,11 +92,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "2091b531eabb7110e04907a42f96fd36f8b86c281b0cc3c52d7b9045822e7c3a"
+          "sha256": "e1171183eaedf145df620d356ae7b9457286d26abb4135d895d967fcb96eb4d0"
         },
         {
           "path": "plugin.json",
-          "sha256": "bb7e8bf221440bd5897077d73878bdafa216efde85cfcbc18a66117095e96869"
+          "sha256": "be4766621758dff52982b68929b31593f9d82299f4c03ca875320acba87944e4"
         }
       ]
     },

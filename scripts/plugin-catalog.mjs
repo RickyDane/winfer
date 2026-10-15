@@ -2,6 +2,9 @@
 // Builds plugins/catalog.json, the plugin store's index: every plugin folder's manifest
 // fields plus each file's SHA-256, which the app checks when installing.
 //
+// A plugin's catalog version needn't match its plugin.json: the catalog keeps its own and takes
+// plugin.json's only when that one is higher, so either can be bumped to publish an update.
+//
 //   node scripts/plugin-catalog.mjs          write plugins/catalog.json
 //   node scripts/plugin-catalog.mjs --check  exit 1 if it's out of date
 import { createHash } from "node:crypto";
@@ -22,7 +25,32 @@ function files(dir) {
     });
 }
 
+/** Compares dotted versions numerically ("1.10.0" > "1.9.2"); non-numeric parts compare as text. */
+export function compareVersions(a, b) {
+  const pa = String(a).split(/[.+-]/);
+  const pb = String(b).split(/[.+-]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? "0";
+    const y = pb[i] ?? "0";
+    const nx = Number(x);
+    const ny = Number(y);
+    const diff = Number.isNaN(nx) || Number.isNaN(ny) ? x.localeCompare(y) : nx - ny;
+    if (diff) return Math.sign(diff);
+  }
+  return 0;
+}
+
+function previousVersions(root) {
+  try {
+    const catalog = JSON.parse(readFileSync(join(root, "catalog.json"), "utf8"));
+    return new Map(catalog.plugins.map((p) => [p.id, p.version]));
+  } catch {
+    return new Map();
+  }
+}
+
 export function buildCatalog(root = PLUGINS) {
+  const previous = previousVersions(root);
   const plugins = readdirSync(root)
     .filter((name) => !name.startsWith(".") && statSync(join(root, name)).isDirectory())
     .sort()
@@ -30,11 +58,12 @@ export function buildCatalog(root = PLUGINS) {
       const dir = join(root, id);
       const manifest = JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8"));
       if (manifest.id !== id) throw new Error(`plugins/${id}/plugin.json has id “${manifest.id}”`);
-      if (!manifest.version) throw new Error(`plugins/${id}/plugin.json needs a version`);
+      const versions = [previous.get(id), manifest.version].filter(Boolean);
+      if (!versions.length) throw new Error(`plugins/${id} needs a version in plugin.json or catalog.json`);
       return {
         id,
         name: manifest.name,
-        version: manifest.version,
+        version: versions.reduce((a, b) => (compareVersions(b, a) > 0 ? b : a)),
         description: manifest.description ?? "",
         author: manifest.author ?? null,
         tags: manifest.tags ?? [],

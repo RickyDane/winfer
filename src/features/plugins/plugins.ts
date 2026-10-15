@@ -45,6 +45,8 @@ export interface PluginInfo {
   enabled: boolean;
   /** Installed from the plugin store. */
   fromStore: boolean;
+  /** Catalog version installed from the store; may differ from `manifest.version`. */
+  storeVersion?: string | null;
   error: string | null;
 }
 

@@ -812,14 +812,15 @@ function PluginSettings() {
             const error = p.error ?? (p.enabled ? runtimeErrors[p.id] : undefined);
             const name = p.manifest?.name ?? p.id;
             const latest = catalog?.find((e) => e.id === p.id);
-            const outdated = p.fromStore && latest && latest.version !== p.manifest?.version;
+            const installedVersion = p.storeVersion ?? p.manifest?.version;
+            const outdated = p.fromStore && latest && latest.version !== installedVersion;
             return (
               <Row
                 key={p.id}
                 label={
                   <>
                     {name}
-                    {p.manifest?.version && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{p.manifest.version}</span>}
+                    {installedVersion && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{installedVersion}</span>}
                     {!p.fromStore && <span className="ml-1.5 rounded bg-active px-1.5 py-0.5 text-[10px] text-fg-subtle">local</span>}
                   </>
                 }

@@ -18,8 +18,10 @@ To try the store from a checkout, start winfer with `WINFER_PLUGIN_STORE=/path/t
 
 To add or change a store plugin:
 
-1. Create or edit `plugins/<id>/` (`id` must equal the folder name; set a `version` and bump it on
-   every change, so installed copies offer an update). Optional `tags` help search.
+1. Create or edit `plugins/<id>/` (`id` must equal the folder name; bump its version on every
+   change, so installed copies offer an update). The version can live in `plugin.json` or be
+   edited in `catalog.json` directly; they don't have to match, and the catalog keeps the higher
+   one. Optional `tags` help search.
 2. Run `node scripts/plugin-catalog.mjs` to rebuild `catalog.json` (a test fails if you forget).
 
 [`plugins/example-hello`](../../plugins/example-hello) uses every manifest feature;
@@ -42,7 +44,7 @@ database. Their pure functions are tested in `scripts/db-explorer.test.mjs` and
 |---|---|
 | `id` | Required. Lowercase letters, digits, `-` `_` `.`; must equal the folder name. |
 | `name` | Required. Shown in Settings. |
-| `version` | Required for store plugins; a different version in the catalog shows "Update". |
+| `version` | Optional. A store plugin needs a version in `plugin.json` or `catalog.json`; when the catalog's differs from the one installed, Settings shows "Update". |
 | `description`, `author`, `tags` | Shown in the store; searched. |
 | `providers` | Agent CLIs, same shape as [`src-tauri/resources/providers.json`](../../src-tauri/resources/providers.json). Ids must not clash with built-in agents or other plugins. |
 | `recipes` | `{ id, name, panes: [{ provider, prompt? }], preset?, url? }`; listed after your own recipes. |
