@@ -1,7 +1,8 @@
 // Knowledge Base: a graphify (https://pypi.org/project/graphifyy/) knowledge graph of each
-// workspace's project. The page shows it as a live 3D galaxy (WebGL2, a force layout in a worker)
-// where you search, trace paths, see what a change would affect and watch agents work; agents
-// query the same graph through agent tools (kb_query, kb_explain, kb_path, kb_affected, …).
+// workspace's project. The page shows it as a live 3D galaxy or a flat 2D map (WebGL2, a force
+// layout in a worker) where you search, trace paths, see what a change would affect and watch
+// agents work; agents query the same graph through agent tools (kb_query, kb_explain, kb_path,
+// kb_affected, …).
 //
 // graphify runs through `api.vault.exec` (a shell in the project folder, with no secrets). The
 // graph lives in `<project>/graphify-out/`.
@@ -22,6 +23,8 @@ const TYPE_LABELS = { code: "Code", document: "Docs", concept: "Concepts", ratio
 const IS_WIN = /Win/i.test(navigator.platform ?? "") || /Windows/i.test(navigator.userAgent);
 const REDUCED_MOTION = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 const SNAPSHOT = /^\d{4}-\d{2}-\d{2}(?:_(\d+))?$/;
+/** Graphs up to this many nodes open in 3D; bigger ones open as a flat 2D map. */
+const MAX_3D_NODES = 10_000;
 
 // Helpers ----------------------------------------------------------------------------------------
 
@@ -603,7 +606,7 @@ function createStore(api) {
   } catch {
     saved = {};
   }
-  const settings = { autoUpdate: true, motion: !REDUCED_MOTION, labels: true, flow: true, ...saved.settings };
+  const settings = { autoUpdate: true, motion: !REDUCED_MOTION, labels: true, flow: true, views: {}, ...saved.settings };
   const kbs = new Map();
   const listeners = new Set();
   const activityListeners = new Set();
@@ -977,12 +980,13 @@ function createStore(api) {
  * Force layout, run in a worker. Communities sit on the arms of a spiral galaxy (the biggest near
  * the core); nodes are pulled to their community's spot, held apart on a hashed grid (only close
  * nodes push each other, so a tick is O(n)) and pulled together along edges, inside a community
- * more strongly than across. The disc is flattened by pulling harder along y.
+ * more strongly than across. The disc is flattened by pulling harder along y; in 2D (flat) it is
+ * squashed onto y = 0 and the grid only looks at its xz neighbours.
  */
 const LAYOUT_WORKER = `
 "use strict";
 const CELL = 22, REPULSE = 9, K_ANCHOR = 0.01, LINK_IN = 14, LINK_OUT = 40, K_IN = 0.35, K_OUT = 0.05, DECAY = 0.6;
-let n = 0, m = 0, pos, vel, src, dst, comm, deg, anchor, head, next, mask = 0, alpha = 0, running = false;
+let n = 0, m = 0, pos, vel, src, dst, comm, deg, anchor, head, next, mask = 0, alpha = 0, running = false, flat = false;
 
 function rng(seed) {
   return () => {
@@ -1043,7 +1047,8 @@ function tick() {
   for (let i = 0; i < n; i++) {
     const p = i * 3;
     const cx = Math.floor(pos[p] / CELL), cy = Math.floor(pos[p + 1] / CELL), cz = Math.floor(pos[p + 2] / CELL);
-    for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
+    const oy0 = flat ? 0 : -1, oy1 = flat ? 0 : 1;
+    for (let ox = -1; ox <= 1; ox++) for (let oy = oy0; oy <= oy1; oy++) for (let oz = -1; oz <= 1; oz++) {
       for (let j = head[hash(cx + ox, cy + oy, cz + oz)]; j !== -1; j = next[j]) {
         if (j <= i) continue;
         const q = j * 3;
@@ -1062,6 +1067,7 @@ function tick() {
     vel[k] *= DECAY;
     pos[k] += vel[k];
   }
+  if (flat) for (let i = 1; i < n * 3; i += 3) { vel[i] = 0; pos[i] = Math.abs(pos[i]) < 0.01 ? 0 : pos[i] * 0.85; }
   alpha += -alpha * 0.018;
 }
 
@@ -1079,7 +1085,7 @@ function loop() {
 onmessage = (event) => {
   const msg = event.data;
   if (msg.type === "init") {
-    n = msg.n; m = msg.src.length; src = msg.src; dst = msg.dst; comm = msg.comm; deg = msg.deg;
+    n = msg.n; m = msg.src.length; src = msg.src; dst = msg.dst; comm = msg.comm; deg = msg.deg; flat = !!msg.flat;
     const g = galaxy(msg.sizes);
     anchor = g.anchors;
     pos = msg.positions ?? new Float32Array(n * 3).fill(NaN);
@@ -1095,7 +1101,7 @@ onmessage = (event) => {
       if (!Number.isNaN(pos[i * 3])) continue;
       const a = comm[i] * 3, spread = CELL * 0.8 * Math.cbrt(msg.sizes[comm[i]]) + 3;
       pos[i * 3] = anchor[a] + gauss() * spread;
-      pos[i * 3 + 1] = anchor[a + 1] + gauss() * spread * 0.5;
+      pos[i * 3 + 1] = flat ? 0 : anchor[a + 1] + gauss() * spread * 0.5;
       pos[i * 3 + 2] = anchor[a + 2] + gauss() * spread;
     }
     alpha = msg.alpha;
@@ -1105,6 +1111,15 @@ onmessage = (event) => {
     if (!running) { running = true; loop(); }
   } else if (msg.type === "reheat") {
     alpha = Math.max(alpha, msg.alpha);
+    if (!running && n) { running = true; loop(); }
+  } else if (msg.type === "flat") {
+    flat = msg.flat;
+    if (!flat) {
+      // Lift the squashed disc back up a little so repulsion can spread it along y again.
+      const rand = rng(77);
+      for (let i = 0; i < n; i++) pos[i * 3 + 1] += (rand() - 0.5) * CELL;
+    }
+    alpha = Math.max(alpha, flat ? 0.2 : 0.4);
     if (!running && n) { running = true; loop(); }
   } else if (msg.type === "stop") {
     running = false;
@@ -1304,9 +1319,10 @@ function program(gl, vs, fs) {
 }
 
 /**
- * The 3D galaxy: WebGL2 (instanced glow sprites, additive lines, particles flowing along edges,
+ * The galaxy: WebGL2 (instanced glow sprites, additive lines, particles flowing along edges,
  * a starfield) or a plain 2D canvas where WebGL2 isn't available. Owns the camera and the layout
- * worker; the page tells it what to show (focus, filters, path, pulses, agents).
+ * worker; the page tells it what to show (focus, filters, path, pulses, agents). In 2D (flat) the
+ * layout is squashed onto a plane, the camera looks straight down and dragging pans.
  */
 function createGalaxy(container, callbacks) {
   const canvas = h("canvas", { class: "kb-canvas" });
@@ -1319,6 +1335,11 @@ function createGalaxy(container, callbacks) {
   let lost = false;
 
   const cam = { target: [0, 0, 0], yaw: 0.7, pitch: 0.62, dist: 900, anim: null };
+  /** Straight down; a hair under π/2 so lookAt's +y up vector stays usable. */
+  const TOP = Math.PI / 2 - 0.001;
+  const TILT = 0.62;
+  let flat = false;
+  let pitchGoal = null;
   const fov = (48 * Math.PI) / 180;
   let view = new Float32Array(16);
   let proj = new Float32Array(16);
@@ -1547,7 +1568,8 @@ function createGalaxy(container, callbacks) {
 
   // Data ---------------------------------------------------------------------------------------
 
-  function setGraph(graph, cached, fresh) {
+  function setGraph(graph, cached, fresh, is2d = flat) {
+    flat = is2d;
     g = graph;
     const n = g.n;
     nodeSize = new Float32Array(n);
@@ -1607,6 +1629,7 @@ function createGalaxy(container, callbacks) {
       comm: g.commRank,
       deg: Int32Array.from(g.degree, (d) => Math.max(1, d)),
       sizes,
+      flat,
       positions: hasCache ? cached.slice() : null,
       alpha: hasCache ? (fresh?.size ? 0.25 : 0.05) : 1,
     });
@@ -1614,8 +1637,9 @@ function createGalaxy(container, callbacks) {
     styleDirty = flowDirty = true;
     if (!hasCache) {
       cam.yaw = 0.7;
-      cam.pitch = 0.62;
+      cam.pitch = flat ? TOP : TILT;
     }
+    pitchGoal = flat ? TOP : cam.pitch === TOP ? TILT : null;
   }
 
   function recolor() {
@@ -1929,7 +1953,14 @@ function createGalaxy(container, callbacks) {
       cam.target = cam.anim.from.map((v, j) => v + (cam.anim.to[j] - v) * e);
       cam.dist = Math.exp(Math.log(cam.anim.fromDist) + (Math.log(cam.anim.toDist) - Math.log(cam.anim.fromDist)) * e);
       if (k >= 1) cam.anim = null;
-    } else if (options.motion && t - lastInteract > 6000) cam.yaw += dt * 0.035;
+    } else if (options.motion && !flat && t - lastInteract > 6000) cam.yaw += dt * 0.035;
+    if (pitchGoal !== null) {
+      cam.pitch += (pitchGoal - cam.pitch) * Math.min(1, dt * 5);
+      if (Math.abs(pitchGoal - cam.pitch) < 1e-3) {
+        cam.pitch = pitchGoal;
+        pitchGoal = null;
+      }
+    }
     updateMatrices();
 
     scanLevel += ((scanOn ? 1 : 0) - scanLevel) * Math.min(1, dt * 3);
@@ -2112,7 +2143,7 @@ function createGalaxy(container, callbacks) {
   function onPointerDown(e) {
     canvas.setPointerCapture(e.pointerId);
     const [x, y] = local(e);
-    drag = { x, y, sx: x, sy: y, button: e.button, pan: e.button === 2 || e.altKey, moved: false };
+    drag = { x, y, sx: x, sy: y, button: e.button, pan: flat || e.button === 2 || e.altKey, moved: false };
     cam.anim = null;
     lastInteract = performance.now();
   }
@@ -2131,6 +2162,7 @@ function createGalaxy(container, callbacks) {
       } else {
         cam.yaw -= dx * 0.005;
         cam.pitch = clamp(cam.pitch + dy * 0.005, -1.45, 1.45);
+        pitchGoal = null;
       }
       lastInteract = performance.now();
       return;
@@ -2258,6 +2290,18 @@ function createGalaxy(container, callbacks) {
     },
     setPaused(on) {
       paused = on;
+    },
+    get flat() {
+      return flat;
+    },
+    /** Switches between the 3D galaxy and a flat, top-down 2D map. */
+    setFlat(on) {
+      if (on === flat) return;
+      flat = on;
+      pitchGoal = flat ? TOP : TILT;
+      cam.anim = null;
+      if (flat) cam.target = [cam.target[0], 0, cam.target[2]];
+      worker?.postMessage({ type: "flat", flat });
     },
     pulse,
     shockwave,
@@ -2439,6 +2483,15 @@ function mountPage(el, store, api) {
     return ws ? store.kb(ws.rootDir) : null;
   };
   const graph = () => galaxy.graph;
+  /** "2d" or "3d": what the user picked for this project, else 3D for small graphs and 2D for big ones. */
+  const viewFor = (k) => store.settings.views?.[k.root] ?? (k.graph && k.graph.n <= MAX_3D_NODES ? "3d" : "2d");
+  function setView(view) {
+    const k = current();
+    if (!k) return;
+    store.set({ views: { ...store.settings.views, [k.root]: view } });
+    galaxy.setFlat(view === "2d");
+    renderTop();
+  }
   const accent = () => cssColor("--color-accent", [0.43, 0.49, 1]);
   const danger = () => cssColor("--color-danger", [0.95, 0.43, 0.43]);
 
@@ -2520,7 +2573,7 @@ function mountPage(el, store, api) {
       if (reload) saveLayout();
       ui.version = k.version;
       const fresh = reload && k.previousIds ? new Set(k.graph.ids.filter((id) => !k.previousIds.has(id))) : null;
-      galaxy.setGraph(k.graph, cachedLayout(k), fresh);
+      galaxy.setGraph(k.graph, cachedLayout(k), fresh, viewFor(k) === "2d");
       setNebula(k.graph);
       const keep = selectedId ? (k.graph.index.get(selectedId) ?? -1) : -1;
       resetView();
@@ -2915,6 +2968,23 @@ function mountPage(el, store, api) {
           "button",
           { class: "kb-btn kb-glass kb-icon-only", title: "Search (/ or ⌘F)", onclick: () => openSearch() },
           icon("search"),
+        ),
+      g &&
+        ui.tab === "galaxy" &&
+        h(
+          "div",
+          { class: "kb-tabs kb-glass", title: "View" },
+          ["2d", "3d"].map((v) =>
+            h(
+              "button",
+              {
+                class: `kb-tab kb-view${viewFor(k) === v ? " kb-on" : ""}`,
+                title: v === "2d" ? "Flat 2D map (pan by dragging)" : "3D galaxy (drag to orbit)",
+                onclick: () => setView(v),
+              },
+              v.toUpperCase(),
+            ),
+          ),
         ),
       g && h("div", { class: "kb-tabs kb-glass" }, tab("galaxy", "Galaxy", "orbit"), tab("insights", "Insights", "grid")),
       k &&
@@ -4224,6 +4294,7 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
 .kb-tabs { display: flex; padding: 3px; gap: 2px; border-radius: 11px; height: 34px; box-sizing: border-box; }
 .kb-tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border-radius: 8px; border: none; background: none; font: inherit; font-size: 12px; color: var(--color-fg-muted); cursor: pointer; }
 .kb-tab:hover { color: var(--color-fg); }
+.kb-tab.kb-view { padding: 0 9px; font-weight: 600; letter-spacing: .02em; }
 .kb-tab.kb-on { color: var(--color-fg); background: color-mix(in srgb, var(--color-fg) 9%, transparent); box-shadow: inset 0 1px 0 rgb(255 255 255 / .06); }
 
 .kb-banner { position: absolute; z-index: 9; top: 56px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; width: min(620px, calc(100% - 640px)); min-width: 320px; pointer-events: none; }
