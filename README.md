@@ -35,6 +35,11 @@ When an agent is done, a card shows up with a summary of what changed, the files
 a screenshot of the running app. Merge it, send it back with a comment, or discard it. Every merge
 is kept in a searchable **History**.
 
+Cards warn before anything breaks: which branches conflict with the base or touch the same files as
+another agent. **Merge all** puts them in a queue that merges one at a time, bringing in what landed
+before and running the tests first; a branch that conflicts goes back to its agent to resolve. Each
+card and merge also shows what the agents spent on it, and the Usage page breaks spend down by task.
+
 ![The review inbox with two finished tasks](docs/screenshots/review.png)
 
 ## Know how far along everything is

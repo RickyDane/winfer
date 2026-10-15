@@ -59,3 +59,37 @@ export const commitWorktree = (info: WorktreeInfo, message: string) => invoke<vo
 
 export const removeWorktree = (info: WorktreeInfo, deleteBranch: boolean) =>
   invoke<void>("worktree_remove", { info, deleteBranch });
+
+export interface ConflictItem {
+  path: string;
+  branch: string;
+  /** Files changed since branching off, committed or not. */
+  files: string[];
+  /** Commits the base gained since: it moved on. */
+  behind: number;
+  /** Files that conflict if the committed work is merged into the base now. */
+  baseConflicts: string[];
+}
+
+export interface ConflictPair {
+  /** Worktree paths. */
+  a: string;
+  b: string;
+  /** Files both changed. */
+  overlap: string[];
+  /** Of those, the ones whose committed changes actually conflict. */
+  conflicts: string[];
+}
+
+export interface ConflictReport {
+  items: ConflictItem[];
+  pairs: ConflictPair[];
+}
+
+/** Which worktrees collide with their base, and with each other (same repo only). */
+export const worktreeConflicts = (infos: WorktreeInfo[]) => invoke<ConflictReport>("worktree_conflicts", { infos });
+
+export type SyncOutcome = { kind: "upToDate" } | { kind: "synced"; commits: number } | { kind: "conflicts"; files: string[] };
+
+/** Merges the base's new commits into the worktree branch; backs out on conflicts. */
+export const syncWorktree = (info: WorktreeInfo) => invoke<SyncOutcome>("worktree_sync", { info });

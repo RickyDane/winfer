@@ -1,6 +1,10 @@
 import { Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
+import { relativeTime } from "@/stores/activity";
+import { useWorkspaces } from "@/stores/workspaces";
+import { dirLabel, fetchUsageByDir, type DirUsage } from "./taskCost";
+import { costBreakdown } from "./TaskCostChip";
 import { bucketTokens, fetchUsageHistory, formatCost, formatTokens, modelTotals, RANGES, SERIES, toBars, type Bar, type Range, type UsageBucket } from "./history";
 
 const NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" };
@@ -126,6 +130,73 @@ function Chart({ bars, metric, range }: { bars: Bar[]; metric: Metric; range: Ra
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Spend per task: each worktree (or folder) the agents worked in, most expensive first. */
+function ByTask({ days }: { days: number }) {
+  const [rows, setRows] = useState<DirUsage[] | null>(null);
+  const [all, setAll] = useState(false);
+  const panes = useWorkspaces((s) => s.workspaces.flatMap((w) => w.panes));
+  useEffect(() => {
+    let live = true;
+    setRows(null);
+    fetchUsageByDir(days).then(
+      (r) => live && setRows(r),
+      () => live && setRows([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [days]);
+
+  if (!rows) return null;
+  if (rows.length === 0) return null;
+  const shown = all ? rows : rows.slice(0, 8);
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[11px] text-fg-subtle">By task — each worktree an agent worked in, so you can see what a feature cost across agents</div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-[11px] text-fg-subtle">
+            <th className="pb-1.5 font-normal">Task</th>
+            <th className="pb-1.5 font-normal">Agents</th>
+            <th className="pb-1.5 text-right font-normal">Last active</th>
+            <th className="pb-1.5 text-right font-normal">Tokens</th>
+            <th className="pb-1.5 text-right font-normal">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((d) => {
+            const label = dirLabel(d.dir, panes);
+            const providers = [...new Set(d.models.map((m) => m.provider))];
+            return (
+              <tr key={d.dir} className="border-t border-border" title={`${d.dir}\n\n${costBreakdown(d)}`}>
+                <td className="max-w-56 py-1.5">
+                  <div className="truncate text-fg">{label.title}</div>
+                  {label.detail && <div className="truncate font-mono text-[10px] text-fg-subtle">{label.detail}</div>}
+                </td>
+                <td className="py-1.5">
+                  <span className="flex items-center gap-1.5">
+                    {providers.map((p) => (
+                      <span key={p} className="size-2 rounded-sm" style={{ background: COLORS[p] ?? "var(--color-fg-subtle)" }} title={NAMES[p] ?? p} />
+                    ))}
+                  </span>
+                </td>
+                <td className="py-1.5 text-right text-fg-subtle">{d.lastAt ? relativeTime(d.lastAt) : ""}</td>
+                <td className="py-1.5 text-right font-mono text-fg-muted">{formatTokens(d.tokens)}</td>
+                <td className="py-1.5 text-right font-mono text-fg">{d.priced || d.cost > 0 ? formatCost(d.cost) : <span className="text-fg-subtle">—</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {rows.length > 8 && (
+        <button onClick={() => setAll(!all)} className="text-[11px] text-fg-subtle hover:text-fg">
+          {all ? "Show fewer" : `Show all ${rows.length}`}
+        </button>
+      )}
     </div>
   );
 }
@@ -276,6 +347,8 @@ export function UsageHistory() {
               </tbody>
             </table>
           )}
+
+          <ByTask days={RANGES.find((r) => r.id === range)!.days} />
         </>
       )}
     </div>

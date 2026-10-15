@@ -12,6 +12,7 @@ import { speak } from "@/features/voice/readback";
 import { providerName, useWorkspaces, type Pane, type WorktreeInfo } from "@/stores/workspaces";
 import { discardPane, mergePane } from "@/commands/bus";
 import { recordMerge, snapshotForHistory } from "@/features/history/history";
+import { refreshTaskCosts } from "@/features/usage/taskCost";
 
 export interface DiffStats {
   files: string[];
@@ -62,6 +63,8 @@ export const useReviews = create<ReviewState>(() => ({ reviews: [] }));
 
 const update = (id: string, patch: Partial<Review>) =>
   useReviews.setState((s) => ({ reviews: s.reviews.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+
+export const reviewById = (id: string) => useReviews.getState().reviews.find((r) => r.id === id);
 
 export const reviewFor = (paneId: string) => useReviews.getState().reviews.find((r) => r.paneId === paneId && r.status === "open");
 
@@ -206,6 +209,7 @@ export async function collectReview(paneId: string) {
   useReviews.setState((st) => ({ reviews: [review, ...st.reviews.filter((r) => r.id !== review.id)] }));
 
   void summarize(review, diff);
+  if (pane.worktree) void refreshTaskCosts([pane.worktree.path]);
   void invoke<string | null>("review_test_command", { dir: review.dir }).then(
     (testCommand) => {
       update(review.id, { testCommand });
@@ -245,7 +249,7 @@ export function readReviewsAloud() {
 }
 
 /** First sentence of the summary, as a commit message for changes the agent didn't commit. */
-function commitMessage(review: Review | undefined): string | undefined {
+export function commitMessage(review: Review | undefined): string | undefined {
   if (review?.summary.state !== "done") return review?.prompt ? `winfer: ${review.prompt.slice(0, 72)}` : undefined;
   const first = review.summary.value.split(/(?<=[.!?])\s/)[0];
   return first.length > 100 ? `${first.slice(0, 97)}…` : first;

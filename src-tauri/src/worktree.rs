@@ -304,6 +304,142 @@ pub fn merge(info: &WorktreeInfo) -> Result<String, String> {
     }
 }
 
+/// Files a worktree changed since it branched off, committed or not (untracked included).
+fn changed_files(info: &WorktreeInfo) -> Result<Vec<String>, String> {
+    let path = Path::new(&info.path);
+    let merge_base = git(path, &["merge-base", &info.base, "HEAD"])?;
+    let mut files: Vec<String> = git(path, &["diff", "--name-only", "--no-renames", &merge_base])?
+        .lines()
+        .chain(git(path, &["ls-files", "--others", "--exclude-standard"])?.lines())
+        .map(String::from)
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+/// Files that conflict when `theirs` is merged into `ours` (both commits or branches), without
+/// touching any checkout. Empty when it merges cleanly.
+fn merge_conflicts(repo: &Path, ours: &str, theirs: &str) -> Result<Vec<String>, String> {
+    let out = crate::env::no_window(&mut Command::new("git"))
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-tree", "--write-tree", "--name-only", "--no-messages", ours, theirs])
+        .envs(login_env())
+        .output()
+        .map_err(|e| format!("couldn't run git: {e}"))?;
+    match out.status.code() {
+        Some(0) => Ok(Vec::new()),
+        // Exit 1: conflicts. The tree id comes first, then the conflicted files.
+        Some(1) => {
+            let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().skip(1).filter(|l| !l.is_empty()).map(String::from).collect();
+            files.dedup();
+            Ok(files)
+        }
+        _ => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictItem {
+    pub path: String,
+    pub branch: String,
+    /// Files changed since branching off (committed or not).
+    pub files: Vec<String>,
+    /// Commits on the base the branch doesn't have yet: the base moved on since.
+    pub behind: u32,
+    /// Files that conflict if the committed work is merged into the base now.
+    pub base_conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictPair {
+    /// Worktree paths.
+    pub a: String,
+    pub b: String,
+    /// Files both changed.
+    pub overlap: Vec<String>,
+    /// Of those, the ones whose committed changes actually conflict.
+    pub conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictReport {
+    pub items: Vec<ConflictItem>,
+    /// Pairs of worktrees (of the same repo) that touch the same files.
+    pub pairs: Vec<ConflictPair>,
+}
+
+/// Which worktrees would collide: with their base as it is now, and with each other once one
+/// of them is merged. Worktrees that are gone are left out.
+pub fn conflicts(infos: &[WorktreeInfo]) -> ConflictReport {
+    let mut items: Vec<(WorktreeInfo, ConflictItem)> = Vec::new();
+    for info in infos {
+        let path = Path::new(&info.path);
+        let Ok(files) = changed_files(info) else { continue };
+        let behind = git(path, &["rev-list", "--count", &format!("HEAD..{}", info.base)]).ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+        // Run from the worktree, so HEAD is its branch's tip.
+        let base_conflicts = merge_conflicts(path, &info.base, "HEAD").unwrap_or_default();
+        items.push((info.clone(), ConflictItem { path: info.path.clone(), branch: info.branch.clone(), files, behind, base_conflicts }));
+    }
+    let mut pairs = Vec::new();
+    for (i, (a, ia)) in items.iter().enumerate() {
+        for (b, ib) in &items[i + 1..] {
+            if a.repo != b.repo {
+                continue;
+            }
+            let overlap: Vec<String> = ia.files.iter().filter(|f| ib.files.binary_search(f).is_ok()).cloned().collect();
+            if overlap.is_empty() {
+                continue;
+            }
+            let conflicts = merge_conflicts(Path::new(&a.path), "HEAD", &b.branch).unwrap_or_default();
+            pairs.push(ConflictPair { a: a.path.clone(), b: b.path.clone(), overlap, conflicts });
+        }
+    }
+    ConflictReport { items: items.into_iter().map(|(_, item)| item).collect(), pairs }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SyncOutcome {
+    /// The branch already has everything on the base.
+    UpToDate,
+    /// The base was merged into the branch.
+    Synced { commits: u32 },
+    /// Merging the base in conflicts; nothing was changed.
+    Conflicts { files: Vec<String> },
+}
+
+/// Brings the base's new commits into the worktree branch (a merge, so the agent's history stays
+/// as it is), so tests can run on what the base will look like after merging. On conflicts it
+/// backs out and names the files.
+pub fn sync_with_base(info: &WorktreeInfo) -> Result<SyncOutcome, String> {
+    let path = Path::new(&info.path);
+    let behind: u32 = git(path, &["rev-list", "--count", &format!("HEAD..{}", info.base)])?.parse().unwrap_or(0);
+    if behind == 0 {
+        return Ok(SyncOutcome::UpToDate);
+    }
+    if !git(path, &["status", "--porcelain"])?.is_empty() {
+        return Err("The worktree has uncommitted changes. Commit them first.".into());
+    }
+    let message = format!("Merge {} into {}", info.base, info.branch);
+    match git(path, &["-c", "user.name=winfer", "-c", "user.email=winfer@localhost", "merge", "--no-edit", "-m", &message, &info.base]) {
+        Ok(_) => Ok(SyncOutcome::Synced { commits: behind }),
+        Err(err) => {
+            let files: Vec<String> = git(path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default().lines().map(String::from).collect();
+            let _ = git(path, &["merge", "--abort"]);
+            if files.is_empty() {
+                Err(err)
+            } else {
+                Ok(SyncOutcome::Conflicts { files })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExistingWorktree {
@@ -519,6 +655,16 @@ pub async fn worktree_commit(info: WorktreeInfo, message: String) -> Result<(), 
 }
 
 #[tauri::command]
+pub async fn worktree_conflicts(infos: Vec<WorktreeInfo>) -> Result<ConflictReport, String> {
+    Ok(conflicts(&infos))
+}
+
+#[tauri::command]
+pub async fn worktree_sync(info: WorktreeInfo) -> Result<SyncOutcome, String> {
+    sync_with_base(&info)
+}
+
+#[tauri::command]
 pub async fn worktree_remove(info: WorktreeInfo, delete_branch: bool) -> Result<(), String> {
     remove(&info, delete_branch)
 }
@@ -674,6 +820,40 @@ mod tests {
         let from_inside = branches(Path::new(&local.path)).unwrap();
         let local_only = from_inside.iter().find(|b| b.name == "local-only").unwrap();
         assert!(local_only.checked_out_at.as_deref().is_some_and(|p| p.ends_with("local-only")));
+    }
+
+    #[test]
+    fn previews_conflicts_with_the_base_and_between_worktrees() {
+        let repo = repo();
+        sh(&repo, "printf 'a\\nb\\nc\\n' > lines.txt && git add . && git commit -qm lines");
+        let wts = temp_dir("wt");
+        let commit = "git -c user.email=t@t -c user.name=t commit -qam";
+        let a = create(&wts, &repo, "claude").unwrap().unwrap();
+        let b = create(&wts, &repo, "codex").unwrap().unwrap();
+        let c = create(&wts, &repo, "opencode").unwrap().unwrap();
+        // a and b edit the same line; c edits another file, uncommitted.
+        sh(Path::new(&a.path), &format!("sed -i.bak 's/^b$/from-a/' lines.txt && rm lines.txt.bak && {commit} a"));
+        sh(Path::new(&b.path), &format!("sed -i.bak 's/^b$/from-b/' lines.txt && rm lines.txt.bak && {commit} b"));
+        sh(Path::new(&c.path), "echo c >> a.txt");
+
+        let r = conflicts(&[a.clone(), b.clone(), c.clone()]);
+        assert_eq!(r.items.len(), 3);
+        assert!(r.items.iter().all(|i| i.behind == 0 && i.base_conflicts.is_empty()), "{r:?}");
+        assert_eq!(r.items[2].files, vec!["a.txt"]);
+        assert_eq!(r.pairs, vec![ConflictPair { a: a.path.clone(), b: b.path.clone(), overlap: vec!["lines.txt".into()], conflicts: vec!["lines.txt".into()] }]);
+
+        // Once a is merged, b conflicts with the base and can't be synced; c syncs cleanly.
+        merge(&a).unwrap();
+        let r = conflicts(&[b.clone(), c.clone()]);
+        assert_eq!((r.items[0].behind, r.items[0].base_conflicts.clone()), (2, vec!["lines.txt".to_string()]));
+        assert_eq!(sync_with_base(&b).unwrap(), SyncOutcome::Conflicts { files: vec!["lines.txt".into()] });
+        sh(Path::new(&b.path), "test -z \"$(git status --porcelain)\" && grep -q from-b lines.txt");
+        assert!(sync_with_base(&c).unwrap_err().contains("uncommitted"));
+        sh(Path::new(&c.path), &format!("{commit} c"));
+        assert_eq!(sync_with_base(&c).unwrap(), SyncOutcome::Synced { commits: 2 });
+        assert_eq!(sync_with_base(&c).unwrap(), SyncOutcome::UpToDate);
+        sh(Path::new(&c.path), "grep -q from-a lines.txt");
+        merge(&c).unwrap();
     }
 
     #[test]

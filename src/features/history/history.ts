@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useProgress } from "@/features/progress/progress";
 import { diffStats, reviewFor, type DiffStats } from "@/features/review/reviews";
+import { refreshTaskCosts } from "@/features/usage/taskCost";
 import { worktreeDiff } from "@/features/worktree/worktree";
 import { useWorkspaces, type Pane, type WorktreeInfo } from "@/stores/workspaces";
 
@@ -25,6 +26,9 @@ export interface MergeRecord {
   adds: number;
   dels: number;
   tests: string | null;
+  /** What the agents spent on it at API prices (US dollars), when the usage logs knew. */
+  cost: number | null;
+  tokens: number | null;
 }
 
 /** What to remember about a branch, taken before merging (afterwards its diff is empty). */
@@ -42,6 +46,7 @@ export async function snapshotForHistory(pane: Pane & { worktree: WorktreeInfo }
   const progress = useProgress.getState().byPane[pane.id];
   let stats: DiffStats | null = review?.stats ?? null;
   if (!stats) stats = await worktreeDiff(pane.worktree).then(diffStats, () => null);
+  const [usage] = await refreshTaskCosts([pane.worktree.path]);
   const summary = review?.summary.state === "done" ? review.summary.value : null;
   const task = progress?.task ?? pane.prompt ?? null;
   const tests = review?.tests.state === "done" && review.tests.value ? `${review.tests.value.command} ${review.tests.value.ok ? "passed" : "failed"}` : null;
@@ -59,6 +64,8 @@ export async function snapshotForHistory(pane: Pane & { worktree: WorktreeInfo }
     adds: stats?.adds ?? 0,
     dels: stats?.dels ?? 0,
     tests,
+    cost: usage?.calls ? usage.cost : null,
+    tokens: usage?.calls ? usage.tokens : null,
   };
 }
 

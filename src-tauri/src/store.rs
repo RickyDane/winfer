@@ -113,6 +113,10 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE panes ADD COLUMN custom_title TEXT;
 "#,
+    r#"
+    ALTER TABLE merges ADD COLUMN cost REAL;
+    ALTER TABLE merges ADD COLUMN tokens INTEGER;
+"#,
 ];
 
 /// A merged feature in the history (from the review inbox, the pane menu, voice or a race).
@@ -139,6 +143,11 @@ pub struct MergeRecord {
     pub dels: i64,
     /// e.g. "pnpm test passed".
     pub tests: Option<String>,
+    /// What the agents spent on it at API prices (US dollars), if known.
+    #[serde(default)]
+    pub cost: Option<f64>,
+    #[serde(default)]
+    pub tokens: Option<i64>,
 }
 
 impl Store {
@@ -270,12 +279,12 @@ impl Store {
     pub fn add_merge(&self, m: &MergeRecord) -> rusqlite::Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO merges (id, merged_at, workspace_id, workspace, repo, branch, base, commit_sha,
-                provider, title, summary, task, files, adds, dels, tests)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                provider, title, summary, task, files, adds, dels, tests, cost, tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 m.id, m.merged_at, m.workspace_id, m.workspace, m.repo, m.branch, m.base, m.commit_sha,
                 m.provider, m.title, m.summary, m.task, serde_json::to_string(&m.files).unwrap_or_default(),
-                m.adds, m.dels, m.tests,
+                m.adds, m.dels, m.tests, m.cost, m.tokens,
             ],
         )?;
         Ok(())
@@ -287,7 +296,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let mut sql = String::from(
             "SELECT id, merged_at, workspace_id, workspace, repo, branch, base, commit_sha, provider, title, summary,
-                    task, files, adds, dels, tests FROM merges WHERE 1 = 1",
+                    task, files, adds, dels, tests, cost, tokens FROM merges WHERE 1 = 1",
         );
         let mut args: Vec<String> = Vec::new();
         if let Some(ws) = workspace_id {
@@ -326,6 +335,8 @@ impl Store {
                     adds: r.get(13)?,
                     dels: r.get(14)?,
                     tests: r.get(15)?,
+                    cost: r.get(16)?,
+                    tokens: r.get(17)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -452,6 +463,8 @@ mod tests {
             adds: 10,
             dels: 2,
             tests: None,
+            cost: Some(1.25),
+            tokens: Some(420_000),
         };
         store.add_merge(&merge("1", 1, "api", "Fix the login redirect", &["src/auth/login.ts"])).unwrap();
         store.add_merge(&merge("2", 2, "api", "Rate limit billing webhooks", &["src/billing/hooks.ts"])).unwrap();
