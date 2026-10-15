@@ -10,7 +10,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type CatalogEntry, type PluginInfo } from "@/features/plugins/plugins";
 import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
-import { checkForUpdates, installUpdate, useUpdates } from "@/features/updates/updater";
+import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
 import { UsageHistory } from "@/features/usage/UsageHistory";
 import { THEMES } from "@/features/theme/themes";
 import { cn } from "@/lib/cn";
@@ -122,13 +122,18 @@ function AppearanceSettings() {
 
 /** App version, and installing a newer release from GitHub. */
 function UpdateSettings() {
-  const { version, checking, installing, available } = useUpdates();
+  const { version, checking, installing, available, installed } = useUpdates();
   return (
     <Card title="Updates">
       <Row
         label={available ? `winfer ${available.version} is available` : `winfer ${version ?? ""}`}
         hint={available ? `You have ${version ?? "?"}.` : "Checks GitHub releases for a newer version."}
       >
+        {(available || installed?.version === version) && (
+          <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={buttonClass}>
+            What's new
+          </button>
+        )}
         {available ? (
           <button
             onClick={() => void installUpdate()}
@@ -699,9 +704,6 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
 ];
 
-// The page last looked at, so reopening settings lands where you left off.
-let lastPage = PAGES[0].id;
-
 /** What a plugin adds, e.g. "2 tools · 1 agent · code". */
 function contributions(plugin: PluginInfo): string {
   const m = plugin.manifest;
@@ -897,9 +899,8 @@ function PluginSettings() {
 }
 
 export function SettingsModal() {
-  const { settingsOpen, setSettings } = useWorkspaces();
-  const [pageId, setPageId] = useState(lastPage);
-  const page = PAGES.find((p) => p.id === pageId) ?? PAGES[0];
+  const { settingsOpen, settingsPage, setSettings } = useWorkspaces();
+  const page = PAGES.find((p) => p.id === settingsPage) ?? PAGES[0];
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -909,10 +910,7 @@ export function SettingsModal() {
   }, [settingsOpen, setSettings]);
 
   if (!settingsOpen) return null;
-  const open = (id: string) => {
-    lastPage = id;
-    setPageId(id);
-  };
+  const open = (id: string) => setSettings(true, id);
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setSettings(false)}>
       <div
