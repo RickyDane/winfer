@@ -45,6 +45,29 @@
           "sha256": "161c684ee4b23794d0a679d520018580ab955025cd9c51a0487aecf6f66b37c5"
         }
       ]
+    },
+    {
+      "id": "task-board",
+      "name": "Task Board",
+      "version": "1.0.0",
+      "description": "A shared board per workspace where agents post, claim and finish tasks and leave notes for each other, so several agents work as a team.",
+      "author": "winfer",
+      "tags": [
+        "agents",
+        "tasks",
+        "kanban",
+        "coordination"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "4cec91bba6c41a6f4397f8f20f61b12dd0debf28ec806903363b0c98394c1d94"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "e384f73a02dcb4c9bcc402ce987959ac39d6f209a3f009f83e9ac28a4a06ebd2"
+        }
+      ]
     }
   ]
 }

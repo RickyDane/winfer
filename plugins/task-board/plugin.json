@@ -1,0 +1,14 @@
+{
+  "id": "task-board",
+  "name": "Task Board",
+  "version": "1.0.0",
+  "description": "A shared board per workspace where agents post, claim and finish tasks and leave notes for each other, so several agents work as a team.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": [
+    "agents",
+    "tasks",
+    "kanban",
+    "coordination"
+  ]
+}
