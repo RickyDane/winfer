@@ -324,7 +324,7 @@ export function knowledgeBaseExec(raw: string): Promise<{ code: number; timedOut
     return delay(200, ok([`@@STAMP ${f.stamp}`, `@@HEAD ${f.commit}`, "@@IGNORED 1", "@@SNAPSHOTS", ...SNAPSHOTS, "GRAPH_REPORT.md", "cache", "graph.html", "graph.json"].join("\n")));
   }
   if (command.startsWith("date -r")) return ok(exists ? `${current().stamp}\n` : "");
-  if (command.startsWith("graphify update") || command.startsWith("graphify extract")) {
+  if (command.startsWith("graphify update")) {
     const first = !exists;
     exists = true;
     generation += first ? 0 : 1;

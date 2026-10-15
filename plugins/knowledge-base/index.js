@@ -3,12 +3,13 @@
 // where you search, trace paths, see what a change would affect and watch agents work; agents
 // query the same graph through agent tools (kb_query, kb_explain, kb_path, kb_affected, …).
 //
-// graphify runs through `api.vault.exec` (a shell in the project folder, no secrets unless a
-// headless build needs an API key). The graph lives in `<project>/graphify-out/`.
+// graphify runs through `api.vault.exec` (a shell in the project folder, with no secrets). The
+// graph lives in `<project>/graphify-out/`.
 
 const STORAGE = "winfer.plugin.knowledge-base";
 const OUT = "graphify-out";
-const API_KEY = "ANTHROPIC_API_KEY";
+/** Where 1.x kept an Anthropic key for background builds; removed from the keychain on start. */
+const OLD_API_KEY = "ANTHROPIC_API_KEY";
 const INSTALL = "uv tool install graphifyy";
 /** What agent tools return at most, so a big answer doesn't flood an agent's context. */
 const TOOL_OUTPUT_MAX = 12_000;
@@ -813,7 +814,6 @@ function createStore(api) {
    * - "quick": `graphify update`, code only (tree-sitter), no AI, seconds.
    * - "agent": the default agent, in a pane in the project folder, runs graphify's skill, which
    *   also reads docs and finds concepts and rationale; the page reloads when that agent finishes.
-   * - "headless": `graphify extract --backend claude` with the API key from this plugin's vault.
    */
   async function build(root, mode, { workspaceId, force = false, quiet = false } = {}) {
     const k = kb(root);
@@ -833,8 +833,7 @@ function createStore(api) {
     k.needsForce = false;
     changed();
     try {
-      const command = mode === "headless" ? `${bin()} extract . --backend claude` : `${bin()} update .${force ? " --force" : ""}`;
-      const r = await exec(root, command, mode === "headless" ? 3600 : 900, mode === "headless" ? [API_KEY] : []);
+      const r = await exec(root, `${bin()} update .${force ? " --force" : ""}`, 900);
       k.log = r.output;
       if (r.timedOut) throw new Error("graphify took too long and was stopped.");
       if (r.code !== 0) throw new Error(lastLines(r.output) || `graphify exited with code ${r.code}.`);
@@ -2343,8 +2342,6 @@ function mountPage(el, store, api) {
     timeline: { index: -1, playing: false },
     presence: null,
     counted: "",
-    hasKey: false,
-    keyDraft: "",
   };
   const agentState = new Map();
 
@@ -2871,7 +2868,7 @@ function mountPage(el, store, api) {
           "div",
           { class: "kb-chip kb-glass kb-building" },
           h("span", { class: "kb-spinner" }),
-          h("span", { class: "kb-chip-text" }, building.mode === "agent" ? "An agent is mapping the project" : building.mode === "headless" ? "Deep build running" : "Mapping code"),
+          h("span", { class: "kb-chip-text" }, building.mode === "agent" ? "An agent is mapping the project" : "Mapping code"),
           h("span", { class: "kb-elapsed" }, elapsed(Date.now() - building.startedAt)),
           building.mode === "agent" && h("button", { class: "kb-link", onclick: () => store.cancelBuild(k.root) }, "Stop waiting"),
         ),
@@ -3599,9 +3596,7 @@ function mountPage(el, store, api) {
       agent ? "An agent is mapping this project" : "Mapping the project…",
       agent
         ? "It reads the code, docs and notes and works out concepts and why things are the way they are. This page fills in when the agent finishes."
-        : k.building.mode === "headless"
-          ? "graphify reads the code and docs with Claude through your API key. Big projects take a few minutes."
-          : "graphify parses the code. This usually takes seconds.",
+        : "graphify parses the code. This usually takes seconds.",
       h("div", { class: "kb-progress" }, h("span", {})),
       agent && h("div", { class: "kb-actions kb-center" }, h("button", { class: "kb-btn", onclick: () => store.cancelBuild(k.root) }, "Stop waiting")),
     );
@@ -3624,15 +3619,6 @@ function mountPage(el, store, api) {
           "Adds docs, concepts, design rationale and inferred links. Your default agent runs graphify's skill in a new pane.",
           ["Minutes", "Uses your agent"],
           h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "agent", { workspaceId: ws?.id }) }, icon("sparkles"), "Start agent"),
-        ),
-        option(
-          "key",
-          "Deep map in the background",
-          "The same deep map without a pane, using your Anthropic API key from the keychain.",
-          ["Minutes", "API key"],
-          ui.hasKey
-            ? h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "headless") }, icon("wand"), "Build")
-            : h("button", { class: "kb-btn", onclick: () => toggleMenu("settings") }, icon("key"), "Add API key"),
         ),
       ),
       h("p", { class: "kb-subtle kb-center" }, "Everything stays in ", h("code", {}, `${OUT}/`), " in the project folder."),
@@ -3856,7 +3842,6 @@ function mountPage(el, store, api) {
           { class: "kb-menu kb-glass" },
           item("refresh", "Update code graph", "graphify update · seconds, no AI", () => void store.build(k.root, "quick"), !!k.building),
           item("bot", "Deep build with an agent", "Your default agent adds docs, concepts and rationale", () => void store.build(k.root, "agent", { workspaceId: ws?.id }), !!k.building),
-          item("key", "Deep build in the background", ui.hasKey ? "Uses your Anthropic API key" : "Add an API key in settings first", () => void store.build(k.root, "headless"), !!k.building || !ui.hasKey),
           item("alert", "Force update", "Keep the new graph even if it's smaller", () => void store.build(k.root, "quick", { force: true }), !!k.building || !k.graph),
           h("div", { class: "kb-menu-sep" }),
           item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", `${store.bin} export html`), !k.graph),
@@ -3881,13 +3866,6 @@ function mountPage(el, store, api) {
           },
         }),
       );
-    const keyInput = h("input", {
-      class: "kb-input",
-      type: "password",
-      placeholder: ui.hasKey ? "Saved in the keychain · paste to replace" : "sk-ant-…",
-      value: ui.keyDraft,
-      oninput: (e) => (ui.keyDraft = e.target.value),
-    });
     const gf = store.graphify;
     fill(menus, 
       h(
@@ -3904,44 +3882,7 @@ function mountPage(el, store, api) {
           galaxy.setOptions({ labels: store.settings.labels });
           renderDock();
         }),
-        h("div", { class: "kb-menu-sep" }),
-        h("div", { class: "kb-menu-title" }, "Anthropic API key", ui.hasKey ? h("span", { class: "wf-badge wf-accent" }, "saved") : null),
-        h("div", { class: "kb-subtle" }, "Only for deep builds in the background. Kept in your keychain; agents never see it."),
-        h(
-          "div",
-          { class: "kb-key-row" },
-          keyInput,
-          h(
-            "button",
-            {
-              class: "kb-btn kb-primary",
-              onclick: async () => {
-                if (!ui.keyDraft.trim()) return;
-                await api.vault.set(API_KEY, ui.keyDraft.trim(), { label: "Anthropic API key" });
-                ui.keyDraft = "";
-                ui.hasKey = true;
-                api.toast("API key saved", "success");
-                renderMenus();
-                renderOverlay();
-              },
-            },
-            "Save",
-          ),
-          ui.hasKey &&
-            h(
-              "button",
-              {
-                class: "kb-btn",
-                onclick: async () => {
-                  await api.vault.delete(API_KEY);
-                  ui.hasKey = false;
-                  renderMenus();
-                  renderOverlay();
-                },
-              },
-              "Remove",
-            ),
-        ),
+        k.ignored === false && h("div", { class: "kb-menu-sep" }),
         k.ignored === false &&
           h(
             "button",
@@ -4142,13 +4083,6 @@ function mountPage(el, store, api) {
   });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
 
-  void api.vault
-    .list()
-    .then((list) => {
-      ui.hasKey = list.some((s) => s.key === API_KEY);
-      renderOverlay();
-    })
-    .catch(() => {});
   if (store.graphify.state === "unknown") void store.detect();
   renderAll();
   shell.focus({ preventScroll: true });
@@ -4274,8 +4208,8 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
 .kb-legend { position: absolute; z-index: 6; top: 58px; right: 12px; width: 236px; max-height: calc(100% - 150px); display: flex; flex-direction: column; gap: 8px; padding: 10px 8px 8px 10px; box-sizing: border-box; animation: kb-slide-l .3s ease-out; }
 .kb-legend-closed { padding: 0; width: auto; background: none; border: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 @keyframes kb-slide-l { from { opacity: 0; transform: translateX(10px); } }
-.kb-legend-filter, .kb-input { height: 28px; padding: 0 9px; border-radius: 8px; border: 1px solid var(--kb-line); background: color-mix(in srgb, var(--color-app) 40%, transparent); color: var(--color-fg); font: inherit; font-size: 12px; outline: none; user-select: text; min-width: 0; }
-.kb-legend-filter:focus, .kb-input:focus { border-color: color-mix(in srgb, var(--kb-accent) 60%, transparent); }
+.kb-legend-filter { height: 28px; padding: 0 9px; border-radius: 8px; border: 1px solid var(--kb-line); background: color-mix(in srgb, var(--color-app) 40%, transparent); color: var(--color-fg); font: inherit; font-size: 12px; outline: none; user-select: text; min-width: 0; }
+.kb-legend-filter:focus { border-color: color-mix(in srgb, var(--kb-accent) 60%, transparent); }
 .kb-legend-list { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; margin-right: -4px; padding-right: 4px; }
 .kb-comm { position: relative; display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 7px; border-radius: 7px; border: none; background: none; font: inherit; font-size: 12px; color: var(--color-fg-muted); text-align: left; cursor: pointer; overflow: hidden; flex-shrink: 0; }
 .kb-comm::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: var(--w); background: linear-gradient(90deg, var(--c), transparent); opacity: .35; border-radius: 2px; }
@@ -4416,8 +4350,6 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
 .kb-menu-text span { font-size: 11px; color: var(--color-fg-subtle); }
 .kb-menu-sep { height: 1px; margin: 4px 2px; background: var(--kb-line); }
 .kb-setting { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.kb-key-row { display: flex; gap: 6px; }
-.kb-key-row .kb-input { flex: 1; height: 30px; }
 .kb-graphify-row { display: flex; align-items: center; gap: 8px; }
 .kb-graphify-row .kb-subtle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 10.5px; }
 .kb-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-fg-subtle); flex-shrink: 0; }
@@ -4451,14 +4383,13 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
 .kb-progress { width: 260px; height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--color-fg) 10%, transparent); overflow: hidden; }
 .kb-progress span { display: block; width: 40%; height: 100%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--kb-accent), #ff8fb1, transparent); animation: kb-indet 1.6s ease-in-out infinite; }
 @keyframes kb-indet { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
-.kb-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; margin-top: 12px; text-align: left; }
+.kb-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; max-width: 620px; margin-top: 12px; text-align: left; }
 .kb-option { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 16px; transition: transform .25s cubic-bezier(.2,.8,.2,1), border-color .25s, box-shadow .25s; overflow: hidden; }
 .kb-option::before { content: ""; position: absolute; inset: 0; background: radial-gradient(80% 60% at 0% 0%, var(--kb-glow), transparent 60%); opacity: 0; transition: opacity .3s; pointer-events: none; }
 .kb-option:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--kb-accent) 40%, transparent); box-shadow: 0 18px 50px rgb(0 0 0 / .35), 0 0 0 1px color-mix(in srgb, var(--kb-accent) 20%, transparent); }
 .kb-option:hover::before { opacity: .5; }
 .kb-option-icon { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 11px; color: white; background: linear-gradient(140deg, #7c8cff, #c27bff); box-shadow: 0 6px 20px rgb(124 140 255 / .45); }
 .kb-option:nth-child(2) .kb-option-icon { background: linear-gradient(140deg, #ff9a76, #d9608f); box-shadow: 0 6px 20px rgb(255 140 120 / .4); }
-.kb-option:nth-child(3) .kb-option-icon { background: linear-gradient(140deg, #4fd1b5, #3a8fd9); box-shadow: 0 6px 20px rgb(80 200 190 / .4); }
 .kb-option-icon .kb-i { width: 18px; height: 18px; }
 .kb-option-title { font-size: 14px; font-weight: 650; }
 .kb-option-text { flex: 1; font-size: 12px; line-height: 1.55; color: var(--color-fg-muted); }
@@ -4742,5 +4673,10 @@ export function activate(api) {
   });
 
   void store.detect();
+  // Background builds with an API key are gone; don't leave the key behind in the keychain.
+  void api.vault
+    .list()
+    .then((list) => list.some((x) => x.key === OLD_API_KEY) && api.vault.delete(OLD_API_KEY))
+    .catch(() => {});
   return () => store.dispose();
 }
