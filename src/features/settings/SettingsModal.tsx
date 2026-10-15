@@ -120,37 +120,39 @@ function AppearanceSettings() {
   );
 }
 
-/** App version, and installing a newer release from GitHub. */
-function UpdateSettings() {
+/** App version and installing a newer release from GitHub, pinned to the bottom of the settings sidebar. */
+function UpdateFooter() {
   const { version, checking, installing, available, installed } = useUpdates();
+  const small = "flex h-7 w-full items-center justify-center gap-1.5 rounded-md px-2.5 text-xs disabled:opacity-50";
   return (
-    <Card title="Updates">
-      <Row
-        label={available ? `winfer ${available.version} is available` : `winfer ${version ?? ""}`}
-        hint={available ? `You have ${version ?? "?"}.` : "Checks GitHub releases for a newer version."}
-      >
-        {(available || installed?.version === version) && (
-          <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={buttonClass}>
-            What's new
-          </button>
-        )}
+    <div className="mt-auto space-y-1.5 border-t border-border px-0.5 pt-3 pb-1">
+      <div className="px-2 text-[11px] text-fg-subtle">
         {available ? (
-          <button
-            onClick={() => void installUpdate()}
-            disabled={installing}
-            className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-50"
-          >
-            {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-            Install and restart
-          </button>
+          <>
+            <span className="font-medium text-fg">winfer {available.version}</span> is available
+            <div>You have {version ?? "?"}</div>
+          </>
         ) : (
-          <button onClick={() => void checkForUpdates()} disabled={checking} className={buttonClass}>
-            {checking && <Loader2 size={12} className="animate-spin" />}
-            Check for updates
-          </button>
+          <span className="font-mono">winfer {version ?? ""}</span>
         )}
-      </Row>
-    </Card>
+      </div>
+      {available ? (
+        <button onClick={() => void installUpdate()} disabled={installing} className={cn(small, "bg-accent font-medium text-on-accent hover:opacity-90")}>
+          {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+          Install and restart
+        </button>
+      ) : (
+        <button onClick={() => void checkForUpdates()} disabled={checking} className={cn(small, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}>
+          {checking && <Loader2 size={12} className="animate-spin" />}
+          Check for updates
+        </button>
+      )}
+      {(available || installed?.version === version) && (
+        <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={cn(small, "text-fg-muted hover:bg-hover hover:text-fg")}>
+          What's new
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -668,7 +670,6 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
       <>
         <TerminalSettings />
         <ShortcutSettings />
-        <UpdateSettings />
       </>
     ),
   },
@@ -921,6 +922,7 @@ export function SettingsModal() {
               {p.label}
             </button>
           ))}
+          <UpdateFooter />
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-12 shrink-0 items-center border-b border-border px-6">
