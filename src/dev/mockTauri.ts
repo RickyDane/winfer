@@ -9,6 +9,7 @@ import pkg from "../../package.json";
 import storeCatalog from "../../plugins/catalog.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 import { KB_DEMO, knowledgeBaseExec } from "./knowledgeBase";
+import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
@@ -39,6 +40,11 @@ function installMockPlugin(id: string) {
 }
 // `?kb` starts with the Knowledge Base plugin installed (see ./knowledgeBase.ts).
 if (KB_DEMO) installMockPlugin("knowledge-base");
+// `?xp` starts with the Cross-Project Knowledge plugin and three linked demo projects (see ./crossProject.ts).
+if (XP_DEMO) {
+  installMockPlugin("cross-project");
+  seedCrossProject();
+}
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
 
@@ -202,6 +208,7 @@ mockIPC(
         return vault.get(a.key)?.value ?? "";
       case "vault_exec":
         if (a.plugin === "knowledge-base") return knowledgeBaseExec(a.command);
+        if (a.plugin === "cross-project") return crossProjectExec(a.command, a.cwd);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
       case "browser_fill_secret":
         return null;

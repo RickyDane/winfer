@@ -2,6 +2,33 @@
   "version": 1,
   "plugins": [
     {
+      "id": "cross-project",
+      "name": "Cross-Project Knowledge",
+      "version": "1.0.0",
+      "description": "Link projects that talk to each other (a mobile app, a web API, the NuGet or npm package with their models) and see the contracts they serialize and deserialize, the endpoints between them and the packages they share, drawn as a map, with drift flagged. Agents get the same links as tools.",
+      "author": "winfer",
+      "tags": [
+        "knowledge",
+        "contracts",
+        "api",
+        "nuget",
+        "mobile",
+        "dto",
+        "agents",
+        "monorepo"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "ba6d7faec726b59132d98e049b0b13382ad4380043430b4c8ab3c5f5cfd626ad"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "e9ba265d86fd4996a51b7ba10417cda460287bb7960eea9cf41316d3b126d59f"
+        }
+      ]
+    },
+    {
       "id": "example-hello",
       "name": "Example: hello",
       "version": "1.0.0",
