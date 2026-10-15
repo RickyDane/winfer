@@ -199,7 +199,7 @@ const setRuntimeError = (id: string, error: string | null) =>
     return { runtimeErrors };
   });
 
-/** Usable ids for the decision API, which only accepts [A-Za-z0-9_-]. */
+/** Tool ids from plugin and tool id, kept to [A-Za-z0-9_-] so the planner can echo them back. */
 export const pluginToolId = (pluginId: string, toolId: string) => `${pluginId}__${toolId}`.replace(/[^A-Za-z0-9_-]/g, "_");
 
 /** Replaces `{{name}}` in every string of `value` with the argument (empty if missing). */

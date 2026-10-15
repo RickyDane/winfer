@@ -1,8 +1,8 @@
 //! Sign in with ChatGPT: winfer's own OAuth registration with OpenAI (developers.openai.com/siwc,
 //! "ChatGPT plan usage for open-source apps"). The user signs in in the browser, names the agent
 //! and allows winfer to use their ChatGPT plan; winfer then calls the OpenAI API with that token:
-//! the Responses API for the LLM (prompt writer, voice planner, progress, review summaries) and
-//! the Decisions API for voice commands where the plan allows it.
+//! the Responses API for the LLM (prompt writer, voice planner, progress, review summaries). The
+//! Decisions API isn't available with a ChatGPT plan.
 //!
 //! Tokens live in the OS keychain. Codex's own login is never read.
 
@@ -435,40 +435,6 @@ pub fn respond(model: &str, instructions: &str, input: &str) -> Result<String, S
 
 /// Default model for the LLM: fast enough for voice, smart enough to plan.
 pub const DEFAULT_MODEL: &str = "gpt-6-luna";
-/// Marker in errors when the plan can't use the Decisions API, so the UI can plan with the LLM.
-pub const DECISIONS_UNAVAILABLE: &str = "decisions-unavailable";
-
-/// Whether OpenAI refused the Decisions route for this sign-in (as opposed to a broken token).
-/// A ChatGPT plan token is rejected with 401 `rejected_by_access_enforcement` /
-/// `no_matching_rule` (seen Oct 2026), or the documented `subscription_sharing_route_not_supported`.
-fn decisions_refused(status: u16, code: &str, body: &Value) -> bool {
-    matches!(code, "subscription_sharing_route_not_supported" | "subscription_sharing_unsupported_capability" | "no_matching_rule")
-        || body["error"]["type"].as_str() == Some("rejected_by_access_enforcement")
-        || status == 404
-}
-
-/// A Decisions API call (`POST /v1/decisions`, GPT-6 Luna) with the user's ChatGPT plan.
-pub fn decide(body: &Value) -> Result<Value, String> {
-    let token = access_token()?;
-    let mut body = body.clone();
-    body["model"] = json!("gpt-6-luna");
-    let mut res = http()
-        .post(&format!("{API}/decisions"))
-        .header("Authorization", &format!("Bearer {token}"))
-        .send_json(&body)
-        .map_err(|e| format!("couldn't reach OpenAI: {e}"))?;
-    let status = res.status().as_u16();
-    let json: Value = res.body_mut().read_json().unwrap_or(Value::Null);
-    if !(200..300).contains(&status) {
-        let (code, message) = api_error(status, &json);
-        if decisions_refused(status, &code, &json) {
-            return Err(format!("{DECISIONS_UNAVAILABLE}: {message}"));
-        }
-        return Err(message);
-    }
-    Ok(json)
-}
-
 /// Models the signed-in account can use.
 pub fn models() -> Result<Vec<String>, String> {
     let token = access_token()?;
@@ -612,16 +578,6 @@ mod tests {
         let failed = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}}\n";
         assert!(read_stream(failed.as_bytes()).unwrap_err().contains("limit"));
         assert!(read_stream("data: {\"type\":\"response.output_text.delta\",\"delta\":\"cut\"}\n".as_bytes()).is_err());
-    }
-
-    #[test]
-    fn tells_a_refused_route_from_a_broken_token() {
-        let refused = json!({ "error": { "message": "Unauthorized", "type": "rejected_by_access_enforcement", "code": "no_matching_rule" } });
-        assert!(decisions_refused(401, "no_matching_rule", &refused));
-        let documented = json!({ "error": { "code": "subscription_sharing_route_not_supported" } });
-        assert!(decisions_refused(403, "subscription_sharing_route_not_supported", &documented));
-        let bad_token = json!({ "error": { "code": "subscription_sharing_invalid_user" } });
-        assert!(!decisions_refused(401, "subscription_sharing_invalid_user", &bad_token));
     }
 
     #[test]

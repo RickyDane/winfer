@@ -87,16 +87,6 @@ export function VoiceHUD() {
             <button onClick={() => confirmPending()} className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90">
               {message} <span className="opacity-70">↩</span>
             </button>
-            {pending.decisions.length === 1 &&
-              pending.decisions[0].alternatives.map((alt) => (
-                <button
-                  key={alt.tool.id}
-                  onClick={() => confirmPending({ ...pending.decisions[0], tool: alt.tool, confidence: alt.probability, alternatives: [] })}
-                  className="rounded-md border border-border-strong px-2.5 py-1 text-xs text-fg hover:bg-hover"
-                >
-                  {alt.tool.title}
-                </button>
-              ))}
             <button onClick={cancelPending} className="ml-auto rounded-md px-2 py-1 text-xs text-fg-subtle hover:bg-hover">
               Cancel <span className="opacity-70">esc</span>
             </button>

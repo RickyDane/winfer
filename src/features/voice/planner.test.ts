@@ -6,7 +6,7 @@ import type { Workspace } from "@/stores/workspaces";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@/features/terminal/xtermRegistry", () => ({ readTerminal: vi.fn(() => "") }));
 
-const { isComplex, parsePlan, plannerPrompt } = await import("./planner");
+const { parsePlan, plannerPrompt } = await import("./planner");
 
 const provider = (id: string, name: string, aliases: string[] = []): Provider => ({
   id, name, command: id, args: [], resumeArgs: [], aliases, statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true,
@@ -33,19 +33,6 @@ const ctx: ToolContext = {
   models: { claude: [{ id: "opus", label: "Opus (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }] },
   recentAddresses: { "file:///Users/r/Coding/index.html": "/Users/r/Coding/index.html — mentioned in pane 1 (Claude Code)" },
 };
-
-describe("isComplex", () => {
-  it("sends short commands to the decision model", () => {
-    expect(isComplex("open two codex panes")).toBe(false);
-    expect(isComplex("tell claude to run the tests")).toBe(false);
-    expect(isComplex("open codex and ask it to add dark mode to the settings page")).toBe(false);
-  });
-
-  it("sends long or multi-sentence commands to the LLM", () => {
-    expect(isComplex("We need four new features, one general plugin system, one graphify plugin for managing context and a secret store")).toBe(true);
-    expect(isComplex("Create credentials.js with placeholders. Implement decide in openaiDecisions.js. Start it in Claude Code.")).toBe(true);
-  });
-});
 
 describe("parsePlan", () => {
   it("keeps only known tools and allowed values", () => {

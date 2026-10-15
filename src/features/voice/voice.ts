@@ -1,7 +1,7 @@
 /**
- * Voice flow in the UI: push-to-talk events from src-tauri/src/voice, then the OpenAI Decisions
- * API (short commands, decision.ts) or the LLM planner (long or complex ones, planner.ts) decides
- * which tools to run, and the policy gate runs, confirms or rejects.
+ * Voice flow in the UI: push-to-talk events from src-tauri/src/voice, then the LLM planner
+ * (planner.ts) decides which tools to run and writes their prompts, and risky commands can ask
+ * for confirmation first.
  */
 import { applyVoiceShortcuts, isCustomized, VOICE_BINDINGS } from "@/commands/keymap";
 import { invoke } from "@tauri-apps/api/core";
@@ -10,14 +10,13 @@ import { create } from "zustand";
 import { execute, type Command } from "@/commands/bus";
 import { sendText } from "@/features/terminal/xtermRegistry";
 import { toolContext } from "@/features/palette/entries";
-import { defaultProviderId, providerName, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
-import { needsWriting, planPerRecipient, recipientsOf, splitTasks, writeInstructions } from "./writer";
-import { buildRequest, fromApi, orderByMention, parseDecision, toApi, verdict, type ApiResponse, type Decision, type DecisionResult } from "./decision";
-import { isComplex, planWithLlm } from "./planner";
+import { orderByMention, type Decision } from "./decision";
+import { planWithLlm } from "./planner";
 import { llmEnabled } from "@/features/llm/llm";
-import { markDecisionsUnavailable, refreshChatGpt, useChatGpt } from "@/features/llm/chatgpt";
+import { refreshChatGpt } from "@/features/llm/chatgpt";
 
 export type Phase = "idle" | "listening" | "transcribing" | "deciding" | "confirm" | "done" | "error";
 export type Mode = "command" | "dictation";
@@ -48,8 +47,7 @@ interface VoiceState {
   level: number;
   transcript: string;
   message: string;
-  /** `planned`: from the LLM planner, whose prompts are already written. */
-  pending: { decisions: Decision[]; transcript: string; planned?: boolean } | null;
+  pending: { decisions: Decision[]; transcript: string } | null;
   timings: { sttMs?: number; decideMs?: number };
   recent: string[];
   lastCommands: Command[];
@@ -114,61 +112,11 @@ function commandsFor(decisions: Decision[], transcript: string): Command[] {
   return orderByMention(commands, transcript, ctx);
 }
 
-/** Spawn order for a decision: one entry per new agent, in the order they were named. */
-function spawnOrder(d: Decision, transcript: string): string[] {
-  const ctx = toolContext();
-  return orderByMention(d.tool.toCommands(d.args, ctx), transcript, ctx).flatMap((c) =>
-    c.type === "pane.spawn" ? Array(c.count ?? 1).fill(c.provider === "default" ? defaultProviderId() : c.provider) : [],
-  );
-}
-
-async function run(decisions: Decision[], transcript: string, opts: { planned?: boolean } = {}) {
-  // Commands that reach several agents get one planned message per agent.
-  const planned = new Map<Decision, Command[]>();
-  // Prompts that are already written (by the planner or task splitter) and shouldn't be rewritten.
-  const ready = new Set<Decision>(opts.planned ? decisions : []);
-  decisions = [...decisions];
-  for (const [i, d] of decisions.entries()) {
-    if (ready.has(d)) continue;
-    // One new agent asked to do several separate things: one agent per task, each in its own
-    // worktree, so every feature gets its own branch and pull request.
-    const order = (d.tool.id === "spawn_panes" || d.tool.id === "start_features") && d.args.prompt ? spawnOrder(d, transcript) : [];
-    if (order.length !== 1 || order[0] === "shell") continue;
-    show("deciding", { transcript, message: "Writing the prompt…" });
-    const tasks = await splitTasks(transcript, String(d.args.prompt), providerName(useWorkspaces.getState().providers, order[0]));
-    if (!tasks) continue;
-    if (tasks.length === 1) {
-      decisions[i] = { ...d, args: { ...d.args, prompt: tasks[0] } };
-      ready.add(decisions[i]);
-      continue;
-    }
-    const model = d.args.model && d.args.model !== "default" ? String(d.args.model) : undefined;
-    planned.set(d, tasks.map((prompt) => ({ type: "pane.spawn", provider: order[0], count: 1, prompt, model, worktree: true })));
-  }
-  for (const d of decisions) {
-    if (planned.has(d) || ready.has(d)) continue;
-    const recipients = recipientsOf(d, d.tool.id === "spawn_panes" ? spawnOrder(d, transcript) : []);
-    const instruction = String(d.args.prompt ?? d.args.text ?? "");
-    if (!recipients || !instruction) continue;
-    show("deciding", { transcript, message: `Writing ${recipients.length} prompts…` });
-    const commands = await planPerRecipient(transcript, instruction, recipients);
-    if (commands) planned.set(d, commands);
-  }
-  const single = decisions.filter((d) => !planned.has(d) && !ready.has(d));
-  if (needsWriting(single)) {
-    show("deciding", { transcript, message: "Writing the prompt…" });
-    const written = await writeInstructions(single, transcript);
-    decisions = decisions.map((d) => (single.includes(d) ? written[single.indexOf(d)] : d));
-  }
-  const commands = decisions.flatMap((d) => planned.get(d) ?? commandsFor([d], transcript));
+function run(decisions: Decision[], transcript: string) {
+  const commands = commandsFor(decisions, transcript);
   commands.forEach(execute);
-  const perAgent = [...planned.values()].flat().length;
-  const split = [...planned.entries()].filter(([d]) => d.tool.id === "spawn_panes" || d.tool.id === "start_features").map(([, c]) => c.length);
-  const written = perAgent ? `${perAgent} individual prompts` : decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
-  const summary =
-    decisions.map(describe).join(" · ") +
-    (split.length ? ` — split into ${split.join(" + ")} tasks` : "") +
-    (written ? ` — “${String(written).slice(0, 140)}”` : "");
+  const written = decisions.map((d) => d.args.prompt ?? (d.tool.id === "send_to_pane" || d.tool.id === "broadcast" ? d.args.text : undefined)).find(Boolean);
+  const summary = decisions.map(describe).join(" · ") + (written ? ` — “${String(written).slice(0, 140)}”` : "");
   useVoice.setState((s) => ({
     recent: [...s.recent, `${transcript} → ${summary}`].slice(-3),
     lastCommands: decisions.some((d) => d.tool.id === "repeat_last") ? s.lastCommands : commands,
@@ -177,70 +125,29 @@ async function run(decisions: Decision[], transcript: string, opts: { planned?: 
   logActivity(useWorkspaces.getState().activeWorkspaceId, `Voice: “${transcript}” → ${summary}`);
 }
 
-export function confirmPending(alternative?: Decision) {
+export function confirmPending() {
   const pending = useVoice.getState().pending;
-  if (!pending) return;
-  void run(alternative ? [alternative] : pending.decisions, pending.transcript, { planned: pending.planned && !alternative });
+  if (pending) run(pending.decisions, pending.transcript);
 }
 
 export function cancelPending() {
   show("idle", { pending: null });
 }
 
-/** Plans with the LLM; false when it's off or failed, so the caller can try something else. */
-async function decideWithLlm(transcript: string, ctx: ReturnType<typeof toolContext>): Promise<boolean> {
+async function decide(transcript: string) {
+  if (!llmEnabled()) {
+    return show("error", { message: "Voice commands need an LLM: sign in with ChatGPT or install Codex or Claude Code (Settings → AI)." }, 6000);
+  }
   show("deciding", { transcript, message: "Planning…" });
+  const ctx = toolContext(useVoice.getState().lastCommands);
   const started = performance.now();
   const decisions = await planWithLlm(transcript, ctx, useVoice.getState().recent);
-  if (!decisions) return false;
+  if (!decisions) return show("error", { message: "Couldn't plan that command; check the LLM in Settings → AI." }, 6000);
   useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
   if (decisions.length === 0) show("error", { message: `No winfer command in “${transcript}”` }, 4000);
   else if (useWorkspaces.getState().voiceConfig.confirm && decisions.some((d) => d.tool.risk === "confirm")) {
-    show("confirm", { pending: { decisions, transcript, planned: true }, message: decisions.map(describe).join(" · ") });
-  } else void run(decisions, transcript, { planned: true });
-  return true;
-}
-
-async function decide(transcript: string) {
-  show("deciding", { transcript, message: "" });
-  const ctx = toolContext(useVoice.getState().lastCommands);
-  const planner = useWorkspaces.getState().voiceConfig.planner ?? "auto";
-  const { signedIn, decisionsUnavailable } = useChatGpt.getState();
-  // The Decisions API needs the ChatGPT sign-in and a plan that allows it; without either,
-  // every command is planned by the LLM.
-  const decisionsUsable = signedIn && !decisionsUnavailable;
-  // Long or complex commands go to the full LLM; the decision model only picks from short questions.
-  const plan = planner !== "off" && (planner === "always" || isComplex(transcript) || !decisionsUsable);
-  if (plan && llmEnabled() && (await decideWithLlm(transcript, ctx))) return;
-  if (!decisionsUsable) {
-    return show("error", { message: signedIn ? "Couldn't plan that command; check the LLM in Settings → Voice." : "Sign in with ChatGPT in Settings → Voice to use voice commands." }, 6000);
-  }
-
-  const request = buildRequest(transcript, ctx, useVoice.getState().recent);
-  const started = performance.now();
-  let result: DecisionResult;
-  try {
-    result = fromApi(await invoke<ApiResponse>("voice_decide", { body: toApi(request) }), request);
-  } catch (err) {
-    // The plan doesn't cover the Decisions API: plan with the LLM from now on.
-    if (String(err).includes("decisions-unavailable")) {
-      markDecisionsUnavailable();
-      if (llmEnabled() && (await decideWithLlm(transcript, ctx))) return;
-    }
-    show("error", { message: String(err).replace(/^decisions-unavailable: /, "") }, 6000);
-    return;
-  }
-  useVoice.setState((s) => ({ timings: { ...s.timings, decideMs: Math.round(performance.now() - started) } }));
-
-  const decisions = parseDecision(result, ctx);
-  switch (verdict(decisions, { confirm: useWorkspaces.getState().voiceConfig.confirm ?? false })) {
-    case "run":
-      return run(decisions, transcript);
-    case "confirm":
-      return show("confirm", { pending: { decisions, transcript }, message: decisions.map(describe).join(" · ") });
-    case "reject":
-      return show("error", { message: `No winfer command in “${transcript}”` }, 4000);
-  }
+    show("confirm", { pending: { decisions, transcript }, message: decisions.map(describe).join(" · ") });
+  } else run(decisions, transcript);
 }
 
 function dictate(text: string) {

@@ -1,9 +1,10 @@
 //! The LLM behind voice "smart moves": plans long or complex voice commands, turns what the user
 //! said into the message an agent receives, estimates progress and summarizes finished work.
 //!
-//! Two backends, both with the user's own subscription: ChatGPT through winfer's Sign in with
-//! ChatGPT (the Responses API, see chatgpt.rs), or Claude Code run headless (`claude -p`, no
-//! tools, no settings or MCP servers).
+//! Three backends, all with the user's own subscription: ChatGPT through winfer's Sign in with
+//! ChatGPT (the Responses API, see chatgpt.rs), the Codex CLI run headless with its own login
+//! (`codex exec`, read-only sandbox, no user config), or Claude Code run headless (`claude -p`,
+//! no tools, no settings or MCP servers).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -17,7 +18,7 @@ use crate::env::login_env;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeRequest {
-    /// "chatgpt" or "claude".
+    /// "chatgpt", "codex" or "claude".
     provider: String,
     /// Model (e.g. "gpt-6-luna", "sonnet"); empty uses the default.
     #[serde(default)]
@@ -120,10 +121,61 @@ fn claude(model: &str, system: &str, user: &str) -> Result<String, String> {
     Ok(answer.to_string())
 }
 
+/// Codex in exec mode with the user's Codex login: read-only sandbox in an empty scratch
+/// directory, no session files, no user config or rules. The system prompt replaces Codex's own
+/// instructions; the last message is read from a file, so progress output can't leak in.
+fn codex_args(dir: &Path, model: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "-c",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    // A TOML literal string: Windows paths keep their backslashes.
+    args.push(format!("model_instructions_file='{}'", dir.join("system.txt").to_string_lossy()));
+    args.extend(["--output-last-message".into(), dir.join("answer.txt").to_string_lossy().into_owned()]);
+    if !model.is_empty() {
+        args.extend(["--model".into(), model.into()]);
+    }
+    // The prompt comes in on stdin.
+    args.push("-".into());
+    args
+}
+
+fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
+    let launcher = crate::env::launcher("codex").ok_or("Codex isn't installed.")?;
+    let dir = scratch_dir()?;
+    let result = std::fs::write(dir.join("system.txt"), system).map_err(|e| e.to_string()).and_then(|_| {
+        let mut cmd = Command::new(&launcher.program);
+        cmd.args(&launcher.args).args(codex_args(&dir, model)).current_dir(&dir);
+        run(cmd, user, "Codex")?;
+        std::fs::read_to_string(dir.join("answer.txt")).map_err(|_| "Codex gave no answer".to_string())
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    let answer = result?;
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err("Codex gave no answer".into());
+    }
+    Ok(answer.to_string())
+}
+
 #[tauri::command]
 pub async fn llm_compose(req: ComposeRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || match req.provider.as_str() {
         "claude" => claude(&req.model, &req.system, &req.user),
+        "codex" => codex(&req.model, &req.system, &req.user),
         "chatgpt" => crate::chatgpt::respond(&req.model, &req.system, &req.user),
         other => Err(format!("unknown LLM provider {other}")),
     })
@@ -148,13 +200,28 @@ mod tests {
         assert!(!claude_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
     }
 
-    /// Live: a logged-in Claude Code, and a ChatGPT sign-in made in winfer.
+    #[test]
+    fn codex_runs_read_only_without_user_config() {
+        let args = codex_args(Path::new("/tmp/x"), "gpt-6.1-sol");
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].as_str());
+        assert_eq!(args[0], "exec");
+        assert_eq!(after("--sandbox"), Some("read-only"));
+        assert_eq!(after("--model"), Some("gpt-6.1-sol"));
+        assert!(args.contains(&"--ignore-user-config".to_string()));
+        assert!(args.contains(&"--ephemeral".to_string()));
+        assert!(args.iter().any(|a| a.starts_with("model_instructions_file='") && a.ends_with("system.txt'")));
+        assert!(after("--output-last-message").unwrap().ends_with("answer.txt"));
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        assert!(!codex_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
+    }
+
+    /// Live: a logged-in Claude Code and Codex, and a ChatGPT sign-in made in winfer.
     /// cargo test --lib -- --ignored --nocapture live_compose
     #[test]
     #[ignore]
     fn live_compose() {
         let system = "Rewrite as a one-sentence instruction for a coding agent. Output only it.";
-        for (provider, run) in [("claude", claude as fn(&str, &str, &str) -> Result<String, String>), ("chatgpt", crate::chatgpt::respond)] {
+        for (provider, run) in [("claude", claude as fn(&str, &str, &str) -> Result<String, String>), ("codex", codex), ("chatgpt", crate::chatgpt::respond)] {
             let started = Instant::now();
             let result = run("", system, "Spoken: make the button blue");
             eprintln!("{provider}: {result:?} in {:?}", started.elapsed());

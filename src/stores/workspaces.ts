@@ -107,7 +107,7 @@ interface WorkspaceState {
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Voice model choices, persisted and pushed to the backend on launch. */
-  voiceConfig: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "claude"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string };
+  voiceConfig: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string };
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -150,7 +150,7 @@ interface WorkspaceState {
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setSearchPane: (id: string | null) => void;
-  setVoiceConfig: (config: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "claude"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string }) => void;
+  setVoiceConfig: (config: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -444,7 +444,7 @@ interface Snapshot {
     activeWorkspaceId?: string;
     sidebarOpen?: boolean;
     browserOpen?: boolean;
-    voice?: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "claude"; writerModel?: string; planner?: "auto" | "always" | "off"; inputDevice?: string };
+    voice?: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string };
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
     autoApprove?: ProviderId[];

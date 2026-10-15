@@ -1,8 +1,8 @@
 /**
  * Tool Registry: every user-facing action, described once.
  *
- * - `description` is what the decision model (OpenAI Decisions API) sees as the option text (keep ~10–15 words).
- * - `params` map to System One question types (choice / noul / score) when voice lands in M5.
+ * - `description` is what the voice planner (LLM) sees for the tool (keep ~10–15 words).
+ * - `params` are described to the planner with their `ask` and allowed values, and validated on the way back.
  * - `palette` expands a tool into concrete ⌘K entries.
  * - `toCommands` turns resolved arguments into Command Bus commands.
  */
@@ -32,13 +32,13 @@ export interface ToolContext {
 type Options = (ctx: ToolContext) => Record<string, string | null>;
 
 export type ParamDef =
-  | { kind: "enum"; ask: string; options: Options } // → choice
-  | { kind: "count"; ask: string; max: number } // → choice "zero".."max"
-  | { kind: "perOption"; ask: string; options: Options; max: number } // → one count question per option
-  | { kind: "bool"; ask: string } // → noul
-  | { kind: "level"; ask: string; levels: string[] } // → score
-  /** Free text picked from the transcript. Tools share one question per slot. */
-  | { kind: "span"; slot: "instruction" | "address"; ask: string }; // → choice over transcript spans
+  | { kind: "enum"; ask: string; options: Options }
+  | { kind: "count"; ask: string; max: number }
+  | { kind: "perOption"; ask: string; options: Options; max: number } // a count per option
+  | { kind: "bool"; ask: string }
+  | { kind: "level"; ask: string; levels: string[] }
+  /** Free text from what the user said: an instruction for an agent or a web address. */
+  | { kind: "span"; slot: "instruction" | "address"; ask: string };
 
 export type Args = Record<string, unknown>;
 
@@ -147,17 +147,6 @@ export const TOOLS: ToolDef[] = [
       ...ctx.providers.filter((p) => p.installed).map((p) => ({ title: `New pane: ${p.name}`, args: { counts: { [p.id]: 1 } } })),
       ...(ctx.active.useWorktrees ? [{ title: "New pane without worktree", args: { noWorktree: true } }] : []),
     ],
-  },
-  {
-    id: "start_features",
-    title: "Start new features",
-    description: "The user lists new features, files to create or code changes to implement, in any language (“we need a plugin system, a secret store and …”, “Erstelle … Implementiere …”), without addressing an agent that is already open; starts new agents on them",
-    risk: "safe",
-    params: {
-      prompt: { kind: "span", slot: "instruction", ask: "What should be built or implemented?" },
-    },
-    // One default agent; the voice flow splits the work into one agent per feature.
-    toCommands: (args) => (args.prompt ? [{ type: "pane.spawn", provider: "default", count: 1, prompt: String(args.prompt) }] : []),
   },
   {
     id: "split_pane",
@@ -676,14 +665,6 @@ export const TOOLS: ToolDef[] = [
     risk: "safe",
     params: {},
     toCommands: (_args, ctx) => ctx.lastCommands,
-  },
-  {
-    id: "none",
-    title: "Nothing",
-    description: "Not a request to winfer: questions, chit-chat, weather, time, or unrelated speech",
-    risk: "safe",
-    params: {},
-    toCommands: () => [],
   },
 ];
 

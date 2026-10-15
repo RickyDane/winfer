@@ -1,6 +1,7 @@
 /**
  * Live check of the LLM planner on long/complex commands, through the logged-in CLI:
  *   PLANNER=claude [PLANNER_MODEL=sonnet] pnpm eval:planner
+ *   PLANNER=codex [PLANNER_MODEL=gpt-6.1-sol] pnpm eval:planner
  *   PLANNER=openai OPENAI_TOKEN=… [PLANNER_MODEL=gpt-6-luna] pnpm eval:planner   (Responses API; an
  *     API key or a Sign in with ChatGPT access token)
  * Skipped unless PLANNER is set.
@@ -91,6 +92,14 @@ async function plan(utterance: string) {
   try {
     if (PLANNER === "openai") {
       text = await respond(user);
+    } else if (PLANNER === "codex") {
+      writeFileSync(join(dir, "system.txt"), PLANNER_SYSTEM);
+      execFileSync(
+        "codex",
+        ["exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--color", "never", "-c", 'model_reasoning_effort="low"', "-c", `model_instructions_file='${join(dir, "system.txt")}'`, "--output-last-message", join(dir, "answer.txt"), ...(PLANNER_MODEL ? ["--model", PLANNER_MODEL] : []), "-"],
+        { cwd: dir, input: user, encoding: "utf8" },
+      );
+      text = readFileSync(join(dir, "answer.txt"), "utf8");
     } else {
       writeFileSync(join(dir, "system.txt"), PLANNER_SYSTEM);
       text = execFileSync(

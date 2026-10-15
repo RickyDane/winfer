@@ -12,7 +12,7 @@ Cross-platform (macOS + Windows) desktop app for orchestrating coding agents (Cl
 | Terminals | `portable-pty` (ConPTY on Windows) + xterm.js (WebGL) |
 | Browser | Managed Chromium (Chrome for Testing, ~150 MB, downloaded on first use) driven via CDP screencast; agents attach to the same browser |
 | Voice STT | Local whisper.cpp (`whisper-rs`) |
-| Voice intent | **OpenAI Decisions API** (`POST /v1/decisions`, GPT-6 Luna) for short commands; long or complex ones are planned by an LLM (ChatGPT via the Responses API, or Claude Code headless). No grammar parser. Replaced the Cloudflare Clef model in Oct 2026. |
+| Voice intent | Every command is planned by an LLM (ChatGPT via the Responses API, or the Codex or Claude Code CLI headless; Codex stands in until ChatGPT is signed in). No grammar parser. The OpenAI Decisions API (which replaced the Cloudflare Clef model) was dropped in Oct 2026: it isn't available with a ChatGPT plan. |
 | Why not local Clef | M0.5 spike (`spikes/clef-local/REPORT.md`): 95.5% accurate but ~6 s per command on an M1 Pro (needs < 0.6 s). Compute-bound; no caching possible. |
 | Voice requirements | Network + Sign in with ChatGPT (the user's ChatGPT plan; tokens in the OS keychain). Without it, voice commands are off unless Claude Code is installed for the planner; keyboard and palette still work. |
 | Git worktree per agent | On by default |

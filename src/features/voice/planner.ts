@@ -1,10 +1,8 @@
 /**
- * The LLM planner: long or complex voice commands are planned by a full LLM instead of the
- * decision model.
+ * The LLM planner: every voice command is planned by the LLM (ChatGPT, Codex or Claude Code, see
+ * llm.ts).
  *
- * The decision model picks options from short multiple-choice questions, which works for "open two Codex
- * panes" but not for "we need four features: …, and tell the one in pane 2 to …". The planner
- * sees the same Tool Registry (ids, descriptions, allowed values) plus the app state, and answers
+ * It sees the Tool Registry (ids, descriptions, allowed values) plus the app state, and answers
  * with a JSON plan of tool calls whose prompts it writes itself. Every call is validated against
  * the registry, so it can still only run what winfer offers.
  */
@@ -14,22 +12,6 @@ import { readTerminal } from "@/features/terminal/xtermRegistry";
 import { providerName } from "@/stores/workspaces";
 import { allTools, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
 import type { Decision } from "./decision";
-
-/** Decision-model helpers: the planner starts agents per feature itself. */
-const HIDDEN = new Set(["none", "start_features"]);
-
-export type PlannerMode = "auto" | "always" | "off";
-
-/** Words from which a command counts as long, and from which several sentences count as complex. */
-const LONG_WORDS = 18;
-const SENTENCES_WORDS = 10;
-
-/** Whether a command is too long or complex for the decision model's multiple-choice questions. */
-export function isComplex(transcript: string): boolean {
-  const words = transcript.split(/\s+/).filter(Boolean).length;
-  const sentences = transcript.split(/[.!?;:]+(?:\s|$)/).filter((s) => s.trim().split(/\s+/).length >= 3).length;
-  return words >= LONG_WORDS || (sentences >= 2 && words >= SENTENCES_WORDS);
-}
 
 export const PLANNER_SYSTEM = `You control winfer, a desktop app that runs coding agents (Claude Code, Codex, …) in terminal panes, from the user's voice command.
 Decide which winfer tools to call and with which arguments. Only use the tools and allowed values listed; leave out arguments that don't apply.
@@ -98,7 +80,7 @@ export function plannerPrompt(transcript: string, ctx: ToolContext, recent: stri
   ];
   if (recent.length) parts.push(`Recent voice commands:\n${recent.map((r) => `  ${r}`).join("\n")}`);
   if (focusedOutput) parts.push(`Recent output of the focused pane:\n${focusedOutput}`);
-  parts.push(`Tools:\n${allTools().filter((t) => !HIDDEN.has(t.id)).map((t) => describeTool(t, ctx)).join("\n")}`);
+  parts.push(`Tools:\n${allTools().map((t) => describeTool(t, ctx)).join("\n")}`);
   parts.push(`Voice command: "${transcript}"`);
   return parts.join("\n\n");
 }
@@ -159,15 +141,15 @@ export function parsePlan(answer: string, ctx: ToolContext): Decision[] | null {
   if (!Array.isArray(actions)) return null;
   return actions.flatMap((action) => {
     const id = (action as { tool?: unknown })?.tool;
-    const tool = allTools().find((t) => t.id === id && !HIDDEN.has(t.id));
+    const tool = allTools().find((t) => t.id === id);
     if (!tool) return [];
     const raw = (action as { args?: unknown }).args;
     const args = validArgs(tool, raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}, ctx);
-    return [{ tool, args, confidence: Infinity, alternatives: [] }];
+    return [{ tool, args }];
   });
 }
 
-/** Asks the LLM for a plan; null when the LLM is off or fails (the caller falls back to the decision model). */
+/** Asks the LLM for a plan; null when the LLM is off or fails. */
 export async function planWithLlm(transcript: string, ctx: ToolContext, recent: string[]): Promise<Decision[] | null> {
   if (!llmEnabled()) return null;
   const focusedOutput = ctx.focusedPaneId ? (readTerminal(ctx.focusedPaneId, 40) ?? "").slice(-2000).trim() : "";
@@ -175,7 +157,7 @@ export async function planWithLlm(transcript: string, ctx: ToolContext, recent: 
     const answer = await llmCompose(PLANNER_SYSTEM, plannerPrompt(transcript, ctx, recent, focusedOutput));
     return parsePlan(answer, ctx);
   } catch (err) {
-    console.warn("LLM planner failed, falling back to the decision model", err);
+    console.warn("LLM planner failed", err);
     return null;
   }
 }

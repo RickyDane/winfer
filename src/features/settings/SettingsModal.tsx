@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
-import { availableLlms, LLM_PROVIDERS, llmProvider } from "@/features/llm/llm";
+import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type CatalogEntry, type PluginInfo } from "@/features/plugins/plugins";
 import { toast } from "@/stores/toasts";
-import { cancelChatGptSignIn, markDecisionsUnavailable, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
+import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
 import { UsageHistory } from "@/features/usage/UsageHistory";
 import { THEMES } from "@/features/theme/themes";
@@ -507,8 +507,8 @@ function VoiceSettings() {
         <Row label="Speak agent updates aloud" hint="“Codex needs your input”, “Claude Code finished”.">
           <Toggle label="Speak agent updates aloud" checked={readback} onChange={(readback) => useWorkspaces.getState().setVoiceConfig({ readback })} />
         </Row>
-        <Row label="Confirm uncertain commands" hint="Ask before running voice commands that are unclear or risky.">
-          <Toggle label="Confirm uncertain commands" checked={confirm} onChange={(confirm) => useWorkspaces.getState().setVoiceConfig({ confirm })} />
+        <Row label="Confirm risky commands" hint="Ask before running voice commands that close, stop or merge things.">
+          <Toggle label="Confirm risky commands" checked={confirm} onChange={(confirm) => useWorkspaces.getState().setVoiceConfig({ confirm })} />
         </Row>
       </Card>
     </>
@@ -523,7 +523,6 @@ function AiSettings() {
   const writer = useWorkspaces(() => llmProvider() ?? "off");
   const available = useWorkspaces(() => availableLlms().join(","));
   const writerModel = useWorkspaces((s) => s.voiceConfig.writerModel ?? "");
-  const planner = useWorkspaces((s) => s.voiceConfig.planner ?? "auto");
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -542,16 +541,9 @@ function AiSettings() {
   };
 
   const testConnection = async () => {
-    try {
-      return `Connected in ${await invoke<number>("voice_test_connection")} ms`;
-    } catch (err) {
-      if (!String(err).includes("decisions-unavailable")) throw err;
-      markDecisionsUnavailable();
-    }
-    // The plan can't use the Decisions API; voice commands go to the LLM, so check that.
     const started = performance.now();
     await invoke("llm_compose", { req: { provider: "chatgpt", model: "", system: "Reply with OK.", user: "ping" } });
-    return `Connected in ${Math.round(performance.now() - started)} ms. Your plan can't use the Decisions API, so voice commands are planned by the LLM.`;
+    return `Connected in ${Math.round(performance.now() - started)} ms`;
   };
 
   return (
@@ -560,9 +552,8 @@ function AiSettings() {
         title="ChatGPT account"
         description={
           <>
-            Runs voice commands and the prompt writer on your ChatGPT plan (Plus or Pro); no API key needed. Voice commands send the
-            transcript and a short summary of your panes, never terminal output, file paths or environment variables. Set a weekly limit or
-            disconnect winfer in ChatGPT's settings.
+            Runs the LLM below on your ChatGPT plan (Plus or Pro); no API key needed. Until you sign in, the Codex CLI's own login is used
+            instead if Codex is installed. Set a weekly limit or disconnect winfer in ChatGPT's settings.
           </>
         }
       >
@@ -608,20 +599,25 @@ function AiSettings() {
           </Row>
         )}
       </Card>
-      {chatgpt.decisionsUnavailable && <p className="px-1 text-xs text-fg-subtle">Your plan can't use the Decisions API; every voice command is planned by the LLM below.</p>}
       <Result result={result} />
 
       <Card
         title="LLM"
-        description="Plans long or complex commands (“we need four features: …”) and turns what you say into a clear prompt for the agent, using its recent output as context. Short commands go to the Decisions API (GPT-6 Luna); “Type … into Claude” stays word for word. Also used for progress estimates and review summaries."
+        description="Plans every voice command (“we need four features: …”) and turns what you say into a clear prompt for the agent, using its recent output as context. Also used for progress estimates and review summaries."
       >
         <Row
           label="Provider"
-          hint={writer === "claude" ? "Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings." : undefined}
+          hint={
+            writer === "claude"
+              ? "Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings."
+              : writer === "codex"
+                ? "Runs Codex headless with your Codex login, read-only and without your Codex config."
+                : undefined
+          }
         >
           <Select
             value={writer}
-            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | "chatgpt" | "claude", writerModel: "" })}
+            onChange={(e) => useWorkspaces.getState().setVoiceConfig({ writer: e.target.value as "off" | LlmProvider, writerModel: "" })}
             className="w-72"
           >
             {LLM_PROVIDERS.map((p) => {
@@ -633,7 +629,7 @@ function AiSettings() {
                 </option>
               );
             })}
-            <option value="off">Off (send my words as spoken)</option>
+            <option value="off">Off (no voice commands; dictation still works)</option>
           </Select>
         </Row>
         {writer === "chatgpt" && chatgpt.models.length > 0 && (
@@ -647,24 +643,15 @@ function AiSettings() {
             </Select>
           </Row>
         )}
-        {writer === "claude" && (
+        {(writer === "claude" || writer === "codex") && (
           <Row label="Model">
             <input
               key={writer}
               defaultValue={writerModel}
               onBlur={(e) => useWorkspaces.getState().setVoiceConfig({ writer, writerModel: e.target.value.trim() })}
-              placeholder="Default, e.g. sonnet"
+              placeholder={writer === "claude" ? "Default, e.g. sonnet" : "Default, e.g. gpt-6.1-sol"}
               className={cn(inputClass, "w-56")}
             />
-          </Row>
-        )}
-        {writer !== "off" && (
-          <Row label="Who decides what runs" stacked>
-            <Select value={planner} onChange={(e) => useWorkspaces.getState().setVoiceConfig({ planner: e.target.value as "auto" | "always" | "off" })} className="w-full">
-              <option value="auto">LLM for long or complex commands, Decisions API for short ones</option>
-              <option value="always">LLM for every command (slower)</option>
-              <option value="off">Decisions API for every command</option>
-            </Select>
           </Row>
         )}
       </Card>

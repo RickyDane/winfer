@@ -178,8 +178,6 @@ pub fn run() {
             voice::voice_input_devices,
             voice::voice_set_shortcuts,
             voice::voice_test_microphone,
-            voice::voice_decide,
-            voice::voice_test_connection,
             voice::voice_start,
             voice::voice_stop,
             mcp::mcp_respond,

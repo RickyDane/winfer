@@ -1,7 +1,7 @@
 //! Voice control: hold ⌥Space (commands) or ⌥⇧Space (dictation) anywhere, speak, release.
 //! Both keys can be changed in the app (`voice_set_shortcuts`).
-//! Audio is transcribed locally with whisper; the frontend then asks the OpenAI Decisions API
-//! (GPT-6 Luna, via `voice_decide`) which tool to run.
+//! Audio is transcribed locally with whisper; the frontend then has the LLM (see llm.rs) plan
+//! which tools to run.
 
 mod capture;
 pub mod model;
@@ -13,14 +13,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
-    /// Spoken commands, decided by the Decisions API.
+    /// Spoken commands, planned by the LLM.
     Command,
     /// Spoken text typed into the focused pane.
     Dictation,
@@ -451,26 +451,6 @@ pub async fn voice_test_microphone(app: AppHandle) -> Result<MicTest, String> {
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-/// Sends a Decisions API request with the ChatGPT sign-in and returns the answers.
-#[tauri::command]
-pub async fn voice_decide(body: Value) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::chatgpt::decide(&body))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-/// Round-trips a tiny request; returns latency in ms.
-#[tauri::command]
-pub async fn voice_test_connection() -> Result<u64, String> {
-    let started = Instant::now();
-    let body = json!({
-        "input": "The user said: open a new terminal",
-        "questions": [{ "type": "predicate", "name": "is_command", "instructions": "Is this a request to do something?" }]
-    });
-    voice_decide(body).await?;
-    Ok(started.elapsed().as_millis() as u64)
 }
 
 #[tauri::command]
