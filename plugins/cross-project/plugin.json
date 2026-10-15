@@ -1,7 +1,7 @@
 {
   "id": "cross-project",
   "name": "Cross-Project Knowledge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Link projects that talk to each other (a mobile app, a web API, the NuGet or npm package with their models) and see the contracts they serialize and deserialize, the endpoints between them and the packages they share, drawn as a map, with drift flagged. Agents get the same links as tools.",
   "author": "winfer",
   "main": "index.js",

@@ -1,20 +1,45 @@
 /** Plugin pages: title bar tabs and the main-area view that hosts a page's DOM. */
-import { Bot, Database, FileText, Globe, KeyRound, Lock, Puzzle, Shield, Star, Terminal, type LucideIcon } from "lucide-react";
+import {
+  Atom,
+  Bot,
+  Database,
+  DatabaseSearch,
+  FileText,
+  Globe,
+  KeyRound,
+  Lock,
+  MessageSquareQuote,
+  Puzzle,
+  Send,
+  Shield,
+  SquareKanban,
+  Star,
+  Terminal,
+  Waypoints,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { usePlugins, pluginPages, type PluginPage } from "./plugins";
 
 /** Icons a page can name in `icon`. */
 export const PAGE_ICONS: Record<string, LucideIcon> = {
+  atom: Atom,
   bot: Bot,
   database: Database,
+  "database-search": DatabaseSearch,
   file: FileText,
   globe: Globe,
   key: KeyRound,
+  "key-round": KeyRound,
   lock: Lock,
+  "message-square-quote": MessageSquareQuote,
   puzzle: Puzzle,
+  send: Send,
   shield: Shield,
+  "square-kanban": SquareKanban,
   star: Star,
   terminal: Terminal,
+  waypoints: Waypoints,
 };
 
 export const pageIcon = (page: PluginPage): LucideIcon => PAGE_ICONS[page.icon ?? ""] ?? Puzzle;

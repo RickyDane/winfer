@@ -18,6 +18,10 @@ const TOOL_OUTPUT_MAX = 12_000;
 const CHUNK = 19_000;
 /** Source files bigger than this are skipped (generated code, bundles). */
 const MAX_FILE = 400_000;
+/** Generated API clients and OpenAPI documents may be this big. */
+const MAX_GENERATED = 6_000_000;
+/** Paths of files that get MAX_GENERATED. */
+const BIG = "[Cc]lient|[Pp]roxy|[Ss]wagger|[Oo]pen[Aa][Pp][Ii]|[Nn][Ss]wag|[Gg]enerated|[Rr]equest[Bb]uilder|\\.json$|\\.ya?ml$|\\.nswag$";
 /** At most this much source is read per project. */
 const MAX_TOTAL = 40_000_000;
 /** Usage sites kept per contract, project and role. */
@@ -27,8 +31,8 @@ const MAX_SITES = 25;
 //
 // Everything here is pure (text in, facts out) so it can be tested without winfer.
 
-const LANGS = { cs: "csharp", ts: "ts", tsx: "ts", js: "ts", jsx: "ts", mjs: "ts", cjs: "ts", kt: "kotlin", java: "java", swift: "swift", dart: "dart" };
-export const LANG_LABELS = { csharp: "C#", ts: "TS/JS", kotlin: "Kotlin", java: "Java", swift: "Swift", dart: "Dart" };
+const LANGS = { cs: "csharp", ts: "ts", tsx: "ts", js: "ts", jsx: "ts", mjs: "ts", cjs: "ts", kt: "kotlin", java: "java", swift: "swift", dart: "dart", go: "go", rs: "rust", zig: "zig" };
+export const LANG_LABELS = { csharp: "C#", ts: "TS/JS", kotlin: "Kotlin", java: "Java", swift: "Swift", dart: "Dart", go: "Go", rust: "Rust", zig: "Zig", openapi: "OpenAPI" };
 
 /** Type names that wrap the interesting one (List<OrderDto> is about OrderDto). */
 const WRAPPERS = new Set(
@@ -38,7 +42,9 @@ const WRAPPERS = new Set(
     "Dictionary IDictionary IReadOnlyDictionary Map HashMap MutableMap Set HashSet MutableList MutableSet Optional Nullable Record Partial Readonly Required Pick Omit " +
     "String Int Integer Long Short Byte Double Float Decimal Boolean Bool Object Any Unit Void Never Unknown Date DateTime DateTimeOffset DateOnly TimeOnly TimeSpan Guid UUID Uri URL Char Number BigInteger BigDecimal Instant LocalDate LocalDateTime " +
     "HttpResponseMessage HttpResponse HttpRequest JsonElement JsonNode JsonDocument JObject JToken JArray JsonObject CancellationToken IFormFile FormData Blob File Buffer Uint8Array ArrayBuffer Data Error Exception " +
-    "Int32 Int64 Int16 UInt32 UInt64 Single SByte CGFloat Codable Decodable Encodable Equatable Hashable Identifiable Serializable Parcelable Sendable"
+    "Int32 Int64 Int16 UInt32 UInt64 Single SByte CGFloat Codable Decodable Encodable Equatable Hashable Identifiable Serializable Parcelable Sendable " +
+    "SwaggerResponse FileResponse ApiResponse IApiResponse " +
+    "Vec VecDeque Box Option Result Arc Rc Cow Json Path Query State Form Extension HashMap BTreeMap BTreeSet Value Utc NaiveDate NaiveDateTime HttpResponse Responder StatusCode Time Duration Mutex RwLock Allocator ArrayList"
   ).split(" "),
 );
 /** Names too generic to be a shared contract even when two projects both have one. */
@@ -46,7 +52,8 @@ const STOP = new Set(
   (
     "Program Startup App AppDelegate SceneDelegate MainActivity MainApplication MainPage MainWindow AppShell Constants Config Configuration Settings AppSettings " +
     "Utils Util Helpers Helper Extensions Resources Strings Colors Theme Styles BuildConfig Module Application Base Default Index Home Router Routes Api Client Service " +
-    "Assembly Properties Global Globals Test Tests Mock Fixture Main Layout Page View Component Props State Context Provider Store Action Reducer"
+    "Assembly Properties Global Globals Test Tests Mock Fixture Main Layout Page View Component Props State Context Provider Store Action Reducer " +
+    "ApiException SwaggerException FileParameter ProblemDetails ValidationProblemDetails HttpValidationProblemDetails"
   ).split(" "),
 );
 /** Server-side parameters that are injected, not sent in the request body. */
@@ -89,6 +96,18 @@ export function lex(src, lang) {
       j = j < 0 ? n : j + 3;
       blankRange(masked, i + 3, Math.max(i + 3, j - 3));
       i = j;
+      continue;
+    }
+    // Rust lifetimes ('a) and Zig/Rust labels aren't char literals.
+    if (ch === "'" && (lang === "rust" || lang === "zig") && !/^'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'/.test(src.slice(i, i + 14))) {
+      i++;
+      continue;
+    }
+    if (ch === "`" && lang === "go") {
+      let j = src.indexOf("`", i + 1);
+      if (j < 0) j = n;
+      blankRange(masked, i + 1, j);
+      i = j + 1;
       continue;
     }
     if (ch === '"' || ch === "'" || (ch === "`" && lang === "ts")) {
@@ -218,14 +237,23 @@ export function typeNames(str) {
 export const normKey = (name) => String(name).toLowerCase().replace(/[_\-\s]/g, "");
 const tidy = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 
-const NUMBERS = new Set("int long short byte sbyte uint ulong ushort float double decimal number integer int32 int64 int16 uint32 uint64 num bigint cgfloat".split(" "));
-const STRINGS = new Set("string guid datetime datetimeoffset dateonly timeonly date uuid uri url char timespan instant localdate localdatetime zoneddatetime offsetdatetime".split(" "));
+const NUMBERS = new Set(
+  "int long short byte sbyte uint ulong ushort float double decimal number integer int32 int64 int16 uint32 uint64 num bigint cgfloat int8 uint8 uint16 float32 float64 rune uintptr i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f16 f32 f64 f128 comptime_int comptime_float c_int".split(" "),
+);
+const STRINGS = new Set("string guid datetime datetimeoffset dateonly timeonly date uuid uri url char timespan instant localdate localdatetime zoneddatetime offsetdatetime str time naivedate naivedatetime".split(" "));
 
 /** Rough JSON shape of a type in any of the languages: number, string, bool, array, object or "". */
 export function typeFamily(type) {
-  const s = String(type ?? "").replace(/[?!]/g, "").trim();
+  // Option<T>, *T, &'a T, ?T: the value's own shape.
+  const s = String(type ?? "")
+    .replace(/^(?:\s*(?:Option|Box|Arc|Rc)\s*<\s*)+([\s\S]*?)(?:\s*>)+$/, "$1")
+    .replace(/^[\s*&?]*(?:'\w+\s+)?(?:mut\s+)?/, "")
+    .replace(/[?!]/g, "")
+    .trim();
   if (!s) return "";
-  if (/\[\]$|^\[.*\]$|^(I?List|IEnumerable|ICollection|IReadOnly\w*|Array|ReadonlyArray|Set|HashSet|MutableList|Collection|Iterable|Seq|Sequence)\b/.test(s)) return "array";
+  if (/^\[\]\s*(?:const\s+)?u8$|^\[:0\]\s*const\s+u8$/.test(s)) return "string";
+  if (/^map\[|^(?:HashMap|BTreeMap)\b/.test(s)) return "object";
+  if (/\[\]$|^\[.*\]$|^\[\]|^(I?List|IEnumerable|ICollection|IReadOnly\w*|Array|ReadonlyArray|Set|HashSet|MutableList|Collection|Iterable|Seq|Sequence|Vec|VecDeque|BTreeSet|ArrayList)\b/.test(s)) return "array";
   const base = s.replace(/<.*$/, "").split(".").pop().toLowerCase();
   if (STRINGS.has(base)) return "string";
   if (NUMBERS.has(base)) return "number";
@@ -244,6 +272,7 @@ const JSON_NAMES = [
   /JsonKey\(\s*name:\s*['"]([^'"]+)['"]/,
   /EnumMember\([^)]*Value\s*=\s*"([^"]+)"/,
   /JsonStringEnumMemberName\(\s*"([^"]+)"/,
+  /serde\([^)]*\brename\s*=\s*"([^"]+)"/,
 ];
 /** The JSON name an annotation gives a member, or "". */
 function jsonName(annotations) {
@@ -253,7 +282,7 @@ function jsonName(annotations) {
   }
   return "";
 }
-const ignored = (annotations) => /\bJsonIgnore\b|\bIgnoreDataMember\b|@Transient\b|\bJsonKey\([^)]*ignore:\s*true/.test(annotations ?? "");
+const ignored = (annotations) => /\bJsonIgnore\b|\bIgnoreDataMember\b|@Transient\b|\bJsonKey\([^)]*ignore:\s*true|\bserde\([^)]*\bskip\b/.test(annotations ?? "");
 
 /** Facts about one project, filled file by file. */
 export function newFacts() {
@@ -271,6 +300,8 @@ export function newFacts() {
     centralVersions: new Map(),
     tokens: new Map(),
     imports: new Map(),
+    controllers: new Map(),
+    specs: [],
   };
 }
 
@@ -399,7 +430,7 @@ function extractCSharp(F, file, code, masked, line) {
           if (ignored(attrs)) continue;
           fields.push({ name: member.replace(/^@/, ""), json: jsonName(attrs), type: tidy(type) });
         }
-        if (/\bController(Base)?\b/.test(bases) || /\[\s*ApiController\b/.test(prefix)) extractController(F, file, code, masked, line, { name, prefix, open, close });
+        if (/Controller(Base)?\b/.test(bases) || /\[\s*(?:ApiController|Route)\b/.test(prefix) || /Controller$/.test(name)) extractController(F, file, code, masked, line, { name, prefix, bases, open, close });
       }
     }
     F.types.push({ name, kind, file, line: line(m.index), namespace: nsAt(m.index), fields, lang: "csharp" });
@@ -445,8 +476,18 @@ function extractCSharp(F, file, code, masked, line) {
     }
     F.calls.push({ method, expr: a1.text, file, line: line(m.index), request, response });
   }
+  // new HttpRequestMessage(HttpMethod.Get, url) / new HttpRequestMessage(new HttpMethod("GET"), url)
+  for (const m of code.matchAll(/new\s+(?:System\.Net\.Http\.)?HttpRequestMessage\s*\(\s*(?:(?:System\.Net\.Http\.)?HttpMethod\.(Get|Post|Put|Patch|Delete)|new\s+(?:System\.Net\.Http\.)?HttpMethod\s*\(\s*"(\w+)"\s*\))\s*,/g)) {
+    const a = argAt(code, masked, m.index + m[0].length);
+    if (!a.text) continue;
+    const ahead = code.slice(a.end, a.end + 800);
+    const d = new RegExp(`(?:ReadFromJsonAsync|DeserializeObject|Deserialize(?:Async)?|ReadAsAsync)\\s*${GEN}`).exec(ahead);
+    F.calls.push({ method: (m[1] ?? m[2]).toUpperCase(), expr: a.text, file, line: line(m.index), request: [], response: d ? typeNames(d[1]) : [] });
+  }
+  if (/\burlBuilder_?\s*\.\s*Append\s*\(/.test(code)) extractNSwag(F, file, code, masked, line);
+  if (code.includes('"{+baseurl}')) extractKiota(F, file, code, masked, line);
   // Refit interfaces.
-  for (const m of code.matchAll(/\[\s*(Get|Post|Put|Patch|Delete)\s*\(\s*"([^"]*)"\s*\)\s*\]/g)) {
+  for (const m of code.matchAll(/(?:\[|,)\s*(Get|Post|Put|Patch|Delete)\s*\(\s*"([^"]*)"\s*\)/g)) {
     const after = code.slice(m.index + m[0].length, m.index + m[0].length + 600);
     const sig = /^(?:\s*\[[\s\S]*?\])*\s*([\w.<>[\]?, ]+?)\s+\w+\s*\(([^)]*)\)/.exec(after);
     if (!sig) continue;
@@ -464,26 +505,61 @@ function extractCSharp(F, file, code, masked, line) {
   for (const m of code.matchAll(/\[FromBody\]\s*([\w.<>[\]?]+)/g)) addUsage(F, m[1], "deserialize", file, line(m.index), "request body");
 }
 
+/** The first positional argument of attribute `name` in `attrs` ([Route("x")], [Authorize, Route(Routes.X)]), or null. */
+function attrArg(attrs, name) {
+  const m = new RegExp(`(?:\\[|,)\\s*(?:[\\w.]+\\.)?${name}(?:Attribute)?\\s*\\(((?:@?"(?:[^"]|"")*"|[^()"]|\\([^()]*\\))*)\\)`).exec(attrs);
+  const first = m ? splitTop(m[1])[0] : undefined;
+  return first && !/^\w+\s*=[^=]/.test(first) ? first.replace(/^template\s*:\s*/, "") : null;
+}
+
+/** Resolves a controller endpoint's route (constants, [controller], inherited class routes) once the whole project is read. */
+function controllerPath(F, r) {
+  const resolve = (expr) => (expr == null ? null : resolveUrlExpr(expr, F.consts).replace(/^\{\}\/?/, ""));
+  let classExpr = r.classExpr;
+  for (let base = r.base, n = 0; classExpr == null && base && n < 5; n++) {
+    const parent = F.controllers.get(base);
+    classExpr = parent?.route ?? null;
+    base = parent?.base;
+  }
+  const classRoute = resolve(classExpr) ?? "";
+  const template = resolve(r.templateExpr);
+  const path =
+    template !== null && /^~?\//.test(template)
+      ? template.replace(/^~/, "")
+      : template !== null || classRoute
+        ? joinRoute(classRoute, template ?? "")
+        : joinRoute(r.ctrl, r.action);
+  return path.replace(/\[controller\]/gi, r.ctrl).replace(/\[action\]/gi, r.action).replace(/\[area\]/gi, r.area ?? "{area}");
+}
+
 function extractController(F, file, code, masked, line, cls) {
-  const classRoute = /\[\s*Route\s*\(\s*"([^"]*)"/.exec(cls.prefix)?.[1] ?? "";
+  const classExpr = attrArg(cls.prefix, "Route");
+  const base = typeNames(cls.bases.split(",")[0])[0] ?? "";
+  F.controllers.set(cls.name, { route: classExpr, base });
   const ctrl = cls.name.replace(/Controller$/, "");
-  const body = code.slice(cls.open, cls.close);
-  for (const m of body.matchAll(/\[\s*Http(Get|Post|Put|Delete|Patch)\s*(?:\(\s*(?:template\s*:\s*)?"([^"]*)"[^)]*\))?\s*\]/g)) {
-    const at = cls.open + m.index + m[0].length;
+  const area = attrArg(cls.prefix, "Area")?.replace(/^@?"|"$/g, "");
+  // [HttpGet], [HttpGet("{id}", Name = "x")], [Authorize, HttpPost(Routes.Create)], [HttpGetAttribute]
+  for (const m of masked.slice(cls.open, cls.close).matchAll(/(?:\[|,)\s*(?:[\w.]+\.)?Http(Get|Post|Put|Delete|Patch)(?:Attribute)?\b\s*(\()?/g)) {
+    let end = cls.open + m.index + m[0].length;
+    let templateExpr = null;
+    if (m[2]) {
+      const close = matchClose(masked, end - 1);
+      const first = splitTop(code.slice(end, close))[0];
+      if (first && !/^\w+\s*=[^=]/.test(first)) templateExpr = first.replace(/^template\s*:\s*/, "");
+      end = close + 1;
+    }
+    const at = masked.indexOf("]", end) + 1;
+    if (at <= 0) continue;
     const after = code.slice(at, at + 2000);
-    const sig = /^((?:\s*\[[\s\S]*?\])*)\s*(?:(?:public|private|protected|internal|virtual|override|async|static|new)\s+)*([\w.<>[\]?, ]+?)\s+(\w+)\s*\(/.exec(after);
+    const sig = /^((?:\s*\[[\s\S]*?\])*)\s*(?:(?:public|private|protected|internal|virtual|override|async|static|new|sealed)\s+)*([\w.<>[\]?, ]+?)\s+(\w+)\s*\(/.exec(after);
     if (!sig) continue;
     const parenAt = at + sig[0].length - 1;
     const params = code.slice(parenAt + 1, matchClose(masked, parenAt));
     const method = m[1].toUpperCase();
-    const template = m[2] ?? /\[\s*Route\s*\(\s*"([^"]*)"/.exec(sig[1])?.[1] ?? null;
-    let path =
-      template !== null && /^~?\//.test(template)
-        ? template.replace(/^~/, "")
-        : template !== null || classRoute
-          ? joinRoute(classRoute, template ?? "")
-          : joinRoute(ctrl, sig[3]);
-    path = path.replace(/\[controller\]/gi, ctrl).replace(/\[action\]/gi, sig[3]).replace(/\[area\]/gi, "{area}");
+    // Every attribute of the method, before and after the Http one.
+    const attrs = prefixOf(code, masked, parenAt);
+    if (templateExpr === null) templateExpr = attrArg(attrs, "Route");
+    const route = { classExpr, base, templateExpr, ctrl, action: sig[3], area };
     const request = [];
     const parts = splitTop(params);
     const explicit = parts.find((p) => /\[FromBody\]/.test(p));
@@ -496,8 +572,250 @@ function extractController(F, file, code, masked, line, cls) {
         break;
       }
     }
-    const response = [...typeNames(sig[2]), ...[...sig[1].matchAll(/ProducesResponseType\s*(?:\(\s*typeof\s*\(([^)]+)\)|<([^>]+)>)/g)].flatMap((x) => typeNames(x[1] ?? x[2]))];
-    F.endpoints.push({ method, path, file, line: line(cls.open + m.index), handler: `${cls.name}.${sig[3]}`, request, response: [...new Set(response)] });
+    const declared = [...attrs.matchAll(/\b(?:ProducesResponseType|Produces|SwaggerResponse)\s*(?:<([^>]+)>)?\s*\(((?:[^()]|\([^()]*\))*)\)/g)].flatMap((x) => [
+      ...typeNames(x[1]),
+      ...[...x[2].matchAll(/typeof\s*\(([^)]+)\)/g)].flatMap((t) => typeNames(t[1])),
+    ]);
+    const response = [...typeNames(sig[2]), ...declared];
+    F.endpoints.push({ method, path: "", route, file, line: line(cls.open + m.index), handler: `${cls.name}.${sig[3]}`, request, response: [...new Set(response)] });
+  }
+}
+
+// Generated C# API clients ---------------------------------------------------------------------
+
+/** Methods with a body in C# source: { name, returns, params, open, close, at }. */
+function csMethods(code, masked) {
+  const out = [];
+  for (const m of masked.matchAll(/\b(?:public|internal|protected|private)\s+(?:(?:virtual|override|async|static|new|sealed|partial)\s+)*([\w.<>[\]?, ]+?)\s+(\w+)\s*\(/g)) {
+    const paren = m.index + m[0].length - 1;
+    const close = matchClose(masked, paren);
+    const next = /^\s*(?:where\b[^{;]*)?([{;]|=>)/.exec(masked.slice(close + 1, close + 300));
+    if (next?.[1] !== "{") continue;
+    const open = masked.indexOf("{", close + 1);
+    out.push({ name: m[2], returns: code.slice(m.index, m.index + m[0].length).match(/\s([\w.<>[\]?, ]+?)\s+\w+\s*\($/)?.[1] ?? m[1], params: code.slice(paren + 1, close), open, close: matchClose(masked, open), at: m.index });
+  }
+  return out;
+}
+
+/** The type of parameter `name` in a C# parameter list. */
+function paramType(params, name) {
+  for (const p of splitTop(params)) {
+    const pm = /^(?:\[[^\]]*\]\s*)*(?:(?:this|ref|in|out|params)\s+)?([\w.<>[\]?, ]+?)\s+@?(\w+)\s*(?:=.*)?$/.exec(p);
+    if (pm && pm[2] === name) return pm[1];
+  }
+  return "";
+}
+
+/**
+ * NSwag (and similar generators): each operation builds its URL with urlBuilder_.Append(…), sets
+ * request_.Method = new HttpMethod("GET") and sends it with SendAsync.
+ */
+function extractNSwag(F, file, code, masked, line) {
+  for (const fn of csMethods(code, masked)) {
+    const body = code.slice(fn.open, fn.close);
+    const mbody = masked.slice(fn.open, fn.close);
+    if (!/\burlBuilder_?\s*\.\s*Append\s*\(/.test(body)) continue;
+    const verb = /HttpMethod\s*\(\s*"(\w+)"\s*\)|HttpMethod\.(Get|Post|Put|Patch|Delete)\b/i.exec(body);
+    if (!verb) continue;
+    const method = (verb[1] ?? verb[2]).toUpperCase();
+    let path = "";
+    for (const m of mbody.matchAll(/\.\s*Append\s*\(/g)) {
+      const stmt = Math.max(mbody.lastIndexOf(";", m.index), mbody.lastIndexOf("{", m.index), mbody.lastIndexOf("}", m.index));
+      if (!/\burlBuilder_?\b/.test(mbody.slice(stmt + 1, m.index))) continue;
+      const arg = argAt(body, mbody, m.index + m[0].length).text;
+      if (/^(['"])\?\1$/.test(arg)) break;
+      const lit = /^@?"((?:[^"\\]|\\.)*)"$/.exec(arg);
+      if (lit) {
+        const q = lit[1].indexOf("?");
+        path += q < 0 ? lit[1] : lit[1].slice(0, q);
+        if (q >= 0) break;
+      } else if (path) path += "{}";
+    }
+    if (!path.replace(/[{}/]/g, "")) continue;
+    const sent = /(?:SerializeToUtf8Bytes|SerializeObject|Serialize|JsonContent\.Create|StringContent)\s*(?:<[^>]*>)?\s*\(\s*(\w+)/.exec(body)?.[1];
+    const read = /ReadObjectResponseAsync\s*<([^>]+(?:<[^>]*>)?)>/.exec(body)?.[1];
+    F.calls.push({ method, expr: JSON.stringify(path), file, line: line(fn.at), request: sent ? typeNames(paramType(fn.params, sent)) : [], response: typeNames(read ?? fn.returns) });
+  }
+}
+
+/** Kiota request builders: base(requestAdapter, "{+baseurl}/api/orders{?page}", …) with GetAsync/PostAsync/… methods. */
+function extractKiota(F, file, code, masked, line) {
+  const template = /"\{\+baseurl\}([^"]*)"/.exec(code)?.[1];
+  if (template === undefined) return;
+  const path = template.replace(/\{[?&][^}]*\}/g, "");
+  if (!path.replace(/[{}/]/g, "")) return;
+  for (const fn of csMethods(code, masked)) {
+    const verb = /^(Get|Post|Put|Patch|Delete)Async$/.exec(fn.name);
+    if (!verb || !/\bSend\w*Async\b|\bTo\w+RequestInformation\b/.test(code.slice(fn.open, fn.close))) continue;
+    F.calls.push({ method: verb[1].toUpperCase(), expr: JSON.stringify(path), file, line: line(fn.at), request: typeNames(paramType(fn.params, "body")), response: typeNames(fn.returns) });
+  }
+}
+
+// OpenAPI / Swagger documents ------------------------------------------------------------------
+
+/** OpenAPI documents a client is generated from (swagger.json, OpenAPIs/*.yaml) and NSwag configs that embed one. */
+const SPEC_FILE = /(?:swagger|openapi|api[-_.]?spec)[^/]*\.(?:json|ya?ml)$|(?:^|\/)openapis\/[^/]+\.(?:json|ya?ml)$|\.nswag$|(?:^|\/)nswag\.json$/i;
+
+/** A small block-style YAML reader: enough for OpenAPI documents (maps, lists, scalars, simple flow values). */
+export function parseYaml(text) {
+  const rows = [];
+  for (const raw of String(text).split(/\r?\n/)) {
+    if (/^\s*(#|$)/.test(raw) || /^(---|\.\.\.)\s*$/.test(raw)) continue;
+    rows.push({ indent: raw.length - raw.trimStart().length, text: raw.trim() });
+  }
+  const unquote = (s) => (/^(['"]).*\1$/s.test(s) ? s.slice(1, -1) : s);
+  const keyOf = (s) => {
+    const m = /^("[^"]*"|'[^']*'|[^:#'"][^:]*?|\?)\s*:(?:\s+(.*)|$)/.exec(s);
+    return m ? [unquote(m[1].trim()), (m[2] ?? "").trim()] : null;
+  };
+  const scalar = (raw) => {
+    const s = raw.replace(/\s+#.*$/, "").trim();
+    if (/^(['"]).*\1$/s.test(s)) return s.slice(1, -1);
+    if (/^\[.*\]$/s.test(s)) return splitTop(s.slice(1, -1)).map(scalar);
+    if (/^\{.*\}$/s.test(s)) return Object.fromEntries(splitTop(s.slice(1, -1)).map((kv) => keyOf(kv)).filter(Boolean).map(([k, v]) => [k, scalar(v)]));
+    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+    if (s === "true" || s === "false") return s === "true";
+    if (s === "null" || s === "~") return null;
+    return s;
+  };
+  const isItem = (r) => r.text === "-" || r.text.startsWith("- ");
+  let i = 0;
+  function block(indent) {
+    if (isItem(rows[i])) {
+      const out = [];
+      while (i < rows.length && rows[i].indent >= indent) {
+        if (rows[i].indent > indent || !isItem(rows[i])) {
+          i++;
+          continue;
+        }
+        const rest = rows[i].text.slice(1).trim();
+        if (!rest) {
+          i++;
+          out.push(i < rows.length && rows[i].indent > indent ? block(rows[i].indent) : null);
+        } else if (keyOf(rest)) {
+          // "- name: x" starts a map whose other keys sit under "name".
+          rows[i] = { indent: indent + 2, text: rest };
+          out.push(block(indent + 2));
+        } else {
+          i++;
+          out.push(scalar(rest));
+        }
+      }
+      return out;
+    }
+    const out = {};
+    while (i < rows.length && rows[i].indent >= indent) {
+      const kv = rows[i].indent === indent && keyOf(rows[i].text);
+      i++;
+      if (!kv) continue;
+      const [key, rest] = kv;
+      if (!rest) {
+        const nested = i < rows.length && (rows[i].indent > indent || (rows[i].indent === indent && isItem(rows[i])));
+        out[key] = nested ? block(rows[i].indent) : null;
+      } else if (/^[|>][+-]?\d*$/.test(rest)) {
+        const lines = [];
+        while (i < rows.length && rows[i].indent > indent) lines.push(rows[i++].text);
+        out[key] = lines.join("\n");
+      } else out[key] = scalar(rest);
+    }
+    return out;
+  }
+  return rows.length ? block(rows[0].indent) : null;
+}
+
+function parseSpec(file, text) {
+  const body = String(text).replace(/^﻿/, "");
+  if (/\.nswag$|nswag\.json$/i.test(file)) {
+    let config;
+    try {
+      config = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    const inner = config?.documentGenerator?.fromDocument?.json;
+    return typeof inner === "string" && inner.trim() ? parseSpec("embedded", inner) : null;
+  }
+  if (/^\s*[{[]/.test(body)) {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return null;
+    }
+  }
+  return parseYaml(body);
+}
+
+/** Operations and schemas of an OpenAPI 3 or Swagger 2 document. */
+export function extractSpec(F, file, text) {
+  const spec = parseSpec(file, text);
+  if (!spec?.paths || typeof spec.paths !== "object" || !(spec.openapi || spec.swagger)) return;
+  const line = lineIndex(text);
+  const at = (needle, from = 0) => {
+    const i = text.indexOf(needle, from);
+    return i < 0 ? -1 : i;
+  };
+  const refs = (schema) => {
+    if (!schema || typeof schema !== "object") return [];
+    if (typeof schema.$ref === "string") return [schema.$ref.split("/").pop()];
+    if (schema.items) return refs(schema.items);
+    for (const k of ["allOf", "oneOf", "anyOf"]) if (Array.isArray(schema[k])) return schema[k].flatMap(refs);
+    return [];
+  };
+  const bodyOf = (content) => (content && typeof content === "object" ? refs((content["application/json"] ?? Object.values(content)[0])?.schema) : []);
+  const serverPath = typeof spec.basePath === "string" ? spec.basePath : (/^(?:[a-z]+:\/\/[^/]*)?(\/[^?#]*)/i.exec(spec.servers?.[0]?.url ?? "")?.[1] ?? "");
+  const ops = [];
+  for (const [path, item] of Object.entries(spec.paths)) {
+    const pathAt = Math.max(at(`"${path}"`), at(`${path}:`), 0);
+    for (const verb of ["get", "post", "put", "patch", "delete"]) {
+      const op = item?.[verb];
+      if (!op || typeof op !== "object") continue;
+      let request = bodyOf(op.requestBody?.content);
+      if (!request.length && Array.isArray(op.parameters)) request = refs(op.parameters.find((p) => p?.in === "body")?.schema);
+      const ok = Object.keys(op.responses ?? {}).find((k) => /^2/.test(k));
+      const res = ok ? op.responses[ok] : null;
+      const response = res ? (res.content ? bodyOf(res.content) : refs(res.schema)) : [];
+      const verbAt = Math.max(at(`"${verb}"`, pathAt), at(`${verb}:`, pathAt));
+      ops.push({ method: verb.toUpperCase(), path: joinRoute(serverPath, path), file, line: line(verbAt >= 0 ? verbAt : pathAt), request, response, handler: op.operationId ?? "" });
+    }
+  }
+  const typeOf = (s) => {
+    if (!s || typeof s !== "object") return "";
+    if (typeof s.$ref === "string") return s.$ref.split("/").pop();
+    if (s.type === "array") return `${typeOf(s.items) || "object"}[]`;
+    if (Array.isArray(s.allOf) && s.allOf.length === 1) return typeOf(s.allOf[0]);
+    return String(s.format === "date-time" || s.format === "uuid" ? "string" : (Array.isArray(s.type) ? s.type.find((t) => t !== "null") : s.type) ?? "");
+  };
+  const types = [];
+  for (const [name, s] of Object.entries(spec.components?.schemas ?? spec.definitions ?? {})) {
+    if (!s || typeof s !== "object") continue;
+    const nameAt = Math.max(at(`"${name}"`), at(`${name}:`), 0);
+    const fields = Array.isArray(s.enum)
+      ? s.enum.map((v) => ({ name: String(v), json: "", type: "enum" }))
+      : Object.entries(s.properties ?? Object.assign({}, ...(s.allOf ?? []).map((x) => x?.properties ?? {}))).map(([k, v]) => ({ name: k, json: k, type: typeOf(v) }));
+    types.push({ name, kind: Array.isArray(s.enum) ? "enum" : "schema", file, line: line(nameAt), namespace: "", fields, lang: "openapi" });
+  }
+  F.files++;
+  F.langs.openapi = (F.langs.openapi ?? 0) + 1;
+  F.specs.push({ file, ops, types });
+}
+
+/**
+ * A project's OpenAPI documents describe the API it calls (a client generated from them), unless
+ * most of a document's operations are the project's own endpoints (the API's exported spec).
+ */
+function specClients(F) {
+  const have = new Set(F.calls.map((c) => `${c.method} ${c.segs.join("/")}`));
+  for (const spec of F.specs) {
+    const own = spec.ops.filter((o) => F.endpoints.some((e) => sameMethod(e.method, o.method) && pathScore(e.segs, normPath(o.path)) > 0)).length;
+    if (spec.ops.length && own >= spec.ops.length / 2) continue;
+    for (const o of spec.ops) {
+      const segs = normPath(o.path);
+      const key = `${o.method} ${segs.join("/")}`;
+      if (have.has(key) || !segs.some((x) => x !== "{}")) continue;
+      have.add(key);
+      F.calls.push({ method: o.method, path: o.path, segs, file: o.file, line: o.line, request: o.request, response: o.response });
+    }
+    for (const t of spec.types) if (!F.types.some((x) => x.name === t.name)) F.types.push(t);
   }
 }
 
@@ -741,6 +1059,289 @@ function extractDart(F, file, code, masked, line) {
   for (const m of code.matchAll(/\b([A-Z]\w*)\.fromJson\(/g)) addUsage(F, m[1], "deserialize", file, line(m.index), "fromJson");
 }
 
+// Go, Rust and Zig shared helpers --------------------------------------------------------------
+
+/** Functions of a file: [{ name, params, returns, open, close, at }] for every `re` match ending at the "(" of the parameters. */
+function fnsOf(code, masked, re) {
+  const out = [];
+  for (const m of masked.matchAll(re)) {
+    const paren = m.index + m[0].length - 1;
+    const close = matchClose(masked, paren);
+    const open = masked.indexOf("{", close);
+    const semi = masked.indexOf(";", close);
+    if (open < 0 || (semi >= 0 && semi < open)) continue;
+    out.push({ name: m[1], params: code.slice(paren + 1, close), returns: code.slice(close + 1, open), open, close: matchClose(masked, open), at: m.index });
+  }
+  return out;
+}
+
+const fnAt = (fns, pos) => fns.filter((f) => f.open < pos && pos < f.close).pop();
+const lastName = (expr) => /([A-Za-z_]\w*)\s*$/.exec(String(expr ?? ""))?.[1] ?? "";
+
+// Go --------------------------------------------------------------------------------------------
+
+/** What a Go function decodes from and encodes into JSON (types resolved through its variables). */
+function goPayloads(code, masked, fn) {
+  if (!fn) return { decoded: [], encoded: [] };
+  const body = code.slice(fn.open, fn.close);
+  const mbody = masked.slice(fn.open, fn.close);
+  const vars = new Map();
+  for (const p of splitTop(fn.params)) {
+    const pm = /^(\w+)\s+\*?([\w.[\]]+)$/.exec(p);
+    if (pm) vars.set(pm[1], pm[2]);
+  }
+  for (const m of body.matchAll(/\bvar\s+(\w+)\s+\*?((?:\[\])?\*?[\w.]+)/g)) vars.set(m[1], m[2]);
+  for (const m of body.matchAll(/\b(\w+)\s*:?=\s*&?((?:\[\])?\*?[\w.]+)\s*\{/g)) vars.set(m[1], m[2]);
+  for (const m of body.matchAll(/\b(\w+)\s*:?=\s*new\(\s*([\w.]+)\s*\)/g)) vars.set(m[1], m[2]);
+  const typeOf = (expr) => {
+    const e = String(expr ?? "").trim().replace(/^&/, "");
+    return /^((?:\[\])?\*?[\w.]+)\s*\{/.exec(e)?.[1] ?? vars.get(e) ?? "";
+  };
+  const decoded = [];
+  const encoded = [];
+  for (const m of mbody.matchAll(/\.(?:ShouldBindJSON|BindJSON|ShouldBind|Bind|BodyParser|Decode)\s*\(/g)) decoded.push(...typeNames(typeOf(argAt(body, mbody, m.index + m[0].length).text)));
+  for (const m of mbody.matchAll(/\bjson\.Unmarshal\s*\(/g)) {
+    const a = argAt(body, mbody, m.index + m[0].length);
+    if (!a.last) decoded.push(...typeNames(typeOf(argAt(body, mbody, a.end + 1).text)));
+  }
+  for (const m of mbody.matchAll(/\.(?:JSON|IndentedJSON|PureJSON|Encode)\s*\(|\bjson\.Marshal(?:Indent)?\s*\(/g)) {
+    const a = argAt(body, mbody, m.index + m[0].length);
+    // c.JSON(http.StatusOK, x) (gin, echo) or c.JSON(x) (fiber).
+    const value = !a.last && /\.(?:JSON|IndentedJSON|PureJSON)/.test(m[0]) ? argAt(body, mbody, a.end + 1).text : a.text;
+    encoded.push(...typeNames(typeOf(value)));
+  }
+  for (const m of body.matchAll(/\.SetResult\(\s*&?([\w.]+)\s*\{?/g)) decoded.push(...typeNames(typeOf(m[1]) || m[1]));
+  for (const m of body.matchAll(/\.SetBody\(\s*([^)]+)\)/g)) encoded.push(...typeNames(typeOf(m[1])));
+  return { decoded: [...new Set(decoded)], encoded: [...new Set(encoded)] };
+}
+
+const GO_METHOD = { MethodGet: "GET", MethodPost: "POST", MethodPut: "PUT", MethodPatch: "PATCH", MethodDelete: "DELETE" };
+
+function extractGo(F, file, code, masked, line) {
+  const imports = [];
+  for (const m of code.matchAll(/\bimport\s*\(([^)]*)\)|\bimport\s+(?:[\w.]+\s+)?"([^"]+)"/g)) imports.push(...(m[2] ? [m[2]] : [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])));
+  F.imports.set(file, imports);
+
+  for (const m of masked.matchAll(/\btype\s+(\w+)\s+struct\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const fields = [];
+    for (const row of flatten(code, masked, open + 1, matchClose(masked, open)).split(/[\n;]/)) {
+      const fm = /^\s*(\w+(?:\s*,\s*\w+)*)\s+([^`\s][^`]*?)\s*(`[^`]*`)?\s*$/.exec(row);
+      if (!fm) continue;
+      const tag = /json:"([^"]*)"/.exec(fm[3] ?? "")?.[1];
+      if (tag?.split(",")[0] === "-") continue;
+      for (const name of fm[1].split(/\s*,\s*/)) if (/^[A-Z]/.test(name) || tag) fields.push({ name, json: tag?.split(",")[0] ?? "", type: tidy(fm[2]) });
+    }
+    if (fields.length) F.types.push({ name: m[1], kind: "struct", file, line: line(m.index), namespace: "", fields, lang: "go" });
+  }
+
+  const fns = fnsOf(code, masked, /\bfunc\s+(?:\([^)]*\)\s*)?(\w+)\s*(?:\[[^\]]*\])?\s*\(/g);
+  const byName = new Map(fns.map((f) => [f.name, f]));
+  const handlerFn = (expr, pos) => {
+    const inline = /^func\s*\(/.test(expr.trim()) ? fnsOf(code, masked, /\bfunc\s*()\(/g).find((f) => f.at >= pos && f.at < pos + 400) : null;
+    return inline ?? byName.get(lastName(expr));
+  };
+  for (const fn of fns) {
+    const p = goPayloads(code, masked, fn);
+    addUsage(F, p.decoded, "deserialize", file, line(fn.at), "json decode");
+    addUsage(F, p.encoded, "serialize", file, line(fn.at), "json encode");
+  }
+
+  // Route prefixes: gin/echo/fiber groups and chi's r.Route("/api", func(r chi.Router) { … }).
+  const groups = new Map();
+  for (const m of code.matchAll(/\b(\w+)\s*:?=\s*(\w+)\.Group\(\s*"([^"]*)"/g)) groups.set(m[1], joinRoute(groups.get(m[2]) ?? "", m[3]));
+  const blocks = [...code.matchAll(/\.Route\(\s*"([^"]*)"\s*,\s*func\s*\([^)]*\)\s*\{/g)].map((m) => {
+    const open = m.index + m[0].length - 1;
+    return { open, close: matchClose(masked, open), prefix: m[1] };
+  });
+  const prefixAt = (pos, receiver) => joinRoute(...blocks.filter((b) => b.open < pos && pos < b.close).map((b) => b.prefix), groups.get(receiver) ?? "");
+  const serve = (method, path, handlerExpr, pos) => {
+    const p = goPayloads(code, masked, handlerFn(handlerExpr, pos));
+    F.endpoints.push({ method, path, file, line: line(pos), handler: lastName(handlerExpr) || "func", request: method === "GET" || method === "DELETE" ? [] : p.decoded, response: p.encoded });
+  };
+
+  // r.GET("/x", h) (gin, echo), app.Get("/x", h) (fiber, chi), http.Get(url) / http.Post(url, …) (client).
+  for (const m of code.matchAll(/\b(\w+)\.(GET|POST|PUT|PATCH|DELETE|Get|Post|Put|Patch|Delete)\s*\(/g)) {
+    const a1 = argAt(code, masked, m.index + m[0].length);
+    if (!a1.text) continue;
+    const method = m[2].toUpperCase();
+    if (m[1] === "http") {
+      const p = goPayloads(code, masked, fnAt(fns, m.index));
+      F.calls.push({ method, expr: a1.text, file, line: line(m.index), request: [], response: p.decoded });
+      continue;
+    }
+    if (a1.last || !/^["`]/.test(a1.text)) continue;
+    serve(method, joinRoute(prefixAt(m.index, m[1]), resolveUrlExpr(a1.text, new Map())), argAt(code, masked, a1.end + 1).text, m.index);
+  }
+  // net/http and gorilla/mux: HandleFunc("GET /x/{id}", h), HandleFunc("/x", h).Methods("POST").
+  for (const m of code.matchAll(/\b(\w+)\.(?:HandleFunc|Handle)\s*\(\s*"(?:(GET|POST|PUT|PATCH|DELETE)\s+)?([^"]*)"\s*,/g)) {
+    const a = argAt(code, masked, m.index + m[0].length);
+    const tail = code.slice(a.end, a.end + 200).split("\n")[0];
+    const methods = m[2] ? [m[2]] : [.../\.Methods\(([^)]*)\)/.exec(tail)?.[1].matchAll(/"(\w+)"|Method(\w+)/g) ?? []].map((x) => (x[1] ?? x[2]).toUpperCase());
+    for (const method of methods.length ? methods : ["*"]) serve(method, joinRoute(prefixAt(m.index, m[1]), m[3]), a.text, m.index);
+  }
+  // http.NewRequest("POST", url, body) / http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+  for (const m of code.matchAll(/\bhttp\.NewRequest(WithContext)?\s*\(/g)) {
+    let a = argAt(code, masked, m.index + m[0].length);
+    if (m[1] && !a.last) a = argAt(code, masked, a.end + 1);
+    const method = /^"(\w+)"$/.exec(a.text)?.[1]?.toUpperCase() ?? GO_METHOD[a.text.split(".").pop()];
+    if (!method || a.last) continue;
+    const url = argAt(code, masked, a.end + 1);
+    const p = goPayloads(code, masked, fnAt(fns, m.index));
+    F.calls.push({ method, expr: url.text, file, line: line(m.index), request: method === "GET" ? [] : p.encoded, response: p.decoded });
+  }
+  // resty: client.R().SetBody(x).SetResult(&T{}).Post(url)
+  for (const m of code.matchAll(/\.R\(\)((?:\s*\.\s*\w+\((?:[^()]|\([^()]*\))*\))*)\s*\.\s*(Get|Post|Put|Patch|Delete)\s*\(/g)) {
+    const a = argAt(code, masked, m.index + m[0].length);
+    const result = /SetResult\(\s*&?([\w.]+)/.exec(m[1])?.[1];
+    const p = goPayloads(code, masked, fnAt(fns, m.index));
+    F.calls.push({ method: m[2].toUpperCase(), expr: a.text, file, line: line(m.index), request: m[2] === "Get" ? [] : p.encoded, response: result ? typeNames(result) : p.decoded });
+  }
+}
+
+// Rust ------------------------------------------------------------------------------------------
+
+/** What a Rust handler takes and returns as JSON: Json<T> extractors, Json<T> returns, .json(&x) bodies. */
+function rustPayloads(code, fn) {
+  if (!fn) return { request: [], response: [] };
+  const body = code.slice(fn.open, fn.close);
+  const vars = new Map();
+  for (const m of body.matchAll(/\blet\s+(?:mut\s+)?(\w+)\s*:\s*([\w:<>]+)/g)) vars.set(m[1], m[2]);
+  for (const m of body.matchAll(/\blet\s+(?:mut\s+)?(\w+)\s*=\s*([A-Z]\w*)\s*\{/g)) vars.set(m[1], m[2]);
+  const request = [...fn.params.matchAll(/\bJson\s*<\s*([\w:]+(?:<[^>]*>)?)\s*>/g)].flatMap((m) => typeNames(m[1].replace(/::/g, ".")));
+  let response = [...fn.returns.matchAll(/\bJson\s*<\s*([\w:]+(?:<[^>]*>)?)\s*>/g)].flatMap((m) => typeNames(m[1].replace(/::/g, ".")));
+  if (!response.length) response = [...body.matchAll(/\.json\(\s*&?\s*(\w+)\s*\)|\bJson\(\s*&?\s*(\w+)\s*\)|\bJson\(\s*([A-Z]\w*)\s*\{/g)].flatMap((m) => typeNames(m[3] ?? vars.get(m[1] ?? m[2]) ?? ""));
+  return { request: [...new Set(request)], response: [...new Set(response)] };
+}
+
+function extractRust(F, file, code, masked, line) {
+  F.imports.set(file, [...code.matchAll(/\buse\s+(?:::)?(\w+)::([\w:]*)/g)].filter((m) => !/^(crate|self|super|std|core|alloc)$/.test(m[1])).map((m) => `${m[1]}/${m[2].replace(/::/g, "/")}`.replace(/\/$/, "")));
+
+  for (const m of masked.matchAll(/\b(struct|enum)\s+(\w+)\s*(<[^>{;(]*>)?\s*(?:where\b[^{;]*)?\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const prefix = prefixOf(code, masked, m.index);
+    const flat = flatten(code, masked, open + 1, matchClose(masked, open));
+    const fields = [];
+    for (const seg of splitTop(flat)) {
+      if (m[1] === "enum") {
+        const em = /^((?:#\[[\s\S]*?\]\s*)*)(\w+)/.exec(seg);
+        if (em && !ignored(em[1])) fields.push({ name: em[2], json: jsonName(em[1]), type: "enum" });
+        continue;
+      }
+      const fm = /^((?:#\[[\s\S]*?\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?(\w+)\s*:\s*([\s\S]+)$/.exec(seg);
+      if (fm && !ignored(fm[1])) fields.push({ name: fm[2], json: jsonName(fm[1]), type: tidy(fm[3]) });
+    }
+    if (fields.length) F.types.push({ name: m[2], kind: m[1], file, line: line(m.index), namespace: "", fields, lang: "rust", serde: /\b(Serialize|Deserialize)\b/.test(prefix) });
+  }
+
+  const fns = fnsOf(code, masked, /\bfn\s+(\w+)\s*(?:<[^>(]*>)?\s*\(/g);
+  const byName = new Map(fns.map((f) => [f.name, f]));
+  const serve = (method, path, handler, pos) => {
+    const p = rustPayloads(code, byName.get(lastName(handler.replace(/::/g, "."))));
+    F.endpoints.push({ method, path, file, line: line(pos), handler: lastName(handler), request: p.request, response: p.response });
+  };
+  // actix-web / rocket: #[get("/x")] async fn h(…)
+  for (const m of code.matchAll(/#\[\s*(get|post|put|patch|delete)\s*\(\s*"([^"]*)"[^\]]*\]/g)) {
+    const fn = fns.find((f) => f.at > m.index);
+    if (fn) serve(m[1].toUpperCase(), m[2], fn.name, m.index);
+  }
+  // axum: .route("/x", get(list).post(create)); actix: .route("/x", web::get().to(h)), web::resource("/x").route(web::post().to(h))
+  const VERBS = /\b(get|post|put|patch|delete)\s*\(\s*\)\s*\.\s*to\s*\(\s*([\w:]+)|\b(get|post|put|patch|delete)\s*\(\s*([\w:]+)\s*\)/g;
+  for (const m of code.matchAll(/\.route\s*\(\s*"([^"]*)"\s*,/g)) {
+    const a = argAt(code, masked, m.index + m[0].length);
+    for (const v of a.text.matchAll(VERBS)) serve((v[1] ?? v[3]).toUpperCase(), m[1], v[2] ?? v[4], m.index);
+  }
+  for (const m of code.matchAll(/\bresource\s*\(\s*"([^"]*)"\s*\)/g)) {
+    const rest = code.slice(m.index + m[0].length, m.index + 1500);
+    const chain = rest.split(/\bresource\s*\(|;/)[0];
+    for (const v of chain.matchAll(VERBS)) serve((v[1] ?? v[3]).toUpperCase(), m[1], v[2] ?? v[4], m.index);
+  }
+
+  // reqwest / ureq clients.
+  for (const m of code.matchAll(/\b(?:(\w+)\s*\.\s*|(?:reqwest|ureq)::)(get|post|put|patch|delete)\s*\(/g)) {
+    if (m[1] && /^(web|axum|routing|Router)$/.test(m[1])) continue;
+    const a1 = argAt(code, masked, m.index + m[0].length);
+    if (!a1.last || !/"|format!|\w+\.\w+/.test(a1.text)) continue;
+    const ahead = code.slice(a1.end, a1.end + 600).split(/;\s*\n/)[0];
+    const response = typeNames(/\.json\s*::\s*<\s*([\w:<>]+)\s*>/.exec(ahead)?.[1]?.replace(/::/g, ".") ?? "");
+    const sent = /\.json\(\s*&?\s*(\w+)/.exec(ahead)?.[1];
+    const fn = fnAt(fns, m.index);
+    const vars = new Map([...(fn ? code.slice(fn.open, fn.close).matchAll(/\blet\s+(?:mut\s+)?(\w+)\s*(?::\s*([\w:<>]+))?\s*=\s*([A-Z]\w*)?/g) : [])].map((x) => [x[1], x[2] ?? x[3] ?? ""]));
+    if (fn) for (const p of splitTop(fn.params)) {
+      const pm = /^&?(?:mut\s+)?(\w+)\s*:\s*&?([\w:<>]+)/.exec(p);
+      if (pm) vars.set(pm[1], pm[2]);
+    }
+    F.calls.push({ method: m[2].toUpperCase(), expr: a1.text, file, line: line(m.index), request: sent ? typeNames(vars.get(sent) ?? "") : [], response });
+  }
+
+  for (const m of code.matchAll(/serde_json::from_(?:str|slice|value|reader)\s*::\s*<\s*([\w:<>]+)\s*>|let\s+\w+\s*:\s*([\w:<>]+)\s*=\s*serde_json::from_/g))
+    addUsage(F, (m[1] ?? m[2]).replace(/::/g, "."), "deserialize", file, line(m.index), "serde_json");
+  for (const m of code.matchAll(/serde_json::to_(?:string|vec|value|writer)(?:_pretty)?\s*\(\s*&?\s*([A-Z]\w*)\s*\{/g)) addUsage(F, m[1], "serialize", file, line(m.index), "serde_json");
+}
+
+// Zig -------------------------------------------------------------------------------------------
+
+function extractZig(F, file, code, masked, line) {
+  F.imports.set(file, [...code.matchAll(/@import\(\s*"([^"]+)"\s*\)/g)].map((m) => m[1]).filter((x) => x !== "std" && x !== "builtin"));
+  for (const m of masked.matchAll(/\bconst\s+(\w+)\s*=\s*(?:extern\s+|packed\s+)?(struct|enum|union)\s*(?:\([^)]*\))?\s*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const flat = flatten(code, masked, open + 1, matchClose(masked, open)).replace(/\{\}/g, "{};");
+    const fields = [];
+    for (const seg of splitTop(flat, ",;")) {
+      if (/^(pub|fn|const|var|comptime|test|usingnamespace|inline|export|extern)\b/.test(seg)) continue;
+      if (m[2] === "enum") {
+        const em = /^@?"?(\w+)"?\s*(?:=.*)?$/.exec(seg);
+        if (em) fields.push({ name: em[1], json: "", type: "enum" });
+        continue;
+      }
+      const fm = /^@?"?(\w+)"?\s*:\s*([^=]+?)\s*(?:=[\s\S]*)?$/.exec(seg);
+      if (fm) fields.push({ name: fm[1], json: "", type: tidy(fm[2]) });
+    }
+    if (fields.length) F.types.push({ name: m[1], kind: m[2], file, line: line(m.index), namespace: "", fields, lang: "zig" });
+  }
+
+  const fns = fnsOf(code, masked, /\bfn\s+(\w+)\s*\(/g);
+  const byName = new Map(fns.map((f) => [f.name, f]));
+  const payloads = (fn) => {
+    if (!fn) return { decoded: [], encoded: [] };
+    const body = code.slice(fn.open, fn.close);
+    const vars = new Map([...body.matchAll(/\b(?:const|var)\s+(\w+)\s*(?::\s*([\w.]+))?\s*=\s*(?:try\s+)?([A-Z][\w.]*)?\s*\{?/g)].map((x) => [x[1], x[2] ?? x[3] ?? ""]));
+    const decoded = [...body.matchAll(/\b(?:parseFromSlice|parseFromSliceLeaky|parseFromValue|parseFromTokenSource)\s*\(\s*([\w.]+)|\.json\s*\(\s*([A-Z][\w.]*)\s*\)/g)].flatMap((x) => typeNames(x[1] ?? x[2]));
+    const encoded = [...body.matchAll(/\.json\s*\(\s*([A-Z][\w.]*\s*\{|\w+)\s*,|\bstringify(?:Alloc)?\s*\(\s*([A-Z][\w.]*\s*\{|\w+)\s*,|\bStringify\.value(?:Alloc)?\s*\(\s*(?:\w+\s*,\s*)?([A-Z][\w.]*\s*\{|\w+)\s*,/g)].flatMap((x) => {
+      const v = (x[1] ?? x[2] ?? x[3]).replace(/\s*\{$/, "");
+      return typeNames(/^[A-Z]/.test(v) ? v : (vars.get(v) ?? ""));
+    });
+    return { decoded: [...new Set(decoded)], encoded: [...new Set(encoded)] };
+  };
+  for (const fn of fns) {
+    const p = payloads(fn);
+    addUsage(F, p.decoded, "deserialize", file, line(fn.at), "std.json parse");
+    addUsage(F, p.encoded, "serialize", file, line(fn.at), "std.json stringify");
+  }
+  // http.zig / zap-style routers: router.get("/x", handler, .{})
+  for (const m of code.matchAll(/\b(\w+)\.(get|post|put|patch|delete)\s*\(\s*"([^"]*)"\s*,\s*([\w.]+)/g)) {
+    const p = payloads(byName.get(lastName(m[4])));
+    const method = m[2].toUpperCase();
+    F.endpoints.push({ method, path: m[3], file, line: line(m.index), handler: lastName(m[4]), request: method === "GET" || method === "DELETE" ? [] : p.decoded, response: p.encoded });
+  }
+  // std.http.Client: client.fetch(.{ .method = .POST, .location = .{ .url = url }, … }) and client.open(.GET, uri, …)
+  for (const m of code.matchAll(/\.fetch\s*\(\s*\.\{/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = matchClose(masked, open);
+    const opts = code.slice(open, close);
+    const um = /\.(?:url|uri)\s*=\s*/.exec(opts);
+    if (!um) continue;
+    const start = open + um.index + um[0].length;
+    const url = argAt(code, masked, start).text.replace(/\s*\}\s*$/, "");
+    const p = payloads(fnAt(fns, m.index));
+    F.calls.push({ method: /\.method\s*=\s*\.(\w+)/.exec(opts)?.[1]?.toUpperCase() ?? "GET", expr: url, file, line: line(m.index), request: [], response: p.decoded });
+  }
+  for (const m of code.matchAll(/\.open\s*\(\s*\.(GET|POST|PUT|PATCH|DELETE)\s*,\s*/g)) {
+    const p = payloads(fnAt(fns, m.index));
+    F.calls.push({ method: m[1], expr: argAt(code, masked, m.index + m[0].length).text, file, line: line(m.index), request: [], response: p.decoded });
+  }
+}
+
 // Manifests -------------------------------------------------------------------------------------
 
 function extractManifest(F, file, text) {
@@ -778,17 +1379,61 @@ function extractManifest(F, file, text) {
         if (dm) F.packages.push({ name: dm[1], version: dm[2].trim(), file, ecosystem: "pub" });
       }
     }
+  } else if (base === "go.mod") {
+    const mod = /^\s*module\s+(\S+)/m.exec(text)?.[1];
+    if (mod) F.provides.push({ name: mod, file, ecosystem: "go", version: "" });
+    for (const m of text.matchAll(/^\s*(?:require\s+)?([\w.~-]+\.[\w.~/-]+)\s+(v[\w.+-]+)/gm)) F.packages.push({ name: m[1], version: m[2], file, ecosystem: "go" });
+  } else if (base === "Cargo.toml") {
+    // Crates are imported with "_" for "-", so names are kept that way.
+    const crate = (name) => name.replace(/-/g, "_");
+    let section = "";
+    for (const row of text.split("\n")) {
+      const head = /^\s*\[([^\]]+)\]\s*$/.exec(row);
+      if (head) {
+        section = head[1].trim();
+        const table = /(?:^|\.)(?:dev-|build-)?dependencies\.([\w-]+)$/.exec(section);
+        if (table) F.packages.push({ name: crate(table[1]), version: "", file, ecosystem: "cargo" });
+        continue;
+      }
+      const kv = /^\s*([\w.-]+)\s*=\s*(.+?)\s*$/.exec(row);
+      if (!kv) continue;
+      const version = /^"([^"]*)"/.exec(kv[2])?.[1] ?? /\bversion\s*=\s*"([^"]*)"/.exec(kv[2])?.[1] ?? "";
+      if (section === "package") {
+        if (kv[1] === "name") F.provides.push({ name: crate(/"([^"]*)"/.exec(kv[2])?.[1] ?? ""), file, ecosystem: "cargo", version: "" });
+        else if (kv[1] === "version") for (const pr of F.provides) if (pr.file === file && !pr.version) pr.version = version;
+      } else if (section === "workspace.dependencies") F.centralVersions.set(crate(kv[1]).toLowerCase(), version);
+      else if (/(?:^|\.)(?:dev-|build-)?dependencies$/.test(section)) F.packages.push({ name: crate(kv[1].replace(/\.workspace$/, "")), version, file, ecosystem: "cargo" });
+      else if (/(?:^|\.)(?:dev-|build-)?dependencies\.[\w-]+$/.test(section) && kv[1] === "version") {
+        const last = F.packages.at(-1);
+        if (last?.file === file) last.version = version;
+      }
+    }
+  } else if (base === "build.zig.zon") {
+    const name = /\.name\s*=\s*(?:"([^"]+)"|\.@?"?(\w+)"?)/.exec(text);
+    if (name) F.provides.push({ name: name[1] ?? name[2], file, ecosystem: "zig", version: /\.version\s*=\s*"([^"]*)"/.exec(text)?.[1] ?? "" });
+    const deps = /\.dependencies\s*=\s*\.\{/.exec(text);
+    if (deps) {
+      const { masked } = lex(text, "zig");
+      const open = deps.index + deps[0].length - 1;
+      const close = matchClose(masked, open);
+      for (const m of text.slice(open + 1, close).matchAll(/\.@?"?([\w-]+)"?\s*=\s*\.\{([^}]*)\}/g))
+        F.packages.push({ name: m[1], version: /\.url\s*=\s*"[^"]*?v?(\d+\.\d+\.\d+[\w.-]*?)(?:\.tar\.gz|\.zip|\.tgz)?"/.exec(m[2])?.[1] ?? "", file, ecosystem: "zig" });
+    }
   } else if (/^build\.gradle(\.kts)?$/.test(base)) {
     for (const m of text.matchAll(/["']([\w.-]+:[\w.-]+):([^"'$\s]+)["']/g)) F.packages.push({ name: m[1], version: m[2], file, ecosystem: "maven" });
   }
 }
 
-const MANIFEST = /(?:^|\/)(?:package\.json|pubspec\.yaml|packages\.config|Directory\.Packages\.props|Directory\.Build\.props|build\.gradle(?:\.kts)?)$|\.(?:cs|fs)proj$/;
+const MANIFEST = /(?:^|\/)(?:package\.json|pubspec\.yaml|packages\.config|Directory\.Packages\.props|Directory\.Build\.props|build\.gradle(?:\.kts)?|go\.mod|Cargo\.toml|build\.zig\.zon)$|\.(?:cs|fs)proj$/;
 
 /** Adds one file to a project's facts. */
 export function extractFile(F, file, text) {
   if (MANIFEST.test(file)) {
     extractManifest(F, file, text);
+    return;
+  }
+  if (SPEC_FILE.test(file)) {
+    extractSpec(F, file, text);
     return;
   }
   const lang = LANGS[/\.(\w+)$/.exec(file)?.[1]?.toLowerCase() ?? ""];
@@ -813,6 +1458,9 @@ export function extractFile(F, file, text) {
   else if (lang === "kotlin" || lang === "java") extractJvm(F, file, code, masked, line, lang);
   else if (lang === "swift") extractSwift(F, file, code, masked, line);
   else if (lang === "dart") extractDart(F, file, code, masked, line);
+  else if (lang === "go") extractGo(F, file, code, masked, line);
+  else if (lang === "rust") extractRust(F, file, code, masked, line);
+  else if (lang === "zig") extractZig(F, file, code, masked, line);
 }
 
 /** Resolves call URLs, fills central package versions and records what endpoints and calls carry. */
@@ -826,7 +1474,11 @@ export function finishFacts(F) {
     })
     .filter((c) => c.known && c.path.includes("/") && !FILE_LIKE.test(c.path.split(/[?#]/)[0]) && c.segs.some((x) => x !== "{}"))
     .map(({ known, ...c }) => c);
-  F.endpoints = F.endpoints.map((e) => ({ ...e, segs: normPath(e.path) }));
+  F.endpoints = F.endpoints.map(({ route, ...e }) => {
+    const path = route ? controllerPath(F, route) : e.path;
+    return { ...e, path, segs: normPath(path) };
+  });
+  specClients(F);
   for (const e of F.endpoints) {
     addUsage(F, e.response, "serialize", e.file, e.line, `${e.method} /${e.segs.join("/")} response`);
     addUsage(F, e.request, "deserialize", e.file, e.line, `${e.method} /${e.segs.join("/")} request body`);
@@ -1034,7 +1686,9 @@ export function linkSystem(projects) {
     let bestScore = 0;
     for (const e of endpoints) {
       if (e.root === root || !sameMethod(e.method, call.method)) continue;
-      const score = pathScore(e.segs, call.segs) + (e.method === call.method ? 0.25 : 0);
+      const path = pathScore(e.segs, call.segs);
+      if (path <= 0) continue;
+      const score = path + (e.method === call.method ? 0.25 : 0);
       if (score > bestScore) {
         best = e;
         bestScore = score;
@@ -1059,8 +1713,8 @@ export function linkSystem(projects) {
     }
     // Path literals elsewhere (constants, URL builders) count only when they match an endpoint.
     for (const l of p.facts.literals) {
-      if (explicit.has(`${l.file}:${l.line}`) || p.facts.calls.some((c) => c.path.includes(l.path))) continue;
       const segs = normPath(l.path);
+      if (explicit.has(`${l.file}:${l.line}`) || p.facts.calls.some((c) => c.path.includes(l.path) || (c.file === l.file && c.segs.join("/") === segs.join("/")))) continue;
       if (segs.length < 2) continue;
       const e = findTarget({ method: "?", segs }, p.root);
       if (e && pathScore(e.segs, segs) >= 4) link(e, { root: p.root, file: l.file, line: l.line, method: "?", path: l.path, request: [], response: [], literal: true });
@@ -1260,23 +1914,25 @@ const projectColor = (i) => oklch(isLight() ? 0.58 : 0.76, isLight() ? 0.16 : 0.
 
 // Scanning --------------------------------------------------------------------------------------
 
-const INCLUDE = "\\.(cs|ts|tsx|js|jsx|mjs|cjs|kt|java|swift|dart)$|(^|/)(package\\.json|pubspec\\.yaml|packages\\.config|Directory\\.Packages\\.props|Directory\\.Build\\.props|build\\.gradle|build\\.gradle\\.kts)$|\\.(cs|fs)proj$";
+const INCLUDE =
+  "\\.(cs|ts|tsx|js|jsx|mjs|cjs|kt|java|swift|dart|go|rs|zig)$|(^|/)(package\\.json|pubspec\\.yaml|packages\\.config|Directory\\.Packages\\.props|Directory\\.Build\\.props|build\\.gradle|build\\.gradle\\.kts|go\\.mod|Cargo\\.toml|build\\.zig\\.zon)$|\\.(cs|fs)proj$" +
+  "|([Ss]wagger|[Oo]pen[Aa][Pp][Ii]|[Aa]pi[-_.]?[Ss]pec)[^/]*\\.(json|ya?ml)$|(^|/)[Oo]pen[Aa][Pp][Ii]s/[^/]+\\.(json|ya?ml)$|\\.nswag$|(^|/)nswag\\.json$";
 const EXCLUDE =
-  "(^|/)(node_modules|bin|obj|dist|build|out|Pods|Carthage|\\.gradle|\\.dart_tool|DerivedData|\\.next|\\.nuxt|\\.svelte-kit|coverage|vendor|graphify-out|\\.git|Migrations)/|wwwroot/lib/|\\.min\\.js$|\\.bundle\\.js$|\\.g\\.cs$|\\.g\\.i\\.cs$|\\.Designer\\.cs$|\\.d\\.ts$|\\.(spec|test)\\.[cm]?[jt]sx?$|AssemblyInfo\\.cs$";
+  "(^|/)(node_modules|bin|obj|dist|build|out|Pods|Carthage|\\.gradle|\\.dart_tool|DerivedData|\\.next|\\.nuxt|\\.svelte-kit|coverage|vendor|graphify-out|\\.git|Migrations|target|zig-out|\\.?zig-cache|swagger-ui)/|wwwroot/lib/|\\.min\\.js$|\\.bundle\\.js$|_test\\.go$|\\.g\\.i\\.cs$|\\.Designer\\.cs$|\\.d\\.ts$|\\.(spec|test)\\.[cm]?[jt]sx?$|AssemblyInfo\\.cs$";
 
 /** Prints "\n@@FILE <path>\n<content>" for every source file and manifest of the project. */
 const DUMP_UNIX = [
   "{ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git -c core.quotePath=false ls-files -co --exclude-standard;",
-  "else find . -type d \\( -name node_modules -o -name .git -o -name bin -o -name obj -o -name Pods -o -name build -o -name dist \\) -prune -o -type f -print | sed 's|^\\./||'; fi; }",
+  "else find . -type d \\( -name node_modules -o -name .git -o -name bin -o -name obj -o -name Pods -o -name build -o -name dist -o -name target -o -name zig-out -o -name .zig-cache -o -name zig-cache \\) -prune -o -type f -print | sed 's|^\\./||'; fi; }",
   `| grep -E ${q(INCLUDE)} | grep -vE ${q(EXCLUDE)}`,
-  `| { t=0; while IFS= read -r f; do [ -f "$f" ] || continue; n=$(($(wc -c < "$f"))); [ "$n" -le ${MAX_FILE} ] || continue; t=$((t + n)); [ "$t" -le ${MAX_TOTAL} ] || break; printf '\\n@@FILE %s\\n' "$f"; cat "$f"; done; }`,
+  `| { t=0; while IFS= read -r f; do [ -f "$f" ] || continue; n=$(($(wc -c < "$f"))); if [ "$n" -gt ${MAX_FILE} ]; then [ "$n" -le ${MAX_GENERATED} ] && printf '%s' "$f" | grep -qE ${q(BIG)} || continue; fi; t=$((t + n)); [ "$t" -le ${MAX_TOTAL} ] || break; printf '\\n@@FILE %s\\n' "$f"; cat "$f"; done; }`,
 ].join(" ");
 const DUMP_WIN = [
-  `$inc = ${q(INCLUDE)}; $exc = ${q(EXCLUDE)}`,
+  `$inc = ${q(INCLUDE)}; $exc = ${q(EXCLUDE)}; $big = ${q(BIG)}`,
   "$files = @(git -c core.quotePath=false ls-files -co --exclude-standard 2>$null)",
   "if ($LASTEXITCODE -ne 0 -or $files.Count -eq 0) { $base = (Get-Location).Path; $files = @(Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($base.Length + 1).Replace('\\', '/') }) }",
   "$sb = New-Object Text.StringBuilder; $total = 0",
-  `foreach ($f in $files) { if ($f -match $inc -and $f -notmatch $exc) { $p = Join-Path (Get-Location) $f; if (Test-Path -LiteralPath $p -PathType Leaf) { $len = (Get-Item -LiteralPath $p).Length; if ($len -le ${MAX_FILE}) { $total += $len; if ($total -gt ${MAX_TOTAL}) { break }; [void]$sb.Append("\`n@@FILE $f\`n"); [void]$sb.Append([IO.File]::ReadAllText($p)) } } } }`,
+  `foreach ($f in $files) { if ($f -match $inc -and $f -notmatch $exc) { $p = Join-Path (Get-Location) $f; if (Test-Path -LiteralPath $p -PathType Leaf) { $len = (Get-Item -LiteralPath $p).Length; if ($len -le ${MAX_FILE} -or ($len -le ${MAX_GENERATED} -and $f -cmatch $big)) { $total += $len; if ($total -gt ${MAX_TOTAL}) { break }; [void]$sb.Append("\`n@@FILE $f\`n"); [void]$sb.Append([IO.File]::ReadAllText($p)) } } } }`,
 ].join("\n");
 
 /** Runs `script` (which prints text), gzips and base64-encodes its output into a temp file; prints "<size> <file>". */
@@ -2196,7 +2852,7 @@ function mountPage(root, store, api) {
       "div",
       { class: "xp-panel" },
       h("div", { class: "wf-h2" }, "How it works"),
-      h("ol", { class: "xp-steps" }, h("li", {}, "Link the projects that talk to each other: a mobile app, a web API, the package with their shared models."), h("li", {}, "winfer reads their source (C#, TypeScript, Kotlin, Java, Swift, Dart) and manifests."), h("li", {}, "You see which models travel between them, which endpoints each one calls, which packages they share — and where they drifted apart.")),
+      h("ol", { class: "xp-steps" }, h("li", {}, "Link the projects that talk to each other: a mobile app, a web API, the package with their shared models."), h("li", {}, "winfer reads their source (C#, TypeScript, Kotlin, Java, Swift, Dart, Go, Rust, Zig), manifests and OpenAPI documents, including generated Swagger clients (NSwag, Kiota, Refit)."), h("li", {}, "You see which models travel between them, which endpoints each one calls, which packages they share — and where they drifted apart.")),
     );
   }
 
@@ -2680,7 +3336,7 @@ export function activate(api) {
     },
   });
 
-  api.registerPage({ id: "map", title: "Cross-project", icon: "globe", mount: (el) => mountPage(el, store, api) });
+  api.registerPage({ id: "map", title: "Cross-project", icon: "waypoints", mount: (el) => mountPage(el, store, api) });
 
   api.registerTool({ id: "open", title: "Cross-project: open the map", description: "Show the contracts and APIs shared between linked projects", palette: true, run: () => api.openPage("map") });
   api.registerTool({

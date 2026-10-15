@@ -4,7 +4,7 @@
     {
       "id": "cross-project",
       "name": "Cross-Project Knowledge",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Link projects that talk to each other (a mobile app, a web API, the NuGet or npm package with their models) and see the contracts they serialize and deserialize, the endpoints between them and the packages they share, drawn as a map, with drift flagged. Agents get the same links as tools.",
       "author": "winfer",
       "tags": [
@@ -20,18 +20,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "ba6d7faec726b59132d98e049b0b13382ad4380043430b4c8ab3c5f5cfd626ad"
+          "sha256": "a8d774cf5d2a3a4776d45c0d28aa179ffd1a67bf928bc2e9cd90e7fda48374de"
         },
         {
           "path": "plugin.json",
-          "sha256": "e9ba265d86fd4996a51b7ba10417cda460287bb7960eea9cf41316d3b126d59f"
+          "sha256": "a6b8c1880a0d70b786ea3e3e8e81788335aeda44f7417b96334da285b4f7d324"
         }
       ]
     },
     {
       "id": "db-explorer",
       "name": "DB Explorer",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Browse your Postgres, MySQL and SQLite databases read-only: run queries, see the schema and keep a query history. Agents query them by name without ever seeing the credentials.",
       "author": "winfer",
       "tags": [
@@ -45,11 +45,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "cc71dcebafdd1fd6a54c9e1c3efd8c5411680ffc73cc4d1a452cc42c3641d617"
+          "sha256": "970bceab7a1223d30680bbf56a4b757982594bcfb219ffd167829dcc8b754ea2"
         },
         {
           "path": "plugin.json",
-          "sha256": "e545d3b1f456294e45b5434638f2330149c8562d12bc38b3224dafe0364c809f"
+          "sha256": "c3ea89d8cb47a4cbbe7a1cca2745739b6fa06314e0409c73df15b747439202a8"
         }
       ]
     },
@@ -78,7 +78,7 @@
     {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.3.0",
+      "version": "1.3.1",
       "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy or a flat 2D map. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -92,18 +92,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "2656b1b14179e024f17748eabcc357f9cc904f814a3a16b4d586039ccc93dedb"
+          "sha256": "ddf432036c9b6425cf198c58721d98dbd318f05471ae01e2cf733e72fff205fa"
         },
         {
           "path": "plugin.json",
-          "sha256": "c11bd67e8576383156039850f2b60abf193cab2c59704e64c01785119956e016"
+          "sha256": "5922d9daebf03da0c38122e695699436a3c803d4db2afa13d5a79ae0a432e463"
         }
       ]
     },
     {
       "id": "prompt-library",
       "name": "Prompt Library",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Save the prompts you keep retyping, with {{placeholders}} you fill in when you use them. Send one to an agent from the palette or by voice, broadcast it to every agent, or start a new agent with it.",
       "author": "winfer",
       "tags": [
@@ -117,18 +117,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "07c7abe6d7cc5bf04c089f46541295edcb8e2f2524997bd04b3222a7e81fe938"
+          "sha256": "3382b16eea1bd6086b1e8be1c092f10867938407a627a2c913ba9d27124bd608"
         },
         {
           "path": "plugin.json",
-          "sha256": "0b8e9f3d6d3bc2c0c06cfaffcf9340b070d5532b38d9c8ec9206ec8d4aa83c89"
+          "sha256": "bf68dd6112b5ab3ebe06cc462e32ed202aa80dc89e06c41b466d1bff4507314b"
         }
       ]
     },
     {
       "id": "secrets",
       "name": "Secrets",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "description": "Keep API keys, environment variables and logins in your keychain. Agents use them by name without ever seeing the values.",
       "author": "winfer",
       "tags": [
@@ -140,18 +140,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "b8cfc546ad7b668282a266920f10ae08be953ddeea151df8ea1d50952107d0f3"
+          "sha256": "1f7636049f4ac7f83b314f10bf2b93fd4b8c67d4a3dc9d04af6a3e0572cc7b52"
         },
         {
           "path": "plugin.json",
-          "sha256": "d8f422312b5e1408c71cf8bd94722a62071706a1f87e5da0f6cc351022a77ef2"
+          "sha256": "c15c34ff49cae892e5c9965221828caff692ac668f35b7c42a7f9de0f9d4a62d"
         }
       ]
     },
     {
       "id": "task-board",
       "name": "Task Board",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "description": "A shared board per workspace where agents post, claim and finish tasks and leave notes for each other, so several agents work as a team.",
       "author": "winfer",
       "tags": [
@@ -163,18 +163,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "23232c8400513687d1d760521faf223a9cc9838c6a02fd62ea356d30308882a6"
+          "sha256": "3410eec479b0441bc1be68be397fa7aa8d8f795bc8ca9b1e6cfc23ca3c8db1cc"
         },
         {
           "path": "plugin.json",
-          "sha256": "d68f6799af060ad03ae489e28ce6f4490a30c499ab9c1384d8c6c3ddf40120bd"
+          "sha256": "af7afec738dc1b580278aa9ed0d114f524181a962879c2421660f2647ead74cc"
         }
       ]
     },
     {
       "id": "telegram",
       "name": "Telegram",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
       "author": "winfer",
       "tags": [
@@ -187,11 +187,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "6639217d74392a3f1d861e7a3ae608d1af6d3a02cfa874a46ab783c860c969a2"
+          "sha256": "9de7764b34b52dd1c494125748560be0313b86fe5a5cd1a84088c8c099e26233"
         },
         {
           "path": "plugin.json",
-          "sha256": "aadd10f8a1fb171f56605a44d5633dba9ae9f9cb1a03415c6c492f88de14a22f"
+          "sha256": "0657c0ee7bc7cd6185dbf7d325b01b5ec104d691082f385f5ea5554e1471622d"
         }
       ]
     }

@@ -605,7 +605,7 @@ export function activate(api) {
     },
   });
 
-  api.registerPage({ id: "db", title: "Databases", icon: "database", mount: (el) => mountPage(el, api, store) });
+  api.registerPage({ id: "db", title: "Databases", icon: "database-search", mount: (el) => mountPage(el, api, store) });
 
   api.registerTool({
     id: "open",

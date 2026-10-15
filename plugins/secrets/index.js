@@ -122,7 +122,7 @@ export function activate(api) {
     },
   });
 
-  api.registerPage({ id: "secrets", title: "Secrets", icon: "key", mount: (el) => mountPage(el, api) });
+  api.registerPage({ id: "secrets", title: "Secrets", icon: "key-round", mount: (el) => mountPage(el, api) });
 
   api.registerTool({
     id: "open",

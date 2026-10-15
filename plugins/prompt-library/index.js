@@ -459,7 +459,7 @@ export function activate(api) {
   api.registerPage({
     id: "prompts",
     title: "Prompts",
-    icon: "star",
+    icon: "message-square-quote",
     mount: (el) => {
       const select = pendingSelect;
       pendingSelect = null;

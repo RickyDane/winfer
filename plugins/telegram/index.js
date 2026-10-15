@@ -409,7 +409,7 @@ export function activate(api) {
     send?.catch((err) => console.error("telegram: sending failed", err));
   });
 
-  api.registerPage({ id: "telegram", title: "Telegram", icon: "bot", mount: (el) => mountPage(el, store, api) });
+  api.registerPage({ id: "telegram", title: "Telegram", icon: "send", mount: (el) => mountPage(el, store, api) });
   api.registerTool({
     id: "open",
     title: "Telegram",

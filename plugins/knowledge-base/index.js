@@ -4742,7 +4742,7 @@ export function activate(api) {
     },
   });
 
-  api.registerPage({ id: "galaxy", title: "Knowledge", icon: "database", mount: (el) => mountPage(el, store, api) });
+  api.registerPage({ id: "galaxy", title: "Knowledge", icon: "atom", mount: (el) => mountPage(el, store, api) });
 
   api.registerTool({
     id: "open",

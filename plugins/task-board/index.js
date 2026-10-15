@@ -305,7 +305,7 @@ export function activate(api) {
 
   // Page, palette and voice ----------------------------------------------------------------------
 
-  api.registerPage({ id: "board", title: "Tasks", icon: "star", mount: (el) => mountPage(el, api, store, { assign, broadcast }) });
+  api.registerPage({ id: "board", title: "Tasks", icon: "square-kanban", mount: (el) => mountPage(el, api, store, { assign, broadcast }) });
 
   api.registerTool({
     id: "open",
