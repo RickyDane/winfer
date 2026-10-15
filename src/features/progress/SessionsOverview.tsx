@@ -10,15 +10,13 @@ import { relativeTime } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { estimate, useProgress, type Progress } from "./progress";
 
-/** Thin progress bar; indeterminate (a sweeping segment) while there's no estimate yet. */
+/** Thin progress bar; empty track while there's no estimate yet. */
 export function ProgressBar({ progress, status, className }: { progress: Progress | undefined; status: Pane["status"]; className?: string }) {
   const percent = progress?.percent;
   const done = status === "done" || percent === 100;
   return (
     <span className={cn("block h-1 overflow-hidden rounded-full bg-hover", className)}>
-      {percent === null || percent === undefined ? (
-        status === "working" && <span className="anim-indeterminate block h-full w-1/4 rounded-full bg-accent/60" />
-      ) : (
+      {percent != null && (
         <span
           className={cn("block h-full rounded-full transition-[width,background-color] duration-700 ease-out", done ? "bg-success" : status === "needs-input" ? "bg-warning" : "bg-accent")}
           style={{ width: `${Math.max(percent, 2)}%` }}

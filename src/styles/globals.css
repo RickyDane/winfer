@@ -132,14 +132,6 @@ body.resizing * {
     transform: scale(0.97);
   }
 }
-@keyframes indeterminate {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(400%);
-  }
-}
 @keyframes flash {
   from {
     background-color: var(--color-accent-soft);
@@ -188,15 +180,11 @@ body.resizing * {
   .anim-ring {
     animation: ring 1.6s ease-out infinite;
   }
-  /* Indeterminate bar: a segment that sweeps across its track. */
-  .anim-indeterminate {
-    animation: indeterminate 1.3s ease-in-out infinite;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   /* Spinners keep turning: they say "still working", not decoration. */
-  *:not(.animate-spin, .anim-indeterminate),
+  *:not(.animate-spin),
   *::before,
   *::after {
     animation-duration: 1ms !important;

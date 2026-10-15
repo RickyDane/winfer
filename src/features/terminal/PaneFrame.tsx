@@ -48,7 +48,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const searching = useWorkspaces((s) => s.searchPaneId === pane.id);
   const beingDragged = useDrag((s) => s.paneId === pane.id);
   const progress = useProgress((s) => s.byPane[pane.id]);
-  const showProgress = pane.provider !== "shell" && (pane.status === "working" || pane.status === "needs-input" || progress?.percent != null);
+  const showProgress = pane.provider !== "shell" && progress?.percent != null;
   const starting = useStarting((s) => s[pane.id]);
   const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
   const [isNew] = useState(() => !seen.has(pane.id));
@@ -87,7 +87,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
           {pane.agentTitle ?? pane.title}
         </span>
         <ContextMeter paneId={pane.id} />
-        {showProgress && progress?.percent != null && (
+        {showProgress && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">
             {progress.percent}%
           </span>

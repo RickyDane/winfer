@@ -34,7 +34,7 @@ function PaneName({ pane, className }: { pane: Pane; className?: string }) {
 /** Thin progress bar along the bottom of an agent's sidebar row. */
 function PaneProgress({ pane }: { pane: Pane }) {
   const progress = useProgress((s) => s.byPane[pane.id]);
-  if (pane.provider === "shell" || (progress?.percent == null && pane.status !== "working")) return null;
+  if (pane.provider === "shell" || progress?.percent == null) return null;
   return (
     <span className="absolute right-2 bottom-0.5 left-5" title={progressLabel(progress)}>
       <ProgressBar progress={progress} status={pane.status} className="h-0.5" />

@@ -44,7 +44,8 @@ function WorktreeState({ wt }: { wt: ExistingWorktree }) {
  * made outside winfer. Clicking one opens the default agent inside it.
  */
 export function WorktreeList({ workspace }: { workspace: Workspace }) {
-  const [found, setFound] = useState<ExistingWorktree[]>([]);
+  // null until the first listing for this repo comes back.
+  const [found, setFound] = useState<ExistingWorktree[] | null>(null);
   const [menu, openMenu, closeMenu] = useContextMenu<ExistingWorktree>();
   const [removing, setRemoving] = useState<Set<string>>(new Set());
   const inUse = useWorkspaces((s) => new Set(s.workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : [])))).size);
@@ -52,6 +53,8 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
   const refresh = useCallback(() => {
     listWorktrees(workspace.rootDir).then(setFound, () => setFound([]));
   }, [workspace.rootDir]);
+
+  useEffect(() => setFound(null), [workspace.rootDir]);
 
   // Re-check when the workspace or its panes change, when winfer gets focus, and now and then.
   useEffect(() => {
@@ -67,12 +70,13 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
   const used = new Set(useWorkspaces.getState().workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : []))));
   // Newest activity first; finished (merged) ones sink to the bottom, ready to clean up.
   // The project folder (main checkout) always comes first; worktrees no pane uses follow.
-  const main = found.find((w) => w.isMain);
-  const free = found
+  const loading = found === null;
+  const main = found?.find((w) => w.isMain);
+  const free = (found ?? [])
     .filter((w) => !w.isMain && !used.has(w.info.path))
     .sort((a, b) => Number(a.merged) - Number(b.merged) || (lastActivity(b) ?? 0) - (lastActivity(a) ?? 0));
   const rows = main ? [main, ...free] : free;
-  if (rows.length === 0) return null;
+  if (!loading && rows.length === 0) return null;
 
   const open = (wt: ExistingWorktree) => {
     openInWorktree(workspace, wt, defaultProviderId());
@@ -120,7 +124,10 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
         />
       )}
       <div className="flex items-center pt-1 pb-0.5 pr-1">
-        <span className="flex-1 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">Branches</span>
+        <span className="flex flex-1 items-center gap-1.5 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">
+          Branches
+          {loading && <Loader2 size={10} className="animate-spin" aria-label="Loading worktrees" />}
+        </span>
         <button onClick={() => openBranchDialog(workspace)} title="New worktree from a branch…" className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
           <Plus size={12} />
         </button>
