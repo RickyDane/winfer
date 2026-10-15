@@ -24,6 +24,8 @@ To add or change a store plugin:
 
 [`plugins/example-hello`](../../plugins/example-hello) uses every manifest feature;
 [`plugins/secrets`](../../plugins/secrets) is a full plugin with a page and agent tools.
+[`plugins/knowledge-base`](../../plugins/knowledge-base) runs a CLI (graphify) through `vault.exec`,
+reads files bigger than its 20,000-character output limit in chunks, and draws a WebGL page.
 
 ## plugin.json
 

@@ -8,6 +8,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import pkg from "../../package.json";
 import storeCatalog from "../../plugins/catalog.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
+import { KB_DEMO, knowledgeBaseExec } from "./knowledgeBase";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
@@ -36,6 +37,8 @@ function installMockPlugin(id: string) {
   if (i >= 0) mockPlugins[i] = plugin;
   else mockPlugins.push(plugin);
 }
+// `?kb` starts with the Knowledge Base plugin installed (see ./knowledgeBase.ts).
+if (KB_DEMO) installMockPlugin("knowledge-base");
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
 
@@ -194,6 +197,7 @@ mockIPC(
       case "vault_reveal":
         return vault.get(a.key)?.value ?? "";
       case "vault_exec":
+        if (a.plugin === "knowledge-base") return knowledgeBaseExec(a.command);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
       case "browser_fill_secret":
         return null;

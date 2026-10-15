@@ -146,3 +146,14 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Ask it to run `echo $API_TOKEN | tee out.txt`: winfer asks first (shows the command); the reply says `[secret API_TOKEN]`. Decline → the agent is told the user declined. The env var without approval runs without asking.
 - [ ] Open a login page in the browser panel and ask the agent to fill the password field with the login's secret: it's typed in without the agent seeing it.
 - [ ] Turn the plugin off → the tab and the agent tools are gone (new agents don't list them).
+
+## Knowledge Base plugin
+Needs graphify (`uv tool install graphifyy`). In the dev server, `?kb` installs it with a fake graph (`?kb=empty` starts without one).
+- [ ] Install Knowledge Base → a "Knowledge" tab. Without graphify it shows the install command and "Check again".
+- [ ] In a repo without `graphify-out/`: "Map code" builds a code graph in seconds and the galaxy forms; "Start agent" opens Claude Code running `/graphify .` in the project folder (no worktree) and the page fills in when it finishes.
+- [ ] Galaxy: drag orbits, right-drag pans, scroll/pinch zooms, double-click a node flies to it (empty space fits all), it slowly spins when idle. Hover shows a card; click opens the inspector with links grouped by relation; Esc clears.
+- [ ] `/` or ⌘F searches nodes and files. Path mode (or shift-click): two nodes → route with comets along it. Impact mode: red shockwave over everything that depends on the node, by depth.
+- [ ] Ask bar: a question highlights the nodes graphify returns; "Ask an agent" opens one with the question. Legend: hover previews a community, click isolates and frames it.
+- [ ] Insights tab: core abstractions, link quality, surprising connections (click → path), groups, communities, freshness. With dated snapshots in `graphify-out/`, the clock in the dock replays how the graph grew.
+- [ ] Agents in the workspace orbit as labeled satellites near the files their terminal mentions. Ask Claude "use kb_query to find where X lives" → it calls the tool and the answer's nodes pulse in its color; kb_explain, kb_path, kb_affected, kb_report and kb_status answer too, and a project without a graph says how to build one.
+- [ ] With "Update after agents finish" on, an agent finishing re-reads the code ~20 s later ("Built just now"). Light mode, and the browser panel open (narrow page), still look right.
