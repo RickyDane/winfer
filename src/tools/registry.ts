@@ -133,18 +133,20 @@ export const TOOLS: ToolDef[] = [
     },
     toCommands: (args, ctx) => {
       const prompt = args.prompt ? String(args.prompt) : undefined;
+      // Palette only: skip the worktree even when the workspace always makes one.
+      const worktree = args.noWorktree ? false : undefined;
       const named = Object.entries((args.counts as Record<string, number>) ?? {}).filter(([, n]) => n > 0);
       // "Open five windows" names no agent: open the default agent that many times.
       if (named.length === 0) {
         const count = Math.max(1, Number(args.total) || 1);
-        return [{ type: "pane.spawn", provider: "default", count, prompt }];
+        return [{ type: "pane.spawn", provider: "default", count, prompt, worktree }];
       }
-      return named.map(([provider, count]) => ({ type: "pane.spawn", provider, count, prompt, model: modelFor(ctx, provider, args.model) }));
+      return named.map(([provider, count]) => ({ type: "pane.spawn", provider, count, prompt, worktree, model: modelFor(ctx, provider, args.model) }));
     },
-    palette: (ctx) =>
-      ctx.providers
-        .filter((p) => p.installed)
-        .map((p) => ({ title: `New pane: ${p.name}`, args: { counts: { [p.id]: 1 } } })),
+    palette: (ctx) => [
+      ...ctx.providers.filter((p) => p.installed).map((p) => ({ title: `New pane: ${p.name}`, args: { counts: { [p.id]: 1 } } })),
+      ...(ctx.active.useWorktrees ? [{ title: "New pane without worktree", args: { noWorktree: true } }] : []),
+    ],
   },
   {
     id: "start_features",

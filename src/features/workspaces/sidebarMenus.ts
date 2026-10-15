@@ -32,7 +32,23 @@ export function workspaceMenu(ws: Workspace): MenuItem[] {
         execute({ type: "pane.spawn", provider: "default" });
       },
     },
+    ...(ws.useWorktrees
+      ? [
+          {
+            label: `New ${agent} without worktree`,
+            hint: keysFor({ type: "pane.spawn", provider: "default", worktree: false }),
+            run: () => {
+              execute({ type: "workspace.switch", target: { id: ws.id } });
+              execute({ type: "pane.spawn", provider: "default", worktree: false });
+            },
+          },
+        ]
+      : []),
     { label: "New worktree from a branch…", run: () => openBranchDialog(ws) },
+    {
+      label: ws.useWorktrees ? "Stop giving new agents a worktree" : "Give every new agent a worktree",
+      run: () => useWorkspaces.setState((st) => ({ workspaces: st.workspaces.map((w) => (w.id === ws.id ? { ...w, useWorktrees: !w.useWorktrees } : w)) })),
+    },
     "separator",
     { label: REVEAL, run: () => reveal(ws.rootDir) },
     { label: "Copy folder path", run: () => copy(ws.rootDir) },

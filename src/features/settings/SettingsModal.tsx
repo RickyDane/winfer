@@ -206,7 +206,8 @@ function ShortcutSettings() {
 
 /** Which agent ⌘T, splits and "open a new window" start, and the model each agent starts with. */
 function AgentSettings() {
-  const { providers, defaultProvider, setDefaultProvider, models, agentModels, setAgentModel, loadModels } = useWorkspaces();
+  const { providers, defaultProvider, setDefaultProvider, models, agentModels, setAgentModel, loadModels, workspaces, activeWorkspaceId, updateActive } = useWorkspaces();
+  const active = workspaces.find((w) => w.id === activeWorkspaceId);
   const current = defaultProviderId({ providers, defaultProvider });
   const agents = providers.filter((p) => p.installed && p.modelArg);
   useEffect(() => agents.forEach((p) => void loadModels(p.id)), [agents.length]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -223,6 +224,18 @@ function AgentSettings() {
             ))}
           </Select>
         </Row>
+        {active && (
+          <Row
+            label="Always open new agents in their own worktree"
+            hint={`Applies to the workspace “${active.name}”. ${keysFor({ type: "pane.spawn", provider: "default", worktree: false })} opens one in the project folder anyway.`}
+          >
+            <Toggle
+              label="Always open new agents in their own worktree"
+              checked={active.useWorktrees}
+              onChange={(useWorktrees) => updateActive(() => ({ useWorktrees }))}
+            />
+          </Row>
+        )}
       </Card>
       {agents.length > 0 && (
         <Card title="Models" description="The model each agent starts with in new panes.">

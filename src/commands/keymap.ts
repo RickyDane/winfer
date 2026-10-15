@@ -41,6 +41,7 @@ type BindingSpec = Omit<Binding, "id" | "digit">;
 
 const SPECS: BindingSpec[] = [
   { keys: "Mod+T", title: "New pane (default agent)", group: "Panes", command: { type: "pane.spawn", provider: "default" } },
+  { keys: "Mod+Shift+N", win: "Ctrl+Shift+Alt+N", title: "New pane without worktree", group: "Panes", command: { type: "pane.spawn", provider: "default", worktree: false } },
   { keys: "Mod+Shift+T", win: "Ctrl+Shift+Alt+T", title: "New pane: pick provider", group: "Panes", command: { type: "ui.palette", query: "New pane: " } },
   ...DIGITS.map(
     (n): BindingSpec => ({
