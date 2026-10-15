@@ -64,6 +64,8 @@ interface WorkspaceState {
   activeWorkspaceId: string;
   focusedPaneId: string | null;
   sidebarOpen: boolean;
+  /** Workspaces whose sessions are listed in the sidebar (persisted). */
+  expandedWorkspaces: string[];
   browserOpen: boolean;
   paletteQuery: string | null;
   cheatSheetOpen: boolean;
@@ -113,6 +115,11 @@ interface WorkspaceState {
   setActiveWorkspace: (id: string) => void;
   createWorkspace: (name: string, rootDir: string) => string;
   removeWorkspace: (id: string) => void;
+  toggleWorkspaceExpanded: (id: string) => void;
+  /** Moves a workspace to `index` in the sidebar order. */
+  moveWorkspace: (id: string, index: number) => void;
+  /** Moves a pane to `index` within its workspace's sidebar list. */
+  movePaneInList: (id: string, index: number) => void;
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
@@ -166,6 +173,15 @@ function newWorkspace(name: string, rootDir: string): Workspace {
 const updateWorkspace = (workspaces: Workspace[], id: string, fn: (w: Workspace) => Workspace) =>
   workspaces.map((w) => (w.id === id ? fn(w) : w));
 
+/** `items` with the one whose id is `id` moved to `index`. */
+function moveItem<T extends { id: string }>(items: T[], id: string, index: number): T[] {
+  const from = items.findIndex((x) => x.id === id);
+  if (from < 0 || from === index) return items;
+  const next = items.filter((x) => x.id !== id);
+  next.splice(Math.max(0, Math.min(index, next.length)), 0, items[from]);
+  return next;
+}
+
 const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null);
 
 export const DEFAULT_BROWSER_WIDTH = 420;
@@ -195,6 +211,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   activeWorkspaceId: "",
   focusedPaneId: null,
   sidebarOpen: true,
+  expandedWorkspaces: [],
   browserOpen: true,
   paletteQuery: null,
   cheatSheetOpen: false,
@@ -226,7 +243,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     if (get().hydrated) return;
     if (snapshot.workspaces.length === 0) {
       const home = newWorkspace("home", "~");
-      set({ hydrated: true, workspaces: [home], activeWorkspaceId: home.id });
+      set({ hydrated: true, workspaces: [home], activeWorkspaceId: home.id, expandedWorkspaces: [home.id] });
       return;
     }
 
@@ -250,6 +267,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       activeWorkspaceId: active.id,
       focusedPaneId: firstPane(active),
       sidebarOpen: ui.sidebarOpen ?? true,
+      expandedWorkspaces: ui.expandedWorkspaces?.filter((id) => workspaces.some((w) => w.id === id)) ?? [active.id],
       browserOpen: ui.browserOpen ?? true,
       voiceConfig: ui.voice ?? {},
       recipes: ui.recipes ?? [],
@@ -278,12 +296,13 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
 
   setActiveWorkspace: (id) => {
     const ws = get().workspaces.find((w) => w.id === id);
-    set({ activeWorkspaceId: id, focusedPaneId: firstPane(ws) });
+    // The active workspace's sessions are always listed.
+    set((s) => ({ activeWorkspaceId: id, focusedPaneId: firstPane(ws), expandedWorkspaces: s.expandedWorkspaces.includes(id) ? s.expandedWorkspaces : [...s.expandedWorkspaces, id] }));
   },
 
   createWorkspace: (name, rootDir) => {
     const ws = newWorkspace(name, rootDir);
-    set((s) => ({ workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id, focusedPaneId: null }));
+    set((s) => ({ workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id, focusedPaneId: null, expandedWorkspaces: [...s.expandedWorkspaces, ws.id] }));
     return ws.id;
   },
 
@@ -294,6 +313,16 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       if (s.activeWorkspaceId !== id) return { workspaces };
       return { workspaces, activeWorkspaceId: workspaces[0].id, focusedPaneId: firstPane(workspaces[0]) };
     }),
+
+  toggleWorkspaceExpanded: (id) =>
+    set((s) => ({
+      expandedWorkspaces: s.expandedWorkspaces.includes(id) ? s.expandedWorkspaces.filter((w) => w !== id) : [...s.expandedWorkspaces, id],
+    })),
+
+  moveWorkspace: (id, index) => set((s) => ({ workspaces: moveItem(s.workspaces, id, index) })),
+
+  movePaneInList: (id, index) =>
+    set((s) => ({ workspaces: s.workspaces.map((w) => (w.panes.some((p) => p.id === id) ? { ...w, panes: moveItem(w.panes, id, index) } : w)) })),
 
   focusPane: (id) => {
     // In a zoomed workspace the focused pane must be the visible one, so the zoom follows.
@@ -443,6 +472,7 @@ interface Snapshot {
   ui: {
     activeWorkspaceId?: string;
     sidebarOpen?: boolean;
+    expandedWorkspaces?: string[];
     browserOpen?: boolean;
     voice?: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string };
     recipes?: Recipe[];
@@ -477,7 +507,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 

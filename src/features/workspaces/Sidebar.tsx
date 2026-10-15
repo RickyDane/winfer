@@ -11,7 +11,8 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { paneMenu, workspaceMenu } from "./sidebarMenus";
-import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
+import { useSortable } from "./useSortable";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
@@ -174,11 +175,69 @@ function ReviewEntry() {
   );
 }
 
+/** Where a dragged sidebar row would land. */
+function DropLine({ at }: { at: "top" | "bottom" }) {
+  return <span className={cn("pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-accent", at === "top" ? "-top-[3px]" : "-bottom-[3px]")} />;
+}
+
+type OpenMenu = (e: React.MouseEvent, target: { title: string; items: MenuItem[] }) => void;
+
+/** An expanded workspace's sessions, in the order the user dragged them into. */
+function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace: Workspace; focusedPaneId: string | null; openMenu: OpenMenu }) {
+  const movePaneInList = useWorkspaces((s) => s.movePaneInList);
+  const { drag, begin, dropLine } = useSortable(movePaneInList);
+  return (
+    <div className="relative pr-1 pb-1.5 pl-[17px]">
+      {/* Guide line tying the sessions to their workspace. */}
+      <span className="absolute top-0 bottom-2.5 left-[17px] w-px bg-border" />
+      {ws.panes.map((pane, i) => {
+        const focused = pane.id === focusedPaneId;
+        const line = dropLine(i, ws.panes.length);
+        return (
+          <button
+            key={pane.id}
+            data-sort-id={pane.id}
+            onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
+            onPointerDown={(e) => begin(e, pane.id)}
+            onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane) })}
+            className={cn(
+              "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+              focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+              drag?.id === pane.id && "opacity-50",
+            )}
+          >
+            {line && <DropLine at={line} />}
+            {/* Marks the focused session on the guide line. */}
+            {focused && <span className="absolute top-1.5 bottom-1.5 -left-2 w-0.5 -translate-x-1/2 rounded-full bg-accent" />}
+            {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
+            {(pane.status === "done" || pane.status === "needs-input") && (
+              <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
+            )}
+            <span className="flex items-center gap-2">
+              <StatusDot status={pane.status} />
+              <ProviderIcon provider={pane.provider} size={12} />
+              <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
+              <PanePercent pane={pane} />
+            </span>
+            <span className="block pl-[26px]">
+              <PaneDetail pane={pane} />
+              <PaneProgress pane={pane} />
+            </span>
+          </button>
+        );
+      })}
+      {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "pane.spawn", provider: "default" })} starts one</span>}
+      <WorktreeList workspace={ws} />
+    </div>
+  );
+}
+
 const iconButton = "rounded-md p-1.5 text-fg-subtle transition-colors hover:bg-hover hover:text-fg";
 
 export function Sidebar() {
-  const { workspaces, activeWorkspaceId, focusedPaneId, theme, toggleTheme } = useWorkspaces();
+  const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, moveWorkspace, theme, toggleTheme } = useWorkspaces();
   const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
+  const { drag, begin, dropLine } = useSortable(moveWorkspace);
 
   return (
     <aside className="anim-slide flex h-full w-64 shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
@@ -193,7 +252,7 @@ export function Sidebar() {
 
       <div className="mx-3 border-t border-border" />
 
-      <nav className="flex-1 overflow-y-auto px-2 pt-2 pb-2">
+      <nav className="flex-1 overflow-y-auto px-2 pt-2 pb-2 select-none">
         <SectionLabel
           action={
             <button onClick={() => execute({ type: "workspace.create" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="New workspace">
@@ -203,14 +262,27 @@ export function Sidebar() {
         >
           Workspaces
         </SectionLabel>
-        {workspaces.map((ws) => {
+        {workspaces.map((ws, i) => {
           const active = ws.id === activeWorkspaceId;
+          const expanded = expandedWorkspaces.includes(ws.id);
+          const line = dropLine(i, workspaces.length);
           return (
-            <div key={ws.id} className={cn("mb-1 rounded-lg transition-colors duration-150", active && "bg-panel-raised ring-1 ring-border")}>
+            <div
+              key={ws.id}
+              data-sort-id={ws.id}
+              className={cn(
+                "relative mb-1 rounded-lg transition-[background-color,opacity] duration-150",
+                active && "bg-panel-raised ring-1 ring-border",
+                drag?.id === ws.id && "opacity-50",
+              )}
+            >
+              {line && <DropLine at={line} />}
               <button
-                onClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
+                onClick={() => toggleWorkspaceExpanded(ws.id)}
+                onDoubleClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
+                onPointerDown={(e) => begin(e, ws.id)}
                 onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
-                title={ws.rootDir}
+                title={`${ws.rootDir}\nDouble-click to open · drag to reorder`}
                 className={cn(
                   "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
                   active ? "font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
@@ -218,52 +290,14 @@ export function Sidebar() {
               >
                 <WorkspaceAvatar name={ws.name} active={active} />
                 <span className="flex-1 truncate">{ws.name}</span>
-                {!active && <WorkspaceDots panes={ws.panes} />}
+                {!expanded && <WorkspaceDots panes={ws.panes} />}
                 <ChevronRight
                   size={13}
-                  className={cn("shrink-0 text-fg-subtle transition-transform duration-200", active ? "rotate-90" : "opacity-0 group-hover:opacity-100")}
+                  className={cn("shrink-0 text-fg-subtle transition-transform duration-200", expanded ? "rotate-90" : "opacity-0 group-hover:opacity-100")}
                 />
               </button>
 
-              {active && (
-                <div className="relative pr-1 pb-1.5 pl-[17px]">
-                  {/* Guide line tying the sessions to their workspace. */}
-                  <span className="absolute top-0 bottom-2.5 left-[17px] w-px bg-border" />
-                  {ws.panes.map((pane) => {
-                    const focused = pane.id === focusedPaneId;
-                    return (
-                      <button
-                        key={pane.id}
-                        onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
-                        onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane) })}
-                        className={cn(
-                          "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
-                          focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
-                        )}
-                      >
-                        {/* Marks the focused session on the guide line. */}
-                        {focused && <span className="absolute top-1.5 bottom-1.5 -left-2 w-0.5 -translate-x-1/2 rounded-full bg-accent" />}
-                        {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
-                        {(pane.status === "done" || pane.status === "needs-input") && (
-                          <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
-                        )}
-                        <span className="flex items-center gap-2">
-                          <StatusDot status={pane.status} />
-                          <ProviderIcon provider={pane.provider} size={12} />
-                          <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
-                          <PanePercent pane={pane} />
-                        </span>
-                        <span className="block pl-[26px]">
-                          <PaneDetail pane={pane} />
-                          <PaneProgress pane={pane} />
-                        </span>
-                      </button>
-                    );
-                  })}
-                  {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "pane.spawn", provider: "default" })} starts one</span>}
-                  <WorktreeList workspace={ws} />
-                </div>
-              )}
+              {expanded && <WorkspacePanes workspace={ws} focusedPaneId={active ? focusedPaneId : null} openMenu={openMenu} />}
             </div>
           );
         })}
