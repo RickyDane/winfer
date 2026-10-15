@@ -163,6 +163,10 @@ mockIPC(
     switch (cmd) {
       case "providers_list":
         return providers;
+      case "editors_list":
+        return [{ id: "vscode", name: "VS Code" }, { id: "cursor", name: "Cursor" }, { id: "zed", name: "Zed" }];
+      case "editor_open":
+        return null;
       case "plugins_list":
         return structuredClone(mockPlugins);
       case "plugins_catalog":

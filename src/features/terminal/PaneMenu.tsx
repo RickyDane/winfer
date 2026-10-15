@@ -2,6 +2,7 @@ import { Ellipsis } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { execute, type Command } from "@/commands/bus";
+import { preferredEditor } from "@/features/editors/editors";
 import type { Pane } from "@/stores/workspaces";
 
 /** Per-pane actions behind the "…" button. */
@@ -17,6 +18,7 @@ export function PaneMenu({ pane }: { pane: Pane }) {
   }, [open]);
 
   const target = { id: pane.id };
+  const editor = preferredEditor();
   const items: { label: string; run: () => void; danger?: boolean }[] = [
     ...(pane.worktree
       ? [
@@ -26,6 +28,7 @@ export function PaneMenu({ pane }: { pane: Pane }) {
           { label: "Discard worktree", run: () => execute({ type: "pane.discardWorktree", target }), danger: true },
         ]
       : []),
+    ...(editor ? [{ label: `Open in ${editor.name}`, run: () => execute({ type: "editor.open", target }) }] : []),
     {
       label: "Change model…",
       run: () => {

@@ -1,6 +1,7 @@
 mod android;
 mod browser;
 mod chatgpt;
+mod editors;
 mod env;
 mod hooks;
 mod llm;
@@ -143,6 +144,8 @@ pub fn run() {
             worktree::worktree_branches,
             worktree::worktree_from_branch,
             worktree::worktree_fetch,
+            editors::editors_list,
+            editors::editor_open,
             notify::notify_action,
             android::android_status,
             android::android_start_avd,

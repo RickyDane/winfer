@@ -13,6 +13,7 @@ import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } 
 import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
 import { UsageHistory } from "@/features/usage/UsageHistory";
 import { THEMES } from "@/features/theme/themes";
+import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
 
 /* Building blocks: a titled card of rows, each row a label with its hint on the left and the
@@ -190,6 +191,31 @@ function TerminalSettings() {
         >
           Reset
         </button>
+      </Row>
+    </Card>
+  );
+}
+
+/** Which code editor "Open in editor" uses. */
+function EditorSettings() {
+  const { editor, setEditor } = useWorkspaces();
+  const editors = useEditors((s) => s.editors);
+  // Picks up editors installed while winfer was running.
+  useEffect(() => void loadEditors(), []);
+  const current = preferredEditor(editors, editor);
+  return (
+    <Card title="Code editor">
+      <Row
+        label="Open projects and worktrees in"
+        hint={
+          editors.length
+            ? `From a workspace's, agent's or worktree's right-click menu, or ${keysFor({ type: "editor.open", target: "focused" })} for the focused pane.`
+            : "No supported editor found (VS Code, Cursor, Zed, Visual Studio, JetBrains IDEs, Sublime Text, Xcode…)."
+        }
+      >
+        <Select value={current?.id ?? ""} onChange={(e) => setEditor(e.target.value)} disabled={!editors.length} className="w-44">
+          {editors.length ? editors.map((e) => <option key={e.id} value={e.id}>{e.name}</option>) : <option value="">None installed</option>}
+        </Select>
       </Row>
     </Card>
   );
@@ -669,6 +695,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
     render: () => (
       <>
         <TerminalSettings />
+        <EditorSettings />
         <ShortcutSettings />
       </>
     ),

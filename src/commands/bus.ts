@@ -22,6 +22,7 @@ import { withToast } from "@/stores/toasts";
 import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
 import { discardReviewed, mergeReviewed, readReviewsAloud } from "@/features/review/reviews";
 import { readProgressAloud, setTask } from "@/features/progress/progress";
+import { openInEditor } from "@/features/editors/editors";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
 import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, providerName, useWorkspaces, type View, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
@@ -66,6 +67,8 @@ export type Command =
   | { type: "pane.showChanges"; target: PaneRef }
   | { type: "pane.mergeWorktree"; target: PaneRef }
   | { type: "pane.discardWorktree"; target: PaneRef }
+  /** Opens a pane's worktree (or folder), or the workspace's project folder, in a code editor. */
+  | { type: "editor.open"; target: PaneRef | "workspace"; editor?: string }
   /** Jump to the next pane (any workspace) whose agent needs input or finished unseen. */
   | { type: "pane.nextAttention" }
   | { type: "layout.equalize" }
@@ -314,6 +317,12 @@ export function execute(cmd: Command): void {
     case "pane.mergeWorktree": {
       const pane = paneWithWorktree(cmd.target);
       if (pane) void mergeReviewed(pane);
+      return;
+    }
+    case "editor.open": {
+      const id = cmd.target === "workspace" ? null : resolvePane(cmd.target);
+      const pane = id ? s.workspaces.flatMap((w) => w.panes).find((p) => p.id === id) : undefined;
+      void openInEditor(pane ? (pane.worktree?.path ?? pane.cwd) : active().rootDir, cmd.editor);
       return;
     }
     case "pane.discardWorktree": {

@@ -86,6 +86,8 @@ interface WorkspaceState {
   autoApprove: ProviderId[];
   /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
   defaultProvider: ProviderId | null;
+  /** Code editor "Open in editor" uses (see features/editors); null = the first one installed. */
+  editor: string | null;
   /** Shortcut overrides by binding id (see src/commands/keymap.ts); "" = switched off. */
   shortcuts: Record<string, string>;
   /** Browser panel width in px. */
@@ -142,6 +144,7 @@ interface WorkspaceState {
   setAgentModel: (provider: ProviderId, model: string | null) => void;
   setAutoApprove: (provider: ProviderId, on: boolean) => void;
   setDefaultProvider: (provider: ProviderId | null) => void;
+  setEditor: (editor: string | null) => void;
   /** Sets a binding's chord; null restores the default. */
   setShortcut: (id: string, chord: string | null) => void;
   resetShortcuts: () => void;
@@ -224,6 +227,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   agentModels: {},
   autoApprove: [],
   defaultProvider: null,
+  editor: null,
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
   sidePanel: "browser",
@@ -274,6 +278,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       agentModels: ui.agentModels ?? {},
       autoApprove: ui.autoApprove ?? [],
       defaultProvider: ui.defaultProvider ?? null,
+      editor: ui.editor ?? null,
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       sidePanel: ui.sidePanel ?? "browser",
@@ -430,6 +435,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     }),
   setAutoApprove: (provider, on) => set((s) => ({ autoApprove: [...s.autoApprove.filter((p) => p !== provider), ...(on ? [provider] : [])] })),
   setDefaultProvider: (provider) => set({ defaultProvider: provider }),
+  setEditor: (editor) => set({ editor }),
   setShortcut: (id, chord) =>
     set((s) => {
       const shortcuts = { ...s.shortcuts };
@@ -479,6 +485,7 @@ interface Snapshot {
     agentModels?: Record<ProviderId, string>;
     autoApprove?: ProviderId[];
     defaultProvider?: ProviderId | null;
+    editor?: string | null;
     shortcuts?: Record<string, string>;
     browserWidth?: number;
     sidePanel?: "browser" | "device" | "terminal";
@@ -507,7 +514,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
   };
 }
 

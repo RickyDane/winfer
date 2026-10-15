@@ -10,6 +10,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { execute } from "@/commands/bus";
 import { IS_MAC, keysFor } from "@/commands/keymap";
 import type { MenuItem } from "@/components/ContextMenu";
+import { openInEditor, preferredEditor } from "@/features/editors/editors";
 import { reviewFor } from "@/features/review/reviews";
 import { restartTerminal } from "@/features/terminal/xtermRegistry";
 import { getHome } from "@/lib/home";
@@ -20,6 +21,12 @@ import { copyWithToast } from "@/stores/toasts";
 const REVEAL = IS_MAC ? "Reveal in Finder" : "Show in Explorer";
 const reveal = (path: string) => void revealItemInDir(path.replace(/^~(?=[/\\]|$)/, getHome())).catch(() => {});
 const copy = (text: string) => copyWithToast(text, "Copied to the clipboard");
+
+/** "Open in VS Code" for the preferred editor; nothing when no editor is installed. */
+function openInEditorItem(path: string, opts: { disabled?: boolean; hint?: string } = {}): MenuItem[] {
+  const editor = preferredEditor();
+  return editor ? [{ label: `Open in ${editor.name}`, ...opts, run: () => void openInEditor(path) }] : [];
+}
 
 export function workspaceMenu(ws: Workspace): MenuItem[] {
   const agent = providerName(useWorkspaces.getState().providers, defaultProviderId());
@@ -50,6 +57,7 @@ export function workspaceMenu(ws: Workspace): MenuItem[] {
       run: () => useWorkspaces.setState((st) => ({ workspaces: st.workspaces.map((w) => (w.id === ws.id ? { ...w, useWorktrees: !w.useWorktrees } : w)) })),
     },
     "separator",
+    ...openInEditorItem(ws.rootDir),
     { label: REVEAL, run: () => reveal(ws.rootDir) },
     { label: "Copy folder path", run: () => copy(ws.rootDir) },
     "separator",
@@ -99,11 +107,13 @@ export function paneMenu(pane: Pane): MenuItem[] {
           ...(review ? [{ label: "Open its review", run: () => execute({ type: "ui.overlay", overlay: "review" }) }] : []),
           { label: `Merge into ${wt.base}…`, run: () => execute({ type: "pane.mergeWorktree", target }) },
           "separator" as const,
+          ...openInEditorItem(wt.path, { hint: keysFor({ type: "editor.open", target: "focused" }) }),
           { label: REVEAL, run: () => reveal(wt.path) },
           { label: "Copy worktree path", run: () => copy(wt.path) },
           { label: "Copy branch name", run: () => copy(wt.branch) },
         ]
       : [
+          ...openInEditorItem(pane.cwd, { hint: keysFor({ type: "editor.open", target: "focused" }) }),
           { label: REVEAL, run: () => reveal(pane.cwd) },
           { label: "Copy folder path", run: () => copy(pane.cwd) },
         ]),
@@ -130,6 +140,7 @@ export function worktreeMenu(workspace: Workspace, wt: ExistingWorktree, remove:
     ...agents.map((p) => ({ label: `Open ${p.name} here`, disabled: missing, run: () => openInWorktree(workspace, wt, p.id) })),
     { label: "Open a shell here", disabled: missing, run: () => openInWorktree(workspace, wt, "shell") },
     "separator",
+    ...openInEditorItem(wt.info.path, { disabled: missing }),
     { label: REVEAL, disabled: missing, run: () => reveal(wt.info.path) },
     { label: "Copy worktree path", run: () => copy(wt.info.path) },
     { label: "Copy branch name", run: () => copy(wt.info.branch) },

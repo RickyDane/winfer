@@ -33,6 +33,7 @@ import { startStatusTracking } from "@/features/status/agentStatus";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
 import { loadHome } from "@/lib/home";
+import { loadEditors } from "@/features/editors/editors";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
@@ -160,6 +161,7 @@ export function AppShell() {
     void loadProviders();
     void hydrate();
     void loadHome();
+    void loadEditors();
     startTerminalEvents();
     startStatusTracking();
     startVoice();

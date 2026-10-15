@@ -13,6 +13,7 @@ import { providerName, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
 import { isThemeId, THEMES } from "@/features/theme/themes";
 import { pluginTools } from "@/features/plugins/plugins";
+import { preferredEditor, useEditors } from "@/features/editors/editors";
 
 export interface ToolContext {
   providers: Provider[];
@@ -353,6 +354,42 @@ export const TOOLS: ToolDef[] = [
     params: { target: { kind: "enum", ask: "Whose changes?", options: paneTargets } },
     toCommands: (args) => [{ type: "pane.showChanges", target: target(args) }],
     palette: () => [{ title: "Show changes", args: { target: "focused" } }],
+  },
+  {
+    id: "open_in_editor",
+    title: "Open in code editor",
+    description: "Open an agent's worktree or the project folder in a code editor like VS Code, Cursor or Zed",
+    risk: "safe",
+    params: {
+      target: {
+        kind: "enum",
+        ask: "Which folder: a pane's worktree, or the whole project?",
+        options: (ctx) => {
+          const { all: _all, ...panes } = paneTargets(ctx);
+          return { ...panes, workspace: "The workspace's project folder" };
+        },
+      },
+      editor: {
+        kind: "enum",
+        ask: "Which editor? Default if none was named.",
+        options: () => ({ default: "No editor named; use the default", ...Object.fromEntries(useEditors.getState().editors.map((e) => [e.id, e.name])) }),
+      },
+    },
+    toCommands: (args) => [
+      {
+        type: "editor.open",
+        target: args.target === "workspace" ? "workspace" : target(args),
+        editor: args.editor && args.editor !== "default" ? String(args.editor) : undefined,
+      },
+    ],
+    palette: (ctx) => {
+      const editors = useEditors.getState().editors;
+      const first = preferredEditor();
+      const ordered = first ? [first, ...editors.filter((e) => e !== first)] : [];
+      // Without a focused pane it opens the project folder; say which.
+      const what = ctx.focusedPaneId ? "" : " (project folder)";
+      return ordered.map((e) => ({ title: `Open in ${e.name}${what}`, args: { target: "focused", editor: e === first ? "default" : e.id } }));
+    },
   },
   {
     id: "merge_worktree",
