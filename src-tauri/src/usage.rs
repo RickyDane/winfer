@@ -3,7 +3,10 @@
 //! - Claude Code hands its status line command the account's rate limits (5-hour and weekly
 //!   windows). winfer registers `winfer statusline` as the status line: it reports them to the
 //!   app and then runs the user's own status line, so that keeps working.
-//! - Codex records its rate limits after every turn in its session logs (`~/.codex/sessions`).
+//! - Codex: asked live from ChatGPT's usage endpoint with Codex's own sign-in
+//!   (`~/.codex/auth.json`), the numbers `/status` shows. Falls back to the rate limits Codex
+//!   records after every turn in its session logs (`~/.codex/sessions`), which go stale when
+//!   Codex is used elsewhere (another machine, the IDE extension, the cloud).
 //! - OpenCode has no plan limits of its own (it uses whatever model providers are set up), so
 //!   it reports today's tokens and cost.
 
@@ -176,9 +179,58 @@ pub fn claude_statusline_setting(exe: &str) -> Value {
 
 // Codex -----------------------------------------------------------------------------------------
 
+fn codex_home() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".codex")))
+}
+
 fn codex_sessions() -> Option<PathBuf> {
-    let home = std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".codex")))?;
-    Some(home.join("sessions"))
+    Some(codex_home()?.join("sessions"))
+}
+
+const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+
+/// The account's limits right now, from the endpoint Codex's `/status` reads. Needs a ChatGPT
+/// sign-in (API-key users have no plan limits); None when signed out or the token has expired
+/// (Codex refreshes it on its next run).
+fn codex_live() -> Option<Snapshot> {
+    let auth: Value = serde_json::from_str(&std::fs::read_to_string(codex_home()?.join("auth.json")).ok()?).ok()?;
+    let token = auth["tokens"]["access_token"].as_str().filter(|t| !t.is_empty())?;
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
+    let mut req = agent.get(CODEX_USAGE_URL).header("Authorization", &format!("Bearer {token}")).header("User-Agent", "codex-cli");
+    if let Some(account) = auth["tokens"]["account_id"].as_str() {
+        req = req.header("ChatGPT-Account-Id", account);
+    }
+    let body: Value = req.call().ok()?.body_mut().read_json().ok()?;
+    codex_usage_snapshot(&body, now_ms())
+}
+
+/// The usage endpoint's answer as a snapshot.
+pub fn codex_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
+    let limits = &body["rate_limit"];
+    let mut windows: Vec<Window> = ["primary_window", "secondary_window"]
+        .iter()
+        .filter_map(|key| {
+            let w = &limits[*key];
+            let used = w["used_percent"].as_f64()?;
+            let minutes = w["limit_window_seconds"].as_i64().unwrap_or(0) / 60;
+            let resets_at = seconds_or_date(&w["reset_at"]).or_else(|| w["reset_after_seconds"].as_i64().map(|s| at + s * 1000));
+            let (kind, label) = window_label(minutes);
+            Some(Window { kind, label, used_percent: used, resets_at })
+        })
+        .collect();
+    windows.extend(credit_window(&body["spend_control"]["individual_limit"]));
+    (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at })
+}
+
+/// Workspace plans: the member's monthly credit limit.
+fn credit_window(credit: &Value) -> Option<Window> {
+    let left = credit["remaining_percent"].as_f64()?;
+    Some(Window {
+        kind: "month-credit".into(),
+        label: "Monthly credit".into(),
+        used_percent: 100.0 - left,
+        resets_at: seconds_or_date(&credit["resets_at"]),
+    })
 }
 
 /// Session logs, newest first (sessions/YYYY/MM/DD/rollout-*.jsonl).
@@ -257,16 +309,7 @@ pub fn codex_snapshot_in(log: &str) -> Option<Snapshot> {
                 Some(Window { kind, label, used_percent: used, resets_at })
             })
             .collect();
-        // Workspace plans: the member's monthly credit limit.
-        let credit = &limits["individual_limit"];
-        if let Some(left) = credit["remaining_percent"].as_f64() {
-            windows.push(Window {
-                kind: "month-credit".into(),
-                label: "Monthly credit".into(),
-                used_percent: 100.0 - left,
-                resets_at: seconds_or_date(&credit["resets_at"]),
-            });
-        }
+        windows.extend(credit_window(&limits["individual_limit"]));
         (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at })
     })
 }
@@ -316,6 +359,9 @@ pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option
 #[tauri::command]
 pub async fn usage_codex() -> Option<Snapshot> {
     tauri::async_runtime::spawn_blocking(|| {
+        if let Some(live) = codex_live() {
+            return Some(live);
+        }
         let root = codex_sessions()?;
         // The newest reading of the last few sessions (a session started yesterday may still be
         // running, so folder order alone isn't enough).
@@ -545,6 +591,30 @@ mod tests {
         assert_eq!(s.windows.len(), 2);
         assert_eq!((s.windows[0].kind.as_str(), s.windows[0].used_percent), ("week", 8.0));
         assert_eq!((s.windows[1].kind.as_str(), s.windows[1].used_percent, s.windows[1].resets_at), ("month-credit", 0.0, Some(1793000000000)));
+    }
+
+    #[test]
+    fn reads_the_codex_usage_endpoint() {
+        let body = json!({
+            "plan_type": "business",
+            "rate_limit": {
+                "primary_window": { "used_percent": 42, "limit_window_seconds": 18000, "reset_after_seconds": 600, "reset_at": 1792073479 },
+                "secondary_window": { "used_percent": 7, "limit_window_seconds": 604800, "reset_after_seconds": 9000 }
+            },
+            "spend_control": { "reached": false, "individual_limit": { "remaining_percent": 75, "resets_at": 1793000000 } }
+        });
+        let s = codex_usage_snapshot(&body, 1_000_000).unwrap();
+        assert_eq!(s.windows[0], Window { kind: "session".into(), label: "5-hour".into(), used_percent: 42.0, resets_at: Some(1792073479000) });
+        assert_eq!((s.windows[1].kind.as_str(), s.windows[1].used_percent, s.windows[1].resets_at), ("week", 7.0, Some(1_000_000 + 9_000_000)));
+        assert_eq!((s.windows[2].kind.as_str(), s.windows[2].used_percent), ("month-credit", 25.0));
+        assert!(codex_usage_snapshot(&json!({ "rate_limit": null }), 0).is_none());
+    }
+
+    /// Asks the real endpoint with this machine's Codex sign-in: `cargo test codex_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn codex_live_on_this_machine() {
+        println!("{:#?}", codex_live());
     }
 
     #[test]

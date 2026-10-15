@@ -1,7 +1,7 @@
 /**
  * How much of their plan's usage limits the agents have left (see src-tauri/src/usage.rs):
- * Claude Code reports through its status line, Codex is read from its session logs, OpenCode
- * reports today's tokens and cost. Kept across restarts, with samples for a run-out projection.
+ * Claude Code reports through its status line, Codex is asked live from ChatGPT (session logs
+ * as fallback), OpenCode reports today's tokens and cost. Kept across restarts, with samples for a run-out projection.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -175,7 +175,7 @@ function record(snapshot: Snapshot) {
   }
 }
 
-/** The first read after launch replaces whatever was kept: the logs are the source of truth. */
+/** The first read after launch replaces whatever was kept: Codex is the source of truth. */
 let codexRead = false;
 
 export async function refreshCodex() {
