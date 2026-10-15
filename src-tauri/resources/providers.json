@@ -40,7 +40,10 @@
         "label": "Haiku (latest)"
       }
     ],
-    "modelCommand": "/model {model}"
+    "modelCommand": "/model {model}",
+    "autoApproveArgs": [
+      "--dangerously-skip-permissions"
+    ]
   },
   {
     "id": "codex",
@@ -63,7 +66,10 @@
     "statusHooks": true,
     "promptArg": true,
     "approveInput": "y",
-    "modelArg": "--model"
+    "modelArg": "--model",
+    "autoApproveArgs": [
+      "--dangerously-bypass-approvals-and-sandbox"
+    ]
   },
   {
     "id": "agy",
