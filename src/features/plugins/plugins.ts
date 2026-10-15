@@ -21,6 +21,7 @@ import { PRESETS } from "@/features/layout/tree";
 import { toast } from "@/stores/toasts";
 import { providerName, useWorkspaces, type AgentStatus, type Pane, type Workspace } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
+import { describeRequest, type AgentRequest } from "@/features/status/request";
 
 /** Mirrors `Manifest` in src-tauri/src/plugins.rs. */
 export interface PluginManifest {
@@ -153,6 +154,12 @@ export interface PluginApi {
   on<T extends PluginEvent["type"]>(type: T, handler: (event: Extract<PluginEvent, { type: T }>) => void): Disposer;
   /** A read-only snapshot of workspaces and panes. */
   state(): { workspaces: Workspace[]; activeWorkspaceId: string; focusedPaneId: string | null };
+  /** Names a pane like agent tools' `caller` (workspace, label, provider); null if it's gone. */
+  describePane(paneId: string): AgentCaller | null;
+  /** The last `lines` lines (default 40) of a pane's terminal as plain text; null if it's gone. */
+  readPane(paneId: string, lines?: number): Promise<string | null>;
+  /** What an agent waiting for input asks, read from its screen; null if the pane is gone. */
+  paneRequest(paneId: string): Promise<AgentRequest | null>;
   toast(text: string, kind?: "info" | "success" | "error"): void;
 }
 
@@ -428,8 +435,20 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
       const s = useWorkspaces.getState();
       return structuredClone({ workspaces: s.workspaces, activeWorkspaceId: s.activeWorkspaceId, focusedPaneId: s.focusedPaneId });
     },
+    describePane: (paneId) => agentCaller(paneId),
+    readPane: (paneId, lines = 40) => readPane(paneId, lines),
+    async paneRequest(paneId) {
+      const screen = await readPane(paneId, 40);
+      return screen === null ? null : describeRequest(screen);
+    },
     toast: (text, kind = "info") => void toast(text, kind),
   };
+}
+
+async function readPane(paneId: string, lines: number): Promise<string | null> {
+  // Imported here: the terminal registry imports the Command Bus, which imports this module.
+  const { readTerminal } = await import("@/features/terminal/xtermRegistry");
+  return readTerminal(paneId, Math.max(1, Math.min(lines, 2000)));
 }
 
 const manifestName = (id: string) => usePlugins.getState().plugins.find((p) => p.id === id)?.manifest?.name ?? id;

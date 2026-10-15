@@ -68,6 +68,30 @@
           "sha256": "ec500ca905bb72416be221afa1e9d979ac4f27c7475c254bd240bd1f2a87b745"
         }
       ]
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "version": "1.0.0",
+      "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
+      "author": "winfer",
+      "tags": [
+        "notifications",
+        "remote",
+        "mobile",
+        "approvals",
+        "agents"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "cc5207713fdc450b29d92d397dca67e9468ff2a0b653f633e65302796ad2b3a1"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "dca34b6399552596a6e30d157d790e1ca2c60f5522d0136b5813ac85a5593a8d"
+        }
+      ]
     }
   ]
 }

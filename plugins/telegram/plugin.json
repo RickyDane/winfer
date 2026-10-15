@@ -1,0 +1,15 @@
+{
+  "id": "telegram",
+  "name": "Telegram",
+  "version": "1.0.0",
+  "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": [
+    "notifications",
+    "remote",
+    "mobile",
+    "approvals",
+    "agents"
+  ]
+}

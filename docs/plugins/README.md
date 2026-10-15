@@ -82,6 +82,9 @@ export function deactivate() {}  // optional
 | `execute(command)` | Runs any Command Bus command. |
 | `on(type, handler)` | Events: `pane.opened`, `pane.closed`, `pane.status` (`status`, `previous`: idle / working / needs-input / done / error). |
 | `state()` | Snapshot of `workspaces` (with panes), `activeWorkspaceId`, `focusedPaneId`. |
+| `describePane(paneId)` | `{ paneId, workspaceId, workspaceName, cwd, provider, label }` like an agent tool's `caller`, or null. |
+| `readPane(paneId, lines?)` | The last `lines` (default 40) of a pane's terminal as plain text, or null. |
+| `paneRequest(paneId)` | What an agent in `needs-input` asks: `{ kind: "approval" \| "question", text }`, or null. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
 | `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
 | `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, database, file, globe, key, lock, puzzle, shield, star, terminal. |
