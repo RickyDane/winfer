@@ -148,9 +148,9 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Turn the plugin off → the tab and the agent tools are gone (new agents don't list them).
 
 ## Knowledge Base plugin
-Needs graphify (`uv tool install graphifyy`). In the dev server, `?kb` installs it with a fake graph (`?kb=empty` starts without one).
-- [ ] Install Knowledge Base → a "Knowledge" tab. Without graphify it shows the install command and "Check again".
-- [ ] In a repo without `graphify-out/`: "Map code" builds a code graph in seconds and the galaxy forms; "Start agent" opens Claude Code running `/graphify .` in the project folder (no worktree) and the page fills in when it finishes.
+In the dev server, `?kb` installs it with a fake graph (`?kb=empty` starts without one, `?kb=missing` without graphify).
+- [ ] Install Knowledge Base → a "Knowledge" tab. Without graphify: "Install graphify" asks first (lists the commands), installs uv if missing and then graphifyy, and goes straight to "Map …" without restarting winfer. Settings (sliders) → "Update" updates graphify.
+- [ ] In a repo without `graphify-out/`: "Map code" builds a code graph in seconds and the galaxy forms; "Start agent" opens your default agent (Settings → New panes; try Claude Code and Codex) in the project folder (no worktree) running graphify's skill, and the page fills in when it finishes.
 - [ ] Galaxy: drag orbits, right-drag pans, scroll/pinch zooms, double-click a node flies to it (empty space fits all), it slowly spins when idle. Hover shows a card; click opens the inspector with links grouped by relation; Esc clears.
 - [ ] `/` or ⌘F searches nodes and files. Path mode (or shift-click): two nodes → route with comets along it. Impact mode: red shockwave over everything that depends on the node, by depth.
 - [ ] Ask bar: a question highlights the nodes graphify returns; "Ask an agent" opens one with the question. Legend: hover previews a community, click isolates and frames it.

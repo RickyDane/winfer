@@ -2,7 +2,8 @@
  * Dev-only fake graphify for the Knowledge Base plugin (plugins/knowledge-base): answers the shell
  * commands the plugin runs through `vault_exec` with a generated graph of a made-up "orbit" web
  * app, whose files match the showcase agents' transcripts. Open the dev server with `?kb` to
- * install the plugin, or `?kb=empty` to start without a graph.
+ * install the plugin, `?kb=empty` to start without a graph, or `?kb=missing` without graphify
+ * (and uv) to try the installer.
  */
 
 type Node = { id: string; label: string; file_type: string; source_file: string; source_location: string; community: number };
@@ -55,7 +56,10 @@ interface Fake {
 }
 
 let fake: Fake | null = null;
-let exists = MODE !== "empty";
+let exists = MODE !== "empty" && MODE !== "missing";
+let installed = MODE !== "missing";
+let uvInstalled = MODE !== "missing";
+const BIN = "/Users/maya/.local/bin/graphify";
 let generation = 0;
 
 function generate(extra: number): Fake {
@@ -294,8 +298,22 @@ async function gzipBase64(text: string) {
 }
 
 /** Answers one `vault_exec` call of the knowledge-base plugin. */
-export function knowledgeBaseExec(command: string): Promise<{ code: number; timedOut: boolean; output: string }> | { code: number; timedOut: boolean; output: string } {
-  if (command.startsWith("command -v graphify")) return ok("/Users/maya/.local/bin/graphify\ngraphify 0.8.18\n");
+export function knowledgeBaseExec(raw: string): Promise<{ code: number; timedOut: boolean; output: string }> | { code: number; timedOut: boolean; output: string } {
+  // The plugin runs graphify by its full path.
+  const command = raw.replaceAll(`'${BIN}'`, "graphify");
+  if (command.startsWith("b=$(command -v graphify")) {
+    if (!installed) return ok("@@MISSING\n");
+    return ok(`@@BIN ${BIN}\n@@ONPATH 1\n@@VERSION graphify 0.8.18\n@@SKILLS /Users/maya/.local/share/uv/tools/graphifyy/lib/python3.12/site-packages/graphify\n`);
+  }
+  if (command.startsWith("command -v uv")) return ok(uvInstalled ? "/Users/maya/.local/bin/uv\n" : "");
+  if (command.startsWith("curl -LsSf https://astral.sh/uv/install.sh")) {
+    uvInstalled = true;
+    return delay(1800, ok("downloading uv 0.9.2 aarch64-apple-darwin\ninstalling to /Users/maya/.local/bin\neverything's installed!\n"));
+  }
+  if (/uv' tool install --upgrade graphifyy$/.test(command)) {
+    installed = true;
+    return delay(2400, ok("Resolved 14 packages\nInstalled 1 executable: graphify\n"));
+  }
   if (command === 'echo "$HOME"') return ok("/Users/maya\n");
   if (/^\[ -f '[^']+' \] && echo @@YES \|\| echo @@NO$/.test(command)) return ok(exists ? "@@YES\n" : "@@NO\n");
   const noGraph = command.includes("@@NOGRAPH") && !exists;

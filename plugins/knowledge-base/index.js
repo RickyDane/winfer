@@ -502,6 +502,23 @@ const headOf = (command, max = CHUNK) => (IS_WIN ? command : `__o=$(${command} 2
 const STAMP = IS_WIN
   ? `powershell -NoProfile -Command "if (Test-Path ${OUT}/graph.json) { (Get-Item ${OUT}/graph.json).LastWriteTimeUtc.Ticks }"`
   : `date -r ${OUT}/graph.json +%s 2>/dev/null`;
+const UV_INSTALLER = "https://astral.sh/uv/install.sh";
+const UV_INSTALLER_WIN = "https://astral.sh/uv/install.ps1";
+/** graphify's path (on PATH, else where uv installs tools), version and package folder. */
+const DETECT_UNIX = [
+  'b=$(command -v graphify 2>/dev/null); onpath=1',
+  'if [ -z "$b" ]; then onpath=0; for p in "$HOME/.local/bin/graphify" "$HOME/.local/share/uv/tools/graphifyy/bin/graphify" "$HOME/.local/pipx/venvs/graphifyy/bin/graphify"; do if [ -x "$p" ]; then b="$p"; break; fi; done; fi',
+  'if [ -z "$b" ]; then echo @@MISSING; exit 0; fi',
+  'echo "@@BIN $b"',
+  'echo "@@ONPATH $onpath"',
+  'echo "@@VERSION $("$b" --version 2>&1 | head -n 1)"',
+  `py=$(head -n 1 "$b" | sed 's/^#! *//')`,
+  `echo "@@SKILLS $($py -c 'import graphify, os; print(os.path.dirname(graphify.__file__))' 2>/dev/null)"`,
+].join("; ");
+const DETECT_WIN =
+  'powershell -NoProfile -Command "$c = Get-Command graphify -ErrorAction SilentlyContinue; $b = if ($c) { $c.Source } else { $p = Join-Path $env:USERPROFILE \'.local\\bin\\graphify.exe\'; if (Test-Path $p) { $p } }; if (-not $b) { \'@@MISSING\' } else { \'@@BIN \' + $b; \'@@ONPATH \' + [int][bool]$c; \'@@VERSION \' + (& $b --version | Select-Object -First 1) }"';
+const FIND_UV_UNIX = 'command -v uv 2>/dev/null || for p in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do if [ -x "$p" ]; then echo "$p"; break; fi; done';
+const FIND_UV_WIN = 'where uv 2>nul || if exist "%USERPROFILE%\\.local\\bin\\uv.exe" echo %USERPROFILE%\\.local\\bin\\uv.exe';
 /** Runs `command` only if the project has a graph; otherwise prints @@NOGRAPH. */
 const ifGraph = (command) =>
   IS_WIN ? `if exist ${OUT}\\graph.json (${command}) else (echo @@NOGRAPH)` : `if [ -f ${OUT}/graph.json ]; then ${command}; else echo @@NOGRAPH; fi`;
@@ -514,6 +531,24 @@ function snapshotKey(name) {
 }
 
 const lastLines = (text, n = 6) => String(text).trim().split("\n").slice(-n).join("\n");
+
+/**
+ * What the agent doing a deep map is told. It works for any agent: one with graphify's skill
+ * installed runs it; others follow the skill file for their kind of agent from graphify's
+ * package (graphify ships one per agent).
+ */
+function deepMapPrompt(update, gf) {
+  const lines = [
+    `Build a knowledge graph of this project with graphify: run your graphify skill on "." (in Claude Code that is \`/graphify .${update ? " --update" : ""}\`).`,
+    update ? "A graph already exists in graphify-out/, so only re-extract what changed (the skill's --update mode)." : "",
+    gf.skillDir
+      ? `If you don't have a graphify skill, read graphify's instructions for your kind of agent in ${gf.skillDir} (skill-codex.md for Codex, skill-opencode.md for OpenCode, skill-copilot.md for Copilot, skill.md for Claude Code and others) and follow them for the path ".".`
+      : "",
+    gf.bin && !gf.onPath ? `The graphify command is at ${gf.bin}.` : "",
+    "Write the results to graphify-out/ in this folder, then give a short summary.",
+  ];
+  return lines.filter(Boolean).join(" ");
+}
 
 /** Graphs by project folder, settings, graphify's install state and what agents asked lately. */
 function createStore(api) {
@@ -561,20 +596,80 @@ function createStore(api) {
     return k;
   }
 
+  /**
+   * Finds graphify: on the PATH, or where uv puts it (a fresh install isn't on winfer's PATH
+   * until it restarts), plus its version and the folder with its skill files for agents.
+   */
   async function detect() {
     graphify = { ...graphify, state: "checking" };
     changed();
     try {
-      const r = await exec(anyRoot(), IS_WIN ? "where graphify && graphify --version" : "command -v graphify && graphify --version", 30);
-      graphify =
-        r.code === 0
-          ? { state: "ok", path: r.output.trim().split("\n")[0], version: /graphify v?([\d.]+)/i.exec(r.output)?.[1] ?? "" }
-          : { state: "missing", path: "", version: "" };
+      const r = await exec("", IS_WIN ? DETECT_WIN : DETECT_UNIX, 30);
+      const parts = splitMarked(r.output);
+      const bin = (parts.BIN ?? "").trim();
+      graphify = bin
+        ? {
+            state: "ok",
+            path: bin,
+            bin,
+            onPath: parts.ONPATH?.trim() === "1",
+            version: /graphify v?([\d.]+)/i.exec(parts.VERSION ?? "")?.[1] ?? "",
+            skillDir: (parts.SKILLS ?? "").trim(),
+          }
+        : { state: "missing", path: "", version: "", installError: graphify.installError };
     } catch (err) {
       graphify = { state: "missing", path: "", version: "", error: String(err?.message ?? err) };
     }
     changed();
     return graphify.state === "ok";
+  }
+
+  /** The graphify command, quoted, for building shell commands. */
+  const bin = () => (graphify.bin ? q(graphify.bin) : "graphify");
+
+  /**
+   * Installs graphify with uv, installing uv first when it's missing (with its official
+   * installer), or updates it the way it was installed. Progress is in `graphify.step`.
+   */
+  async function install({ update = false } = {}) {
+    const step = (text) => {
+      graphify = { ...graphify, state: update ? graphify.state : "installing", step: text, installError: "" };
+      changed();
+    };
+    try {
+      // ~/.local/bin/graphify is a link; the package folder tells how it was installed.
+      const where = `${graphify.skillDir ?? ""} ${graphify.bin ?? ""}`;
+      if (update && !/[\\/]uv[\\/]tools[\\/]/.test(where)) {
+        if (!/[\\/]pipx[\\/]/.test(where)) throw new Error(`graphify at ${graphify.bin} wasn't installed with uv or pipx; update it the way you installed it.`);
+        step("Updating graphify…");
+        const r = await exec("", "pipx upgrade graphifyy", 900);
+        if (r.code !== 0) throw new Error(lastLines(r.output, 8));
+      } else {
+        step("Looking for uv…");
+        let uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
+        if (!uv) {
+          step("Installing uv…");
+          const r = await exec("", IS_WIN ? `powershell -NoProfile -ExecutionPolicy ByPass -c "irm ${UV_INSTALLER_WIN} | iex"` : `curl -LsSf ${UV_INSTALLER} | sh`, 600);
+          if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing uv failed.");
+          uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
+          if (!uv) throw new Error("uv was installed but winfer can't find it. Restart winfer and try again.");
+        }
+        step(update ? "Updating graphify…" : "Installing graphify…");
+        const r = await exec("", `${q(uv)} tool install --upgrade graphifyy`, 900);
+        if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing graphify failed.");
+      }
+      const was = graphify.version;
+      graphify = { ...graphify, step: "" };
+      if (!(await detect())) throw new Error("graphify was installed but winfer can't find it. Restart winfer and try again.");
+      api.toast(update ? (was === graphify.version ? `graphify ${graphify.version} is up to date` : `graphify updated to ${graphify.version}`) : `graphify ${graphify.version} installed`, "success");
+      return true;
+    } catch (err) {
+      const message = String(err?.message ?? err);
+      graphify = { ...graphify, state: update ? graphify.state : "missing", step: "", installError: message };
+      if (update) api.toast(`Updating graphify failed: ${message}`, "error");
+      changed();
+      return false;
+    }
   }
 
   function apply(k, parts) {
@@ -716,8 +811,8 @@ function createStore(api) {
   /**
    * Builds or updates a project's graph:
    * - "quick": `graphify update`, code only (tree-sitter), no AI, seconds.
-   * - "agent": a Claude Code pane in the project folder runs /graphify, which also reads docs and
-   *   finds concepts and rationale; the page reloads when that agent finishes.
+   * - "agent": the default agent, in a pane in the project folder, runs graphify's skill, which
+   *   also reads docs and finds concepts and rationale; the page reloads when that agent finishes.
    * - "headless": `graphify extract --backend claude` with the API key from this plugin's vault.
    */
   async function build(root, mode, { workspaceId, force = false, quiet = false } = {}) {
@@ -728,7 +823,7 @@ function createStore(api) {
     }
     if (mode === "agent") {
       if (workspaceId && api.state().activeWorkspaceId !== workspaceId) api.execute({ type: "workspace.switch", target: { id: workspaceId } });
-      api.execute({ type: "pane.spawn", provider: "claude", worktree: false, prompt: k.graph ? "/graphify . --update" : "/graphify ." });
+      api.execute({ type: "pane.spawn", provider: "default", worktree: false, prompt: deepMapPrompt(!!k.graph, graphify) });
       api.execute({ type: "ui.view", view: "workspace" });
       k.building = { mode, startedAt: Date.now(), workspaceId };
       changed();
@@ -738,7 +833,7 @@ function createStore(api) {
     k.needsForce = false;
     changed();
     try {
-      const command = mode === "headless" ? "graphify extract . --backend claude" : `graphify update .${force ? " --force" : ""}`;
+      const command = mode === "headless" ? `${bin()} extract . --backend claude` : `${bin()} update .${force ? " --force" : ""}`;
       const r = await exec(root, command, mode === "headless" ? 3600 : 900, mode === "headless" ? [API_KEY] : []);
       k.log = r.output;
       if (r.timedOut) throw new Error("graphify took too long and was stopped.");
@@ -804,6 +899,10 @@ function createStore(api) {
     get graphify() {
       return graphify;
     },
+    get bin() {
+      return bin();
+    },
+    install,
     kb,
     exec,
     detect,
@@ -2546,7 +2645,7 @@ function mountPage(el, store, api) {
     ui.answer = { question, busy: true, text: "", nodes: [] };
     renderAnswer();
     try {
-      const r = await store.exec(k.root, `graphify query ${q(question)} --budget 2000`, 90);
+      const r = await store.exec(k.root, `${store.bin} query ${q(question)} --budget 2000`, 90);
       if (r.code !== 0) throw new Error(lastLines(r.output) || "graphify query failed");
       const nodes = nodesInOutput(k.graph, r.output);
       ui.answer = { question, busy: false, text: r.output.trim(), nodes };
@@ -2772,7 +2871,7 @@ function mountPage(el, store, api) {
           "div",
           { class: "kb-chip kb-glass kb-building" },
           h("span", { class: "kb-spinner" }),
-          h("span", { class: "kb-chip-text" }, building.mode === "agent" ? "Claude Code is mapping the project" : building.mode === "headless" ? "Deep build running" : "Mapping code"),
+          h("span", { class: "kb-chip-text" }, building.mode === "agent" ? "An agent is mapping the project" : building.mode === "headless" ? "Deep build running" : "Mapping code"),
           h("span", { class: "kb-elapsed" }, elapsed(Date.now() - building.startedAt)),
           building.mode === "agent" && h("button", { class: "kb-link", onclick: () => store.cancelBuild(k.root) }, "Stop waiting"),
         ),
@@ -3429,7 +3528,7 @@ function mountPage(el, store, api) {
         content = insightsView(k);
         insights = true;
       }
-    } else if (gf.state === "missing") content = installCard();
+    } else if (gf.state === "missing" || gf.state === "installing") content = installCard();
     else if (!k || k.status === "idle" || k.status === "loading" || gf.state === "unknown" || gf.state === "checking") content = loadingCard();
     else if (k.building) content = buildingCard(k);
     else if (k.status === "error") content = errorCard(k);
@@ -3446,18 +3545,43 @@ function mountPage(el, store, api) {
     return hero("Reading the knowledge graph…", null);
   }
 
+  /** Installs uv (if needed) and graphify after asking, showing what will run. */
+  async function installGraphify() {
+    const hasUv = (await store.exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30).catch(() => ({ output: "" }))).output.trim() !== "";
+    const steps = [
+      ...(hasUv ? [] : [IS_WIN ? `irm ${UV_INSTALLER_WIN} | iex` : `curl -LsSf ${UV_INSTALLER} | sh`]),
+      "uv tool install graphifyy",
+    ];
+    const ok = await api.confirm(
+      `winfer will run:\n\n${steps.join("\n")}\n\n${hasUv ? "" : "uv is a Python package manager from Astral; its installer adds ~/.local/bin to your PATH. "}graphify (from PyPI) then goes to ~/.local/bin. uv downloads Python itself if needed.`,
+      { title: "Install graphify", okLabel: "Install", kind: "info" },
+    );
+    if (ok) await store.install();
+  }
+
   function installCard() {
+    const gf = store.graphify;
+    if (gf.state === "installing") {
+      return hero("Installing graphify", gf.step || "Working…", h("div", { class: "kb-progress" }, h("span", {})), h("p", { class: "kb-subtle" }, "This takes up to a minute the first time."));
+    }
+    const manual = IS_WIN ? [`powershell -c "irm ${UV_INSTALLER_WIN} | iex"`, INSTALL] : [`curl -LsSf ${UV_INSTALLER} | sh`, INSTALL];
     return hero(
       "Install graphify",
-      "The knowledge base is built by graphify, a free command line tool that turns code, docs, papers and images into a knowledge graph. Install it once, then come back here.",
+      "The knowledge base is built by graphify, a free open-source tool that turns code, docs, papers and images into a knowledge graph. winfer can install it for you with uv.",
+      gf.installError && h("div", { class: "kb-alert kb-glass kb-install-error" }, icon("alert"), h("span", { class: "kb-grow" }, gf.installError)),
       h(
         "div",
-        { class: "kb-code-row kb-glass" },
-        h("code", {}, INSTALL),
-        h("button", { class: "kb-btn", onclick: () => copy(INSTALL, "Command copied") }, icon("copy"), "Copy"),
+        { class: "kb-actions kb-center" },
+        h("button", { class: "kb-btn kb-primary kb-big", onclick: () => void installGraphify() }, icon("wand"), gf.installError ? "Try again" : "Install graphify"),
+        h("button", { class: "kb-btn", onclick: () => void store.detect() }, icon("refresh"), "Check again"),
       ),
-      h("p", { class: "kb-subtle" }, "or ", h("code", {}, "pipx install graphifyy"), " · needs Python 3.10+"),
-      h("div", { class: "kb-actions kb-center" }, h("button", { class: "kb-btn kb-primary", onclick: () => void store.detect().then(() => renderAll()) }, icon("refresh"), "Check again")),
+      h(
+        "details",
+        { class: "kb-manual" },
+        h("summary", {}, "Install it yourself"),
+        manual.map((cmd) => h("div", { class: "kb-code-row kb-glass" }, h("code", {}, cmd), h("button", { class: "kb-btn", onclick: () => copy(cmd, "Command copied") }, icon("copy"), "Copy"))),
+        h("p", { class: "kb-subtle" }, "or ", h("code", {}, "pipx install graphifyy"), " · needs Python 3.10+"),
+      ),
     );
   }
 
@@ -3472,11 +3596,11 @@ function mountPage(el, store, api) {
   function buildingCard(k) {
     const agent = k.building.mode === "agent";
     return hero(
-      agent ? "Claude Code is mapping this project" : "Mapping the project…",
+      agent ? "An agent is mapping this project" : "Mapping the project…",
       agent
         ? "It reads the code, docs and notes and works out concepts and why things are the way they are. This page fills in when the agent finishes."
         : k.building.mode === "headless"
-          ? "graphify reads the code and docs with Claude. Big projects take a few minutes."
+          ? "graphify reads the code and docs with Claude through your API key. Big projects take a few minutes."
           : "graphify parses the code. This usually takes seconds.",
       h("div", { class: "kb-progress" }, h("span", {})),
       agent && h("div", { class: "kb-actions kb-center" }, h("button", { class: "kb-btn", onclick: () => store.cancelBuild(k.root) }, "Stop waiting")),
@@ -3496,8 +3620,8 @@ function mountPage(el, store, api) {
         option("terminal", "Quick map", "Functions, classes, files, calls and imports, read straight from the code.", ["Seconds", "No AI", "Free"], h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "quick") }, icon("zap"), "Map code")),
         option(
           "bot",
-          "Deep map with Claude Code",
-          "Adds docs, concepts, design rationale and inferred links. Runs /graphify in a Claude Code pane.",
+          "Deep map with an agent",
+          "Adds docs, concepts, design rationale and inferred links. Your default agent runs graphify's skill in a new pane.",
           ["Minutes", "Uses your agent"],
           h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "agent", { workspaceId: ws?.id }) }, icon("sparkles"), "Start agent"),
         ),
@@ -3731,12 +3855,12 @@ function mountPage(el, store, api) {
           "div",
           { class: "kb-menu kb-glass" },
           item("refresh", "Update code graph", "graphify update · seconds, no AI", () => void store.build(k.root, "quick"), !!k.building),
-          item("bot", "Deep build with Claude Code", "Docs, concepts and rationale in a new pane", () => void store.build(k.root, "agent", { workspaceId: ws?.id }), !!k.building),
+          item("bot", "Deep build with an agent", "Your default agent adds docs, concepts and rationale", () => void store.build(k.root, "agent", { workspaceId: ws?.id }), !!k.building),
           item("key", "Deep build in the background", ui.hasKey ? "Uses your Anthropic API key" : "Add an API key in settings first", () => void store.build(k.root, "headless"), !!k.building || !ui.hasKey),
           item("alert", "Force update", "Keep the new graph even if it's smaller", () => void store.build(k.root, "quick", { force: true }), !!k.building || !k.graph),
           h("div", { class: "kb-menu-sep" }),
-          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", "graphify export html"), !k.graph),
-          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", "graphify tree", true), !k.graph),
+          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", `${store.bin} export html`), !k.graph),
+          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", `${store.bin} tree`, true), !k.graph),
           item("file", "Open the report", "GRAPH_REPORT.md, in the browser panel", () => void openOutput(k, "GRAPH_REPORT.md"), !k.graph),
         ),
       );
@@ -3840,7 +3964,9 @@ function mountPage(el, store, api) {
           "div",
           { class: "kb-graphify-row" },
           h("span", { class: `kb-status-dot${gf.state === "ok" ? " kb-ok-dot" : gf.state === "missing" ? " kb-bad-dot" : ""}` }),
-          h("span", { class: "kb-grow kb-subtle" }, gf.state === "ok" ? `graphify ${gf.version} · ${gf.path}` : gf.state === "missing" ? "graphify isn't installed" : "Checking graphify…"),
+          h("span", { class: "kb-grow kb-subtle", title: gf.path }, gf.step || (gf.state === "ok" ? `graphify ${gf.version} · ${gf.path}` : gf.state === "missing" ? "graphify isn't installed" : "Checking graphify…")),
+          gf.state === "ok" && h("button", { class: "kb-link", disabled: !!gf.step, onclick: () => void store.install({ update: true }) }, "Update"),
+          gf.state === "missing" && h("button", { class: "kb-link", onclick: () => void installGraphify() }, "Install"),
           h("button", { class: "kb-link", onclick: () => void store.detect() }, "Check"),
         ),
       ),
@@ -4313,6 +4439,13 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
 .kb-big-orb span:nth-child(2) { inset: 14px; background: conic-gradient(from 180deg, #7c8cff, #6fe3c1, #ffcf6e, #ff8fb1, #c27bff, #7c8cff); animation: kb-spin 6s linear infinite reverse; box-shadow: 0 0 40px rgb(140 150 255 / .6); }
 .kb-big-orb span:nth-child(3) { inset: 22px; background: radial-gradient(circle at 35% 30%, #ffffff 0%, #d7dbff 22%, #3a3f8f 70%, #12143a 100%); box-shadow: inset 0 -6px 18px rgb(0 0 0 / .4); animation: kb-breathe 4s ease-in-out infinite; }
 @keyframes kb-breathe { 50% { transform: scale(.94); } }
+.kb-big { height: 38px; padding: 0 18px; font-size: 13px; border-radius: 11px; }
+.kb-manual { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 6px; }
+.kb-manual summary { cursor: pointer; font-size: 12px; color: var(--color-fg-subtle); list-style: none; }
+.kb-manual summary:hover { color: var(--color-fg); }
+.kb-manual[open] summary { margin-bottom: 8px; }
+.kb-manual .kb-code-row { margin: 0 auto 6px; }
+.kb-install-error { max-width: 520px; text-align: left; font-family: var(--font-mono); font-size: 11px; }
 .kb-code-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 14px; border-radius: 11px; }
 .kb-code-row code { font-family: var(--font-mono); font-size: 13px; background: none; padding: 0; }
 .kb-progress { width: 260px; height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--color-fg) 10%, transparent); overflow: hidden; }
@@ -4438,7 +4571,7 @@ export function activate(api) {
     if (out.includes("@@NOGRAPH")) throw new Error(noGraph(root));
     if (r.timedOut) throw new Error("graphify took too long and was stopped.");
     if (r.code !== 0) {
-      if (r.code === 127 || /command not found|not recognized/i.test(out)) throw new Error(`graphify isn't installed. Ask the user to install it: ${INSTALL}`);
+      if (r.code === 127 || /command not found|not recognized/i.test(out)) throw new Error("graphify isn't installed. Ask the user to install it from winfer's Knowledge page (one click).");
       throw new Error(out || `graphify failed (exit code ${r.code}).`);
     }
     if (record) store.record({ root, workspaceId: caller.workspaceId, paneId: caller.paneId, provider: caller.provider, label: caller.label, tool, output: out, summary });
@@ -4468,7 +4601,7 @@ export function activate(api) {
     run: (args, caller) => {
       const question = need(args.question, "question");
       const budget = clamp(Math.round(Number(args.budget) || 1500), 200, 6000);
-      return graphify(caller, "kb_query", `graphify query ${q(question)} --budget ${budget}${args.depth_first ? " --dfs" : ""}`, { summary: question });
+      return graphify(caller, "kb_query", `${store.bin} query ${q(question)} --budget ${budget}${args.depth_first ? " --dfs" : ""}`, { summary: question });
     },
   });
 
@@ -4479,7 +4612,7 @@ export function activate(api) {
     inputSchema: { type: "object", properties: { node: { type: "string", description: "The node's label as kb_query shows it" } }, required: ["node"] },
     run: (args, caller) => {
       const node = need(args.node, "node");
-      return graphify(caller, "kb_explain", `graphify explain ${q(node)}`, { summary: node });
+      return graphify(caller, "kb_explain", `${store.bin} explain ${q(node)}`, { summary: node });
     },
   });
 
@@ -4494,7 +4627,7 @@ export function activate(api) {
     run: (args, caller) => {
       const from = need(args.from, "from");
       const to = need(args.to, "to");
-      return graphify(caller, "kb_path", `graphify path ${q(from)} ${q(to)}`, { summary: `${from} → ${to}` });
+      return graphify(caller, "kb_path", `${store.bin} path ${q(from)} ${q(to)}`, { summary: `${from} → ${to}` });
     },
   });
 
@@ -4510,7 +4643,7 @@ export function activate(api) {
     run: (args, caller) => {
       const node = need(args.node, "node");
       const depth = clamp(Math.round(Number(args.depth) || 2), 1, 4);
-      return graphify(caller, "kb_affected", `graphify affected ${q(node)} --depth ${depth}`, { summary: node });
+      return graphify(caller, "kb_affected", `${store.bin} affected ${q(node)} --depth ${depth}`, { summary: node });
     },
   });
 
@@ -4548,7 +4681,7 @@ export function activate(api) {
     },
     run: async (args, caller) => {
       const nodes = Array.isArray(args.nodes) ? args.nodes.map(text).filter(Boolean).slice(0, 50) : [];
-      await graphify(caller, "kb_save", `graphify save-result --question ${q(need(args.question, "question"))} --answer ${q(need(args.answer, "answer"))} --type query${nodes.length ? ` --nodes ${nodes.map(q).join(" ")}` : ""}`, { record: false });
+      await graphify(caller, "kb_save", `${store.bin} save-result --question ${q(need(args.question, "question"))} --answer ${q(need(args.answer, "answer"))} --type query${nodes.length ? ` --nodes ${nodes.map(q).join(" ")}` : ""}`, { record: false });
       return "Saved to the knowledge graph's memory.";
     },
   });
@@ -4591,8 +4724,8 @@ export function activate(api) {
   });
   api.registerTool({
     id: "deep_build",
-    title: "Knowledge: deep build with Claude Code",
-    description: "Build a full knowledge graph of the code and docs with a Claude Code agent",
+    title: "Knowledge: deep build with an agent",
+    description: "Build a full knowledge graph of the code and docs with the default agent",
     risk: "confirm",
     palette: true,
     run: () => {
