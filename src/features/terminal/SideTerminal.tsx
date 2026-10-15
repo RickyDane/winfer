@@ -31,6 +31,7 @@ const shellPane = (workspace: Workspace): Pane => ({
   worktree: null,
   wantsWorktree: false,
   resume: false,
+  sessionId: null,
   unseen: false,
   devUrl: null,
   raceId: null,

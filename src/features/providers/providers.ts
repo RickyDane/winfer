@@ -9,6 +9,8 @@ export interface Provider {
   command: string | null;
   args: string[];
   resumeArgs: string[];
+  /** Resumes one session by id (`{session}` is replaced), when the CLI supports it. */
+  resumeSessionArgs?: string[];
   aliases: string[];
   /** Reports status through hooks; otherwise status is inferred from output. */
   statusHooks: boolean;

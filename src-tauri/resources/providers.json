@@ -7,6 +7,10 @@
     "resumeArgs": [
       "--continue"
     ],
+    "resumeSessionArgs": [
+      "--resume",
+      "{session}"
+    ],
     "aliases": [
       "claude",
       "claude code",
@@ -46,6 +50,10 @@
     "resumeArgs": [
       "resume",
       "--last"
+    ],
+    "resumeSessionArgs": [
+      "resume",
+      "{session}"
     ],
     "aliases": [
       "codex",
@@ -100,6 +108,10 @@
     ],
     "resumeArgs": [
       "--continue"
+    ],
+    "resumeSessionArgs": [
+      "--session",
+      "{session}"
     ],
     "promptFlag": "--prompt",
     "statusHooks": true,

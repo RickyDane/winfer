@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { fetchModels, fetchProviders, type ModelInfo, type Provider, type ProviderId } from "@/features/providers/providers";
 import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
+import { getHome } from "@/lib/home";
 import { DEFAULT_THEME, isThemeId, themeById } from "@/features/theme/themes";
 
 /** Main area: workspace tiles, the overview, or a plugin page (`page:<plugin>/<page>`). */
@@ -30,6 +31,8 @@ export interface Pane {
   wantsWorktree: boolean;
   /** Restored from a previous session: spawn with the provider's resume args. */
   resume: boolean;
+  /** The agent's own session id (reported by its hooks), resumed after a restart. */
+  sessionId: string | null;
   /** Status changed while the user wasn't looking at this pane. */
   unseen: boolean;
   /** Latest local dev-server URL printed in this pane (e.g. http://localhost:5173/). */
@@ -112,6 +115,8 @@ interface WorkspaceState {
   progressConfig: { enabled?: boolean; intervalSec?: number };
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
+  /** Last session id per agent and folder (`provider:path`), so a reopened worktree resumes it (persisted). */
+  recentSessions: Record<string, string>;
   /** Voice model choices, persisted and pushed to the backend on launch. */
   voiceConfig: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string };
   hydrate: () => Promise<void>;
@@ -127,13 +132,15 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
   /** Names a session; an empty name goes back to the agent's own title. */
   renamePane: (id: string, name: string) => void;
   setPaneStatus: (id: string, status: AgentStatus) => void;
+  /** Records the agent session a pane runs, reported by the agent's hooks. */
+  setPaneSession: (id: string, sessionId: string) => void;
   /** Applies a change to the active workspace. */
   updateActive: (fn: (w: Workspace) => Partial<Workspace>) => void;
   openPalette: (query?: string) => void;
@@ -243,6 +250,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   reviewConfig: {},
   progressConfig: {},
   searchPaneId: null,
+  recentSessions: {},
   voiceConfig: {},
 
   hydrate: async () => {
@@ -255,16 +263,17 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       return;
     }
 
-    // Only one restored pane per provider + directory resumes its last session; others
-    // sharing that directory would all resume the same conversation.
+    // Panes resume their own session by id. Without one (the agent never reported it), only one
+    // restored pane per provider + directory resumes the folder's last session; others sharing
+    // that directory would all resume the same conversation.
     const resumed = new Set<string>();
     const workspaces: Workspace[] = snapshot.workspaces.map((w) => ({
       ...w,
       panes: w.panes.map((p) => {
         const key = `${p.provider}:${p.cwd}`;
-        const resume = !resumed.has(key);
-        resumed.add(key);
-        return { ...p, raceId: p.raceId ?? null, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        const resume = !!p.sessionId || !resumed.has(key);
+        if (!p.sessionId) resumed.add(key);
+        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -293,6 +302,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       overview: { layout: ui.overviewLayout ?? null, zoomedPaneId: null, presetIndex: GRID },
       reviewConfig: ui.review ?? {},
       progressConfig: ui.progress ?? {},
+      recentSessions: ui.recentSessions ?? {},
     });
   },
 
@@ -365,7 +375,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             status: "idle",
             worktree: opts?.existingWorktree ?? null,
             wantsWorktree: !opts?.existingWorktree && provider !== "shell" && (opts?.worktree ?? w.useWorktrees),
-            resume: false,
+            resume: !!opts?.resumeSession,
+            sessionId: opts?.resumeSession ?? null,
             unseen: false,
             devUrl: null,
             agentTitle: null,
@@ -413,6 +424,20 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     const s = get();
     const visible = s.focusedPaneId === id && document.hasFocus();
     s.updatePane(id, { status, unseen: !visible && (status === "needs-input" || status === "done" || status === "error") });
+  },
+
+  setPaneSession: (id, sessionId) => {
+    const pane = get().workspaces.flatMap((w) => w.panes).find((p) => p.id === id);
+    if (!pane || pane.provider === "shell") return;
+    const key = sessionKey(pane.provider, pane.worktree?.path ?? pane.cwd);
+    if (pane.sessionId === sessionId && get().recentSessions[key] === sessionId) return;
+    get().updatePane(id, { sessionId });
+    set((s) => {
+      // Newest last; only the most recent folders are kept.
+      const { [key]: _, ...rest } = s.recentSessions;
+      const entries = [...Object.entries(rest), [key, sessionId]].slice(-MAX_RECENT_SESSIONS);
+      return { recentSessions: Object.fromEntries(entries) };
+    });
   },
 
   updateActive: (fn) =>
@@ -469,6 +494,22 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   toggleBrowser: () => set((s) => ({ browserOpen: !s.browserOpen })),
 }));
 
+const MAX_RECENT_SESSIONS = 200;
+
+/** Key of `recentSessions`: the agent and the folder it ran in ("~" expanded, so both spellings match). */
+export function sessionKey(provider: ProviderId, path: string): string {
+  const home = getHome();
+  const full = home && (path === "~" || path.startsWith("~/")) ? home + path.slice(1) : path;
+  return `${provider}:${full.replace(/(.)\/+$/, "$1")}`;
+}
+
+/** The agent session last run in `path` that no open pane is running, if any. */
+export function recentSession(provider: ProviderId, path: string, s: Pick<WorkspaceState, "recentSessions" | "workspaces"> = useWorkspaces.getState()): string | null {
+  const id = s.recentSessions[sessionKey(provider, path)];
+  if (!id || s.workspaces.some((w) => w.panes.some((p) => p.sessionId === id))) return null;
+  return id;
+}
+
 export const useActiveWorkspace = () =>
   useWorkspaces((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId));
 
@@ -478,7 +519,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null; agentTitle?: string | null; customTitle?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -503,6 +544,7 @@ interface Snapshot {
     overviewLayout?: LayoutNode | null;
     review?: { autoTests?: boolean; screenshots?: boolean };
     progress?: { enabled?: boolean; intervalSec?: number };
+    recentSessions?: Record<string, string>;
   } | null;
 }
 
@@ -519,9 +561,9 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, recentSessions: s.recentSessions },
   };
 }
 

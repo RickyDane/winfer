@@ -125,7 +125,9 @@ export function startStatusTracking() {
   if (started) return;
   started = true;
   void listen<Parameters<typeof onNotificationAction>[0]>("notification://action", ({ payload }) => onNotificationAction(payload));
-  void listen<{ paneId: string; status: AgentStatus; message?: string; reply?: string | null }>("agent://status", ({ payload }) => {
+  void listen<{ paneId: string; status: AgentStatus; message?: string; reply?: string | null; session?: string | null }>("agent://status", ({ payload }) => {
+    // Remembered so the pane (or its worktree, reopened later) resumes this very session.
+    if (payload.session) useWorkspaces.getState().setPaneSession(payload.paneId, payload.session);
     // Set before the status change so plugins see the reply with the "done" event.
     if (payload.status === "done") setLastReply(payload.paneId, payload.reply);
     reportStatus(payload.paneId, payload.status, payload.message ?? undefined);

@@ -16,6 +16,9 @@ pub struct Provider {
     pub args: Vec<String>,
     #[serde(default)]
     pub resume_args: Vec<String>,
+    /// Resumes one specific session; `{session}` is replaced with its id (from the hooks).
+    #[serde(default)]
+    pub resume_session_args: Vec<String>,
     #[serde(default)]
     pub aliases: Vec<String>,
     /// Reports status through hooks (see hooks.rs) instead of output heuristics.

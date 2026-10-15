@@ -61,6 +61,10 @@ pub struct SpawnRequest {
     /// Append the provider's resume arguments (used when restoring panes after a restart).
     #[serde(default)]
     resume: bool,
+    /// The agent session to resume (captured from its hooks); without one, resuming picks the
+    /// most recent session in the folder.
+    #[serde(default)]
+    session: Option<String>,
     /// Initial prompt for a fresh agent (race mode, voice "open claude and tell it to …").
     #[serde(default)]
     prompt: Option<String>,
@@ -119,6 +123,7 @@ fn agent_args(
     hook_args: Vec<String>,
     model: Option<&str>,
     resume: bool,
+    session: Option<&str>,
     prompt: Option<&str>,
 ) -> Vec<String> {
     let mut args = mcp_args;
@@ -128,7 +133,10 @@ fn agent_args(
     if let (Some(flag), Some(model)) = (&provider.model_arg, model.filter(|m| !m.is_empty())) {
         args.extend([flag.clone(), model.to_string()]);
     }
-    if resume {
+    let session = session.filter(|s| !s.is_empty() && !provider.resume_session_args.is_empty());
+    if let (true, Some(session)) = (resume, session) {
+        args.extend(provider.resume_session_args.iter().map(|a| a.replace("{session}", session)));
+    } else if resume {
         args.extend(provider.resume_args.iter().cloned());
     } else if let Some(prompt) = prompt {
         if let Some(flag) = &provider.prompt_flag {
@@ -195,6 +203,7 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 hooks,
                 req.model.as_deref(),
                 req.resume,
+                req.session.as_deref(),
                 req.prompt.as_deref().filter(|_| !launcher.batch),
             ));
             cmd
@@ -407,6 +416,7 @@ mod tests {
             cwd: Some("~".into()),
             workspace_id: Some("ws-test".into()),
             resume: false,
+            session: None,
             prompt: None,
             model: None,
             auto_approve: false,
@@ -455,6 +465,7 @@ mod tests {
             vec!["--settings".into(), "/hooks.json".into()],
             None,
             false,
+            None,
             Some("fix the login bug"),
         );
         assert_eq!(
@@ -467,11 +478,16 @@ mod tests {
                 "fix the login bug"
             ]
         );
-        let resumed = agent_args(claude, vec![], vec![], Some("opus"), true, Some("ignored"));
+        let resumed = agent_args(claude, vec![], vec![], Some("opus"), true, None, Some("ignored"));
         assert_eq!(resumed, ["--model", "opus", "--continue"]);
+        let by_id = agent_args(claude, vec![], vec![], None, true, Some("abc-123"), None);
+        assert_eq!(by_id, ["--resume", "abc-123"]);
+        // A known session only matters when resuming.
+        assert!(agent_args(claude, vec![], vec![], None, false, Some("abc-123"), None).is_empty());
         // OpenCode has no launch-time model flag and takes the prompt as an option.
         let opencode = &providers::find("opencode").unwrap();
-        assert_eq!(agent_args(opencode, vec![], vec![], Some("opencode/big-pickle"), false, Some("fix it")), ["--prompt", "fix it"]);
+        assert_eq!(agent_args(opencode, vec![], vec![], Some("opencode/big-pickle"), false, None, Some("fix it")), ["--prompt", "fix it"]);
+        assert_eq!(agent_args(opencode, vec![], vec![], None, true, Some("ses_1"), None), ["--session", "ses_1"]);
         let codex = &providers::find("codex").unwrap();
         assert_eq!(
             agent_args(
@@ -480,9 +496,14 @@ mod tests {
                 vec![],
                 Some("gpt-5.5"),
                 true,
+                None,
                 None
             ),
             ["-c", "a=1", "--model", "gpt-5.5", "resume", "--last"]
+        );
+        assert_eq!(
+            agent_args(codex, vec!["-c".into(), "a=1".into()], vec![], None, true, Some("0199-uuid"), None),
+            ["-c", "a=1", "resume", "0199-uuid"]
         );
     }
 
@@ -500,6 +521,7 @@ mod tests {
             cwd: None,
             workspace_id: None,
             resume: false,
+            session: None,
             prompt: None,
             model: None,
             auto_approve: false,

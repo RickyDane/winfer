@@ -221,6 +221,7 @@ async function spawn(entry: Entry) {
         cwd: entry.pane.cwd,
         workspaceId: entry.pane.workspaceId,
         resume: entry.pane.resume,
+        session: entry.pane.resume ? entry.pane.sessionId : null,
         prompt: entry.pane.prompt,
         model: entry.pane.model,
         autoApprove: useWorkspaces.getState().autoApprove.includes(entry.pane.provider),

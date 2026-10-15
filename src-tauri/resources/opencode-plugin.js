@@ -36,7 +36,8 @@ export default {
         const sessionID = data.sessionID ?? data.form?.sessionID;
         if (type === "session.created" && data.parentID) subagents.add(sessionID);
         else if ((TURN.includes(type) && !subagents.has(sessionID)) || PROMPT.includes(type)) {
-          void send(type, sessionID, message(type, data));
+          // Only the main session's id is reported: it's the one winfer resumes after a restart.
+          void send(type, subagents.has(sessionID) ? undefined : sessionID, message(type, data));
         }
       }
     })().catch(() => {});

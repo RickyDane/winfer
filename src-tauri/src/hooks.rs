@@ -40,7 +40,8 @@ struct StatusEvent {
     event: String,
     status: &'static str,
     message: Option<String>,
-    /// The agent's session id, when the event names it (Codex's `thread-id`).
+    /// The agent's session id, when the event names it (Claude Code's and OpenCode's
+    /// `session_id`, Codex's `thread-id`); winfer resumes it after a restart.
     session: Option<String>,
     /// The agent's final reply of the turn, on "done" events that carry it.
     reply: Option<String>,

@@ -14,7 +14,7 @@ import { openInEditor, preferredEditor } from "@/features/editors/editors";
 import { reviewFor } from "@/features/review/reviews";
 import { restartTerminal } from "@/features/terminal/xtermRegistry";
 import { getHome } from "@/lib/home";
-import { defaultProviderId, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
+import { defaultProviderId, providerName, recentSession, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import type { ExistingWorktree } from "@/features/worktree/worktree";
 import { copyWithToast } from "@/stores/toasts";
 
@@ -90,7 +90,7 @@ export function paneMenu(pane: Pane, rename: () => void): MenuItem[] {
     ...(isAgent
       ? [
           { label: "Restart agent (resume session)", run: () => {
-              s.updatePane(pane.id, { resume: provider?.resumeArgs.length ? true : false, prompt: null });
+              s.updatePane(pane.id, { resume: !!(pane.sessionId && provider?.resumeSessionArgs?.length) || !!provider?.resumeArgs.length, prompt: null });
               const fresh = useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === pane.id);
               if (fresh) restartTerminal(fresh);
             } },
@@ -125,13 +125,26 @@ export function paneMenu(pane: Pane, rename: () => void): MenuItem[] {
   ];
 }
 
-/** Opens `provider` (or a shell) inside an existing worktree of `workspace`. */
-export function openInWorktree(workspace: Workspace, wt: ExistingWorktree, provider: string) {
+/** The agent's last session in a worktree that no open pane runs, if the agent can resume it. */
+export function worktreeSession(workspace: Workspace, wt: ExistingWorktree, provider: string): string | null {
+  const s = useWorkspaces.getState();
+  if (!s.providers.find((p) => p.id === provider)?.resumeSessionArgs?.length) return null;
+  // Panes in the project folder itself may have been opened at the workspace's root path.
+  const paths = wt.isMain ? [wt.info.path, workspace.rootDir] : [wt.info.path];
+  return paths.map((path) => recentSession(provider, path, s)).find((id) => id) ?? null;
+}
+
+/**
+ * Opens `provider` (or a shell) inside an existing worktree of `workspace`, resuming the agent's
+ * last session there unless `fresh`.
+ */
+export function openInWorktree(workspace: Workspace, wt: ExistingWorktree, provider: string, fresh = false) {
   const s = useWorkspaces.getState();
   if (s.activeWorkspaceId !== workspace.id) s.setActiveWorkspace(workspace.id);
+  const resumeSession = fresh ? undefined : (worktreeSession(workspace, wt, provider) ?? undefined);
   // In the project folder itself the agent works directly on its branch, without a worktree.
-  if (wt.isMain) s.addPane(provider, { workspaceId: workspace.id, worktree: false, cwd: wt.info.path });
-  else s.addPane(provider, { workspaceId: workspace.id, existingWorktree: wt.info });
+  if (wt.isMain) s.addPane(provider, { workspaceId: workspace.id, worktree: false, cwd: wt.info.path, resumeSession });
+  else s.addPane(provider, { workspaceId: workspace.id, existingWorktree: wt.info, resumeSession });
 }
 
 export function worktreeMenu(workspace: Workspace, wt: ExistingWorktree, remove: () => void): MenuItem[] {
@@ -139,7 +152,14 @@ export function worktreeMenu(workspace: Workspace, wt: ExistingWorktree, remove:
   const agents = s.providers.filter((p) => p.installed && p.id !== "shell");
   const missing = wt.prunable;
   return [
-    ...agents.map((p) => ({ label: `Open ${p.name} here`, disabled: missing, run: () => openInWorktree(workspace, wt, p.id) })),
+    ...agents.flatMap((p) =>
+      worktreeSession(workspace, wt, p.id)
+        ? [
+            { label: `Resume ${p.name} session here`, disabled: missing, run: () => openInWorktree(workspace, wt, p.id) },
+            { label: `New ${p.name} session here`, disabled: missing, run: () => openInWorktree(workspace, wt, p.id, true) },
+          ]
+        : [{ label: `Open ${p.name} here`, disabled: missing, run: () => openInWorktree(workspace, wt, p.id) }],
+    ),
     { label: "Open a shell here", disabled: missing, run: () => openInWorktree(workspace, wt, "shell") },
     "separator",
     ...openInEditorItem(wt.info.path, { disabled: missing }),
