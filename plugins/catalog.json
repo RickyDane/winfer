@@ -26,7 +26,7 @@
     {
       "id": "secrets",
       "name": "Secrets",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Keep API keys, environment variables and logins in your keychain. Agents use them by name without ever seeing the values.",
       "author": "winfer",
       "tags": [
@@ -38,11 +38,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "42a408d45c2efaceaa7cfa525604999c2e2ac8865671be3714f8eb5759220091"
+          "sha256": "b8cfc546ad7b668282a266920f10ae08be953ddeea151df8ea1d50952107d0f3"
         },
         {
           "path": "plugin.json",
-          "sha256": "161c684ee4b23794d0a679d520018580ab955025cd9c51a0487aecf6f66b37c5"
+          "sha256": "d8f422312b5e1408c71cf8bd94722a62071706a1f87e5da0f6cc351022a77ef2"
         }
       ]
     },
