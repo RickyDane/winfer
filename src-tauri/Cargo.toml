@@ -68,3 +68,4 @@ whisper-rs = "0.16.0"
 
 [target."cfg(windows)".dependencies]
 tauri-winrt-notification = "0.8.1"
+winreg = "0.56.0"

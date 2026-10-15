@@ -216,9 +216,90 @@ fn resolve() -> Option<HashMap<String, String>> {
     vars.contains_key("PATH").then_some(vars)
 }
 
+/// Windows apps inherit PATH from whoever started them, which isn't always the user: after an
+/// update the installer relaunches the app, possibly elevated under an admin account, and a
+/// PATH snapshot taken before a CLI was installed goes stale. Rebuild it from the registry the
+/// way Explorer does (system Path, then user Path), keeping entries only the parent added.
 #[cfg(windows)]
 fn resolve() -> Option<HashMap<String, String>> {
-    None
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    let read = |root, key: &str| -> Option<String> {
+        RegKey::predef(root)
+            .open_subkey(key)
+            .ok()?
+            .get_value::<String, _>("Path")
+            .ok()
+    };
+    let system = read(
+        HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+    );
+    let user = read(HKEY_CURRENT_USER, "Environment");
+    if system.is_none() && user.is_none() {
+        return None;
+    }
+
+    let mut vars: HashMap<String, String> = std::env::vars().collect();
+    let key = vars
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case("PATH"))
+        .cloned()
+        .unwrap_or_else(|| "Path".into());
+    let registry = [system, user]
+        .into_iter()
+        .flatten()
+        .map(|p| expand_vars(&p, &vars))
+        .collect::<Vec<_>>()
+        .join(";");
+    let inherited = vars.get(&key).cloned().unwrap_or_default();
+    vars.insert(key, merge_paths(&registry, &inherited));
+    Some(vars)
+}
+
+/// Expands `%NAME%` references (registry Paths are REG_EXPAND_SZ). Unknown names stay as-is.
+#[cfg(any(windows, test))]
+fn expand_vars(text: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let name = &after[..end];
+        match vars.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
+            Some((_, value)) if !name.is_empty() => {
+                out.push_str(value);
+                rest = &after[end + 1..];
+            }
+            // Not a variable: keep the first `%` and look for one starting at the second.
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `primary`'s entries, then those of `extra` it lacks; empty and duplicate entries dropped
+/// (compared case-insensitively, ignoring a trailing backslash).
+#[cfg(any(windows, test))]
+fn merge_paths(primary: &str, extra: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    primary
+        .split(';')
+        .chain(extra.split(';'))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .filter(|p| seen.insert(p.trim_end_matches('\\').to_lowercase()))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 #[cfg(test)]
@@ -239,6 +320,29 @@ mod tests {
         assert_eq!(node_shim_script(pnpm).unwrap(), ["..", "cli", "bin", "run.js"].join(sep));
         // Not a Node shim.
         assert_eq!(node_shim_script("@echo off\r\nsomething.exe %*\r\n"), None);
+    }
+
+    #[test]
+    fn expands_registry_path_variables() {
+        use super::expand_vars;
+        let vars = [("USERPROFILE", r"C:\Users\me"), ("SystemRoot", r"C:\Windows")]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .into();
+        assert_eq!(
+            expand_vars(r"%SystemRoot%\system32;%userprofile%\AppData\Roaming\npm", &vars),
+            r"C:\Windows\system32;C:\Users\me\AppData\Roaming\npm"
+        );
+        assert_eq!(expand_vars("100%;%NOPE%;50%", &vars), "100%;%NOPE%;50%");
+        assert_eq!(expand_vars("a%%b%USERPROFILE%", &vars), r"a%%bC:\Users\me");
+    }
+
+    #[test]
+    fn merges_paths_without_duplicates() {
+        use super::merge_paths;
+        assert_eq!(
+            merge_paths(r"C:\Windows;C:\npm\;;", r"c:\windows;C:\npm;D:\extra"),
+            r"C:\Windows;C:\npm\;D:\extra"
+        );
     }
 
     #[test]
