@@ -35,6 +35,10 @@ const MAX_3D_NODES = 10_000;
 const VIEWS = ["2d", "flat", "3d"];
 /** A project opens showing only nodes with at least this many links. */
 const DEFAULT_MIN_DEGREE = 20;
+/** The Links slider tops out here. */
+const MAX_MIN_DEGREE = 100;
+/** Projects with at least this many nodes open at the slider's top instead. */
+const GIANT_NODES = 50_000;
 
 // Helpers ----------------------------------------------------------------------------------------
 
@@ -2693,7 +2697,10 @@ function mountPage(el, store, api) {
       resetView();
       ui.selected = keep;
       // A fresh project starts on its well-connected core; the Links slider shows the rest.
-      if (!reload) ui.minDegree = Math.min(DEFAULT_MIN_DEGREE, Math.min(40, k.graph.degree.reduce((m, d) => Math.max(m, d), 0)));
+      if (!reload) {
+        const start = k.graph.n >= GIANT_NODES ? MAX_MIN_DEGREE : DEFAULT_MIN_DEGREE;
+        ui.minDegree = Math.min(start, MAX_MIN_DEGREE, k.graph.degree.reduce((m, d) => Math.max(m, d), 0));
+      }
       applyFilters();
       applyFocus();
     }
@@ -3836,7 +3843,7 @@ function mountPage(el, store, api) {
     const confCounts = [0, 0, 0];
     for (let e = 0; e < g.m; e++) confCounts[g.conf[e]]++;
     const toggle = (on, ic, title, fn) => h("button", { class: `kb-tool${on ? " kb-on" : ""}`, title, onclick: fn }, icon(ic));
-    const maxDegree = Math.min(40, g.degree.reduce((m, d) => Math.max(m, d), 0));
+    const maxDegree = Math.min(MAX_MIN_DEGREE, g.degree.reduce((m, d) => Math.max(m, d), 0));
     const degreeValue = h("span", { class: "kb-range-v" }, ui.minDegree ? `≥ ${ui.minDegree}` : "all");
     const parts = [
       h("div", { class: "kb-segs" }, seg("explore", "Explore", "orbit", "Click a node to inspect it"), seg("path", "Path", "route", "Click two nodes to see how they connect"), seg("impact", "Impact", "zap", "Click a node to see what depends on it"), seg("flow", "Flow", "flow", "Click a function to replay its calls step by step")),
