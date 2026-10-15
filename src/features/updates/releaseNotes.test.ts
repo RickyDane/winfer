@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseChanges, splitArea } from "./releaseNotes";
+import { compareVersions, parseChanges, releasesBetween, splitArea } from "./releaseNotes";
 
 const BODY = `### Changes
 - Plugins: add Telegram, answer agents from your phone
@@ -34,5 +34,34 @@ describe("splitArea", () => {
 
   it("leaves plain subjects alone", () => {
     expect(splitArea("fix crash on start")).toEqual({ area: null, text: "fix crash on start" });
+  });
+});
+
+describe("compareVersions", () => {
+  it("compares numerically", () => {
+    expect(compareVersions("0.1.9", "0.1.10")).toBeLessThan(0);
+    expect(compareVersions("v0.2.0", "0.1.43")).toBeGreaterThan(0);
+    expect(compareVersions("0.1.43", "v0.1.43")).toBe(0);
+  });
+});
+
+describe("releasesBetween", () => {
+  const releases = [
+    { tag_name: "v0.1.44", body: "- four" },
+    { tag_name: "v0.1.43", body: "- three" },
+    { tag_name: "v0.1.42", body: "- two" },
+    { tag_name: "v0.1.41", body: "- one" },
+    { tag_name: "v0.1.45", body: "- draft", draft: true },
+  ];
+
+  it("lists every release after the current one, newest first", () => {
+    expect(releasesBetween(releases, "0.1.41", "0.1.43")).toEqual([
+      { version: "0.1.43", changes: ["three"] },
+      { version: "0.1.42", changes: ["two"] },
+    ]);
+  });
+
+  it("takes only the target without a starting version", () => {
+    expect(releasesBetween(releases, null, "0.1.44")).toEqual([{ version: "0.1.44", changes: ["four"] }]);
   });
 });

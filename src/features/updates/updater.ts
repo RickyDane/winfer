@@ -3,7 +3,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
 import { toast, updateToast } from "@/stores/toasts";
-import { parseChanges } from "./releaseNotes";
+import { parseChanges, type ReleaseChanges, releasesBetween } from "./releaseNotes";
 
 /**
  * App updates from GitHub releases: the updater plugin reads latest.json on the latest release
@@ -16,10 +16,12 @@ interface UpdateState {
   installing: boolean;
   /** The newer release, once a check found one. */
   available: Update | null;
+  /** Every release between this version and the available one, newest first. */
+  availableNotes: ReleaseChanges[];
   /** Set when the last check failed (offline, or a release still being built). */
   error: string | null;
-  /** The changes in the version just updated to, until the user has seen them. */
-  installed: { version: string; changes: string[] } | null;
+  /** The changes since the previous version, once updated, newest release first. */
+  installed: { version: string; releases: ReleaseChanges[] } | null;
   /** Which release's changes the "What's new" dialog shows, if open. */
   notesOpen: "available" | "installed" | null;
 }
@@ -29,6 +31,7 @@ export const useUpdates = create<UpdateState>(() => ({
   checking: false,
   installing: false,
   available: null,
+  availableNotes: [],
   error: null,
   installed: null,
   notesOpen: null,
@@ -55,10 +58,11 @@ export async function checkForUpdates(quiet = false): Promise<Update | null> {
   useUpdates.setState({ checking: true, error: null });
   try {
     const update = await check();
-    useUpdates.setState({ available: update });
+    const availableNotes = update ? await notesFor(update) : [];
+    useUpdates.setState({ available: update, availableNotes });
     if (update && (!quiet || !offered.has(update.version))) {
       offered.add(update.version);
-      const count = parseChanges(update.body).length;
+      const count = availableNotes.reduce((n, r) => n + r.changes.length, 0);
       toast(
         `winfer ${update.version} is available`,
         "info",
@@ -80,14 +84,14 @@ export async function checkForUpdates(quiet = false): Promise<Update | null> {
 
 /** Downloads and installs the available update, then relaunches into it. */
 export async function installUpdate() {
-  const { available, installing } = useUpdates.getState();
+  const { available, availableNotes, installing } = useUpdates.getState();
   if (!available || installing) return;
   useUpdates.setState({ installing: true, notesOpen: null });
   const id = toast(`Downloading winfer ${available.version}…`, "loading");
   let total = 0;
   let received = 0;
   // Saved up front: on Windows the installer quits the app partway through downloadAndInstall.
-  localStorage.setItem(PENDING_NOTES, JSON.stringify({ version: available.version, changes: parseChanges(available.body) }));
+  localStorage.setItem(PENDING_NOTES, JSON.stringify({ version: available.version, releases: availableNotes }));
   try {
     await available.downloadAndInstall((event) => {
       if (event.event === "Started") total = event.data.contentLength ?? 0;
@@ -122,11 +126,23 @@ export function startUpdateChecks() {
   window.setInterval(() => void checkForUpdates(true), CHECK_EVERY_MS);
 }
 
-/** The release's changes from GitHub, for updates that didn't go through installUpdate. */
-async function fetchChanges(version: string): Promise<string[]> {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${version}`, { headers: { Accept: "application/vnd.github+json" } });
+/** The changes of every release after `from` up to `to`, from GitHub. */
+async function fetchChanges(from: string | null, to: string): Promise<ReleaseChanges[]> {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: { Accept: "application/vnd.github+json" } });
   if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-  return parseChanges(((await res.json()) as { body?: string }).body);
+  return releasesBetween(await res.json(), from, to);
+}
+
+/** What changed between this version and the update; just the update's own notes if GitHub can't say. */
+async function notesFor(update: Update): Promise<ReleaseChanges[]> {
+  const own = [{ version: update.version, changes: parseChanges(update.body) }];
+  try {
+    const releases = await fetchChanges(update.currentVersion, update.version);
+    return releases.length ? releases : own;
+  } catch (err) {
+    console.warn("couldn't load release notes", err);
+    return own;
+  }
 }
 
 /** On the first launch of a new version, shows what changed in it. Fresh installs stay quiet. */
@@ -135,14 +151,19 @@ async function announceUpdate(version: string) {
   const pending = localStorage.getItem(PENDING_NOTES);
   localStorage.setItem(LAST_VERSION, version);
   localStorage.removeItem(PENDING_NOTES);
-  let changes: string[] = [];
+  let releases: ReleaseChanges[] = [];
   try {
-    const saved = pending ? (JSON.parse(pending) as { version: string; changes: string[] }) : null;
-    if (saved?.version === version) changes = saved.changes;
-    else if (last && last !== version && !import.meta.env.DEV) changes = await fetchChanges(version);
+    // Older versions saved only the new release's changes.
+    const saved = pending ? (JSON.parse(pending) as { version: string; releases?: ReleaseChanges[]; changes?: string[] }) : null;
+    if (saved?.version === version) releases = saved.releases ?? [{ version, changes: saved.changes ?? [] }];
   } catch (err) {
-    console.warn("couldn't load release notes", err);
+    console.warn("couldn't read saved release notes", err);
   }
-  if (changes.length === 0) return;
-  useUpdates.setState({ installed: { version, changes }, notesOpen: "installed" });
+  // GitHub fills in releases the saved notes missed, e.g. when updating from before this list existed.
+  if (last && last !== version && !import.meta.env.DEV) {
+    const fetched = await fetchChanges(last, version).catch((err) => (console.warn("couldn't load release notes", err), []));
+    if (fetched.length > releases.length) releases = fetched;
+  }
+  if (!releases.some((r) => r.changes.length)) return;
+  useUpdates.setState({ installed: { version, releases }, notesOpen: "installed" });
 }
