@@ -72,7 +72,7 @@
     {
       "id": "telegram",
       "name": "Telegram",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
       "author": "winfer",
       "tags": [
@@ -85,11 +85,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "d6178f0a2edb08692e441f8d244aa1b1bb0c802a12f5393675f0f485aeede010"
+          "sha256": "3c694c19346bc8a74a59709d567d794bd0c9b8de7026ec662d766c150d5138e0"
         },
         {
           "path": "plugin.json",
-          "sha256": "9f654a8b0ce8f6d695dee06b0cbac6ac0940c7a6f2dd3f9d9aefb26aa3fafd04"
+          "sha256": "f34f438395c5c89903551465f6a1043790554beefe9dc4160e8f181bf564755f"
         }
       ]
     }

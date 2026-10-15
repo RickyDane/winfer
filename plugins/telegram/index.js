@@ -177,7 +177,8 @@ export function activate(api) {
     if (!who) return;
     const seq = nextSeq++;
     const html = `${STATUS_ICON[status]} ${title(who)} ${status === "done" ? "finished" : "stopped with an error"}`;
-    const reply = status === "done" ? api.lastReply(paneId) : null;
+    // `lastReply` arrived in winfer 0.1.35; older apps send the message without the reply.
+    const reply = status === "done" ? (api.lastReply?.(paneId) ?? null) : null;
     const extra = { reply_markup: { inline_keyboard: [[{ text: "🖥 Show screen", callback_data: `s:${seq}` }]] } };
     const send = (body) => say(`${body}\n\n<i>Reply to give it a new instruction.</i>`, extra);
     // Telegram refuses the whole message if it can't parse the converted reply; send it without.
