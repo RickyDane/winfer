@@ -1,6 +1,6 @@
 // Knowledge Base: a graphify (https://pypi.org/project/graphifyy/) knowledge graph of each
-// workspace's project. The page shows it as a live 3D galaxy or a flat 2D map (WebGL2, a force
-// layout in a worker) where you search, trace paths, see what a change would affect and watch
+// workspace's project. The page shows it as a live 3D galaxy, a flat glowing galaxy or a plain 2D map (WebGL2, a force
+// layout in a worker) where you search, trace paths, replay call flows, see what a change would affect and watch
 // agents work; agents query the same graph through agent tools (kb_query, kb_explain, kb_path,
 // kb_affected, …).
 //
@@ -15,6 +15,12 @@ const INSTALL = "uv tool install graphifyy";
 /** What agent tools return at most, so a big answer doesn't flood an agent's context. */
 const TOOL_OUTPUT_MAX = 12_000;
 /** Relations a change travels back along: who calls, imports or extends a node is affected by it. */
+/** Flow mode follows these edges as calls, and these into what a file or class defines. */
+const CALL_RELATIONS = new Set(["calls"]);
+const DEFINE_RELATIONS = new Set(["contains", "method"]);
+/** Flow replay: seconds per step at 1×, and the speeds offered. */
+const FLOW_STEP_SECONDS = 2;
+const FLOW_SPEEDS = [0.5, 1, 2];
 const IMPACT_RELATIONS = new Set(["calls", "references", "imports", "imports_from", "re_exports", "inherits", "extends", "implements", "uses", "mixes_in", "embeds"]);
 /** Relations that get particles flowing from source to target. */
 const FLOW_RELATIONS = new Set(["calls", "imports", "imports_from", "references", "uses", "inherits", "extends", "implements", "re_exports"]);
@@ -23,8 +29,12 @@ const TYPE_LABELS = { code: "Code", document: "Docs", concept: "Concepts", ratio
 const IS_WIN = /Win/i.test(navigator.platform ?? "") || /Windows/i.test(navigator.userAgent);
 const REDUCED_MOTION = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 const SNAPSHOT = /^\d{4}-\d{2}-\d{2}(?:_(\d+))?$/;
-/** Graphs up to this many nodes open in 3D; bigger ones open as a flat 2D map. */
+/** Graphs up to this many nodes open in 3D; bigger ones open as the plain 2D map. */
 const MAX_3D_NODES = 10_000;
+/** The galaxy's views: plain 2D map, flat glowing galaxy, 3D galaxy. */
+const VIEWS = ["2d", "flat", "3d"];
+/** A project opens showing only nodes with at least this many links. */
+const DEFAULT_MIN_DEGREE = 20;
 
 // Helpers ----------------------------------------------------------------------------------------
 
@@ -77,6 +87,10 @@ const ICONS = {
   arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  flow: '<path d="M5 6h9a3.5 3.5 0 0 1 0 7H9a3.5 3.5 0 0 0 0 7h10"/><path d="m16 17 3 3-3 3"/><circle cx="5" cy="6" r="1.6"/>',
+  stepBack: '<path d="M18 6 9 12l9 6z"/><path d="M6 6v12"/>',
+  stepForward: '<path d="M6 6l9 6-9 6z"/><path d="M18 6v12"/>',
+  restart: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   wand: '<path d="m4 20 11-11M14 4v3M19 9h-3M17.5 5.5l-2 2M11 4l.5 1.5M20 13l-1.5-.5"/>',
 };
 
@@ -230,6 +244,7 @@ function compactGraph(raw, names = new Map()) {
   const rel = [];
   const conf = [];
   const weight = [];
+  const eloc = [];
   for (const link of rawLinks) {
     const a = index.get(String(link.source?.id ?? link.source));
     const b = index.get(String(link.target?.id ?? link.target));
@@ -244,6 +259,7 @@ function compactGraph(raw, names = new Map()) {
     rel.push(relIndex.get(name));
     conf.push(Math.max(0, CONFIDENCE.indexOf(String(link.confidence ?? "EXTRACTED"))));
     weight.push(Number(link.weight) > 0 ? Number(link.weight) : 1);
+    eloc.push(lineNumber(link.source_location));
   }
   const m = src.length;
   const degree = new Int32Array(n);
@@ -313,6 +329,7 @@ function compactGraph(raw, names = new Map()) {
     rel: Uint16Array.from(rel),
     conf: Uint8Array.from(conf),
     weight: Float32Array.from(weight),
+    eloc: Int32Array.from(eloc),
     relations,
     adjStart,
     adjEdge,
@@ -379,6 +396,61 @@ function affected(g, origin, maxDepth = 2) {
     frontier = next;
   }
   return depth;
+}
+
+/** "L42" (or "42", "L42-L50") → 42; 0 when there's no line. */
+function lineNumber(loc) {
+  const m = /(\d+)/.exec(String(loc ?? ""));
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * A call trace from `start`: a depth-first walk over outgoing calls, each caller's callees in the
+ * order their call sites appear in its code. A start node that calls nothing (a file or a class)
+ * walks into what it defines instead. Each step is { node, edge, parent, depth, kind }, kind being
+ * "start", "call", "defines", "seen" (traced earlier, not expanded again) or "recursion".
+ */
+function traceFlow(g, start, maxDepth = 6, maxSteps = 150) {
+  const steps = [{ node: start, edge: -1, parent: -1, depth: 0, kind: "start" }];
+  const expanded = new Set();
+  const onStack = new Set();
+  let truncated = false;
+  const at = (e) => g.eloc[e] || lineNumber(g.locs[g.dst[e]]);
+  const outgoing = (i, rels) => {
+    const list = [];
+    for (let k = g.adjStart[i]; k < g.adjStart[i + 1]; k++) {
+      const e = g.adjEdge[k];
+      if (g.src[e] === i && g.dst[e] !== i && rels.has(g.relations[g.rel[e]])) list.push(e);
+    }
+    return list.sort((a, b) => at(a) - at(b));
+  };
+  const walk = (s) => {
+    const { node, depth } = steps[s];
+    expanded.add(node);
+    onStack.add(node);
+    let edges = outgoing(node, CALL_RELATIONS);
+    let kind = "call";
+    if (!edges.length && depth === 0) {
+      edges = outgoing(node, DEFINE_RELATIONS);
+      kind = "defines";
+    }
+    for (const e of edges) {
+      if (steps.length >= maxSteps) {
+        truncated = true;
+        break;
+      }
+      const j = g.dst[e];
+      const k = onStack.has(j) ? "recursion" : expanded.has(j) ? "seen" : kind;
+      steps.push({ node: j, edge: e, parent: s, depth: depth + 1, kind: k });
+      if (k !== "seen" && k !== "recursion") {
+        if (depth + 1 < maxDepth) walk(steps.length - 1);
+        else if (outgoing(j, CALL_RELATIONS).length) truncated = true;
+      }
+    }
+    onStack.delete(node);
+  };
+  walk(0);
+  return { steps, truncated };
 }
 
 /** The edge between a and b (either direction), or -1. */
@@ -1157,11 +1229,29 @@ void main() {
 const NODE_FS = `#version 300 es
 precision highp float;
 in vec2 vUv; in vec4 vColor; in float vShape; in float vPulse; in vec3 vPulseColor; in float vEmph;
-uniform float uLight;
+uniform float uLight, uPlain;
 out vec4 outColor;
 void main() {
   float r = length(vUv);
   if (r > 1.0) discard;
+  if (uPlain > 0.5) {
+    // Flat shapes with a crisp edge: no halo, no glow.
+    float aa = fwidth(r) * 1.5;
+    float fillA;
+    float edge;
+    if (vShape < 0.5) { fillA = smoothstep(0.45 + aa, 0.45 - aa, r); edge = 0.34; }
+    else if (vShape < 1.5) { vec2 a = abs(vUv); float d = max(a.x, a.y); fillA = smoothstep(0.38 + aa, 0.38 - aa, d); r = d * 1.18; edge = 0.34; }
+    else if (vShape < 2.5) { vec2 a = abs(vUv); float d = a.x + a.y; fillA = smoothstep(0.52 + aa, 0.52 - aa, d); r = d * 0.86; edge = 0.34; }
+    else if (vShape < 3.5) { fillA = smoothstep(0.05 + aa, 0.05 - aa, abs(r - 0.7)); edge = -1.0; }
+    else { fillA = smoothstep(0.5 + aa, 0.5 - aa, r); edge = 0.36; }
+    float ringP = vPulse > 0.0 ? smoothstep(0.06 + aa, 0.0, abs(r - (1.0 - vPulse) * 0.95)) * vPulse : 0.0;
+    vec3 col = mix(vColor.rgb, vPulseColor, clamp(vPulse * 0.6, 0.0, 1.0));
+    // A thin darker (light theme) or lighter (dark theme) outline helps overlapping nodes read apart.
+    if (edge > 0.0) col = mix(col, uLight > 0.5 ? col * 0.55 : mix(col, vec3(1.0), 0.35), smoothstep(edge, edge + 0.08, r) * fillA);
+    float a = clamp(fillA + ringP, 0.0, 1.0) * vColor.a;
+    outColor = vec4(mix(col, vPulseColor, ringP) * a, a);
+    return;
+  }
   float halo = pow(1.0 - r, 2.6) * 0.6;
   float core;
   if (vShape < 0.5) core = smoothstep(0.36, 0.17, r);
@@ -1339,6 +1429,8 @@ function createGalaxy(container, callbacks) {
   const TOP = Math.PI / 2 - 0.001;
   const TILT = 0.62;
   let flat = false;
+  /** The plain 2D map: flat shapes, normal blending, no stars, glow or ambient particles. */
+  let plain = false;
   let pitchGoal = null;
   const fov = (48 * Math.PI) / 180;
   let view = new Float32Array(16);
@@ -1568,8 +1660,9 @@ function createGalaxy(container, callbacks) {
 
   // Data ---------------------------------------------------------------------------------------
 
-  function setGraph(graph, cached, fresh, is2d = flat) {
-    flat = is2d;
+  function setGraph(graph, cached, fresh, view = plain ? "2d" : flat ? "flat" : "3d") {
+    flat = view !== "3d";
+    plain = view === "2d";
     g = graph;
     const n = g.n;
     nodeSize = new Float32Array(n);
@@ -1669,7 +1762,7 @@ function createGalaxy(container, callbacks) {
       nodeColorBuf[i * 4 + 3] = emph >= 1 ? 1 : dim;
     }
     const warn = light ? [0.8, 0.5, 0.05] : [1, 0.75, 0.3];
-    const base = light ? [0.2, 0.13, 0.28] : [0.11, 0.07, 0.2];
+    const base = plain ? (light ? [0.22, 0.14, 0.3] : [0.2, 0.13, 0.3]) : light ? [0.2, 0.13, 0.28] : [0.11, 0.07, 0.2];
     for (let e = 0; e < g.m; e++) {
       const a = g.src[e];
       const b = g.dst[e];
@@ -1685,8 +1778,9 @@ function createGalaxy(container, callbacks) {
         edgeColorBuf.set(warn, o);
         edgeColorBuf.set(warn, o + 4);
       } else if (pathEdges.has(e)) {
-        edgeColorBuf.set([1, 1, 1], o);
-        edgeColorBuf.set([1, 1, 1], o + 4);
+        const c = light ? [0.15, 0.15, 0.3] : [1, 1, 1];
+        edgeColorBuf.set(c, o);
+        edgeColorBuf.set(c, o + 4);
       } else {
         edgeColorBuf[o] = baseColor[a * 3];
         edgeColorBuf[o + 1] = baseColor[a * 3 + 1];
@@ -1723,7 +1817,7 @@ function createGalaxy(container, callbacks) {
         for (let j = 0; j < 9; j++) add(e, dir, white, 1 - j / 9, k * 0.12 - j * 0.016, 0.42, 1.9 - j * 0.12);
       }
     }
-    if (options.flow || f) {
+    if (!plain && (options.flow || f)) {
       let count = 0;
       const cap = f ? 2400 : 1800;
       const stride = f ? 1 : Math.max(1, Math.ceil(g.m / 6000));
@@ -1984,10 +2078,10 @@ function createGalaxy(container, callbacks) {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
-    if (light) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    if (light || plain) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     else gl.blendFunc(gl.ONE, gl.ONE);
 
-    if (!light) {
+    if (!light && !plain) {
       const rot = view.slice();
       rot[12] = rot[13] = rot[14] = 0;
       gl.useProgram(res.star.p);
@@ -2057,6 +2151,7 @@ function createGalaxy(container, callbacks) {
     gl.uniform1f(res.node.u.uTime, time);
     gl.uniform1f(res.node.u.uViewportH, canvas.height);
     gl.uniform1f(res.node.u.uLight, light ? 1 : 0);
+    gl.uniform1f(res.node.u.uPlain, plain ? 1 : 0);
     gl.uniform1f(res.node.u.uScan, scanLevel);
     gl.uniform1f(res.node.u.uScanR, ((time * 110) % (R * 1.5)) - R * 0.1);
     gl.bindVertexArray(res.nodes.vao);
@@ -2095,7 +2190,7 @@ function createGalaxy(container, callbacks) {
       c.lineTo(b.x, b.y);
       c.stroke();
     }
-    c.globalCompositeOperation = light ? "source-over" : "lighter";
+    c.globalCompositeOperation = light || plain ? "source-over" : "lighter";
     for (let i = 0; i < g.n; i++) {
       const s = screen[i];
       if (!s) continue;
@@ -2294,8 +2389,14 @@ function createGalaxy(container, callbacks) {
     get flat() {
       return flat;
     },
-    /** Switches between the 3D galaxy and a flat, top-down 2D map. */
-    setFlat(on) {
+    /** Switches between the plain 2D map ("2d"), the flat glowing galaxy ("flat") and the 3D galaxy ("3d"). */
+    setView(view) {
+      const nextPlain = view === "2d";
+      if (nextPlain !== plain) {
+        plain = nextPlain;
+        styleDirty = flowDirty = true;
+      }
+      const on = view !== "3d";
       if (on === flat) return;
       flat = on;
       pitchGoal = flat ? TOP : TILT;
@@ -2305,10 +2406,10 @@ function createGalaxy(container, callbacks) {
     },
     pulse,
     shockwave,
-    flyToNode(i, close = true) {
+    flyToNode(i, close = true, ms) {
       if (!pos || i < 0) return;
       const p = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
-      flyTo(p, close ? clamp(cam.dist * 0.5, 60, 260) : cam.dist);
+      flyTo(p, close ? clamp(cam.dist * 0.5, 60, 260) : cam.dist, ms);
     },
     flyToNodes: (indices) => fitIndices(indices, 1100),
     fit,
@@ -2411,6 +2512,9 @@ function mountPage(el, store, api) {
     path: [],
     impact: null,
     impactDepth: 2,
+    /** Flow replay: { origin, steps, truncated, index, playing }. */
+    flow: null,
+    flowSpeed: 1,
     community: null,
     answer: null,
     hiddenTypes: new Set(),
@@ -2483,13 +2587,20 @@ function mountPage(el, store, api) {
     return ws ? store.kb(ws.rootDir) : null;
   };
   const graph = () => galaxy.graph;
-  /** "2d" or "3d": what the user picked for this project, else 3D for small graphs and 2D for big ones. */
-  const viewFor = (k) => store.settings.views?.[k.root] ?? (k.graph && k.graph.n <= MAX_3D_NODES ? "3d" : "2d");
+  /**
+   * "2d" (plain map), "flat" (flat glowing galaxy) or "3d": what the user picked for this project,
+   * else 3D for small graphs and the plain 2D map for big ones.
+   */
+  const viewFor = (k) => {
+    const v = store.settings.views?.[k.root];
+    return VIEWS.includes(v) ? v : k.graph && k.graph.n <= MAX_3D_NODES ? "3d" : "2d";
+  };
   function setView(view) {
     const k = current();
     if (!k) return;
     store.set({ views: { ...store.settings.views, [k.root]: view } });
-    galaxy.setFlat(view === "2d");
+    galaxy.setView(view);
+    shell.classList.toggle("kb-plain", view === "2d");
     renderTop();
   }
   const accent = () => cssColor("--color-accent", [0.43, 0.49, 1]);
@@ -2545,6 +2656,7 @@ function mountPage(el, store, api) {
     ui.answer = null;
     ui.timeline = { index: -1, playing: false };
     ui.presence = null;
+    stopFlow();
   }
 
   function setNebula(g) {
@@ -2573,12 +2685,15 @@ function mountPage(el, store, api) {
       if (reload) saveLayout();
       ui.version = k.version;
       const fresh = reload && k.previousIds ? new Set(k.graph.ids.filter((id) => !k.previousIds.has(id))) : null;
-      galaxy.setGraph(k.graph, cachedLayout(k), fresh, viewFor(k) === "2d");
+      const view = viewFor(k);
+      galaxy.setGraph(k.graph, cachedLayout(k), fresh, view);
+      shell.classList.toggle("kb-plain", view === "2d");
       setNebula(k.graph);
       const keep = selectedId ? (k.graph.index.get(selectedId) ?? -1) : -1;
       resetView();
       ui.selected = keep;
-      if (ui.minDegree > 0 && !reload) ui.minDegree = 0;
+      // A fresh project starts on its well-connected core; the Links slider shows the rest.
+      if (!reload) ui.minDegree = Math.min(DEFAULT_MIN_DEGREE, Math.min(40, k.graph.degree.reduce((m, d) => Math.max(m, d), 0)));
       applyFilters();
       applyFocus();
     }
@@ -2593,6 +2708,8 @@ function mountPage(el, store, api) {
     if (!g) return;
     const mask = new Uint8Array(g.n);
     for (let i = 0; i < g.n; i++) mask[i] = !ui.hiddenTypes.has(g.types[i]) && g.degree[i] >= ui.minDegree ? 1 : 0;
+    // A replayed flow shows every node it passes through, filtered or not.
+    if (ui.flow) for (const s of ui.flow.steps) mask[s.node] = 1;
     galaxy.setVisible(mask);
     galaxy.setConfidence(ui.conf);
   }
@@ -2602,6 +2719,16 @@ function mountPage(el, store, api) {
     if (!g) return;
     let set = null;
     let keys = new Set();
+    if (ui.flow) {
+      const { steps, index } = ui.flow;
+      const stack = flowStack();
+      set = new Set(steps.slice(0, index + 1).map((s) => s.node));
+      keys = new Set([steps[0].node, steps[index].node]);
+      galaxy.setFocus(set, keys);
+      galaxy.setSelected(steps[index].node);
+      galaxy.setPath(stack);
+      return;
+    }
     if (ui.path.length) {
       set = new Set(ui.path);
       keys = new Set([ui.path[0], ui.path[ui.path.length - 1]]);
@@ -2624,6 +2751,7 @@ function mountPage(el, store, api) {
   }
 
   function select(i, fly = true) {
+    stopFlow();
     ui.selected = i;
     ui.path = [];
     ui.impact = null;
@@ -2634,6 +2762,7 @@ function mountPage(el, store, api) {
   }
 
   function clearAll() {
+    stopFlow();
     ui.selected = -1;
     ui.path = [];
     ui.impact = null;
@@ -2647,6 +2776,7 @@ function mountPage(el, store, api) {
   }
 
   function setMode(mode) {
+    if (mode !== "flow") stopFlow();
     ui.mode = mode;
     ui.pathFrom = -1;
     if (mode !== "path") ui.path = [];
@@ -2668,10 +2798,12 @@ function mountPage(el, store, api) {
     }
     if (ui.mode === "path" || e.shiftKey) return pathClick(i);
     if (ui.mode === "impact") return runImpact(i);
+    if (ui.mode === "flow") return runFlow(i);
     select(i);
   }
 
   function pathClick(i) {
+    stopFlow();
     const g = graph();
     if (ui.pathFrom < 0 || ui.path.length) {
       ui.pathFrom = i;
@@ -2696,6 +2828,7 @@ function mountPage(el, store, api) {
   }
 
   function runImpact(i) {
+    stopFlow();
     const g = graph();
     const depths = affected(g, i, ui.impactDepth);
     ui.impact = { origin: i, depths };
@@ -2706,6 +2839,115 @@ function mountPage(el, store, api) {
     if (depths.size > 1) galaxy.flyToNodes([...depths.keys()]);
     else galaxy.flyToNode(i, true);
     renderInspector();
+  }
+
+  // Flow replay ------------------------------------------------------------------------------
+
+  let flowTimer = 0;
+
+  /** Ends the replay (if any) and forgets the trace. */
+  function stopFlow() {
+    clearTimeout(flowTimer);
+    flowTimer = 0;
+    if (!ui.flow) return;
+    ui.flow = null;
+    applyFilters();
+  }
+
+  /** Root → current step: the call stack at this point of the replay. */
+  function flowStack() {
+    const { steps, index } = ui.flow;
+    const stack = [];
+    for (let s = index; s >= 0; s = steps[s].parent) stack.push(steps[s].node);
+    return stack.reverse();
+  }
+
+  /** Traces the calls out of `i` and starts replaying them. */
+  function runFlow(i) {
+    const g = graph();
+    stopFlow();
+    const { steps, truncated } = traceFlow(g, i);
+    ui.selected = -1;
+    ui.path = [];
+    ui.pathFrom = -1;
+    ui.impact = null;
+    if (steps.length < 2) {
+      api.toast(`“${g.labels[i]}” doesn't call anything the graph knows about`, "error");
+      select(i);
+      return;
+    }
+    ui.flow = { origin: i, steps, truncated, index: 0, playing: true };
+    applyFilters();
+    galaxy.flyToNodes(steps.map((s) => s.node));
+    showFlowStep(0, false);
+    scheduleFlow(FLOW_STEP_SECONDS * 1000 * 1.25);
+  }
+
+  function showFlowStep(index, fly = true) {
+    const f = ui.flow;
+    if (!f) return;
+    f.index = clamp(index, 0, f.steps.length - 1);
+    const step = f.steps[f.index];
+    applyFocus();
+    const ms = Math.min(900, (FLOW_STEP_SECONDS * 1000) / ui.flowSpeed * 0.55);
+    if (fly) galaxy.flyToNode(step.node, false, ms);
+    const g = graph();
+    const color = step.kind === "recursion" || step.kind === "seen" ? [1, 0.75, 0.3] : step.kind === "start" ? [0.6, 1, 0.8] : communityColor(g.commRank[step.node], isLight());
+    galaxy.pulse([step.node], color);
+    renderInspector();
+  }
+
+  function scheduleFlow(ms) {
+    clearTimeout(flowTimer);
+    const f = ui.flow;
+    if (!f?.playing) return;
+    flowTimer = setTimeout(() => {
+      if (ui.flow !== f || !f.playing || !shell.isConnected) return;
+      if (f.index >= f.steps.length - 1) {
+        f.playing = false;
+        renderInspector();
+        return;
+      }
+      showFlowStep(f.index + 1);
+      scheduleFlow();
+    }, ms ?? (FLOW_STEP_SECONDS * 1000) / ui.flowSpeed);
+  }
+
+  function toggleFlowPlay() {
+    const f = ui.flow;
+    if (!f) return;
+    f.playing = !f.playing;
+    if (f.playing && f.index >= f.steps.length - 1) showFlowStep(0);
+    else renderInspector();
+    scheduleFlow();
+  }
+
+  /** Moves by `delta` steps and pauses, so the user reads at their own pace. */
+  function stepFlow(delta) {
+    const f = ui.flow;
+    if (!f) return;
+    f.playing = false;
+    clearTimeout(flowTimer);
+    showFlowStep(f.index + delta);
+  }
+
+  /** One sentence for a step: who calls what, and where. */
+  function flowSentence(g, step) {
+    const steps = ui.flow.steps;
+    if (step.kind === "start") return [h("b", {}, g.labels[step.node]), " starts the flow"];
+    const from = steps[step.parent].node;
+    const verb = { call: "calls", defines: "defines", seen: "calls", recursion: "calls" }[step.kind];
+    const tail = step.kind === "seen" ? " again (traced above)" : step.kind === "recursion" ? " again (recursion)" : "";
+    return [h("b", {}, g.labels[from]), ` ${verb} `, h("b", {}, g.labels[step.node]), tail];
+  }
+
+  /** The call site of a step: the caller's file at the line of the call. */
+  function flowSite(g, step) {
+    if (step.edge < 0) return fileRef(g, step.node);
+    const from = ui.flow.steps[step.parent].node;
+    const line = g.eloc[step.edge];
+    const file = g.files[from] || g.files[step.node];
+    return file ? `${file}${line ? `:${line}` : ""}` : "";
   }
 
   function isolate(id) {
@@ -2974,15 +3216,15 @@ function mountPage(el, store, api) {
         h(
           "div",
           { class: "kb-tabs kb-glass", title: "View" },
-          ["2d", "3d"].map((v) =>
+          VIEWS.map((v) =>
             h(
               "button",
               {
                 class: `kb-tab kb-view${viewFor(k) === v ? " kb-on" : ""}`,
-                title: v === "2d" ? "Flat 2D map (pan by dragging)" : "3D galaxy (drag to orbit)",
+                title: v === "2d" ? "Plain 2D map, no effects (pan by dragging)" : v === "flat" ? "Flat glowing galaxy (pan by dragging)" : "3D galaxy (drag to orbit)",
                 onclick: () => setView(v),
               },
-              v.toUpperCase(),
+              v === "2d" ? "2D" : v === "flat" ? "2.5D" : "3D",
             ),
           ),
         ),
@@ -3067,8 +3309,12 @@ function mountPage(el, store, api) {
             : ui.path.length
               ? "Click another node to start a new path"
               : "Click the node where the path starts (or shift-click in Explore)"
-          : "Click a node to see everything that depends on it";
-      parts.push(h("div", { class: "kb-hint kb-glass" }, icon(ui.mode === "path" ? "route" : "zap"), text));
+          : ui.mode === "flow"
+            ? ui.flow
+              ? "Space plays or pauses, ← → step. Click another function to trace it"
+              : "Click a function or entry point to replay what it calls, step by step"
+            : "Click a node to see everything that depends on it";
+      parts.push(h("div", { class: "kb-hint kb-glass" }, icon(ui.mode === "path" ? "route" : ui.mode === "flow" ? "flow" : "zap"), text));
     }
     fill(banner, ...parts);
   }
@@ -3166,10 +3412,93 @@ function mountPage(el, store, api) {
 
   function renderInspector() {
     const g = graph();
-    const show = g && ui.tab === "galaxy" && (ui.selected >= 0 || ui.path.length || ui.impact);
+    const show = g && ui.tab === "galaxy" && (ui.selected >= 0 || ui.path.length || ui.impact || ui.flow);
     inspector.hidden = !show;
     if (!show) return;
     const closeBtn = h("button", { class: "kb-icon-btn", title: "Close (Esc)", onclick: clearAll }, icon("x"));
+
+    if (ui.flow) {
+      const f = ui.flow;
+      const step = f.steps[f.index];
+      const site = flowSite(g, step);
+      const stack = flowStack();
+      const rows = f.steps.map((s, k) =>
+        h(
+          "button",
+          {
+            class: `kb-flow-row kb-flow-${s.kind}${k === f.index ? " kb-on" : k < f.index ? " kb-done" : ""}`,
+            style: `--d:${Math.min(s.depth, 8)}`,
+            title: `${g.labels[s.node]}${g.files[s.node] ? ` — ${fileRef(g, s.node)}` : ""}`,
+            onclick: () => stepFlow(k - f.index),
+          },
+          h("span", { class: "kb-flow-n" }, k + 1),
+          h("span", { class: "kb-dot", style: `--c:${nodeCss(g, s.node)}` }),
+          h("span", { class: "kb-node-name" }, g.labels[s.node]),
+          s.kind === "seen" || s.kind === "recursion" ? h("span", { class: "kb-conf kb-conf-2" }, s.kind === "seen" ? "again" : "recursion") : s.kind === "defines" ? h("span", { class: "kb-conf" }, "defines") : null,
+        ),
+      );
+      const ctl = (ic, title, fn, cls = "") => h("button", { class: `kb-tool${cls}`, title, onclick: fn }, icon(ic));
+      fill(inspector,
+        h("div", { class: "kb-panel-head" }, icon("flow"), h("span", { class: "kb-eyebrow" }, "Flow"), h("span", { class: "kb-count" }, `${f.index + 1} / ${f.steps.length}`), h("span", { class: "kb-grow" }), closeBtn),
+        h("div", { class: "kb-flow-now" }, h("div", { class: "kb-flow-text" }, flowSentence(g, step)), site && h("button", { class: "kb-insp-file", title: "Copy file and line", onclick: () => copy(site, "Reference copied") }, icon("file"), site)),
+        h("div", { class: "kb-flow-bar" }, h("span", { style: `--w:${(((f.index + 1) / f.steps.length) * 100).toFixed(1)}%` })),
+        h(
+          "div",
+          { class: "kb-flow-controls" },
+          ctl("restart", "From the start", () => stepFlow(-f.index)),
+          ctl("stepBack", "Previous step (←)", () => stepFlow(-1)),
+          ctl(f.playing ? "pause" : "play", f.playing ? "Pause (Space)" : "Play (Space)", toggleFlowPlay, " kb-on"),
+          ctl("stepForward", "Next step (→)", () => stepFlow(1)),
+          h("span", { class: "kb-grow" }),
+          FLOW_SPEEDS.map((x) =>
+            h(
+              "button",
+              {
+                class: `kb-seg kb-seg-small${ui.flowSpeed === x ? " kb-on" : ""}`,
+                title: `${(FLOW_STEP_SECONDS / x).toFixed(1).replace(/\.0$/, "")}s per step`,
+                onclick: () => {
+                  ui.flowSpeed = x;
+                  renderInspector();
+                  scheduleFlow();
+                },
+              },
+              `${x}×`,
+            ),
+          ),
+        ),
+        stack.length > 1 &&
+          h(
+            "div",
+            { class: "kb-flow-stack", title: "Call stack at this step" },
+            h("span", { class: "kb-subtle" }, "Stack"),
+            stack.flatMap((i, k) => [k ? h("span", { class: "kb-arrow" }, "›") : null, h("span", { class: k === stack.length - 1 ? "kb-flow-top" : "" }, g.labels[i])]),
+          ),
+        h("div", { class: "kb-flow-list" }, rows),
+        f.truncated && h("div", { class: "kb-more" }, "Trace shortened: very deep or long flows stop after 6 calls deep or 150 steps."),
+        h(
+          "div",
+          { class: "kb-actions" },
+          h(
+            "button",
+            {
+              class: "kb-btn kb-primary",
+              onclick: () =>
+                spawnAgent(
+                  `Walk me through what happens when ${g.labels[f.origin]} (${fileRef(g, f.origin)}) runs, step by step. The knowledge graph traces this call flow:\n${f.steps
+                    .slice(0, 80)
+                    .map((s) => `${"  ".repeat(s.depth)}${g.labels[s.node]}${g.files[s.node] ? ` (${fileRef(g, s.node)})` : ""}`)
+                    .join("\n")}\nRead the code to confirm the order and explain what each step does. Use kb_explain from winfer's knowledge base where helpful.`,
+                ),
+            },
+            icon("bot"),
+            "Explain with an agent",
+          ),
+          h("button", { class: "kb-btn", onclick: () => copy(f.steps.map((s) => `${"  ".repeat(s.depth)}${g.labels[s.node]}${g.files[s.node] ? `  (${fileRef(g, s.node)})` : ""}`).join("\n"), "Flow copied") }, icon("copy"), "Copy"),
+        ),
+      );
+      inspector.querySelector(".kb-flow-row.kb-on")?.scrollIntoView({ block: "nearest" });
+      return;
+    }
 
     if (ui.path.length) {
       const from = ui.path[0];
@@ -3360,6 +3689,21 @@ function mountPage(el, store, api) {
           icon("route"),
           "Path",
         ),
+        h(
+          "button",
+          {
+            class: "kb-btn",
+            title: "Replay the calls this makes, step by step",
+            onclick: () => {
+              ui.mode = "flow";
+              runFlow(i);
+              renderDock();
+              renderBanner();
+            },
+          },
+          icon("flow"),
+          "Flow",
+        ),
       ),
       h(
         "div",
@@ -3495,7 +3839,7 @@ function mountPage(el, store, api) {
     const maxDegree = Math.min(40, g.degree.reduce((m, d) => Math.max(m, d), 0));
     const degreeValue = h("span", { class: "kb-range-v" }, ui.minDegree ? `≥ ${ui.minDegree}` : "all");
     const parts = [
-      h("div", { class: "kb-segs" }, seg("explore", "Explore", "orbit", "Click a node to inspect it"), seg("path", "Path", "route", "Click two nodes to see how they connect"), seg("impact", "Impact", "zap", "Click a node to see what depends on it")),
+      h("div", { class: "kb-segs" }, seg("explore", "Explore", "orbit", "Click a node to inspect it"), seg("path", "Path", "route", "Click two nodes to see how they connect"), seg("impact", "Impact", "zap", "Click a node to see what depends on it"), seg("flow", "Flow", "flow", "Click a function to replay its calls step by step")),
       h("span", { class: "kb-sep" }),
       h(
         "div",
@@ -4073,6 +4417,7 @@ function mountPage(el, store, api) {
       pathClick(i);
       if (!ui.path.length) galaxy.flyToNode(i, true);
     } else if (ui.mode === "impact") runImpact(i);
+    else if (ui.mode === "flow") runFlow(i);
     else select(i);
     renderBanner();
   }
@@ -4115,7 +4460,7 @@ function mountPage(el, store, api) {
       h("div", { class: "kb-hc-title" }, h("span", { class: "kb-dot", style: `--c:${nodeCss(g, i)}` }), h("span", {}, g.labels[i])),
       h("div", { class: "kb-hc-meta" }, `${typeLabel(g.types[i])} · ${c.name}`),
       g.files[i] && h("div", { class: "kb-hc-file" }, fileRef(g, i)),
-      h("div", { class: "kb-hc-meta" }, plural(g.degree[i], "link"), ui.mode === "path" ? " · click to route" : ui.mode === "impact" ? " · click for impact" : ""),
+      h("div", { class: "kb-hc-meta" }, plural(g.degree[i], "link"), ui.mode === "path" ? " · click to route" : ui.mode === "impact" ? " · click for impact" : ui.mode === "flow" ? " · click to replay its flow" : ""),
     );
     hoverCard.hidden = false;
     const w = hoverCard.offsetWidth;
@@ -4146,6 +4491,10 @@ function mountPage(el, store, api) {
       else if (ui.mode !== "explore") setMode("explore");
       else clearAll();
       renderBanner();
+    } else if (ui.flow && (e.key === " " || e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      if (e.key === " ") toggleFlowPlay();
+      else stepFlow(e.key === "ArrowLeft" ? -1 : 1);
     } else if (e.key === "f" || e.key === "F") galaxy.fit();
   }
 
@@ -4199,6 +4548,7 @@ function mountPage(el, store, api) {
 
   return () => {
     saveLayout();
+    clearTimeout(flowTimer);
     clearInterval(ticker);
     clearInterval(agentTimer);
     unsubscribe();
@@ -4228,6 +4578,13 @@ const CSS = `
   background: radial-gradient(28% 24% at 34% 46%, var(--kb-n1, transparent) 0%, transparent 70%), radial-gradient(24% 20% at 66% 58%, var(--kb-n2, transparent) 0%, transparent 70%), radial-gradient(20% 18% at 54% 32%, var(--kb-n3, transparent) 0%, transparent 70%);
   animation: kb-drift 70s ease-in-out infinite alternate; }
 @keyframes kb-drift { to { transform: rotate(8deg) scale(1.08) translate(2%, -1%); } }
+/* The plain 2D map: solid backdrop, no nebula, vignette, blur or glow. */
+:root .kb.kb-plain { background: var(--color-app); --kb-glass: var(--color-panel); --kb-glass-hi: var(--color-panel-raised); }
+.kb-plain .kb-nebula, .kb-plain .kb-vignette { display: none; }
+.kb-plain .kb-glass, .kb-plain .kb-label { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.kb-plain .kb-label { background: var(--color-panel); box-shadow: none; }
+.kb-plain .kb-constellation { background: none; text-shadow: none; }
+.kb-plain .kb-label-agent::before { box-shadow: none; }
 .kb-stage { position: absolute; inset: 0; overflow: hidden; }
 .kb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 .kb-canvas:active { cursor: grabbing; }
@@ -4363,6 +4720,21 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
 .kb-step-rel { display: flex; align-items: center; gap: 6px; margin-left: 9px; padding: 3px 0 3px 12px; border-left: 1px dashed var(--kb-line-hi); font-size: 10px; color: var(--color-fg-subtle); text-transform: lowercase; }
 .kb-step-rel .kb-i { width: 11px; height: 11px; color: var(--kb-accent); }
 .kb-depths { display: flex; align-items: center; gap: 4px; }
+.kb-flow-now { display: flex; flex-direction: column; gap: 6px; }
+.kb-flow-text { font-size: 13px; line-height: 1.45; color: var(--color-fg-muted); }
+.kb-flow-text b { color: var(--color-fg); font-weight: 600; font-family: var(--font-mono); font-size: 12px; }
+.kb-flow-bar { height: 3px; border-radius: 2px; background: var(--kb-line); overflow: hidden; }
+.kb-flow-bar span { display: block; height: 100%; width: var(--w); background: var(--kb-accent); transition: width .3s ease-out; }
+.kb-flow-controls { display: flex; align-items: center; gap: 2px; }
+.kb-flow-stack { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--color-fg-subtle); }
+.kb-flow-stack .kb-subtle { font-family: inherit; margin-right: 2px; }
+.kb-flow-top { color: var(--color-fg); font-weight: 600; }
+.kb-flow-list { display: flex; flex-direction: column; max-height: 280px; overflow-y: auto; margin: 0 -4px; }
+.kb-flow-row { display: flex; align-items: center; gap: 7px; min-height: 24px; padding: 0 6px 0 calc(6px + var(--d) * 12px); border: none; border-radius: 6px; background: none; font: inherit; font-size: 12px; color: var(--color-fg-subtle); text-align: left; cursor: pointer; flex-shrink: 0; }
+.kb-flow-row:hover { background: color-mix(in srgb, var(--color-fg) 7%, transparent); color: var(--color-fg); }
+.kb-flow-row.kb-done { color: var(--color-fg-muted); }
+.kb-flow-row.kb-on { color: var(--color-fg); background: color-mix(in srgb, var(--kb-accent) 20%, transparent); box-shadow: inset 2px 0 0 var(--kb-accent); }
+.kb-flow-n { min-width: 20px; font-size: 10px; font-variant-numeric: tabular-nums; color: var(--color-fg-subtle); text-align: right; }
 
 .kb-seg { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 8px; border: none; background: none; font: inherit; font-size: 12px; color: var(--color-fg-muted); cursor: pointer; }
 .kb-seg:hover { color: var(--color-fg); background: color-mix(in srgb, var(--color-fg) 6%, transparent); }
