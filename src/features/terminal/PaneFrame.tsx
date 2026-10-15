@@ -15,6 +15,7 @@ import { paneTitle, providerName, useWorkspaces, type Pane } from "@/stores/work
 import { useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { ContextMeter } from "@/features/usage/UsageMeter";
+import { PaneCost } from "@/features/usage/TaskCostChip";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -97,6 +98,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
           </span>
         )}
         <ContextMeter paneId={pane.id} />
+        <PaneCost pane={pane} />
         {showProgress && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">
             {progress.percent}%

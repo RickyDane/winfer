@@ -334,6 +334,18 @@ function ReviewSettings() {
   );
 }
 
+/** Opt-in: each worktree pane's task cost in its header. */
+function PaneCostSettings() {
+  const showPaneCost = useWorkspaces((s) => s.showPaneCost);
+  return (
+    <Card title="On panes">
+      <Row label="Show task cost on panes" hint="Each agent in its own worktree shows what its task has cost so far, at API prices, next to its title.">
+        <Toggle label="Show task cost on panes" checked={showPaneCost} onChange={(on) => useWorkspaces.getState().setShowPaneCost(on)} />
+      </Row>
+    </Card>
+  );
+}
+
 /** How often the LLM re-estimates working agents' progress. */
 function ProgressSettings() {
   const { progressConfig, setProgressConfig } = useWorkspaces();
@@ -715,7 +727,13 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   },
   { id: "voice", label: "Voice", icon: Mic, render: () => <VoiceSettings /> },
   { id: "ai", label: "AI", icon: Sparkles, render: () => <AiSettings /> },
-  { id: "usage", label: "Usage", icon: ChartColumn, render: () => <UsageHistory /> },
+  { id: "usage", label: "Usage", icon: ChartColumn, render: () => (
+      <>
+        <PaneCostSettings />
+        <UsageHistory />
+      </>
+    ),
+  },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
 ];
 
