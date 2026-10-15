@@ -1,6 +1,6 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, Check, CornerDownLeft, FlaskConical, GitBranch, GitMerge, Inbox, ListOrdered, ListPlus, Loader2, RotateCcw, Trash2, Trophy, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
@@ -113,7 +113,8 @@ const fileList = (files: string[]) => (files.length > 3 ? `${files.slice(0, 3).j
 function ConflictNotes({ pane }: { pane: Pane | undefined }) {
   const report = useConflicts((s) => s.report);
   const providers = useWorkspaces((s) => s.providers);
-  const panes = useWorkspaces((s) => s.workspaces.flatMap((w) => w.panes));
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  const panes = useMemo(() => workspaces.flatMap((w) => w.panes), [workspaces]);
   if (!pane?.worktree) return null;
   const { item, others } = conflictsFor(report, pane.worktree.path);
   const base = pane.worktree.base;

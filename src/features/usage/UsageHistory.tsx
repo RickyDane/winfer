@@ -138,7 +138,9 @@ function Chart({ bars, metric, range }: { bars: Bar[]; metric: Metric; range: Ra
 function ByTask({ days }: { days: number }) {
   const [rows, setRows] = useState<DirUsage[] | null>(null);
   const [all, setAll] = useState(false);
-  const panes = useWorkspaces((s) => s.workspaces.flatMap((w) => w.panes));
+  // Select the stable array and derive: a selector returning a fresh array loops forever in zustand v5.
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  const panes = useMemo(() => workspaces.flatMap((w) => w.panes), [workspaces]);
   useEffect(() => {
     let live = true;
     setRows(null);
