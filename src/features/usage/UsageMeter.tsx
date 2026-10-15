@@ -76,13 +76,11 @@ function WindowBar({ provider, window }: { provider: string; window: UsageWindow
   );
 }
 
-/** Title bar: one ring per agent with known limits; click for the details. */
-export function UsageMeter() {
+/** Providers with known limits, and whether OpenCode's spend is shown; re-renders as countdowns move. */
+function useLimited() {
   const snapshots = useUsage((s) => s.snapshots);
   const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
   const [, tick] = useState(0);
 
   useEffect(() => {
@@ -90,6 +88,61 @@ export function UsageMeter() {
     const timer = window.setInterval(() => tick((n) => n + 1), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const installed = (id: string) => providers.some((p) => p.id === id && p.installed);
+  const limited = Object.values(snapshots).filter((s) => installed(s.provider) && s.windows.length > 0);
+  const showOpencode = installed("opencode") && opencode !== null;
+  return { limited, showOpencode };
+}
+
+/** Every agent's limits as bars, plus OpenCode's spend today. */
+export function UsageDetails({ className, children }: { className?: string; children?: React.ReactNode }) {
+  const snapshots = useUsage((s) => s.snapshots);
+  const opencode = useUsage((s) => s.opencode);
+  const providers = useWorkspaces((s) => s.providers);
+  const { limited, showOpencode } = useLimited();
+  const claudeInstalled = providers.some((p) => p.id === "claude" && p.installed);
+  return (
+    <div className={cn("w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl", className)}>
+      <div className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">Usage limits</div>
+      {limited.map((s) => (
+        <section key={s.provider} className="space-y-2">
+          <header className="flex items-center gap-2 text-[13px]">
+            <ProviderIcon provider={s.provider} />
+            <span className="flex-1 font-medium text-fg">{providerName(providers, s.provider)}</span>
+            <span className="text-[10px] text-fg-subtle" title={new Date(s.at).toLocaleString()}>
+              {Date.now() - s.at < 120_000 ? "just now" : `${duration(Date.now() - s.at)} ago`}
+            </span>
+          </header>
+          {s.windows.map((w) => (
+            <WindowBar key={w.kind} provider={s.provider} window={w} />
+          ))}
+        </section>
+      ))}
+      {showOpencode && opencode && (
+        <section className="flex items-center gap-2 text-[13px]">
+          <ProviderIcon provider="opencode" />
+          <span className="flex-1 font-medium text-fg">{providerName(providers, "opencode")}</span>
+          <span className="font-mono text-[11px] text-fg-muted">
+            today {tokens(opencode.tokens)} tokens · ${opencode.cost.toFixed(2)}
+          </span>
+        </section>
+      )}
+      {limited.length === 0 && !showOpencode && <p className="text-[11px] text-fg-subtle">No usage reported yet. Limits show up once an agent has answered a message.</p>}
+      {!claudeInstalled || snapshots.claude ? null : (
+        <p className="text-[11px] text-fg-subtle">Claude Code reports its limits once a session in winfer has answered a message.</p>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/** Title bar: one ring per agent with known limits; click for the details. */
+export function UsageMeter() {
+  const providers = useWorkspaces((s) => s.providers);
+  const { limited, showOpencode } = useLimited();
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -103,9 +156,6 @@ export function UsageMeter() {
     };
   }, [open]);
 
-  const installed = (id: string) => providers.some((p) => p.id === id && p.installed);
-  const limited = Object.values(snapshots).filter((s) => installed(s.provider) && s.windows.length > 0);
-  const showOpencode = installed("opencode") && opencode !== null;
   if (limited.length === 0 && !showOpencode) return null;
 
   const summary = limited
@@ -124,35 +174,42 @@ export function UsageMeter() {
       >
         {limited.length > 0 ? limited.map((s) => <UsageRing key={s.provider} provider={s.provider} />) : <Gauge size={14} />}
       </button>
-      {open && (
-        <div className="anim-menu absolute right-0 z-50 mt-1 w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl">
-          <div className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">Usage limits</div>
-          {limited.map((s) => (
-            <section key={s.provider} className="space-y-2">
-              <header className="flex items-center gap-2 text-[13px]">
-                <ProviderIcon provider={s.provider} />
-                <span className="flex-1 font-medium text-fg">{providerName(providers, s.provider)}</span>
-                <span className="text-[10px] text-fg-subtle" title={new Date(s.at).toLocaleString()}>
-                  {Date.now() - s.at < 120_000 ? "just now" : `${duration(Date.now() - s.at)} ago`}
-                </span>
-              </header>
-              {s.windows.map((w) => (
-                <WindowBar key={w.kind} provider={s.provider} window={w} />
-              ))}
-            </section>
-          ))}
-          {showOpencode && (
-            <section className="flex items-center gap-2 text-[13px]">
-              <ProviderIcon provider="opencode" />
-              <span className="flex-1 font-medium text-fg">{providerName(providers, "opencode")}</span>
-              <span className="font-mono text-[11px] text-fg-muted">
-                today {tokens(opencode.tokens)} tokens · ${opencode.cost.toFixed(2)}
-              </span>
-            </section>
-          )}
-          {!installed("claude") || snapshots.claude ? null : (
-            <p className="text-[11px] text-fg-subtle">Claude Code reports its limits once a session in winfer has answered a message.</p>
-          )}
+      {open && <UsageDetails className="anim-menu absolute right-0 z-50 mt-1" />}
+    </div>
+  );
+}
+
+/** Sidebar footer: opens the Usage page in settings; hovering previews the limits. */
+export function UsageButton({ onOpen, title }: { onOpen: () => void; title: string }) {
+  const [hover, setHover] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const enter = () => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setHover(true), 250);
+  };
+  const leave = () => {
+    window.clearTimeout(timer.current);
+    setHover(false);
+  };
+  return (
+    <div className="relative" onMouseEnter={enter} onMouseLeave={leave}>
+      <button
+        onClick={() => {
+          leave();
+          onOpen();
+        }}
+        aria-label={title}
+        className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg"
+      >
+        <Gauge size={14} />
+      </button>
+      {hover && (
+        // pb bridges the gap so moving onto the preview doesn't close it.
+        <div className="absolute bottom-full left-0 z-50 pb-1">
+          <UsageDetails className="anim-menu">
+            <p className="border-t border-border pt-3 text-[11px] text-fg-subtle">Click for usage history</p>
+          </UsageDetails>
         </div>
       )}
     </div>

@@ -16,6 +16,7 @@ import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { themeById } from "@/features/theme/themes";
+import { UsageButton } from "@/features/usage/UsageMeter";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
 function PaneName({ pane, className }: { pane: Pane; className?: string }) {
@@ -205,6 +206,7 @@ export function Sidebar() {
             {themeById(theme).mode === "dark" ? <Sun size={14} /> : <Moon size={14} />}
           </span>
         </button>
+        <UsageButton onOpen={() => execute({ type: "ui.settings", page: "usage" })} title="Usage" />
         <button onClick={() => execute({ type: "ui.settings" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title={`Settings (${keysFor({ type: "ui.settings" })})`}>
           <Settings size={14} />
         </button>

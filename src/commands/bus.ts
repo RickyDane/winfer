@@ -90,7 +90,8 @@ export type Command =
   | { type: "ui.sidePanel"; panel: "browser" | "device" | "terminal" }
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
-  | { type: "ui.settings" }
+  /** Toggles settings; with a page, opens settings on that page. */
+  | { type: "ui.settings"; page?: string }
   | { type: "ui.theme"; theme: string }
   | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" }
   /** Speaks how far each working agent is ("how far are the agents?"). */
@@ -404,7 +405,7 @@ export function execute(cmd: Command): void {
     case "ui.cheatSheet":
       return s.setCheatSheet(!s.cheatSheetOpen);
     case "ui.settings":
-      return s.setSettings(!s.settingsOpen);
+      return cmd.page ? s.setSettings(true, cmd.page) : s.setSettings(!s.settingsOpen);
     case "ui.theme":
       return s.setTheme(cmd.theme);
     case "recipe.load":

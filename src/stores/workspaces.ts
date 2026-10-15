@@ -70,6 +70,8 @@ interface WorkspaceState {
   /** Pane whose worktree changes are shown in the diff view. */
   diffPaneId: string | null;
   settingsOpen: boolean;
+  /** Settings page shown; kept after closing so reopening lands where you left off. */
+  settingsPage: string;
   /** Open overlay for agent orchestration and recipes. */
   overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | null;
   /** User-saved recipes (persisted). */
@@ -125,7 +127,8 @@ interface WorkspaceState {
   closePalette: () => void;
   setCheatSheet: (open: boolean) => void;
   setDiffPane: (id: string | null) => void;
-  setSettings: (open: boolean) => void;
+  /** Opens or closes settings, optionally on a given page. */
+  setSettings: (open: boolean, page?: string) => void;
   setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
@@ -197,6 +200,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   cheatSheetOpen: false,
   diffPaneId: null,
   settingsOpen: false,
+  settingsPage: "general",
   overlay: null,
   recipes: [],
   models: {},
@@ -378,7 +382,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   // One modal at a time: they share a layer, so a later one would hide behind an earlier one.
   setCheatSheet: (open) => set(open ? { cheatSheetOpen: true, paletteQuery: null, settingsOpen: false, overlay: null } : { cheatSheetOpen: false }),
   setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
-  setSettings: (open) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false }),
+  setSettings: (open, page) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false, ...(page ? { settingsPage: page } : {}) }),
   setOverlay: (overlay) => set({ overlay, paletteQuery: null, cheatSheetOpen: false }),
   setRecipes: (recipes) => set({ recipes }),
   loadModels: async (provider) => {
