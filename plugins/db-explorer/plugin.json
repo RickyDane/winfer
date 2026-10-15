@@ -1,0 +1,16 @@
+{
+  "id": "db-explorer",
+  "name": "DB Explorer",
+  "version": "1.0.0",
+  "description": "Browse your Postgres, MySQL and SQLite databases read-only: run queries, see the schema and keep a query history. Agents query them by name without ever seeing the credentials.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": [
+    "database",
+    "sql",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "agents"
+  ]
+}

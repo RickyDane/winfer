@@ -10,16 +10,17 @@ import storeCatalog from "../../plugins/catalog.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 import { KB_DEMO, knowledgeBaseExec } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
+import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
 
 const providers = [
-  { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, installed: true },
-  { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, installed: true },
+  { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: ["--continue"], resumeSessionArgs: ["--resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, installed: true },
+  { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], resumeSessionArgs: ["resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: false },
-  { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--auto"], installed: true },
+  { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], resumeSessionArgs: ["--session", "{session}"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--auto"], installed: true },
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 
@@ -47,6 +48,12 @@ if (XP_DEMO) {
 }
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
+// `?db` starts with DB Explorer (one fake Postgres connection, see ./dbExplorer.ts) and Prompt Library.
+if (DB_DEMO) {
+  installMockPlugin("db-explorer");
+  installMockPlugin("prompt-library");
+  vault.set(DB_CONNECTION.key, { info: { key: DB_CONNECTION.key, meta: DB_CONNECTION.meta, updatedAt: Date.now() }, value: DB_CONNECTION.value });
+}
 
 const SAMPLE_DIFF = `diff --git a/src/common/guards/subscription.guard.ts b/src/common/guards/subscription.guard.ts
 index 3f2a1c0..9b8e7d1 100644
@@ -209,6 +216,7 @@ mockIPC(
       case "vault_exec":
         if (a.plugin === "knowledge-base") return knowledgeBaseExec(a.command);
         if (a.plugin === "cross-project") return crossProjectExec(a.command, a.cwd);
+        if (a.plugin === "db-explorer") return dbExplorerExec(a.command);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
       case "browser_fill_secret":
         return null;

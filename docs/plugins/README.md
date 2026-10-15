@@ -30,6 +30,11 @@ reads files bigger than its 20,000-character output limit in chunks, and draws a
 API and the NuGet package with their models) and shows the contracts, endpoints and packages they
 share as an SVG map; its analysis is pure functions tested in `scripts/cross-project.test.mjs`, and
 `pnpm dev` with `?xp` opens it on three demo projects.
+[`plugins/db-explorer`](../../plugins/db-explorer) runs psql, mysql or sqlite3 read-only with the
+connection from the vault, and [`plugins/prompt-library`](../../plugins/prompt-library) re-registers
+its palette and voice tool whenever the prompts change; `pnpm dev` with `?db` opens both on a fake
+database. Their pure functions are tested in `scripts/db-explorer.test.mjs` and
+`scripts/prompt-library.test.mjs`.
 
 ## plugin.json
 

@@ -29,6 +29,31 @@
       ]
     },
     {
+      "id": "db-explorer",
+      "name": "DB Explorer",
+      "version": "1.0.0",
+      "description": "Browse your Postgres, MySQL and SQLite databases read-only: run queries, see the schema and keep a query history. Agents query them by name without ever seeing the credentials.",
+      "author": "winfer",
+      "tags": [
+        "database",
+        "sql",
+        "postgres",
+        "mysql",
+        "sqlite",
+        "agents"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "cc71dcebafdd1fd6a54c9e1c3efd8c5411680ffc73cc4d1a452cc42c3641d617"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "e545d3b1f456294e45b5434638f2330149c8562d12bc38b3224dafe0364c809f"
+        }
+      ]
+    },
+    {
       "id": "example-hello",
       "name": "Example: hello",
       "version": "1.0.0",
@@ -72,6 +97,31 @@
         {
           "path": "plugin.json",
           "sha256": "c11bd67e8576383156039850f2b60abf193cab2c59704e64c01785119956e016"
+        }
+      ]
+    },
+    {
+      "id": "prompt-library",
+      "name": "Prompt Library",
+      "version": "1.0.0",
+      "description": "Save the prompts you keep retyping, with {{placeholders}} you fill in when you use them. Send one to an agent from the palette or by voice, broadcast it to every agent, or start a new agent with it.",
+      "author": "winfer",
+      "tags": [
+        "prompts",
+        "snippets",
+        "templates",
+        "palette",
+        "voice",
+        "agents"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "07c7abe6d7cc5bf04c089f46541295edcb8e2f2524997bd04b3222a7e81fe938"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "0b8e9f3d6d3bc2c0c06cfaffcf9340b070d5532b38d9c8ec9206ec8d4aa83c89"
         }
       ]
     },
