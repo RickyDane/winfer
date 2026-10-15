@@ -185,7 +185,45 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
     let child = cmd
         .spawn()
         .map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
+    #[cfg(windows)]
+    kill_with_app(&child);
     Ok(Launched { child, port })
+}
+
+/// Puts the browser in a job object that Windows tears down when winfer exits, crash included,
+/// so no browser outlives the app. Replaces the PowerShell orphan sweep that endpoint
+/// protection (Sophos "Lockdown") blocked on startup.
+#[cfg(windows)]
+fn kill_with_app(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // The handle is deliberately never closed: the OS closes it when winfer exits, which kills
+    // the job. Stored as usize because raw handles aren't Sync.
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return 0;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of_val(&info) as u32,
+        );
+        job as usize
+    });
+    if job != 0 {
+        unsafe { AssignProcessToJobObject(job as _, child.as_raw_handle() as _) };
+    }
 }
 
 /// One attempt at reading the browser-level WebSocket URL from `/json/version`.

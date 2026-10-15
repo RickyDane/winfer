@@ -358,29 +358,20 @@ impl BrowserManager {
 
 /// Kills browsers left behind by a previous run that didn't exit cleanly (crash, force quit).
 /// They'd otherwise keep running and hold the profile lock, so the next launch would fail.
+/// Windows needs no sweep: browsers run in a job object that dies with winfer.
 pub fn kill_orphans(app: &AppHandle) {
-    let Ok(profiles) = data_dir(app).map(|d| d.join("browser-profiles")) else {
-        return;
-    };
     #[cfg(unix)]
     {
+        let Ok(profiles) = data_dir(app).map(|d| d.join("browser-profiles")) else {
+            return;
+        };
         let _ = std::process::Command::new("pkill")
             .arg("-f")
             .arg(format!("user-data-dir={}", profiles.display()))
             .status();
     }
     #[cfg(windows)]
-    {
-        // wmic is gone from current Windows 11; PowerShell's CIM cmdlets do the same job.
-        let pattern = format!("*--user-data-dir={}*", profiles.display()).replace('\'', "''");
-        let script = format!(
-            "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '{pattern}' }} | Invoke-CimMethod -MethodName Terminate | Out-Null"
-        );
-        let _ = crate::env::no_window(
-            std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]),
-        )
-        .status();
-    }
+    let _ = app;
 }
 
 /// Playwright MCP server attached to the workspace browser.
