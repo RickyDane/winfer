@@ -18,15 +18,6 @@ concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
 
 env:
-  # whisper.cpp otherwise compiles for the CI machine's own CPU (GGML_NATIVE, e.g. AVX-512) and
-  # the app dies with an illegal instruction when it loads the speech model on users' CPUs that
-  # lack those extensions. Build for a common baseline instead (x86: AVX2, ~2013+; ignored on ARM).
-  GGML_NATIVE: "OFF"
-  GGML_AVX: "ON"
-  GGML_AVX2: "ON"
-  GGML_FMA: "ON"
-  GGML_F16C: "ON"
-  GGML_AVX512: "OFF"
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
@@ -41,6 +32,14 @@ jobs:
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
+      # Test once, before the release exists, rather than in every bundle job.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
       - name: Create the release with this version's changes
         id: create
         env:
@@ -103,8 +102,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm test
-
       - name: Build and upload to the release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -126,12 +123,10 @@ jobs:
     needs: [release, bundle]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
       - name: Write latest.json from the release's signatures
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           mkdir sigs && cd sigs
           gh release download "$TAG" --pattern '*.sig'

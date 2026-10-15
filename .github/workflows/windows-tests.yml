@@ -12,17 +12,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # whisper.cpp otherwise compiles for the CI machine's own CPU (GGML_NATIVE, e.g. AVX-512) and
-  # the app dies with an illegal instruction when it loads the speech model on users' CPUs that
-  # lack those extensions. Build for a common baseline instead (x86: AVX2, ~2013+; ignored on ARM).
-  GGML_NATIVE: "OFF"
-  GGML_AVX: "ON"
-  GGML_AVX2: "ON"
-  GGML_FMA: "ON"
-  GGML_F16C: "ON"
-  GGML_AVX512: "OFF"
-
 jobs:
   test:
     runs-on: windows-latest

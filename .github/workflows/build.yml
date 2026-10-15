@@ -1,7 +1,5 @@
 name: build
 
-# Frontend checks on every push; full macOS/Windows bundles on pull requests and on demand
-# (macOS runner minutes count 10x on private repos).
 on:
   push:
     branches: [main]
@@ -11,17 +9,6 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  # whisper.cpp otherwise compiles for the CI machine's own CPU (GGML_NATIVE, e.g. AVX-512) and
-  # the app dies with an illegal instruction when it loads the speech model on users' CPUs that
-  # lack those extensions. Build for a common baseline instead (x86: AVX2, ~2013+; ignored on ARM).
-  GGML_NATIVE: "OFF"
-  GGML_AVX: "ON"
-  GGML_AVX2: "ON"
-  GGML_FMA: "ON"
-  GGML_F16C: "ON"
-  GGML_AVX512: "OFF"
 
 jobs:
   frontend:
@@ -36,43 +23,3 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
-
-  build:
-    if: github.event_name != 'push'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin
-            rust-targets: aarch64-apple-darwin
-          - platform: windows-latest
-            args: --target x86_64-pc-windows-msvc
-            rust-targets: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-targets }}
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-
-      - run: pnpm install --frozen-lockfile
-
-      - run: pnpm test
-
-      - name: Build app bundle (unsigned)
-        uses: tauri-apps/tauri-action@v0
-        with:
-          args: ${{ matrix.args }}
