@@ -286,11 +286,12 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
     }
 }
 
-/// Environment that registers `servers` with an agent configured through its environment
-/// (OpenCode reads extra config from `OPENCODE_CONFIG_CONTENT`). `existing` is the variable's
-/// current value, if the user set one: our servers are added to it.
-pub fn agent_env(provider_id: &str, servers: &[Server], existing: Option<&str>) -> Vec<(String, String)> {
-    if servers.is_empty() || provider_id != "opencode" {
+/// Environment that registers `servers` (and winfer's status `plugin`, a directory) with an
+/// agent configured through its environment (OpenCode reads extra config from
+/// `OPENCODE_CONFIG_CONTENT`). `existing` is the variable's current value, if the user set one:
+/// ours are added to it.
+pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, existing: Option<&str>) -> Vec<(String, String)> {
+    if (servers.is_empty() && plugin.is_none()) || provider_id != "opencode" {
         return Vec::new();
     }
     let mut config = existing
@@ -314,6 +315,12 @@ pub fn agent_env(provider_id: &str, servers: &[Server], existing: Option<&str>) 
             "enabled": true,
         });
     }
+    if let Some(plugin) = plugin {
+        if !config["plugins"].is_array() {
+            config["plugins"] = json!([]);
+        }
+        config["plugins"].as_array_mut().expect("an array").push(json!(plugin));
+    }
     vec![("OPENCODE_CONFIG_CONTENT".into(), config.to_string())]
 }
 
@@ -329,14 +336,17 @@ mod tests {
             args: vec!["mcp-stdio".into()],
             env: vec![("WINFER_PANE_ID", "p-1".into())],
         }];
-        let env = agent_env("opencode", &servers, Some(r#"{"theme":"dark","mcp":{"mine":{"type":"remote"}}}"#));
+        let env = agent_env("opencode", &servers, Some("/data/opencode-plugin"), Some(r#"{"theme":"dark","mcp":{"mine":{"type":"remote"}},"plugins":["mine"]}"#));
         assert_eq!(env[0].0, "OPENCODE_CONFIG_CONTENT");
         let config: Value = serde_json::from_str(&env[0].1).unwrap();
         assert_eq!(config["theme"], "dark");
         assert_eq!(config["mcp"]["mine"]["type"], "remote");
         assert_eq!(config["mcp"]["winfer"]["command"], json!(["/app/winfer", "mcp-stdio"]));
         assert_eq!(config["mcp"]["winfer"]["environment"]["WINFER_PANE_ID"], "p-1");
-        assert!(agent_env("claude", &servers, None).is_empty());
+        assert_eq!(config["plugins"], json!(["mine", "/data/opencode-plugin"]));
+        assert!(agent_env("claude", &servers, None, None).is_empty());
+        let env = agent_env("opencode", &servers, None, None);
+        assert!(serde_json::from_str::<Value>(&env[0].1).unwrap().get("plugins").is_none());
     }
 
     fn env() -> (String, String, String) {

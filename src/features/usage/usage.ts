@@ -239,7 +239,7 @@ export function startUsageTracking() {
   });
   // Codex also logs token counts during a turn: follow working panes, and read all at startup.
   window.setTimeout(() => codexPanes().forEach((p) => void refreshCodexContext(p)), 3000);
-  // OpenCode has no hooks: look at its sessions now and then (one small database query each).
+  // OpenCode reports no token counts: look at its sessions now and then (one small database query each).
   const pollOpencodeContext = () => panesOf("opencode").forEach((p) => void refreshOpencodeContext(p));
   window.setTimeout(pollOpencodeContext, 3000);
   window.setInterval(pollOpencodeContext, 20_000);

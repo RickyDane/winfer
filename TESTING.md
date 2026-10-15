@@ -80,6 +80,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 
 - [ ] Terminal tab (or Ctrl+`): a shell in the workspace folder; it keeps running when switching tabs or workspaces (each workspace has its own); the ↻ button restarts it. Ctrl+` again hides the panel.
 
+- [ ] OpenCode 2.x pane (status plugin): while you're in another app, it asking permission (e.g. a `bash` command with `"permission": {"bash": "ask"}`) or asking a question (question tool) shows a notification, and finishing a turn shows "OpenCode finished" (subagents finishing don't). Status dot follows working / waiting / done. OpenCode 1.x keeps the output-quiet heuristic.
 - [ ] OpenCode pane: ask it to open a page and click something / take a screenshot (tools `winfer-browser_*`), and to "notify me when you're done" (`winfer_notify_user`); a native notification appears. Works with OpenCode 1.x and 2.x (2.x is started with `--standalone`).
 
 ## 6. Voice

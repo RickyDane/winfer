@@ -170,6 +170,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_opencode_major_version() {
+        assert_eq!(opencode_major("opencode v2.0.28\n"), Some(2));
+        assert_eq!(opencode_major("0.15.3"), Some(0));
+        assert_eq!(opencode_major("1.4.0"), Some(1));
+        assert_eq!(opencode_major(""), None);
+    }
+
+    #[test]
     fn parses_the_cli_model_list_formats() {
         let agy = "Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\n";
         assert_eq!(
@@ -241,15 +249,48 @@ pub fn is_installed(provider: &Provider) -> bool {
     crate::env::find_command(command).is_some()
 }
 
+/// Whether the installed OpenCode is version 2 or later, which has `--standalone` and the plugin
+/// API our status plugin uses. Asked once.
+pub fn opencode_v2(launcher: &crate::env::Launcher) -> bool {
+    static V2: OnceLock<bool> = OnceLock::new();
+    *V2.get_or_init(|| {
+        let output = crate::env::no_window(
+            std::process::Command::new(&launcher.program)
+                .args(&launcher.args)
+                .arg("--version")
+                .env("PATH", crate::env::path_var()),
+        )
+        .output();
+        output.is_ok_and(|o| opencode_major(&String::from_utf8_lossy(&o.stdout)) >= Some(2))
+    })
+}
+
+/// Major version from `opencode --version` ("opencode v2.0.28", "0.15.3").
+fn opencode_major(text: &str) -> Option<u32> {
+    let start = text.find(|c: char| c.is_ascii_digit())?;
+    text[start..].split('.').next()?.parse().ok()
+}
+
+/// Async so that asking OpenCode its version stays off the main thread.
 #[tauri::command]
-pub fn providers_list() -> Vec<ProviderInfo> {
-    all()
-        .into_iter()
-        .map(|p| ProviderInfo {
-            installed: is_installed(&p),
-            provider: p,
-        })
-        .collect()
+pub async fn providers_list() -> Vec<ProviderInfo> {
+    let list = || {
+        all()
+            .into_iter()
+            .map(|mut p| {
+                let installed = is_installed(&p);
+                // Only OpenCode 2 gets our status plugin (see pty.rs); OpenCode 1 keeps the
+                // output heuristics.
+                if p.id == "opencode" && p.status_hooks {
+                    p.status_hooks = installed
+                        && crate::hooks::server().is_some()
+                        && p.command.as_deref().and_then(crate::env::launcher).is_some_and(|l| opencode_v2(&l));
+                }
+                ProviderInfo { installed, provider: p }
+            })
+            .collect()
+    };
+    tauri::async_runtime::spawn_blocking(list).await.unwrap_or_default()
 }
 
 #[cfg(test)]

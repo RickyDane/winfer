@@ -1,7 +1,8 @@
 //! Agent status via the agents' own hook systems.
 //!
 //! A tiny HTTP server on 127.0.0.1 (random port, random token) receives events from
-//! Claude Code hooks and the Codex `notify` program, and forwards them to the webview as
+//! Claude Code hooks, the Codex `notify` program and OpenCode 2's plugin
+//! (resources/opencode-plugin.js), and forwards them to the webview as
 //! `agent://status`. PTYs get `WINFER_HOOK` / `WINFER_TOKEN` so the hook program
 //! (`winfer hook`, see [`run_hook`]) can reach it.
 
@@ -18,6 +19,8 @@ pub struct HookServer {
     pub token: String,
     /// Claude Code settings file with our hooks, passed via `--settings`.
     pub claude_settings: PathBuf,
+    /// Directory of the OpenCode plugin, listed in its `plugins` config.
+    pub opencode_plugin: PathBuf,
 }
 
 static SERVER: OnceLock<HookServer> = OnceLock::new();
@@ -46,6 +49,12 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
         ("claude", "Notification") => Some("needs-input"),
         ("claude", "Stop") => Some("done"),
         ("codex", "turn-complete") => Some("done"),
+        ("opencode", "session.execution.started" | "permission.replied" | "form.replied" | "form.cancelled") => {
+            Some("working")
+        }
+        ("opencode", "permission.asked" | "form.created" | "session.execution.failed") => Some("needs-input"),
+        ("opencode", "session.execution.succeeded") => Some("done"),
+        ("opencode", "session.execution.interrupted") => Some("idle"),
         _ => None,
     }
 }
@@ -154,6 +163,8 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
         &settings_path,
         serde_json::to_vec_pretty(&claude_settings(&current_exe()))?,
     )?;
+    let opencode_plugin = data_dir.join("opencode-plugin");
+    write_opencode_plugin(&opencode_plugin)?;
 
     let token = format!("{:032x}", rand::random::<u128>());
     let status_app = app.clone();
@@ -172,8 +183,17 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
         addr,
         token,
         claude_settings: settings_path,
+        opencode_plugin,
     });
     Ok(())
+}
+
+/// OpenCode 2 loads a plugin from a directory: a package whose entry point is the plugin.
+fn write_opencode_plugin(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let package = json!({ "name": "winfer-status", "private": true, "type": "module", "exports": { ".": "./index.js" } });
+    std::fs::write(dir.join("package.json"), serde_json::to_vec_pretty(&package)?)?;
+    std::fs::write(dir.join("index.js"), include_str!("../resources/opencode-plugin.js"))
 }
 
 /// Binds 127.0.0.1 on a random port and handles hook requests on a background thread.
@@ -269,6 +289,9 @@ mod tests {
         assert_eq!(status_for("claude", "Stop"), Some("done"));
         assert_eq!(status_for("claude", "Notification"), Some("needs-input"));
         assert_eq!(status_for("codex", "turn-complete"), Some("done"));
+        assert_eq!(status_for("opencode", "permission.asked"), Some("needs-input"));
+        assert_eq!(status_for("opencode", "form.created"), Some("needs-input"));
+        assert_eq!(status_for("opencode", "session.execution.succeeded"), Some("done"));
         assert_eq!(status_for("claude", "Unknown"), None);
     }
 

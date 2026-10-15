@@ -101,7 +101,8 @@
     "resumeArgs": [
       "--continue"
     ],
-    "promptFlag": "--prompt"
+    "promptFlag": "--prompt",
+    "statusHooks": true
   },
   {
     "id": "cursor",

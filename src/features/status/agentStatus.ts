@@ -1,5 +1,5 @@
 /**
- * Agent status: hook events from Claude Code / Codex (src-tauri/src/hooks.rs), terminal
+ * Agent status: hook events from Claude Code / Codex / OpenCode 2 (src-tauri/src/hooks.rs), terminal
  * notifications (OSC 9/777, bell) and, for agents without hooks, output activity.
  */
 import { listen } from "@tauri-apps/api/event";
