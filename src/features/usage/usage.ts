@@ -175,10 +175,14 @@ function record(snapshot: Snapshot) {
   }
 }
 
+/** The first read after launch replaces whatever was kept: the logs are the source of truth. */
+let codexRead = false;
+
 export async function refreshCodex() {
   const snapshot = await invoke<Snapshot | null>("usage_codex").catch(() => null);
   const current = useUsage.getState().snapshots.codex;
-  if (snapshot && (!current || snapshot.at >= current.at)) record(snapshot);
+  if (snapshot && (!codexRead || !current || snapshot.at >= current.at)) record(snapshot);
+  if (snapshot) codexRead = true;
 }
 
 function setContext(paneId: string, context: Context) {

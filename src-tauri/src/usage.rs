@@ -235,13 +235,18 @@ fn window_label(minutes: i64) -> (String, String) {
     }
 }
 
-/// The last rate limit snapshot in a Codex session log.
+/// The last rate limit snapshot in a Codex session log. Codex logs several limit buckets
+/// (`codex`, `codex_other`, per-model ones); only the main `codex` bucket is the plan's limits,
+/// the one `/status` shows (no `limit_id` means `codex`).
 pub fn codex_snapshot_in(log: &str) -> Option<Snapshot> {
     log.lines().rev().filter(|l| l.contains("\"rate_limits\"")).find_map(|line| {
         let v: Value = serde_json::from_str(line).ok()?;
         let at = v["timestamp"].as_str().and_then(parse_rfc3339).unwrap_or_else(now_ms);
         let limits = &v["payload"]["rate_limits"];
-        let windows: Vec<Window> = ["primary", "secondary"]
+        if limits["limit_id"].as_str().is_some_and(|id| id != "codex") {
+            return None;
+        }
+        let mut windows: Vec<Window> = ["primary", "secondary"]
             .iter()
             .filter_map(|key| {
                 let w = &limits[*key];
@@ -252,6 +257,16 @@ pub fn codex_snapshot_in(log: &str) -> Option<Snapshot> {
                 Some(Window { kind, label, used_percent: used, resets_at })
             })
             .collect();
+        // Workspace plans: the member's monthly credit limit.
+        let credit = &limits["individual_limit"];
+        if let Some(left) = credit["remaining_percent"].as_f64() {
+            windows.push(Window {
+                kind: "month-credit".into(),
+                label: "Monthly credit".into(),
+                used_percent: 100.0 - left,
+                resets_at: seconds_or_date(&credit["resets_at"]),
+            });
+        }
         (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at })
     })
 }
@@ -302,7 +317,9 @@ pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option
 pub async fn usage_codex() -> Option<Snapshot> {
     tauri::async_runtime::spawn_blocking(|| {
         let root = codex_sessions()?;
-        newest_logs(&root, 4).iter().find_map(|log| codex_snapshot_in(&tail(log, 512 * 1024)?))
+        // The newest reading of the last few sessions (a session started yesterday may still be
+        // running, so folder order alone isn't enough).
+        newest_logs(&root, 8).iter().filter_map(|log| codex_snapshot_in(&tail(log, 512 * 1024)?)).max_by_key(|s| s.at)
     })
     .await
     .ok()
@@ -515,6 +532,19 @@ mod tests {
         assert_eq!(s.at, parse_rfc3339("2026-10-14T00:10:00.000Z").unwrap());
         assert_eq!(s.windows[0], Window { kind: "session".into(), label: "5-hour".into(), used_percent: 12.0, resets_at: Some(1791929188000) });
         assert_eq!(s.windows[1].kind, "week");
+    }
+
+    #[test]
+    fn reads_only_the_main_codex_bucket() {
+        let log = [
+            r#"{"timestamp":"2026-10-14T00:00:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":null,"secondary":{"used_percent":8.0,"window_minutes":10080,"resets_at":1792515988},"individual_limit":{"limit":"100","used":"0","remaining_percent":100,"resets_at":1793000000}}}}"#,
+            r#"{"timestamp":"2026-10-14T00:10:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_other","primary":null,"secondary":{"used_percent":23.0,"window_minutes":10080,"resets_at":1792515988}}}}"#,
+        ]
+        .join("\n");
+        let s = codex_snapshot_in(&log).unwrap();
+        assert_eq!(s.windows.len(), 2);
+        assert_eq!((s.windows[0].kind.as_str(), s.windows[0].used_percent), ("week", 8.0));
+        assert_eq!((s.windows[1].kind.as_str(), s.windows[1].used_percent, s.windows[1].resets_at), ("month-credit", 0.0, Some(1793000000000)));
     }
 
     #[test]
