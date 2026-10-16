@@ -32,6 +32,8 @@ async function canNotify() {
 async function notify(pane: Pane, status: AgentStatus, message?: string) {
   const s = useWorkspaces.getState();
   if (document.hasFocus() && s.focusedPaneId === pane.id) return;
+  // Auto-approved agents don't stop for permission prompts: no Approve / Decline notifications.
+  if (status === "needs-input" && s.autoApprove.includes(pane.provider)) return;
   if (!(await canNotify())) return;
   const workspace = s.workspaces.find((w) => w.id === pane.workspaceId)?.name ?? "";
   const name = providerName(s.providers, pane.provider);
