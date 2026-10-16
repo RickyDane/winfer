@@ -2464,7 +2464,10 @@ function mountPage(root, store, api) {
       }
     }
 
-    const svg = s("svg", { class: `xp-svg${ui.hover ? " xp-focus" : ""}${store.settings.motion ? " xp-motion" : ""}`, width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+    const svg = s("svg", { class: `xp-svg${store.settings.motion ? " xp-motion" : ""}`, width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+    // What each pill and card links to, so highlighting touches only the elements that change.
+    const index = { svg, pills: new Map(), cards: new Map(), edgesByItem: new Map(), edgesByRoot: new Map(), rootsOf: new Map(), itemsOf: new Map(), on: new Set(), sel: null };
+    const push = (map, key, value) => (map.get(key) ?? map.set(key, []).get(key)).push(value);
     svg.addEventListener("click", (e) => {
       if (e.target === svg) {
         ui.selected = null;
@@ -2494,6 +2497,10 @@ function mountPage(root, store, api) {
         const color = e.warn ? "var(--color-warning)" : colorOf(rootDir);
         const toPill = e.role === "out";
         const g = s("g", { class: `xp-e xp-${e.role}`, "data-item": pl.it.id, "data-root": rootDir });
+        push(index.edgesByItem, pl.it.id, g);
+        push(index.edgesByRoot, rootDir, g);
+        push(index.rootsOf, pl.it.id, rootDir);
+        push(index.itemsOf, rootDir, pl.it.id);
         g.append(s("path", { d, stroke: color, class: "xp-line" }));
         if (e.role === "out" || e.role === "in" || e.role === "both") {
           g.append(s("path", { d, stroke: color, class: `xp-flow ${toPill ? "xp-fwd" : e.role === "in" ? "xp-back" : "xp-fwd"}` }));
@@ -2541,6 +2548,7 @@ function mountPage(root, store, api) {
         g.append(s("text", { x: pillW - 16, y: PILL_H / 2 + 3.8, class: "xp-badge-t", "text-anchor": "middle" }, ui.lens === "packages" ? "!" : it.badge));
       }
       g.append(s("title", {}, it.label));
+      index.pills.set(it.id, g);
       pillLayer.append(g);
     }
 
@@ -2563,6 +2571,7 @@ function mountPage(root, store, api) {
         onkeydown: (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), select({ project: p.root })),
       });
       g.append(
+        s("rect", { y: 2, width: CARD_W, height: CARD_H, rx: 12, class: "xp-card-shadow" }),
         s("rect", { width: CARD_W, height: CARD_H, rx: 12, class: "xp-card-bg" }),
         s("rect", { x: c.side === "left" ? CARD_W - 4 : 0, y: 14, width: 4, height: CARD_H - 28, rx: 2, fill: color }),
         s("circle", { cx: 18, cy: 22, r: 5, fill: color }),
@@ -2572,10 +2581,12 @@ function mountPage(root, store, api) {
         s("text", { x: 14, y: 84, class: "xp-card-p" }, p.root.length > 32 ? `…${p.root.slice(-31)}` : p.root),
         s("title", {}, p.root),
       );
+      index.cards.set(p.root, g);
       cardLayer.append(g);
     }
 
     fill(mapWrap, svg, legend());
+    mapIndex = index;
     paintSelection();
   }
 
@@ -2595,22 +2606,52 @@ function mountPage(root, store, api) {
     );
   }
 
+  /**
+   * Leaving a pill or card waits a moment before un-highlighting: moving to the next one crosses
+   * the gap between them, and dropping the focus there would flash the whole map.
+   */
+  let hoverTimer = 0;
   function hover(target) {
+    clearTimeout(hoverTimer);
+    if (!target) {
+      hoverTimer = setTimeout(() => {
+        ui.hover = null;
+        paintSelection();
+      }, 90);
+      return;
+    }
+    if (ui.hover && ui.hover.item === target.item && ui.hover.root === target.root) return;
     ui.hover = target;
     paintSelection();
   }
 
-  /** Highlights the hovered or selected item's edges and dims the rest. */
+  /** Highlights the hovered or selected item's edges and dims the rest, touching only what changes. */
+  let mapIndex = null;
   function paintSelection() {
-    const svg = mapWrap.querySelector("svg");
-    if (!svg) return;
+    const index = mapIndex;
+    if (!index || !index.svg.isConnected) return;
     const focus = ui.hover ?? (ui.selected?.id !== undefined && ui.selected?.lens === ui.lens ? { item: ui.selected.id } : ui.selected?.project ? { root: ui.selected.project } : null);
-    svg.classList.toggle("xp-focus", !!focus);
-    for (const el of svg.querySelectorAll(".xp-e, .xp-pill, .xp-card")) {
-      const on = !!focus && ((focus.item !== undefined && el.dataset.item === focus.item) || (focus.root && el.dataset.root === focus.root) || (focus.root && el.classList.contains("xp-pill") && svg.querySelector(`.xp-e[data-item="${CSS.escape(el.dataset.item)}"][data-root="${CSS.escape(focus.root)}"]`)) || (focus.item !== undefined && el.classList.contains("xp-card") && svg.querySelector(`.xp-e[data-item="${CSS.escape(focus.item)}"][data-root="${CSS.escape(el.dataset.root)}"]`)));
-      el.classList.toggle("on", !!on);
+    const on = new Set();
+    const add = (el) => el && on.add(el);
+    if (focus?.item !== undefined) {
+      add(index.pills.get(focus.item));
+      (index.edgesByItem.get(focus.item) ?? []).forEach(add);
+      (index.rootsOf.get(focus.item) ?? []).forEach((r) => add(index.cards.get(r)));
+    } else if (focus?.root) {
+      add(index.cards.get(focus.root));
+      (index.edgesByRoot.get(focus.root) ?? []).forEach(add);
+      (index.itemsOf.get(focus.root) ?? []).forEach((id) => add(index.pills.get(id)));
     }
-    for (const el of svg.querySelectorAll(".xp-pill")) el.classList.toggle("sel", ui.selected?.lens === ui.lens && el.dataset.item === ui.selected?.id);
+    for (const el of index.on) if (!on.has(el)) el.classList.remove("on");
+    for (const el of on) if (!index.on.has(el)) el.classList.add("on");
+    index.on = on;
+    if (index.svg.classList.contains("xp-focus") !== !!focus) index.svg.classList.toggle("xp-focus", !!focus);
+    const sel = ui.selected?.lens === ui.lens ? (index.pills.get(ui.selected?.id) ?? null) : null;
+    if (sel !== index.sel) {
+      index.sel?.classList.remove("sel");
+      sel?.classList.add("sel");
+      index.sel = sel;
+    }
   }
 
   function select(target) {
@@ -3005,6 +3046,7 @@ function mountPage(root, store, api) {
   return () => {
     unsub();
     resize.disconnect();
+    clearTimeout(hoverTimer);
     theme.disconnect();
   };
 }
@@ -3047,7 +3089,8 @@ const PAGE_CSS = `
 @container (max-width: 1100px) { .xp { height: auto; min-height: 100%; } .xp-body { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: 560px auto; } .xp-side { overflow: visible; } }
 .xp-map { position: relative; min-height: 0; overflow: auto; border-radius: 14px; border: 1px solid var(--color-border); background:
   radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--color-fg) 9%, transparent) 1px, transparent 0) 0 0 / 22px 22px, var(--color-panel); }
-.xp-svg { display: block; }
+/* Its own layer: hover dimming and the flow animation repaint only the map, not the page around it. */
+.xp-svg { display: block; will-change: transform; }
 .xp-line { fill: none; stroke-width: 1.6; opacity: .55; transition: opacity .15s; }
 .xp-def .xp-line { stroke-dasharray: 6 4; }
 .xp-ref .xp-line { stroke-dasharray: 1.5 4; stroke-width: 1.4; opacity: .4; }
@@ -3078,12 +3121,13 @@ const PAGE_CSS = `
 .xp-m-get { fill: var(--color-success); color: var(--color-success); }
 .xp-m-delete { fill: var(--color-danger); color: var(--color-danger); }
 .xp-m-put, .xp-m-patch { fill: var(--color-warning); color: var(--color-warning); }
-.xp-card-bg { fill: var(--color-panel-raised); stroke: var(--color-border-strong); transition: stroke .15s; filter: drop-shadow(0 2px 6px rgb(0 0 0 / .12)); }
+.xp-card-bg { fill: var(--color-panel-raised); stroke: var(--color-border-strong); transition: stroke .15s; }
+.xp-card-shadow { fill: rgb(0 0 0 / .1); }
 .xp-card:hover .xp-card-bg, .xp-card:focus-visible .xp-card-bg, .xp-card.on .xp-card-bg { stroke: var(--color-accent); }
 .xp-card-t { font-size: 13.5px; font-weight: 600; fill: var(--color-fg); }
 .xp-card-s { font-size: 11.5px; fill: var(--color-fg-muted); }
 .xp-card-p { font-size: 10.5px; fill: var(--color-fg-subtle); font-family: var(--font-mono); }
-.xp-legend { position: sticky; left: 10px; bottom: 10px; display: inline-flex; gap: 14px; flex-wrap: wrap; margin: -46px 0 10px 10px; padding: 7px 12px; border-radius: 9px; background: color-mix(in srgb, var(--color-panel) 88%, transparent); backdrop-filter: blur(8px); border: 1px solid var(--color-border); font-size: 11px; color: var(--color-fg-muted); }
+.xp-legend { position: sticky; left: 10px; bottom: 10px; display: inline-flex; gap: 14px; flex-wrap: wrap; margin: -46px 0 10px 10px; padding: 7px 12px; border-radius: 9px; background: color-mix(in srgb, var(--color-panel) 94%, transparent); border: 1px solid var(--color-border); font-size: 11px; color: var(--color-fg-muted); }
 .xp-leg { display: inline-flex; align-items: center; gap: 6px; }
 .xp-leg-t input { margin: 0; }
 .xp-leg-l { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--color-fg-muted); }

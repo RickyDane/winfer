@@ -4,7 +4,7 @@
     {
       "id": "cross-project",
       "name": "Cross-Project Knowledge",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Link projects that talk to each other (a mobile app, a web API, the NuGet or npm package with their models) and see the contracts they serialize and deserialize, the endpoints between them and the packages they share, drawn as a map, with drift flagged. Agents get the same links as tools.",
       "author": "winfer",
       "tags": [
@@ -20,11 +20,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "a8d774cf5d2a3a4776d45c0d28aa179ffd1a67bf928bc2e9cd90e7fda48374de"
+          "sha256": "55cf1c8c1fe9ed6cb7baa45f13ffa54a9b933ce6bf73ba51157afb41b9ba20b0"
         },
         {
           "path": "plugin.json",
-          "sha256": "a6b8c1880a0d70b786ea3e3e8e81788335aeda44f7417b96334da285b4f7d324"
+          "sha256": "177835ed95e90cc8aa22994f4fd3d2d495b565b939b04c3887da029639b77d17"
         }
       ]
     },
@@ -78,7 +78,7 @@
     {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy, a flat glowing galaxy or a plain 2D map, and replay call flows step by step. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -92,11 +92,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "e1171183eaedf145df620d356ae7b9457286d26abb4135d895d967fcb96eb4d0"
+          "sha256": "7d21ca0ea1d4152c55766d4a8ec5946070a83b0bb955061d7f0e0620e8c7e021"
         },
         {
           "path": "plugin.json",
-          "sha256": "be4766621758dff52982b68929b31593f9d82299f4c03ca875320acba87944e4"
+          "sha256": "b9fc85685256e9f43010a846f401b25c612795c0cd165406a0e822af0cf25356"
         }
       ]
     },

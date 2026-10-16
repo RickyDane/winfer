@@ -827,11 +827,21 @@ function createStore(api) {
   }
 
   /**
-   * Reads a file of the project of any size. vault.exec only returns the last 20,000 characters
-   * of output, so the file is gzipped and base64-encoded into a temp file once, read back in
-   * chunks (several at a time) and unpacked here.
+   * Reads a file of the project of any size: with api.readFile when the host has it, else through
+   * vault.exec, which only returns the last 20,000 characters of output, so the file is gzipped
+   * and base64-encoded into a temp file once, read back in chunks (several at a time) and
+   * unpacked here.
    */
   async function readText(root, rel) {
+    // Hosts with readFile hand the file over in one call; older ones go through the shell below.
+    if (api.readFile) {
+      try {
+        const dir = (await absolute(root)).replace(/[\\/]+$/, "");
+        return await api.readFile(`${dir}/${rel}`);
+      } catch {
+        // Missing or unreadable: the shell path below reports why.
+      }
+    }
     const prepare = IS_WIN
       ? `$b = [IO.File]::ReadAllBytes((Join-Path (Get-Location) ${q(rel)})); $m = New-Object IO.MemoryStream; $z = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Compress); $z.Write($b, 0, $b.Length); $z.Close(); $s = [Convert]::ToBase64String($m.ToArray()); $f = [IO.Path]::GetTempFileName(); [IO.File]::WriteAllText($f, $s); [string]$s.Length + ' ' + $f`
       : `f=$(mktemp) && gzip -c ${q(rel)} | base64 | tr -d '\\n' > "$f" && echo "$(wc -c < "$f" | tr -d ' ') $f"`;
@@ -1063,6 +1073,41 @@ const LAYOUT_WORKER = `
 "use strict";
 const CELL = 22, REPULSE = 9, K_ANCHOR = 0.01, LINK_IN = 14, LINK_OUT = 40, K_IN = 0.35, K_OUT = 0.05, DECAY = 0.6;
 let n = 0, m = 0, pos, vel, src, dst, comm, deg, anchor, head, next, mask = 0, alpha = 0, running = false, flat = false;
+// Only the nodes on screen (the filters hide the rest) are simulated: nodes lists them, edges
+// the links between them. Hidden nodes keep their spot until they're shown.
+let active = null, nodes = new Int32Array(0), edges = new Int32Array(0), placed = null, adjStart = null, adj = null;
+
+function setActive(mask) {
+  const fresh = [];
+  let count = 0;
+  for (let i = 0; i < n; i++) if (!mask || mask[i]) count++;
+  nodes = new Int32Array(count);
+  count = 0;
+  for (let i = 0; i < n; i++) {
+    if (mask && !mask[i]) continue;
+    nodes[count++] = i;
+    if (!placed[i]) fresh.push(i);
+  }
+  active = mask;
+  let k = 0;
+  const list = new Int32Array(m);
+  for (let e = 0; e < m; e++) if (!mask || (mask[src[e]] && mask[dst[e]])) list[k++] = e;
+  edges = list.slice(0, k);
+  // A node shown for the first time starts next to a neighbor that's already placed.
+  const rand = rng(fresh.length + 99);
+  for (const i of fresh) {
+    for (let a = adjStart[i]; a < adjStart[i + 1]; a++) {
+      const j = adj[a];
+      if (!placed[j]) continue;
+      pos[i * 3] = pos[j * 3] + (rand() - 0.5) * CELL;
+      pos[i * 3 + 1] = flat ? 0 : pos[j * 3 + 1] + (rand() - 0.5) * CELL;
+      pos[i * 3 + 2] = pos[j * 3 + 2] + (rand() - 0.5) * CELL;
+      break;
+    }
+  }
+  for (const i of fresh) placed[i] = 1;
+  return fresh.length;
+}
 
 function rng(seed) {
   return () => {
@@ -1094,13 +1139,16 @@ function galaxy(sizes) {
 const hash = (x, y, z) => (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & mask;
 
 function tick() {
-  for (let i = 0; i < n; i++) {
+  const N = nodes.length;
+  for (let k = 0; k < N; k++) {
+    const i = nodes[k];
     const a = comm[i] * 3, p = i * 3;
     vel[p] += (anchor[a] - pos[p]) * K_ANCHOR * alpha;
     vel[p + 1] += (anchor[a + 1] - pos[p + 1]) * K_ANCHOR * 3 * alpha;
     vel[p + 2] += (anchor[a + 2] - pos[p + 2]) * K_ANCHOR * alpha;
   }
-  for (let e = 0; e < m; e++) {
+  for (let k = 0; k < edges.length; k++) {
+    const e = edges[k];
     const a = src[e], b = dst[e], pa = a * 3, pb = b * 3;
     let dx = pos[pb] + vel[pb] - pos[pa] - vel[pa];
     let dy = pos[pb + 1] + vel[pb + 1] - pos[pa + 1] - vel[pa + 1];
@@ -1114,13 +1162,15 @@ function tick() {
     vel[pa] += dx * (1 - bias); vel[pa + 1] += dy * (1 - bias); vel[pa + 2] += dz * (1 - bias);
   }
   head.fill(-1);
-  for (let i = 0; i < n; i++) {
+  for (let k = 0; k < N; k++) {
+    const i = nodes[k];
     const h = hash(Math.floor(pos[i * 3] / CELL), Math.floor(pos[i * 3 + 1] / CELL), Math.floor(pos[i * 3 + 2] / CELL));
     next[i] = head[h];
     head[h] = i;
   }
   const c2 = CELL * CELL;
-  for (let i = 0; i < n; i++) {
+  for (let k = 0; k < N; k++) {
+    const i = nodes[k];
     const p = i * 3;
     const cx = Math.floor(pos[p] / CELL), cy = Math.floor(pos[p + 1] / CELL), cz = Math.floor(pos[p + 2] / CELL);
     const oy0 = flat ? 0 : -1, oy1 = flat ? 0 : 1;
@@ -1139,11 +1189,14 @@ function tick() {
       }
     }
   }
-  for (let k = 0; k < n * 3; k++) {
-    vel[k] *= DECAY;
-    pos[k] += vel[k];
+  for (let k = 0; k < N; k++) {
+    const p = nodes[k] * 3;
+    for (let c = p; c < p + 3; c++) {
+      vel[c] *= DECAY;
+      pos[c] += vel[c];
+    }
+    if (flat) { vel[p + 1] = 0; pos[p + 1] = Math.abs(pos[p + 1]) < 0.01 ? 0 : pos[p + 1] * 0.85; }
   }
-  if (flat) for (let i = 1; i < n * 3; i += 3) { vel[i] = 0; pos[i] = Math.abs(pos[i]) < 0.01 ? 0 : pos[i] * 0.85; }
   alpha += -alpha * 0.018;
 }
 
@@ -1168,23 +1221,42 @@ onmessage = (event) => {
     vel = new Float32Array(n * 3);
     let size = 1024;
     while (size < n * 4) size <<= 1;
+    // Neighbors, for placing nodes when they're first shown.
+    adjStart = new Int32Array(n + 1);
+    for (let e = 0; e < m; e++) { adjStart[src[e] + 1]++; adjStart[dst[e] + 1]++; }
+    for (let i = 0; i < n; i++) adjStart[i + 1] += adjStart[i];
+    adj = new Int32Array(m * 2);
+    const fill = adjStart.slice(0, n);
+    for (let e = 0; e < m; e++) { adj[fill[src[e]]++] = dst[e]; adj[fill[dst[e]]++] = src[e]; }
     mask = size - 1;
     head = new Int32Array(size);
     next = new Int32Array(n);
     const rand = rng(1234);
     const gauss = () => (rand() + rand() + rand() - 1.5) * 1.4;
+    placed = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      if (!Number.isNaN(pos[i * 3])) continue;
+      if (!Number.isNaN(pos[i * 3])) { placed[i] = 1; continue; }
       const a = comm[i] * 3, spread = CELL * 0.8 * Math.cbrt(msg.sizes[comm[i]]) + 3;
       pos[i * 3] = anchor[a] + gauss() * spread;
       pos[i * 3 + 1] = flat ? 0 : anchor[a + 1] + gauss() * spread * 0.5;
       pos[i * 3 + 2] = anchor[a + 2] + gauss() * spread;
     }
+    // Shown nodes start from the cache or the scatter above; hidden ones without a cached spot
+    // are placed next to a neighbor when they're first shown.
+    for (let i = 0; i < n; i++) if (!msg.active || msg.active[i]) placed[i] = 1;
+    setActive(msg.active ?? null);
     alpha = msg.alpha;
     postMessage({ type: "meta", R: g.R });
     const first = pos.slice();
     postMessage({ type: "positions", positions: first, alpha }, [first.buffer]);
     if (!running) { running = true; loop(); }
+  } else if (msg.type === "active") {
+    if (!n) return;
+    const fresh = setActive(msg.active);
+    if (fresh) {
+      alpha = Math.max(alpha, Math.min(0.5, 0.08 + fresh / Math.max(1, nodes.length)));
+      if (!running) { running = true; loop(); }
+    }
   } else if (msg.type === "reheat") {
     alpha = Math.max(alpha, msg.alpha);
     if (!running && n) { running = true; loop(); }
@@ -1480,6 +1552,11 @@ function createGalaxy(container, callbacks) {
   let edgePosBuf = new Float32Array(0);
   let edgeColorBuf = new Float32Array(0);
   let edgeTBuf = new Float32Array(0);
+  /** The edges drawn (both ends shown, confidence on), in buffer order; the rest cost nothing. */
+  let edgeList = new Int32Array(0);
+  let edgeCount = 0;
+  /** setGraph starts the layout once the caller's filters are in, so it simulates only those. */
+  let maskSet = false;
   let flow = { edges: new Int32Array(0), dirs: new Int8Array(0), color: new Float32Array(0), param: new Float32Array(0), ab: new Float32Array(0) };
   let positionsDirty = false;
   let styleDirty = false;
@@ -1679,14 +1756,13 @@ function createGalaxy(container, callbacks) {
     edgePosBuf = new Float32Array(g.m * 6);
     edgeColorBuf = new Float32Array(g.m * 8);
     edgeTBuf = new Float32Array(g.m * 4);
+    edgeList = new Int32Array(g.m);
+    edgeCount = 0;
+    maskSet = false;
     for (let i = 0; i < n; i++) {
       nodeSize[i] = Math.min(10, 1.3 + Math.sqrt(g.degree[i]) * 0.6);
       const t = g.types[i];
       shape[i] = t === "document" || t === "paper" ? 1 : t === "concept" || t === "rationale" ? 2 : 0;
-    }
-    for (let e = 0; e < g.m; e++) {
-      edgeTBuf[e * 4 + 2] = 1;
-      edgeTBuf[e * 4 + 1] = edgeTBuf[e * 4 + 3] = g.conf[e] === 2 ? 1 : 0;
     }
     topNodes = [...Array(n).keys()].sort((a, b) => g.degree[b] - g.degree[a]).slice(0, 12);
     recolor();
@@ -1718,17 +1794,23 @@ function createGalaxy(container, callbacks) {
       }
     };
     const hasCache = !!cached && cached.length === n * 3;
-    worker.postMessage({
-      type: "init",
-      n,
-      src: g.src,
-      dst: g.dst,
-      comm: g.commRank,
-      deg: Int32Array.from(g.degree, (d) => Math.max(1, d)),
-      sizes,
-      flat,
-      positions: hasCache ? cached.slice() : null,
-      alpha: hasCache ? (fresh?.size ? 0.25 : 0.05) : 1,
+    const target = worker;
+    queueMicrotask(() => {
+      if (worker !== target) return;
+      maskSet = true;
+      worker.postMessage({
+        type: "init",
+        n,
+        src: g.src,
+        dst: g.dst,
+        comm: g.commRank,
+        deg: Int32Array.from(g.degree, (d) => Math.max(1, d)),
+        sizes,
+        flat,
+        active: visible.slice(),
+        positions: hasCache ? cached.slice() : null,
+        alpha: hasCache ? (fresh?.size ? 0.25 : 0.05) : 1,
+      });
     });
     if (fresh?.size) pulse([...fresh].map((id) => g.index.get(id)).filter((i) => i !== undefined), [0.6, 1, 0.8], 0.6);
     styleDirty = flowDirty = true;
@@ -1767,17 +1849,20 @@ function createGalaxy(container, callbacks) {
     }
     const warn = light ? [0.8, 0.5, 0.05] : [1, 0.75, 0.3];
     const base = plain ? (light ? [0.22, 0.14, 0.3] : [0.2, 0.13, 0.3]) : light ? [0.2, 0.13, 0.28] : [0.11, 0.07, 0.2];
+    let k = 0;
     for (let e = 0; e < g.m; e++) {
       const a = g.src[e];
       const b = g.dst[e];
-      const vis = visible[a] && visible[b] && confVisible[g.conf[e]] && (!presence || (presence[a] && presence[b]));
-      let alpha = 0;
-      if (vis) {
-        if (pathEdges.has(e)) alpha = 1;
-        else if (f) alpha = f.has(a) && f.has(b) ? (light ? 0.55 : 0.5) : light ? 0.02 : 0.012;
-        else alpha = base[g.conf[e]];
-      }
-      const o = e * 8;
+      if (!(visible[a] && visible[b] && confVisible[g.conf[e]] && (!presence || (presence[a] && presence[b])))) continue;
+      let alpha;
+      if (pathEdges.has(e)) alpha = 1;
+      else if (f) alpha = f.has(a) && f.has(b) ? (light ? 0.55 : 0.5) : light ? 0.02 : 0.012;
+      else alpha = base[g.conf[e]];
+      edgeList[k] = e;
+      edgeTBuf[k * 4] = 0;
+      edgeTBuf[k * 4 + 2] = 1;
+      edgeTBuf[k * 4 + 1] = edgeTBuf[k * 4 + 3] = g.conf[e] === 2 ? 1 : 0;
+      const o = k++ * 8;
       if (g.conf[e] === 2) {
         edgeColorBuf.set(warn, o);
         edgeColorBuf.set(warn, o + 4);
@@ -1795,6 +1880,9 @@ function createGalaxy(container, callbacks) {
       }
       edgeColorBuf[o + 3] = edgeColorBuf[o + 7] = alpha;
     }
+    edgeCount = k;
+    // The drawn edges may have changed, so their positions are refilled too.
+    positionsDirty = true;
     labelItems = labelCandidates(f);
   }
 
@@ -1824,8 +1912,9 @@ function createGalaxy(container, callbacks) {
     if (!plain && (options.flow || f)) {
       let count = 0;
       const cap = f ? 2400 : 1800;
-      const stride = f ? 1 : Math.max(1, Math.ceil(g.m / 6000));
-      for (let e = 0; e < g.m && count < cap; e += stride) {
+      const stride = f ? 1 : Math.max(1, Math.ceil(edgeCount / 6000));
+      for (let k = 0; k < edgeCount && count < cap; k += stride) {
+        const e = edgeList[k];
         const a = g.src[e];
         const b = g.dst[e];
         if (!visible[a] || !visible[b] || !confVisible[g.conf[e]]) continue;
@@ -1852,10 +1941,11 @@ function createGalaxy(container, callbacks) {
   }
 
   function fillPositions() {
-    for (let e = 0; e < g.m; e++) {
+    for (let k = 0; k < edgeCount; k++) {
+      const e = edgeList[k];
       const a = g.src[e] * 3;
       const b = g.dst[e] * 3;
-      const o = e * 6;
+      const o = k * 6;
       edgePosBuf[o] = pos[a];
       edgePosBuf[o + 1] = pos[a + 1];
       edgePosBuf[o + 2] = pos[a + 2];
@@ -2100,15 +2190,15 @@ function createGalaxy(container, callbacks) {
 
     if (positionsDirty) {
       upload(res.nodes.pos, pos);
-      upload(res.edges.pos, edgePosBuf);
+      upload(res.edges.pos, edgePosBuf.subarray(0, edgeCount * 6));
       upload(res.particles.ab, flow.ab);
     }
     if (styleDirty || pulseDirty) {
       upload(res.nodes.color, nodeColorBuf);
       upload(res.nodes.state, nodeStateBuf);
       upload(res.nodes.pulse, pulseColor);
-      upload(res.edges.color, edgeColorBuf);
-      upload(res.edges.t, edgeTBuf);
+      upload(res.edges.color, edgeColorBuf.subarray(0, edgeCount * 8));
+      upload(res.edges.t, edgeTBuf.subarray(0, edgeCount * 4));
     }
     if (flowDirty) {
       upload(res.particles.color, flow.color);
@@ -2119,7 +2209,7 @@ function createGalaxy(container, callbacks) {
     gl.uniformMatrix4fv(res.edge.u.uView, false, view);
     gl.uniformMatrix4fv(res.edge.u.uProj, false, proj);
     gl.bindVertexArray(res.edges.vao);
-    gl.drawArrays(gl.LINES, 0, g.m * 2);
+    gl.drawArrays(gl.LINES, 0, edgeCount * 2);
 
     // Beams from agent satellites to the nodes they're on.
     const beamPos = [];
@@ -2183,12 +2273,13 @@ function createGalaxy(container, callbacks) {
     const screen = new Array(g.n);
     for (let i = 0; i < g.n; i++) screen[i] = nodeStateBuf[i * 4] > 0 ? project(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]) : null;
     c.lineWidth = 1;
-    for (let e = 0; e < g.m; e++) {
-      const alpha = edgeColorBuf[e * 8 + 3];
+    for (let k = 0; k < edgeCount; k++) {
+      const e = edgeList[k];
+      const alpha = edgeColorBuf[k * 8 + 3];
       const a = screen[g.src[e]];
       const b = screen[g.dst[e]];
       if (!a || !b || alpha < 0.01) continue;
-      c.strokeStyle = css([edgeColorBuf[e * 8], edgeColorBuf[e * 8 + 1], edgeColorBuf[e * 8 + 2]], Math.min(1, alpha * 2));
+      c.strokeStyle = css([edgeColorBuf[k * 8], edgeColorBuf[k * 8 + 1], edgeColorBuf[k * 8 + 2]], Math.min(1, alpha * 2));
       c.beginPath();
       c.moveTo(a.x, a.y);
       c.lineTo(b.x, b.y);
@@ -2349,6 +2440,7 @@ function createGalaxy(container, callbacks) {
     setVisible(mask) {
       visible = mask;
       styleDirty = flowDirty = true;
+      if (maskSet) worker?.postMessage({ type: "active", active: mask.slice() });
     },
     setPresence(mask) {
       presence = mask;

@@ -120,6 +120,7 @@ pub fn run() {
             plugins::plugins_set_enabled,
             plugins::plugins_dir,
             plugins::plugins_source,
+            plugins::plugins_read_file,
             plugins::plugins_catalog,
             plugins::plugins_install,
             plugins::plugins_uninstall,

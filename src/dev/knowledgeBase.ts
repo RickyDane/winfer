@@ -2,8 +2,9 @@
  * Dev-only fake graphify for the Knowledge Base plugin (plugins/knowledge-base): answers the shell
  * commands the plugin runs through `vault_exec` with a generated graph of a made-up "orbit" web
  * app, whose files match the showcase agents' transcripts. Open the dev server with `?kb` to
- * install the plugin, `?kb=empty` to start without a graph, or `?kb=missing` without graphify
- * (and uv) to try the installer.
+ * install the plugin, `?kb=empty` to start without a graph, `?kb=missing` without graphify
+ * (and uv) to try the installer, or `?kb=big` for a graph with 60,000 more nodes to profile
+ * (`&kbn=180000` for another count).
  */
 
 type Node = { id: string; label: string; file_type: string; source_file: string; source_location: string; community: number };
@@ -158,8 +159,27 @@ function generate(extra: number): Fake {
   return { nodes, links, names, hyper, stamp: Math.floor(Date.now() / 1000), commit: "9f3c2a71e0b4d5c6a7e8f9a0b1c2d3e4f5a6b7c8" };
 }
 
+/** Adds `count` nodes to `f`, linked by preferential attachment so a few hubs get most links. */
+function bulk(f: Fake, count: number): Fake {
+  const rand = rng(7);
+  const ends: string[] = f.links.flatMap((l) => [l.source, l.target]);
+  for (let k = 0; k < count; k++) {
+    const c = Math.floor(rand() * AREAS.length);
+    const area = AREAS[c];
+    const file = area.files[Math.floor(rand() * area.files.length)];
+    const id = `bulk_${k}`;
+    f.nodes.push({ id, label: `${VERBS[k % VERBS.length]}${area.nouns[k % area.nouns.length]}${k}()`, file_type: "code", source_file: file, source_location: `L${k % 900}`, community: c });
+    for (let j = 0; j < 3; j++) {
+      const target = ends[Math.floor(rand() * ends.length)];
+      f.links.push({ source: id, target, relation: "calls", confidence: rand() < 0.1 ? "INFERRED" : "EXTRACTED", weight: 1 });
+      ends.push(id, target);
+    }
+  }
+  return f;
+}
+
 function current(): Fake {
-  fake ??= generate(0);
+  fake ??= MODE === "big" ? bulk(generate(0), Number(new URLSearchParams(location.search).get("kbn")) || 60_000) : generate(0);
   return fake;
 }
 
@@ -295,6 +315,14 @@ async function gzipBase64(text: string) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);
+}
+
+/** Answers `plugins_read_file` for the knowledge-base plugin's graph files. */
+export function knowledgeBaseFile(path: string): ArrayBuffer {
+  const rel = /graphify-out\/.*$/.exec(path)?.[0];
+  const text = exists && rel ? fileText(rel) : null;
+  if (text === null) throw new Error(`can't read ${path}: No such file or directory`);
+  return new TextEncoder().encode(text).buffer as ArrayBuffer;
 }
 
 /** Answers one `vault_exec` call of the knowledge-base plugin. */

@@ -226,7 +226,7 @@ fn visual_studio() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-fn expand_home(path: &str) -> PathBuf {
+pub fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => dirs::home_dir()
             .unwrap_or_default()

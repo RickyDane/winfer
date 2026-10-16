@@ -8,7 +8,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import pkg from "../../package.json";
 import storeCatalog from "../../plugins/catalog.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
-import { KB_DEMO, knowledgeBaseExec } from "./knowledgeBase";
+import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
 import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
 
@@ -218,6 +218,8 @@ mockIPC(
         if (a.plugin === "cross-project") return crossProjectExec(a.command, a.cwd);
         if (a.plugin === "db-explorer") return dbExplorerExec(a.command);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
+      case "plugins_read_file":
+        return knowledgeBaseFile(a.path);
       case "browser_fill_secret":
         return null;
       case "plugins_set_enabled": {

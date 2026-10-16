@@ -163,6 +163,8 @@ export interface PluginApi {
   readPane(paneId: string, lines?: number): Promise<string | null>;
   /** What an agent waiting for input asks, read from its screen; null if the pane is gone. */
   paneRequest(paneId: string): Promise<AgentRequest | null>;
+  /** A file's text (UTF-8), by absolute path or one starting with "~"; reads big files much faster than `vault.exec`. */
+  readFile(path: string): Promise<string>;
   /** The agent's final reply from its last finished turn, when its hooks report it; else null. */
   lastReply(paneId: string): string | null;
   toast(text: string, kind?: "info" | "success" | "error"): void;
@@ -442,6 +444,7 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
     },
     describePane: (paneId) => agentCaller(paneId),
     readPane: (paneId, lines = 40) => readPane(paneId, lines),
+    readFile: async (path) => new TextDecoder().decode(await invoke<ArrayBuffer>("plugins_read_file", { path })),
     async paneRequest(paneId) {
       const screen = await readPane(paneId, 40);
       return screen === null ? null : describeRequest(screen);

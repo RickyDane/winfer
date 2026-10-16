@@ -377,6 +377,22 @@ pub fn plugins_source(id: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("can't read {}: {e}", path.display()))
 }
 
+/// A file's bytes, for plugins reading big project files (a knowledge graph) without the shell
+/// round trips `vault.exec` needs, since that keeps only the end of a command's output. Plugins can
+/// already read any file through `vault.exec`, so this grants nothing new.
+#[tauri::command]
+pub async fn plugins_read_file(path: String) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = crate::editors::expand_home(&path);
+        if !path.is_absolute() {
+            return Err(format!("{} isn't an absolute path", path.display()));
+        }
+        std::fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| format!("can't read {}: {e}", path.display()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The plugins the store offers.
 #[tauri::command]
 pub async fn plugins_catalog() -> Result<Vec<CatalogEntry>, String> {

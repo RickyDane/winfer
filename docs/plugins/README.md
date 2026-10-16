@@ -97,6 +97,7 @@ export function deactivate() {}  // optional
 | `state()` | Snapshot of `workspaces` (with panes), `activeWorkspaceId`, `focusedPaneId`. |
 | `describePane(paneId)` | `{ paneId, workspaceId, workspaceName, cwd, provider, label }` like an agent tool's `caller`, or null. |
 | `readPane(paneId, lines?)` | The last `lines` (default 40) of a pane's terminal as plain text, or null. |
+| `readFile(path)` | A file's text, by absolute path (or `~/…`). Much faster than `vault.exec` for big files, whose output keeps only the last 20,000 characters. |
 | `paneRequest(paneId)` | What an agent in `needs-input` asks: `{ kind: "approval" \| "question", text }`, or null. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
 | `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
