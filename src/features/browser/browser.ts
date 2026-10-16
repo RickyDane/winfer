@@ -211,8 +211,19 @@ async function fail(err: unknown) {
   useBrowser.setState({ availability: "error", error: String(err) });
 }
 
-/** Checks for a browser and starts the workspace's instance. */
-export async function ensureBrowser(workspaceId = shownWorkspaceId()): Promise<boolean> {
+const opening = new Map<string, Promise<boolean>>();
+
+/** Checks for a browser and starts the workspace's instance; concurrent calls share one start. */
+export function ensureBrowser(workspaceId = shownWorkspaceId()): Promise<boolean> {
+  let pending = opening.get(workspaceId);
+  if (!pending) {
+    pending = startBrowser(workspaceId).finally(() => opening.delete(workspaceId));
+    opening.set(workspaceId, pending);
+  }
+  return pending;
+}
+
+async function startBrowser(workspaceId: string): Promise<boolean> {
   listenForTabs();
   const s = useBrowser.getState();
   if (s.availability === "unknown" || s.availability === "error") {

@@ -158,11 +158,16 @@ fn free_port() -> Result<u16, String> {
         .map_err(|e| format!("no free port for the browser: {e}"))
 }
 
+/// Holds the DevTools port of the browser last started on a profile (Chrome only writes its own
+/// `DevToolsActivePort` when it picks the port).
+const PORT_FILE: &str = "winfer-devtools-port";
+
 /// Starts the browser with its DevTools endpoint on a port chosen up front. Returns as soon as
 /// the process runs: callers (terminal spawns on the UI thread) must never wait for the
 /// browser. Use `ws_url` to get the endpoint once it's up.
 pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> {
     std::fs::create_dir_all(profile_dir).map_err(|e| e.to_string())?;
+    close_running(profile_dir);
     let port = free_port()?;
     let mut cmd = Command::new(&exe.path);
     cmd.arg(format!("--remote-debugging-port={port}"))
@@ -187,6 +192,7 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
         .map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
     #[cfg(windows)]
     kill_with_app(&child);
+    let _ = std::fs::write(profile_dir.join(PORT_FILE), port.to_string());
     Ok(Launched { child, port })
 }
 
@@ -224,6 +230,48 @@ fn kill_with_app(child: &Child) {
     if job != 0 {
         unsafe { AssignProcessToJobObject(job as _, child.as_raw_handle() as _) };
     }
+}
+
+/// Quits a browser left running on this profile by an earlier run (crash, force quit, or a
+/// version without the Windows job object). It holds the profile lock, so a new browser would
+/// hand its launch over to it and exit at once. Found through the `DevToolsActivePort` file
+/// recorded in the profile at launch and told to close over CDP: no process sweep, which endpoint
+/// protection blocks on Windows. Returns quickly when nothing is running.
+fn close_running(profile_dir: &Path) {
+    use std::net::{SocketAddr, TcpStream};
+    use tokio_tungstenite::tungstenite::{self, Message};
+
+    let Some(port) = std::fs::read_to_string(profile_dir.join(PORT_FILE))
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+    else {
+        return;
+    };
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let answers = || TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok();
+    if !answers() {
+        return;
+    }
+    // Anything else on a reused port has no DevTools endpoint and is left alone.
+    let Some(url) = ws_url(port) else {
+        return;
+    };
+    let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) else {
+        return;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let Ok((mut ws, _)) = tungstenite::client(url, stream) else {
+        return;
+    };
+    let _ = ws.send(Message::text(r#"{"id":1,"method":"Browser.close"}"#));
+    let _ = ws.read();
+    // The port closes as the browser shuts down; give it a moment to release the profile.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while answers() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(300));
 }
 
 /// One attempt at reading the browser-level WebSocket URL from `/json/version`.
@@ -283,5 +331,27 @@ mod tests {
         let _guard = ChromeGuard(launched.child);
         let url = wait_ws_url(launched.port, Duration::from_secs(45)).unwrap();
         assert!(url.starts_with(&format!("ws://127.0.0.1:{}/", launched.port)), "{url}");
+    }
+
+    /// A browser left running on the profile would take over the next launch; it gets closed.
+    #[test]
+    fn closes_a_leftover_browser_on_the_profile() {
+        let tmp = std::env::temp_dir().join(format!("winfer-chrome-{:x}", rand::random::<u32>()));
+        let Some(exe) = find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let profile = tmp.join("profile");
+        let first = launch(&exe, &profile).unwrap();
+        let mut leftover = ChromeGuard(first.child);
+        wait_ws_url(first.port, Duration::from_secs(45)).unwrap();
+
+        let second = launch(&exe, &profile).unwrap();
+        let _guard = ChromeGuard(second.child);
+        assert!(
+            leftover.0.try_wait().unwrap().is_some(),
+            "the leftover browser still runs"
+        );
+        wait_ws_url(second.port, Duration::from_secs(45)).unwrap();
     }
 }

@@ -376,7 +376,10 @@ impl Instance {
                 return Ok(url);
             }
             if let Some(status) = self.child.lock().unwrap().try_wait().ok().flatten() {
-                return Err(format!("the browser quit while starting ({status})"));
+                // Usually another browser holds the profile and took the launch over.
+                return Err(format!(
+                    "the browser quit while starting ({status}). If a browser from an earlier winfer run is still open, end it in Task Manager or restart, then retry."
+                ));
             }
             if std::time::Instant::now() > deadline {
                 return Err("the browser didn't start in time".into());

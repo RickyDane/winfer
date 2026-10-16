@@ -107,7 +107,8 @@ export function BrowserPanel() {
   useEffect(() => {
     // Pins the panel to the workspace it first shows.
     if (!shown) useBrowser.setState({ shown: workspaceId });
-    void ensureBrowser(workspaceId);
+    // A failed start stays on screen until retried; retrying here would loop and flash it.
+    if (availability !== "error") void ensureBrowser(workspaceId);
   }, [workspaceId, shown, availability]);
 
   useEffect(() => {
@@ -266,7 +267,17 @@ export function BrowserPanel() {
               <Loader2 size={14} className="animate-spin" /> Downloading browser…
             </span>
           )}
-          {availability === "error" && <span className="text-danger">{error}</span>}
+          {availability === "error" && (
+            <>
+              <span className="text-danger">{error}</span>
+              <button
+                onClick={() => void ensureBrowser(workspaceId)}
+                className="flex items-center gap-1.5 rounded-md bg-panel-raised px-3 py-1.5 text-xs font-medium text-fg hover:bg-hover"
+              >
+                <RotateCw size={13} /> Retry
+              </button>
+            </>
+          )}
           {(availability === "unknown" || (availability === "ready" && !active)) && (
             <span className="flex items-center gap-2">
               <Loader2 size={14} className="animate-spin" /> Starting browser…
