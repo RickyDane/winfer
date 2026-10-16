@@ -64,12 +64,8 @@ export function CheatSheet() {
       setEditing(null);
       setPending(null);
       setMessage(null);
-      return;
     }
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setCheatSheet(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [cheatSheetOpen, setCheatSheet]);
+  }, [cheatSheetOpen]);
 
   // While a row records, every key goes here: the keymap is paused and nothing else sees it.
   useEffect(() => {

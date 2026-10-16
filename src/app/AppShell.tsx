@@ -25,6 +25,7 @@ import { startRunTimes } from "@/features/orchestration/runTimes";
 import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
+import { useEscapeToClose } from "@/features/modals/escape";
 import { Toaster } from "@/components/Toaster";
 import { UsageMeter } from "@/features/usage/UsageMeter";
 import { startUsageTracking } from "@/features/usage/usage";
@@ -143,6 +144,7 @@ function EmptyWorkspace() {
 export function AppShell() {
   const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view } = useWorkspaces();
   useKeymap();
+  useEscapeToClose();
   const pages = usePluginPages();
   // A page whose plugin was turned off (or hasn't loaded yet) falls back to the workspace.
   const page = view.startsWith("page:") ? pages.find((p) => `page:${p.key}` === view) : undefined;

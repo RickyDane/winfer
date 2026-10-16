@@ -246,18 +246,6 @@ export function RaceResults() {
   const workspaces = useWorkspaces((s) => s.workspaces);
   const panes = raceId ? workspaces.flatMap((w) => w.panes).filter((p) => p.raceId === raceId) : [];
 
-  useEffect(() => {
-    if (!raceId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Only this modal closes, not the race view under it.
-      e.stopImmediatePropagation();
-      closeRaceResults();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [raceId]);
-
   if (!raceId) return null;
   const ab = raceId.startsWith("ab-");
   return (

@@ -249,13 +249,6 @@ export function RaceView() {
   const workspace = useActiveWorkspace();
   const [showForm, setShowForm] = useState(false);
 
-  useEffect(() => {
-    if (overlay !== "race" && overlay !== "abtest") return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [overlay, setOverlay]);
-
   if ((overlay !== "race" && overlay !== "abtest") || !workspace) return null;
   const ab = overlay === "abtest";
   const races = new Map<string, Pane[]>();

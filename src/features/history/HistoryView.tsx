@@ -132,12 +132,8 @@ export function HistoryView() {
   }, [isOpen, fromOverview]);
 
   useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
-    window.addEventListener("keydown", onKey);
-    input.current?.focus();
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, setOverlay]);
+    if (isOpen) input.current?.focus();
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;

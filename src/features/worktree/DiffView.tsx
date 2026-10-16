@@ -27,13 +27,6 @@ export function DiffView() {
     load();
   }, [load]);
 
-  useEffect(() => {
-    if (!diffPaneId) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setDiffPane(null);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [diffPaneId, setDiffPane]);
-
   const files = useMemo(() => splitFiles(data?.diff ?? ""), [data]);
 
   if (!pane?.worktree) return null;

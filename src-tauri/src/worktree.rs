@@ -7,6 +7,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -216,36 +217,46 @@ pub fn create(
     };
 
     let parent = worktrees_parent(worktrees_dir, &repo);
-
-    let (branch, path) = (1..)
-        .map(|n| {
-            (
-                format!("winfer/{provider}-{n}"),
-                parent.join(format!("{provider}-{n}")),
-            )
-        })
-        .find(|(branch, path)| !branch_exists(&repo, branch) && !path.exists())
-        .expect("unbounded range");
-
     std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            &branch,
-            &path.to_string_lossy(),
-            &base,
-        ],
-    )?;
 
-    Ok(Some(WorktreeInfo {
-        repo: repo.to_string_lossy().into_owned(),
-        path: path.to_string_lossy().into_owned(),
-        branch,
-        base,
-    }))
+    // Race and A/B panes start at the same moment, often with the same provider. Picking a
+    // free name and claiming it must not interleave, or both pick `-1` and one fails with
+    // "already exists". The lock covers this process; the retry covers anything else
+    // (another winfer, a manual `git worktree add`) taking the name in between.
+    static CREATE: Mutex<()> = Mutex::new(());
+    let _guard = CREATE.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Bounded so an unexpected "already exists" can't loop forever.
+    for n in 1..1000 {
+        let branch = format!("winfer/{provider}-{n}");
+        let path = parent.join(format!("{provider}-{n}"));
+        if branch_exists(&repo, &branch) || path.exists() {
+            continue;
+        }
+        match git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch,
+                &path.to_string_lossy(),
+                &base,
+            ],
+        ) {
+            Ok(_) => {
+                return Ok(Some(WorktreeInfo {
+                    repo: repo.to_string_lossy().into_owned(),
+                    path: path.to_string_lossy().into_owned(),
+                    branch,
+                    base,
+                }))
+            }
+            Err(e) if e.contains("already exists") => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(format!("couldn't find a free worktree name for {provider}"))
 }
 
 pub fn diff(info: &WorktreeInfo) -> Result<WorktreeDiff, String> {
@@ -725,6 +736,25 @@ mod tests {
         assert_eq!(
             create(&temp_dir("wt"), &temp_dir("plain"), "claude").unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn concurrent_creates_get_distinct_worktrees() {
+        // A/B tests start both agents at once with the same provider.
+        let repo = repo();
+        let wts = temp_dir("wt");
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let (repo, wts) = (repo.clone(), wts.clone());
+                std::thread::spawn(move || create(&wts, &repo, "claude").unwrap().unwrap())
+            })
+            .collect();
+        let mut branches: Vec<_> = handles.into_iter().map(|h| h.join().unwrap().branch).collect();
+        branches.sort();
+        assert_eq!(
+            branches,
+            ["winfer/claude-1", "winfer/claude-2", "winfer/claude-3", "winfer/claude-4"]
         );
     }
 

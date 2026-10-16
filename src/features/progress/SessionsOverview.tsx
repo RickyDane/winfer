@@ -46,14 +46,9 @@ export function SessionsOverview() {
 
   useEffect(() => {
     if (overlay !== "progress") return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
-    window.addEventListener("keydown", onKey);
     const timer = window.setInterval(() => tick((n) => n + 1), 15_000);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.clearInterval(timer);
-    };
-  }, [overlay, setOverlay]);
+    return () => window.clearInterval(timer);
+  }, [overlay]);
 
   if (overlay !== "progress") return null;
   const groups = workspaces.map((w) => ({ workspace: w, panes: trackedSessions(w.panes, byPane) })).filter((g) => g.panes.length > 0);

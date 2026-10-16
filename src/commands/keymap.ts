@@ -271,6 +271,7 @@ export function conflicts(id: string, chord: string, overrides: Overrides = useW
 }
 
 let recording = false;
+export const isRecording = () => recording;
 /** Pauses the keymap while the shortcut editor records a new chord. */
 export function setRecording(on: boolean) {
   recording = on;

@@ -461,14 +461,9 @@ export function ReviewInbox() {
 
   useEffect(() => {
     if (overlay !== "review") return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
-    window.addEventListener("keydown", onKey);
     const timer = window.setInterval(() => tick((n) => n + 1), 30_000);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.clearInterval(timer);
-    };
-  }, [overlay, setOverlay]);
+    return () => window.clearInterval(timer);
+  }, [overlay]);
 
   if (overlay !== "review") return null;
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);

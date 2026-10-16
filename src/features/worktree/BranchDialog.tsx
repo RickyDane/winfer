@@ -41,9 +41,6 @@ export function BranchDialog() {
     setBranches(null);
     load();
     search.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, dir]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!isOpen || !workspace || !dir) return null;

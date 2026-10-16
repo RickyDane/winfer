@@ -1,5 +1,4 @@
 import { Download, Loader2, Sparkles, X } from "lucide-react";
-import { useEffect } from "react";
 import { splitArea } from "./releaseNotes";
 import { closeReleaseNotes, installUpdate, useUpdates } from "./updater";
 
@@ -15,13 +14,6 @@ export function WhatsNew() {
       : notesOpen === "installed"
         ? installed
         : null;
-
-  useEffect(() => {
-    if (!release) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeReleaseNotes();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [release]);
 
   if (!release) return null;
   const upcoming = notesOpen === "available";

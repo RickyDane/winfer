@@ -1052,13 +1052,6 @@ export function SettingsModal() {
   const { settingsOpen, settingsPage, setSettings } = useWorkspaces();
   const page = PAGES.find((p) => p.id === settingsPage) ?? PAGES[0];
 
-  useEffect(() => {
-    if (!settingsOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSettings(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, setSettings]);
-
   if (!settingsOpen) return null;
   const open = (id: string) => setSettings(true, id);
   return (

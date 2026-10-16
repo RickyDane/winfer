@@ -1,5 +1,5 @@
 import { BookOpen, Play, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
 import { BUILT_IN, allRecipes, deleteRecipe, describeRecipe, loadRecipe, saveCurrentAsRecipe } from "./recipes";
 
@@ -7,13 +7,6 @@ export function RecipesView() {
   const { overlay, setOverlay, recipes: saved } = useWorkspaces();
   const workspace = useActiveWorkspace();
   const [name, setName] = useState("");
-
-  useEffect(() => {
-    if (overlay !== "recipes") return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [overlay, setOverlay]);
 
   if (overlay !== "recipes") return null;
   const recipes = allRecipes();
