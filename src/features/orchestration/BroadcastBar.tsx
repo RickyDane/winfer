@@ -1,6 +1,7 @@
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { execute } from "@/commands/bus";
+import { formatChord } from "@/commands/keymap";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { leaves } from "@/features/layout/tree";
 import { cn } from "@/lib/cn";
@@ -45,7 +46,7 @@ export function BroadcastBar() {
             } else if (e.key === "Escape") setOverlay(null);
           }}
           rows={3}
-          placeholder="e.g. run the tests and fix any failures (⇧↩ for a new line)"
+          placeholder={`e.g. run the tests and fix any failures (${formatChord("Shift+Enter")} for a new line)`}
           className="w-full resize-none rounded-md border border-border bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:border-accent"
         />
         <div className="flex flex-wrap items-center gap-1.5">

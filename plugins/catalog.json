@@ -31,7 +31,7 @@
     {
       "id": "db-explorer",
       "name": "Databases",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "description": "Your Postgres, MySQL, SQLite and SQL Server databases in one place, read-only: browse tables, run queries with a history, and see the schema as a class diagram with keys, relations and their cardinality (join tables and relations without a foreign key found for you, Mermaid, PlantUML and SVG export). Paste a URL or a SQL Server connection string. Agents query and describe them by name without ever seeing the credentials.",
       "author": "winfer",
       "tags": [
@@ -52,11 +52,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "c8bb1dfc9fb4afe069b2f6aa5e7dc6d46a36eaca8970e2d32ed435eec31f3aaf"
+          "sha256": "2838025fab83f619ead1695d7f67ec52dbff217b2b543bb2d2168b97080ff711"
         },
         {
           "path": "plugin.json",
-          "sha256": "b5d6f63e3ea8fe423ecffcd22492790448977f9fce91c9df3a22f914ed5ae789"
+          "sha256": "c3619d10749dec08470dc28a18829de7844693d4aa4f360483a399d3999465c0"
         }
       ]
     },
@@ -85,7 +85,7 @@
     {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy, a flat glowing galaxy or a plain 2D map, and replay call flows step by step. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -99,18 +99,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "7d21ca0ea1d4152c55766d4a8ec5946070a83b0bb955061d7f0e0620e8c7e021"
+          "sha256": "0b8d9352ebec5680ac9a6dd82c271424781219cbf83767a3bcf90967433e81fe"
         },
         {
           "path": "plugin.json",
-          "sha256": "b9fc85685256e9f43010a846f401b25c612795c0cd165406a0e822af0cf25356"
+          "sha256": "a07eacb3f75c196ce57cd6bdef9003b1596e92fae21b1e848fb4cf896b6ce3a9"
         }
       ]
     },
     {
       "id": "prompt-library",
       "name": "Prompt Library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Save the prompts you keep retyping, with {{placeholders}} you fill in when you use them. Send one to an agent from the palette or by voice, broadcast it to every agent, or start a new agent with it.",
       "author": "winfer",
       "tags": [
@@ -124,18 +124,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "3382b16eea1bd6086b1e8be1c092f10867938407a627a2c913ba9d27124bd608"
+          "sha256": "ad9ed1535232dfeb26b506830d81c1240d292be8c13564acd41cb623e620b856"
         },
         {
           "path": "plugin.json",
-          "sha256": "bf68dd6112b5ab3ebe06cc462e32ed202aa80dc89e06c41b466d1bff4507314b"
+          "sha256": "7b2f90cf33c00852cbfde93243a3db392e37fac2fab871611b528623fe94a325"
         }
       ]
     },
     {
       "id": "screen-recorder",
       "name": "Screen Recorder",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "description": "Record the browser panel or the Android mirror and save it as an MP4, with the record button on the panel, from the palette, by voice or by an agent showing off what it built.",
       "author": "winfer",
       "tags": [
@@ -150,11 +150,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "4238d1e9d876915d82b87f689fbe1a18972b528217eba4793268639032aad2d2"
+          "sha256": "8b3b5f182677ec0e426f9429f17aca02ccc074aba99ca11f78cbf755cfc6e7b1"
         },
         {
           "path": "plugin.json",
-          "sha256": "0d6979b2861fc837a3d44fd1e212bbed4d7159cf6225d9b28231255cb1b26106"
+          "sha256": "922111ee028a1a3668db9cd89fe5d620adb8ebae4b49774bacd71c5bff7d31dd"
         }
       ]
     },
@@ -184,7 +184,7 @@
     {
       "id": "task-board",
       "name": "Task Board",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "description": "A shared board per workspace where agents post, claim and finish tasks and leave notes for each other, so several agents work as a team.",
       "author": "winfer",
       "tags": [
@@ -196,18 +196,18 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "3410eec479b0441bc1be68be397fa7aa8d8f795bc8ca9b1e6cfc23ca3c8db1cc"
+          "sha256": "bee60a833b639f4a8e291db955550afe901c2ac22d1fb926a928dc59d02dd5a6"
         },
         {
           "path": "plugin.json",
-          "sha256": "af7afec738dc1b580278aa9ed0d114f524181a962879c2421660f2647ead74cc"
+          "sha256": "e7314107fe17458b926aada09abbc1f7a6928a5884ce11dedf80aae20572063b"
         }
       ]
     },
     {
       "id": "telegram",
       "name": "Telegram",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
       "author": "winfer",
       "tags": [
@@ -220,11 +220,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "9de7764b34b52dd1c494125748560be0313b86fe5a5cd1a84088c8c099e26233"
+          "sha256": "4f0177155db68de3c8fc59f5e7ab2cc223572eddf70df761364400182f88aa73"
         },
         {
           "path": "plugin.json",
-          "sha256": "0657c0ee7bc7cd6185dbf7d325b01b5ec104d691082f385f5ea5554e1471622d"
+          "sha256": "23e8ca88d7f57b97d2cb33fca6cdb42144d019925fef39c95259070cc3b68cc3"
         }
       ]
     }

@@ -217,7 +217,8 @@ const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null)
 export const DEFAULT_BROWSER_WIDTH = 420;
 export const DEFAULT_TERMINAL_FONT_SIZE = 12.5;
 export const DEFAULT_SYSTEM_PROMPT =
-  "Always make full use of every tool available to you (MCP servers, the browser, skills, subagents, search and shell) whenever it makes your work faster or your output better. Before doing something by hand, check whether a tool does it more efficiently or more reliably, and use tools to verify your work.";
+  "Always make full use of every tool available to you (MCP servers, the browser, skills, subagents, search and shell) whenever it makes your work faster or your output better. Before doing something by hand, check whether a tool does it more efficiently or more reliably, and use tools to verify your work.\n\n" +
+  "Prefer the tools winfer provides over external ones: reach for the integrated winfer tools first and only consider an external tool when no integrated one can do the job. Always open, preview and test web applications and websites in winfer's integrated browser (its browser tools or open_url), never in an external web browser: do not run `open`, `xdg-open`, `start` or similar to launch a URL, and do not use other browser automation when the integrated browser can do it.";
 
 /** The system prompt agents start with: the user's, else the default. */
 export const systemPromptOf = (s: { systemPrompt: string | null }) => s.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;

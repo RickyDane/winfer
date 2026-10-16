@@ -397,7 +397,7 @@ export function activate(api) {
       page.append(h("label", "wf-field", [h("span", "wf-subtle", "Save to"), h("div", "wf-row", [folder])]));
 
       page.append(h("h2", "wf-h2", "Recent"));
-      if (settings.recent.length === 0) page.append(h("p", "wf-empty", "No recordings yet. Start one above, with the record button on the browser or Android panel, from ⌘K or ask an agent to record a demo."));
+      if (settings.recent.length === 0) page.append(h("p", "wf-empty", "No recordings yet. Start one above, with the record button on the browser or Android panel, from " + (isMac() ? "⌘K" : "Ctrl+Shift+K") + " or ask an agent to record a demo."));
       for (const r of settings.recent) {
         const reveal = h("button", "wf-button wf-ghost", isMac() ? "Show in Finder" : "Show in folder");
         reveal.onclick = () => api.revealFile(r.path).catch((err) => api.toast(String(err), "error"));

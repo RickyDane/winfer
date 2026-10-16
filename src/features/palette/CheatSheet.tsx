@@ -5,6 +5,7 @@ import {
   conflicts,
   eventChord,
   formatChord,
+  IS_MAC,
   isCustomized,
   rowChord,
   setRecording,
@@ -44,7 +45,7 @@ function recordChord(e: KeyboardEvent, row: Row): { chord: string } | { error: s
   if (!chord) return null; // a lone modifier: keep waiting
   const parts = chord.split("+");
   const key = parts[parts.length - 1];
-  if (!/^F\d+$/.test(key) && !parts.some((p) => MODIFIERS.includes(p))) return { error: "Use Ctrl, Alt or ⌘/Win with the key (or an F-key)." };
+  if (!/^F\d+$/.test(key) && !parts.some((p) => MODIFIERS.includes(p))) return { error: `Use ${IS_MAC ? "⌃, ⌥ or ⌘" : "Ctrl, Alt or Win"} with the key (or an F-key).` };
   if (row.numbered) {
     if (!/^\d$/.test(key)) return { error: "Include a number key: the number picks the pane or workspace." };
     return { chord: [...parts.slice(0, -1), "#"].join("+") };
@@ -165,7 +166,7 @@ export function CheatSheet() {
                     <button
                       onClick={() => {
                         setPending(null);
-                        setMessage(r.numbered ? "Press the new keys with any number, e.g. Ctrl+Alt+1. Esc cancels, ⌫ switches it off." : "Press the new keys. Esc cancels, ⌫ switches it off.");
+                        setMessage(`Press the new keys${r.numbered ? ` with any number, e.g. ${formatChord("Ctrl+Alt+1")}` : ""}. Esc cancels, ${IS_MAC ? "⌫" : "Backspace"} switches it off.`);
                         setEditing(recording ? null : r);
                       }}
                       className={cn(

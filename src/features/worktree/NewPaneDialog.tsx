@@ -1,5 +1,6 @@
 import { FolderOpen, GitBranch, Loader2, Plus, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { formatChord, IS_MAC } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { relativeTime, logActivity } from "@/stores/activity";
 import { defaultProviderId, providerName, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
@@ -183,7 +184,7 @@ export function NewPaneDialog() {
 
         <footer className="space-y-1.5 border-t border-border px-5 py-2.5">
           {error && <p className="text-xs text-danger">{error}</p>}
-          <p className="text-[11px] text-fg-subtle">↑↓ choose · ↵ open · {navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl+"}↵ without worktree · esc cancel</p>
+          <p className="text-[11px] text-fg-subtle">↑↓ choose · {formatChord("Enter")} open · {formatChord(IS_MAC ? "Meta+Enter" : "Ctrl+Enter")} without worktree · esc cancel</p>
         </footer>
       </div>
     </div>

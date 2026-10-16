@@ -1,7 +1,7 @@
 {
   "id": "knowledge-base",
   "name": "Knowledge Base",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy, a flat glowing galaxy or a plain 2D map, and replay call flows step by step. Agents query it with tools and you watch what they look at.",
   "author": "winfer",
   "main": "index.js",

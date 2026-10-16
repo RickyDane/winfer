@@ -3,6 +3,7 @@
 // no server or public URL is needed. The bot only listens to the one account paired with it.
 
 const STORAGE = "winfer.plugin.telegram";
+const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 const TOKEN_KEY = "BOT_TOKEN";
 const API = "https://api.telegram.org";
 const PAIR_TTL_MS = 10 * 60 * 1000;
@@ -863,7 +864,7 @@ function mountPage(root, store, api) {
           "div",
           { class: "tg-cmds" },
           COMMANDS.map(([cmd, desc]) => h("div", { class: "tg-cmd" }, h("span", { class: "tg-code" }, cmd), desc)),
-          h("div", { class: "tg-hint" }, icon("reply"), "Reply to any message to answer that agent, or to give a finished one a new instruction. ⌘K → “Telegram: I'm away” works too."),
+          h("div", { class: "tg-hint" }, icon("reply"), "Reply to any message to answer that agent, or to give a finished one a new instruction. " + (MAC ? "⌘K" : "Ctrl+Shift+K") + " → “Telegram: I'm away” works too."),
         ),
       ),
     );

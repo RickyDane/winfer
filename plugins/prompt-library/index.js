@@ -7,6 +7,9 @@
 // themselves: {{workspace}}, {{project}}, {{pane}}, {{date}}, {{time}} and {{clipboard}}.
 
 const STORAGE = "winfer.prompt-library";
+const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+const SEND_KEYS = MAC ? "⌘↵" : "Ctrl+Enter";
+const PALETTE_KEYS = MAC ? "⌘K" : "Ctrl+Shift+K";
 
 export const BUILTINS = {
   workspace: "The workspace's name",
@@ -312,7 +315,7 @@ export function activate(api) {
           h("label", { class: "pl-submit", title: "Press Enter after typing it in" }, submitBox, "Submit"),
           h("span", { class: "pl-grow" }),
           h("button", { class: "wf-button wf-ghost", type: "button", onclick: close }, "Cancel"),
-          h("button", { class: "wf-button wf-primary", type: "submit" }, icon("send"), "Send", h("span", { class: "pl-kbd" }, "⌘↵")),
+          h("button", { class: "wf-button wf-primary", type: "submit" }, icon("send"), "Send", h("span", { class: "pl-kbd" }, SEND_KEYS)),
         ),
       ),
     );
@@ -649,7 +652,7 @@ function mountPage(root, api, store, actions) {
     h(
       "div",
       { class: "pl-bar" },
-      h("button", { class: "wf-button wf-primary", onclick: () => sendCurrent() }, icon("send"), "Send", h("span", { class: "pl-kbd" }, "⌘↵")),
+      h("button", { class: "wf-button wf-primary", onclick: () => sendCurrent() }, icon("send"), "Send", h("span", { class: "pl-kbd" }, SEND_KEYS)),
       target,
       h("span", { class: "pl-grow" }),
       saved,
@@ -666,7 +669,7 @@ function mountPage(root, api, store, actions) {
     h("code", {}, "{{name:default}}"),
     " suggests one, and ",
     Object.keys(BUILTINS).flatMap((b, i) => [i ? " " : "", h("code", { title: BUILTINS[b] }, `{{${b}}}`)]),
-    " fill themselves. Every prompt is in ⌘K as “Prompt: …”, and you can ask for one by voice.",
+    " fill themselves. Every prompt is in " + PALETTE_KEYS + " as “Prompt: …”, and you can ask for one by voice.",
   );
 
   page.append(

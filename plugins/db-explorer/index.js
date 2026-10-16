@@ -22,6 +22,8 @@
 // shop database (src/dev/dbExplorer.ts).
 
 const IS_WIN = typeof navigator !== "undefined" && (/Win/i.test(navigator.platform ?? "") || /Windows/i.test(navigator.userAgent));
+const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+const RUN_KEYS = MAC ? "⌘↵" : "Ctrl+Enter";
 const HISTORY = "winfer.db-explorer.history";
 const PAGE = "winfer.db-explorer.page";
 /** The database chosen per connection key on the page, when not the one in its URL. */
@@ -2057,9 +2059,24 @@ const CSS = `
 .db-editor textarea::placeholder { color: var(--color-fg-subtle); }
 .db-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-top: 1px solid var(--color-border); background: var(--color-panel); }
 .db-bar .db-grow { flex: 1; }
+.db-running { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 28px 12px; font-size: 12px; color: var(--color-fg-subtle); }
+.db-running .sd-spinner { width: 26px; height: 26px; }
+.db-btn-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgb(255 255 255 / .35); border-top-color: currentColor; animation: sd-spin .8s linear infinite; flex: none; }
 .db-kbd { font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgb(255 255 255 / .18); }
 .db-status { font-size: 11px; color: var(--color-fg-subtle); font-variant-numeric: tabular-nums; }
 .db-select, .sd-select { height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-fg); font: inherit; font-size: 12px; max-width: 240px; }
+.db-picker { position: relative; display: inline-flex; }
+.db-picker-btn { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; text-align: left; }
+.db-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-picker-caret { width: 12px; height: 12px; flex: none; color: var(--color-fg-subtle); transform: rotate(90deg); }
+.db-picker-pop { position: absolute; top: calc(100% + 4px); left: 0; z-index: 50; width: 260px; padding: 4px 0; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-panel); box-shadow: 0 8px 24px rgb(0 0 0 / .28); }
+.db-picker-pop[hidden] { display: none; }
+.db-picker-pop .db-filter { margin: 2px 6px 4px; }
+.db-picker-list { max-height: 300px; overflow-y: auto; padding: 0 4px; }
+.db-picker-opt { display: block; width: 100%; padding: 5px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--color-fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-picker-opt.db-active { background: var(--color-hover); }
+.db-picker-opt.db-on { color: var(--color-accent); font-weight: 600; }
+.db-picker-empty { padding: 8px; font-size: 12px; color: var(--color-fg-subtle); white-space: pre-wrap; }
 
 .db-results { overflow: auto; max-height: 520px; }
 .db-grid-table { border-collapse: separate; border-spacing: 0; font-size: 12px; min-width: 100%; }
@@ -2355,11 +2372,7 @@ function mountPage(root, api, store) {
     title: "Connection",
     onchange: (e) => (ctx.onSelect ? ctx.onSelect(e.target.value) : ctx.select(e.target.value)),
   });
-  const dbSelect = h("select", {
-    class: "db-select",
-    title: "Database on this server",
-    onchange: (e) => ctx.useDatabase(e.target.value),
-  });
+  const dbPicker = databasePicker((name) => ctx.useDatabase(name));
   const subtitle = h("span", {});
   const access = h("span", {});
   const iconBtn = (name, title, onclick, extra = "") => h("button", { class: `db-icon-btn ${extra}`, title, "aria-label": title, onclick }, icon(name));
@@ -2367,7 +2380,7 @@ function mountPage(root, api, store) {
     "div",
     { class: "db-top-conn" },
     connSelect,
-    dbSelect,
+    dbPicker.el,
     access,
     iconBtn("refresh", "Read the schema and the server's databases again", () => {
       const c = ctx.current();
@@ -2411,17 +2424,11 @@ function mountPage(root, api, store) {
   /** The database picker: the chosen database at once, the others once the server lists them. */
   function renderDatabases() {
     const c = ctx.current();
-    dbSelect.style.display = c && databasesSql(c.meta.kind) ? "" : "none";
+    dbPicker.el.style.display = c && databasesSql(c.meta.kind) ? "" : "none";
     if (!c || !databasesSql(c.meta.kind)) return;
     const fill = (names, note = "") => {
       const chosen = databaseOf(c);
-      const all = chosen && !names.includes(chosen) ? [chosen, ...names] : names;
-      dbSelect.replaceChildren(
-        ...(chosen ? [] : [h("option", { value: "", disabled: true, selected: true }, "Choose a database")]),
-        ...all.map((name) => h("option", { value: name, selected: name === chosen }, name)),
-      );
-      dbSelect.value = chosen;
-      dbSelect.title = note || "Database on this server";
+      dbPicker.set(chosen && !names.includes(chosen) ? [chosen, ...names] : names, chosen, note);
     };
     fill([], "Listing the server's databases…");
     store.databases(c).then(
@@ -2455,9 +2462,123 @@ function mountPage(root, api, store) {
   return () => {
     off();
     unmount?.();
+    dbPicker.destroy();
     document.querySelectorAll(".wf-dialog-backdrop.db-backdrop").forEach((d) => d.remove());
     host.remove();
     style.remove();
+  };
+}
+
+/**
+ * The database picker in the header: a button with the chosen database that opens a list with a
+ * search field, for servers with more databases than a plain select can show comfortably.
+ */
+function databasePicker(onPick) {
+  let names = [];
+  let chosen = "";
+  let shown = [];
+  let active = 0;
+  const label = h("span", { class: "db-picker-label" });
+  const button = h(
+    "button",
+    { class: "db-select db-picker-btn", type: "button", "aria-haspopup": "listbox", "aria-expanded": "false", onclick: () => (pop.hidden ? open() : close()) },
+    label,
+    icon("chevron", "db-icon db-picker-caret"),
+  );
+  const input = h("input", {
+    type: "search",
+    placeholder: "Search databases",
+    spellcheck: "false",
+    oninput: () => {
+      active = 0;
+      renderList();
+    },
+    onkeydown: (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!shown.length) return;
+        active = (active + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length;
+        renderList();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (shown[active] !== undefined) pick(shown[active]);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+        button.focus();
+      }
+    },
+  });
+  const list = h("div", { class: "db-picker-list", role: "listbox" });
+  const pop = h("div", { class: "db-picker-pop", hidden: true }, h("label", { class: "db-filter" }, icon("search"), input), list);
+  const el = h("div", { class: "db-picker" }, button, pop);
+
+  function renderList() {
+    const q = input.value.trim().toLowerCase();
+    shown = q ? names.filter((n) => n.toLowerCase().includes(q)) : names;
+    if (active >= shown.length) active = Math.max(0, shown.length - 1);
+    list.replaceChildren(
+      ...(shown.length
+        ? shown.map((name, i) =>
+            h(
+              "button",
+              {
+                type: "button",
+                role: "option",
+                class: `db-picker-opt${i === active ? " db-active" : ""}${name === chosen ? " db-on" : ""}`,
+                "aria-selected": String(name === chosen),
+                title: name,
+                onmousemove: () => {
+                  if (active === i) return;
+                  active = i;
+                  renderList();
+                },
+                onclick: () => pick(name),
+              },
+              name,
+            ),
+          )
+        : [h("div", { class: "db-picker-empty" }, names.length ? "No database matches" : button.title)]),
+    );
+    list.querySelector(".db-active")?.scrollIntoView({ block: "nearest" });
+  }
+
+  function pick(name) {
+    close();
+    if (name !== chosen) onPick(name);
+  }
+
+  function open() {
+    pop.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    input.value = "";
+    active = Math.max(0, names.indexOf(chosen));
+    renderList();
+    input.focus();
+    document.addEventListener("mousedown", outside, true);
+  }
+
+  function close() {
+    pop.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    document.removeEventListener("mousedown", outside, true);
+  }
+
+  function outside(e) {
+    if (!el.contains(e.target)) close();
+  }
+
+  return {
+    el,
+    /** Shows `chosen` on the button and lists `all`; `note` explains an empty or failed list. */
+    set(all, current, note = "") {
+      names = all;
+      chosen = current || "";
+      label.textContent = chosen || "Choose a database";
+      button.title = note || "Database on this server";
+      if (!pop.hidden) renderList();
+    },
+    destroy: close,
   };
 }
 
@@ -2734,7 +2855,7 @@ function mountQuery(root, ctx) {
   const schemaCard = h("div", { class: "wf-card" }, h("label", { class: "db-filter" }, icon("search"), filterInput), schemaList);
   const editor = h("textarea", {
     spellcheck: "false",
-    placeholder: "SELECT * FROM users LIMIT 100\n\n⌘↵ runs the statement at the cursor, or the selection.",
+    placeholder: `SELECT * FROM users LIMIT 100\n\n${RUN_KEYS} runs the statement at the cursor, or the selection.`,
     oninput: () => ctx.drafts.set(selected(), editor.value),
     onkeydown: (e) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -2845,7 +2966,7 @@ function mountQuery(root, ctx) {
 
   function resultView() {
     const last = ctx.last;
-    if (running) return h("div", { class: "db-note" }, "Running…");
+    if (running) return h("div", { class: "db-running", role: "status" }, h("div", { class: "sd-spinner" }), "Running query…");
     const conn = current();
     if (!last || last.conn !== selected()) return h("div", { class: "db-note" }, "Results show up here.");
     if (!last.ok) return h("div", { class: "db-error" }, icon("alert"), last.error);
@@ -2901,7 +3022,7 @@ function mountQuery(root, ctx) {
     const conn = current();
     const last = ctx.last;
     runButton.disabled = !conn || running;
-    runButton.replaceChildren(icon("play"), running ? "Running…" : "Run", h("span", { class: "db-kbd" }, "⌘↵"));
+    runButton.replaceChildren(running ? h("span", { class: "db-btn-spinner" }) : icon("play"), running ? "Running…" : "Run", h("span", { class: "db-kbd" }, RUN_KEYS));
     status.textContent = last && last.conn === selected() && !running ? `${last.ok ? "Done" : "Failed"} in ${last.ms.toLocaleString()} ms` : conn ? `${KINDS[conn.meta.kind].short} · read-only` : "";
     resultCard.replaceChildren(resultView());
 
@@ -3727,7 +3848,7 @@ function mountDiagram(root, ctx) {
             slow.map((r) => h("div", { class: "sd-insight" }, icon("alert"), h("span", {}, link(r.from), ` · no index on ${r.fromColumns.join(", ")}`))),
           )
         : null,
-      h("div", { class: "sd-sec" }, h("span", { class: "wf-subtle", style: "font-size:11px;line-height:1.5" }, "Click a table for its columns, keys and relations. Drag tables to arrange them; ⌘ + scroll zooms.")),
+      h("div", { class: "sd-sec" }, h("span", { class: "wf-subtle", style: "font-size:11px;line-height:1.5" }, "Click a table for its columns, keys and relations. Drag tables to arrange them; " + (MAC ? "⌘" : "Ctrl") + " + scroll zooms.")),
     ];
   }
 

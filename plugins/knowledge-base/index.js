@@ -8,6 +8,7 @@
 // graph lives in `<project>/graphify-out/`.
 
 const STORAGE = "winfer.plugin.knowledge-base";
+const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 const OUT = "graphify-out";
 /** Where 1.x kept an Anthropic key for background builds; removed from the keychain on start. */
 const OLD_API_KEY = "ANTHROPIC_API_KEY";
@@ -3307,7 +3308,7 @@ function mountPage(el, store, api) {
       g &&
         h(
           "button",
-          { class: "kb-btn kb-glass kb-icon-only", title: "Search (/ or ⌘F)", onclick: () => openSearch() },
+          { class: "kb-btn kb-glass kb-icon-only", title: `Search (/ or ${MAC ? "⌘F" : "Ctrl+F"})`, onclick: () => openSearch() },
           icon("search"),
         ),
       g &&

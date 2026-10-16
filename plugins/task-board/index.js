@@ -3,6 +3,7 @@
 // hand one to a new agent pane, or send the board to every agent.
 
 const STORAGE = "winfer.plugin.task-board";
+const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 const MAX_NOTES = 50;
 const COLUMNS = [
   ["todo", "To do"],
@@ -540,7 +541,7 @@ function mountPage(root, api, store, actions) {
       { class: "tb-composer-row" },
       icon("plus"),
       title,
-      h("span", { class: "tb-hint" }, h("span", { class: "tb-kbd" }, "⇧↩"), " details"),
+      h("span", { class: "tb-hint" }, h("span", { class: "tb-kbd" }, MAC ? "⇧↩" : "Shift+Enter"), " details"),
       toggleDetails,
       h("button", { class: "wf-button wf-primary", type: "submit" }, "Add task"),
     ),

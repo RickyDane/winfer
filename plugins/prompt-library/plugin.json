@@ -1,7 +1,7 @@
 {
   "id": "prompt-library",
   "name": "Prompt Library",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Save the prompts you keep retyping, with {{placeholders}} you fill in when you use them. Send one to an agent from the palette or by voice, broadcast it to every agent, or start a new agent with it.",
   "author": "winfer",
   "main": "index.js",

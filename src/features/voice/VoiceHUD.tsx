@@ -1,5 +1,6 @@
 import { Check, CircleAlert, Loader2, Mic, Type } from "lucide-react";
 import { useEffect } from "react";
+import { formatChord } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { cancelPending, confirmPending, useVoice } from "./voice";
 
@@ -85,7 +86,7 @@ export function VoiceHUD() {
         {phase === "confirm" && pending && (
           <div className="flex flex-wrap items-center gap-2">
             <button onClick={() => confirmPending()} className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90">
-              {message} <span className="opacity-70">↩</span>
+              {message} <span className="opacity-70">{formatChord("Enter")}</span>
             </button>
             <button onClick={cancelPending} className="ml-auto rounded-md px-2 py-1 text-xs text-fg-subtle hover:bg-hover">
               Cancel <span className="opacity-70">esc</span>

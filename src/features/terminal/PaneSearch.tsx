@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { formatChord } from "@/commands/keymap";
 import { useWorkspaces } from "@/stores/workspaces";
 import { searchTerminal } from "./xtermRegistry";
 
@@ -41,10 +42,10 @@ export function PaneSearch({ paneId }: { paneId: string }) {
       <span className="min-w-10 text-right font-mono text-[11px] text-fg-subtle">
         {query && result ? (result.count ? `${result.index + 1}/${result.count}` : "0/0") : ""}
       </span>
-      <button onClick={() => find("previous")} className="rounded p-0.5 text-fg-subtle hover:text-fg" title="Previous (⇧↩)">
+      <button onClick={() => find("previous")} className="rounded p-0.5 text-fg-subtle hover:text-fg" title={`Previous (${formatChord("Shift+Enter")})`}>
         <ChevronUp size={13} />
       </button>
-      <button onClick={() => find("next")} className="rounded p-0.5 text-fg-subtle hover:text-fg" title="Next (↩)">
+      <button onClick={() => find("next")} className="rounded p-0.5 text-fg-subtle hover:text-fg" title={`Next (${formatChord("Enter")})`}>
         <ChevronDown size={13} />
       </button>
       <button onClick={() => setSearchPane(null)} className="rounded p-0.5 text-fg-subtle hover:text-fg" title="Close (Esc)">
