@@ -1770,14 +1770,24 @@ function icon(name, cls = "db-icon") {
 const kindTile = (kind) => h("div", { class: `db-kind db-${kind}` }, kind === "mssql" ? "MS" : KINDS[kind]?.short.slice(0, 2) ?? "DB");
 
 const CSS = `
-.db-host-diagram { height: 100%; }
+.db-host { height: 100%; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
+.db-view { flex: 1; min-height: 0; overflow: auto; }
+.db-host-diagram .db-view { overflow: hidden; display: flex; flex-direction: column; }
+.db-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--color-border); background: var(--color-panel); }
+.db-top .db-logo { width: 32px; height: 32px; border-radius: 9px; }
+.db-top .db-logo .db-icon { width: 17px; height: 17px; }
+.db-top-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; max-width: 300px; margin-right: 4px; }
+.db-top-title b { font-size: 14px; font-weight: 600; color: var(--color-fg); }
+.db-top-title span { font-size: 11px; color: var(--color-fg-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-top-conn { display: flex; align-items: center; gap: 4px; }
+.db-top-conn .db-select { margin-right: 4px; }
+.db-top-conn > span:empty { display: none; }
+.db-top-conn > span { margin-right: 4px; display: inline-flex; }
+.db-grow { flex: 1; }
 .db-views { flex-shrink: 0; }
-.db-hero { flex-wrap: wrap; }
-.db-hero-text { min-width: 220px; }
-.db-page { max-width: 1280px; gap: 16px; container-type: inline-size; }
+.sd-root { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.db-page { max-width: none; margin: 0; padding: 16px; gap: 16px; }
 .db-icon { width: 14px; height: 14px; flex-shrink: 0; }
-.db-hero { display: flex; align-items: center; gap: 14px; }
-.db-hero-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .db-logo { width: 40px; height: 40px; border-radius: 11px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: white; background: linear-gradient(160deg, #5aa7f0, #2f6fd1); box-shadow: inset 0 1px 0 rgb(255 255 255 / .25), 0 4px 14px rgb(47 111 209 / .25); }
 .db-logo .db-icon { width: 20px; height: 20px; }
 .db-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; color: var(--color-fg-muted); background: var(--color-panel-raised); border: 1px solid var(--color-border); }
@@ -1795,27 +1805,17 @@ const CSS = `
 .db-kind.db-sqlite { --db-tone: #2bb39e; }
 .db-kind.db-mssql { --db-tone: #c94f5d; }
 
-.db-conn { display: flex; align-items: center; gap: 10px; padding: 9px 8px 9px 10px; cursor: pointer; transition: background .12s; }
-.db-conn + .db-conn { border-top: 1px solid var(--color-border); }
-.db-conn:hover { background: color-mix(in srgb, var(--color-hover) 55%, transparent); }
-.db-conn.db-on { background: var(--color-accent-soft); }
-.db-conn-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.db-conn-name { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--color-fg); }
-.db-conn-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-conn-target { font-family: var(--font-mono); font-size: 11px; color: var(--color-fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-conn-actions { display: flex; gap: 0; opacity: 0; transition: opacity .12s; }
-.db-conn:hover .db-conn-actions, .db-conn.db-on .db-conn-actions { opacity: 1; }
 .db-tag { display: inline-flex; align-items: center; gap: 3px; height: 16px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; white-space: nowrap; color: var(--color-fg-subtle); background: var(--color-active); }
 .db-tag .db-icon { width: 10px; height: 10px; }
 .db-tag.db-ask { color: var(--color-accent); background: var(--color-accent-soft); }
 .db-tag.db-auto { color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 12%, transparent); }
-.db-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 6px; border: 0; background: transparent; color: var(--color-fg-subtle); }
+.db-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; border: 0; background: transparent; color: var(--color-fg-subtle); cursor: pointer; }
 .db-icon-btn:hover { background: var(--color-active); color: var(--color-fg); }
 .db-icon-btn.db-bad:hover { color: var(--color-danger); background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
 .db-icon-btn.db-done { color: var(--color-success); }
 .db-icon-btn .db-icon { width: 13px; height: 13px; }
 
-.db-schema { max-height: 420px; overflow: auto; padding: 4px 0; }
+.db-schema { max-height: calc(100vh - 230px); overflow: auto; padding: 4px 0; }
 .db-filter { display: flex; align-items: center; gap: 6px; margin: 4px 8px 6px; height: 26px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-panel); }
 .db-filter .db-icon { width: 12px; height: 12px; color: var(--color-fg-subtle); }
 .db-filter input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--color-fg); font: inherit; font-size: 12px; user-select: text; }
@@ -1839,7 +1839,7 @@ const CSS = `
 .db-bar .db-grow { flex: 1; }
 .db-kbd { font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgb(255 255 255 / .18); }
 .db-status { font-size: 11px; color: var(--color-fg-subtle); font-variant-numeric: tabular-nums; }
-.db-select { height: 26px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-fg-muted); font: inherit; font-size: 11px; }
+.db-select, .sd-select { height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-fg); font: inherit; font-size: 12px; max-width: 240px; }
 
 .db-results { overflow: auto; max-height: 520px; }
 .db-grid-table { border-collapse: separate; border-spacing: 0; font-size: 12px; min-width: 100%; }
@@ -1901,21 +1901,13 @@ const CSS = `
 .db-alert .db-icon { margin-top: 2px; }
 
 /* Diagram view */
-.sd-root { height: 100%; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
 .db-icon { width: 14px; height: 14px; flex-shrink: 0; }
-.sd-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
-.sd-logo { width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: white; background: linear-gradient(160deg, #8b7cf6, #5b45d6); box-shadow: inset 0 1px 0 rgb(255 255 255 / .25), 0 4px 14px rgb(91 69 214 / .25); }
-.sd-logo .db-icon { width: 17px; height: 17px; }
-.sd-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; margin-right: 6px; }
-.sd-title b { font-size: 14px; font-weight: 600; color: var(--color-fg); }
-.sd-title span { font-size: 11px; color: var(--color-fg-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sd-grow { flex: 1; }
-.sd-select { height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-fg); font: inherit; font-size: 12px; max-width: 240px; }
 .sd-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; border: 0; background: transparent; color: var(--color-fg-subtle); cursor: pointer; }
 .sd-icon-btn:hover { background: var(--color-active); color: var(--color-fg); }
 .sd-icon-btn.sd-bad:hover { color: var(--color-danger); background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
 .sd-icon-btn:disabled { opacity: .4; pointer-events: none; }
-.sd-tools { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; background: var(--color-panel); }
+.sd-tools { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; background: var(--color-panel); }
 .sd-search { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-bg, var(--color-panel)); width: 200px; }
 .sd-search .db-icon { width: 12px; height: 12px; color: var(--color-fg-subtle); }
 .sd-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--color-fg); font: inherit; font-size: 12px; }
@@ -2057,7 +2049,13 @@ function mountPage(root, api, store) {
     select(key) {
       ctx.selected = key;
       saveJson(PAGE, { conn: key, view: ctx.view });
+      renderHeader();
     },
+    /** Set by the open view: how it switches to another connection and reads the schema again. */
+    onSelect: null,
+    onReload: null,
+    /** The views call it when `conns` changed. */
+    renderHeader: () => renderHeader(),
     setView(view) {
       if (view === ctx.view && unmount) return;
       ctx.view = view;
@@ -2104,16 +2102,69 @@ function mountPage(root, api, store) {
       ),
   };
 
+  // The header both views share: the connection, what it allows, the view switch.
+  const connSelect = h("select", {
+    class: "db-select",
+    title: "Connection",
+    onchange: (e) => (ctx.onSelect ? ctx.onSelect(e.target.value) : ctx.select(e.target.value)),
+  });
+  const subtitle = h("span", {});
+  const access = h("span", {});
+  const iconBtn = (name, title, onclick, extra = "") => h("button", { class: `db-icon-btn ${extra}`, title, "aria-label": title, onclick }, icon(name));
+  const connTools = h(
+    "div",
+    { class: "db-top-conn" },
+    connSelect,
+    access,
+    iconBtn("refresh", "Read the schema again", () => ctx.onReload?.()),
+    iconBtn("pencil", "Edit connection", () => ctx.current() && ctx.openEditor(ctx.current())),
+    iconBtn("trash", "Remove connection", () => ctx.current() && ctx.remove(ctx.current()), "db-bad"),
+  );
+  const switchSlot = h("span", { style: "display:contents" });
+  const top = h(
+    "header",
+    { class: "db-top" },
+    h("div", { class: "db-logo" }, icon("db")),
+    h("div", { class: "db-top-title" }, h("b", {}, "Databases"), subtitle),
+    connTools,
+    h("span", { class: "db-grow" }),
+    h("span", { class: "db-pill", title: "Every session is read-only; agents never see credentials" }, icon("lock"), "Read-only"),
+    switchSlot,
+    h("button", { class: "wf-button wf-primary", onclick: () => ctx.openEditor(null) }, icon("plus"), "Add connection"),
+  );
+
+  function renderHeader() {
+    const c = ctx.current();
+    connTools.style.display = ctx.conns.length ? "" : "none";
+    connSelect.replaceChildren(...ctx.conns.map((x) => h("option", { value: x.key, selected: x.key === ctx.selected }, `${x.meta.name || x.key} · ${KINDS[x.meta.kind].short}`)));
+    connSelect.value = ctx.selected ?? "";
+    subtitle.textContent = c ? target(c.meta) : "Browse, query and draw your databases. Agents use them by name and never see the credentials.";
+    subtitle.title = subtitle.textContent;
+    access.replaceChildren(
+      !c
+        ? ""
+        : !canQuery(c.meta.kind)
+          ? h("span", { class: "db-tag", title: "SQL Server: its schema and diagram, no queries" }, "Schema only")
+          : c.meta.approve !== false
+            ? h("span", { class: "db-tag db-ask", title: "Agents need your OK for each query" }, icon("shield"), "Asks")
+            : h("span", { class: "db-tag db-auto", title: "Agents query without asking you" }, icon("bolt"), "Auto"),
+    );
+    switchSlot.replaceChildren(ctx.viewSwitch());
+  }
+
   const style = h("style", {}, CSS);
-  const host = h("div", { class: "db-host" });
+  const view = h("div", { class: "db-view" });
+  const host = h("div", { class: "db-host" }, top, view);
   root.append(style, host);
   let unmount = null;
 
   function show() {
     unmount?.();
-    host.replaceChildren();
+    ctx.onSelect = ctx.onReload = null;
+    view.replaceChildren();
     host.className = `db-host db-host-${ctx.view}`;
-    unmount = (ctx.view === "diagram" ? mountDiagram : mountQuery)(host, ctx);
+    renderHeader();
+    unmount = (ctx.view === "diagram" ? mountDiagram : mountQuery)(view, ctx);
   }
 
   const off = store.subscribe((e) => {
@@ -2325,6 +2376,7 @@ function mountQuery(root, ctx) {
       loadError = String(err?.message ?? err);
     }
     if (!current()) ctx.select(ctx.conns[0]?.key ?? null);
+    ctx.renderHeader();
     editor.value = ctx.drafts.get(selected()) ?? "";
     render();
     const conn = current();
@@ -2389,10 +2441,8 @@ function mountQuery(root, ctx) {
     h("button", { class: `db-icon-btn ${extra}`, title, "aria-label": title, onclick: (e) => (e.stopPropagation(), onclick(e)) }, icon(name));
 
   // Static parts; render() fills them.
-  const pill = h("span", { class: "db-pill" });
   const problem = h("div", { class: "db-alert" });
   const body = h("div");
-  const connList = h("div", { class: "wf-card" });
   const filterInput = h("input", {
     type: "search",
     placeholder: "Filter tables",
@@ -2431,31 +2481,20 @@ function mountQuery(root, ctx) {
   const historyLabel = h("div", { class: "db-label" });
   const historyList = h("div", { class: "wf-card" });
 
-  page.append(
-    h(
-      "div",
-      { class: "db-hero" },
-      h("div", { class: "db-logo" }, icon("db")),
-      h("div", { class: "db-hero-text" }, h("h1", { class: "wf-h1" }, "Databases"), h("div", { class: "wf-muted" }, "Browse and query your databases read-only. Agents query them by name and never see the credentials.")),
-      pill,
-      ctx.viewSwitch(),
-      h("button", { class: "wf-button wf-primary", onclick: () => ctx.openEditor(null) }, icon("plus"), "Add connection"),
-    ),
-    problem,
-    body,
-  );
+  page.append(problem, body);
+  ctx.onSelect = select;
+  ctx.onReload = () => current() && loadSchema(current(), true);
 
   const grid = h(
     "div",
     { class: "db-grid" },
-    h("div", { class: "db-side" }, h("div", { class: "db-label" }, "Connections"), connList, schemaLabel, schemaCard),
+    h("div", { class: "db-side" }, schemaLabel, schemaCard),
     h("div", { class: "db-main" }, editorCard, resultCard, historyLabel, historyList),
   );
 
   function render() {
     problem.replaceChildren(icon("alert"), loadError);
     problem.style.display = loadError ? "" : "none";
-    pill.replaceChildren(icon("lock"), "Read-only");
     if (ctx.conns.length === 0) {
       body.replaceChildren(emptyState(ctx));
       return;
@@ -2466,40 +2505,12 @@ function mountQuery(root, ctx) {
   }
 
   function renderSide() {
-    connList.replaceChildren(
-      ...ctx.conns.map((c) =>
-        h(
-          "div",
-          { class: `db-conn${c.key === selected() ? " db-on" : ""}`, onclick: () => select(c.key), title: c.meta.description || c.key },
-          kindTile(c.meta.kind),
-          h(
-            "div",
-            { class: "db-conn-body" },
-            h(
-              "div",
-              { class: "db-conn-name" },
-              h("span", {}, c.meta.name || c.key),
-              !canQuery(c.meta.kind)
-                ? h("span", { class: "db-tag", title: "SQL Server: its schema and diagram, no queries" }, "Schema")
-                : c.meta.approve !== false
-                  ? h("span", { class: "db-tag db-ask", title: "Agents need your OK for each query" }, icon("shield"), "Asks")
-                  : h("span", { class: "db-tag db-auto", title: "Agents query without asking you" }, icon("bolt"), "Auto"),
-            ),
-            h("div", { class: "db-conn-target" }, target(c.meta)),
-          ),
-          h("div", { class: "db-conn-actions" }, btn("pencil", "Edit", () => ctx.openEditor(c)), btn("trash", "Remove", () => ctx.remove(c), "db-bad")),
-        ),
-      ),
-    );
-
     const conn = current();
     const schema = conn ? store.schema(conn.key) : null;
     const tables = schema?.state === "ok" ? schema.model.tables.filter((t) => t.kind !== "external") : [];
     schemaLabel.replaceChildren(
       "Tables",
       schema?.state === "ok" ? h("span", { style: "font-weight:500;text-transform:none;letter-spacing:0" }, String(tables.length)) : null,
-      h("span", { class: "db-grow" }),
-      conn ? btn("refresh", "Reload tables", () => loadSchema(conn, true)) : null,
     );
     if (!schema || schema.state === "loading") {
       schemaList.replaceChildren(h("div", { class: "db-note" }, "Loading tables…"));
@@ -2694,25 +2705,6 @@ function mountDiagram(root, ctx) {
   };
 
   // Static parts --------------------------------------------------------------------------------
-  const connSelect = h("select", { class: "sd-select", title: "Database", onchange: (e) => select(e.target.value) });
-  const subtitle = h("span", {});
-  const reloadBtn = h("button", { class: "sd-icon-btn", title: "Read the schema again", onclick: () => current() && load(current(), true) }, icon("refresh"));
-  const editBtn = h("button", { class: "sd-icon-btn", title: "Edit connection", onclick: () => current() && ctx.openEditor(current()) }, icon("pencil"));
-  const removeBtn = h("button", { class: "sd-icon-btn sd-bad", title: "Remove connection", onclick: () => current() && ctx.remove(current()) }, icon("trash"));
-  const head = h(
-    "div",
-    { class: "sd-head" },
-    h("div", { class: "sd-logo" }, icon("logo")),
-    h("div", { class: "sd-title" }, h("b", {}, "Databases"), subtitle),
-    connSelect,
-    reloadBtn,
-    editBtn,
-    removeBtn,
-    h("span", { class: "sd-grow" }),
-    ctx.viewSwitch(),
-    h("button", { class: "wf-button", onclick: () => ctx.openEditor(null) }, icon("plus"), "Add connection"),
-  );
-
   const searchInput = h("input", {
     type: "search",
     placeholder: "Find a table or column",
@@ -2806,7 +2798,9 @@ function mountDiagram(root, ctx) {
   const canvas = h("div", { class: "sd-canvas" }, svg, legend, zoomBar, note);
   const side = h("aside", { class: "sd-side", style: "display:none" });
   const body = h("div", { class: "sd-body" }, canvas, side);
-  const shell = h("div", { style: "display:contents" }, head, tools, body);
+  const shell = h("div", { style: "display:contents" }, tools, body);
+  ctx.onSelect = (key) => select(key);
+  ctx.onReload = () => current() && load(current(), true);
 
   // Data ----------------------------------------------------------------------------------------
   async function refresh() {
@@ -2857,7 +2851,6 @@ function mountDiagram(root, ctx) {
   function showModel(fitAfter = false) {
     const conn = current();
     const st = conn ? store.schema(conn.key) : null;
-    reloadBtn.disabled = !conn || st?.state === "loading";
     if (!st || st.state === "loading") {
       model = null;
       note.replaceChildren(h("div", { class: "sd-spinner" }), `Reading the schema of ${conn?.meta.name ?? "the database"}…`);
@@ -3495,10 +3488,7 @@ function mountDiagram(root, ctx) {
       return;
     }
     if (page.firstChild !== shell) page.replaceChildren(shell);
-    connSelect.replaceChildren(...ctx.conns.map((c) => h("option", { value: c.key, selected: c.key === ctx.selected }, `${c.meta.name || c.key} · ${KINDS[c.meta.kind].short}`)));
-    connSelect.value = ctx.selected ?? "";
-    const c = current();
-    subtitle.textContent = c ? target(c.meta) : "";
+    ctx.renderHeader();
     renderTools();
     showModel();
   }
