@@ -134,6 +134,8 @@ struct Instance {
     app: AppHandle,
     child: Mutex<Child>,
     port: u16,
+    exe: Executable,
+    profile: PathBuf,
     cdp: OnceCell<Arc<Cdp>>,
     /// Page targets in creation order.
     tabs: Mutex<Vec<Tab>>,
@@ -152,22 +154,8 @@ struct Instance {
 }
 
 impl Drop for Instance {
-    /// Asks Chrome to quit first so it flushes cookies and the profile, then force-kills.
     fn drop(&mut self) {
-        let mut child = self.child.lock().unwrap();
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline {
-            if child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+        chrome::terminate(&mut self.child.lock().unwrap());
     }
 }
 
@@ -365,8 +353,11 @@ impl Instance {
     }
 
     /// Polls the DevTools endpoint until the browser is up (it was started without waiting).
+    /// A browser that quit because another one held its profile is restarted after that one is
+    /// ended (`spawn` reclaims the profile).
     async fn wait_ws_url(&self) -> Result<String, String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut retries = 2;
         loop {
             let port = self.port;
             let url = tauri::async_runtime::spawn_blocking(move || chrome::ws_url(port))
@@ -375,11 +366,27 @@ impl Instance {
             if let Some(url) = url {
                 return Ok(url);
             }
-            if let Some(status) = self.child.lock().unwrap().try_wait().ok().flatten() {
-                // Usually another browser holds the profile and took the launch over.
-                return Err(format!(
-                    "the browser quit while starting ({status}). If a browser from an earlier winfer run is still open, end it in Task Manager or restart, then retry."
-                ));
+            let exited = self.child.lock().unwrap().try_wait().ok().flatten();
+            if let Some(status) = exited {
+                if status.code() == Some(chrome::PROFILE_IN_USE) && retries > 0 {
+                    retries -= 1;
+                    // Holds the child lock while restarting so `ensure` doesn't start a second
+                    // browser on the profile meanwhile.
+                    tokio::task::block_in_place(|| {
+                        let mut child = self.child.lock().unwrap();
+                        chrome::spawn(&self.exe, &self.profile, self.port).map(|c| *child = c)
+                    })?;
+                    deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                    continue;
+                }
+                return Err(if status.code() == Some(chrome::PROFILE_IN_USE) {
+                    format!(
+                        "another browser keeps the profile {} locked. End the Chrome processes using it, then retry.",
+                        self.profile.display()
+                    )
+                } else {
+                    format!("the browser quit while starting ({status})")
+                });
             }
             if std::time::Instant::now() > deadline {
                 return Err("the browser didn't start in time".into());
@@ -470,6 +477,8 @@ impl BrowserManager {
             app: app.clone(),
             child: Mutex::new(launched.child),
             port: launched.port,
+            exe,
+            profile,
             cdp: OnceCell::new(),
             tabs: Mutex::default(),
             created_by_ui: Mutex::default(),
@@ -492,24 +501,26 @@ impl BrowserManager {
             .map(|i| format!("http://127.0.0.1:{}", i.port))
     }
 
+    /// Ends every browser now, in parallel. Not left to `Drop`: tasks may still hold an
+    /// instance when the app exits, and its browser would outlive winfer.
     pub fn shutdown(&self) {
-        self.instances.lock().unwrap().clear();
+        let instances: Vec<_> = self.instances.lock().unwrap().drain().map(|(_, i)| i).collect();
+        std::thread::scope(|scope| {
+            for instance in &instances {
+                scope.spawn(|| chrome::terminate(&mut instance.child.lock().unwrap()));
+            }
+        });
     }
 }
 
 /// Kills browsers left behind by a previous run that didn't exit cleanly (crash, force quit).
 /// They'd otherwise keep running and hold the profile lock, so the next launch would fail.
+/// Waits for them to go, so it only blocks startup when there are orphans.
 /// Windows needs no sweep: browsers run in a job object that dies with winfer.
 pub fn kill_orphans(app: &AppHandle) {
     #[cfg(unix)]
-    {
-        let Ok(profiles) = data_dir(app).map(|d| d.join("browser-profiles")) else {
-            return;
-        };
-        let _ = std::process::Command::new("pkill")
-            .arg("-f")
-            .arg(format!("user-data-dir={}", profiles.display()))
-            .status();
+    if let Ok(dir) = data_dir(app) {
+        chrome::reclaim_all(&dir.join("browser-profiles"));
     }
     #[cfg(windows)]
     let _ = app;

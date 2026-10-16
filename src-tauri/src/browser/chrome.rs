@@ -162,13 +162,23 @@ fn free_port() -> Result<u16, String> {
 /// `DevToolsActivePort` when it picks the port).
 const PORT_FILE: &str = "winfer-devtools-port";
 
+/// Chrome's exit code when another browser holds the profile (`RESULT_CODE_PROFILE_IN_USE`).
+pub const PROFILE_IN_USE: i32 = 21;
+
 /// Starts the browser with its DevTools endpoint on a port chosen up front. Returns as soon as
 /// the process runs: callers (terminal spawns on the UI thread) must never wait for the
 /// browser. Use `ws_url` to get the endpoint once it's up.
 pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> {
-    std::fs::create_dir_all(profile_dir).map_err(|e| e.to_string())?;
-    close_running(profile_dir);
     let port = free_port()?;
+    let child = spawn(exe, profile_dir, port)?;
+    Ok(Launched { child, port })
+}
+
+/// Starts the browser on `port`, first freeing the profile from any browser still on it. Also
+/// used to retry on the same port, so the CDP URL agents already got stays valid.
+pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, String> {
+    std::fs::create_dir_all(profile_dir).map_err(|e| e.to_string())?;
+    reclaim(profile_dir);
     let mut cmd = Command::new(&exe.path);
     cmd.arg(format!("--remote-debugging-port={port}"))
         .arg("--remote-debugging-address=127.0.0.1")
@@ -186,6 +196,9 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Own process group, so `terminate` can take the helpers down with the browser.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     crate::env::no_window(&mut cmd);
     let child = cmd
         .spawn()
@@ -193,7 +206,146 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
     #[cfg(windows)]
     kill_with_app(&child);
     let _ = std::fs::write(profile_dir.join(PORT_FILE), port.to_string());
-    Ok(Launched { child, port })
+    Ok(child)
+}
+
+/// Asks the browser to quit (so it flushes cookies and the profile), then force-kills it and
+/// its helpers. Blocks for at most ~2 s.
+pub fn terminate(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGTERM);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while child.try_wait().ok().flatten().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    // Helpers that outlived the browser.
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+}
+
+/// Frees a profile for a new browser: ends whatever browser still runs on it (an earlier run's
+/// orphan, or one still shutting down), which would otherwise take the launch over and make
+/// the new browser exit with `PROFILE_IN_USE`, and clears the lock it left behind.
+fn reclaim(profile_dir: &Path) {
+    close_running(profile_dir);
+    #[cfg(unix)]
+    {
+        holders::end(|dir| dir == profile_dir);
+        holders::clear_lock(profile_dir);
+    }
+}
+
+/// Ends browsers left on any profile in `profiles_dir` by a run that didn't exit cleanly and
+/// clears their locks. Waits until they're gone, so launches right after don't race them.
+#[cfg(unix)]
+pub fn reclaim_all(profiles_dir: &Path) {
+    holders::end(|dir| dir.parent() == Some(profiles_dir));
+    if let Ok(entries) = std::fs::read_dir(profiles_dir) {
+        for entry in entries.flatten() {
+            holders::clear_lock(&entry.path());
+        }
+    }
+}
+
+/// Browser processes found by their `--user-data-dir`, so ones from earlier runs (which winfer
+/// no longer holds a handle to) are found too. Unix only: Windows runs browsers in a job object
+/// that dies with winfer, and endpoint protection blocks process sweeps there.
+#[cfg(unix)]
+mod holders {
+    use std::path::Path;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    const FLAG: &str = "--user-data-dir=";
+
+    /// The profile a command line runs on. The path may contain spaces; the next `--` flag
+    /// (or our trailing `about:blank`) ends it.
+    fn profile_of(command: &str) -> Option<&Path> {
+        let rest = &command[command.find(FLAG)? + FLAG.len()..];
+        let value = rest.find(" --").map_or(rest, |i| &rest[..i]);
+        Some(Path::new(value.strip_suffix(" about:blank").unwrap_or(value)))
+    }
+
+    fn pids(on: &impl Fn(&Path) -> bool) -> Vec<i32> {
+        let Ok(out) = Command::new("ps").args(["-axww", "-o", "pid=,command="]).output() else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (pid, command) = line.trim_start().split_once(' ')?;
+                profile_of(command)
+                    .filter(|dir| on(dir))
+                    .and_then(|_| pid.parse().ok())
+            })
+            .filter(|&pid| pid != std::process::id() as i32)
+            .collect()
+    }
+
+    fn signal_until_gone(on: &impl Fn(&Path) -> bool, signal: i32, wait: Duration) -> bool {
+        for pid in pids(on) {
+            unsafe { libc::kill(pid, signal) };
+        }
+        let deadline = Instant::now() + wait;
+        loop {
+            if pids(on).is_empty() {
+                return true;
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// SIGTERM, then SIGKILL for browsers that hang. Returns at once when none run.
+    pub fn end(on: impl Fn(&Path) -> bool) {
+        if pids(&on).is_empty() {
+            return;
+        }
+        if !signal_until_gone(&on, libc::SIGTERM, Duration::from_secs(3)) {
+            signal_until_gone(&on, libc::SIGKILL, Duration::from_secs(2));
+        }
+    }
+
+    /// Removes the singleton lock of a profile no browser runs on. Chrome treats a lock naming a
+    /// live process as in use, and after a crash that pid may belong to anything by now.
+    pub fn clear_lock(profile_dir: &Path) {
+        if !pids(&|dir: &Path| dir == profile_dir).is_empty() {
+            return;
+        }
+        for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+            let _ = std::fs::remove_file(profile_dir.join(name));
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn reads_the_profile_from_a_command_line() {
+            let cmd = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=1 --user-data-dir=/Users/a/Library/Application Support/x/browser-profiles/ws-1 --no-first-run about:blank";
+            assert_eq!(
+                profile_of(cmd),
+                Some(Path::new("/Users/a/Library/Application Support/x/browser-profiles/ws-1"))
+            );
+            assert_eq!(
+                profile_of("chrome --user-data-dir=/p/ws-1 about:blank"),
+                Some(Path::new("/p/ws-1"))
+            );
+            assert_eq!(profile_of("chrome --user-data-dir=/p/ws-12"), Some(Path::new("/p/ws-12")));
+            assert_eq!(profile_of("chrome --type=renderer"), None);
+        }
+    }
 }
 
 /// Puts the browser in a job object that Windows tears down when winfer exits, crash included,
@@ -351,6 +503,30 @@ mod tests {
         assert!(
             leftover.0.try_wait().unwrap().is_some(),
             "the leftover browser still runs"
+        );
+        wait_ws_url(second.port, Duration::from_secs(45)).unwrap();
+    }
+
+    /// A hung leftover answers neither CDP nor SIGTERM; it still gets killed and its lock cleared.
+    #[cfg(unix)]
+    #[test]
+    fn kills_a_hung_leftover_browser() {
+        let tmp = std::env::temp_dir().join(format!("winfer-chrome-{:x}", rand::random::<u32>()));
+        let Some(exe) = find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let profile = tmp.join("profile");
+        let first = launch(&exe, &profile).unwrap();
+        let mut leftover = ChromeGuard(first.child);
+        wait_ws_url(first.port, Duration::from_secs(45)).unwrap();
+        unsafe { libc::kill(leftover.0.id() as i32, libc::SIGSTOP) };
+
+        let second = launch(&exe, &profile).unwrap();
+        let _guard = ChromeGuard(second.child);
+        assert!(
+            leftover.0.try_wait().unwrap().is_some(),
+            "the hung browser still runs"
         );
         wait_ws_url(second.port, Duration::from_secs(45)).unwrap();
     }
