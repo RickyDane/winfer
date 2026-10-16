@@ -1,0 +1,22 @@
+{
+  "id": "schema-diagram",
+  "name": "Schema Diagram",
+  "version": "1.0.0",
+  "description": "Reads the structure of your Postgres, MySQL, SQLite and SQL Server databases (tables, views, columns, keys, indexes, foreign keys) and draws it as a class diagram with its relations and their cardinality. Finds join tables and relations without a foreign key, exports Mermaid, PlantUML and SVG, and agents can ask for the diagram too.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": [
+    "database",
+    "schema",
+    "erd",
+    "uml",
+    "class-diagram",
+    "diagram",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "sql-server",
+    "mssql",
+    "agents"
+  ]
+}

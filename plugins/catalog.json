@@ -126,6 +126,37 @@
       ]
     },
     {
+      "id": "schema-diagram",
+      "name": "Schema Diagram",
+      "version": "1.0.0",
+      "description": "Reads the structure of your Postgres, MySQL, SQLite and SQL Server databases (tables, views, columns, keys, indexes, foreign keys) and draws it as a class diagram with its relations and their cardinality. Finds join tables and relations without a foreign key, exports Mermaid, PlantUML and SVG, and agents can ask for the diagram too.",
+      "author": "winfer",
+      "tags": [
+        "database",
+        "schema",
+        "erd",
+        "uml",
+        "class-diagram",
+        "diagram",
+        "postgres",
+        "mysql",
+        "sqlite",
+        "sql-server",
+        "mssql",
+        "agents"
+      ],
+      "files": [
+        {
+          "path": "index.js",
+          "sha256": "5ffbc81a5edb29a26de9d1000713ad4cd6cde7f8090919137edc875a7ad28792"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "30c6d0a043bd876d20ba230a74ecbd9fe9614a15d2fb012d7882e716e5436d9b"
+        }
+      ]
+    },
+    {
       "id": "screen-recorder",
       "name": "Screen Recorder",
       "version": "1.0.2",

@@ -40,6 +40,11 @@ connection from the vault, and [`plugins/prompt-library`](../../plugins/prompt-l
 its palette and voice tool whenever the prompts change; `pnpm dev` with `?db` opens both on a fake
 database. Their pure functions are tested in `scripts/db-explorer.test.mjs` and
 `scripts/prompt-library.test.mjs`.
+[`plugins/schema-diagram`](../../plugins/schema-diagram) reads a database's catalog (tables, views,
+keys, indexes, foreign keys) and draws it as a pannable SVG class diagram with crow's-foot or UML
+cardinalities, join tables and relations inferred from column names; its introspection SQL, model,
+layout and Mermaid/PlantUML exporters are tested in `scripts/schema-diagram.test.mjs`, and `pnpm dev`
+with `?erd` opens it on a fake shop database.
 
 ## plugin.json
 
@@ -106,7 +111,7 @@ export function deactivate() {}  // optional
 | `paneRequest(paneId)` | What an agent in `needs-input` asks: `{ kind: "approval" \| "question", text }`, or null. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
 | `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
-| `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, database, file, globe, key, lock, puzzle, shield, star, terminal, video. |
+| `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, database, file, globe, key, lock, network, puzzle, shield, star, terminal, video. |
 | `openPage(id)` | Shows one of the plugin's pages. |
 | `registerAgentTool({ name, description, inputSchema?, run(args, caller) })` | A tool agents started by winfer can call (served by winfer's MCP server). `caller` has `paneId`, `workspaceId`, `workspaceName`, `cwd`, `provider` and `label`; return the text the agent sees, or throw. |
 | `vault` | Secrets in the OS keychain, per plugin (below). |
