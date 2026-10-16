@@ -155,7 +155,7 @@ struct Instance {
 
 impl Drop for Instance {
     fn drop(&mut self) {
-        chrome::terminate(&mut self.child.lock().unwrap());
+        chrome::terminate(&mut self.child.lock().unwrap(), self.port);
     }
 }
 
@@ -507,7 +507,7 @@ impl BrowserManager {
         let instances: Vec<_> = self.instances.lock().unwrap().drain().map(|(_, i)| i).collect();
         std::thread::scope(|scope| {
             for instance in &instances {
-                scope.spawn(|| chrome::terminate(&mut instance.child.lock().unwrap()));
+                scope.spawn(|| chrome::terminate(&mut instance.child.lock().unwrap(), instance.port));
             }
         });
     }
@@ -516,14 +516,10 @@ impl BrowserManager {
 /// Kills browsers left behind by a previous run that didn't exit cleanly (crash, force quit).
 /// They'd otherwise keep running and hold the profile lock, so the next launch would fail.
 /// Waits for them to go, so it only blocks startup when there are orphans.
-/// Windows needs no sweep: browsers run in a job object that dies with winfer.
 pub fn kill_orphans(app: &AppHandle) {
-    #[cfg(unix)]
     if let Ok(dir) = data_dir(app) {
         chrome::reclaim_all(&dir.join("browser-profiles"));
     }
-    #[cfg(windows)]
-    let _ = app;
 }
 
 /// Playwright MCP server attached to the workspace browser.

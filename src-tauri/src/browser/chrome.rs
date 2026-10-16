@@ -200,23 +200,27 @@ pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, S
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     crate::env::no_window(&mut cmd);
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
     #[cfg(windows)]
-    kill_with_app(&child);
+    let child = job::spawn(&mut cmd);
+    #[cfg(not(windows))]
+    let child = cmd.spawn().map_err(|e| e.to_string());
+    let child = child.map_err(|e| format!("couldn't start {}: {e}", exe.path.display()))?;
     let _ = std::fs::write(profile_dir.join(PORT_FILE), port.to_string());
     Ok(child)
 }
 
-/// Asks the browser to quit (so it flushes cookies and the profile), then force-kills it and
-/// its helpers. Blocks for at most ~2 s.
-pub fn terminate(child: &mut Child) {
+/// Asks the browser on `port` to quit (so it flushes cookies and the profile), then force-kills
+/// it and its helpers. Blocks for a few seconds at most.
+pub fn terminate(child: &mut Child, port: u16) {
     if child.try_wait().ok().flatten().is_none() {
+        #[cfg(unix)]
+        let _ = port;
         #[cfg(unix)]
         unsafe {
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
+        #[cfg(windows)]
+        close_over_cdp(port);
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while child.try_wait().ok().flatten().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
@@ -229,6 +233,8 @@ pub fn terminate(child: &mut Child) {
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
+    #[cfg(windows)]
+    job::kill_tree(child.id());
 }
 
 /// Frees a profile for a new browser: ends whatever browser still runs on it (an earlier run's
@@ -241,23 +247,27 @@ fn reclaim(profile_dir: &Path) {
         holders::end(|dir| dir == profile_dir);
         holders::clear_lock(profile_dir);
     }
+    #[cfg(windows)]
+    job::end_holders(profile_dir);
 }
 
 /// Ends browsers left on any profile in `profiles_dir` by a run that didn't exit cleanly and
 /// clears their locks. Waits until they're gone, so launches right after don't race them.
-#[cfg(unix)]
 pub fn reclaim_all(profiles_dir: &Path) {
+    #[cfg(unix)]
     holders::end(|dir| dir.parent() == Some(profiles_dir));
     if let Ok(entries) = std::fs::read_dir(profiles_dir) {
         for entry in entries.flatten() {
+            #[cfg(unix)]
             holders::clear_lock(&entry.path());
+            #[cfg(windows)]
+            job::end_holders(&entry.path());
         }
     }
 }
 
 /// Browser processes found by their `--user-data-dir`, so ones from earlier runs (which winfer
-/// no longer holds a handle to) are found too. Unix only: Windows runs browsers in a job object
-/// that dies with winfer, and endpoint protection blocks process sweeps there.
+/// no longer holds a handle to) are found too.
 #[cfg(unix)]
 mod holders {
     use std::path::Path;
@@ -348,39 +358,219 @@ mod holders {
     }
 }
 
-/// Puts the browser in a job object that Windows tears down when winfer exits, crash included,
-/// so no browser outlives the app. Replaces the PowerShell orphan sweep that endpoint
-/// protection (Sophos "Lockdown") blocked on startup.
+/// Windows: every browser runs in its own job object that kills its whole process tree when
+/// closed, which Windows does when winfer exits, crash included. Orphans of runs where that
+/// failed are found the way Chrome itself finds the profile's owner, not by a process sweep
+/// (PowerShell/WMI), which endpoint protection (Sophos "Lockdown") blocks.
 #[cfg(windows)]
-fn kill_with_app(child: &Child) {
+mod job {
+    use std::collections::HashMap;
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
-    use std::sync::OnceLock;
+    use std::os::windows::process::CommandExt;
+    use std::path::Path;
+    use std::process::{Child, Command};
+    use std::sync::{LazyLock, Mutex};
+
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject,
+    };
+    use windows_sys::Win32::System::RestartManager::{
+        CCH_RM_SESSION_KEY, RM_PROCESS_INFO, RmEndSession, RmGetList, RmRegisterResources,
+        RmStartSession,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_SUSPENDED, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, ResumeThread,
+        THREAD_SUSPEND_RESUME, TerminateProcess, WaitForSingleObject,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE,
     };
 
-    // The handle is deliberately never closed: the OS closes it when winfer exits, which kills
-    // the job. Stored as usize because raw handles aren't Sync.
-    static JOB: OnceLock<usize> = OnceLock::new();
-    let job = *JOB.get_or_init(|| unsafe {
-        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if job.is_null() {
-            return 0;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    /// Browser pid → its job. Stored as usize because raw handles aren't Send.
+    static JOBS: LazyLock<Mutex<HashMap<u32, usize>>> = LazyLock::new(Mutex::default);
+
+    fn wide(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain([0]).collect()
+    }
+
+    fn new_job() -> Option<HANDLE> {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of_val(&info) as u32,
+            );
+            Some(job)
         }
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info as *const _ as *const _,
-            std::mem::size_of_val(&info) as u32,
-        );
-        job as usize
-    });
-    if job != 0 {
-        unsafe { AssignProcessToJobObject(job as _, child.as_raw_handle() as _) };
+    }
+
+    /// Starts the browser suspended and only lets it run once it's in its job, so no helper it
+    /// starts early (crashpad, GPU, network) escapes the job and outlives winfer.
+    pub fn spawn(cmd: &mut Command) -> Result<Child, String> {
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        if let Some(job) = new_job() {
+            if unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as _) } != 0 {
+                JOBS.lock().unwrap().insert(child.id(), job as usize);
+            } else {
+                unsafe { CloseHandle(job) };
+            }
+        }
+        if !resume(child.id()) {
+            kill_tree(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("couldn't resume the browser process".into());
+        }
+        Ok(child)
+    }
+
+    fn resume(pid: u32) -> bool {
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let mut entry: THREADENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+            let mut resumed = false;
+            let mut more = Thread32First(snapshot, &mut entry) != 0;
+            while more {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !thread.is_null() {
+                        resumed |= ResumeThread(thread) != u32::MAX;
+                        CloseHandle(thread);
+                    }
+                }
+                more = Thread32Next(snapshot, &mut entry) != 0;
+            }
+            CloseHandle(snapshot);
+            resumed
+        }
+    }
+
+    /// Kills the browser's whole process tree, helpers included.
+    pub fn kill_tree(pid: u32) {
+        if let Some(job) = JOBS.lock().unwrap().remove(&pid) {
+            unsafe {
+                TerminateJobObject(job as HANDLE, 1);
+                CloseHandle(job as HANDLE);
+            }
+        }
+    }
+
+    /// The browser owning the profile, found as Chrome finds it before handing a launch over:
+    /// its message window, titled with the profile path.
+    fn window_owner(profile_dir: &Path) -> Option<u32> {
+        let class = wide(OsStr::new("Chrome_MessageWindow"));
+        let title = wide(profile_dir.as_os_str());
+        let mut pid = 0;
+        unsafe {
+            let hwnd = FindWindowExW(HWND_MESSAGE, std::ptr::null_mut(), class.as_ptr(), title.as_ptr());
+            if hwnd.is_null() {
+                return None;
+            }
+            GetWindowThreadProcessId(hwnd, &mut pid);
+        }
+        (pid != 0).then_some(pid)
+    }
+
+    /// Processes holding the profile's `lockfile` open, via the Restart Manager.
+    fn lock_holders(lockfile: &Path) -> Vec<u32> {
+        if !lockfile.exists() {
+            return Vec::new();
+        }
+        let path = wide(lockfile.as_os_str());
+        let mut out = Vec::new();
+        unsafe {
+            let mut session = 0;
+            let mut key = [0u16; CCH_RM_SESSION_KEY as usize + 1];
+            if RmStartSession(&mut session, 0, key.as_mut_ptr()) != 0 {
+                return out;
+            }
+            let files = [path.as_ptr()];
+            if RmRegisterResources(session, 1, files.as_ptr(), 0, std::ptr::null(), 0, std::ptr::null()) == 0 {
+                let mut infos: Vec<RM_PROCESS_INFO> = Vec::new();
+                for _ in 0..3 {
+                    let (mut needed, mut count, mut reasons) = (0, infos.len() as u32, 0);
+                    let res = RmGetList(session, &mut needed, &mut count, infos.as_mut_ptr(), &mut reasons);
+                    if res == ERROR_MORE_DATA {
+                        infos = vec![std::mem::zeroed(); needed as usize];
+                        continue;
+                    }
+                    if res == 0 {
+                        out = infos[..count as usize].iter().map(|i| i.Process.dwProcessId).collect();
+                    }
+                    break;
+                }
+            }
+            RmEndSession(session);
+        }
+        out
+    }
+
+    /// Only browsers get killed: a virus scanner may hold the lockfile for a moment too.
+    fn is_browser(process: HANDLE) -> bool {
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        if unsafe { QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut len) } == 0 {
+            return false;
+        }
+        let image = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
+        let name = image.rsplit('\\').next().unwrap_or_default().to_string();
+        let custom = std::env::var_os("WINFER_CHROME").and_then(|p| {
+            Path::new(&p).file_name().map(|n| n.to_string_lossy().to_lowercase())
+        });
+        ["chrome.exe", "msedge.exe", "brave.exe", "chromium.exe", super::SHELL_BIN]
+            .contains(&name.as_str())
+            || custom.as_deref() == Some(name.as_str())
+    }
+
+    /// Ends browsers still on the profile (orphans of an earlier run, or one still shutting
+    /// down) and waits until they're gone. Returns at once when there are none.
+    pub fn end_holders(profile_dir: &Path) {
+        let mut pids = lock_holders(&profile_dir.join("lockfile"));
+        pids.extend(window_owner(profile_dir));
+        pids.sort_unstable();
+        pids.dedup();
+        for pid in pids {
+            if pid == std::process::id() {
+                continue;
+            }
+            unsafe {
+                let access = PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION;
+                let process = OpenProcess(access, 0, pid);
+                if process.is_null() {
+                    continue;
+                }
+                if is_browser(process) {
+                    TerminateProcess(process, 1);
+                    WaitForSingleObject(process, 5000);
+                }
+                CloseHandle(process);
+            }
+        }
+        // Deletable only once nobody holds it.
+        let _ = std::fs::remove_file(profile_dir.join("lockfile"));
     }
 }
 
@@ -390,21 +580,26 @@ fn kill_with_app(child: &Child) {
 /// recorded in the profile at launch and told to close over CDP: no process sweep, which endpoint
 /// protection blocks on Windows. Returns quickly when nothing is running.
 fn close_running(profile_dir: &Path) {
-    use std::net::{SocketAddr, TcpStream};
-    use tokio_tungstenite::tungstenite::{self, Message};
-
     let Some(port) = std::fs::read_to_string(profile_dir.join(PORT_FILE))
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
     else {
         return;
     };
+    close_over_cdp(port);
+}
+
+/// Tells the browser on `port` to close over CDP and waits (up to ~3 s) until it has. Anything
+/// else on a reused port has no DevTools endpoint and is left alone.
+fn close_over_cdp(port: u16) {
+    use std::net::{SocketAddr, TcpStream};
+    use tokio_tungstenite::tungstenite::{self, Message};
+
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let answers = || TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok();
     if !answers() {
         return;
     }
-    // Anything else on a reused port has no DevTools endpoint and is left alone.
     let Some(url) = ws_url(port) else {
         return;
     };
