@@ -69,7 +69,7 @@ useUsage.subscribe((s) =>
   localStorage.setItem(STORAGE, JSON.stringify({ snapshots: s.snapshots, samples: s.samples, context: s.context, codexSessions: s.codexSessions })),
 );
 
-const windowKey = (provider: string, w: UsageWindow) => `${provider}:${w.kind}:${w.resetsAt ?? ""}`;
+export const windowKey = (provider: string, w: UsageWindow) => `${provider}:${w.kind}:${w.resetsAt ?? ""}`;
 
 /** Used percent now: a window whose reset time has passed starts over. */
 export function usedNow(w: UsageWindow, now = Date.now()): number {

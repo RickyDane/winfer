@@ -149,15 +149,45 @@ if (SHOWCASE) {
   }, 1200);
 }
 
+// Limit windows reset at fixed times for the session, so their readings line up into a history.
+const LOADED = Date.now();
+const RESETS = {
+  claude: { session: LOADED + 108 * 60_000, week: LOADED + 2.5 * 86400_000 },
+  codex: { session: LOADED + 48 * 60_000, week: LOADED + 5 * 86400_000 },
+};
+
+/** Readings from the window's start until now, climbing to `used` with some idle stretches. */
+function limitSamples(span: number, resetsAt: number, used: number): [number, number][] {
+  const start = resetsAt - span;
+  const steps = 24;
+  return Array.from({ length: steps }, (_, i) => {
+    const t = start + ((LOADED - 60_000 - start) * (i + 1)) / steps;
+    const f = (i + 1) / steps;
+    return [t, Math.round(used * (f + Math.sin(i * 1.3) * 0.04 * (1 - f)) * 10) / 10] as [number, number];
+  });
+}
+
+void import("@/features/usage/usage").then(({ useUsage }) => {
+  const h = 3600_000;
+  const d = 24 * h;
+  useUsage.setState({
+    samples: {
+      [`claude:session:${RESETS.claude.session}`]: limitSamples(5 * h, RESETS.claude.session, 38),
+      [`claude:week:${RESETS.claude.week}`]: limitSamples(7 * d, RESETS.claude.week, 69),
+      [`codex:session:${RESETS.codex.session}`]: limitSamples(5 * h, RESETS.codex.session, 81),
+      [`codex:week:${RESETS.codex.week}`]: limitSamples(7 * d, RESETS.codex.week, 6),
+    },
+  });
+});
+
 // Claude Code reports its limits through the status line once a session answers.
 window.setTimeout(() => {
-  const now = Date.now();
   void emit("usage://report", {
     provider: "claude",
     report: {
       windows: [
-        { kind: "session", label: "5-hour", usedPercent: 38, resetsAt: now + 108 * 60_000 },
-        { kind: "week", label: "Weekly", usedPercent: 69, resetsAt: now + 2.5 * 86400_000 },
+        { kind: "session", label: "5-hour", usedPercent: 38, resetsAt: RESETS.claude.session },
+        { kind: "week", label: "Weekly", usedPercent: 69, resetsAt: RESETS.claude.week },
       ],
     },
   });
@@ -295,8 +325,8 @@ mockIPC(
           provider: "codex",
           at: now - 60_000,
           windows: [
-            { kind: "session", label: "5-hour", usedPercent: 81, resetsAt: now + 48 * 60_000 },
-            { kind: "week", label: "Weekly", usedPercent: 6, resetsAt: now + 5 * 86400_000 },
+            { kind: "session", label: "5-hour", usedPercent: 81, resetsAt: RESETS.codex.session },
+            { kind: "week", label: "Weekly", usedPercent: 6, resetsAt: RESETS.codex.week },
           ],
         };
       }

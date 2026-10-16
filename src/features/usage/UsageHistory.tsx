@@ -5,6 +5,7 @@ import { relativeTime } from "@/stores/activity";
 import { useWorkspaces } from "@/stores/workspaces";
 import { dirLabel, fetchUsageByDir, type DirUsage } from "./taskCost";
 import { costBreakdown } from "./TaskCostChip";
+import { ChartKindToggle, Segmented, useSaved, type ChartKind } from "./controls";
 import { bucketTokens, fetchUsageHistory, formatCost, formatTokens, modelTotals, RANGES, SERIES, toBars, type Bar, type Range, type UsageBucket } from "./history";
 
 const NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" };
@@ -15,17 +16,6 @@ const COLORS: Record<string, string> = {
 };
 
 type Metric = "cost" | "tokens";
-
-const RANGE_KEY = "winfer.usageRange";
-
-function savedRange(): Range {
-  try {
-    const r = localStorage.getItem(RANGE_KEY);
-    return RANGES.some((x) => x.id === r) ? (r as Range) : "7d";
-  } catch {
-    return "7d";
-  }
-}
 
 /** A round axis maximum at or above `n`. */
 function niceMax(n: number): number {
@@ -52,15 +42,18 @@ function axisLabel(t: number, range: Range): string {
   return range === "24h" ? d.toLocaleTimeString(undefined, { hour: "numeric" }) : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
-function Chart({ bars, metric, range }: { bars: Bar[]; metric: Metric; range: Range }) {
+function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; range: Range; kind: ChartKind }) {
   const [hover, setHover] = useState<number | null>(null);
   const totals = bars.map((b) => SERIES.reduce((s, p) => s + (b[metric][p] ?? 0), 0));
-  const max = niceMax(Math.max(...totals));
+  // Bars stack the agents; lines each stand alone, so the axis fits the biggest single value.
+  const max = niceMax(kind === "bars" ? Math.max(...totals) : Math.max(...bars.flatMap((b) => SERIES.map((p) => b[metric][p] ?? 0))));
   const ticks = [max, max / 2, 0];
   const dense = bars.length > 40;
   // Axis dates under the first, middle and last bars.
   const labelled = new Set([0, Math.floor((bars.length - 1) / 2), bars.length - 1]);
   const hovered = hover !== null ? bars[hover] : null;
+  const lines = SERIES.filter((p) => bars.some((b) => b[metric][p]));
+  const y = (v: number) => 100 - (v / max) * 100;
 
   return (
     <div className="flex gap-2">
@@ -76,23 +69,53 @@ function Chart({ bars, metric, range }: { bars: Bar[]; metric: Metric; range: Ra
           {ticks.map((t, i) => (
             <div key={t} className={cn("absolute inset-x-0 border-t", i === ticks.length - 1 ? "border-border-strong" : "border-dashed border-border")} style={{ top: `${(i / (ticks.length - 1)) * 100}%` }} />
           ))}
+          {kind === "line" && (
+            <>
+              {hover !== null && <div className="absolute inset-y-0 border-l border-border-strong" style={{ left: `${((hover + 0.5) / bars.length) * 100}%` }} />}
+              <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${bars.length} 100`} preserveAspectRatio="none">
+                {lines.map((p) => (
+                  <polyline
+                    key={p}
+                    points={bars.map((b, i) => `${i + 0.5},${y(b[metric][p] ?? 0)}`).join(" ")}
+                    fill="none"
+                    stroke={COLORS[p]}
+                    strokeWidth={1.75}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+              </svg>
+              {hovered &&
+                hover !== null &&
+                lines.map((p) => (
+                  <span
+                    key={p}
+                    className="absolute size-2 -translate-1/2 rounded-full border-2 border-panel-raised"
+                    style={{ left: `${((hover + 0.5) / bars.length) * 100}%`, top: `${y(hovered[metric][p] ?? 0)}%`, background: COLORS[p] }}
+                  />
+                ))}
+            </>
+          )}
           <div className={cn("absolute inset-0 flex items-end", dense ? "gap-px" : "gap-[2px]")}>
             {bars.map((bar, i) => (
               // The hit target is the full column height, not just the bar.
               <div key={bar.start} className="flex h-full min-w-0 flex-1 items-end" onMouseEnter={() => setHover(i)}>
-                <div
-                  className={cn("flex w-full flex-col-reverse gap-px overflow-hidden rounded-t-[4px]", hover !== null && hover !== i && "opacity-60")}
-                  style={{ height: `${(totals[i] / max) * 100}%` }}
-                >
-                  {SERIES.map((p) => {
-                    const v = bar[metric][p] ?? 0;
-                    return v > 0 ? <div key={p} style={{ flexGrow: v, flexBasis: 0, background: COLORS[p], minHeight: 1 }} /> : null;
-                  })}
-                </div>
+                {kind === "bars" && (
+                  <div
+                    className={cn("flex w-full flex-col-reverse gap-px overflow-hidden rounded-t-[4px]", hover !== null && hover !== i && "opacity-60")}
+                    style={{ height: `${(totals[i] / max) * 100}%` }}
+                  >
+                    {SERIES.map((p) => {
+                      const v = bar[metric][p] ?? 0;
+                      return v > 0 ? <div key={p} style={{ flexGrow: v, flexBasis: 0, background: COLORS[p], minHeight: 1 }} /> : null;
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>
-          {hovered && hover !== null && (
+        {hovered && hover !== null && (
             <div
               className="pointer-events-none absolute top-1 z-10 w-max min-w-40 rounded-md border border-border-strong bg-panel px-2.5 py-2 text-xs shadow-lg"
               style={hover < bars.length / 2 ? { left: `calc(${((hover + 1) / bars.length) * 100}% + 6px)` } : { right: `calc(${((bars.length - hover) / bars.length) * 100}% + 6px)` }}
@@ -213,8 +236,9 @@ const Stat = ({ label, value, detail }: { label: string; value: string; detail?:
 
 /** Tokens the agents used and what they'd cost on the API, over a chosen range of the last 90 days. */
 export function UsageHistory() {
-  const [range, setRange] = useState<Range>(savedRange);
+  const [range, pick] = useSaved<Range>("winfer.usageRange", RANGES.map((r) => r.id), "7d");
   const [metric, setMetric] = useState<Metric>("cost");
+  const [kind, setKind] = useSaved<ChartKind>("winfer.usageChart", ["bars", "line"], "bars");
   // Always the full 90 days: switching ranges is instant.
   const [rows, setRows] = useState<UsageBucket[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -228,15 +252,6 @@ export function UsageHistory() {
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
-
-  const pick = (r: Range) => {
-    setRange(r);
-    try {
-      localStorage.setItem(RANGE_KEY, r);
-    } catch {
-      // Not remembered; fine.
-    }
-  };
 
   const bars = useMemo(() => (rows ? toBars(rows, range) : []), [rows, range]);
   const models = useMemo(() => (rows && bars.length ? modelTotals(rows, bars[0].start) : []), [rows, bars]);
@@ -291,17 +306,15 @@ export function UsageHistory() {
 
           <div className="space-y-2">
             <div className="flex items-center gap-3">
-              <div className="flex rounded-md border border-border p-0.5">
-                {(["cost", "tokens"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMetric(m)}
-                    className={cn("rounded px-2 py-0.5 text-[11px]", metric === m ? "bg-active text-fg" : "text-fg-muted hover:text-fg")}
-                  >
-                    {m === "cost" ? "Cost" : "Tokens"}
-                  </button>
-                ))}
-              </div>
+              <Segmented
+                value={metric}
+                options={[
+                  { id: "cost", label: "Cost" },
+                  { id: "tokens", label: "Tokens" },
+                ]}
+                onChange={setMetric}
+              />
+              <ChartKindToggle value={kind} onChange={setKind} />
               <div className="flex flex-1 justify-end gap-3">
                 {providers.map((p) => (
                   <span key={p} className="flex items-center gap-1.5 text-[11px] text-fg-muted">
@@ -311,7 +324,7 @@ export function UsageHistory() {
                 ))}
               </div>
             </div>
-            <Chart bars={bars} metric={metric} range={range} />
+            <Chart bars={bars} metric={metric} range={range} kind={kind} />
           </div>
 
           {models.length === 0 ? (
@@ -353,6 +366,69 @@ export function UsageHistory() {
           <ByTask days={RANGES.find((r) => r.id === range)!.days} />
         </>
       )}
+    </div>
+  );
+}
+
+const Spent = ({ label, cost, tokens }: { label: string; cost: number; tokens: number }) => (
+  <div className="min-w-0 flex-1">
+    <div className="text-[11px] text-fg-subtle">{label}</div>
+    <div className="font-mono text-fg">
+      {formatCost(cost)} <span className="text-[11px] text-fg-subtle">· {formatTokens(tokens)} tokens</span>
+    </div>
+  </div>
+);
+
+// The sidebar preview opens often: reuse a recent read rather than asking the logs again each hover.
+let recent: { at: number; rows: UsageBucket[] } | null = null;
+
+/** Today's and this week's spend with a small line of the week, for the sidebar's usage preview. */
+export function UsageSummary() {
+  const [rows, setRows] = useState<UsageBucket[] | null>(recent?.rows ?? null);
+  useEffect(() => {
+    if (recent && Date.now() - recent.at < 60_000) return;
+    let live = true;
+    fetchUsageHistory(7).then(
+      (r) => {
+        recent = { at: Date.now(), rows: r };
+        if (live) setRows(r);
+      },
+      () => live && setRows((r) => r ?? []),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (!rows) {
+    return (
+      <div className="flex items-center gap-1.5 text-[11px] text-fg-subtle">
+        <Loader2 size={11} className="animate-spin" /> Reading usage…
+      </div>
+    );
+  }
+  const bars = toBars(rows, "7d");
+  const midnight = new Date().setHours(0, 0, 0, 0);
+  const total = (since: number) => {
+    const models = modelTotals(rows, since);
+    return { cost: models.reduce((s, m) => s + m.cost, 0), tokens: models.reduce((s, m) => s + bucketTokens(m), 0) };
+  };
+  const today = total(midnight);
+  const week = total(bars[0].start);
+  if (week.tokens === 0) return <p className="text-[11px] text-fg-subtle">No agent usage in the last 7 days.</p>;
+  const costs = bars.map((b) => SERIES.reduce((s, p) => s + (b.cost[p] ?? 0), 0));
+  const max = Math.max(...costs) || 1;
+  const points = costs.map((c, i) => `${i + 0.5},${30 - (c / max) * 28}`).join(" ");
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-4 text-xs">
+        <Spent label="Today" {...today} />
+        <Spent label="7 days" {...week} />
+      </div>
+      <svg className="h-8 w-full" viewBox={`0 0 ${bars.length} 31`} preserveAspectRatio="none" aria-label="API cost over the last 7 days">
+        <polygon points={`0.5,31 ${points} ${bars.length - 0.5},31`} fill="var(--color-accent)" opacity={0.12} />
+        <polyline points={points} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
     </div>
   );
 }

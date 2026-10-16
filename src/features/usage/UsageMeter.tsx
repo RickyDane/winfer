@@ -1,10 +1,12 @@
-import { Gauge } from "lucide-react";
+import { ChevronRight, Gauge } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
-import { contextColor, duration, leftNow, levelColor, runsOutAt, tightest, tokens, useUsage, when, type UsageWindow } from "./usage";
+import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
+import { contextColor, duration, leftNow, levelColor, runsOutAt, tightest, tokens, useUsage, when, windowKey, type UsageWindow } from "./usage";
+import { UsageSummary } from "./UsageHistory";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
 export function UsageRing({ provider, size = 22, className }: { provider: string; size?: number; className?: string }) {
@@ -77,6 +79,90 @@ function WindowBar({ provider, window }: { provider: string; window: UsageWindow
   );
 }
 
+/** How long each kind of window runs, to place its start on the time axis. */
+const SPAN: Record<string, number> = { session: 5 * 3600_000, week: 7 * 86400_000, "month-credit": 30 * 86400_000 };
+
+const clock = (t: number, long: boolean) =>
+  new Date(t).toLocaleString(undefined, long ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+
+/** What's left of a window over its run so far, from the readings kept for the run-out projection. */
+function WindowLine({ provider, window: w }: { provider: string; window: UsageWindow }) {
+  const samples = useUsage((s) => s.samples[windowKey(provider, w)]);
+  const [hover, setHover] = useState<number | null>(null);
+  const now = Date.now();
+  const left = leftNow(w, now);
+  const live = w.resetsAt !== null && w.resetsAt > now;
+  const outAt = runsOutAt(provider, w);
+  const span = SPAN[w.kind];
+  // Readings as [at, % left], ending at the current value now.
+  const points: [number, number][] = live ? (samples ?? []).filter(([t]) => t <= now).map(([t, used]) => [t, 100 - used]) : [];
+  const windowStart = live && span ? w.resetsAt! - span : null;
+  const start = Math.min(windowStart ?? Infinity, points[0]?.[0] ?? Infinity, now - 3600_000);
+  // A window starts full.
+  if (windowStart !== null && (points[0]?.[0] ?? now) > windowStart) points.unshift([windowStart, 100]);
+  if (!points.length) points.push([start, left]);
+  points.push([now, left]);
+  const end = live ? w.resetsAt! : now;
+  const x = (t: number) => ((t - start) / (end - start)) * 1000;
+  const line = points.map(([t, v]) => `${x(t)},${100 - v}`).join(" ");
+  const long = end - start > 86400_000;
+  // Value at a time: the last reading at or before it.
+  const at = (t: number) => [...points].reverse().find(([pt]) => pt <= t)?.[1] ?? points[0][1];
+  const hoverAt = hover !== null ? start + hover * (end - start) : null;
+  const color = levelColor(left);
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline gap-2 text-xs">
+        <span className="flex-1 text-fg-muted">{w.label}</span>
+        <span className="font-mono text-[11px] text-fg">{Math.round(left)}% left</span>
+      </div>
+      <div
+        className="relative h-16"
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          const f = (e.clientX - r.left) / r.width;
+          // Only the past has readings.
+          setHover(Math.max(0, Math.min(f, (now - start) / (end - start))));
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
+        {[0, 50, 100].map((t) => (
+          <div key={t} className={cn("absolute inset-x-0 border-t", t === 100 ? "border-border-strong" : "border-dashed border-border")} style={{ top: `${t}%` }} />
+        ))}
+        {live && <div className="absolute inset-y-0 border-l border-dashed border-border-strong" style={{ left: `${x(now) / 10}%` }} title="Now" />}
+        <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 1000 100" preserveAspectRatio="none">
+          <polygon points={`${x(points[0][0])},100 ${line} ${x(now)},100`} fill={color} opacity={0.12} />
+          <polyline points={line} fill="none" stroke={color} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          {outAt && (
+            <line x1={x(now)} y1={100 - left} x2={x(outAt)} y2={100} stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+          )}
+        </svg>
+        <span className="absolute size-2 -translate-1/2 rounded-full border-2 border-panel-raised" style={{ left: `${x(now) / 10}%`, top: `${100 - left}%`, background: color }} />
+        {hoverAt !== null && (
+          <>
+            <div className="absolute inset-y-0 border-l border-fg-subtle" style={{ left: `${hover! * 100}%` }} />
+            <div
+              className="pointer-events-none absolute -top-1 z-10 w-max -translate-y-full rounded-md border border-border-strong bg-panel px-2 py-1 text-[11px] shadow-lg"
+              style={hover! < 0.5 ? { left: `${hover! * 100}%` } : { right: `${(1 - hover!) * 100}%` }}
+            >
+              <span className="text-fg-muted">{clock(hoverAt, long)}</span> <span className="font-mono text-fg">{Math.round(at(hoverAt))}% left</span>
+            </div>
+          </>
+        )}
+      </div>
+      <div className="flex justify-between font-mono text-[10px] text-fg-subtle">
+        <span>{clock(start, long)}</span>
+        <span>{live ? clock(end, long) : "now"}</span>
+      </div>
+      <div className="text-[11px] text-fg-subtle">
+        {w.resetsAt && (live ? `resets ${when(w.resetsAt)}` : "reset — full again")}
+        {outAt && <span className="text-warning"> · at this pace runs out {when(outAt)}</span>}
+      </div>
+    </div>
+  );
+}
+
 /** Providers with known limits, and whether OpenCode's spend is shown; re-renders as countdowns move. */
 function useLimited() {
   const snapshots = useUsage((s) => s.snapshots);
@@ -96,16 +182,18 @@ function useLimited() {
   return { limited, showOpencode };
 }
 
-/** Every agent's limits as bars, plus OpenCode's spend today. */
-export function UsageDetails({ className, children }: { className?: string; children?: React.ReactNode }) {
+const CARD = "w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl";
+
+/** Every agent's limits as bars or lines, plus OpenCode's spend today. */
+export function Limits({ chart = "bars" }: { chart?: ChartKind }) {
   const snapshots = useUsage((s) => s.snapshots);
   const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
   const { limited, showOpencode } = useLimited();
   const claudeInstalled = providers.some((p) => p.id === "claude" && p.installed);
+  const Window = chart === "line" ? WindowLine : WindowBar;
   return (
-    <div className={cn("w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl", className)}>
-      <div className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">Usage limits</div>
+    <div className="space-y-4">
       {limited.map((s) => (
         <section key={s.provider} className="space-y-2">
           <header className="flex items-center gap-2 text-[13px]">
@@ -116,7 +204,7 @@ export function UsageDetails({ className, children }: { className?: string; chil
             </span>
           </header>
           {s.windows.map((w) => (
-            <WindowBar key={w.kind} provider={s.provider} window={w} />
+            <Window key={w.kind} provider={s.provider} window={w} />
           ))}
         </section>
       ))}
@@ -133,7 +221,18 @@ export function UsageDetails({ className, children }: { className?: string; chil
       {!claudeInstalled || snapshots.claude ? null : (
         <p className="text-[11px] text-fg-subtle">Claude Code reports its limits once a session in winfer has answered a message.</p>
       )}
-      {children}
+    </div>
+  );
+}
+
+const Heading = ({ children }: { children: React.ReactNode }) => <div className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">{children}</div>;
+
+/** The title bar's popover: every agent's limits. */
+export function UsageDetails({ className }: { className?: string }) {
+  return (
+    <div className={cn(CARD, className)}>
+      <Heading>Usage limits</Heading>
+      <Limits />
     </div>
   );
 }
@@ -180,7 +279,20 @@ export function UsageMeter() {
   );
 }
 
-/** Sidebar footer: opens the Usage page in settings; hovering previews the limits. */
+/** A part of the sidebar preview; its heading opens that tab of the Usage page. */
+function PreviewSection({ title, onOpen, className, children }: { title: string; onOpen: () => void; className?: string; children: React.ReactNode }) {
+  return (
+    <section className={cn("space-y-3", className)}>
+      <button onClick={onOpen} className="group flex w-full items-center gap-1 text-left" title={`Open ${title.toLowerCase()} in settings`}>
+        <Heading>{title}</Heading>
+        <ChevronRight size={11} className="text-fg-subtle opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+      {children}
+    </section>
+  );
+}
+
+/** Sidebar footer: opens the Usage page in settings; hovering previews the usage and the limits. */
 export function UsageButton({ onOpen, title }: { onOpen: () => void; title: string }) {
   // Anchor point (button's top-left) while the preview is shown.
   const [hover, setHover] = useState<{ left: number; bottom: number } | null>(null);
@@ -197,6 +309,11 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
   const leave = () => {
     window.clearTimeout(timer.current);
     setHover(null);
+  };
+  const openTab = (tab: UsageTab) => {
+    setUsageTab(tab);
+    leave();
+    onOpen();
   };
   return (
     <div ref={anchor} className="relative" onMouseEnter={enter} onMouseLeave={leave}>
@@ -215,9 +332,14 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
         // so hovering it keeps the preview open. pb bridges the gap to the button.
         createPortal(
           <div className="fixed z-[1000] pb-1" style={{ left: hover.left, bottom: hover.bottom }}>
-            <UsageDetails className="anim-menu">
-              <p className="border-t border-border pt-3 text-[11px] text-fg-subtle">Click for usage history</p>
-            </UsageDetails>
+            <div className={cn(CARD, "anim-menu")}>
+              <PreviewSection title="Usage" onOpen={() => openTab("usage")}>
+                <UsageSummary />
+              </PreviewSection>
+              <PreviewSection title="Limits" onOpen={() => openTab("limits")} className="border-t border-border pt-3">
+                <Limits />
+              </PreviewSection>
+            </div>
           </div>,
           document.body,
         )}

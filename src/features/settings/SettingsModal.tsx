@@ -11,7 +11,7 @@ import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, se
 import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
-import { UsageHistory } from "@/features/usage/UsageHistory";
+import { UsageSettings } from "@/features/usage/UsagePage";
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
@@ -727,11 +727,14 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   },
   { id: "voice", label: "Voice", icon: Mic, render: () => <VoiceSettings /> },
   { id: "ai", label: "AI", icon: Sparkles, render: () => <AiSettings /> },
-  { id: "usage", label: "Usage", icon: ChartColumn, render: () => (
-      <>
+  {
+    id: "usage",
+    label: "Usage",
+    icon: ChartColumn,
+    render: () => (
+      <UsageSettings>
         <PaneCostSettings />
-        <UsageHistory />
-      </>
+      </UsageSettings>
     ),
   },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
