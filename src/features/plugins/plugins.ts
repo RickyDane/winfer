@@ -630,18 +630,18 @@ export async function setPluginEnabled(id: string, enabled: boolean) {
 
 export const pluginsDir = () => invoke<string>("plugins_dir");
 
-/** Mirrors `CatalogEntry` in src-tauri/src/plugins.rs. */
-export interface CatalogEntry {
+/** Mirrors `StoreEntry` in src-tauri/src/plugins.rs: a plugin in the repo's plugins/ folder. */
+export interface StoreEntry {
   id: string;
   name: string;
+  /** Any text (or empty), only compared with the installed one. */
   version: string;
   description: string;
   author?: string | null;
   tags: string[];
-  files: { path: string; sha256: string }[];
 }
 
-export const fetchCatalog = () => invoke<CatalogEntry[]>("plugins_catalog");
+export const fetchCatalog = () => invoke<StoreEntry[]>("plugins_catalog");
 
 /** Installs or updates a store plugin (it's turned on) and reloads plugins. */
 export async function installPlugin(id: string) {

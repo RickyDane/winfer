@@ -5,27 +5,30 @@
 //! JavaScript `main` module the frontend runs. Rust only discovers, validates and reads them;
 //! recipes and tools are passed through as JSON and validated by the frontend.
 //!
-//! The plugin store is the repo's `plugins/` folder: `catalog.json` lists each plugin's files
-//! with their SHA-256, and installing downloads and checks them. Plugins run with the app's
-//! privileges, so a plugin someone copies into the folder starts disabled; installing from the
-//! store turns it on (after the user agreed). The choices are kept in `<app data>/plugins.json`.
+//! The plugin store is the repo's `plugins/` folder on GitHub: every subfolder with a
+//! `plugin.json` is a plugin, offered at whatever version its manifest says, and installing
+//! downloads the folder's files. Plugins run with the app's privileges, so a plugin someone copies
+//! into the folder starts disabled; installing from the store turns it on (after the user
+//! agreed). The choices are kept in `<app data>/plugins.json`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::providers::{self, Provider};
 
-/// Where the store's catalog and files are; `WINFER_PLUGIN_STORE` (a URL or a local folder,
-/// e.g. a checkout's `plugins/`) overrides it for development.
-const STORE: &str = "https://raw.githubusercontent.com/RickyDane/winfer/main/plugins";
+/// The GitHub repo, branch and folder the store lists; `WINFER_PLUGIN_STORE` (a local folder,
+/// e.g. a checkout's `plugins/`) replaces them for development.
+const STORE_REPO: &str = "RickyDane/winfer";
+const STORE_BRANCH: &str = "main";
+const STORE_FOLDER: &str = "plugins";
 /// Marks a plugin folder installed from the store.
 const STORE_MARKER: &str = ".store.json";
 const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_FILES: usize = 500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +50,9 @@ pub struct Manifest {
     pub recipes: Vec<Value>,
     #[serde(default)]
     pub tools: Vec<Value>,
+    /// Words the store's search matches.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,38 +65,23 @@ pub struct PluginInfo {
     pub enabled: bool,
     /// Installed from the store (so it can be updated and uninstalled from there).
     pub from_store: bool,
-    /// The catalog version installed from the store, which may differ from `manifest.version`;
-    /// updates are offered when the catalog's version differs from this one.
+    /// The version installed from the store; updates are offered when the store's differs.
     pub store_version: Option<String>,
     /// Why the plugin can't load (bad manifest, id clash, …).
     pub error: Option<String>,
 }
 
-/// One plugin in the store's `catalog.json`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// One plugin the store offers, from its `plugin.json`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct CatalogEntry {
+pub struct StoreEntry {
     pub id: String,
     pub name: String,
+    /// Any text, or empty: it's only compared with the installed one.
     pub version: String,
-    #[serde(default)]
     pub description: String,
-    #[serde(default)]
     pub author: Option<String>,
-    #[serde(default)]
     pub tags: Vec<String>,
-    pub files: Vec<CatalogFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CatalogFile {
-    pub path: String,
-    pub sha256: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Catalog {
-    plugins: Vec<CatalogEntry>,
 }
 
 struct Registry {
@@ -266,65 +257,196 @@ pub fn providers() -> Vec<Provider> {
 // ---------------------------------------------------------------------------------------------
 // Store
 
-fn store_base() -> String {
-    std::env::var("WINFER_PLUGIN_STORE").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| STORE.into())
+/// Where the store's plugins come from.
+#[derive(Debug, Clone)]
+enum Store {
+    /// `STORE_FOLDER` of `STORE_REPO` on GitHub.
+    GitHub,
+    /// A local folder laid out the same way.
+    Local(PathBuf),
 }
 
-/// A file from the store: fetched over HTTPS, or read from a local folder.
-fn fetch(base: &str, path: &str) -> Result<Vec<u8>, String> {
-    let base = base.trim_end_matches('/');
-    if base.starts_with("https://") || base.starts_with("http://") {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
-            .build()
-            .into();
-        let mut res = agent.get(&format!("{base}/{path}")).call().map_err(|e| format!("couldn't download {path}: {e}"))?;
-        res.body_mut()
-            .with_config()
-            .limit(MAX_FILE_BYTES)
-            .read_to_vec()
-            .map_err(|e| format!("couldn't download {path}: {e}"))
-    } else {
-        let file = Path::new(base).join(path);
-        if file.metadata().map_err(|e| format!("couldn't read {}: {e}", file.display()))?.len() > MAX_FILE_BYTES {
-            return Err(format!("{path} is too big"));
-        }
-        std::fs::read(&file).map_err(|e| format!("couldn't read {}: {e}", file.display()))
+fn store() -> Store {
+    match std::env::var("WINFER_PLUGIN_STORE") {
+        Ok(dir) if !dir.is_empty() => Store::Local(PathBuf::from(dir)),
+        _ => Store::GitHub,
     }
 }
 
-fn read_catalog(base: &str) -> Result<Vec<CatalogEntry>, String> {
-    let bytes = fetch(base, "catalog.json")?;
-    let catalog: Catalog = serde_json::from_slice(&bytes).map_err(|e| format!("the plugin catalog is invalid: {e}"))?;
-    Ok(catalog.plugins.into_iter().filter(|p| valid_id(&p.id)).collect())
+/// What the store holds: each plugin folder's files (paths inside it, `/`-separated), and for
+/// GitHub the commit they're read from, so a listing and its downloads agree.
+struct Listing {
+    rev: String,
+    plugins: BTreeMap<String, Vec<String>>,
 }
 
-/// Downloads a store plugin into `root/<id>`, checking every file's hash; replaces an older
-/// copy only once the new one is complete.
-fn install(root: &Path, base: &str, id: &str) -> Result<(), String> {
-    let entry = read_catalog(base)?.into_iter().find(|p| p.id == id).ok_or_else(|| format!("“{id}” isn't in the plugin store"))?;
-    if !entry.files.iter().any(|f| f.path == "plugin.json") {
-        return Err(format!("{id} has no plugin.json"));
+fn http_get(url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
+        .build()
+        .into();
+    // GitHub's API refuses requests without a User-Agent.
+    agent
+        .get(url)
+        .header("User-Agent", "winfer")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::StatusCode(403 | 429) => "GitHub's rate limit for the plugin store was reached; try again in a while".to_string(),
+            e => format!("couldn't reach the plugin store: {e}"),
+        })
+}
+
+fn github_json(path: &str) -> Result<Value, String> {
+    http_get(&format!("https://api.github.com/repos/{STORE_REPO}/{path}"))?
+        .body_mut()
+        .read_json::<Value>()
+        .map_err(|e| format!("the plugin store's answer is invalid: {e}"))
+}
+
+/// Groups `id/rest/of/path` paths by plugin folder; hidden files and folders are left out.
+fn group_files(paths: impl IntoIterator<Item = String>) -> BTreeMap<String, Vec<String>> {
+    let mut plugins: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in paths {
+        let Some((id, rel)) = path.split_once('/') else { continue };
+        if valid_id(id) && !rel.is_empty() && !path.split('/').any(|part| part.starts_with('.')) {
+            plugins.entry(id.to_string()).or_default().push(rel.to_string());
+        }
+    }
+    plugins.retain(|_, files| files.iter().any(|f| f == "plugin.json"));
+    for files in plugins.values_mut() {
+        files.sort();
+    }
+    plugins
+}
+
+fn local_files(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+        if entry.path().is_dir() {
+            local_files(&entry.path(), &path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+fn list_store(store: &Store) -> Result<Listing, String> {
+    match store {
+        Store::Local(dir) => {
+            if !dir.is_dir() {
+                return Err(format!("the plugin store folder {} doesn't exist", dir.display()));
+            }
+            let mut paths = Vec::new();
+            local_files(dir, "", &mut paths);
+            Ok(Listing { rev: String::new(), plugins: group_files(paths) })
+        }
+        Store::GitHub => {
+            let commit = github_json(&format!("commits/{STORE_BRANCH}"))?;
+            let rev = commit["sha"].as_str().ok_or("the plugin store's answer has no commit")?.to_string();
+            let tree = commit["commit"]["tree"]["sha"].as_str().ok_or("the plugin store's answer has no tree")?;
+            let tree = github_json(&format!("git/trees/{tree}?recursive=1"))?;
+            let prefix = format!("{STORE_FOLDER}/");
+            let paths = tree["tree"]
+                .as_array()
+                .ok_or("the plugin store's answer has no files")?
+                .iter()
+                .filter(|item| item["type"] == "blob")
+                .filter_map(|item| item["path"].as_str()?.strip_prefix(&prefix).map(str::to_string));
+            Ok(Listing { rev, plugins: group_files(paths) })
+        }
+    }
+}
+
+/// Percent-encodes a path's segments for a URL.
+fn url_path(path: &str) -> String {
+    path.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// One file of a store plugin.
+fn fetch(store: &Store, rev: &str, id: &str, rel: &str) -> Result<Vec<u8>, String> {
+    let path = format!("{id}/{rel}");
+    match store {
+        Store::Local(dir) => {
+            let file = resolve_inside(dir, &path)?;
+            if file.metadata().map_err(|e| format!("couldn't read {}: {e}", file.display()))?.len() > MAX_FILE_BYTES {
+                return Err(format!("{path} is too big"));
+            }
+            std::fs::read(&file).map_err(|e| format!("couldn't read {}: {e}", file.display()))
+        }
+        Store::GitHub => http_get(&format!("https://raw.githubusercontent.com/{STORE_REPO}/{rev}/{STORE_FOLDER}/{}", url_path(&path)))?
+            .body_mut()
+            .with_config()
+            .limit(MAX_FILE_BYTES)
+            .read_to_vec()
+            .map_err(|e| format!("couldn't download {path}: {e}")),
+    }
+}
+
+/// A store plugin's manifest, checked like an installed one's.
+fn store_manifest(store: &Store, rev: &str, id: &str) -> Result<Manifest, String> {
+    let manifest: Manifest = serde_json::from_slice(&fetch(store, rev, id, "plugin.json")?).map_err(|e| format!("{id}: invalid plugin.json: {e}"))?;
+    if manifest.id != id {
+        return Err(format!("{id}: plugin.json says it's “{}”", manifest.id));
+    }
+    Ok(manifest)
+}
+
+/// Every plugin in the store; folders whose manifest is broken are left out.
+fn read_store(store: &Store) -> Result<Vec<StoreEntry>, String> {
+    let listing = list_store(store)?;
+    let ids: Vec<&String> = listing.plugins.keys().collect();
+    // The manifests are fetched in parallel; GitHub's raw files aren't rate limited.
+    let manifests: Vec<Option<Manifest>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = ids.iter().map(|id| scope.spawn(|| store_manifest(store, &listing.rev, id).ok())).collect();
+        handles.into_iter().map(|h| h.join().ok().flatten()).collect()
+    });
+    Ok(manifests
+        .into_iter()
+        .flatten()
+        .map(|m| StoreEntry {
+            version: m.version.unwrap_or_default(),
+            description: m.description.unwrap_or_default(),
+            id: m.id,
+            name: m.name,
+            author: m.author,
+            tags: m.tags,
+        })
+        .collect())
+}
+
+/// Downloads a store plugin into `root/<id>`; replaces an older copy only once the new one is
+/// complete.
+fn install(root: &Path, store: &Store, id: &str) -> Result<(), String> {
+    let listing = list_store(store)?;
+    let files = listing.plugins.get(id).ok_or_else(|| format!("“{id}” isn't in the plugin store"))?;
+    if files.len() > MAX_FILES {
+        return Err(format!("{id} has more than {MAX_FILES} files"));
     }
     let staging = root.join(format!(".install-{id}"));
     let _ = std::fs::remove_dir_all(&staging);
     let result = (|| {
-        for file in &entry.files {
-            let target = resolve_inside(&staging, &file.path)?;
-            let bytes = fetch(base, &format!("{id}/{}", file.path))?;
-            if hex::encode(Sha256::digest(&bytes)) != file.sha256.to_ascii_lowercase() {
-                return Err(format!("{} doesn't match the catalog (changed or corrupted download)", file.path));
-            }
+        for rel in files {
+            let target = resolve_inside(&staging, rel)?;
+            let bytes = fetch(store, &listing.rev, id, rel)?;
             std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
             std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
         }
-        std::fs::write(staging.join(STORE_MARKER), serde_json::json!({ "version": entry.version }).to_string()).map_err(|e| e.to_string())?;
         // Checked under its final name, which the manifest's id must match.
         let manifest: Manifest = serde_json::from_slice(&std::fs::read(staging.join("plugin.json")).map_err(|e| e.to_string())?)
             .map_err(|e| format!("invalid plugin.json: {e}"))?;
         if manifest.id != id {
             return Err(format!("plugin.json says it's “{}”", manifest.id));
         }
+        let version = manifest.version.unwrap_or_default();
+        std::fs::write(staging.join(STORE_MARKER), serde_json::json!({ "version": version }).to_string()).map_err(|e| e.to_string())?;
         let target = root.join(id);
         if target.exists() {
             std::fs::remove_dir_all(&target).map_err(|e| format!("couldn't replace the old version: {e}"))?;
@@ -422,8 +544,8 @@ pub async fn plugins_write_file(request: tauri::ipc::Request<'_>) -> Result<Stri
 
 /// The plugins the store offers.
 #[tauri::command]
-pub async fn plugins_catalog() -> Result<Vec<CatalogEntry>, String> {
-    tauri::async_runtime::spawn_blocking(|| read_catalog(&store_base())).await.map_err(|e| e.to_string())?
+pub async fn plugins_catalog() -> Result<Vec<StoreEntry>, String> {
+    tauri::async_runtime::spawn_blocking(|| read_store(&store())).await.map_err(|e| e.to_string())?
 }
 
 /// Installs (or updates) a plugin from the store and turns it on.
@@ -437,7 +559,7 @@ pub async fn plugins_install(id: String) -> Result<(), String> {
             let registry = registry()?.read().unwrap();
             (registry.root.clone(), registry.settings.clone())
         };
-        install(&root, &store_base(), &id)?;
+        install(&root, &store(), &id)?;
         write_enabled(&settings, &id, true)
     })
     .await
@@ -517,61 +639,62 @@ mod tests {
         assert!(resolve_inside(dir, "a/../../b.js").is_err());
     }
 
-    /// A local store folder with one plugin; `tamper` changes a file after hashing it.
-    fn store(name: &str, tamper: bool) -> PathBuf {
+    /// A local store folder with one plugin (and the files that aren't plugins).
+    fn local_store(name: &str, version: &str) -> Store {
         let base = temp_dir(name);
-        let files = [("plugin.json", r#"{ "id": "demo", "name": "Demo", "main": "lib/index.js" }"#), ("lib/index.js", "export function activate() {}")];
-        let mut entries = Vec::new();
-        for (path, text) in files {
-            let file = base.join("demo").join(path);
+        let manifest = format!(r#"{{ "id": "demo", "name": "Demo", "version": "{version}", "main": "lib/index.js", "tags": ["x"] }}"#);
+        for (path, text) in [("demo/plugin.json", manifest.as_str()), ("demo/lib/index.js", "export function activate() {}"), ("demo/.DS_Store", ""), ("README.md", ""), ("catalog.json", "{}"), ("notes/todo.txt", "")] {
+            let file = base.join(path);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(&file, text).unwrap();
-            entries.push(serde_json::json!({ "path": path, "sha256": hex::encode(Sha256::digest(text.as_bytes())) }));
         }
-        if tamper {
-            std::fs::write(base.join("demo/lib/index.js"), "alert('evil')").unwrap();
-        }
-        // The catalog's version needn't match plugin.json's (which has none here).
-        let catalog = serde_json::json!({ "plugins": [{ "id": "demo", "name": "Demo", "version": "1.0.0", "files": entries }] });
-        std::fs::write(base.join("catalog.json"), catalog.to_string()).unwrap();
-        base
+        Store::Local(base)
+    }
+
+    #[test]
+    fn lists_plugin_folders_without_a_catalog() {
+        let store = local_store("store-list", "2025.1-beta");
+        let listing = list_store(&store).unwrap();
+        assert_eq!(listing.plugins.keys().collect::<Vec<_>>(), ["demo"]);
+        assert_eq!(listing.plugins["demo"], ["lib/index.js", "plugin.json"]);
+        let entries = read_store(&store).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!((entries[0].version.as_str(), entries[0].tags.as_slice()), ("2025.1-beta", ["x".to_string()].as_slice()));
+    }
+
+    #[test]
+    fn groups_github_paths_by_plugin() {
+        let paths = ["a/plugin.json", "a/src/x.js", "a/.hidden/y", "b/readme.md", "Bad Id/plugin.json", "catalog.json"].map(String::from);
+        let plugins = group_files(paths);
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins["a"], ["plugin.json", "src/x.js"]);
+        assert_eq!(url_path("a b/ü.js"), "a%20b/%C3%BC.js");
     }
 
     #[test]
     fn installs_and_updates_from_the_store() {
-        let base = store("store-ok", false);
         let root = temp_dir("store-root");
-        assert_eq!(read_catalog(base.to_str().unwrap()).unwrap()[0].files.len(), 2);
-        install(&root, base.to_str().unwrap(), "demo").unwrap();
+        install(&root, &local_store("store-ok", "1.0.0"), "demo").unwrap();
         let plugins = scan(&root, &BTreeSet::new());
         assert_eq!(plugins.len(), 1);
         assert!(plugins[0].from_store && plugins[0].error.is_none());
         assert_eq!(plugins[0].store_version.as_deref(), Some("1.0.0"));
-        assert_eq!(plugins[0].manifest.as_ref().unwrap().version, None);
-        assert!(root.join("demo/lib/index.js").exists());
-        // Reinstalling (an update) replaces the folder and leaves no staging copy behind.
-        install(&root, base.to_str().unwrap(), "demo").unwrap();
+        assert!(root.join("demo/lib/index.js").exists() && !root.join("demo/.DS_Store").exists());
+        // An update to any other version replaces the folder and leaves no staging copy behind.
+        install(&root, &local_store("store-ok", "0.9"), "demo").unwrap();
+        assert_eq!(scan(&root, &BTreeSet::new())[0].store_version.as_deref(), Some("0.9"));
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
-        assert!(install(&root, base.to_str().unwrap(), "missing").unwrap_err().contains("isn't in the plugin store"));
-    }
-
-    #[test]
-    fn refuses_files_that_dont_match_the_catalog() {
-        let base = store("store-bad", true);
-        let root = temp_dir("store-bad-root");
-        let err = install(&root, base.to_str().unwrap(), "demo").unwrap_err();
-        assert!(err.contains("doesn't match the catalog"), "{err}");
-        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "nothing is left behind");
+        assert!(install(&root, &local_store("store-ok", "1"), "missing").unwrap_err().contains("isn't in the plugin store"));
     }
 
     #[test]
     fn every_store_plugin_installs_and_loads() {
-        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins");
+        let store = Store::Local(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins")));
         let root = temp_dir("repo-store");
-        let catalog = read_catalog(base).unwrap();
-        assert!(catalog.iter().any(|p| p.id == "secrets"));
-        for entry in &catalog {
-            install(&root, base, &entry.id).unwrap();
+        let entries = read_store(&store).unwrap();
+        assert!(entries.iter().any(|p| p.id == "secrets"));
+        for entry in &entries {
+            install(&root, &store, &entry.id).unwrap();
         }
         for plugin in scan(&root, &BTreeSet::new()) {
             assert!(plugin.error.is_none(), "{}: {:?}", plugin.id, plugin.error);

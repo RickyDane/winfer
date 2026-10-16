@@ -433,7 +433,7 @@ export async function seedShowcase() {
     context: Object.fromEntries(
       allPanes()
         .filter((p) => p.context)
-        .map((p) => [p.id, { usedPercent: p.context!, tokens: Math.round((p.provider === "codex" ? 475_000 : 200_000) * p.context! / 100), window: p.provider === "codex" ? 475_000 : 200_000, at: now }]),
+        .map((p) => [p.id, { usedPercent: p.context!, tokens: Math.round((p.provider === "codex" ? 475_000 : 200_000) * p.context! / 100), window: p.provider === "codex" ? 475_000 : 200_000, at: now, source: "mock.jsonl" }]),
     ),
   });
   useReviews.setState({

@@ -11,18 +11,17 @@ first, and a folder copied in by hand stays off until you turn it on.
 
 ## The store
 
-The store is this repo's [`plugins/`](../../plugins) folder. `plugins/catalog.json` lists every
-plugin with the SHA-256 of each file; winfer downloads the files from GitHub
-(`raw.githubusercontent.com/RickyDane/winfer/main/plugins`) and refuses any that don't match.
+The store is this repo's [`plugins/`](../../plugins) folder on GitHub (`main`): every subfolder
+with a `plugin.json` is a plugin, offered at the version its `plugin.json` names. winfer lists the
+folder through GitHub's API and downloads a plugin's files from that same commit.
 To try the store from a checkout, start winfer with `WINFER_PLUGIN_STORE=/path/to/winfer/plugins`.
 
-To add or change a store plugin:
+To add or change a store plugin, create or edit `plugins/<id>/` (`id` must equal the folder name)
+and push. Change `version` in `plugin.json` so installed copies offer an update: any text works,
+and Settings offers it whenever it differs from the installed one. Optional `tags` help search.
 
-1. Create or edit `plugins/<id>/` (`id` must equal the folder name; bump its version on every
-   change, so installed copies offer an update). The version can live in `plugin.json` or be
-   edited in `catalog.json` directly; they don't have to match, and the catalog keeps the higher
-   one. Optional `tags` help search.
-2. Run `node scripts/plugin-catalog.mjs` to rebuild `catalog.json` (a test fails if you forget).
+`plugins/catalog.json` only serves app versions up to 0.1.64, which read it (and check each file
+against its SHA-256); `node scripts/plugin-catalog.mjs` rebuilds it. Newer versions ignore it.
 
 [`plugins/example-hello`](../../plugins/example-hello) uses every manifest feature;
 [`plugins/secrets`](../../plugins/secrets) is a full plugin with a page and agent tools.
@@ -52,7 +51,7 @@ connection strings) are tested in `scripts/db-explorer.test.mjs` and
 |---|---|
 | `id` | Required. Lowercase letters, digits, `-` `_` `.`; must equal the folder name. |
 | `name` | Required. Shown in Settings. |
-| `version` | Optional. A store plugin needs a version in `plugin.json` or `catalog.json`; when the catalog's differs from the one installed, Settings shows "Update". |
+| `version` | Optional, any text. When the store's differs from the one installed, Settings shows "Update". |
 | `description`, `author`, `tags` | Shown in the store; searched. |
 | `providers` | Agent CLIs, same shape as [`src-tauri/resources/providers.json`](../../src-tauri/resources/providers.json). Ids must not clash with built-in agents or other plugins. |
 | `recipes` | `{ id, name, panes: [{ provider, prompt? }], preset?, url? }`; listed after your own recipes. |

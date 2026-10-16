@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Builds plugins/catalog.json, the plugin store's index: every plugin folder's manifest
-// fields plus each file's SHA-256, which the app checks when installing.
+// Builds plugins/catalog.json, the plugin store's index for app versions up to 0.1.64: every
+// plugin folder's manifest fields plus each file's SHA-256, which those versions check when
+// installing. Newer versions list the plugins/ folder itself and ignore this file.
 //
 // A plugin's catalog version needn't match its plugin.json: the catalog keeps its own and takes
 // plugin.json's only when that one is higher, so either can be bumped to publish an update.

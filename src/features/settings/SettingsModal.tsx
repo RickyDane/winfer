@@ -7,7 +7,7 @@ import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/v
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type CatalogEntry, type PluginInfo } from "@/features/plugins/plugins";
+import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type StoreEntry, type PluginInfo } from "@/features/plugins/plugins";
 import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
@@ -825,7 +825,7 @@ async function togglePlugin(plugin: PluginInfo, enabled: boolean) {
 }
 
 // The store's catalog, kept while the app runs so reopening the page is instant.
-let catalogCache: CatalogEntry[] | null = null;
+let catalogCache: StoreEntry[] | null = null;
 
 /** Opt-in: plugin page tabs in the title bar show only their icon. */
 function PageTabSettings() {
@@ -842,7 +842,7 @@ function PageTabSettings() {
 /** The plugin store: search, install, update, turn on/off and uninstall plugins. */
 function PluginSettings() {
   const { plugins, runtimeErrors } = usePlugins();
-  const [catalog, setCatalog] = useState<CatalogEntry[] | null>(catalogCache);
+  const [catalog, setCatalog] = useState<StoreEntry[] | null>(catalogCache);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -869,7 +869,7 @@ function PluginSettings() {
       setBusy(null);
     }
   };
-  const install = (entry: CatalogEntry, update: boolean) =>
+  const install = (entry: StoreEntry, update: boolean) =>
     run(entry.id, async () => {
       if (!update && !(await ask(trustWarning(entry.name), { title: `Install ${entry.name}`, kind: "warning", okLabel: "Install" }))) return;
       await installPlugin(entry.id);

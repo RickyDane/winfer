@@ -1,14 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCatalog, compareVersions } from "./plugin-catalog.mjs";
 
 describe("plugin store catalog", () => {
-  it("matches the plugins/ folder (run node scripts/plugin-catalog.mjs after changing a plugin)", () => {
-    expect(readFileSync(new URL("../plugins/catalog.json", import.meta.url), "utf8")).toBe(buildCatalog());
-  });
-
   it("doesn't require the catalog version to match plugin.json", () => {
     const root = mkdtempSync(join(tmpdir(), "winfer-catalog-"));
     const plugin = (id, manifest) => {

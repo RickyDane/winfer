@@ -6,7 +6,6 @@ import type { Channel } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import pkg from "../../package.json";
-import storeCatalog from "../../plugins/catalog.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
@@ -213,7 +212,7 @@ mockIPC(
       case "plugins_list":
         return structuredClone(mockPlugins);
       case "plugins_catalog":
-        return new Promise((resolve) => setTimeout(() => resolve(storeCatalog.plugins), 300));
+        return new Promise((resolve) => setTimeout(() => resolve(Object.values(storeManifests).map((m) => ({ description: "", tags: [], version: "", ...m }))), 300));
       case "plugins_install":
         return new Promise((resolve, reject) => setTimeout(() => {
           try {
@@ -333,10 +332,25 @@ mockIPC(
       case "usage_codex_context": {
         // Deterministic per folder, so each mock Codex pane shows its own fill.
         const used = 20 + ([...String(a.cwd)].reduce((n, c) => n + c.charCodeAt(0), 0) % 70);
-        return { usedPercent: used, tokens: Math.round(475_000 * used / 100), window: 475_000, at: Date.now() };
+        return { usedPercent: used, tokens: Math.round(475_000 * used / 100), window: 475_000, at: Date.now(), source: "mock.jsonl" };
       }
       case "usage_opencode_context":
-        return { usedPercent: 31, tokens: 81_265, window: 262_144, at: Date.now() };
+        return { usedPercent: 31, tokens: 81_265, window: 262_144, at: Date.now(), source: "mock" };
+      case "usage_context_breakdown": {
+        // Shares of the reported total, like the real estimate.
+        const total = Number(a.tokens);
+        const shares: [string, string, number][] = [
+          ["system", "System prompt", 0.05],
+          ["tools", "Tools", 0.22],
+          ["mcp", "MCP tools", 0.08],
+          ["instructions", "Memory & instructions", 0.1],
+          ["messages", "Your messages", 0.04],
+          ["replies", "Replies", 0.06],
+          ["toolCalls", "Tool calls", 0.12],
+          ["toolResults", "Tool results", 0.33],
+        ];
+        return shares.map(([kind, label, f]) => ({ kind, label, tokens: Math.round(total * f) }));
+      }
       case "usage_opencode_model":
         return { provider: "openai", model: "gpt-5.5", plan: true };
       case "usage_opencode":
