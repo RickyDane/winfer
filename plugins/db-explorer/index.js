@@ -30,6 +30,7 @@ const AGENT_CHARS = 12_000;
 /** What an agent sees of a schema or diagram, at most. */
 const AGENT_SCHEMA_CHARS = 16_000;
 const ROWS_MARK = "@@WINFER_ROWS";
+const FILE_MARK = "@@WINFER_FILE";
 /** Separates the columns of a key inside one cell of the catalog queries. */
 const US = "\u001f";
 
@@ -650,6 +651,12 @@ export function parseResult(output, kind, maxRows = Infinity) {
   return { columns, rows: rows.slice(0, maxRows), total, truncated: total > maxRows };
 }
 
+/** The output file named by a `toFile` command's output, or null. */
+export function outputFile(output) {
+  const match = new RegExp(`^${FILE_MARK} (.+)$`, "m").exec(String(output));
+  return match ? match[1].trim() : null;
+}
+
 /** The CLI's error message without the row marker. */
 export function errorText(output) {
   const text = String(output);
@@ -673,9 +680,10 @@ function delimiter(sql) {
  * The shell command that runs `sql` on a connection in a read-only session and prints its output
  * (the first `maxRows` rows plus the header, if given, with NULLs shown as NULL), then
  * `@@WINFER_ROWS <lines of output>`, exiting with the CLI's code. `conn` is `{ key, meta }` from
- * the vault.
+ * the vault. With `toFile`, a successful run's output stays in a temp file instead, named by
+ * `@@WINFER_FILE <path>` (vault.exec only returns the last 20,000 characters).
  */
-export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win = IS_WIN } = {}) {
+export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win = IS_WIN, toFile = false } = {}) {
   const { key, meta } = conn;
   const ms = Math.max(1, timeoutSec - 2) * 1000;
   const query = maxRows !== null;
@@ -729,9 +737,9 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
       sql,
       d,
       "c=$?",
-      query ? `head -n ${maxRows + 1} "$t"` : 'cat "$t"',
+      toFile ? `if [ $c -eq 0 ]; then printf '${FILE_MARK} %s\\n' "$t"; else cat "$t"; fi` : query ? `head -n ${maxRows + 1} "$t"` : 'cat "$t"',
       `printf '\\n${ROWS_MARK} %s\\n' "$(wc -l < "$t" | tr -d ' ')"`,
-      'rm -f "$t"',
+      toFile ? '[ $c -eq 0 ] || rm -f "$t"' : 'rm -f "$t"',
       "exit $c",
     ].join("\n");
   }
@@ -747,10 +755,12 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     ...env.map(([k, v]) => `$env:${k} = ${typeof v === "object" ? `$env:${v.secret}` : psq(v)}`),
     `$a = ${args.map(psArg).join(" + ' ' + ")}`,
     `$p = Start-Process -FilePath ${psq(program)} -ArgumentList $a -RedirectStandardInput $f.FullName -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName -NoNewWindow -Wait -PassThru`,
-    `Get-Content $o.FullName${query ? ` -TotalCount ${maxRows + 1}` : ""} -Encoding UTF8`,
+    toFile
+      ? `if ($p.ExitCode -eq 0) { "${FILE_MARK} " + $o.FullName } else { Get-Content $o.FullName -Encoding UTF8 }`
+      : `Get-Content $o.FullName${query ? ` -TotalCount ${maxRows + 1}` : ""} -Encoding UTF8`,
     "Get-Content $e.FullName -Encoding UTF8",
     `"\`n${ROWS_MARK} " + (Get-Content $o.FullName | Measure-Object -Line).Lines`,
-    "Remove-Item $f.FullName, $o.FullName, $e.FullName",
+    toFile ? "Remove-Item $f.FullName, $e.FullName; if ($p.ExitCode -ne 0) { Remove-Item $o.FullName }" : "Remove-Item $f.FullName, $o.FullName, $e.FullName",
     "exit $p.ExitCode",
   ].join("\n");
 }
@@ -1464,10 +1474,10 @@ function createStore(api) {
   }
 
   /** Runs `sql` as is; `{ code, timedOut, output }`, or throws why it couldn't. */
-  async function exec(conn, sql, { maxRows = null, timeoutSec = 60 } = {}) {
+  async function exec(conn, sql, { maxRows = null, timeoutSec = 60, toFile = false } = {}) {
     const kind = conn.meta.kind;
     const keys = kind === "postgres" || ((kind === "mysql" || kind === "mssql") && conn.meta.hasPassword) ? [conn.key] : [];
-    let command = buildCommand(conn, sql, { maxRows, timeoutSec });
+    let command = buildCommand(conn, sql, { maxRows, timeoutSec, toFile });
     if (IS_WIN) {
       // The catalog queries are too long for cmd: they go through a script file instead.
       const inline = powershell(command);
@@ -1507,10 +1517,19 @@ function createStore(api) {
 
   /** Runs one catalog query; resolves to `{ columns, rows }` (lower-case columns) or throws. */
   async function catalog(conn, sql, timeoutSec = 90) {
-    const r = await exec(conn, sql, { timeoutSec });
+    // A big schema's output is over vault.exec's 20,000 characters, so it's read from its file.
+    const r = await exec(conn, sql, { timeoutSec, toFile: true });
     if (r.timedOut) throw new Error(`Reading the schema stopped after ${timeoutSec} s.`);
     if (r.code !== 0) throw new Error(failure(conn, r.output));
-    const { columns, rows } = parseResult(r.output, conn.meta.kind);
+    const file = outputFile(r.output);
+    if (!file) throw new Error(`Reading the schema gave no output file.\n\n${errorText(r.output)}`);
+    let text;
+    try {
+      text = await api.readFile(file);
+    } finally {
+      void api.vault.exec({ command: IS_WIN ? `del /f /q "${file}"` : `rm -f ${shq(file)}`, cwd: "", keys: [], timeoutSec: 15 }).catch(() => {});
+    }
+    const { columns, rows } = parseResult(text.replace(/^\uFEFF/, ""), conn.meta.kind);
     return { columns: columns.map((c) => c.trim().toLowerCase()), rows };
   }
 

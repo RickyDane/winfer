@@ -9,6 +9,7 @@ import {
   introspectionSql,
   layout,
   measureTable,
+  outputFile,
   neighbourhood,
   parseConnection,
   parseConnectionString,
@@ -264,6 +265,17 @@ describe("SQL Server", () => {
   it("connects to a named instance through the browser service, or a port", () => {
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "localhost", instance: "SQLEXPRESS" } }, "SELECT 1", { win: false })).toContain("'-S' 'localhost\\SQLEXPRESS'");
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "db", instance: "A", port: 1500 } }, "SELECT 1", { win: false })).toContain("'-S' 'tcp:db,1500'");
+  });
+
+  it("keeps a catalog query's output in its temp file, as vault.exec only returns the end", () => {
+    const conn = { key: "DB_MS", meta: { kind: "mssql", host: "db", user: "sa", hasPassword: true } };
+    const sh = buildCommand(conn, "SELECT 1", { win: false, toFile: true });
+    expect(sh).toContain(`if [ $c -eq 0 ]; then printf '@@WINFER_FILE %s\\n' "$t"; else cat "$t"; fi`);
+    expect(sh).toContain('[ $c -eq 0 ] || rm -f "$t"');
+    const ps = buildCommand(conn, "SELECT 1", { win: true, toFile: true });
+    expect(ps).toContain('if ($p.ExitCode -eq 0) { "@@WINFER_FILE " + $o.FullName }');
+    expect(outputFile("@@WINFER_FILE /tmp/tmp.x1\r\n\n@@WINFER_ROWS 900\n")).toBe("/tmp/tmp.x1");
+    expect(outputFile("Login failed\n@@WINFER_ROWS 1")).toBeNull();
   });
 
   it("sends the catalog queries on Windows through a script file, as cmd can't take them", () => {
