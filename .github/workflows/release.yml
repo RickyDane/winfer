@@ -160,8 +160,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        # "legacy" lets GitHub pick by creation date and semver, so rebuilding an older tag by
-        # hand doesn't take "latest" away from a newer release.
+        # Explicitly, not "legacy": with legacy GitHub picks by creation date and semver, so every
+        # new release became latest the moment it was created, before its bundles were up.
+        # Rebuilding an older tag by hand leaves "latest" on the newer release.
         run: |
+          current=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          newest=$(printf '%s\n%s\n' "$current" "$TAG" | sed '/^$/d' | sort -V | tail -n1)
+          if [ "$newest" != "$TAG" ]; then
+            echo "$current is newer than $TAG; leaving it as latest"
+            exit 0
+          fi
           id=${{ needs.release.outputs.id }}
-          gh api -X PATCH "repos/${{ github.repository }}/releases/$id" -f make_latest=legacy >/dev/null
+          gh api -X PATCH "repos/${{ github.repository }}/releases/$id" -f make_latest=true >/dev/null

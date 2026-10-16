@@ -74,6 +74,10 @@ pub struct SpawnRequest {
     /// Skip the agent's permission prompts (its `autoApproveArgs`), from settings.
     #[serde(default)]
     auto_approve: bool,
+    /// A/B test baseline: start the agent without winfer's MCP tools, the browser, or the
+    /// user's own MCP servers and skills (see [`plain_args`]). Status hooks stay on.
+    #[serde(default)]
+    plain: bool,
     cols: u16,
     rows: u16,
 }
@@ -150,6 +154,16 @@ fn agent_args(
     args
 }
 
+/// Arguments that keep an agent from loading the user's own MCP servers and skills, for a
+/// plain A/B test run. Simple flags, so they're safe in the MCP position of [`agent_args`].
+fn plain_args(provider_id: &str) -> Vec<String> {
+    match provider_id {
+        "claude" => vec!["--strict-mcp-config".into(), "--disable-slash-commands".into()],
+        "codex" => vec!["-c".into(), "mcp_servers={}".into()],
+        _ => Vec::new(),
+    }
+}
+
 /// The command for a pane, and whether its start prompt has to be typed in rather than passed
 /// as an argument.
 fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBuilder, bool), String> {
@@ -161,10 +175,14 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
     let mut agent_env = Vec::new();
     let mut cmd = match &provider.command {
         Some(command) => {
-            let servers: Vec<_> = mcp::winfer_server(&req.pane_id)
-                .into_iter()
-                .chain(cdp_url.map(browser::playwright_server))
-                .collect();
+            let servers: Vec<_> = if req.plain {
+                Vec::new()
+            } else {
+                mcp::winfer_server(&req.pane_id)
+                    .into_iter()
+                    .chain(cdp_url.map(browser::playwright_server))
+                    .collect()
+            };
             let launcher = crate::env::launcher(command)
                 .ok_or_else(|| format!("{} isn't installed (no `{command}` on PATH)", provider.name))?;
             let mut cmd = CommandBuilder::new(&launcher.program);
@@ -196,6 +214,8 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             type_prompt = launcher.batch;
             let (mcp, hooks) = if launcher.batch {
                 (Vec::new(), Vec::new())
+            } else if req.plain {
+                (plain_args(&provider.id), hooks::provider_args(&provider.id))
             } else {
                 (mcp::agent_args(&provider.id, &servers), hooks::provider_args(&provider.id))
             };
@@ -269,7 +289,7 @@ pub fn pty_spawn(
 
     // Agents share the workspace browser (started on demand if one is installed).
     let cdp_url = match (&req.workspace_id, req.provider_id.as_str()) {
-        (Some(ws), provider) if provider != "shell" => {
+        (Some(ws), provider) if provider != "shell" && !req.plain => {
             app.state::<browser::BrowserManager>().cdp_url(&app, ws)
         }
         _ => None,
@@ -429,6 +449,7 @@ mod tests {
             prompt: None,
             model: None,
             auto_approve: false,
+            plain: false,
             cols: 80,
             rows: 24,
         };
@@ -516,6 +537,12 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plain_runs_skip_the_users_mcp_servers() {
+        assert_eq!(plain_args("claude"), ["--strict-mcp-config", "--disable-slash-commands"]);
+        assert_eq!(plain_args("codex"), ["-c", "mcp_servers={}"]);
+        assert!(plain_args("opencode").is_empty());
+    }
 
     #[test]
     fn login_env_has_path() {
@@ -534,6 +561,7 @@ mod tests {
             prompt: None,
             model: None,
             auto_approve: false,
+            plain: false,
             cols: 80,
             rows: 24,
         };

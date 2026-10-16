@@ -29,6 +29,8 @@ pub struct WorktreeDiff {
     /// Unified diff of committed + uncommitted changes since the branch point.
     pub diff: String,
     pub untracked: Vec<String>,
+    /// Lines in the untracked text files (new files the diff doesn't show).
+    pub untracked_lines: u64,
     /// Commits on the worktree branch that aren't on the base.
     pub ahead: u32,
     /// Uncommitted changes (tracked or untracked) in the worktree.
@@ -256,6 +258,7 @@ pub fn diff(info: &WorktreeInfo) -> Result<WorktreeDiff, String> {
         .lines()
         .map(String::from)
         .collect::<Vec<_>>();
+    let untracked_lines = untracked.iter().map(|f| text_lines(&path.join(f))).sum();
     let ahead = git(
         path,
         &["rev-list", "--count", &format!("{}..HEAD", info.base)],
@@ -266,9 +269,25 @@ pub fn diff(info: &WorktreeInfo) -> Result<WorktreeDiff, String> {
     Ok(WorktreeDiff {
         diff,
         untracked,
+        untracked_lines,
         ahead,
         dirty,
     })
+}
+
+/// Lines in a text file; 0 for binaries, unreadable and very large files.
+fn text_lines(file: &Path) -> u64 {
+    const MAX_BYTES: u64 = 2 * 1024 * 1024;
+    if std::fs::metadata(file).map_or(true, |m| !m.is_file() || m.len() > MAX_BYTES) {
+        return 0;
+    }
+    match std::fs::read(file) {
+        Ok(bytes) if !bytes.contains(&0) => {
+            let newlines = bytes.iter().filter(|&&b| b == b'\n').count() as u64;
+            newlines + u64::from(bytes.last().is_some_and(|&b| b != b'\n'))
+        }
+        _ => 0,
+    }
 }
 
 /// Merges the worktree branch into its base in the main checkout. Refuses instead of

@@ -431,7 +431,7 @@ mockIPC(
             ]
           : [];
       case "worktree_diff":
-        return { diff: SAMPLE_DIFF, untracked: ["test/subscription.e2e-spec.ts"], ahead: 2, dirty: false };
+        return { diff: SAMPLE_DIFF, untracked: ["test/subscription.e2e-spec.ts"], untrackedLines: 42, ahead: 2, dirty: false };
       case "worktree_merge":
         return "Merge made by the 'ort' strategy.";
       case "worktree_remove":
