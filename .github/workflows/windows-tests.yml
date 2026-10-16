@@ -5,7 +5,7 @@ name: windows tests
 on:
   push:
     branches: [main]
-    paths: ["src-tauri/**", ".github/workflows/windows-tests.yml"]
+    paths: ["src-tauri/**", ".github/workflows/windows-tests.yml", ".github/actions/sccache/**"]
   workflow_dispatch:
 
 concurrency:
@@ -15,6 +15,10 @@ concurrency:
 jobs:
   test:
     runs-on: avrea-windows-latest-2-vcpu
+    env:
+      RUSTC_WRAPPER: sccache
+      # sccache can't cache incrementally compiled crates.
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -23,12 +27,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
+      - uses: ./.github/actions/sccache
+      # The image has Visual Studio 2026, which whisper-rs-sys's CMake build only finds with
+      # CMake 4.2+.
+      - uses: lukka/get-cmake@v4.4.2
       - run: pnpm install --frozen-lockfile
       # tauri::generate_context! embeds the built frontend.
       - run: pnpm build
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --lib -- --nocapture
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

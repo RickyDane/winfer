@@ -1,0 +1,21 @@
+name: sccache
+description: Install sccache and start it against Avrea's WebDAV build cache.
+runs:
+  using: composite
+  steps:
+    - uses: mozilla-actions/sccache-action@v0.0.11
+      with:
+        version: v0.18.0
+    - name: Start sccache on the WebDAV backend
+      shell: bash
+      run: |
+        # Avrea injects the endpoint on its Linux runners; set it where it isn't.
+        if [ -z "${SCCACHE_WEBDAV_ENDPOINT:-}" ]; then
+          echo "SCCACHE_WEBDAV_ENDPOINT=http://cache.avrea.com:8290/sccache-build/webdav" >> "$GITHUB_ENV"
+          export SCCACHE_WEBDAV_ENDPOINT=http://cache.avrea.com:8290/sccache-build/webdav
+        fi
+        # The GHA backend would win over WebDAV, and it's ref-scoped like actions/cache.
+        unset SCCACHE_GHA_ENABLED SCCACHE_GHA_VERSION
+        echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+        sccache --start-server
+        sccache --show-stats | grep -i 'cache location'
