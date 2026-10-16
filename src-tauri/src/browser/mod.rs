@@ -42,8 +42,91 @@ struct TabsEvent {
 struct Screencast {
     /// Token from the view that started it, so a stale detach can't stop a newer screencast.
     attach_id: String,
+    target_id: String,
     session_id: String,
     channel: Channel,
+    sizing: Sizing,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewportEvent {
+    workspace_id: String,
+    target_id: String,
+    width: u32,
+    height: u32,
+}
+
+/// How long frames may still show a size we replaced (frames lag behind a resize).
+const STALE_SIZES: std::time::Duration = std::time::Duration::from_millis(1500);
+/// How often to check that emulation is still on (Playwright's disconnect clears it).
+const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The shown tab's page size. Agents (Playwright) resize the page with their own emulation:
+/// the panel adopts their size rather than fighting it, and keeps its scale and mobile flags.
+struct Sizing {
+    viewport: Viewport,
+    /// Sizes recently replaced, whose in-flight frames mustn't count as a resize.
+    replaced: Vec<(u32, u32, std::time::Instant)>,
+    last_check: Option<std::time::Instant>,
+}
+
+#[derive(Debug, PartialEq)]
+enum FrameAction {
+    None,
+    /// Something else resized the page: show it at this size.
+    Adopt(u32, u32),
+    /// Time to check our emulation is still applied.
+    Check,
+}
+
+impl Sizing {
+    fn new(viewport: Viewport) -> Self {
+        Self {
+            viewport,
+            replaced: Vec::new(),
+            last_check: None,
+        }
+    }
+
+    fn set(&mut self, viewport: Viewport) {
+        let now = std::time::Instant::now();
+        self.replaced.retain(|(_, _, at)| at.elapsed() < STALE_SIZES);
+        self.replaced
+            .push((self.viewport.width, self.viewport.height, now));
+        self.viewport = viewport;
+    }
+
+    /// What to do about a screencast frame with this `metadata`.
+    fn on_frame(&mut self, metadata: &Value) -> FrameAction {
+        let (Some(w), Some(h)) = (
+            metadata["deviceWidth"].as_f64(),
+            metadata["deviceHeight"].as_f64(),
+        ) else {
+            return FrameAction::None;
+        };
+        let (w, h) = (w.round() as u32, h.round() as u32);
+        let near = |a: u32, b: u32| a.abs_diff(b) <= 1;
+        if near(w, self.viewport.width) && near(h, self.viewport.height) {
+            if self.last_check.is_some_and(|t| t.elapsed() < CHECK_EVERY) {
+                return FrameAction::None;
+            }
+            self.last_check = Some(std::time::Instant::now());
+            return FrameAction::Check;
+        }
+        let stale = self.replaced.iter().any(|&(rw, rh, at)| {
+            at.elapsed() < STALE_SIZES && near(w, rw) && near(h, rh)
+        });
+        if stale || w == 0 || h == 0 {
+            return FrameAction::None;
+        }
+        self.set(Viewport {
+            width: w,
+            height: h,
+            ..self.viewport.clone()
+        });
+        FrameAction::Adopt(w, h)
+    }
 }
 
 struct Instance {
@@ -59,6 +142,10 @@ struct Instance {
     /// One attach per target even when the UI and target discovery race for it.
     attaching: Mutex<HashMap<String, Arc<OnceCell<String>>>>,
     screencast: Mutex<Option<Screencast>>,
+    /// Serializes attach/detach so a slow attach can't replace the screencast a newer one started.
+    attach_lock: tokio::sync::Mutex<()>,
+    /// The attach the panel wants now; older attaches still waiting on the lock give up.
+    wanted_attach: Mutex<Option<String>>,
     console: Mutex<HashMap<String, VecDeque<inspect::ConsoleEntry>>>,
     /// Browser contexts used for review screenshots; their pages never show up as tabs.
     hidden_contexts: Mutex<HashSet<String>>,
@@ -183,12 +270,24 @@ impl Instance {
                 let Some(session) = event.session_id.as_deref() else {
                     return;
                 };
-                let screencast = self.screencast.lock().unwrap();
-                if let Some(sc) = screencast.as_ref().filter(|sc| sc.session_id == session) {
+                let mut screencast = self.screencast.lock().unwrap();
+                if let Some(sc) = screencast.as_mut().filter(|sc| sc.session_id == session) {
                     if let Ok(bytes) = base64::engine::general_purpose::STANDARD
                         .decode(event.params["data"].as_str().unwrap_or_default())
                     {
                         let _ = sc.channel.send(InvokeResponseBody::Raw(bytes));
+                    }
+                    let action = sc.sizing.on_frame(&event.params["metadata"]);
+                    if action != FrameAction::None {
+                        let (instance, target, session, viewport) = (
+                            self.clone(),
+                            sc.target_id.clone(),
+                            session.to_string(),
+                            sc.sizing.viewport.clone(),
+                        );
+                        tauri::async_runtime::spawn(async move {
+                            instance.on_resized(action, target, session, viewport).await;
+                        });
                     }
                 }
                 drop(screencast);
@@ -201,6 +300,43 @@ impl Instance {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Follows up on a frame: re-applies our scale and mobile flags at an agent's new size and
+    /// tells the panel, or restores emulation that a disconnecting agent cleared.
+    async fn on_resized(&self, action: FrameAction, target: String, session: String, v: Viewport) {
+        let Some(cdp) = self.cdp.get() else {
+            return;
+        };
+        match action {
+            FrameAction::None => {}
+            FrameAction::Adopt(width, height) => {
+                let _ = apply_viewport(cdp, &target, &session, &v).await;
+                let _ = self.app.emit(
+                    "browser://viewport",
+                    ViewportEvent {
+                        workspace_id: self.workspace_id.clone(),
+                        target_id: target,
+                        width,
+                        height,
+                    },
+                );
+            }
+            FrameAction::Check => {
+                let ratio = cdp
+                    .call(
+                        "Runtime.evaluate",
+                        json!({ "expression": "devicePixelRatio", "returnByValue": true }),
+                        Some(&session),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r["result"]["value"].as_f64());
+                if ratio.is_some_and(|r| (r - v.device_scale_factor).abs() > 0.01) {
+                    let _ = apply_viewport(cdp, &target, &session, &v).await;
+                }
+            }
         }
     }
 
@@ -337,6 +473,8 @@ impl BrowserManager {
             sessions: Mutex::default(),
             attaching: Mutex::default(),
             screencast: Mutex::default(),
+            attach_lock: tokio::sync::Mutex::new(()),
+            wanted_attach: Mutex::default(),
             console: Mutex::default(),
             hidden_contexts: Mutex::default(),
         });
@@ -666,7 +804,7 @@ pub async fn browser_history(
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Viewport {
     width: u32,
@@ -675,7 +813,9 @@ pub struct Viewport {
     mobile: bool,
 }
 
-async fn apply_viewport(cdp: &Cdp, session: &str, v: &Viewport) -> Res<()> {
+/// Emulates `v` in the tab and sizes its window to match, so the page keeps its size when an
+/// agent's disconnect clears all emulation.
+async fn apply_viewport(cdp: &Cdp, target_id: &str, session: &str, v: &Viewport) -> Res<()> {
     cdp.call(
         "Emulation.setDeviceMetricsOverride",
         json!({ "width": v.width, "height": v.height, "deviceScaleFactor": v.device_scale_factor, "mobile": v.mobile }),
@@ -688,6 +828,19 @@ async fn apply_viewport(cdp: &Cdp, session: &str, v: &Viewport) -> Res<()> {
         Some(session),
     )
     .await?;
+    // Best effort: older browsers lack setContentsSize.
+    if let Ok(window) = cdp
+        .call("Browser.getWindowForTarget", json!({ "targetId": target_id }), None)
+        .await
+    {
+        let _ = cdp
+            .call(
+                "Browser.setContentsSize",
+                json!({ "windowId": window["windowId"], "width": v.width, "height": v.height }),
+                None,
+            )
+            .await;
+    }
     Ok(())
 }
 
@@ -703,7 +856,13 @@ pub async fn browser_attach(
     on_frame: Channel,
 ) -> Res<()> {
     let instance = instance(&app, &manager, &workspace_id).await?;
+    *instance.wanted_attach.lock().unwrap() = Some(attach_id.clone());
     let cdp = instance.cdp().await?;
+    let _guard = instance.attach_lock.lock().await;
+    // The panel moved on (another tab or device) while this waited.
+    if instance.wanted_attach.lock().unwrap().as_deref() != Some(attach_id.as_str()) {
+        return Ok(());
+    }
     let previous = instance.screencast.lock().unwrap().take();
     if let Some(prev) = previous {
         let _ = cdp
@@ -711,11 +870,13 @@ pub async fn browser_attach(
             .await;
     }
     let session = instance.session(&target_id).await?;
-    apply_viewport(&cdp, &session, &viewport).await?;
+    apply_viewport(&cdp, &target_id, &session, &viewport).await?;
     *instance.screencast.lock().unwrap() = Some(Screencast {
         attach_id,
+        target_id,
         session_id: session.clone(),
         channel: on_frame,
+        sizing: Sizing::new(viewport),
     });
     cdp.call(
         "Page.startScreencast",
@@ -741,6 +902,13 @@ pub async fn browser_detach(
     else {
         return Ok(());
     };
+    {
+        let mut wanted = instance.wanted_attach.lock().unwrap();
+        if wanted.as_deref() == Some(attach_id.as_str()) {
+            *wanted = None;
+        }
+    }
+    let _guard = instance.attach_lock.lock().await;
     let previous = {
         let mut current = instance.screencast.lock().unwrap();
         if current.as_ref().is_some_and(|sc| sc.attach_id == attach_id) {
@@ -768,7 +936,16 @@ pub async fn browser_resize(
     let instance = instance(&app, &manager, &workspace_id).await?;
     let session = instance.session(&target_id).await?;
     let cdp = instance.cdp().await?;
-    apply_viewport(&cdp, &session, &viewport).await
+    if let Some(sc) = instance
+        .screencast
+        .lock()
+        .unwrap()
+        .as_mut()
+        .filter(|sc| sc.session_id == session)
+    {
+        sc.sizing.set(viewport.clone());
+    }
+    apply_viewport(&cdp, &target_id, &session, &viewport).await
 }
 
 /// Forwards one input event; `event` is a CDP Input.* method name plus its params.
@@ -863,6 +1040,25 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn adopts_an_agents_size_but_not_stale_frames() {
+        let v = Viewport { width: 1000, height: 700, device_scale_factor: 2.0, mobile: false };
+        let frame = |w: u32, h: u32| json!({ "deviceWidth": w, "deviceHeight": h });
+        let mut sizing = Sizing::new(v.clone());
+        assert_eq!(sizing.on_frame(&frame(1000, 700)), FrameAction::Check);
+        assert_eq!(sizing.on_frame(&frame(1000, 700)), FrameAction::None, "checks are throttled");
+        assert_eq!(sizing.on_frame(&json!({})), FrameAction::None);
+
+        // The panel resized: frames at the old size are still in flight.
+        sizing.set(Viewport { width: 800, ..v.clone() });
+        assert_eq!(sizing.on_frame(&frame(1000, 700)), FrameAction::None);
+
+        // An agent resized: adopt it, keeping our scale, and ignore the panel's old size after.
+        assert_eq!(sizing.on_frame(&frame(500, 400)), FrameAction::Adopt(500, 400));
+        assert_eq!((sizing.viewport.width, sizing.viewport.device_scale_factor), (500, 2.0));
+        assert_eq!(sizing.on_frame(&frame(800, 700)), FrameAction::None);
+    }
 
     /// Real Chrome: a review screenshot loads the page in a throwaway context and returns a JPEG.
     #[test]

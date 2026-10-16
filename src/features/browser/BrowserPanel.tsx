@@ -1,7 +1,7 @@
 import { SideTerminal } from "@/features/terminal/SideTerminal";
 import { DevicePanel } from "@/features/android/DevicePanel";
 import { keysFor } from "@/commands/keymap";
-import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { DEFAULT_BROWSER_WIDTH, useWorkspaces } from "@/stores/workspaces";
@@ -16,6 +16,7 @@ import {
   openUrl,
   selectTab,
   setDevice,
+  setPageSize,
   shownWorkspaceId,
   togglePick,
   useBrowser,
@@ -37,6 +38,9 @@ const IconButton = ({ title, onClick, children }: { title: string; onClick: () =
     {children}
   </button>
 );
+
+/** A laptop-sized page to start from when giving the page its own size. */
+const DESKTOP_SIZE = { width: 1280, height: 800 };
 
 const MIN_WIDTH = 280;
 /** Room the terminals keep when the browser is dragged wide. */
@@ -76,7 +80,7 @@ export function BrowserResizer() {
 }
 
 export function BrowserPanel() {
-  const { availability, error, tabs: allTabs, activeTab, device: devices, focusUrlBar, console: logs, consoleOpen, picking, notice, shown } = useBrowser();
+  const { availability, error, tabs: allTabs, activeTab, device: devices, sizes, focusUrlBar, console: logs, consoleOpen, picking, notice, shown } = useBrowser();
   const workspaces = useWorkspaces((s) => s.workspaces);
   // Re-read on workspace switches until a tab pins the panel to a workspace.
   useWorkspaces((s) => s.activeWorkspaceId);
@@ -86,6 +90,7 @@ export function BrowserPanel() {
   const tabs = allTabs[workspaceId] ?? [];
   const active = tabs.find((t) => t.id === activeTab[workspaceId]) ?? null;
   const device = devices[workspaceId] ?? "desktop";
+  const size = active ? sizes[active.id] : undefined;
   const errors = active ? (logs[active.id] ?? []).filter((e) => e.level === "error").length : 0;
 
   useEffect(() => {
@@ -177,7 +182,7 @@ export function BrowserPanel() {
           <ArrowRight size={14} />
         </IconButton>
         <form
-          className="mx-1 flex h-7 flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 text-fg-subtle"
+          className="mx-1 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 text-fg-subtle"
           onSubmit={(e) => {
             e.preventDefault();
             if (address.trim()) void openUrl(address, { newTab: !active, workspaceId });
@@ -217,6 +222,22 @@ export function BrowserPanel() {
             </span>
           )}
         </button>
+        {active &&
+          (size ? (
+            <button
+              title={device === "mobile" ? "Back to the phone size" : "Fit the page to the panel"}
+              onClick={() => setPageSize(active.id, null)}
+              className="shrink-0 rounded px-1 py-0.5 font-mono text-[10px] text-fg-subtle tabular-nums hover:bg-hover hover:text-fg"
+            >
+              {size.width} × {size.height}
+            </button>
+          ) : (
+            device === "desktop" && (
+              <IconButton title="Give the page its own size (drag its edges to resize)" onClick={() => setPageSize(active.id, DESKTOP_SIZE)}>
+                <Proportions size={14} />
+              </IconButton>
+            )
+          ))}
         <IconButton title={device === "mobile" ? "Desktop view" : "Mobile view"} onClick={() => setDevice("toggle")}>
           {device === "mobile" ? <Smartphone size={14} /> : <Monitor size={14} />}
         </IconButton>
@@ -226,7 +247,7 @@ export function BrowserPanel() {
       {consoleOpen && active && <ConsoleList tabId={active.id} />}
 
       {availability === "ready" && active ? (
-        <BrowserView key={`${workspaceId}:${active.id}`} workspaceId={workspaceId} tabId={active.id} device={device} />
+        <BrowserView key={`${workspaceId}:${active.id}`} workspaceId={workspaceId} tabId={active.id} device={device} size={size} />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-xs text-fg-subtle">
           {availability === "missing" && (

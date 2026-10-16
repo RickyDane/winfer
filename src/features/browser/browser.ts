@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { useWorkspaces } from "@/stores/workspaces";
 import { pasteText } from "@/features/terminal/xtermRegistry";
 import { normalizeUrl } from "./url";
+import { followedTab } from "./follow";
 
 export { normalizeUrl };
 
@@ -21,6 +22,11 @@ export interface Tab {
 }
 
 export type Device = "desktop" | "mobile";
+
+export interface PageSize {
+  width: number;
+  height: number;
+}
 
 export interface ConsoleEntry {
   level: "error" | "warning" | "info" | "log";
@@ -36,6 +42,8 @@ interface BrowserState {
   tabs: Record<string, Tab[]>;
   activeTab: Record<string, string | null>;
   device: Record<string, Device>;
+  /** Page sizes set by dragging the page's edges or by an agent, per tab id; absent fits the panel. */
+  sizes: Record<string, PageSize>;
   /** Bumped to ask the URL bar to take focus (⌘L). */
   focusUrlBar: number;
   /** Console/network entries per tab id. */
@@ -54,6 +62,7 @@ export const useBrowser = create<BrowserState>(() => ({
   tabs: {},
   activeTab: {},
   device: {},
+  sizes: {},
   focusUrlBar: 0,
   console: {},
   consoleOpen: false,
@@ -77,15 +86,19 @@ function targetWorkspaceId() {
 }
 
 function setTabs(workspaceId: string, tabs: Tab[]) {
+  const ws = useWorkspaces.getState();
+  // Follow agents in the workspace the panel shows, or the one on screen.
+  const watched = workspaceId === shownWorkspaceId() || (ws.view === "workspace" && workspaceId === ws.activeWorkspaceId);
   useBrowser.setState((s) => {
     const current = s.activeTab[workspaceId];
     const stillOpen = tabs.some((t) => t.id === current);
+    const follow = watched ? followedTab(s.tabs[workspaceId], tabs, current) : undefined;
     // The shown workspace's last tab closed: show another workspace's tab instead of nothing.
     const other = tabs.length === 0 && s.shown === workspaceId ? Object.keys(s.tabs).find((id) => id !== workspaceId && s.tabs[id].length > 0) : undefined;
     return {
       tabs: { ...s.tabs, [workspaceId]: tabs },
-      activeTab: { ...s.activeTab, [workspaceId]: stillOpen ? current! : (tabs.at(-1)?.id ?? null) },
-      shown: other ?? s.shown,
+      activeTab: { ...s.activeTab, [workspaceId]: follow?.id ?? (stillOpen ? current! : (tabs.at(-1)?.id ?? null)) },
+      shown: follow ? workspaceId : (other ?? s.shown),
     };
   });
 }
@@ -95,6 +108,7 @@ function listenForTabs() {
   if (listening) return;
   listening = true;
   void listen<{ workspaceId: string; tabs: Tab[] }>("browser://tabs", ({ payload }) => setTabs(payload.workspaceId, payload.tabs));
+  void listen<{ targetId: string; width: number; height: number }>("browser://viewport", ({ payload }) => setPageSize(payload.targetId, payload));
   void listen<{ targetId: string; entry: ConsoleEntry }>("browser://console", ({ payload }) =>
     useBrowser.setState((s) => ({ console: { ...s.console, [payload.targetId]: [...(s.console[payload.targetId] ?? []), payload.entry].slice(-200) } })),
   );
@@ -298,10 +312,20 @@ export async function history(delta: -1 | 0 | 1) {
 
 export function setDevice(device: Device | "toggle") {
   const workspaceId = shownWorkspaceId();
+  const tabId = activeTabId(workspaceId);
+  if (tabId) setPageSize(tabId, null);
   useBrowser.setState((s) => {
     const current = s.device[workspaceId] ?? "desktop";
     const next = device === "toggle" ? (current === "desktop" ? "mobile" : "desktop") : device;
     return { device: { ...s.device, [workspaceId]: next } };
+  });
+}
+
+/** Gives a tab's page a fixed size, or (null) lets it fit the panel again. */
+export function setPageSize(tabId: string, size: PageSize | null) {
+  useBrowser.setState((s) => {
+    const { [tabId]: _, ...rest } = s.sizes;
+    return { sizes: size ? { ...rest, [tabId]: { width: Math.round(size.width), height: Math.round(size.height) } } : rest };
   });
 }
 

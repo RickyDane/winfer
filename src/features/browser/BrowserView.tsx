@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef } from "react";
-import type { Device } from "./browser";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { cn } from "@/lib/cn";
+import { setPageSize, type Device, type PageSize } from "./browser";
 
 const MOBILE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
 
@@ -24,24 +25,60 @@ const KEY_CODES: Record<string, number> = {
 
 const keyCode = (e: KeyboardEvent) => KEY_CODES[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase().charCodeAt(0) : 0);
 
+/** Smallest and largest page size the edges can be dragged to. */
+const MIN_SIZE = 200;
+const MAX_SIZE = 4096;
+/** Room around a sized page for its drag handles. */
+const GUTTER = 16;
+
+const clamp = (n: number) => Math.round(Math.min(Math.max(n, MIN_SIZE), MAX_SIZE));
+
 /**
  * Shows one tab via CDP screencast and forwards mouse, wheel and keyboard input.
- * The page is emulated at the panel's CSS size (desktop) or a phone size (mobile, scaled to fit).
+ * The page fits the panel, or has a size of its own (dragged, set by an agent, or a phone),
+ * scaled down to fit when the panel is smaller.
  */
-export function BrowserView({ workspaceId, tabId, device }: { workspaceId: string; tabId: string; device: Device }) {
+export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId: string; tabId: string; device: Device; size?: PageSize }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const viewport = useRef<Viewport | null>(null);
+  const attached = useRef(false);
+  const [panel, setPanel] = useState({ width: 0, height: 0 });
+
+  const own = size ?? (device === "mobile" ? MOBILE : null);
+  const page = own ?? panel;
+  const room = own ? { width: panel.width - 2 * GUTTER, height: panel.height - 2 * GUTTER } : panel;
+  const scale = own ? Math.min(1, room.width / page.width, room.height / page.height) : 1;
+
+  const target = (): Viewport => ({
+    width: Math.max(1, Math.round(page.width)),
+    height: Math.max(1, Math.round(page.height)),
+    deviceScaleFactor: device === "mobile" ? MOBILE.deviceScaleFactor : window.devicePixelRatio || 1,
+    mobile: device === "mobile",
+  });
+  const targetRef = useRef(target);
+  targetRef.current = target;
+
+  useLayoutEffect(() => {
+    const el = box.current!;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setPanel((p) => (p.width === Math.round(r.width) && p.height === Math.round(r.height) ? p : { width: Math.round(r.width), height: Math.round(r.height) }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
-    const el = box.current!;
     const cv = canvas.current!;
     const ctx = cv.getContext("2d")!;
     let disposed = false;
-    let attached = false;
     let decoding = false;
     let pending: ArrayBuffer | null = null;
     const attachId = crypto.randomUUID();
+    attached.current = false;
 
     const draw = async (buf: ArrayBuffer) => {
       if (decoding) {
@@ -67,39 +104,63 @@ export function BrowserView({ workspaceId, tabId, device }: { workspaceId: strin
       }
     };
 
-    const measure = (): Viewport => {
-      if (device === "mobile") return MOBILE;
-      const r = el.getBoundingClientRect();
-      return { width: Math.max(1, Math.round(r.width)), height: Math.max(1, Math.round(r.height)), deviceScaleFactor: window.devicePixelRatio || 1, mobile: false };
-    };
-
     const attach = async () => {
-      viewport.current = measure();
+      viewport.current = targetRef.current();
       const channel = new Channel<ArrayBuffer>();
       channel.onmessage = (buf) => !disposed && void draw(buf);
       await invoke("browser_attach", { workspaceId, targetId: tabId, viewport: viewport.current, attachId, onFrame: channel });
-      attached = true;
+      if (disposed) return;
+      attached.current = true;
+      // The size may have changed (panel opening, an agent) during the attach.
+      syncRef.current();
     };
-
-    let resizeTimer: number | undefined;
-    const observer = new ResizeObserver(() => {
-      if (device === "mobile" || !attached) return;
-      clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => {
-        viewport.current = measure();
-        void invoke("browser_resize", { workspaceId, targetId: tabId, viewport: viewport.current });
-      }, 80);
-    });
-    observer.observe(el);
     void attach().catch((err) => console.error("browser_attach failed", err));
 
     return () => {
       disposed = true;
-      observer.disconnect();
-      clearTimeout(resizeTimer);
+      attached.current = false;
       void invoke("browser_detach", { workspaceId, attachId });
     };
   }, [workspaceId, tabId, device]);
+
+  /** Sends the page size to the browser when it changed. */
+  const sync = () => {
+    const next = targetRef.current();
+    const v = viewport.current;
+    if (!attached.current || (v && v.width === next.width && v.height === next.height && v.deviceScaleFactor === next.deviceScaleFactor && v.mobile === next.mobile)) return;
+    viewport.current = next;
+    void invoke("browser_resize", { workspaceId, targetId: tabId, viewport: next });
+  };
+  const syncRef = useRef(sync);
+  syncRef.current = sync;
+
+  useEffect(() => {
+    if (page.width < 1 || page.height < 1) return;
+    const timer = window.setTimeout(() => syncRef.current(), 50);
+    return () => clearTimeout(timer);
+  }, [page.width, page.height]);
+
+  /** Drags the page's right edge, bottom edge or corner. The page stays centered, so it grows by twice the drag. */
+  const dragEdge = (axes: { x?: boolean; y?: boolean }) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const start = { x: e.clientX, y: e.clientY, width: page.width, height: page.height, scale };
+    const move = (ev: PointerEvent) =>
+      setPageSize(tabId, {
+        width: axes.x ? clamp(start.width + (2 * (ev.clientX - start.x)) / start.scale) : start.width,
+        height: axes.y ? clamp(start.height + (2 * (ev.clientY - start.y)) / start.scale) : start.height,
+      });
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      document.body.classList.remove("resizing");
+    };
+    document.body.style.cursor = axes.x && axes.y ? "nwse-resize" : axes.x ? "ew-resize" : "ns-resize";
+    document.body.classList.add("resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   // --- input ---------------------------------------------------------------------------------
 
@@ -183,23 +244,32 @@ export function BrowserView({ workspaceId, tabId, device }: { workspaceId: strin
     };
   });
 
+  const handle = "absolute rounded-full bg-border-strong opacity-70 transition-colors hover:bg-accent hover:opacity-100";
   return (
     <div
       ref={box}
       tabIndex={0}
-      className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-white outline-none"
-      style={{ background: device === "mobile" ? "var(--color-app)" : "white" }}
+      className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden outline-none"
+      style={{ background: own ? "var(--color-app)" : "white" }}
     >
-      <canvas
-        ref={canvas}
-        data-winfer-capture="browser"
-        onMouseDown={mouse("mousePressed")}
-        onMouseUp={mouse("mouseReleased")}
-        onMouseMove={onMove}
-        onContextMenu={(e) => e.preventDefault()}
-        className={device === "mobile" ? "max-h-full max-w-full rounded-xl border border-border-strong object-contain" : "h-full w-full"}
-        style={device === "mobile" ? { aspectRatio: `${MOBILE.width} / ${MOBILE.height}`, height: "100%" } : undefined}
-      />
+      <div className="relative shrink-0" style={own ? { width: page.width * scale, height: page.height * scale } : { width: "100%", height: "100%" }}>
+        <canvas
+          ref={canvas}
+          data-winfer-capture="browser"
+          onMouseDown={mouse("mousePressed")}
+          onMouseUp={mouse("mouseReleased")}
+          onMouseMove={onMove}
+          onContextMenu={(e) => e.preventDefault()}
+          className={cn("block h-full w-full bg-white", own && "ring-1 ring-border-strong", device === "mobile" && "rounded-xl")}
+        />
+        {own && (
+          <>
+            <div title="Drag to resize · double-click to fit the panel" onPointerDown={dragEdge({ x: true })} onDoubleClick={() => setPageSize(tabId, null)} className={cn(handle, "top-1/2 -right-2.5 h-10 w-1.5 -translate-y-1/2 cursor-ew-resize")} />
+            <div title="Drag to resize · double-click to fit the panel" onPointerDown={dragEdge({ y: true })} onDoubleClick={() => setPageSize(tabId, null)} className={cn(handle, "-bottom-2.5 left-1/2 h-1.5 w-10 -translate-x-1/2 cursor-ns-resize")} />
+            <div title="Drag to resize · double-click to fit the panel" onPointerDown={dragEdge({ x: true, y: true })} onDoubleClick={() => setPageSize(tabId, null)} className={cn(handle, "-right-2.5 -bottom-2.5 size-2.5 cursor-nwse-resize rounded-sm")} />
+          </>
+        )}
+      </div>
     </div>
   );
 }
