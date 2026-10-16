@@ -3,6 +3,8 @@ import {
   buildCommand,
   buildModel,
   checkReadOnly,
+  databaseOf,
+  databasesSql,
   describeModel,
   formatResult,
   inferRelations,
@@ -20,6 +22,7 @@ import {
   powershell,
   powershellFile,
   schemaSummary,
+  scopeKey,
   shortType,
   statementAt,
   stats,
@@ -27,6 +30,8 @@ import {
   toMermaidEr,
   toPlantUml,
   unindexedForeignKeys,
+  withDatabase,
+  msQuery,
 } from "../plugins/db-explorer/index.js";
 
 describe("checkReadOnly", () => {
@@ -319,10 +324,11 @@ describe("SQL Server", () => {
 
   it("runs queries rolled back, without variable substitution, with a separator", () => {
     const cmd = buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "db" } }, "SELECT 1", { win: false, maxRows: 100 });
-    expect(cmd).toContain("BEGIN TRANSACTION;\nSELECT 1\n;\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
+    expect(cmd).toContain("BEGIN TRANSACTION;\nSELECT N'@@WINFER_COLS'");
+    expect(cmd).toContain("\nSELECT 1\n;\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
     expect(cmd).toContain("'-x'");
     expect(cmd).toContain("'-s' '\x1f'");
-    expect(cmd).toContain('head -n 102 "$t"');
+    expect(cmd).toContain('head -n 106 "$t"');
     // The catalog queries run as they are.
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql" } }, introspectionSql("mssql").columns, { win: false, toFile: true })).not.toContain("BEGIN TRANSACTION");
   });
@@ -331,6 +337,24 @@ describe("SQL Server", () => {
     const out = "id  \x1fname       \x1fnote\n----\x1f-----------\x1f----\n   1\x1fAda        \x1fNULL\n   2\x1ftwo\nlines\x1fx\n\n@@WINFER_ROWS 5\n";
     expect(parseResult(out, "mssql", 100)).toMatchObject({ columns: ["id", "name", "note"], rows: [["1", "Ada", "NULL"], ["2", "two\nlines", "x"]], total: 2, truncated: false });
     expect(parseResult("n\n-\n1\n2\n@@WINFER_ROWS 50\n", "mssql", 2)).toMatchObject({ rows: [["1"], ["2"]], total: 48, truncated: true });
+  });
+
+  it("describes a query's columns first, quotes doubled", () => {
+    expect(msQuery("SELECT 'a' AS x")).toContain("sys.dm_exec_describe_first_result_set(N'SELECT ''a'' AS x', NULL, 0)");
+  });
+
+  it("parses a query's output with its line of column names (go-sqlcmd and sqlcmd 18 print no headers)", () => {
+    const out = "@@WINFER_COLS\x1fid\x1fname\x1fnote\n\n1\x1fAda\x1fNULL\n2\x1ftwo\nlines\x1fx\n3\x1fBo\x1flast\nline\n\n@@WINFER_ROWS 7\n";
+    expect(parseResult(out, "mssql", 100)).toMatchObject({ columns: ["id", "name", "note"], rows: [["1", "Ada", "NULL"], ["2", "two\nlines", "x"], ["3", "Bo", "last\nline"]], total: 3, truncated: false });
+    expect(parseResult("@@WINFER_COLS\x1fn\n\n1\n2\n@@WINFER_ROWS 50\n", "mssql", 2)).toMatchObject({ columns: ["n"], rows: [["1"], ["2"]], total: 48, truncated: true });
+  });
+
+  it("parses a query's output with the line of column names and sqlcmd's headers (sqlcmd 15)", () => {
+    const out = "winfer_cols   \n-----------   \n@@WINFER_COLS\x1fid\x1fname   \n\nid  \x1fname\n----\x1f----\n   1\x1fAda \n\n@@WINFER_ROWS 7\n";
+    expect(parseResult(out, "mssql", 100)).toMatchObject({ columns: ["id", "name"], rows: [["1", "Ada"]], total: 1 });
+    // The query couldn't be described: sqlcmd's names, or numbered columns.
+    expect(parseResult("@@WINFER_COLS\n\nid\x1fname\n--\x1f----\n1\x1fAda\n@@WINFER_ROWS 5\n", "mssql").columns).toEqual(["id", "name"]);
+    expect(parseResult("@@WINFER_COLS\n\n1\x1fAda\n@@WINFER_ROWS 3\n", "mssql").columns).toEqual(["column 1", "column 2"]);
   });
 
   it("parses sqlcmd output with padding and blank lines between result sets", () => {
@@ -530,5 +554,45 @@ describe("query mode", () => {
     expect(buildCommand({ key: "DB_X", meta: { kind: "postgres" } }, "SELECT 1", { maxRows: 5, win: false })).toContain("'-P' 'null=NULL'");
     expect(buildCommand({ key: "DB_X", meta: { kind: "postgres" } }, "SELECT 1", { win: false })).not.toContain("null=NULL");
     expect(buildCommand({ key: "DB_X", meta: { kind: "sqlite", path: "a.db" } }, "SELECT 1", { win: false })).toContain('cat "$t"');
+  });
+});
+
+describe("choosing a database on the server", () => {
+  const pg = { key: "DB_PG", meta: { kind: "postgres", database: "shop" } };
+  const my = { key: "DB_MY", meta: { kind: "mysql", host: "db", user: "me", database: "shop" } };
+  const ms = { key: "DB_MS", meta: { kind: "mssql", host: "db", user: "sa" } };
+  const lite = { key: "DB_LITE", meta: { kind: "sqlite", path: "a.db" } };
+
+  it("uses the URL's database until another is chosen", () => {
+    expect(databaseOf(pg)).toBe("shop");
+    expect(databaseOf(withDatabase(pg, "billing"))).toBe("billing");
+    expect(withDatabase(pg, "  ")).toBe(pg);
+    expect(withDatabase(lite, "other")).toBe(lite);
+    expect(databaseOf(lite)).toBe("");
+  });
+
+  it("keeps each database's schema apart", () => {
+    expect(scopeKey(pg)).toBe("DB_PG");
+    expect(scopeKey(withDatabase(pg, "shop"))).toBe("DB_PG");
+    expect(scopeKey(withDatabase(pg, "billing"))).toBe("DB_PG/billing");
+    expect(scopeKey(withDatabase(ms, "app"))).toBe("DB_MS/app");
+  });
+
+  it("reconnects psql to another database, quoting its name", () => {
+    expect(buildCommand(pg, "SELECT 1", { win: false })).not.toContain("\\connect");
+    const cmd = buildCommand(withDatabase(pg, "o'it\\s"), "SELECT 1", { win: false });
+    expect(cmd).toContain(`<<'WINFER_SQL'\n\\connect 'o''it\\\\s'\nSELECT 1\nWINFER_SQL\n`);
+    expect(() => buildCommand(withDatabase(pg, "a\nb"), "SELECT 1", { win: false })).toThrow(/control/);
+  });
+
+  it("passes the chosen database to mysql and sqlcmd", () => {
+    expect(buildCommand(withDatabase(my, "billing"), "SELECT 1", { win: false })).toContain(`'-u' 'me' 'billing'`);
+    expect(buildCommand(withDatabase(my, "-x"), "SELECT 1", { win: false })).toContain(`'--database=-x'`);
+    expect(buildCommand(withDatabase(ms, "app"), "SELECT 1", { win: false })).toContain(`'-d' 'app'`);
+  });
+
+  it("lists the server's databases with a read-only query", () => {
+    for (const kind of ["postgres", "mysql", "mssql"]) expect(checkReadOnly(databasesSql(kind), kind)).toBeNull();
+    expect(databasesSql("sqlite")).toBeNull();
   });
 });

@@ -24,6 +24,8 @@
 const IS_WIN = typeof navigator !== "undefined" && (/Win/i.test(navigator.platform ?? "") || /Windows/i.test(navigator.userAgent));
 const HISTORY = "winfer.db-explorer.history";
 const PAGE = "winfer.db-explorer.page";
+/** The database chosen per connection key on the page, when not the one in its URL. */
+const DATABASES = "winfer.db-explorer.databases";
 const LAYOUTS = "winfer.db-explorer.layout.";
 const PREFS = "winfer.db-explorer.diagram";
 const MAX_HISTORY = 200;
@@ -294,12 +296,20 @@ ORDER BY ${order};`;
 /** sqlcmd's column separator for queries: a character values don't have. */
 const MS_SEP = "\x1f";
 
+/** Starts the line of column names `msQuery` prints before a query's rows. */
+const MS_COLS = "@@WINFER_COLS";
+/** Lines before a query's rows at most: sqlcmd's header for MS_COLS, MS_COLS, a blank, sqlcmd's header. */
+const MS_HEAD_LINES = 6;
+
 /**
  * A query as sqlcmd runs it: in a transaction that's rolled back, so a write that got past
- * `checkReadOnly` is undone. NOCOUNT keeps "(n rows affected)" out of the output.
+ * `checkReadOnly` is undone. NOCOUNT keeps "(n rows affected)" out of the output. Its column
+ * names come first, on a line of their own: go-sqlcmd and sqlcmd 18 print no headers with -y 0.
  */
 export function msQuery(sql) {
-  return `SET NOCOUNT ON;\nSET XACT_ABORT ON;\nBEGIN TRANSACTION;\n${sql}\n;\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;`;
+  const names = `(SELECT STRING_AGG(COALESCE(name, N'(No column name)'), NCHAR(31)) WITHIN GROUP (ORDER BY column_ordinal) FROM sys.dm_exec_describe_first_result_set(N'${sql.replace(/'/g, "''")}', NULL, 0) WHERE is_hidden = 0 AND error_number IS NULL)`;
+  const cols = `SELECT N'${MS_COLS}' + COALESCE(NCHAR(31) + ${names}, N'') AS winfer_cols;`;
+  return `SET NOCOUNT ON;\nSET XACT_ABORT ON;\nBEGIN TRANSACTION;\n${cols}\n${sql}\n;\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;`;
 }
 
 SQL.mssql = Object.fromEntries(Object.entries(MS_PART).map(([tag, part]) => [tag, msCsv(tag, part)]));
@@ -673,7 +683,8 @@ export function parseResult(output, kind, maxRows = Infinity) {
   // A query's output has sqlcmd's header and dashed line; the catalog queries' doesn't, or heads
   // it with MS_COL (sqlcmd 15 prints headers with -y 0, go-sqlcmd and sqlcmd 18 don't).
   const [first = "", second = ""] = body.split("\n", 2);
-  if (kind === "mssql" && !first.startsWith(MS_COL) && /^[-\x1f \t]*-[-\x1f \t]*$/.test(second)) return parseSqlcmd(body, lines, maxRows);
+  if (kind === "mssql" && body.includes(MS_COLS)) return parseSqlcmd(body, lines, maxRows);
+  if (kind === "mssql" && !first.startsWith(MS_COL) && MS_DASHES.test(second)) return parseSqlcmd(body, lines, maxRows);
   // sqlcmd may pad lines, separate result sets with blank lines and head each with its own
   // column name and a dashed line.
   const all = kind === "mysql" ? parseTsv(body) : parseCsv(kind === "mssql" ? body.replace(MS_HEADER, "").replace(/[ \t]+$/gm, "") : body);
@@ -684,26 +695,49 @@ export function parseResult(output, kind, maxRows = Infinity) {
   return { columns, rows: rows.slice(0, maxRows), total, truncated: total > maxRows };
 }
 
+const MS_DASHES = /^[-\x1f \t]*-[-\x1f \t]*$/;
+
 /**
- * A query's sqlcmd output (`MS_SEP` between columns, padded): a header line, a dashed line, then
- * the rows. A value with a line break spans lines, so lines join until a row has every column.
+ * A query's sqlcmd output (`MS_SEP` between columns, padded): `msQuery`'s line of column names
+ * and, depending on the sqlcmd, its own header line and dashed line, then the rows. A value with a
+ * line break spans lines, so lines join until a row has every column.
  */
 function parseSqlcmd(body, lines, maxRows) {
-  const [head = "", , ...rest] = body.split("\n");
-  const columns = head.split(MS_SEP).map((c) => c.trim());
+  const all = body.split("\n");
+  let i = all.findIndex((l) => l.startsWith(MS_COLS));
+  let columns = [];
+  if (i >= 0) {
+    columns = all[i].trimEnd().split(MS_SEP).slice(1).map((c) => c.trim());
+    i++;
+    if (i < all.length && !all[i].trim()) i++;
+  } else i = 0;
+  // sqlcmd's own header: the names when describing the query found none, else skipped.
+  if (MS_DASHES.test(all[i + 1] ?? "") && (!columns.length || all[i].split(MS_SEP).length === columns.length)) {
+    if (!columns.length) columns = all[i].split(MS_SEP).map((c) => c.trim());
+    i += 2;
+  }
+  const head = i;
   const rows = [];
   let cur = null;
-  for (const line of rest) {
-    if (cur === null && !line.trim() && columns.length > 1) continue;
+  for (const line of all.slice(head)) {
+    // A line without a separator after a whole row: the rest of its last value.
+    if (cur === null && columns.length > 1 && rows.length && !line.includes(MS_SEP)) {
+      const last = rows[rows.length - 1];
+      last[last.length - 1] = `${last[last.length - 1]}\n${line}`.trimEnd();
+      continue;
+    }
+    if (cur === null && !line.trim() && columns.length !== 1) continue;
     cur = cur === null ? line : `${cur}\n${line}`;
-    if (cur.split(MS_SEP).length >= columns.length) {
+    if (!columns.length || cur.split(MS_SEP).length >= columns.length) {
       rows.push(cur.split(MS_SEP).map((c) => c.trim()));
       cur = null;
     }
   }
   if (cur !== null) rows.push(cur.split(MS_SEP).map((c) => c.trim()));
-  const complete = lines === null || Number.isNaN(lines) || lines <= maxRows + 2;
-  const total = complete ? rows.length : Math.max(rows.length, lines - 2);
+  // No names at all: number the columns.
+  if (!columns.length && rows.length) columns = Array.from({ length: Math.max(...rows.map((r) => r.length)) }, (_, n) => `column ${n + 1}`);
+  const complete = lines === null || Number.isNaN(lines) || lines <= maxRows + head;
+  const total = complete ? rows.length : Math.max(rows.length, lines - head);
   return { columns, rows: rows.slice(0, maxRows), total, truncated: total > maxRows };
 }
 
@@ -741,10 +775,12 @@ function delimiter(sql) {
  */
 export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win = IS_WIN, toFile = false } = {}) {
   const { key, meta } = conn;
+  const database = databaseOf(conn);
+  if (/[\x00-\x1f]/.test(database)) throw new Error("A database name can't hold control characters.");
   const ms = Math.max(1, timeoutSec - 2) * 1000;
   const query = maxRows !== null;
   // Lines before the rows: the header (and sqlcmd's dashed line under it).
-  const headLines = meta.kind === "mssql" ? 2 : 1;
+  const headLines = meta.kind === "mssql" ? MS_HEAD_LINES : 1;
   if (query && meta.kind === "mssql") sql = msQuery(sql);
   // [program, args, env] with `$KEY` standing for the secret, filled in per shell below.
   let program;
@@ -758,13 +794,16 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
       ["PGCONNECT_TIMEOUT", "10"],
       ["PGAPPNAME", "winfer-db-explorer"],
     ];
+    // The URL is a secret the command can't rewrite, so another database on the server is
+    // reached by reconnecting with its host, user, password and options (PGOPTIONS still applies).
+    if (database !== (meta.database ?? "")) sql = `\\connect '${database.replace(/\\/g, "\\\\").replace(/'/g, "''")}'\n${sql}`;
   } else if (meta.kind === "mysql") {
     program = "mysql";
     args = ["--batch", "--default-character-set=utf8mb4", "--connect-timeout=10", "--init-command=SET SESSION TRANSACTION READ ONLY"];
     if (meta.host) args.push("-h", meta.host);
     if (meta.port) args.push("-P", String(meta.port));
     if (meta.user) args.push("-u", meta.user);
-    if (meta.database) args.push(meta.database);
+    if (database) args.push(database.startsWith("-") ? `--database=${database}` : database);
     if (meta.hasPassword) env.push(["MYSQL_PWD", { secret: key }]);
   } else if (meta.kind === "mssql") {
     // -b: exit with an error code; -y 0: long values in full (not allowed with -h -1, so
@@ -775,7 +814,7 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     // -x: no $(variable) substitution, which could print the environment (the password).
     args = ["-S", server, "-b", "-x", "-y", "0", "-l", "10", "-K", "ReadOnly"];
     if (query) args.push("-s", MS_SEP, "-t", String(Math.max(1, timeoutSec - 2)));
-    if (meta.database) args.push("-d", meta.database);
+    if (database) args.push("-d", database);
     if (meta.user) args.push("-U", meta.user);
     else args.push("-E");
     if (meta.trustCert) args.push("-C");
@@ -1457,9 +1496,34 @@ const keyName = (text) => `DB_${String(text).toUpperCase().replace(/[^A-Z0-9_]+/
 const needsApproval = (conn) => conn.meta.approve !== false;
 
 /** "app@db.example.com:5432/app" — where a connection points, without its password. */
-function target(meta) {
+function target(meta, database = meta.database) {
   if (meta.kind === "sqlite") return meta.path;
-  return `${meta.user ? `${meta.user}@` : ""}${meta.host || "localhost"}${meta.port ? `:${meta.port}` : ""}${meta.database ? `/${meta.database}` : ""}`;
+  return `${meta.user ? `${meta.user}@` : ""}${meta.host || "localhost"}${meta.port ? `:${meta.port}` : ""}${database ? `/${database}` : ""}`;
+}
+
+/** The database a connection's commands use: the one chosen for it, else the one in its URL. */
+export function databaseOf(conn) {
+  return conn.meta.kind === "sqlite" ? "" : String(conn.database ?? conn.meta.database ?? "");
+}
+
+/** The connection on another database of the same server; as is for SQLite or no name. */
+export function withDatabase(conn, database) {
+  const name = String(database ?? "").trim();
+  return !name || conn.meta.kind === "sqlite" ? conn : { ...conn, database: name };
+}
+
+/** What a connection's schema and diagram layout are kept under: its key, plus a chosen database. */
+export function scopeKey(conn) {
+  const database = databaseOf(conn);
+  return database === String(conn.meta.database ?? "") ? conn.key : `${conn.key}/${database}`;
+}
+
+/** The query that lists the databases on a connection's server the user can open, one per row. */
+export function databasesSql(kind) {
+  if (kind === "postgres") return "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname";
+  if (kind === "mysql") return "SHOW DATABASES";
+  if (kind === "mssql") return "SELECT name FROM sys.databases WHERE HAS_DBACCESS(name) = 1 AND state = 0 ORDER BY name";
+  return null;
 }
 
 function describe(conn) {
@@ -1503,8 +1567,10 @@ function saveJson(key, value) {
  */
 function createStore(api) {
   let history = loadJson(HISTORY, []);
-  /** Per connection key: { state: "loading" | "ok" | "error", model?, error?, at?, promise? }. */
+  /** Per `scopeKey`: { state: "loading" | "ok" | "error", model?, error?, at?, promise? }. */
   const schemas = new Map();
+  /** Per connection key: the promise of the database names on its server. */
+  const databaseLists = new Map();
   const listeners = new Set();
   const emit = (event) => listeners.forEach((fn) => fn(event));
   let home = null;
@@ -1599,7 +1665,8 @@ function createStore(api) {
 
   /** Reads a connection's schema (cached unless `fresh`, or older than `maxAge` ms); resolves to the model. */
   async function load(conn, { fresh = false, maxAge = Infinity } = {}) {
-    const have = schemas.get(conn.key);
+    const scope = scopeKey(conn);
+    const have = schemas.get(scope);
     if (have && !fresh) {
       if (have.state === "ok" && Date.now() - have.at <= maxAge) return have.model;
       if (have.state === "loading") return have.promise;
@@ -1609,18 +1676,34 @@ function createStore(api) {
       const [columns, constraints, indexes] = await Promise.all([catalog(conn, sql.columns), catalog(conn, sql.constraints), catalog(conn, sql.indexes)]);
       return buildModel(conn.meta.kind, { columns, constraints, indexes });
     })();
-    schemas.set(conn.key, { state: "loading", promise });
+    schemas.set(scope, { state: "loading", promise });
     emit({ type: "schema", key: conn.key });
     try {
       const model = await promise;
-      schemas.set(conn.key, { state: "ok", model, at: Date.now() });
+      schemas.set(scope, { state: "ok", model, at: Date.now() });
       emit({ type: "schema", key: conn.key });
       return model;
     } catch (err) {
-      schemas.set(conn.key, { state: "error", error: String(err?.message ?? err) });
+      schemas.set(scope, { state: "error", error: String(err?.message ?? err) });
       emit({ type: "schema", key: conn.key });
       throw err;
     }
+  }
+
+  /** The names of the databases on a connection's server (cached unless `fresh`); [] for SQLite. */
+  function databases(conn, { fresh = false } = {}) {
+    const sql = databasesSql(conn.meta.kind);
+    if (!sql) return Promise.resolve([]);
+    if (!fresh && databaseLists.has(conn.key)) return databaseLists.get(conn.key);
+    // On the connection's own database: a chosen one may be gone.
+    const base = { key: conn.key, meta: conn.meta };
+    const promise = run(base, sql, { maxRows: 5000, timeoutSec: 30 }).then((res) => {
+      if (!res.ok) throw new Error(res.error);
+      return res.result.rows.map((r) => String(r[0] ?? "")).filter(Boolean);
+    });
+    databaseLists.set(conn.key, promise);
+    promise.catch(() => databaseLists.get(conn.key) === promise && databaseLists.delete(conn.key));
+    return promise;
   }
 
   function record(entry) {
@@ -1641,15 +1724,19 @@ function createStore(api) {
     exec,
     run,
     load,
-    schema: (key) => schemas.get(key) ?? null,
-    forget: (key) => schemas.delete(key),
+    databases,
+    schema: (conn) => schemas.get(scopeKey(conn)) ?? null,
+    forget(key) {
+      for (const scope of [...schemas.keys()]) if (scope === key || scope.startsWith(`${key}/`)) schemas.delete(scope);
+      databaseLists.delete(key);
+    },
     record,
     clearHistory,
     history: () => history,
     /** A table the diagram shows when it next opens: `{ key, table }`. */
     pending: null,
     /** Asks the open page to show a table on the diagram. */
-    focus: (key, table) => emit({ type: "focus", key, table }),
+    focus: (key, table, database) => emit({ type: "focus", key, table, database }),
     emit,
     subscribe(fn) {
       listeners.add(fn);
@@ -1664,12 +1751,26 @@ const relationsFor = (model) => [...model.relations, ...(prefs().inferred ? infe
 export function activate(api) {
   const store = createStore(api);
   const clampRows = (v, def) => Math.min(5000, Math.max(1, Math.round(Number(v)) || def));
+  /** The connection an agent named, on the database it named (default: the one in its URL). */
+  const resolve = async (args) => withDatabase(await store.find(args.connection), args.database);
+  const databaseArg = { type: "string", description: "Another database on the same server, from db_list with this connection (optional; default: the connection's own)" };
+  const label = (conn) => `${conn.meta.name || conn.key}${conn.database ? ` (database ${conn.database})` : ""}`;
 
   api.registerAgentTool({
     name: "db_list",
-    description: "List the databases the user connected in winfer (Postgres, MySQL, SQLite, SQL Server), by name, with kind, host and database. Credentials are never shown. Read their structure with db_schema, query them read-only with db_query, draw them with db_diagram.",
-    inputSchema: { type: "object", properties: {} },
-    async run() {
+    description: "List the databases the user connected in winfer (Postgres, MySQL, SQLite, SQL Server), by name, with kind, host and database. Credentials are never shown. With `connection`, list the databases on that connection's server instead; pass one as `database` to the other tools to use it. Read their structure with db_schema, query them read-only with db_query, draw them with db_diagram.",
+    inputSchema: {
+      type: "object",
+      properties: { connection: { type: "string", description: "List the databases on this connection's server (optional)" } },
+    },
+    async run(args) {
+      if (args?.connection) {
+        const conn = await store.find(args.connection);
+        if (conn.meta.kind === "sqlite") return `${conn.key} is a SQLite file: it is one database.`;
+        const names = await store.databases(conn, { fresh: true });
+        const own = String(conn.meta.database ?? "");
+        return names.length ? names.map((n) => (n === own ? `${n} (default)` : n)).join("\n") : "The server lists no databases you can open.";
+      }
       const all = await store.connections();
       if (all.length === 0) return "No databases connected yet. Ask the user to add one on winfer's Databases page.";
       return all.map(describe).join("\n");
@@ -1684,22 +1785,24 @@ export function activate(api) {
       type: "object",
       properties: {
         connection: { type: "string", description: "Connection name or key from db_list, e.g. DB_MAIN" },
+        database: databaseArg,
         table: { type: "string", description: "Only this table, in full (optional)" },
       },
       required: ["connection"],
     },
     async run(args, caller) {
-      const conn = await store.find(args.connection);
+      const conn = await resolve(args);
+      const db = conn.database;
       const table = args.table ? String(args.table) : "";
       const started = Date.now();
       let model;
       try {
         model = await store.load(conn, { maxAge: 60_000 });
       } catch (err) {
-        store.record({ conn: conn.key, sql: `-- schema${table ? ` of ${table}` : ""}`, by: caller.label, error: String(err?.message ?? err), ms: Date.now() - started, schema: true });
+        store.record({ conn: conn.key, db, sql: `-- schema${table ? ` of ${table}` : ""}`, by: caller.label, error: String(err?.message ?? err), ms: Date.now() - started, schema: true });
         throw err;
       }
-      store.record({ conn: conn.key, sql: `-- schema${table ? ` of ${table}` : ""}`, by: caller.label, rows: model.tables.length, ms: Date.now() - started, schema: true });
+      store.record({ conn: conn.key, db, sql: `-- schema${table ? ` of ${table}` : ""}`, by: caller.label, rows: model.tables.length, ms: Date.now() - started, schema: true });
       if (model.tables.length === 0) return "The database has no tables.";
       const relations = relationsFor(model);
       const text = table ? describeModel(model, relations, table) : schemaSummary(model, relations);
@@ -1715,25 +1818,27 @@ export function activate(api) {
       type: "object",
       properties: {
         connection: { type: "string", description: "Connection name or key from db_list" },
+        database: databaseArg,
         sql: { type: "string", description: "One read-only SQL statement" },
         max_rows: { type: "integer", description: "Return at most this many rows (default 100, max 5000)" },
       },
       required: ["connection", "sql"],
     },
     async run(args, caller) {
-      const conn = await store.find(args.connection);
+      const conn = await resolve(args);
+      const db = conn.database;
       const sql = String(args.sql ?? "").trim().replace(/;\s*$/, "");
       const problem = checkReadOnly(sql, conn.meta.kind);
       if (problem) throw new Error(problem);
       if (needsApproval(conn)) {
-        const ok = await api.confirm(`${caller.label} in “${caller.workspaceName}” wants to query ${conn.meta.name || conn.key} (read-only):\n\n${sql}`, { title: "Allow database query?", okLabel: "Run query", kind: "info" });
+        const ok = await api.confirm(`${caller.label} in “${caller.workspaceName}” wants to query ${label(conn)} (read-only):\n\n${sql}`, { title: "Allow database query?", okLabel: "Run query", kind: "info" });
         if (!ok) {
-          store.record({ conn: conn.key, sql, by: caller.label, error: "Declined by you", ms: 0 });
+          store.record({ conn: conn.key, db, sql, by: caller.label, error: "Declined by you", ms: 0 });
           throw new Error("The user declined this query.");
         }
       }
       const res = await store.run(conn, sql, { maxRows: clampRows(args.max_rows, 100) });
-      store.record({ conn: conn.key, sql, by: caller.label, rows: res.ok ? res.result.total : undefined, error: res.ok ? undefined : res.error, ms: res.ms });
+      store.record({ conn: conn.key, db, sql, by: caller.label, rows: res.ok ? res.result.total : undefined, error: res.ok ? undefined : res.error, ms: res.ms });
       if (!res.ok) throw new Error(res.error);
       const { result } = res;
       return `${plural(result.total, "row")} in ${res.ms} ms\n\n${formatResult(result)}`;
@@ -1747,6 +1852,7 @@ export function activate(api) {
       type: "object",
       properties: {
         connection: { type: "string", description: "Connection name or key from db_list" },
+        database: databaseArg,
         format: { type: "string", enum: ["mermaid-er", "mermaid-class", "plantuml"], description: "Default mermaid-er" },
         table: { type: "string", description: "Only this table and its neighbours (optional)" },
         depth: { type: "number", description: "How many relations away from `table` to include (default 1)" },
@@ -1755,7 +1861,7 @@ export function activate(api) {
       required: ["connection"],
     },
     async run(args) {
-      const conn = await store.find(args.connection);
+      const conn = await resolve(args);
       const model = await store.load(conn, { maxAge: 60_000 });
       const relations = relationsFor(model);
       let ids = null;
@@ -1766,9 +1872,9 @@ export function activate(api) {
         ids = neighbourhood(model, relations, t.id, Math.max(0, Math.min(5, Math.round(Number(args.depth ?? 1)) || 0)));
       }
       if (args.show) {
-        store.pending = { key: conn.key, table: args.table ?? null };
+        store.pending = { key: conn.key, table: args.table ?? null, database: databaseOf(conn) };
         api.openPage("db");
-        store.focus(conn.key, args.table ?? null);
+        store.focus(conn.key, args.table ?? null, databaseOf(conn));
       }
       const format = args.format ?? "mermaid-er";
       const text = format === "plantuml" ? toPlantUml(model, relations, ids) : format === "mermaid-class" ? toMermaidClass(model, relations, ids) : toMermaidEr(model, relations, ids);
@@ -2152,6 +2258,8 @@ function mountPage(root, api, store) {
     store,
     conns: [],
     selected: saved.conn ?? null,
+    /** Per connection key: the database chosen in the header. */
+    databases: loadJson(DATABASES, {}),
     view: saved.view === "diagram" ? "diagram" : "query",
     /** Query editor text per connection, kept while the app runs. */
     drafts: new Map(),
@@ -2159,14 +2267,33 @@ function mountPage(root, api, store) {
     last: null,
     /** Set to run the editor's text when the Query view opens. */
     autorun: false,
-    current: () => ctx.conns.find((c) => c.key === ctx.selected) ?? null,
+    /** The selected connection, on the database chosen for it. */
+    current() {
+      const c = ctx.conns.find((x) => x.key === ctx.selected);
+      return c ? withDatabase(c, ctx.databases[c.key]) : null;
+    },
     select(key) {
       ctx.selected = key;
       saveJson(PAGE, { conn: key, view: ctx.view });
       renderHeader();
     },
-    /** Set by the open view: how it switches to another connection and reads the schema again. */
+    /** Remembers the database to use for a connection; its URL's one (or none) forgets the choice. */
+    chooseDatabase(key, database) {
+      const c = ctx.conns.find((x) => x.key === key);
+      if (!database || (c && database === (c.meta.database ?? ""))) delete ctx.databases[key];
+      else ctx.databases[key] = database;
+      saveJson(DATABASES, ctx.databases);
+    },
+    /** Switches the selected connection to another database on its server. */
+    useDatabase(database) {
+      if (!ctx.selected) return;
+      ctx.chooseDatabase(ctx.selected, database);
+      renderHeader();
+      ctx.onDatabase?.();
+    },
+    /** Set by the open view: how it switches to another connection or database and reads the schema again. */
     onSelect: null,
+    onDatabase: null,
     onReload: null,
     /** The views call it when `conns` changed. */
     renderHeader: () => renderHeader(),
@@ -2199,7 +2326,11 @@ function mountPage(root, api, store) {
         await api.vault.delete(c.key);
         store.forget(c.key);
         ctx.drafts.delete(c.key);
-        localStorage.removeItem(LAYOUTS + c.key);
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k === LAYOUTS + c.key || k?.startsWith(`${LAYOUTS}${c.key}/`)) localStorage.removeItem(k);
+        }
+        ctx.chooseDatabase(c.key, "");
       } catch (err) {
         api.toast(String(err?.message ?? err), "error");
       }
@@ -2224,6 +2355,11 @@ function mountPage(root, api, store) {
     title: "Connection",
     onchange: (e) => (ctx.onSelect ? ctx.onSelect(e.target.value) : ctx.select(e.target.value)),
   });
+  const dbSelect = h("select", {
+    class: "db-select",
+    title: "Database on this server",
+    onchange: (e) => ctx.useDatabase(e.target.value),
+  });
   const subtitle = h("span", {});
   const access = h("span", {});
   const iconBtn = (name, title, onclick, extra = "") => h("button", { class: `db-icon-btn ${extra}`, title, "aria-label": title, onclick }, icon(name));
@@ -2231,8 +2367,13 @@ function mountPage(root, api, store) {
     "div",
     { class: "db-top-conn" },
     connSelect,
+    dbSelect,
     access,
-    iconBtn("refresh", "Read the schema again", () => ctx.onReload?.()),
+    iconBtn("refresh", "Read the schema and the server's databases again", () => {
+      const c = ctx.current();
+      if (c) void store.databases(c, { fresh: true }).then(renderDatabases, () => renderDatabases());
+      ctx.onReload?.();
+    }),
     iconBtn("pencil", "Edit connection", () => ctx.current() && ctx.openEditor(ctx.current())),
     iconBtn("trash", "Remove connection", () => ctx.current() && ctx.remove(ctx.current()), "db-bad"),
   );
@@ -2254,7 +2395,8 @@ function mountPage(root, api, store) {
     connTools.style.display = ctx.conns.length ? "" : "none";
     connSelect.replaceChildren(...ctx.conns.map((x) => h("option", { value: x.key, selected: x.key === ctx.selected }, `${x.meta.name || x.key} · ${KINDS[x.meta.kind].short}`)));
     connSelect.value = ctx.selected ?? "";
-    subtitle.textContent = c ? target(c.meta) : "Browse, query and draw your databases. Agents use them by name and never see the credentials.";
+    renderDatabases();
+    subtitle.textContent = c ? target(c.meta, databaseOf(c)) : "Browse, query and draw your databases. Agents use them by name and never see the credentials.";
     subtitle.title = subtitle.textContent;
     access.replaceChildren(
       !c
@@ -2266,6 +2408,28 @@ function mountPage(root, api, store) {
     switchSlot.replaceChildren(ctx.viewSwitch());
   }
 
+  /** The database picker: the chosen database at once, the others once the server lists them. */
+  function renderDatabases() {
+    const c = ctx.current();
+    dbSelect.style.display = c && databasesSql(c.meta.kind) ? "" : "none";
+    if (!c || !databasesSql(c.meta.kind)) return;
+    const fill = (names, note = "") => {
+      const chosen = databaseOf(c);
+      const all = chosen && !names.includes(chosen) ? [chosen, ...names] : names;
+      dbSelect.replaceChildren(
+        ...(chosen ? [] : [h("option", { value: "", disabled: true, selected: true }, "Choose a database")]),
+        ...all.map((name) => h("option", { value: name, selected: name === chosen }, name)),
+      );
+      dbSelect.value = chosen;
+      dbSelect.title = note || "Database on this server";
+    };
+    fill([], "Listing the server's databases…");
+    store.databases(c).then(
+      (names) => ctx.selected === c.key && fill(names),
+      (err) => ctx.selected === c.key && fill([], `Couldn't list the server's databases:\n${String(err?.message ?? err)}`),
+    );
+  }
+
   const style = h("style", {}, CSS);
   const view = h("div", { class: "db-view" });
   const host = h("div", { class: "db-host" }, top, view);
@@ -2274,7 +2438,7 @@ function mountPage(root, api, store) {
 
   function show() {
     unmount?.();
-    ctx.onSelect = ctx.onReload = null;
+    ctx.onSelect = ctx.onDatabase = ctx.onReload = null;
     view.replaceChildren();
     host.className = `db-host db-host-${ctx.view}`;
     renderHeader();
@@ -2532,7 +2696,7 @@ function mountQuery(root, ctx) {
     const res = await store.run(conn, sql, { maxRows });
     running = false;
     ctx.last = { conn: conn.key, ...res };
-    store.record({ conn: conn.key, sql, by: "you", rows: res.ok ? res.result.total : undefined, error: res.ok ? undefined : res.error, ms: res.ms });
+    store.record({ conn: conn.key, db: databaseOf(conn) || undefined, sql, by: "you", rows: res.ok ? res.result.total : undefined, error: res.ok ? undefined : res.error, ms: res.ms });
     renderMain();
   }
 
@@ -2596,6 +2760,11 @@ function mountQuery(root, ctx) {
 
   page.append(problem, body);
   ctx.onSelect = select;
+  ctx.onDatabase = () => {
+    openTables.clear();
+    render();
+    if (current()) void loadSchema(current());
+  };
   ctx.onReload = () => current() && loadSchema(current(), true);
 
   const grid = h(
@@ -2619,7 +2788,7 @@ function mountQuery(root, ctx) {
 
   function renderSide() {
     const conn = current();
-    const schema = conn ? store.schema(conn.key) : null;
+    const schema = conn ? store.schema(conn) : null;
     const tables = schema?.state === "ok" ? schema.model.tables.filter((t) => t.kind !== "external") : [];
     schemaLabel.replaceChildren(
       "Tables",
@@ -2766,7 +2935,7 @@ function mountQuery(root, ctx) {
                 h(
                   "div",
                   { class: "db-history-meta" },
-                  `${it.by === "you" ? "You" : it.by} · ${ago(it.at)} · `,
+                  `${it.by === "you" ? "You" : it.by}${it.db ? ` · ${it.db}` : ""} · ${ago(it.at)} · `,
                   it.error ? h("span", { class: "db-bad" }, it.error.split("\n")[0].slice(0, 120)) : it.schema ? `${plural(it.rows ?? 0, "table")} in ${(it.ms ?? 0).toLocaleString()} ms` : `${plural(it.rows ?? 0, "row")} in ${(it.ms ?? 0).toLocaleString()} ms`,
                 ),
               ),
@@ -2909,6 +3078,12 @@ function mountDiagram(root, ctx) {
   const body = h("div", { class: "sd-body" }, canvas, side);
   const shell = h("div", { style: "display:contents" }, tools, body);
   ctx.onSelect = (key) => select(key);
+  ctx.onDatabase = () => {
+    selectedTable = null;
+    schemaFilter = "";
+    render();
+    if (current()) void load(current(), false);
+  };
   ctx.onReload = () => current() && load(current(), true);
 
   // Data ----------------------------------------------------------------------------------------
@@ -2921,7 +3096,10 @@ function mountDiagram(root, ctx) {
     }
     const want = store.pending;
     store.pending = null;
-    if (want && ctx.conns.some((c) => c.key === want.key)) ctx.select(want.key);
+    if (want && ctx.conns.some((c) => c.key === want.key)) {
+      if (want.database) ctx.chooseDatabase(want.key, want.database);
+      ctx.select(want.key);
+    }
     if (!current()) ctx.select(ctx.conns[0]?.key ?? null);
     render();
     if (current()) await load(current(), false, want?.table ?? null);
@@ -2935,7 +3113,7 @@ function mountDiagram(root, ctx) {
     } catch {
       // The store keeps the error; showModel shows it.
     }
-    if (conn.key !== ctx.selected) return;
+    if (conn.key !== ctx.selected || scopeKey(conn) !== scopeKey(current())) return;
     showModel(true);
     if (focusName) focusByName(focusName);
   }
@@ -2959,7 +3137,7 @@ function mountDiagram(root, ctx) {
   /** Puts the current connection's model (or its loading state / error) on the canvas. */
   function showModel(fitAfter = false) {
     const conn = current();
-    const st = conn ? store.schema(conn.key) : null;
+    const st = conn ? store.schema(conn) : null;
     if (!st || st.state === "loading") {
       model = null;
       note.replaceChildren(h("div", { class: "sd-spinner" }), `Reading the schema of ${conn?.meta.name ?? "the database"}…`);
@@ -2979,7 +3157,7 @@ function mountDiagram(root, ctx) {
     const fresh = model !== st.model;
     model = st.model;
     if (model.tables.length === 0) {
-      note.replaceChildren(h("b", { style: "color:var(--color-fg)" }, "No tables"), (conn.meta.kind === "mysql" || conn.meta.kind === "mssql") && !conn.meta.database ? `The URL names no database: add one after the port, like ${KINDS[conn.meta.kind].placeholder}.` : "This database has no tables or views yet.");
+      note.replaceChildren(h("b", { style: "color:var(--color-fg)" }, "No tables"), (conn.meta.kind === "mysql" || conn.meta.kind === "mssql") && !databaseOf(conn) ? "No database chosen: pick one of the server's databases at the top." : "This database has no tables or views yet.");
       note.className = "sd-note";
       note.style.display = "";
       clearDiagram();
@@ -2988,7 +3166,7 @@ function mountDiagram(root, ctx) {
     }
     note.style.display = "none";
     if (fresh) {
-      manual = loadJson(LAYOUTS + conn.key, {});
+      manual = loadJson(LAYOUTS + scopeKey(conn), {});
       rebuildRelations();
       if (schemaFilter && !model.schemas.includes(schemaFilter)) schemaFilter = "";
       // Many schemas: start on the biggest that isn't empty, usually "public".
@@ -3021,7 +3199,7 @@ function mountDiagram(root, ctx) {
     const conn = current();
     if (!conn) return;
     manual = {};
-    localStorage.removeItem(LAYOUTS + conn.key);
+    localStorage.removeItem(LAYOUTS + scopeKey(conn));
     relayout(true);
   }
 
@@ -3297,7 +3475,7 @@ function mountDiagram(root, ctx) {
     if (drag) {
       if (drag.moved) {
         manual[drag.id] = positions.get(drag.id);
-        if (current()) saveJson(LAYOUTS + current().key, manual);
+        if (current()) saveJson(LAYOUTS + scopeKey(current()), manual);
       } else selectTable(selectedTable === drag.id ? null : drag.id);
       drag = null;
       return;
@@ -3526,7 +3704,7 @@ function mountDiagram(root, ctx) {
       .sort((a, b) => b.n - a.n)
       .slice(0, 6);
     const conn = current();
-    const loaded = conn ? store.schema(conn.key)?.at : null;
+    const loaded = conn ? store.schema(conn)?.at : null;
     const link = (id, text) => h("button", { class: "sd-link", onclick: () => focusTable(id, true) }, text ?? tableById(id).name);
     return [
       h("div", { class: "sd-side-head" }, h("div", {}, h("b", { style: "font-family:inherit" }, conn?.meta.name ?? "Database"), h("span", {}, `${KINDS[model.kind].name}${loaded ? ` · read ${new Date(loaded).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}`))),
@@ -3605,9 +3783,13 @@ function mountDiagram(root, ctx) {
   const unsubscribe = store.subscribe((e) => {
     if (e.type === "focus") {
       store.pending = null;
-      if (e.key !== ctx.selected && ctx.conns.some((c) => c.key === e.key)) {
+      const known = ctx.conns.some((c) => c.key === e.key);
+      const otherDb = known && e.database && (e.key !== ctx.selected || e.database !== databaseOf(current()));
+      if (known && e.database) ctx.chooseDatabase(e.key, e.database);
+      if (known && (e.key !== ctx.selected || otherDb)) {
         ctx.select(e.key);
         selectedTable = null;
+        schemaFilter = "";
         render();
       }
       const conn = current();

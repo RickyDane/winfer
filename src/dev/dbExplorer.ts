@@ -93,6 +93,7 @@ export function dbExplorerExec(command: string) {
   const limit = Number(/head -n (\d+)/.exec(command)?.[1] ?? 201) - 1;
   const done = (rows: string[][]) => ({ code: 0, timedOut: false, output: `${csv(rows.slice(0, limit + 1))}\n\n@@WINFER_ROWS ${rows.length}\n` });
   if (/^SELECT 1$/i.test(sql.trim())) return done([["?column?"], ["1"]]);
+  if (/from\s+pg_database/i.test(sql)) return done([["datname"], ["postgres"], ["shop"], ["shop_staging"]]);
   if (/from\s+orders/i.test(sql)) return done([["id", "customer_id", "total", "status"], ...ORDERS]);
   if (/from\s+customers/i.test(sql)) return done([["id", "email", "name", "created_at"], ["1", "ada@example.com", "Ada", "2026-09-01 10:12:00+02"], ["2", "linus@example.com", "NULL", "2026-09-03 08:40:00+02"]]);
   return { code: 1, timedOut: false, output: `ERROR:  relation "${/from\s+(\S+)/i.exec(sql)?.[1] ?? "?"}" does not exist\nLINE 1: ${sql.split("\n")[0]}\n\n@@WINFER_ROWS 2\n` };
