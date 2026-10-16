@@ -31,7 +31,7 @@
     {
       "id": "db-explorer",
       "name": "Databases",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "description": "Your Postgres, MySQL, SQLite and SQL Server databases in one place, read-only: browse tables, run queries with a history, and see the schema as a class diagram with keys, relations and their cardinality (join tables and relations without a foreign key found for you, Mermaid, PlantUML and SVG export). Paste a URL or a SQL Server connection string. Agents query and describe them by name without ever seeing the credentials.",
       "author": "winfer",
       "tags": [
@@ -52,11 +52,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "1f7b0b55718a9e7a967e7ed42d5df5168ee3f01494db593a9fcef73380d38ab3"
+          "sha256": "cc071c6034d08e3da2517411e694c798bda1bd5911a8addd69bfd237e963ab5d"
         },
         {
           "path": "plugin.json",
-          "sha256": "eec86a340c791714f528bda997b73c0d6e42bb4ad2d0c26fc45d5867007b7787"
+          "sha256": "2a567ea9439480e8e647b0bb6e2d81a0df199e08d3b60ff4f4cdbd22a38ea9b8"
         }
       ]
     },

@@ -16,6 +16,8 @@ import {
   parseDbUrl,
   parseResult,
   parseTsv,
+  powershell,
+  powershellFile,
   schemaSummary,
   shortType,
   statementAt,
@@ -262,6 +264,17 @@ describe("SQL Server", () => {
   it("connects to a named instance through the browser service, or a port", () => {
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "localhost", instance: "SQLEXPRESS" } }, "SELECT 1", { win: false })).toContain("'-S' 'localhost\\SQLEXPRESS'");
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "db", instance: "A", port: 1500 } }, "SELECT 1", { win: false })).toContain("'-S' 'tcp:db,1500'");
+  });
+
+  it("sends the catalog queries on Windows through a script file, as cmd can't take them", () => {
+    const conn = { key: "DB_MS", meta: { kind: "mssql", host: "db", user: "sa", hasPassword: true } };
+    expect(powershell(buildCommand(conn, "SELECT 1", { maxRows: 1, win: true }))).toMatch(/^powershell .* -EncodedCommand \S+$/);
+    const script = buildCommand(conn, introspectionSql("mssql").columns, { win: true });
+    expect(powershell(script)).toBeNull();
+    const file = powershellFile(script);
+    expect(file.startsWith("\uFEFF")).toBe(true);
+    expect(file).toContain("Remove-Item -LiteralPath $PSCommandPath");
+    expect(file.endsWith(script)).toBe(true);
   });
 
   it("refuses queries: there's no read-only session", () => {

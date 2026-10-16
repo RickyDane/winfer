@@ -755,15 +755,30 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
   ].join("\n");
 }
 
-/** Wraps a PowerShell script so it reaches PowerShell intact through `cmd /C`. */
-function powershell(script) {
-  const text = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8\n${script}`;
+const PS_PRELUDE = "$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8";
+const PS_RUN = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass";
+// cmd refuses longer command lines, and says so on stderr, which vault.exec drops.
+const CMD_MAX = 8000;
+
+/**
+ * Wraps a PowerShell script so it reaches PowerShell intact through `cmd /C`, or null when it
+ * would be too long for cmd's command line.
+ */
+export function powershell(script) {
+  const text = `${PS_PRELUDE}\n${script}`;
   let bytes = "";
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     bytes += String.fromCharCode(c & 0xff, c >> 8);
   }
-  return `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${btoa(bytes)}`;
+  const command = `${PS_RUN} -EncodedCommand ${btoa(bytes)}`;
+  return command.length <= CMD_MAX ? command : null;
+}
+
+/** A PowerShell script file's text that runs `script` once and deletes itself (read whole first). */
+export function powershellFile(script) {
+  // The BOM makes Windows PowerShell read it as UTF-8, not the ANSI code page.
+  return `\uFEFF${PS_PRELUDE}\nRemove-Item -LiteralPath $PSCommandPath -ErrorAction SilentlyContinue\n${script}`;
 }
 
 /** A result as a plain-text table for agents, cut at `maxChars`. */
@@ -1452,8 +1467,17 @@ function createStore(api) {
   async function exec(conn, sql, { maxRows = null, timeoutSec = 60 } = {}) {
     const kind = conn.meta.kind;
     const keys = kind === "postgres" || ((kind === "mysql" || kind === "mssql") && conn.meta.hasPassword) ? [conn.key] : [];
-    const command = buildCommand(conn, sql, { maxRows, timeoutSec });
-    return api.vault.exec({ command: IS_WIN ? powershell(command) : command, cwd: await absolute(conn.meta.base ?? ""), keys, timeoutSec });
+    let command = buildCommand(conn, sql, { maxRows, timeoutSec });
+    if (IS_WIN) {
+      // The catalog queries are too long for cmd: they go through a script file instead.
+      const inline = powershell(command);
+      if (inline) command = inline;
+      else {
+        const file = await api.writeFile(`~/AppData/Local/Temp/winfer-db-${crypto.randomUUID()}.ps1`, powershellFile(command));
+        command = `${PS_RUN} -File "${file}"`;
+      }
+    }
+    return api.vault.exec({ command, cwd: await absolute(conn.meta.base ?? ""), keys, timeoutSec });
   }
 
   /** The CLI's failure as a message, with what to do when the CLI is missing or distrusts the server. */
