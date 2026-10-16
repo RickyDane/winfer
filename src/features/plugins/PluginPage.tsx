@@ -2,6 +2,8 @@
 import {
   Atom,
   Bot,
+  Camera,
+  CircleDot,
   Database,
   DatabaseSearch,
   FileText,
@@ -13,6 +15,7 @@ import {
   Puzzle,
   Send,
   Shield,
+  Square,
   SquareKanban,
   Star,
   Terminal,
@@ -23,10 +26,12 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { usePlugins, pluginPages, type PluginPage } from "./plugins";
 
-/** Icons a page can name in `icon`. */
+/** Icons a page or panel action can name in `icon`. */
 export const PAGE_ICONS: Record<string, LucideIcon> = {
   atom: Atom,
   bot: Bot,
+  camera: Camera,
+  record: CircleDot,
   database: Database,
   "database-search": DatabaseSearch,
   file: FileText,
@@ -40,6 +45,7 @@ export const PAGE_ICONS: Record<string, LucideIcon> = {
   send: Send,
   shield: Shield,
   "square-kanban": SquareKanban,
+  stop: Square,
   star: Star,
   terminal: Terminal,
   video: Video,

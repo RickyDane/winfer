@@ -1,5 +1,6 @@
 import { SideTerminal } from "@/features/terminal/SideTerminal";
 import { DevicePanel } from "@/features/android/DevicePanel";
+import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
 import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -211,6 +212,7 @@ export function BrowserPanel() {
         >
           <Crosshair size={14} />
         </button>
+        <PanelActions panel="browser" />
         <button
           title="Console and network errors"
           onClick={() => useBrowser.setState({ consoleOpen: !consoleOpen })}

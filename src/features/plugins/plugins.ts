@@ -6,7 +6,8 @@
  * - `recipes`: agent setups, listed beside the user's own.
  * - `tools`: declarative actions for the palette and voice that run Command Bus commands.
  * - `main`: an ES module whose `activate(api)` registers tools, command handlers, pages (title
- *   bar tabs), tools for agents (served by winfer's MCP server) and keeps secrets in a vault.
+ *   bar tabs), buttons on the browser and Android panels, tools for agents (served by winfer's
+ *   MCP server) and keeps secrets in a vault.
  *
  * Plugins come from the store (the repo's plugins/ folder; installing turns them on) or are
  * copied into the plugins folder by hand (those start off until the user turns them on).
@@ -96,6 +97,37 @@ export interface PluginPage extends PageSpec {
   pluginId: string;
 }
 
+/** Side panels a plugin can add toolbar buttons to. */
+export const ACTION_PANELS = ["browser", "android"] as const;
+export type ActionPanel = (typeof ACTION_PANELS)[number];
+
+/** How a panel button looks; `updatePanelAction` changes any of it. */
+export interface PanelActionLook {
+  /** Tooltip. */
+  title: string;
+  /** One of PAGE_ICONS' names; defaults to a puzzle piece. */
+  icon?: string;
+  /** Short text beside the icon, e.g. a running time. */
+  label?: string;
+  /** Drawn highlighted (e.g. while recording). */
+  active?: boolean;
+}
+
+/** A button on a side panel's toolbar: the browser's address bar or the Android mirror's. */
+export interface PanelActionSpec extends PanelActionLook {
+  id: string;
+  panel: ActionPanel;
+  run(): void | Promise<void>;
+}
+
+export interface PanelAction extends PanelActionSpec {
+  /** `<plugin id>/<action id>`. */
+  key: string;
+  pluginId: string;
+  /** Tells registrations of the same key apart, so undoing an old one leaves a newer one. */
+  serial: number;
+}
+
 /** The agent calling a plugin's agent tool. */
 export interface AgentCaller {
   paneId: string;
@@ -146,6 +178,9 @@ export interface PluginApi {
   registerTool(spec: ToolSpec): Disposer;
   registerPage(spec: PageSpec): Disposer;
   registerAgentTool(spec: AgentToolSpec): Disposer;
+  registerPanelAction(spec: PanelActionSpec): Disposer;
+  /** Changes how one of this plugin's panel buttons looks. */
+  updatePanelAction(id: string, look: Partial<PanelActionLook>): void;
   /** Shows one of this plugin's pages. */
   openPage(id: string): void;
   vault: PluginVault;
@@ -196,11 +231,14 @@ interface PluginsState {
   runtimeErrors: Record<string, string>;
   /** Bumped whenever contributed tools change, so views re-read them. */
   version: number;
+  /** Buttons plugins put on side panels; kept apart from `version` since they change often (labels tick). */
+  panelActions: PanelAction[];
 }
 
-export const usePlugins = create<PluginsState>(() => ({ plugins: [], runtimeErrors: {}, version: 0 }));
+export const usePlugins = create<PluginsState>(() => ({ plugins: [], runtimeErrors: {}, version: 0, panelActions: [] }));
 
 const runtimes = new Map<string, Runtime>();
+let panelActionSerial = 0;
 const bump = () => usePlugins.setState((s) => ({ version: s.version + 1 }));
 
 const setRuntimeError = (id: string, error: string | null) =>
@@ -372,6 +410,15 @@ export function pluginRecipes(): Recipe[] {
   );
 }
 
+/** Runs a panel button's action, reporting failures as toasts. */
+export async function runPanelAction(action: PanelAction) {
+  try {
+    await action.run();
+  } catch (err) {
+    toast(`Plugin “${action.pluginId}” failed`, "error", String(err));
+  }
+}
+
 /** Runs `{ type: "plugin.run" }` from the Command Bus. */
 export async function runPluginCommand(pluginId: string, command: string, args: Args = {}) {
   const handler = runtimes.get(pluginId)?.commands.get(command);
@@ -427,6 +474,20 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
       return track(() => {
         runtime.agentTools = runtime.agentTools.filter((t) => t !== spec);
       });
+    },
+    registerPanelAction(spec) {
+      if (!spec?.id || !spec.title || typeof spec.run !== "function") throw new Error("a panel action needs id, title and run");
+      if (!ACTION_PANELS.includes(spec.panel)) throw new Error(`panel action ${spec.id}: panel must be ${ACTION_PANELS.join(" or ")}`);
+      const key = `${id}/${spec.id}`;
+      const serial = ++panelActionSerial;
+      usePlugins.setState((s) => ({ panelActions: [...s.panelActions.filter((a) => a.key !== key), { ...spec, key, pluginId: id, serial }] }));
+      return track(() => usePlugins.setState((s) => ({ panelActions: s.panelActions.filter((a) => a.serial !== serial) })));
+    },
+    updatePanelAction(actionId, look) {
+      const key = `${id}/${actionId}`;
+      const { title, icon, label, active } = look;
+      const patch = Object.fromEntries(Object.entries({ title, icon, label, active }).filter(([k]) => k in look));
+      usePlugins.setState((s) => ({ panelActions: s.panelActions.map((a) => (a.key === key ? { ...a, ...patch } : a)) }));
     },
     openPage: (page) => dispatch({ type: "ui.view", view: `page:${id}/${page}` }),
     vault: makeVault(id),

@@ -48,6 +48,7 @@ export function PageTabs({ tab }: { tab: (active: boolean) => string }) {
   const pages = usePluginPages();
   const view = useWorkspaces((s) => s.view);
   const pinned = pinnedPages(pages, useWorkspaces((s) => s.pinnedPages));
+  const iconsOnly = useWorkspaces((s) => s.pageTabIconsOnly);
   const [menu, setMenu] = useState<{ x: number; y: number; page: PluginPage } | null>(null);
   if (!pages.length) return null;
   const unpinned = pages.filter((p) => !pinned.includes(p));
@@ -71,12 +72,12 @@ export function PageTabs({ tab }: { tab: (active: boolean) => string }) {
             title={page.title}
           >
             <Icon size={12} />
-            {/* Narrow windows show just the icon; the title is in the tooltip. */}
-            <span className="max-w-32 truncate max-xl:hidden">{page.title}</span>
+            {/* Narrow windows, or the icons-only setting, show just the icon; the title is in the tooltip. */}
+            {!iconsOnly && <span className="max-w-32 truncate max-xl:hidden">{page.title}</span>}
           </button>
         );
       })}
-      <AppsMenu pages={pages} pinned={pinned} unpinned={unpinned} tab={tab} />
+      <AppsMenu pages={pages} pinned={pinned} unpinned={unpinned} tab={tab} iconsOnly={iconsOnly} />
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -97,7 +98,7 @@ export function PageTabs({ tab }: { tab: (active: boolean) => string }) {
 }
 
 /** The Apps tab: every plugin page, with a star to pin it to the title bar. */
-function AppsMenu({ pages, pinned, unpinned, tab }: { pages: PluginPage[]; pinned: PluginPage[]; unpinned: PluginPage[]; tab: (active: boolean) => string }) {
+function AppsMenu({ pages, pinned, unpinned, tab, iconsOnly }: { pages: PluginPage[]; pinned: PluginPage[]; unpinned: PluginPage[]; tab: (active: boolean) => string; iconsOnly: boolean }) {
   const view = useWorkspaces((s) => s.view);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -145,7 +146,7 @@ function AppsMenu({ pages, pinned, unpinned, tab }: { pages: PluginPage[]; pinne
         title={current ? `${current.title} · all plugin pages` : "All plugin pages"}
       >
         <CurrentIcon size={12} />
-        <span className="max-w-32 truncate max-lg:hidden">{current ? current.title : "Apps"}</span>
+        {!iconsOnly && <span className="max-w-32 truncate max-lg:hidden">{current ? current.title : "Apps"}</span>}
         {!current && unpinned.length > 0 && <span className="font-mono text-[10px] text-fg-subtle">{unpinned.length}</span>}
         <ChevronDown size={11} className="text-fg-subtle" />
       </button>

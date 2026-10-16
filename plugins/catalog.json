@@ -135,8 +135,8 @@
     {
       "id": "screen-recorder",
       "name": "Screen Recorder",
-      "version": "1.0.2",
-      "description": "Record the browser panel or the Android mirror and save it as an MP4, from the palette, by voice or by an agent showing off what it built.",
+      "version": "1.1.0",
+      "description": "Record the browser panel or the Android mirror and save it as an MP4, with the record button on the panel, from the palette, by voice or by an agent showing off what it built.",
       "author": "winfer",
       "tags": [
         "video",
@@ -150,11 +150,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "ee0ffd1f216a7970b45bf9c526685567361710179881386431b0b292aaa641aa"
+          "sha256": "4238d1e9d876915d82b87f689fbe1a18972b528217eba4793268639032aad2d2"
         },
         {
           "path": "plugin.json",
-          "sha256": "0a21dd0ebc326e2e5f6865573016b822a3bc97748608c30228bae535a0ed32f7"
+          "sha256": "0d6979b2861fc837a3d44fd1e212bbed4d7159cf6225d9b28231255cb1b26106"
         }
       ]
     },

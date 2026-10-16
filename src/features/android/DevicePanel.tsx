@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { ChevronLeft, Circle, Loader2, Power, RefreshCw, Smartphone, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { PanelActions } from "@/features/plugins/PanelActions";
 import { useWorkspaces } from "@/stores/workspaces";
 import { H264Player } from "./h264";
 
@@ -301,6 +302,7 @@ export function DevicePanel() {
         ) : (
           <span className="flex-1 text-xs text-fg-muted">No device</span>
         )}
+        <PanelActions panel="android" />
       </div>
 
       {current ? (

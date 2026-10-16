@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 
-import { fillTemplate, loadPlugins, matchesSearch, pluginAgentToolList, pluginPages, runPluginAgentTool, pluginRecipes, pluginToolId, pluginTools, runPluginCommand, setPluginDispatch, toolFromSpec } from "./plugins";
+import { fillTemplate, loadPlugins, runPanelAction, usePlugins, matchesSearch, pluginAgentToolList, pluginPages, runPluginAgentTool, pluginRecipes, pluginToolId, pluginTools, runPluginCommand, setPluginDispatch, toolFromSpec } from "./plugins";
 import { toast } from "@/stores/toasts";
 import { useWorkspaces } from "@/stores/workspaces";
 
@@ -149,6 +149,33 @@ describe("loading plugins", () => {
     await loadPlugins();
     expect(pluginPages()).toEqual([]);
     expect(pluginAgentToolList()).toEqual([]);
+  });
+});
+
+describe("panel actions", () => {
+  it("adds, updates, runs and removes buttons on side panels", async () => {
+    const executed: unknown[] = [];
+    setPluginDispatch((cmd) => executed.push(cmd));
+    backend.source = `
+      export function activate(api) {
+        api.registerPanelAction({ id: "rec", panel: "android", title: "Record", icon: "record", run: () => api.execute({ type: "ui.toggleSidebar" }) });
+        api.registerCommand("tick", () => api.updatePanelAction("rec", { label: "0:01", active: true }));
+        try { api.registerPanelAction({ id: "bad", panel: "terminal", title: "x", run() {} }); } catch (e) { api.toast(e.message); }
+      }`;
+    backend.plugins = [plugin("rec", { main: "index.js" })];
+    await loadPlugins();
+
+    expect(usePlugins.getState().panelActions).toMatchObject([{ key: "rec/rec", panel: "android", title: "Record", icon: "record" }]);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("panel must be browser or android"), "info");
+    await runPluginCommand("rec", "tick");
+    const [action] = usePlugins.getState().panelActions;
+    expect(action).toMatchObject({ title: "Record", label: "0:01", active: true });
+    await runPanelAction(action);
+    expect(executed).toEqual([{ type: "ui.toggleSidebar" }]);
+
+    backend.plugins = [plugin("rec", { main: "index.js" }, false)];
+    await loadPlugins();
+    expect(usePlugins.getState().panelActions).toEqual([]);
   });
 });
 

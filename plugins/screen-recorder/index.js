@@ -5,15 +5,17 @@
 // times a second (so tab switches, resizes or the panel closing don't break the stream; the
 // video holds the last picture meanwhile) and feeds it to a MediaRecorder. The webview records
 // MP4 (H.264) itself where it can; elsewhere it records WebM and ffmpeg converts it, if present.
+// Each panel gets a record button in its toolbar (winfer builds with `registerPanelAction`).
 
 const STORAGE = "winfer.screen-recorder";
 const FPS = 30;
 const MAX_SIDE = 1920;
 const BITRATE = 8_000_000;
 
+/** `panel` is the side panel to open, `actionPanel` where the record button goes. */
 export const SOURCES = {
-  browser: { title: "Browser", panel: "browser" },
-  android: { title: "Android mirror", panel: "device" },
+  browser: { title: "Browser", panel: "browser", actionPanel: "browser" },
+  android: { title: "Android mirror", panel: "device", actionPanel: "android" },
 };
 
 const MP4_TYPES = ["video/mp4;codecs=avc1.640028", "video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=avc1", "video/mp4"];
@@ -208,7 +210,12 @@ export function activate(api) {
     api.toast(`Deleted ${name}`, "success");
   }
 
+  /** Sources whose recording is starting or stopping, so a double click doesn't do it twice. */
+  const busy = new Set();
+
   async function toggle(source) {
+    if (busy.has(source)) return;
+    busy.add(source);
     try {
       if (active.has(source)) {
         const path = await stop(source);
@@ -219,6 +226,8 @@ export function activate(api) {
       }
     } catch (err) {
       api.toast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      busy.delete(source);
     }
   }
 
@@ -279,6 +288,27 @@ export function activate(api) {
       },
     }),
   );
+
+  // --- record buttons on the panels ---------------------------------------------------------
+
+  /** How a source's button looks: a record dot, or a red stop square with the running time. */
+  const look = (source) => {
+    const entry = active.get(source);
+    const name = SOURCES[source].title.toLowerCase();
+    return entry
+      ? { title: `Stop recording the ${name} and save it`, icon: "stop", label: duration(Date.now() - entry.startedAt), active: true }
+      : { title: `Record the ${name} to a video`, icon: "record", label: "", active: false };
+  };
+  // Older winfer builds have no panel buttons; the palette, the page and agents still work there.
+  if (api.registerPanelAction) {
+    for (const source of Object.keys(SOURCES)) {
+      dispose.push(api.registerPanelAction({ id: `record-${source}`, panel: SOURCES[source].actionPanel, ...look(source), run: () => toggle(source) }));
+    }
+    const refreshButtons = () => Object.keys(SOURCES).forEach((source) => api.updatePanelAction(`record-${source}`, look(source)));
+    listeners.add(refreshButtons);
+    const clock = window.setInterval(() => active.size && refreshButtons(), 1000);
+    dispose.push(() => clearInterval(clock));
+  }
 
   // --- recording indicator ------------------------------------------------------------------
 
@@ -367,7 +397,7 @@ export function activate(api) {
       page.append(h("label", "wf-field", [h("span", "wf-subtle", "Save to"), h("div", "wf-row", [folder])]));
 
       page.append(h("h2", "wf-h2", "Recent"));
-      if (settings.recent.length === 0) page.append(h("p", "wf-empty", "No recordings yet. Start one above, from ⌘K or ask an agent to record a demo."));
+      if (settings.recent.length === 0) page.append(h("p", "wf-empty", "No recordings yet. Start one above, with the record button on the browser or Android panel, from ⌘K or ask an agent to record a demo."));
       for (const r of settings.recent) {
         const reveal = h("button", "wf-button wf-ghost", isMac() ? "Show in Finder" : "Show in folder");
         reveal.onclick = () => api.revealFile(r.path).catch((err) => api.toast(String(err), "error"));
