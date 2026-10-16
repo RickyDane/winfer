@@ -53,7 +53,9 @@ jobs:
               git log --format='- %s' ${prev:+$prev..}"$TAG" | grep -v -E '^- Release [0-9.]+$' | sed -E 's/; release [0-9.]+$//'
               cat .github/release-footer.md
             } > notes.md
-            gh release create "$TAG" --title "winfer $TAG" --notes-file notes.md
+            # Not "latest" yet: the previous release keeps that spot (and serves latest.json to
+            # installed apps) until the updater-json job has every bundle up.
+            gh release create "$TAG" --title "winfer $TAG" --notes-file notes.md --latest=false
           fi
           echo "id=$(gh release view "$TAG" --json databaseId -q .databaseId)" >> "$GITHUB_OUTPUT"
 
@@ -154,3 +156,12 @@ jobs:
             '{version: $version, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
           cat latest.json
           gh release upload "$TAG" latest.json --clobber
+      - name: Mark the release as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        # "legacy" lets GitHub pick by creation date and semver, so rebuilding an older tag by
+        # hand doesn't take "latest" away from a newer release.
+        run: |
+          id=${{ needs.release.outputs.id }}
+          gh api -X PATCH "repos/${{ github.repository }}/releases/$id" -f make_latest=legacy >/dev/null
