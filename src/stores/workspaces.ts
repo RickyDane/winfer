@@ -119,6 +119,8 @@ interface WorkspaceState {
   progressConfig: { enabled?: boolean; intervalSec?: number };
   /** Show what each worktree pane's task has cost so far in its header (opt-in). */
   showPaneCost: boolean;
+  /** Pinned plugin page tabs show only their icon; the title is in the tooltip. */
+  pageTabIconsOnly: boolean;
   /** Pane whose scrollback search bar is open (⌘F). */
   searchPaneId: string | null;
   /** Last session id per agent and folder (`provider:path`), so a reopened worktree resumes it (persisted). */
@@ -178,6 +180,7 @@ interface WorkspaceState {
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setShowPaneCost: (show: boolean) => void;
+  setPageTabIconsOnly: (iconsOnly: boolean) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string }) => void;
   toggleSidebar: () => void;
@@ -260,6 +263,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   reviewConfig: {},
   progressConfig: {},
   showPaneCost: false,
+  pageTabIconsOnly: false,
   searchPaneId: null,
   recentSessions: {},
   voiceConfig: {},
@@ -315,6 +319,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       reviewConfig: ui.review ?? {},
       progressConfig: ui.progress ?? {},
       showPaneCost: ui.showPaneCost ?? false,
+      pageTabIconsOnly: ui.pageTabIconsOnly ?? false,
       recentSessions: ui.recentSessions ?? {},
     });
   },
@@ -502,6 +507,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
   setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
   setShowPaneCost: (showPaneCost) => set({ showPaneCost }),
+  setPageTabIconsOnly: (pageTabIconsOnly) => set({ pageTabIconsOnly }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
 
@@ -561,6 +567,7 @@ interface Snapshot {
     review?: { autoTests?: boolean; screenshots?: boolean };
     progress?: { enabled?: boolean; intervalSec?: number };
     showPaneCost?: boolean;
+    pageTabIconsOnly?: boolean;
     recentSessions?: Record<string, string>;
   } | null;
 }
@@ -580,7 +587,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, recentSessions: s.recentSessions },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions },
   };
 }
 

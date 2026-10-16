@@ -827,6 +827,18 @@ async function togglePlugin(plugin: PluginInfo, enabled: boolean) {
 // The store's catalog, kept while the app runs so reopening the page is instant.
 let catalogCache: CatalogEntry[] | null = null;
 
+/** Opt-in: plugin page tabs in the title bar show only their icon. */
+function PageTabSettings() {
+  const iconsOnly = useWorkspaces((s) => s.pageTabIconsOnly);
+  return (
+    <Card title="Title bar">
+      <Row label="Hide names on plugin tabs" hint="Plugin page tabs show just their icon. Hover a tab to see its name.">
+        <Toggle label="Hide names on plugin tabs" checked={iconsOnly} onChange={(on) => useWorkspaces.getState().setPageTabIconsOnly(on)} />
+      </Row>
+    </Card>
+  );
+}
+
 /** The plugin store: search, install, update, turn on/off and uninstall plugins. */
 function PluginSettings() {
   const { plugins, runtimeErrors } = usePlugins();
@@ -933,6 +945,8 @@ function PluginSettings() {
           })
         )}
       </Card>
+
+      <PageTabSettings />
 
       <Card title="Plugin store" description="Plugins add pages, agents, recipes, commands, voice actions and tools for your agents.">
         {catalogError ? (
