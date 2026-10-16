@@ -65,13 +65,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: avrea-macos-26-8-vcpu
             target: aarch64-apple-darwin
-          - platform: macos-latest
+          - platform: avrea-macos-26-8-vcpu
             target: x86_64-apple-darwin
-          - platform: windows-latest
+          - platform: avrea-windows-2025-8-vcpu
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
+    # Rust goes through sccache on Avrea's WebDAV cache. actions/cache (what rust-cache used) is
+    # scoped to the ref that saved it, so a cache saved under one tag was never visible to the
+    # next tag's run and every release compiled from scratch; sccache's store isn't ref-scoped.
+    env:
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,10 +102,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-          key: ${{ matrix.target }}
+      - uses: ./.github/actions/sccache
+
+      # The Windows image has Visual Studio 2026, which whisper-rs-sys's CMake build only finds
+      # with CMake 4.2+.
+      - if: runner.os == 'Windows'
+        uses: lukka/get-cmake@v4.4.2
 
       - run: pnpm install --frozen-lockfile
 
@@ -118,6 +125,11 @@ jobs:
           # The updater-json job writes it once every bundle is up; three jobs merging into
           # one file at once could drop a platform.
           includeUpdaterJson: false
+
+      - name: sccache stats
+        if: always()
+        shell: bash
+        run: sccache --show-stats
 
   # latest.json is what installed apps poll (releases/latest/download/latest.json): the newest
   # version and, per platform, the signed bundle's URL and signature.
