@@ -266,6 +266,11 @@ WHERE i.type > 0 AND i.is_hypothetical = 0 AND t.is_ms_shipped = 0`,
   },
 };
 
+// sqlcmd also prints its own column headers (`-h -1` can't go with `-y 0`), so both result sets
+// name their one column MS_COL and `parseResult` drops each name and its dashed line.
+const MS_COL = "winfer_csv";
+const MS_HEADER = new RegExp(`^${MS_COL}[ \\t]*\\n-+[ \\t]*$`, "gm");
+
 /** Wraps a SQL Server query so sqlcmd prints a header line, then one CSV line per row. */
 function msCsv(tag, { cols, order, sql }) {
   // Catalog names and descriptions have their own collations; CONCAT needs one.
@@ -273,8 +278,8 @@ function msCsv(tag, { cols, order, sql }) {
   const line = `CONCAT(N'"', ${cols.map(field).join(`, N'","', `)}, N'"')`;
   return `/* erd:${tag} */
 SET NOCOUNT ON;
-SELECT CAST(N'${cols.join(",")}' AS nvarchar(max));
-SELECT ${line} FROM (
+SELECT CAST(N'${cols.join(",")}' AS nvarchar(max)) AS ${MS_COL};
+SELECT ${line} AS ${MS_COL} FROM (
 ${sql}
 ) q
 ORDER BY ${order};`;
@@ -635,8 +640,9 @@ export function parseResult(output, kind, maxRows = Infinity) {
   const lines = mark < 0 ? null : Number(text.slice(mark + ROWS_MARK.length).trim().split(/\s/)[0]);
   const body = (mark < 0 ? text : text.slice(0, mark)).replace(/\n+$/, "");
   if (!body.trim()) return { columns: [], rows: [], total: 0, truncated: false };
-  // sqlcmd may pad lines and separate result sets with blank lines.
-  const all = kind === "mysql" ? parseTsv(body) : parseCsv(kind === "mssql" ? body.replace(/[ \t]+$/gm, "") : body);
+  // sqlcmd may pad lines, separate result sets with blank lines and head each with its own
+  // column name and a dashed line.
+  const all = kind === "mysql" ? parseTsv(body) : parseCsv(kind === "mssql" ? body.replace(MS_HEADER, "").replace(/[ \t]+$/gm, "") : body);
   const [columns = [], ...rows] = kind === "mssql" ? all.filter((r) => r.length > 1 || r[0] !== "") : all;
   // All of the output came back: count the parsed rows (a value can span lines). Else estimate.
   const complete = lines === null || Number.isNaN(lines) || lines <= maxRows + 1;
@@ -694,11 +700,12 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     if (meta.database) args.push(meta.database);
     if (meta.hasPassword) env.push(["MYSQL_PWD", { secret: key }]);
   } else if (meta.kind === "mssql") {
-    // -b: exit with an error code; -h -1: no column headers; -y 0: long values in full.
+    // -b: exit with an error code; -y 0: long values in full (not allowed with -h -1, so
+    // parseResult drops sqlcmd's column headers).
     program = "sqlcmd";
     // A named instance without a port is found through the SQL Server Browser.
     const server = meta.instance && !meta.port ? `${meta.host || "localhost"}\\${meta.instance}` : `tcp:${meta.host || "localhost"},${meta.port || 1433}`;
-    args = ["-S", server, "-b", "-h", "-1", "-y", "0", "-l", "10", "-K", "ReadOnly"];
+    args = ["-S", server, "-b", "-y", "0", "-l", "10", "-K", "ReadOnly"];
     if (meta.database) args.push("-d", meta.database);
     if (meta.user) args.push("-U", meta.user);
     else args.push("-E");

@@ -242,7 +242,8 @@ describe("SQL Server", () => {
 
   it("runs sqlcmd with the password in the environment", () => {
     const cmd = buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "db", port: 1444, user: "sa", database: "shop", hasPassword: true, trustCert: true } }, "SELECT 1", { win: false });
-    expect(cmd).toContain(`SQLCMDPASSWORD="$DB_MS" sqlcmd '-S' 'tcp:db,1444' '-b' '-h' '-1' '-y' '0'`);
+    expect(cmd).toContain(`SQLCMDPASSWORD="$DB_MS" sqlcmd '-S' 'tcp:db,1444' '-b' '-y' '0'`);
+    expect(cmd).not.toContain("'-h'");
     expect(cmd).toContain("'-d' 'shop' '-U' 'sa' '-C'");
     expect(cmd).not.toContain("p@ss");
     // No user: Windows authentication.
@@ -253,7 +254,7 @@ describe("SQL Server", () => {
   it("builds every row as one CSV line after a header result set", () => {
     const sql = introspectionSql("mssql").constraints;
     expect(sql).toContain("SET NOCOUNT ON;");
-    expect(sql).toContain("SELECT CAST(N'table_schema,table_name,constraint_name,constraint_type,columns,ref_schema,ref_table,ref_columns,on_delete,on_update' AS nvarchar(max));");
+    expect(sql).toContain("SELECT CAST(N'table_schema,table_name,constraint_name,constraint_type,columns,ref_schema,ref_table,ref_columns,on_delete,on_update' AS nvarchar(max)) AS winfer_csv;");
     expect(sql).toContain(`REPLACE(CAST(q.on_update AS nvarchar(max)) COLLATE DATABASE_DEFAULT, N'"', N'""')`);
     expect(sql).toContain("FROM sys.foreign_keys fk");
   });
@@ -268,7 +269,7 @@ describe("SQL Server", () => {
   });
 
   it("parses sqlcmd output with padding and blank lines between result sets", () => {
-    const out = 'table_schema,table_name   \n\n"dbo","say ""hi"", ok"   \n"dbo","two\nlines"\n\n@@WINFER_ROWS 5\n';
+    const out = 'winfer_csv   \n----------   \ntable_schema,table_name   \n\nwinfer_csv\n---------------\n"dbo","say ""hi"", ok"   \n"dbo","two\nlines"\n\n@@WINFER_ROWS 5\n';
     expect(parseResult(out, "mssql")).toMatchObject({ columns: ["table_schema", "table_name"], rows: [["dbo", 'say "hi", ok'], ["dbo", "two\nlines"]] });
   });
 });
