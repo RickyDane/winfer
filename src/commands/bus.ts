@@ -89,8 +89,8 @@ export type Command =
   | { type: "browser.sendConsole" }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
-  /** Shows that tab of the side panel, or hides the panel if it's already showing it. */
-  | { type: "ui.sidePanel"; panel: "browser" | "device" | "terminal" }
+  /** Shows that tab of the side panel, or hides the panel if it's already showing it (unless `show`, which never hides). */
+  | { type: "ui.sidePanel"; panel: "browser" | "device" | "terminal"; show?: boolean }
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   /** Toggles settings; with a page, opens settings on that page. */
@@ -407,7 +407,7 @@ export function execute(cmd: Command): void {
     case "ui.toggleBrowser":
       return s.toggleBrowser();
     case "ui.sidePanel":
-      if (s.browserOpen && s.sidePanel === cmd.panel) return s.toggleBrowser();
+      if (!cmd.show && s.browserOpen && s.sidePanel === cmd.panel) return s.toggleBrowser();
       return s.setSidePanel(cmd.panel);
     case "ui.palette":
       return s.paletteQuery === null ? s.openPalette(cmd.query) : s.closePalette();

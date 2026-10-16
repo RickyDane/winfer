@@ -96,7 +96,7 @@ export function activate(api) {
 
   /** Opens the source's panel and waits for its canvas to show a picture. */
   async function waitForCanvas(source) {
-    api.execute({ type: "ui.sidePanel", panel: SOURCES[source].panel });
+    api.execute({ type: "ui.sidePanel", panel: SOURCES[source].panel, show: true });
     const until = Date.now() + 8000;
     while (Date.now() < until) {
       const c = findCanvas(source);
