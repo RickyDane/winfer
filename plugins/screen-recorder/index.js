@@ -65,6 +65,8 @@ const isMac = () => /Mac/i.test(navigator.userAgent);
 const defaultFolder = () => (isMac() ? "~/Movies/winfer" : "~/Videos/winfer");
 const join = (dir, name) => `${dir.replace(/[\\/]+$/, "")}${isWindows() ? "\\" : "/"}${name}`;
 const quote = (path) => `"${path.replace(/"/g, '\\"')}"`;
+/** Quotes a path for the shell: single quotes on Unix (nothing expands), double on Windows (paths can't hold `"`). */
+const shellPath = (path) => (isWindows() ? `"${path}"` : `'${path.replace(/'/g, "'\\''")}'`);
 
 function load() {
   try {
@@ -185,6 +187,25 @@ export function activate(api) {
       api.toast("Saved as WebM: this webview can't record MP4; install ffmpeg to get MP4s", "error");
     }
     return webm;
+  }
+
+  /** Deletes a saved recording's file (if it's still there) and drops it from the list. */
+  async function remove(recording) {
+    const name = recording.path.split(/[\\/]/).pop();
+    if (!(await api.confirm(`Delete ${name}? The video file is deleted for good (not moved to the trash).`, { title: "Delete recording", okLabel: "Delete", kind: "warning" })))
+      return;
+    const command = isWindows() ? `if exist ${shellPath(recording.path)} del /f /q ${shellPath(recording.path)}` : `rm -f ${shellPath(recording.path)}`;
+    try {
+      const run = await api.vault.exec({ command, cwd: "", keys: [], timeoutSec: 30 });
+      if (run.code !== 0) throw new Error(run.output.trim() || `exit code ${run.code}`);
+    } catch (err) {
+      api.toast(`Couldn't delete ${name}: ${err instanceof Error ? err.message : String(err)}`, "error");
+      return;
+    }
+    settings.recent = settings.recent.filter((r) => r.path !== recording.path);
+    save(settings);
+    changed();
+    api.toast(`Deleted ${name}`, "success");
   }
 
   async function toggle(source) {
@@ -350,6 +371,8 @@ export function activate(api) {
       for (const r of settings.recent) {
         const reveal = h("button", "wf-button wf-ghost", isMac() ? "Show in Finder" : "Show in folder");
         reveal.onclick = () => api.revealFile(r.path).catch((err) => api.toast(String(err), "error"));
+        const del = h("button", "wf-button wf-danger wf-ghost", "Delete");
+        del.onclick = () => remove(r);
         page.append(
           h("div", "wf-card wf-row", [
             h("div", "wf-grow wf-stack", [
@@ -357,6 +380,7 @@ export function activate(api) {
               h("span", "wf-subtle", `${SOURCES[r.source]?.title ?? r.source} · ${duration(r.ms)} · ${new Date(r.at).toLocaleString()}`),
             ]),
             reveal,
+            del,
           ]),
         );
       }
