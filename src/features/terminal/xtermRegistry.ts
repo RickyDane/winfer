@@ -14,7 +14,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { create as createStore } from "zustand";
 import { cleanAgentTitle, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { reportInput, reportOutput, reportStatus } from "@/features/status/agentStatus";
+import { reportInput, reportOutput, reportStatus, reportTerminalNotice } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
@@ -131,12 +131,12 @@ function create(pane: Pane): Entry {
 
   // Terminal notifications: OSC 9 (iTerm2/ConEmu style), OSC 777 (notify;title;body), bell.
   term.parser.registerOscHandler(9, (data) => {
-    reportStatus(pane.id, "needs-input", data);
+    reportTerminalNotice(pane.id, data);
     return true;
   });
   term.parser.registerOscHandler(777, (data) => {
     const [kind, title, body] = data.split(";");
-    if (kind === "notify") reportStatus(pane.id, "needs-input", [title, body].filter(Boolean).join(": "));
+    if (kind === "notify") reportTerminalNotice(pane.id, [title, body].filter(Boolean).join(": "));
     return true;
   });
   // Shells beep on tab completion; only agents' bells mean "look at me".
@@ -148,7 +148,7 @@ function create(pane: Pane): Entry {
     const current = s.workspaces.flatMap((w) => w.panes).find((p) => p.id === pane.id);
     if (title && current && current.agentTitle !== title) s.updatePane(pane.id, { agentTitle: title });
   });
-  term.onBell(() => pane.provider !== "shell" && reportStatus(pane.id, "needs-input"));
+  term.onBell(() => reportTerminalNotice(pane.id));
 
   term.onResize(({ cols, rows }) => {
     const entry = entries.get(pane.id);

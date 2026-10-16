@@ -65,6 +65,21 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
     }
 }
 
+/// Claude Code's `Notification` hook also fires as a reminder once the agent has sat idle
+/// after finishing a turn ("Claude is waiting for your input"), and after logging in. Neither
+/// is a request: the pane keeps its "done" status instead of turning into "needs input".
+fn is_reminder(provider: &str, event: &str, json: Option<&Value>) -> bool {
+    if (provider, event) != ("claude", "Notification") {
+        return false;
+    }
+    let field = |key: &str| json.and_then(|v| v.get(key)).and_then(Value::as_str);
+    match field("notification_type") {
+        Some(kind) => matches!(kind, "idle_prompt" | "auth_success"),
+        // Older Claude Code versions send only the message.
+        None => field("message").is_some_and(|m| m.contains("waiting for your input")),
+    }
+}
+
 /// The agent's last reply from a turn-complete event: Claude Code's `last_assistant_message`
 /// (else the last assistant text in its transcript), Codex's `last-assistant-message`.
 fn last_reply(json: &Value) -> Option<String> {
@@ -284,6 +299,10 @@ fn serve(
                         }
                     } else if let Some(status) = status_for(provider, event) {
                         let json = serde_json::from_str::<Value>(&body).ok();
+                        if is_reminder(provider, event, json.as_ref()) {
+                            let _ = req.respond(tiny_http::Response::empty(204));
+                            continue;
+                        }
                         let field = |key: &str| json.as_ref().and_then(|v| v.get(key)).and_then(Value::as_str).map(String::from);
                         let message = field("message");
                         let session = field("thread-id").or_else(|| field("session_id"));
@@ -342,6 +361,17 @@ mod tests {
         assert_eq!(status_for("opencode", "form.created"), Some("needs-input"));
         assert_eq!(status_for("opencode", "session.execution.succeeded"), Some("done"));
         assert_eq!(status_for("claude", "Unknown"), None);
+    }
+
+    #[test]
+    fn idle_reminders_are_not_requests() {
+        let idle = json!({"notification_type":"idle_prompt","message":"Claude is waiting for your input"});
+        let permission = json!({"notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"});
+        let legacy = json!({"message":"Claude is waiting for your input"});
+        assert!(is_reminder("claude", "Notification", Some(&idle)));
+        assert!(is_reminder("claude", "Notification", Some(&legacy)));
+        assert!(!is_reminder("claude", "Notification", Some(&permission)));
+        assert!(!is_reminder("claude", "Stop", Some(&idle)));
     }
 
     #[test]

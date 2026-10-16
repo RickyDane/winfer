@@ -107,6 +107,17 @@ export function reportStatus(paneId: string, status: AgentStatus, message?: stri
   }
 }
 
+/**
+ * A terminal notification (OSC 9/777, bell). Agents with hooks report requests through them,
+ * so a beep after they finished is only an idle reminder, not a new question.
+ */
+export function reportTerminalNotice(paneId: string, message?: string) {
+  const pane = findPane(paneId);
+  if (!pane || pane.provider === "shell") return;
+  if (pane.status === "done" && hasHooks(pane)) return;
+  reportStatus(paneId, "needs-input", message);
+}
+
 /** The user submitted input to an agent: it's working now. */
 export function reportInput(paneId: string) {
   const pane = findPane(paneId);
