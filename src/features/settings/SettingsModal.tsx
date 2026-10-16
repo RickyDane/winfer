@@ -433,12 +433,12 @@ function ReviewSettings() {
   );
 }
 
-/** Opt-in: each worktree pane's task cost in its header. */
+/** Opt-in: each agent pane's task cost in its header. */
 function PaneCostSettings() {
   const showPaneCost = useWorkspaces((s) => s.showPaneCost);
   return (
     <Card title="On panes">
-      <Row label="Show task cost on panes" hint="Each agent in its own worktree shows what its task has cost so far, at API prices, next to its title.">
+      <Row label="Show task cost on panes" hint="Each agent shows what its task has cost so far, at API prices, next to its title: its worktree's spend, or its session's when it works in a shared folder.">
         <Toggle label="Show task cost on panes" checked={showPaneCost} onChange={(on) => useWorkspaces.getState().setShowPaneCost(on)} />
       </Row>
     </Card>

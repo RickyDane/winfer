@@ -45,6 +45,8 @@ pub struct Event {
     pub cost: Option<f64>,
     /// Folder the agent ran in (forward slashes, no trailing slash), if the log says.
     pub cwd: Option<String>,
+    /// The agent session the call belongs to, if the log says.
+    pub session: Option<String>,
 }
 
 /// Tokens and cost of one provider/model in one hour.
@@ -101,7 +103,18 @@ impl UsageHistory {
                  DELETE FROM kv WHERE key = 'opencode';",
             )?;
         }
-        conn.execute_batch("CREATE INDEX IF NOT EXISTS events_by_cwd ON events (cwd, at);")?;
+        if conn.prepare("SELECT session FROM events LIMIT 0").is_err() {
+            // Added later too: read every log again so the rows still there get their session.
+            conn.execute_batch(
+                "ALTER TABLE events ADD COLUMN session TEXT;
+                 DELETE FROM files;
+                 DELETE FROM kv WHERE key = 'opencode';",
+            )?;
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS events_by_cwd ON events (cwd, at);
+             CREATE INDEX IF NOT EXISTS events_by_session ON events (session);",
+        )?;
         Ok(Self { conn: Mutex::new(conn), scanned: Mutex::new(None) })
     }
 
@@ -112,11 +125,11 @@ impl UsageHistory {
 
     fn insert(conn: &Connection, events: &[Event]) -> rusqlite::Result<()> {
         let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO events (id, at, provider, model, input, output, cache_read, cache_write, cost, cwd)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT OR REPLACE INTO events (id, at, provider, model, input, output, cache_read, cache_write, cost, cwd, session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )?;
         for e in events {
-            stmt.execute(params![e.id, e.at, e.provider, e.model, e.input as i64, e.output as i64, e.cache_read as i64, e.cache_write as i64, e.cost, e.cwd])?;
+            stmt.execute(params![e.id, e.at, e.provider, e.model, e.input as i64, e.output as i64, e.cache_read as i64, e.cache_write as i64, e.cost, e.cwd, e.session])?;
         }
         Ok(())
     }
@@ -161,6 +174,20 @@ impl UsageHistory {
         let rows = stmt.query_map(params![dir, under, since], dir_row)?;
         let mut out = fold_dirs(rows, prices)?;
         Ok(out.pop().unwrap_or_else(|| DirUsage { dir, ..Default::default() }))
+    }
+
+    /// Spend in an agent session (Claude Code's or OpenCode's session id, Codex's thread id), for
+    /// a pane that shares its folder with others. Comes back keyed by the session in `dir`.
+    pub fn session_usage(&self, session: &str, prices: &Prices) -> rusqlite::Result<DirUsage> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare_cached(
+            "SELECT ?1, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost), COUNT(cost),
+                    MIN(at), MAX(at), COUNT(*)
+             FROM events WHERE session = ?1 GROUP BY provider, model",
+        )?;
+        let rows = stmt.query_map(params![session], dir_row)?;
+        let mut out = fold_dirs(rows, prices)?;
+        Ok(out.pop().unwrap_or_else(|| DirUsage { dir: session.to_string(), ..Default::default() }))
     }
 
     /// Spend per checkout (repo or worktree) since `since`, most expensive first, for telling
@@ -461,6 +488,7 @@ fn claude_events(line: &str, _path: &Path, _at: u64, _state: &mut Value) -> Opti
         cache_write: n(&u["cache_creation_input_tokens"]),
         cost: None,
         cwd: v["cwd"].as_str().map(norm_dir),
+        session: v["sessionId"].as_str().map(String::from),
     })
     .filter(|e| e.input + e.output + e.cache_read + e.cache_write > 0)
 }
@@ -483,6 +511,9 @@ fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<E
         }
         if let Some(cwd) = v["payload"]["cwd"].as_str() {
             state["cwd"] = norm_dir(cwd).into();
+        }
+        if line.contains("\"session_meta\"") && let Some(id) = v["payload"]["id"].as_str() {
+            state["session"] = id.into();
         }
         return None;
     }
@@ -512,6 +543,7 @@ fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<E
         cache_write,
         cost: None,
         cwd: state["cwd"].as_str().map(String::from),
+        session: state["session"].as_str().map(String::from),
     })
 }
 
@@ -529,20 +561,21 @@ fn scan_opencode(conn: &mut Connection, cutoff: i64) -> rusqlite::Result<()> {
     // The folder is the session's; databases without the sessions table go without.
     let mut stmt = db
         .prepare(
-            "SELECT m.id, m.time_created, m.time_updated, m.data, s.directory FROM session_message m
+            "SELECT m.id, m.time_created, m.time_updated, m.data, s.directory, m.session_id FROM session_message m
              LEFT JOIN session_v2 s ON s.id = m.session_id WHERE m.type = 'assistant' AND m.time_updated >= ?1",
         )
-        .or_else(|_| db.prepare("SELECT id, time_created, time_updated, data, NULL FROM session_message WHERE type = 'assistant' AND time_updated >= ?1"))?;
+        .or_else(|_| db.prepare("SELECT id, time_created, time_updated, data, NULL, session_id FROM session_message WHERE type = 'assistant' AND time_updated >= ?1"))?;
     let mut newest = mark;
     let events: Vec<Event> = stmt
         .query_map([since], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?))
         })?
         .flatten()
-        .filter_map(|(id, created, updated, data, dir)| {
+        .filter_map(|(id, created, updated, data, dir, session)| {
             newest = newest.max(updated);
             let mut e = opencode_event(&id, created, &serde_json::from_str(&data).ok()?)?;
             e.cwd = dir.as_deref().map(norm_dir);
+            e.session = session;
             Some(e)
         })
         .filter(|e| e.at >= cutoff)
@@ -567,6 +600,7 @@ fn opencode_event(id: &str, at: i64, data: &Value) -> Option<Event> {
         cache_write: n(&t["cache"]["write"]),
         cost: data["cost"].as_f64().filter(|c| *c > 0.0),
         cwd: None,
+        session: None,
     };
     (e.input + e.output + e.cache_read + e.cache_write > 0).then_some(e)
 }
@@ -737,6 +771,20 @@ pub async fn usage_dirs(app: tauri::AppHandle, dirs: Vec<String>) -> Result<Vec<
     .map_err(|e| e.to_string())?
 }
 
+/// What the agents spent in each of `sessions`, keyed by the session in `dir`.
+#[tauri::command]
+pub async fn usage_sessions(app: tauri::AppHandle, sessions: Vec<String>) -> Result<Vec<DirUsage>, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let history = app.state::<UsageHistory>();
+        history.scan_if_stale(std::time::Duration::from_secs(20));
+        let prices = Prices::load();
+        sessions.iter().map(|s| history.session_usage(s, &prices)).collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Spend per folder over the last `days`, most expensive first.
 #[tauri::command]
 pub async fn usage_by_dir(app: tauri::AppHandle, days: i64) -> Result<Vec<DirUsage>, String> {
@@ -792,6 +840,26 @@ mod tests {
         assert_eq!(dirs, vec![("/wt/claude-1", 3, 1), ("/wt/claude-10", 1, 1)]);
         assert_eq!((all[0].first_at, all[0].last_at), (Some(5), Some(20)));
         assert_eq!(norm_dir(r"C:\wt\x\"), "C:/wt/x");
+    }
+
+    #[test]
+    fn spend_per_session_ignores_others_in_the_same_folder() {
+        let h = UsageHistory::in_memory();
+        let ev = |id: &str, session: Option<&str>| Event {
+            id: id.into(),
+            at: 10,
+            provider: "claude".into(),
+            model: "claude-opus-5-5".into(),
+            output: 1_000_000,
+            cwd: Some("/repo".into()),
+            session: session.map(String::from),
+            ..Default::default()
+        };
+        UsageHistory::insert(&h.conn.lock().unwrap(), &[ev("a", Some("s1")), ev("b", Some("s1")), ev("c", Some("s2")), ev("d", None)]).unwrap();
+        let prices = Prices { catalog: HashMap::new() };
+        let d = h.session_usage("s1", &prices).unwrap();
+        assert_eq!((d.dir.as_str(), d.calls, d.tokens), ("s1", 2, 2_000_000));
+        assert_eq!(h.session_usage("nope", &prices).unwrap().calls, 0);
     }
 
     #[test]

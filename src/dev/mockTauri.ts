@@ -71,7 +71,7 @@ const channels = new Map<string, Channel<ArrayBuffer>>();
 const lines = new Map<string, string>();
 
 // Fake browser: one tab list per workspace, frames rendered on an OffscreenCanvas.
-type MockTab = { id: string; url: string; title: string; byAgent: boolean };
+type MockTab = { id: string; url: string; title: string };
 const browserTabs = new Map<string, MockTab[]>();
 const screencasts = new Map<string, { tabId: string; channel: Channel<ArrayBuffer>; viewport: any }>();
 const inputs: unknown[] = [];
@@ -455,11 +455,11 @@ mockIPC(
       case "browser_status":
         return { executable: { path: "mock-chrome", source: "system" } };
       case "browser_open": {
-        if (!browserTabs.has(a.workspaceId)) browserTabs.set(a.workspaceId, [{ id: `t-${++tabCounter}`, url: "about:blank", title: "", byAgent: false }]);
+        if (!browserTabs.has(a.workspaceId)) browserTabs.set(a.workspaceId, [{ id: `t-${++tabCounter}`, url: "about:blank", title: "" }]);
         return browserTabs.get(a.workspaceId);
       }
       case "browser_new_tab": {
-        const tab = { id: `t-${++tabCounter}`, url: a.url, title: "", byAgent: false };
+        const tab = { id: `t-${++tabCounter}`, url: a.url, title: "" };
         browserTabs.get(a.workspaceId)!.push(tab);
         emitTabs(a.workspaceId);
         return tab.id;
@@ -517,6 +517,7 @@ mockIPC(
         return null;
       case "browser_history":
       case "browser_detach":
+      case "browser_log":
         return null;
       case "browser_selection":
         return "";
@@ -597,7 +598,7 @@ mockIPC(
   voice,
   /** Simulates an agent opening a tab through CDP. */
   agentTab: (workspaceId: string, url: string) => {
-    browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard", byAgent: true });
+    browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard" });
     emitTabs(workspaceId);
   },
   status: (paneId: string, status: string, message?: string) => emit("agent://status", { paneId, status, message }),

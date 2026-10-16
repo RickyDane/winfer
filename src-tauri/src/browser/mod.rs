@@ -6,6 +6,7 @@
 mod cdp;
 pub mod chrome;
 pub mod inspect;
+pub mod log;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -28,8 +29,6 @@ pub struct Tab {
     id: String,
     url: String,
     title: String,
-    /// Opened by an agent (not from the winfer UI).
-    by_agent: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,7 +138,6 @@ struct Instance {
     cdp: OnceCell<Arc<Cdp>>,
     /// Page targets in creation order.
     tabs: Mutex<Vec<Tab>>,
-    created_by_ui: Mutex<HashSet<String>>,
     sessions: Mutex<HashMap<String, String>>,
     /// One attach per target even when the UI and target discovery race for it.
     attaching: Mutex<HashMap<String, Arc<OnceCell<String>>>>,
@@ -183,31 +181,28 @@ impl Instance {
                     return;
                 }
                 let id = info["targetId"].as_str().unwrap_or_default().to_string();
-                let by_agent = !self.created_by_ui.lock().unwrap().contains(&id);
                 let tab = Tab {
                     url: info["url"].as_str().unwrap_or_default().into(),
                     title: info["title"].as_str().unwrap_or_default().into(),
-                    by_agent,
                     id: id.clone(),
                 };
                 // Attach to every page right away so its console errors are captured
                 // even before anyone looks at it (agents open tabs in the background).
                 if event.method == "Target.targetCreated" {
+                    log::info!("[{}] tab {} opened ({})", self.workspace_id, short(&id), tab.url);
                     let instance = self.clone();
                     let target = id.clone();
                     tauri::async_runtime::spawn(async move {
-                        let _ = instance.session(&target).await;
+                        let _ = log::check(&format!("[{}] attach to new tab {}", instance.workspace_id, short(&target)), instance.session(&target).await);
+                        // The new tab took the front, which hides the one on screen: it'd stop
+                        // painting and taking input. Showing the new tab brings it back in front.
+                        instance.front_shown_tab().await;
                     });
                 }
                 {
                     let mut tabs = self.tabs.lock().unwrap();
                     match tabs.iter_mut().find(|t| t.id == id) {
-                        Some(existing) => {
-                            *existing = Tab {
-                                by_agent: existing.by_agent,
-                                ..tab
-                            }
-                        }
+                        Some(existing) => *existing = tab,
                         None => tabs.push(tab),
                     }
                 }
@@ -215,11 +210,38 @@ impl Instance {
             }
             "Target.targetDestroyed" => {
                 let id = event.params["targetId"].as_str().unwrap_or_default();
+                log::info!("[{}] tab {} closed", self.workspace_id, short(id));
                 self.tabs.lock().unwrap().retain(|t| t.id != id);
                 self.sessions.lock().unwrap().remove(id);
                 self.attaching.lock().unwrap().remove(id);
                 self.console.lock().unwrap().remove(id);
                 self.emit_tabs();
+            }
+            // Our session ended without the tab closing (the page's process swapped or died):
+            // forget it so the next call attaches again instead of failing on a dead session.
+            "Target.detachedFromTarget" => {
+                let session = event.params["sessionId"].as_str().unwrap_or_default();
+                let target = {
+                    let mut sessions = self.sessions.lock().unwrap();
+                    let target = sessions.iter().find(|(_, s)| s.as_str() == session).map(|(t, _)| t.clone());
+                    if let Some(t) = &target {
+                        sessions.remove(t);
+                    }
+                    target
+                };
+                if let Some(target) = target {
+                    log::warning!("[{}] session to tab {} detached", self.workspace_id, short(&target));
+                    self.attaching.lock().unwrap().remove(&target);
+                }
+            }
+            "Target.targetCrashed" => {
+                log::warning!(
+                    "[{}] tab {} crashed (status {}, code {})",
+                    self.workspace_id,
+                    short(event.params["targetId"].as_str().unwrap_or_default()),
+                    event.params["status"],
+                    event.params["errorCode"]
+                );
             }
             "Overlay.inspectNodeRequested" => {
                 let (Some(session), Some(node)) = (
@@ -333,7 +355,8 @@ impl Instance {
         let cdp = self
             .cdp
             .get_or_try_init(|| async move {
-                let ws_url = self.wait_ws_url().await?;
+                let ws_url = log::check(&format!("[{}] browser start", self.workspace_id), self.wait_ws_url().await)?;
+                log::info!("[{}] connecting to {ws_url}", self.workspace_id);
                 let cdp = Cdp::connect(&ws_url, move |event| {
                     if let Some(instance) = weak.upgrade() {
                         instance.on_event(event);
@@ -425,15 +448,73 @@ impl Instance {
                     .lock()
                     .unwrap()
                     .insert(target_id.to_string(), session.clone());
+                // Agents (Playwright) auto-attach with waitForDebuggerOnStart, so a tab can be held
+                // until they resume it; one that went away never would. Harmless otherwise.
+                let _ = cdp.call("Runtime.runIfWaitingForDebugger", json!({}), Some(&session)).await;
                 cdp.call("Page.enable", json!({}), Some(&session)).await?;
                 for domain in ["Runtime.enable", "Log.enable", "Network.enable"] {
-                    let _ = cdp.call(domain, json!({}), Some(&session)).await;
+                    if let Err(err) = cdp.call(domain, json!({}), Some(&session)).await {
+                        log::warning!("[{}] {domain} on tab {}: {err}", self.workspace_id, short(target_id));
+                    }
                 }
                 Ok::<_, String>(session)
             })
             .await?;
         Ok(session.clone())
     }
+
+    /// Sends `method` to a tab, attaching once more if the session turned out to be gone.
+    async fn call_target(self: &Arc<Self>, target_id: &str, method: &str, params: Value) -> Res<Value> {
+        let session = self.session(target_id).await?;
+        let cdp = self.cdp().await?;
+        match cdp.call(method, params.clone(), Some(&session)).await {
+            Err(err) if err.contains("ession") => {
+                log::warning!("[{}] {method} on tab {}: {err}; attaching again", self.workspace_id, short(target_id));
+                self.forget_session(target_id, &session);
+                let session = self.session(target_id).await?;
+                cdp.call(method, params, Some(&session)).await
+            }
+            result => result,
+        }
+    }
+
+    /// Puts the tab the panel shows in front again, focused, so it paints and takes typing.
+    async fn front_shown_tab(&self) {
+        // Serialized with attaches, so this can't put back a tab the panel just moved away from.
+        let _guard = self.attach_lock.lock().await;
+        let shown = self.screencast.lock().unwrap().as_ref().map(|sc| (sc.target_id.clone(), sc.session_id.clone()));
+        let (Some((target, session)), Some(cdp)) = (shown, self.cdp.get()) else {
+            return;
+        };
+        front(cdp, &target, &session, &self.workspace_id).await;
+    }
+
+    fn forget_session(&self, target_id: &str, session: &str) {
+        let mut sessions = self.sessions.lock().unwrap();
+        if sessions.get(target_id).is_some_and(|s| s == session) {
+            sessions.remove(target_id);
+            self.attaching.lock().unwrap().remove(target_id);
+        }
+    }
+}
+
+/// Makes a tab the front, focused one. Only the front tab paints (screencast frames) and has
+/// focus (where typing goes), and agents keep opening tabs in front of the one on screen.
+async fn front(cdp: &Cdp, target_id: &str, session: &str, workspace_id: &str) {
+    for (method, params, session) in [
+        ("Target.activateTarget", json!({ "targetId": target_id }), None),
+        ("Page.bringToFront", json!({}), Some(session)),
+        ("Emulation.setFocusEmulationEnabled", json!({ "enabled": true }), Some(session)),
+    ] {
+        if let Err(err) = cdp.call(method, params, session).await {
+            log::warning!("[{workspace_id}] {method} on tab {}: {err}", short(target_id));
+        }
+    }
+}
+
+/// A target id's first characters, enough to tell tabs apart in the log.
+fn short(id: &str) -> &str {
+    &id[..id.len().min(8)]
 }
 
 #[derive(Default)]
@@ -471,7 +552,8 @@ impl BrowserManager {
         let profile = data_dir(app)?
             .join("browser-profiles")
             .join(sanitize(workspace_id));
-        let launched = chrome::launch(&exe, &profile)?;
+        let launched = log::check(&format!("[{workspace_id}] launch {}", exe.path.display()), chrome::launch(&exe, &profile))?;
+        log::info!("[{workspace_id}] browser launched on port {}", launched.port);
         let instance = Arc::new(Instance {
             workspace_id: workspace_id.to_string(),
             app: app.clone(),
@@ -481,7 +563,6 @@ impl BrowserManager {
             profile,
             cdp: OnceCell::new(),
             tabs: Mutex::default(),
-            created_by_ui: Mutex::default(),
             sessions: Mutex::default(),
             attaching: Mutex::default(),
             screencast: Mutex::default(),
@@ -558,8 +639,8 @@ async fn instance(
     manager: &BrowserManager,
     workspace_id: &str,
 ) -> Res<Arc<Instance>> {
-    let instance = manager.ensure(app, workspace_id)?;
-    instance.cdp().await?;
+    let instance = log::check(&format!("[{workspace_id}] start"), manager.ensure(app, workspace_id))?;
+    log::check(&format!("[{workspace_id}] connect"), instance.cdp().await.map(drop))?;
     Ok(instance)
 }
 
@@ -579,9 +660,11 @@ pub fn browser_status(app: AppHandle) -> Res<BrowserStatus> {
 #[tauri::command]
 pub async fn browser_install(app: AppHandle) -> Res<Executable> {
     let dir = managed_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || chrome::install(&dir))
+    let result = tauri::async_runtime::spawn_blocking(move || chrome::install(&dir))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    log::check("browser install", result)
 }
 
 /// Starts the workspace browser and returns its tabs (creating a first tab if there are none).
@@ -596,7 +679,6 @@ pub async fn browser_open(
     // Discovery events populate tabs asynchronously; fetch the list directly too.
     let targets = cdp.call("Target.getTargets", json!({}), None).await?;
     {
-        let ui = instance.created_by_ui.lock().unwrap();
         let mut tabs = instance.tabs.lock().unwrap();
         for info in targets["targetInfos"]
             .as_array()
@@ -610,7 +692,6 @@ pub async fn browser_open(
                     id: id.into(),
                     url: info["url"].as_str().unwrap_or_default().into(),
                     title: info["title"].as_str().unwrap_or_default().into(),
-                    by_agent: !ui.contains(id) && info["url"] != "about:blank",
                 });
             }
         }
@@ -626,26 +707,15 @@ pub async fn browser_new_tab(
     url: String,
 ) -> Res<String> {
     let instance = instance(&app, &manager, &workspace_id).await?;
-    let res = instance
-        .cdp()
-        .await?
-        .call("Target.createTarget", json!({ "url": url }), None)
-        .await?;
+    let res = log::check(
+        &format!("[{workspace_id}] new tab for {url}"),
+        instance.cdp().await?.call("Target.createTarget", json!({ "url": url }), None).await,
+    )?;
     let id = res["targetId"]
         .as_str()
         .ok_or("createTarget returned no id")?
         .to_string();
-    instance.created_by_ui.lock().unwrap().insert(id.clone());
-    if let Some(tab) = instance
-        .tabs
-        .lock()
-        .unwrap()
-        .iter_mut()
-        .find(|t| t.id == id)
-    {
-        tab.by_agent = false;
-    }
-    instance.emit_tabs();
+    log::info!("[{workspace_id}] new tab {} for {url}", short(&id));
     Ok(id)
 }
 
@@ -753,12 +823,8 @@ pub async fn browser_close_tab(
     target_id: String,
 ) -> Res<()> {
     let instance = instance(&app, &manager, &workspace_id).await?;
-    instance
-        .cdp()
-        .await?
-        .call("Target.closeTarget", json!({ "targetId": target_id }), None)
-        .await?;
-    Ok(())
+    let result = instance.cdp().await?.call("Target.closeTarget", json!({ "targetId": target_id }), None).await;
+    log::check(&format!("[{workspace_id}] close tab {}", short(&target_id)), result).map(drop)
 }
 
 #[tauri::command]
@@ -770,12 +836,11 @@ pub async fn browser_navigate(
     url: String,
 ) -> Res<()> {
     let instance = instance(&app, &manager, &workspace_id).await?;
-    let session = instance.session(&target_id).await?;
-    instance
-        .cdp()
-        .await?
-        .call("Page.navigate", json!({ "url": url }), Some(&session))
-        .await?;
+    let res = instance.call_target(&target_id, "Page.navigate", json!({ "url": &url })).await;
+    let res = log::check(&format!("[{workspace_id}] navigate tab {} to {url}", short(&target_id)), res)?;
+    if let Some(error) = res["errorText"].as_str() {
+        log::warning!("[{workspace_id}] tab {} didn't load {url}: {error}", short(&target_id));
+    }
     Ok(())
 }
 
@@ -789,15 +854,13 @@ pub async fn browser_history(
     delta: i64,
 ) -> Res<()> {
     let instance = instance(&app, &manager, &workspace_id).await?;
+    let what = format!("[{workspace_id}] history {delta} in tab {}", short(&target_id));
+    if delta == 0 {
+        return log::check(&what, instance.call_target(&target_id, "Page.reload", json!({})).await).map(drop);
+    }
+    let history = log::check(&what, instance.call_target(&target_id, "Page.getNavigationHistory", json!({})).await)?;
     let session = instance.session(&target_id).await?;
     let cdp = instance.cdp().await?;
-    if delta == 0 {
-        cdp.call("Page.reload", json!({}), Some(&session)).await?;
-        return Ok(());
-    }
-    let history = cdp
-        .call("Page.getNavigationHistory", json!({}), Some(&session))
-        .await?;
     let index = history["currentIndex"].as_i64().unwrap_or(0) + delta;
     if let Some(entry) = history["entries"]
         .as_array()
@@ -879,8 +942,13 @@ pub async fn browser_attach(
             .call("Page.stopScreencast", json!({}), Some(&prev.session_id))
             .await;
     }
-    let session = instance.session(&target_id).await?;
-    apply_viewport(&cdp, &target_id, &session, &viewport).await?;
+    let what = format!("[{workspace_id}] show tab {}", short(&target_id));
+    log::info!("{what}");
+    let session = log::check(&what, instance.session(&target_id).await)?;
+    // Whichever tab an agent last drove may be in front; a tab behind it shows nothing and
+    // ignores typing.
+    front(&cdp, &target_id, &session, &workspace_id).await;
+    log::check(&what, apply_viewport(&cdp, &target_id, &session, &viewport).await)?;
     *instance.screencast.lock().unwrap() = Some(Screencast {
         attach_id,
         target_id,
@@ -888,13 +956,14 @@ pub async fn browser_attach(
         channel: on_frame,
         sizing: Sizing::new(viewport),
     });
-    cdp.call(
-        "Page.startScreencast",
-        json!({ "format": "jpeg", "quality": 80, "everyNthFrame": 1 }),
-        Some(&session),
-    )
-    .await?;
-    Ok(())
+    let result = cdp
+        .call(
+            "Page.startScreencast",
+            json!({ "format": "jpeg", "quality": 80, "everyNthFrame": 1 }),
+            Some(&session),
+        )
+        .await;
+    log::check(&what, result).map(drop)
 }
 
 #[tauri::command]
@@ -955,7 +1024,10 @@ pub async fn browser_resize(
     {
         sc.sizing.set(viewport.clone());
     }
-    apply_viewport(&cdp, &target_id, &session, &viewport).await
+    log::check(
+        &format!("[{workspace_id}] resize tab {} to {}x{}", short(&target_id), viewport.width, viewport.height),
+        apply_viewport(&cdp, &target_id, &session, &viewport).await,
+    )
 }
 
 /// Forwards one input event; `event` is a CDP Input.* method name plus its params.
@@ -975,13 +1047,9 @@ pub async fn browser_input(
         return Err(format!("unsupported input method {method}"));
     }
     let instance = instance(&app, &manager, &workspace_id).await?;
-    let session = instance.session(&target_id).await?;
-    instance
-        .cdp()
-        .await?
-        .call(&method, params, Some(&session))
-        .await?;
-    Ok(())
+    // Only the event type: key events would put what the user types in the log.
+    let what = format!("[{workspace_id}] {method} {} in tab {}", params["type"].as_str().unwrap_or_default(), short(&target_id));
+    log::check(&what, instance.call_target(&target_id, &method, params).await).map(drop)
 }
 
 /// Types a plugin's secret into the field matching `selector` (replacing its contents) without
@@ -1029,16 +1097,14 @@ pub async fn browser_selection(
     target_id: String,
 ) -> Res<String> {
     let instance = instance(&app, &manager, &workspace_id).await?;
-    let session = instance.session(&target_id).await?;
     let res = instance
-        .cdp()
-        .await?
-        .call(
+        .call_target(
+            &target_id,
             "Runtime.evaluate",
             json!({ "expression": "window.getSelection().toString()", "returnByValue": true }),
-            Some(&session),
         )
-        .await?;
+        .await;
+    let res = log::check(&format!("[{workspace_id}] selection in tab {}", short(&target_id)), res)?;
     Ok(res["result"]["value"]
         .as_str()
         .unwrap_or_default()
@@ -1214,6 +1280,61 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(value["result"]["value"], "hello");
+        });
+    }
+
+    /// The panel's tab after an agent opened another one in front: it must paint and take typing.
+    #[test]
+    fn shown_tab_gets_focus_back_from_an_agents_tab() {
+        let tmp = std::env::temp_dir().join(format!("winfer-cdp-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
+
+        tauri::async_runtime::block_on(async {
+            let ws = chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap();
+            let cdp = Cdp::connect(&ws, |_| {}).await.unwrap();
+            let open = |url: &'static str| {
+                let cdp = cdp.clone();
+                async move {
+                    let id = cdp.call("Target.createTarget", json!({ "url": url }), None).await.unwrap()["targetId"].as_str().unwrap().to_string();
+                    let session = cdp.call("Target.attachToTarget", json!({ "targetId": id, "flatten": true }), None).await.unwrap()["sessionId"]
+                        .as_str()
+                        .unwrap()
+                        .to_string();
+                    (id, session)
+                }
+            };
+            let eval = |session: String, expr: &'static str| {
+                let cdp = cdp.clone();
+                async move {
+                    cdp.call("Runtime.evaluate", json!({ "expression": expr, "returnByValue": true }), Some(&session)).await.unwrap()["result"]["value"].clone()
+                }
+            };
+            let (shown, session) = open("data:text/html,<input id=i>").await;
+            let _agent_tab = open("data:text/html,agent").await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            assert_eq!(eval(session.clone(), "document.visibilityState").await, "hidden");
+            assert_eq!(eval(session.clone(), "document.hasFocus()").await, false);
+
+            front(&cdp, &shown, &session, "test").await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert_eq!(eval(session.clone(), "document.visibilityState").await, "visible");
+            assert_eq!(eval(session.clone(), "document.hasFocus()").await, true);
+
+            // Click-to-focus then type, the way the panel forwards input.
+            eval(session.clone(), "document.getElementById('i').focus()").await;
+            for (kind, text) in [("keyDown", Some("h")), ("keyUp", None), ("keyDown", Some("i")), ("keyUp", None)] {
+                let mut params = json!({ "type": kind, "key": text.unwrap_or("i") });
+                if let Some(t) = text {
+                    params["text"] = json!(t);
+                }
+                cdp.call("Input.dispatchKeyEvent", params, Some(&session)).await.unwrap();
+            }
+            assert_eq!(eval(session.clone(), "document.getElementById('i').value").await, "hi");
         });
     }
 }

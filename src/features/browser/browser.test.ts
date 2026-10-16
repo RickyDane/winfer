@@ -15,11 +15,11 @@ describe("normalizeUrl", () => {
 });
 
 describe("followedTab", () => {
-  const tab = (id: string, url: string, byAgent = false) => ({ id, url, title: "", byAgent });
+  const tab = (id: string, url: string) => ({ id, url, title: "" });
 
-  it("ignores the first listing", () => expect(followedTab(undefined, [tab("a", "https://x.dev", true)], null)).toBeUndefined());
-  it("follows a tab an agent opened", () => expect(followedTab([tab("a", "about:blank")], [tab("a", "about:blank"), tab("b", "", true)], "a")?.id).toBe("b"));
-  it("doesn't follow a tab the UI opened", () => expect(followedTab([tab("a", "about:blank")], [tab("a", "about:blank"), tab("b", "")], "a")).toBeUndefined());
+  it("ignores the first listing", () => expect(followedTab(undefined, [tab("a", "https://x.dev")], null)).toBeUndefined());
+  it("follows a new tab with a page", () => expect(followedTab([tab("a", "about:blank")], [tab("a", "about:blank"), tab("b", "https://b.dev")], "a")?.id).toBe("b"));
+  it("doesn't follow a new blank tab", () => expect(followedTab([tab("a", "about:blank")], [tab("a", "about:blank"), tab("b", "")], "a")).toBeUndefined());
   it("follows a navigation in a background tab", () =>
     expect(followedTab([tab("a", "https://a.dev"), tab("b", "about:blank")], [tab("a", "https://a.dev"), tab("b", "https://b.dev")], "a")?.id).toBe("b"));
   it("ignores title-only changes and the shown tab", () => {

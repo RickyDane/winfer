@@ -18,7 +18,6 @@ export interface Tab {
   id: string;
   url: string;
   title: string;
-  byAgent: boolean;
 }
 
 export type Device = "desktop" | "mobile";
@@ -72,6 +71,12 @@ export const useBrowser = create<BrowserState>(() => ({
 }));
 
 const activeWorkspaceId = () => useWorkspaces.getState().activeWorkspaceId;
+
+/** Records a browser problem in browser.log (app data folder) for later debugging. */
+export function logBrowser(level: "error" | "warn" | "info", message: string) {
+  if (level === "error") console.error(`[browser] ${message}`);
+  void invoke("browser_log", { level, message }).catch(() => {});
+}
 
 /** The workspace whose browser the panel shows (the active one until a tab is picked). */
 export function shownWorkspaceId() {
@@ -208,6 +213,7 @@ export async function clearConsole() {
 }
 
 async function fail(err: unknown) {
+  logBrowser("error", `start failed: ${String(err)}`);
   useBrowser.setState({ availability: "error", error: String(err) });
 }
 
@@ -291,18 +297,20 @@ export async function openUrl(input: string, opts: { newTab?: boolean; workspace
   const current = activeTabId(workspaceId);
   const blank = tabs.find((t) => t.id === current && (t.url === "about:blank" || t.url === ""));
 
-  if (opts.newTab && url === "about:blank" && blank) {
-    // A browser that just started already has a blank tab; show it instead of adding another.
-    selectTab(blank.id, workspaceId);
-  } else if (!opts.newTab && existing) {
-    selectTab(existing.id, workspaceId);
-    if (existing.url !== url) await invoke("browser_navigate", { workspaceId, targetId: existing.id, url });
-  } else if (!opts.newTab && blank) {
-    selectTab(blank.id, workspaceId);
-    await invoke("browser_navigate", { workspaceId, targetId: blank.id, url });
-  } else {
-    const id = await invoke<string>("browser_new_tab", { workspaceId, url });
-    selectTab(id, workspaceId);
+  try {
+    if (!opts.newTab && existing) {
+      selectTab(existing.id, workspaceId);
+      if (existing.url !== url) await invoke("browser_navigate", { workspaceId, targetId: existing.id, url });
+    } else if (!opts.newTab && blank) {
+      selectTab(blank.id, workspaceId);
+      await invoke("browser_navigate", { workspaceId, targetId: blank.id, url });
+    } else {
+      const id = await invoke<string>("browser_new_tab", { workspaceId, url });
+      selectTab(id, workspaceId);
+    }
+  } catch (err) {
+    // The backend logged the details; say so in the panel rather than failing silently.
+    flash(`Couldn't open ${url}: ${String(err)}`);
   }
 }
 
@@ -312,13 +320,13 @@ export async function newTab() {
 }
 
 export async function closeTab(tabId = activeTabId(), workspaceId = shownWorkspaceId()) {
-  if (tabId) await invoke("browser_close_tab", { workspaceId, targetId: tabId });
+  if (tabId) await invoke("browser_close_tab", { workspaceId, targetId: tabId }).catch((err) => flash(`Couldn't close the tab: ${String(err)}`));
 }
 
 /** -1 back, +1 forward, 0 reload. */
 export async function history(delta: -1 | 0 | 1) {
   const targetId = activeTabId();
-  if (targetId) await invoke("browser_history", { workspaceId: shownWorkspaceId(), targetId, delta });
+  if (targetId) await invoke("browser_history", { workspaceId: shownWorkspaceId(), targetId, delta }).catch((err) => flash(String(err)));
 }
 
 export function setDevice(device: Device | "toggle") {

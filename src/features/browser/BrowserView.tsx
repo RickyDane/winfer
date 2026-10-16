@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
-import { setPageSize, type Device, type PageSize } from "./browser";
+import { logBrowser, setPageSize, type Device, type PageSize } from "./browser";
 
 const MOBILE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
 
@@ -44,6 +44,9 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
   const viewport = useRef<Viewport | null>(null);
   const attached = useRef(false);
   const [panel, setPanel] = useState({ width: 0, height: 0 });
+  /** Why the tab couldn't be shown; bumping `attempt` tries again. */
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   const own = size ?? (device === "mobile" ? MOBILE : null);
   const page = own ?? panel;
@@ -79,6 +82,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     let pending: ArrayBuffer | null = null;
     const attachId = crypto.randomUUID();
     attached.current = false;
+    setAttachError(null);
 
     const draw = async (buf: ArrayBuffer) => {
       if (decoding) {
@@ -114,14 +118,17 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       // The size may have changed (panel opening, an agent) during the attach.
       syncRef.current();
     };
-    void attach().catch((err) => console.error("browser_attach failed", err));
+    void attach().catch((err) => {
+      logBrowser("error", `showing tab ${tabId} failed: ${String(err)}`);
+      if (!disposed) setAttachError(String(err));
+    });
 
     return () => {
       disposed = true;
       attached.current = false;
       void invoke("browser_detach", { workspaceId, attachId });
     };
-  }, [workspaceId, tabId, device]);
+  }, [workspaceId, tabId, device, attempt]);
 
   /** Sends the page size to the browser when it changed. */
   const sync = () => {
@@ -262,6 +269,14 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
           onContextMenu={(e) => e.preventDefault()}
           className={cn("block h-full w-full bg-white", own && "ring-1 ring-border-strong", device === "mobile" && "rounded-xl")}
         />
+        {attachError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-panel px-8 text-center text-xs text-fg-subtle">
+            <span className="text-danger">Couldn't show this tab: {attachError}</span>
+            <button onClick={() => setAttempt((n) => n + 1)} className="rounded-md bg-panel-raised px-3 py-1.5 font-medium text-fg hover:bg-hover">
+              Try again
+            </button>
+          </div>
+        )}
         {own && (
           <>
             <div title="Drag to resize · double-click to fit the panel" onPointerDown={dragEdge({ x: true })} onDoubleClick={() => setPageSize(tabId, null)} className={cn(handle, "top-1/2 -right-2.5 h-10 w-1.5 -translate-y-1/2 cursor-ew-resize")} />

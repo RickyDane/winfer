@@ -11,6 +11,7 @@ export function followedTab(previous: Tab[] | undefined, tabs: Tab[], current: s
   return [...tabs].reverse().find((t) => {
     if (t.id === current) return false;
     const before = previous.find((p) => p.id === t.id);
-    return before ? !isBlank(t.url) && before.url !== t.url : t.byAgent;
+    // A new tab is worth showing once it has a page; blank ones are followed when they navigate.
+    return !isBlank(t.url) && before?.url !== t.url;
   });
 }

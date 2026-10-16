@@ -2,7 +2,7 @@ import { SideTerminal } from "@/features/terminal/SideTerminal";
 import { DevicePanel } from "@/features/android/DevicePanel";
 import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
-import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, Globe, Loader2, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Crosshair, Download, Globe, Loader2, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { DEFAULT_BROWSER_WIDTH, useWorkspaces } from "@/stores/workspaces";
@@ -155,9 +155,8 @@ export function BrowserPanel() {
                     workspace.id === workspaceId && tab.id === active?.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover",
                   )}
                 >
-                  {tab.byAgent ? <Bot size={12} className="text-accent" /> : <Globe size={12} />}
+                  <Globe size={12} />
                   <span className="truncate">{label(tab)}</span>
-                  {tab.byAgent && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent">agent</span>}
                   <X
                     size={11}
                     className="shrink-0 opacity-0 group-hover:opacity-60 hover:opacity-100"

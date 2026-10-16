@@ -25,6 +25,9 @@ export interface DirUsage {
 /** Spend in each folder since it was made. */
 export const fetchDirUsage = (dirs: string[]) => invoke<DirUsage[]>("usage_dirs", { dirs });
 
+/** Spend in each agent session (keyed by the session in `dir`). */
+export const fetchSessionUsage = (sessions: string[]) => invoke<DirUsage[]>("usage_sessions", { sessions });
+
 /** Spend per folder over the last `days`, most expensive first. */
 export const fetchUsageByDir = (days: number) => invoke<DirUsage[]>("usage_by_dir", { days });
 
@@ -34,9 +37,11 @@ export const normDir = (dir: string) => dir.replace(/\\/g, "/").replace(/(.)\/+$
 interface TaskCostState {
   /** By normalized folder. */
   byDir: Record<string, DirUsage>;
+  /** By agent session id, for panes without a worktree of their own. */
+  bySession: Record<string, DirUsage>;
 }
 
-export const useTaskCosts = create<TaskCostState>(() => ({ byDir: {} }));
+export const useTaskCosts = create<TaskCostState>(() => ({ byDir: {}, bySession: {} }));
 
 /** Reads fresh numbers for `dirs` into the store (failures keep the old ones). */
 export async function refreshTaskCosts(dirs: string[]): Promise<DirUsage[]> {
@@ -51,6 +56,23 @@ export async function refreshTaskCosts(dirs: string[]): Promise<DirUsage[]> {
     return [];
   }
 }
+
+/** Reads fresh numbers for agent `sessions` into the store (failures keep the old ones). */
+export async function refreshSessionCosts(sessions: string[]): Promise<DirUsage[]> {
+  const unique = [...new Set(sessions)];
+  if (unique.length === 0) return [];
+  try {
+    const found = await fetchSessionUsage(unique);
+    useTaskCosts.setState((s) => ({ bySession: { ...s.bySession, ...Object.fromEntries(found.map((d) => [d.dir, d])) } }));
+    return found;
+  } catch (err) {
+    console.error("usage_sessions failed", err);
+    return [];
+  }
+}
+
+/** The spend recorded for an agent session, if numbers were read. */
+export const useSessionCost = (session: string | null | undefined) => useTaskCosts((s) => (session ? s.bySession[session] : undefined));
 
 /** The spend recorded for a pane's worktree, if it has one and numbers were read. */
 export const useTaskCost = (dir: string | null | undefined) => useTaskCosts((s) => (dir ? s.byDir[normDir(dir)] : undefined));
