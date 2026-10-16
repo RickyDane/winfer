@@ -35,6 +35,7 @@ const shellPane = (workspace: Workspace): Pane => ({
   unseen: false,
   devUrl: null,
   raceId: null,
+  plain: false,
   prompt: null,
   model: null,
   agentTitle: null,

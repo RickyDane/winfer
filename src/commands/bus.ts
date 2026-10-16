@@ -60,6 +60,8 @@ export type Command =
   | { type: "pane.broadcast"; text: string; submit?: boolean; paneIds?: string[] }
   /** Race mode: start several agents on the same prompt, each in its own worktree. */
   | { type: "race.start"; counts: Record<ProviderId, number>; prompt: string }
+  /** A/B test: the same agent twice on one prompt, each in its own worktree; B runs plain (see `Pane.plain`). */
+  | { type: "abtest.start"; provider: ProviderId; prompt: string; model?: string }
   /** Toggles the scrollback search bar of the focused pane. */
   | { type: "pane.search" }
   /** Types text into a pane's terminal (and presses Enter if `submit`). */
@@ -96,7 +98,7 @@ export type Command =
   /** Toggles settings; with a page, opens settings on that page. */
   | { type: "ui.settings"; page?: string }
   | { type: "ui.theme"; theme: string }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane"; provider?: ProviderId }
+  | { type: "ui.overlay"; overlay: "race" | "abtest" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane"; provider?: ProviderId }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
   /** Terminal text size: bigger, smaller or back to the default. */
@@ -242,6 +244,17 @@ export function execute(cmd: Command): void {
       s.setOverlay("race");
       const racers = Object.values(cmd.counts).reduce((a, b) => a + b, 0);
       logActivity(s.activeWorkspaceId, `Race started with ${racers} agents: ${cmd.prompt}`);
+      return;
+    }
+    case "abtest.start": {
+      const raceId = `ab-${crypto.randomUUID().slice(0, 8)}`;
+      const name = providerName(s.providers, cmd.provider);
+      const model = cmd.model || undefined;
+      s.addPane(cmd.provider, { prompt: cmd.prompt, worktree: true, raceId, model, customTitle: `A · ${name} with tools` });
+      s.addPane(cmd.provider, { prompt: cmd.prompt, worktree: true, raceId, model, plain: true, customTitle: `B · ${name} plain` });
+      s.updateActive((w) => ({ layout: w.layout && buildPreset("grid", leaves(w.layout)) }));
+      s.setOverlay("abtest");
+      logActivity(s.activeWorkspaceId, `A/B test started with ${name}: ${cmd.prompt}`, cmd.provider);
       return;
     }
     case "pane.search": {

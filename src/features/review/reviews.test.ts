@@ -45,7 +45,7 @@ describe("review inbox", () => {
   });
 
   it("counts files, lines and untracked files from a worktree diff", () => {
-    expect(diffStats({ diff: DIFF, untracked: ["src/new.ts"], ahead: 1, dirty: true })).toEqual({
+    expect(diffStats({ diff: DIFF, untracked: ["src/new.ts"], untrackedLines: 3, ahead: 1, dirty: true })).toEqual({
       files: ["src/app.ts", "src/new.ts"],
       adds: 2,
       dels: 1,

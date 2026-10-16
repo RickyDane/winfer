@@ -4,6 +4,8 @@ import type { WorktreeInfo } from "@/stores/workspaces";
 export interface WorktreeDiff {
   diff: string;
   untracked: string[];
+  /** Lines in the untracked text files. */
+  untrackedLines: number;
   ahead: number;
   dirty: boolean;
 }

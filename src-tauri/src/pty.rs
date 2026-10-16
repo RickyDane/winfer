@@ -74,6 +74,9 @@ pub struct SpawnRequest {
     /// Skip the agent's permission prompts (its `autoApproveArgs`), from settings.
     #[serde(default)]
     auto_approve: bool,
+    /// Added to the agent's system prompt (from settings); empty or `None` adds nothing.
+    #[serde(default)]
+    system_prompt: Option<String>,
     /// A/B test baseline: start the agent without winfer's MCP tools, the browser, or the
     /// user's own MCP servers and skills (see [`plain_args`]). Status hooks stay on.
     #[serde(default)]
@@ -154,6 +157,35 @@ fn agent_args(
     args
 }
 
+/// Moves the system prompt into the start prompt for agents with no system prompt flag (only for
+/// a fresh session, which is the only one that gets a start prompt). Plain A/B runs get none.
+fn with_system_prompt(mut req: SpawnRequest) -> SpawnRequest {
+    let Some(system) = req.system_prompt.take().filter(|s| !s.trim().is_empty() && !req.plain) else {
+        return req;
+    };
+    match providers::find(&req.provider_id) {
+        Some(p) if p.command.is_some() && !p.system_prompt_args.is_empty() => req.system_prompt = Some(system),
+        Some(p) if p.command.is_some() && !req.resume => {
+            req.prompt = Some(match req.prompt.take().filter(|p| !p.trim().is_empty()) {
+                Some(prompt) => format!("{system}\n\n{prompt}"),
+                None => system,
+            });
+        }
+        _ => {}
+    }
+    req
+}
+
+/// The provider's `system_prompt_args` with the text filled in.
+fn system_prompt_args(provider: &providers::Provider, prompt: &str) -> Vec<String> {
+    let toml = serde_json::to_string(prompt).unwrap_or_default();
+    provider
+        .system_prompt_args
+        .iter()
+        .map(|a| a.replace("{prompt_toml}", &toml).replace("{prompt}", prompt))
+        .collect()
+}
+
 /// Arguments that keep an agent from loading the user's own MCP servers and skills, for a
 /// plain A/B test run. Simple flags, so they're safe in the MCP position of [`agent_args`].
 fn plain_args(provider_id: &str) -> Vec<String> {
@@ -192,6 +224,11 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             let config_approve = req.auto_approve && provider.id == "opencode" && !opencode_v2;
             if req.auto_approve && !config_approve {
                 let extra = std::mem::take(&mut provider.auto_approve_args);
+                provider.args.extend(extra);
+            }
+            // Multi-line text doesn't survive cmd.exe, so batch launchers go without.
+            if let (Some(system), false) = (&req.system_prompt, launcher.batch) {
+                let extra = system_prompt_args(&provider, system);
                 provider.args.extend(extra);
             }
             // Only OpenCode 2 plugins have the API ours uses (and OpenCode 1 reads `plugin`).
@@ -294,6 +331,7 @@ pub fn pty_spawn(
         }
         _ => None,
     };
+    let req = with_system_prompt(req);
     let (cmd, type_prompt) = build_command(&req, cdp_url.as_deref())?;
     let pair = native_pty_system()
         .openpty(size(req.cols, req.rows))
@@ -449,6 +487,7 @@ mod tests {
             prompt: None,
             model: None,
             auto_approve: false,
+            system_prompt: None,
             plain: false,
             cols: 80,
             rows: 24,
@@ -538,6 +577,46 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_goes_in_a_flag_or_the_start_prompt() {
+        let req = |provider: &str, prompt: Option<&str>, resume: bool| SpawnRequest {
+            pane_id: "p".into(),
+            provider_id: provider.into(),
+            cwd: None,
+            workspace_id: None,
+            resume,
+            session: None,
+            prompt: prompt.map(Into::into),
+            model: None,
+            auto_approve: false,
+            system_prompt: Some("Use your tools.".into()),
+            plain: false,
+            cols: 80,
+            rows: 24,
+        };
+        let claude = with_system_prompt(req("claude", Some("fix it"), false));
+        assert_eq!(claude.system_prompt.as_deref(), Some("Use your tools."));
+        assert_eq!(claude.prompt.as_deref(), Some("fix it"));
+        assert_eq!(
+            system_prompt_args(&providers::find("claude").unwrap(), "Use your tools."),
+            ["--append-system-prompt", "Use your tools."]
+        );
+        assert_eq!(
+            system_prompt_args(&providers::find("codex").unwrap(), "say \"hi\"\nnow"),
+            ["-c", r#"developer_instructions="say \"hi\"\nnow""#]
+        );
+        // No flag: it leads the start prompt, or is the start prompt.
+        let opencode = with_system_prompt(req("opencode", Some("fix it"), false));
+        assert_eq!((opencode.system_prompt, opencode.prompt.as_deref()), (None, Some("Use your tools.\n\nfix it")));
+        assert_eq!(with_system_prompt(req("opencode", None, false)).prompt.as_deref(), Some("Use your tools."));
+        // A resumed session already had it; shells and plain runs never get it.
+        assert_eq!(with_system_prompt(req("opencode", None, true)).prompt, None);
+        assert_eq!(with_system_prompt(req("shell", None, false)).prompt, None);
+        let mut plain = req("claude", None, false);
+        plain.plain = true;
+        assert_eq!(with_system_prompt(plain).system_prompt, None);
+    }
+
+    #[test]
     fn plain_runs_skip_the_users_mcp_servers() {
         assert_eq!(plain_args("claude"), ["--strict-mcp-config", "--disable-slash-commands"]);
         assert_eq!(plain_args("codex"), ["-c", "mcp_servers={}"]);
@@ -561,6 +640,7 @@ mod tests {
             prompt: None,
             model: None,
             auto_approve: false,
+            system_prompt: None,
             plain: false,
             cols: 80,
             rows: 24,

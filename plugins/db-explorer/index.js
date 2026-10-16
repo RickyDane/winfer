@@ -10,7 +10,10 @@
 // SESSION TRANSACTION READ ONLY`, `sqlite3 -readonly -safe`) and by `checkReadOnly`, which only
 // lets one read statement through and refuses the CLIs' own commands (psql `\!`, mysql `system`,
 // sqlite `.shell`), which would otherwise run on the user's machine. SQL Server has no read-only
-// session, so only the catalog queries below run on it: its schema and diagram, no queries.
+// session, so there `checkReadOnly` is stricter (SELECT / WITH only, and no INSERT, UPDATE,
+// DELETE, MERGE, SELECT INTO, EXEC or DDL anywhere in the statement, nor sqlcmd's `:` / `!!`
+// commands), sqlcmd runs with variable substitution off, and each query runs in a transaction
+// that is rolled back (`msQuery`).
 //
 // The schema of every view and of the agents' db_schema comes from the same catalog queries
 // (`introspectionSql`), read into a model (`buildModel`) with relations inferred from column names
@@ -41,14 +44,12 @@ export const KINDS = {
   mssql: { name: "SQL Server", short: "SQL Server", cli: "sqlcmd", placeholder: "sqlserver://user:password@localhost:1433/app" },
 };
 
-/** Whether queries run on a kind of database (SQL Server: schema and diagram only). */
-export const canQuery = (kind) => kind !== "mssql";
-
 /** Statements each dialect may start with: reads only. */
 const READS = {
   postgres: ["select", "with", "explain", "show", "values", "table"],
   mysql: ["select", "with", "explain", "describe", "desc", "show", "values", "table"],
   sqlite: ["select", "with", "explain", "pragma", "values"],
+  mssql: ["select", "with"],
 };
 
 /** Things a read statement could still use to write or to leave read-only mode. */
@@ -56,6 +57,10 @@ const FORBIDDEN = {
   postgres: /\b(set_config|default_transaction_read_only|transaction_read_only|dblink\w*|lo_import|lo_export|pg_terminate_backend|pg_cancel_backend|pg_reload_conf)\b/i,
   mysql: /\binto\s+(outfile|dumpfile)\b|\b(load_file|get_lock|release_lock)\s*\(/i,
   sqlite: /\b(load_extension|writefile|readfile|edit|fts3_tokenizer)\s*\(/i,
+  // No read-only session: anything that writes, runs code or changes the session, wherever it is
+  // (`WITH x AS (…) DELETE …`, `SELECT … INTO`), plus sequences, which a rollback doesn't undo.
+  mssql:
+    /\b(insert|update|delete|merge|into|truncate|drop|alter|create|grant|revoke|deny|exec|execute|sp_\w*|xp_\w*|dbcc|bulk|openrowset|opendatasource|openquery|openxml|backup|restore|kill|shutdown|reconfigure|waitfor|use|set|declare|begin|commit|rollback|save|go|readtext|writetext|updatetext)\b|\bnext\s+value\s+for\b/i,
 };
 
 // Catalog SQL ------------------------------------------------------------------------------------
@@ -286,6 +291,17 @@ ${sql}
 ORDER BY ${order};`;
 }
 
+/** sqlcmd's column separator for queries: a character values don't have. */
+const MS_SEP = "\x1f";
+
+/**
+ * A query as sqlcmd runs it: in a transaction that's rolled back, so a write that got past
+ * `checkReadOnly` is undone. NOCOUNT keeps "(n rows affected)" out of the output.
+ */
+export function msQuery(sql) {
+  return `SET NOCOUNT ON;\nSET XACT_ABORT ON;\nBEGIN TRANSACTION;\n${sql}\n;\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;`;
+}
+
 SQL.mssql = Object.fromEntries(Object.entries(MS_PART).map(([tag, part]) => [tag, msCsv(tag, part)]));
 
 /** The three catalog queries for a dialect: `{ columns, constraints, indexes }`. */
@@ -342,7 +358,19 @@ export function blankSql(sql, dialect) {
         continue;
       }
     }
-    if (c === "'" || c === '"' || (c === "`" && dialect !== "postgres")) {
+    if (dialect === "mssql" && c === "[") {
+      let j = i + 1;
+      while (j < n && !(sql[j] === "]" && sql[j + 1] !== "]")) j += sql[j] === "]" ? 2 : 1;
+      if (j >= n) {
+        open = true;
+        code += c + blank(sql.slice(i + 1));
+        break;
+      }
+      code += c + blank(sql.slice(i + 1, j)) + "]";
+      i = j + 1;
+      continue;
+    }
+    if (c === "'" || c === '"' || (c === "`" && dialect !== "postgres" && dialect !== "mssql")) {
       const eString = dialect === "postgres" && c === "'" && /[eE]/.test(sql[i - 1] ?? "") && !/[\w$]/.test(sql[i - 2] ?? "");
       const escapes = (dialect === "mysql" && c !== "`") || eString;
       let j = i + 1;
@@ -402,10 +430,11 @@ export function statementAt(sql, dialect, pos) {
 
 /** null if `sql` is one read statement this plugin will run; else why not. */
 export function checkReadOnly(sql, dialect) {
-  if (!canQuery(dialect)) return "Queries on SQL Server aren't supported: it has no read-only session to run them in. Its schema is available with db_schema and db_diagram.";
   const { code, open } = blankSql(sql, dialect);
   if (open) return "The query has a string, quoted name or comment that isn't closed.";
-  if (dialect !== "sqlite" && code.includes("\\")) return "Backslash commands (like psql's \\d or mysql's \\!) aren't allowed. Write plain SQL; use the schema tool to list tables.";
+  // sqlcmd reads its commands (`:!! cmd`, `:r file`, `GO`, `EXIT`…) from any line, even in a string.
+  if (dialect === "mssql" && /^[ \t]*(:|!!|(go|quit|reset|ed)[ \t]*(\d+[ \t]*)?$|exit\b)/im.test(sql)) return "sqlcmd commands (like :r, !! or GO) aren't allowed. Write plain SQL; use the schema tool to list tables.";
+  if (dialect !== "sqlite" && dialect !== "mssql" && code.includes("\\")) return "Backslash commands (like psql's \\d or mysql's \\!) aren't allowed. Write plain SQL; use the schema tool to list tables.";
   if (dialect === "sqlite" && /^[ \t]*\./m.test(code)) return "sqlite3 dot commands (like .tables) aren't allowed. Write plain SQL; use the schema tool to list tables.";
   const statements = splitStatements(sql, dialect);
   if (statements.length === 0) return "There's no query to run.";
@@ -641,6 +670,10 @@ export function parseResult(output, kind, maxRows = Infinity) {
   const lines = mark < 0 ? null : Number(text.slice(mark + ROWS_MARK.length).trim().split(/\s/)[0]);
   const body = (mark < 0 ? text : text.slice(0, mark)).replace(/\n+$/, "");
   if (!body.trim()) return { columns: [], rows: [], total: 0, truncated: false };
+  // A query's output has sqlcmd's header and dashed line; the catalog queries' doesn't, or heads
+  // it with MS_COL (sqlcmd 15 prints headers with -y 0, go-sqlcmd and sqlcmd 18 don't).
+  const [first = "", second = ""] = body.split("\n", 2);
+  if (kind === "mssql" && !first.startsWith(MS_COL) && /^[-\x1f \t]*-[-\x1f \t]*$/.test(second)) return parseSqlcmd(body, lines, maxRows);
   // sqlcmd may pad lines, separate result sets with blank lines and head each with its own
   // column name and a dashed line.
   const all = kind === "mysql" ? parseTsv(body) : parseCsv(kind === "mssql" ? body.replace(MS_HEADER, "").replace(/[ \t]+$/gm, "") : body);
@@ -648,6 +681,29 @@ export function parseResult(output, kind, maxRows = Infinity) {
   // All of the output came back: count the parsed rows (a value can span lines). Else estimate.
   const complete = lines === null || Number.isNaN(lines) || lines <= maxRows + 1;
   const total = complete ? rows.length : Math.max(rows.length, lines - 1);
+  return { columns, rows: rows.slice(0, maxRows), total, truncated: total > maxRows };
+}
+
+/**
+ * A query's sqlcmd output (`MS_SEP` between columns, padded): a header line, a dashed line, then
+ * the rows. A value with a line break spans lines, so lines join until a row has every column.
+ */
+function parseSqlcmd(body, lines, maxRows) {
+  const [head = "", , ...rest] = body.split("\n");
+  const columns = head.split(MS_SEP).map((c) => c.trim());
+  const rows = [];
+  let cur = null;
+  for (const line of rest) {
+    if (cur === null && !line.trim() && columns.length > 1) continue;
+    cur = cur === null ? line : `${cur}\n${line}`;
+    if (cur.split(MS_SEP).length >= columns.length) {
+      rows.push(cur.split(MS_SEP).map((c) => c.trim()));
+      cur = null;
+    }
+  }
+  if (cur !== null) rows.push(cur.split(MS_SEP).map((c) => c.trim()));
+  const complete = lines === null || Number.isNaN(lines) || lines <= maxRows + 2;
+  const total = complete ? rows.length : Math.max(rows.length, lines - 2);
   return { columns, rows: rows.slice(0, maxRows), total, truncated: total > maxRows };
 }
 
@@ -687,6 +743,9 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
   const { key, meta } = conn;
   const ms = Math.max(1, timeoutSec - 2) * 1000;
   const query = maxRows !== null;
+  // Lines before the rows: the header (and sqlcmd's dashed line under it).
+  const headLines = meta.kind === "mssql" ? 2 : 1;
+  if (query && meta.kind === "mssql") sql = msQuery(sql);
   // [program, args, env] with `$KEY` standing for the secret, filled in per shell below.
   let program;
   let args;
@@ -713,7 +772,9 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     program = "sqlcmd";
     // A named instance without a port is found through the SQL Server Browser.
     const server = meta.instance && !meta.port ? `${meta.host || "localhost"}\\${meta.instance}` : `tcp:${meta.host || "localhost"},${meta.port || 1433}`;
-    args = ["-S", server, "-b", "-y", "0", "-l", "10", "-K", "ReadOnly"];
+    // -x: no $(variable) substitution, which could print the environment (the password).
+    args = ["-S", server, "-b", "-x", "-y", "0", "-l", "10", "-K", "ReadOnly"];
+    if (query) args.push("-s", MS_SEP, "-t", String(Math.max(1, timeoutSec - 2)));
     if (meta.database) args.push("-d", meta.database);
     if (meta.user) args.push("-U", meta.user);
     else args.push("-E");
@@ -737,7 +798,7 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
       sql,
       d,
       "c=$?",
-      toFile ? `if [ $c -eq 0 ]; then printf '${FILE_MARK} %s\\n' "$t"; else cat "$t"; fi` : query ? `head -n ${maxRows + 1} "$t"` : 'cat "$t"',
+      toFile ? `if [ $c -eq 0 ]; then printf '${FILE_MARK} %s\\n' "$t"; else cat "$t"; fi` : query ? `head -n ${maxRows + headLines} "$t"` : 'cat "$t"',
       `printf '\\n${ROWS_MARK} %s\\n' "$(wc -l < "$t" | tr -d ' ')"`,
       toFile ? '[ $c -eq 0 ] || rm -f "$t"' : 'rm -f "$t"',
       "exit $c",
@@ -754,10 +815,12 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     "[IO.File]::WriteAllText($f.FullName, $q)",
     ...env.map(([k, v]) => `$env:${k} = ${typeof v === "object" ? `$env:${v.secret}` : psq(v)}`),
     `$a = ${args.map(psArg).join(" + ' ' + ")}`,
-    `$p = Start-Process -FilePath ${psq(program)} -ArgumentList $a -RedirectStandardInput $f.FullName -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName -NoNewWindow -Wait -PassThru`,
+    // sqlcmd 15 on Windows reads nothing from a redirected stdin (exit 0, no output): it gets -i.
+    ...(meta.kind === "mssql" ? [`$a += ' -i "' + $f.FullName + '"'`] : []),
+    `$p = Start-Process -FilePath ${psq(program)} -ArgumentList $a${meta.kind === "mssql" ? "" : " -RedirectStandardInput $f.FullName"} -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName -NoNewWindow -Wait -PassThru`,
     toFile
       ? `if ($p.ExitCode -eq 0) { "${FILE_MARK} " + $o.FullName } else { Get-Content $o.FullName -Encoding UTF8 }`
-      : `Get-Content $o.FullName${query ? ` -TotalCount ${maxRows + 1}` : ""} -Encoding UTF8`,
+      : `Get-Content $o.FullName${query ? ` -TotalCount ${maxRows + headLines}` : ""} -Encoding UTF8`,
     "Get-Content $e.FullName -Encoding UTF8",
     `"\`n${ROWS_MARK} " + (Get-Content $o.FullName | Measure-Object -Line).Lines`,
     toFile ? "Remove-Item $f.FullName, $e.FullName; if ($p.ExitCode -ne 0) { Remove-Item $o.FullName }" : "Remove-Item $f.FullName, $o.FullName, $e.FullName",
@@ -1403,8 +1466,7 @@ function describe(conn) {
   const meta = conn.meta;
   const parts = [`${conn.key} (${meta.name || conn.key}): ${KINDS[meta.kind]?.name ?? meta.kind} ${target(meta)}`];
   if (meta.description) parts.push(String(meta.description));
-  if (!canQuery(meta.kind)) parts.push("schema and diagram only, no queries");
-  else parts.push(needsApproval(conn) ? "the user approves each query" : "queries run without asking");
+  parts.push(needsApproval(conn) ? "the user approves each query" : "queries run without asking");
   return parts.join(" — ");
 }
 
@@ -1530,6 +1592,8 @@ function createStore(api) {
       void api.vault.exec({ command: IS_WIN ? `del /f /q "${file}"` : `rm -f ${shq(file)}`, cwd: "", keys: [], timeoutSec: 15 }).catch(() => {});
     }
     const { columns, rows } = parseResult(text.replace(/^\uFEFF/, ""), conn.meta.kind);
+    // Every catalog query prints its header, so no output at all means the CLI didn't run it.
+    if (columns.length === 0) throw new Error(`${KINDS[conn.meta.kind].cli} exited without an error but printed nothing.`);
     return { columns: columns.map((c) => c.trim().toLowerCase()), rows };
   }
 
@@ -1646,7 +1710,7 @@ export function activate(api) {
   api.registerAgentTool({
     name: "db_query",
     description:
-      "Run one read-only SQL statement (SELECT, WITH, EXPLAIN, SHOW…) on a connected database and get the rows back as a table. Writes are refused by the database session. Add a LIMIT for big tables. Use db_schema first to learn the tables.",
+      "Run one read-only SQL statement (SELECT, WITH, EXPLAIN, SHOW…) on a connected database and get the rows back as a table. Writes are refused by the database session (on SQL Server only SELECT and WITH, no INSERT/UPDATE/DELETE/EXEC). Add a LIMIT (TOP on SQL Server) for big tables. Use db_schema first to learn the tables.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2114,9 +2178,11 @@ function mountPage(root, api, store) {
     },
     /** Opens the Query view on a table's first rows. */
     queryTable(conn, table) {
-      const name = (table.schema && table.schema !== "public" && table.schema !== "main" && conn.meta.kind === "postgres" ? `${quoteName("postgres", table.schema)}.` : "") + quoteName(conn.meta.kind, table.name);
+      const kind = conn.meta.kind;
+      const qualify = table.schema && ((kind === "postgres" && table.schema !== "public") || (kind === "mssql" && table.schema !== "dbo"));
+      const name = (qualify ? `${quoteName(kind, table.schema)}.` : "") + quoteName(kind, table.name);
       ctx.select(conn.key);
-      ctx.drafts.set(conn.key, `SELECT * FROM ${name} LIMIT 100`);
+      ctx.drafts.set(conn.key, kind === "mssql" ? `SELECT TOP 100 * FROM ${name}` : `SELECT * FROM ${name} LIMIT 100`);
       ctx.autorun = true;
       ctx.setView("query");
     },
@@ -2193,9 +2259,7 @@ function mountPage(root, api, store) {
     access.replaceChildren(
       !c
         ? ""
-        : !canQuery(c.meta.kind)
-          ? h("span", { class: "db-tag", title: "SQL Server: its schema and diagram, no queries" }, "Schema only")
-          : c.meta.approve !== false
+        : c.meta.approve !== false
             ? h("span", { class: "db-tag db-ask", title: "Agents need your OK for each query" }, icon("shield"), "Asks")
             : h("span", { class: "db-tag db-auto", title: "Agents query without asking you" }, icon("bolt"), "Auto"),
     );
@@ -2276,14 +2340,13 @@ function openEditor(ctx, conn, initialKind = "postgres") {
     h("div", {}, h("b", {}, "Ask before agents query it"), h("span", {}, "You see each query first and can decline. Schema lookups don't ask.")),
     approveBox,
   );
-  const mssqlNote = h("div", { class: "wf-subtle", style: "font-size:11px;line-height:1.5" }, "SQL Server has no read-only session, so only its schema is read: the diagram and db_schema work, queries don't.");
+  const mssqlNote = h("div", { class: "wf-subtle", style: "font-size:11px;line-height:1.5" }, "SQL Server has no read-only session, so only SELECT and WITH queries run: INSERT, UPDATE, DELETE, SELECT INTO, EXEC and DDL are refused, and each query is rolled back. For full safety, connect as a user with read-only rights.");
 
   function setKind(next) {
     kind = next;
     urlField.style.display = kind === "sqlite" ? "none" : "";
     pathField.style.display = kind === "sqlite" ? "" : "none";
-    approveRow.style.display = canQuery(kind) ? "" : "none";
-    mssqlNote.style.display = canQuery(kind) ? "none" : "";
+    mssqlNote.style.display = kind === "mssql" ? "" : "none";
     urlLabel.replaceChildren(kind === "mssql" ? "Connection string or URL " : "Connection URL ", h("small", {}, "· stored in your keychain"));
     url.placeholder = editing && meta.kind === kind ? "Leave empty to keep the current one" : kind === "mssql" ? "Server=tcp:db.example.com,1433;Initial Catalog=app;User ID=…;Password=…" : KINDS[kind].placeholder;
     kindButtons.replaceChildren(
@@ -2576,7 +2639,6 @@ function mountQuery(root, ctx) {
       schemaList.replaceChildren(h("div", { class: "db-note" }, tables.length ? "No table matches." : "No tables."));
       return;
     }
-    const queries = canQuery(conn.meta.kind);
     schemaList.replaceChildren(
       ...shown.flatMap((t) => {
         const id = `${conn.key}:${t.id}`;
@@ -2587,19 +2649,19 @@ function mountQuery(root, ctx) {
             role: "button",
             tabindex: "0",
             class: `db-table${open ? " db-open" : ""}`,
-            title: queries ? "Click to show columns, double-click to preview rows" : "Click to show columns",
+            title: "Click to show columns, double-click to preview rows",
             onclick: () => {
               if (open) openTables.delete(id);
               else openTables.add(id);
               renderSide();
             },
-            ondblclick: () => queries && previewTable(conn, t),
+            ondblclick: () => previewTable(conn, t),
           },
           icon("chevron"),
           h("span", {}, `${multiSchema ? `${t.schema}.` : ""}${t.name}`),
           h("small", {}, String(t.columns.length)),
           btn("diagram", "Show on the diagram", () => ctx.showInDiagram(conn, t)),
-          queries ? btn("play", "Preview rows", () => previewTable(conn, t)) : null,
+          btn("play", "Preview rows", () => previewTable(conn, t)),
         );
         if (!open) return [row];
         return [
@@ -2616,7 +2678,6 @@ function mountQuery(root, ctx) {
     const last = ctx.last;
     if (running) return h("div", { class: "db-note" }, "Running…");
     const conn = current();
-    if (conn && !canQuery(conn.meta.kind)) return h("div", { class: "db-note" }, "SQL Server has no read-only session, so queries don't run on it. Its tables are on the left and on the diagram.");
     if (!last || last.conn !== selected()) return h("div", { class: "db-note" }, "Results show up here.");
     if (!last.ok) return h("div", { class: "db-error" }, icon("alert"), last.error);
     const { columns, rows, total, truncated } = last.result;
@@ -2669,12 +2730,10 @@ function mountQuery(root, ctx) {
   function renderMain() {
     if (!body.contains(grid)) return;
     const conn = current();
-    const queries = !!conn && canQuery(conn.meta.kind);
     const last = ctx.last;
-    runButton.disabled = !queries || running;
-    editor.disabled = !!conn && !queries;
+    runButton.disabled = !conn || running;
     runButton.replaceChildren(icon("play"), running ? "Running…" : "Run", h("span", { class: "db-kbd" }, "⌘↵"));
-    status.textContent = last && last.conn === selected() && !running ? `${last.ok ? "Done" : "Failed"} in ${last.ms.toLocaleString()} ms` : conn ? `${KINDS[conn.meta.kind].short} · ${queries ? "read-only" : "schema only"}` : "";
+    status.textContent = last && last.conn === selected() && !running ? `${last.ok ? "Done" : "Failed"} in ${last.ms.toLocaleString()} ms` : conn ? `${KINDS[conn.meta.kind].short} · read-only` : "";
     resultCard.replaceChildren(resultView());
 
     const items = store.history().filter((it) => it.conn === selected()).slice(0, 30);
@@ -3414,7 +3473,7 @@ function mountDiagram(root, ctx) {
           t.junction ? h("span", {}, "Join table between ", h("code", {}, label(t.junction[0])), " and ", h("code", {}, label(t.junction[1]))) : null,
           t.comment ? h("span", { style: "color:var(--color-fg-muted)" }, t.comment) : null,
         ),
-        canQuery(model.kind) && t.kind !== "external" ? h("button", { class: "sd-icon-btn", title: "Query its rows", onclick: () => current() && ctx.queryTable(current(), t) }, icon("play")) : null,
+        t.kind !== "external" ? h("button", { class: "sd-icon-btn", title: "Query its rows", onclick: () => current() && ctx.queryTable(current(), t) }, icon("play")) : null,
         h("button", { class: "sd-icon-btn", title: "Close", onclick: () => selectTable(null) }, icon("close")),
       ),
       h(

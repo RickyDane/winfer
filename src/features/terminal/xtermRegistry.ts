@@ -13,7 +13,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { create as createStore } from "zustand";
-import { cleanAgentTitle, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { cleanAgentTitle, systemPromptOf, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus, reportTerminalNotice } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
@@ -244,6 +244,8 @@ async function spawn(entry: Entry) {
         prompt: entry.pane.prompt,
         model: entry.pane.model,
         autoApprove: useWorkspaces.getState().autoApprove.includes(entry.pane.provider),
+        systemPrompt: systemPromptOf(useWorkspaces.getState()),
+        plain: entry.pane.plain,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },

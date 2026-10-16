@@ -44,6 +44,10 @@
     "autoApproveArgs": [
       "--dangerously-skip-permissions"
     ],
+    "systemPromptArgs": [
+      "--append-system-prompt",
+      "{prompt}"
+    ],
     "update": {
       "args": [
         "update"
@@ -75,6 +79,10 @@
     "modelArg": "--model",
     "autoApproveArgs": [
       "--dangerously-bypass-approvals-and-sandbox"
+    ],
+    "systemPromptArgs": [
+      "-c",
+      "developer_instructions={prompt_toml}"
     ],
     "update": {
       "args": [

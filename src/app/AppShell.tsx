@@ -20,6 +20,8 @@ import { SettingsModal } from "@/features/settings/SettingsModal";
 import { VoiceHUD } from "@/features/voice/VoiceHUD";
 import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
 import { RaceView } from "@/features/orchestration/RaceView";
+import { RaceResults } from "@/features/orchestration/RaceResults";
+import { startRunTimes } from "@/features/orchestration/runTimes";
 import { RecipesView } from "@/features/recipes/RecipesView";
 import { ModelPicker } from "@/features/models/ModelPicker";
 import { DragLayer } from "@/features/layout/DragLayer";
@@ -158,6 +160,7 @@ export function AppShell() {
     void loadEditors();
     startTerminalEvents();
     startStatusTracking();
+    startRunTimes();
     startVoice();
     startAgentApi();
     startProgressTracking();
@@ -224,6 +227,7 @@ export function AppShell() {
       <SettingsModal />
       <WhatsNew />
       <RaceView />
+      <RaceResults />
       <ReviewInbox />
       <HistoryView />
       <BranchDialog />

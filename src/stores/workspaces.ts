@@ -39,6 +39,8 @@ export interface Pane {
   devUrl: string | null;
   /** Panes started together by race mode share an id. */
   raceId: string | null;
+  /** A/B test baseline: runs without winfer's tools, the browser and the user's MCP servers and skills. */
+  plain: boolean;
   /** Initial prompt given when the agent was started (not persisted). */
   prompt: string | null;
   /** Model the agent runs with; null means the CLI's default. */
@@ -80,7 +82,7 @@ interface WorkspaceState {
   /** Settings page shown; kept after closing so reopening lands where you left off. */
   settingsPage: string;
   /** Open overlay for agent orchestration and recipes. */
-  overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null;
+  overlay: "race" | "abtest" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null;
   /** Agent the new pane dialog starts; null for the default agent. */
   newPaneProvider: ProviderId | null;
   /** User-saved recipes (persisted). */
@@ -91,6 +93,8 @@ interface WorkspaceState {
   agentModels: Record<ProviderId, string>;
   /** Agents started with their permission prompts skipped (persisted). */
   autoApprove: ProviderId[];
+  /** Added to every agent's system prompt at start (persisted); null = DEFAULT_SYSTEM_PROMPT, "" = none. */
+  systemPrompt: string | null;
   /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
   defaultProvider: ProviderId | null;
   /** Code editor "Open in editor" uses (see features/editors); null = the first one installed. */
@@ -140,7 +144,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
@@ -157,11 +161,12 @@ interface WorkspaceState {
   setDiffPane: (id: string | null) => void;
   /** Opens or closes settings, optionally on a given page. */
   setSettings: (open: boolean, page?: string) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null, newPaneProvider?: ProviderId | null) => void;
+  setOverlay: (overlay: "race" | "abtest" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null, newPaneProvider?: ProviderId | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
   setAutoApprove: (provider: ProviderId, on: boolean) => void;
+  setSystemPrompt: (prompt: string | null) => void;
   setDefaultProvider: (provider: ProviderId | null) => void;
   setEditor: (editor: string | null) => void;
   /** Sets a binding's chord; null restores the default. */
@@ -211,6 +216,11 @@ const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null)
 
 export const DEFAULT_BROWSER_WIDTH = 420;
 export const DEFAULT_TERMINAL_FONT_SIZE = 12.5;
+export const DEFAULT_SYSTEM_PROMPT =
+  "Always make full use of every tool available to you (MCP servers, the browser, skills, subagents, search and shell) whenever it makes your work faster or your output better. Before doing something by hand, check whether a tool does it more efficiently or more reliably, and use tools to verify your work.";
+
+/** The system prompt agents start with: the user's, else the default. */
+export const systemPromptOf = (s: { systemPrompt: string | null }) => s.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
 export const MIN_TERMINAL_FONT_SIZE = 8;
 export const MAX_TERMINAL_FONT_SIZE = 28;
 
@@ -249,6 +259,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   models: {},
   agentModels: {},
   autoApprove: [],
+  systemPrompt: null,
   defaultProvider: null,
   editor: null,
   shortcuts: {},
@@ -288,7 +299,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !!p.sessionId || !resumed.has(key);
         if (!p.sessionId) resumed.add(key);
-        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -305,6 +316,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       recipes: ui.recipes ?? [],
       agentModels: ui.agentModels ?? {},
       autoApprove: ui.autoApprove ?? [],
+      systemPrompt: ui.systemPrompt ?? null,
       defaultProvider: ui.defaultProvider ?? null,
       editor: ui.editor ?? null,
       shortcuts: ui.shortcuts ?? {},
@@ -398,8 +410,9 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             unseen: false,
             devUrl: null,
             agentTitle: null,
-            customTitle: null,
+            customTitle: opts?.customTitle ?? null,
             raceId: opts?.raceId ?? null,
+            plain: opts?.plain ?? false,
             prompt: opts?.prompt ?? null,
             model: opts?.model ?? get().agentModels[provider] ?? null,
           },
@@ -484,6 +497,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       return { agentModels };
     }),
   setAutoApprove: (provider, on) => set((s) => ({ autoApprove: [...s.autoApprove.filter((p) => p !== provider), ...(on ? [provider] : [])] })),
+  setSystemPrompt: (systemPrompt) => set({ systemPrompt }),
   setDefaultProvider: (provider) => set({ defaultProvider: provider }),
   setEditor: (editor) => set({ editor }),
   setShortcut: (id, chord) =>
@@ -540,7 +554,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; plain?: boolean; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -553,6 +567,7 @@ interface Snapshot {
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
     autoApprove?: ProviderId[];
+    systemPrompt?: string | null;
     defaultProvider?: ProviderId | null;
     editor?: string | null;
     shortcuts?: Record<string, string>;
@@ -585,9 +600,9 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions },
   };
 }
 

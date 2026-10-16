@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Bot, ChartColumn, Check, ChevronDown, Download, FolderOpen, Keyboard, Loader2, Mic, Palette, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
@@ -301,6 +301,7 @@ function AgentSettings() {
       )}
       <VersionSettings />
       <AutoApproveSettings />
+      <SystemPromptSettings />
     </>
   );
 }
@@ -379,6 +380,40 @@ function AutoApproveSettings() {
           <Toggle label={`Start ${p.name} in auto-approve mode`} checked={autoApprove.includes(p.id)} onChange={(on) => setAutoApprove(p.id, on)} />
         </Row>
       ))}
+    </Card>
+  );
+}
+
+/** Text added to every agent's system prompt when it starts (empty adds nothing). */
+function SystemPromptSettings() {
+  const { systemPrompt, setSystemPrompt } = useWorkspaces();
+  const saved = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  const save = () => setSystemPrompt(draft.trim() === DEFAULT_SYSTEM_PROMPT ? null : draft.trim());
+  return (
+    <Card
+      title="System prompt"
+      description="Given to every agent when it starts (or restarts). Claude Code and Codex get it as a system prompt; other agents get it in front of their first message. Leave it empty to add nothing."
+    >
+      <Row
+        stacked
+        label="Instructions for every agent"
+        hint={systemPrompt !== null && (
+          <button onClick={() => setSystemPrompt(null)} className="text-accent hover:underline">
+            Reset to default
+          </button>
+        )}
+      >
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          rows={4}
+          aria-label="System prompt"
+          className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:border-accent"
+        />
+      </Row>
     </Card>
   );
 }

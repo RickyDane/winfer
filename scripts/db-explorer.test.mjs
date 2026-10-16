@@ -245,7 +245,7 @@ describe("SQL Server", () => {
 
   it("runs sqlcmd with the password in the environment", () => {
     const cmd = buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "db", port: 1444, user: "sa", database: "shop", hasPassword: true, trustCert: true } }, "SELECT 1", { win: false });
-    expect(cmd).toContain(`SQLCMDPASSWORD="$DB_MS" sqlcmd '-S' 'tcp:db,1444' '-b' '-y' '0'`);
+    expect(cmd).toContain(`SQLCMDPASSWORD="$DB_MS" sqlcmd '-S' 'tcp:db,1444' '-b' '-x' '-y' '0'`);
     expect(cmd).not.toContain("'-h'");
     expect(cmd).toContain("'-d' 'shop' '-U' 'sa' '-C'");
     expect(cmd).not.toContain("p@ss");
@@ -287,15 +287,60 @@ describe("SQL Server", () => {
     expect(file.startsWith("\uFEFF")).toBe(true);
     expect(file).toContain("Remove-Item -LiteralPath $PSCommandPath");
     expect(file.endsWith(script)).toBe(true);
+    // sqlcmd 15 ignores a redirected stdin, so it reads the SQL with -i.
+    expect(script).toContain(`$a += ' -i "' + $f.FullName + '"'`);
+    expect(script).not.toContain("-RedirectStandardInput");
+    expect(buildCommand({ key: "DB_PG", meta: { kind: "postgres" } }, "SELECT 1", { win: true })).toContain("-RedirectStandardInput $f.FullName");
   });
 
-  it("refuses queries: there's no read-only session", () => {
-    expect(checkReadOnly("SELECT 1", "mssql")).toMatch(/aren't supported/);
+  it("lets reads through and refuses writes: there's no read-only session", () => {
+    expect(checkReadOnly("SELECT TOP 10 * FROM [dbo].[orders] WHERE note = N'x;y'", "mssql")).toBeNull();
+    expect(checkReadOnly("WITH t AS (SELECT 1 AS n) SELECT n FROM t", "mssql")).toBeNull();
+    expect(checkReadOnly("SELECT [update], last_update, [delete;x] FROM t", "mssql")).toBeNull();
+    expect(checkReadOnly("SELECT 'INSERT INTO x' AS s", "mssql")).toBeNull();
+    expect(checkReadOnly("UPDATE t SET a = 1", "mssql")).toMatch(/UPDATE isn't allowed/);
+    expect(checkReadOnly("INSERT INTO t VALUES (1)", "mssql")).toMatch(/INSERT isn't allowed/);
+    expect(checkReadOnly("WITH x AS (SELECT * FROM t) DELETE FROM x", "mssql")).toMatch(/DELETE isn't allowed/);
+    expect(checkReadOnly("WITH x AS (SELECT 1 AS a) UPDATE t SET a = 1", "mssql")).toMatch(/UPDATE isn't allowed/);
+    expect(checkReadOnly("SELECT * INTO copy FROM t", "mssql")).toMatch(/INTO isn't allowed/);
+    expect(checkReadOnly("EXEC xp_cmdshell 'dir'", "mssql")).toMatch(/EXEC isn't allowed/);
+    expect(checkReadOnly("SELECT * FROM OPENROWSET('SQLNCLI', 'x', 'y')", "mssql")).toMatch(/OPENROWSET/);
+    expect(checkReadOnly("SELECT NEXT VALUE FOR seq", "mssql")).toMatch(/NEXT VALUE FOR/i);
+    expect(checkReadOnly("SELECT 1; DROP TABLE t", "mssql")).toMatch(/one statement/);
+    expect(checkReadOnly("SELECT 1 [oops", "mssql")).toMatch(/isn't closed/);
+  });
+
+  it("refuses sqlcmd's own commands, even inside a string", () => {
+    expect(checkReadOnly("SELECT 1\n:!! rm -rf ~", "mssql")).toMatch(/sqlcmd commands/);
+    expect(checkReadOnly("SELECT '\n!! rm -rf ~\n'", "mssql")).toMatch(/sqlcmd commands/);
+    expect(checkReadOnly("SELECT 1\nGO", "mssql")).toMatch(/sqlcmd commands/);
+    expect(checkReadOnly("SELECT 1\n:r /etc/passwd", "mssql")).toMatch(/sqlcmd commands/);
+  });
+
+  it("runs queries rolled back, without variable substitution, with a separator", () => {
+    const cmd = buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "db" } }, "SELECT 1", { win: false, maxRows: 100 });
+    expect(cmd).toContain("BEGIN TRANSACTION;\nSELECT 1\n;\nIF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
+    expect(cmd).toContain("'-x'");
+    expect(cmd).toContain("'-s' '\x1f'");
+    expect(cmd).toContain('head -n 102 "$t"');
+    // The catalog queries run as they are.
+    expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql" } }, introspectionSql("mssql").columns, { win: false, toFile: true })).not.toContain("BEGIN TRANSACTION");
+  });
+
+  it("parses a query's sqlcmd output: padded columns, NULLs, values over several lines", () => {
+    const out = "id  \x1fname       \x1fnote\n----\x1f-----------\x1f----\n   1\x1fAda        \x1fNULL\n   2\x1ftwo\nlines\x1fx\n\n@@WINFER_ROWS 5\n";
+    expect(parseResult(out, "mssql", 100)).toMatchObject({ columns: ["id", "name", "note"], rows: [["1", "Ada", "NULL"], ["2", "two\nlines", "x"]], total: 2, truncated: false });
+    expect(parseResult("n\n-\n1\n2\n@@WINFER_ROWS 50\n", "mssql", 2)).toMatchObject({ rows: [["1"], ["2"]], total: 48, truncated: true });
   });
 
   it("parses sqlcmd output with padding and blank lines between result sets", () => {
     const out = 'winfer_csv   \n----------   \ntable_schema,table_name   \n\nwinfer_csv\n---------------\n"dbo","say ""hi"", ok"   \n"dbo","two\nlines"\n\n@@WINFER_ROWS 5\n';
     expect(parseResult(out, "mssql")).toMatchObject({ columns: ["table_schema", "table_name"], rows: [["dbo", 'say "hi", ok'], ["dbo", "two\nlines"]] });
+  });
+
+  it("parses catalog output without sqlcmd's headers (go-sqlcmd, sqlcmd 18)", () => {
+    const out = 'table_schema,table_name\n\n"dbo","customers"\n"sales","orders"\n';
+    expect(parseResult(out, "mssql")).toMatchObject({ columns: ["table_schema", "table_name"], rows: [["dbo", "customers"], ["sales", "orders"]] });
   });
 });
 

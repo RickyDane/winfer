@@ -1,6 +1,6 @@
 import { recordMerge, snapshotForHistory } from "@/features/history/history";
 import { ask, message } from "@tauri-apps/plugin-dialog";
-import { Flag, GitBranch, Minus, Plus, RefreshCw, Trophy, X } from "lucide-react";
+import { BarChart3, Flag, FlaskConical, GitBranch, Minus, Plus, RefreshCw, Trophy, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { execute } from "@/commands/bus";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -9,6 +9,9 @@ import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
 import { providerName, useActiveWorkspace, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
+import { cn } from "@/lib/cn";
+import { openRaceResults } from "./resultsStore";
+import { isFinished } from "./runTimes";
 
 interface Stats {
   files: number;
@@ -29,9 +32,10 @@ function diffStats(diff: string): Pick<Stats, "files" | "adds" | "dels"> {
   return { files, adds, dels };
 }
 
-function StartForm({ onStarted }: { onStarted: () => void }) {
+function StartForm({ ab, onStarted }: { ab: boolean; onStarted: () => void }) {
   const providers = useWorkspaces((s) => s.providers).filter((p) => p.installed && p.id !== "shell");
   const [prompt, setPrompt] = useState("");
+  const [abProvider, setAbProvider] = useState(() => providers[0]?.id ?? "");
   const [counts, setCounts] = useState<Record<string, number>>(() => Object.fromEntries(providers.slice(0, 2).map((p) => [p.id, 1])));
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
@@ -47,6 +51,33 @@ function StartForm({ onStarted }: { onStarted: () => void }) {
         placeholder="Task for every agent, e.g. “Make the cancelled-tier guard return 403 and add a regression test”"
         className="w-full resize-none rounded-md border border-border bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:border-accent"
       />
+      {ab ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {providers.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setAbProvider(p.id)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
+                abProvider === p.id ? "border-accent bg-accent-soft text-accent" : "border-border text-fg hover:bg-hover",
+              )}
+            >
+              <ProviderIcon provider={p.id} size={12} />
+              {p.name}
+            </button>
+          ))}
+          <button
+            disabled={!prompt.trim() || !abProvider}
+            onClick={() => {
+              execute({ type: "abtest.start", provider: abProvider, prompt: prompt.trim() });
+              onStarted();
+            }}
+            className="ml-auto flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-40"
+          >
+            <FlaskConical size={12} /> Start A/B test
+          </button>
+        </div>
+      ) : (
       <div className="flex flex-wrap items-center gap-2">
         {providers.map((p) => (
           <div key={p.id} className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-fg">
@@ -73,7 +104,12 @@ function StartForm({ onStarted }: { onStarted: () => void }) {
           <Flag size={12} /> Start race ({total})
         </button>
       </div>
-      <p className="text-[11px] text-fg-subtle">Each agent gets its own git worktree and branch, so they can't overwrite each other.</p>
+      )}
+      <p className="text-[11px] text-fg-subtle">
+        {ab
+          ? "Starts the agent twice on the same task, each in its own git worktree: A as usual, with winfer's tools, the browser and your MCP servers and skills; B plain, without them. Compare time, tokens, cost and code written once both finish."
+          : "Each agent gets its own git worktree and branch, so they can't overwrite each other."}
+      </p>
     </section>
   );
 }
@@ -127,11 +163,23 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
   useEffect(load, [raceId, worktrees]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isolated = panes.every((p) => p.worktree);
+  const ab = raceId.startsWith("ab-");
+  const finished = panes.every(isFinished);
   return (
     <section className="space-y-2">
       <div className="flex items-center gap-2 text-xs text-fg-muted">
-        <Flag size={12} className="text-accent" />
-        <span className="flex-1 truncate">{panes[0]?.prompt ?? "Race"}</span>
+        {ab ? <FlaskConical size={12} className="text-accent" /> : <Flag size={12} className="text-accent" />}
+        <span className="flex-1 truncate">{panes[0]?.prompt ?? (ab ? "A/B test" : "Race")}</span>
+        <button
+          onClick={() => openRaceResults(raceId)}
+          className={cn(
+            "flex items-center gap-1 rounded-md px-2 py-0.5",
+            finished ? "bg-accent text-on-accent hover:opacity-90" : "border border-border text-fg-subtle hover:bg-hover hover:text-fg",
+          )}
+          title={finished ? "Time, tokens, cost and code written, side by side" : "The agents are still working; the numbers so far"}
+        >
+          <BarChart3 size={11} /> Results
+        </button>
         <button onClick={load} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="Refresh changes">
           <RefreshCw size={12} />
         </button>
@@ -145,6 +193,11 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
               <StatusDot status={pane.status} />
               <ProviderIcon provider={pane.provider} size={13} />
               <span className="w-28 truncate text-fg">{providerName(providers, pane.provider)}</span>
+              {ab && (
+                <span className={cn("w-16 shrink-0 rounded px-1 text-center text-[10px]", pane.plain ? "bg-hover text-fg-muted" : "bg-accent-soft text-accent")}>
+                  {pane.plain ? "plain" : "with tools"}
+                </span>
+              )}
               <span className="flex w-32 items-center gap-1 truncate font-mono text-[11px] text-fg-subtle">
                 <GitBranch size={11} /> {pane.worktree?.branch.replace(/^winfer\//, "") ?? "—"}
               </span>
@@ -190,20 +243,21 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
   );
 }
 
-/** ⌘⇧R: start a race and compare the competing agents' changes. */
+/** ⌘⇧R: start a race (or an A/B test) and compare the competing agents' changes. */
 export function RaceView() {
   const { overlay, setOverlay } = useWorkspaces();
   const workspace = useActiveWorkspace();
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
-    if (overlay !== "race") return;
+    if (overlay !== "race" && overlay !== "abtest") return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOverlay(null);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [overlay, setOverlay]);
 
-  if (overlay !== "race" || !workspace) return null;
+  if ((overlay !== "race" && overlay !== "abtest") || !workspace) return null;
+  const ab = overlay === "abtest";
   const races = new Map<string, Pane[]>();
   for (const pane of workspace.panes) {
     if (pane.raceId) races.set(pane.raceId, [...(races.get(pane.raceId) ?? []), pane]);
@@ -213,18 +267,29 @@ export function RaceView() {
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
       <div className="anim-dialog h-fit max-h-[80vh] w-[760px] space-y-5 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
-          <Flag size={14} className="text-accent" />
-          <h1 className="flex-1 text-sm font-semibold text-fg">Race mode</h1>
+          {ab ? <FlaskConical size={14} className="text-accent" /> : <Flag size={14} className="text-accent" />}
+          <h1 className="text-sm font-semibold text-fg">{ab ? "A/B test" : "Race mode"}</h1>
+          <div className="ml-2 flex flex-1 gap-0.5">
+            {(["race", "abtest"] as const).map((o) => (
+              <button
+                key={o}
+                onClick={() => setOverlay(o)}
+                className={cn("rounded px-1.5 py-0.5 text-[11px]", overlay === o ? "bg-hover text-fg" : "text-fg-subtle hover:text-fg")}
+              >
+                {o === "race" ? "Race" : "A/B test"}
+              </button>
+            ))}
+          </div>
           {races.size > 0 && !showForm && (
             <button onClick={() => setShowForm(true)} className="rounded-md border border-border-strong px-2 py-1 text-xs text-fg hover:bg-hover">
-              New race
+              {ab ? "New A/B test" : "New race"}
             </button>
           )}
           <button onClick={() => setOverlay(null)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={14} />
           </button>
         </header>
-        {(races.size === 0 || showForm) && <StartForm onStarted={() => setShowForm(false)} />}
+        {(races.size === 0 || showForm) && <StartForm ab={ab} onStarted={() => setShowForm(false)} />}
         {[...races].map(([raceId, panes]) => (
           <RaceBoard key={raceId} raceId={raceId} panes={panes} />
         ))}

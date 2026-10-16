@@ -351,6 +351,13 @@ mockIPC(
         ];
         return shares.map(([kind, label, f]) => ({ kind, label, tokens: Math.round(total * f) }));
       }
+      case "usage_dirs":
+        return (a.dirs as string[]).map((dir, i) => {
+          const f = 1 + ((dir.length * 7 + i) % 5) / 4;
+          const model = { provider: "claude", model: "claude-opus-5-5", input: Math.round(42_000 * f), output: Math.round(9_800 * f), cacheRead: Math.round(610_000 * f), cacheWrite: Math.round(38_000 * f), cost: 0.84 * f, priced: true };
+          const tokens = model.input + model.output + model.cacheRead + model.cacheWrite;
+          return { dir, cost: model.cost, priced: true, tokens, calls: Math.round(31 * f), firstAt: Date.now() - 9 * 60e3 * f, lastAt: Date.now() - 60e3, models: [model] };
+        });
       case "usage_opencode_model":
         return { provider: "openai", model: "gpt-5.5", plan: true };
       case "usage_opencode":

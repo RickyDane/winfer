@@ -48,6 +48,11 @@ pub struct Provider {
     /// Launch flags that skip permission prompts, added when auto-approve is on in settings.
     #[serde(default)]
     pub auto_approve_args: Vec<String>,
+    /// Launch flags that add to the agent's system prompt; `{prompt}` is replaced with the text,
+    /// `{prompt_toml}` with it as a quoted TOML string. Without them the system prompt goes in
+    /// front of the first message instead.
+    #[serde(default)]
+    pub system_prompt_args: Vec<String>,
     /// Where to find the newest version and how the CLI updates itself (see provider_updates.rs).
     #[serde(default)]
     pub update: Option<UpdateSource>,

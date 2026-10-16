@@ -690,12 +690,17 @@ export const TOOLS: ToolDef[] = [
       prompt: { kind: "span", slot: "instruction", ask: "What task should the agents race on?" },
     },
     toCommands: (args) => {
+      if (args.ab) return [{ type: "ui.overlay", overlay: "abtest" }];
       const counts = (args.counts as Record<string, number>) ?? {};
       return args.prompt && Object.values(counts).some((n) => n > 0)
         ? [{ type: "race.start", counts, prompt: String(args.prompt) }]
         : [{ type: "ui.overlay", overlay: "race" }];
     },
-    palette: () => [{ title: "Race mode…", args: {} }],
+    palette: () => [
+      { title: "Race mode…", args: {} },
+      // Palette only: the same agent with and without winfer's tools (see `abtest.start`).
+      { title: "A/B test an agent with and without tools…", args: { ab: true } },
+    ],
   },
   {
     id: "load_recipe",
