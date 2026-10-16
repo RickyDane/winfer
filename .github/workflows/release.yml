@@ -24,7 +24,7 @@ jobs:
   # One job creates the release; the bundle jobs only upload to it. (When each bundle job
   # created it, two jobs raced and v0.1.2 ended up as two releases with split downloads.)
   release:
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     outputs:
       id: ${{ steps.create.outputs.id }}
     steps:
@@ -123,7 +123,7 @@ jobs:
   # version and, per platform, the signed bundle's URL and signature.
   updater-json:
     needs: [release, bundle]
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - name: Write latest.json from the release's signatures
         env:
