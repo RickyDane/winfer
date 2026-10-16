@@ -3,7 +3,7 @@
  * agent's task and recent output and estimates how far along it is, for the progress bars in
  * pane headers, the sidebar and the overview.
  */
-import { llmCompose, llmEnabled } from "@/features/llm/llm";
+import { llmCompose, llmEnabled, replyLanguage, wrongScript } from "@/features/llm/llm";
 import { create } from "zustand";
 import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
 import { worktreeDiff } from "@/features/worktree/worktree";
@@ -68,7 +68,6 @@ const SYSTEM = [
   "100 only when the task is complete and the agent stopped; exploring and planning is early (5–20), implementing is the middle, testing and fixing is late.",
   "An agent that stopped to ask a question or wait for approval isn't done. If the output shows no work on the task yet, answer 0.",
   'Reply with JSON only: {"percent": <integer 0-100>, "step": "<what it is doing now, max 8 words>", "title": "<the task, max 6 words>"}.',
-  "Write step and title in the language of the task.",
 ].join(" ");
 
 /** Pulls {percent, step, title} out of a model answer, tolerating prose around the JSON. */
@@ -133,15 +132,17 @@ export async function estimate(pane: Pane) {
 
   patch(pane.id, { estimating: true });
   try {
-    const answer = await llmCompose(SYSTEM, user);
+    const answer = await llmCompose(`${SYSTEM} Write step and title in ${replyLanguage(task)}.`, user);
     const result = parseEstimate(answer);
     if (!result) throw new Error("no estimate in the answer");
+    if (result.step && wrongScript(result.step, task)) result.step = null;
+    if (result.title && wrongScript(result.title, task)) result.title = null;
     const current = get(pane.id);
     // Estimates are noisy: within one task the bar only moves forward, and a working agent
     // isn't finished. A stopped one may be (agents without completion hooks only stop).
     const cap = status(pane.id) === "working" ? 99 : 100;
     const percent = Math.min(cap, Math.max(current.percent ?? 0, result.percent));
-    patch(pane.id, { percent, step: result.step, title: result.title ?? current.title, updatedAt: Date.now(), estimating: false, error: null });
+    patch(pane.id, { percent, step: result.step ?? current.step, title: result.title ?? current.title, updatedAt: Date.now(), estimating: false, error: null });
   } catch (err) {
     patch(pane.id, { estimating: false, error: String(err) });
   }

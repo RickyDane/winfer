@@ -3,7 +3,7 @@
  * summary, test results and a screenshot of its dev server — so the user can merge, discard or
  * send it back without visiting each pane.
  */
-import { llmCompose, llmEnabled } from "@/features/llm/llm";
+import { llmCompose, llmEnabled, replyLanguage, wrongScript } from "@/features/llm/llm";
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { readTerminal } from "@/features/terminal/xtermRegistry";
@@ -112,7 +112,7 @@ const SUMMARY_SYSTEM = [
   "You review the work a coding agent just finished, for a developer deciding whether to merge it.",
   "From the diff and the agent's last output, write 2–3 short sentences: what changed and why, then anything risky,",
   "unfinished or worth checking (failing steps, TODOs, deleted code). Name files only when it helps.",
-  "Write in the language of the agent's task. Output only the summary.",
+  "Output only the summary.",
 ].join(" ");
 
 async function summarize(review: Review, diff: string) {
@@ -127,7 +127,11 @@ async function summarize(review: Review, diff: string) {
     .filter(Boolean)
     .join("\n\n");
   try {
-    const text = await llmCompose(SUMMARY_SYSTEM, user);
+    const task = review.prompt ?? "";
+    const system = `${SUMMARY_SYSTEM} Write it in ${replyLanguage(task)}.`;
+    let text = await llmCompose(system, user);
+    // Models sometimes switch languages anyway; one retry usually fixes it.
+    if (wrongScript(text, task)) text = await llmCompose(system, user);
     update(review.id, { summary: { state: "done", value: text.trim() } });
   } catch (err) {
     update(review.id, { summary: { state: "error", error: String(err) } });

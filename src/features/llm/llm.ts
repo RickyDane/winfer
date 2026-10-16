@@ -39,6 +39,22 @@ export function llmProvider(): LlmProvider | null {
 
 export const llmEnabled = () => llmProvider() !== null;
 
+/**
+ * The language to write about a task in, named in the prompt: "the language of the task" alone
+ * let models drift, e.g. a terse English task got a Russian progress line.
+ */
+export function replyLanguage(task: string): string {
+  if (/\p{Script=Cyrillic}/u.test(task)) return "the language of the task";
+  if (/[äöüß]/i.test(task) || /\b(und|nicht|bitte|ist|das|der|die|mit|für|auf|ich|wir|noch|auch)\b/i.test(task)) return "German";
+  return "English";
+}
+
+/** True when `text` uses a non-Latin script the task doesn't (the model switched languages). */
+export function wrongScript(text: string, task: string): boolean {
+  const nonLatin = /[^\P{L}\p{Script=Latin}]/u;
+  return nonLatin.test(text) && !nonLatin.test(task);
+}
+
 /** One question to the LLM; rejects when it's off or the call fails. */
 export async function llmCompose(system: string, user: string): Promise<string> {
   const provider = llmProvider();
