@@ -43,7 +43,8 @@ import { Sidebar } from "@/features/workspaces/Sidebar";
 import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
 import { applyTheme, themeById } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
-import { pageIcon, PluginPageView, usePluginPages } from "@/features/plugins/PluginPage";
+import { PluginPageView, usePluginPages } from "@/features/plugins/PluginPage";
+import { PageTabs } from "@/features/plugins/PageTabs";
 
 function TitleBar() {
   const { toggleSidebar, toggleBrowser } = useWorkspaces();
@@ -75,7 +76,6 @@ function TitleBar() {
 /** Title bar tabs: the active workspace's tiles, the overview of every workspace's sessions, and plugin pages. */
 function ViewTabs({ workspace }: { workspace: string }) {
   const view = useWorkspaces((s) => s.view);
-  const pages = usePluginPages();
   const sessions = useWorkspaces((s) => s.workspaces).flatMap((w) => w.panes);
   const waiting = sessions.filter((p) => p.status === "needs-input").length;
   const tab = (active: boolean) =>
@@ -98,16 +98,7 @@ function ViewTabs({ workspace }: { workspace: string }) {
         <span className="font-mono text-[10px] text-fg-subtle">{sessions.length}</span>
         {waiting > 0 && <span className="anim-ring size-1.5 rounded-full bg-warning text-warning" title={`${waiting} waiting for you`} />}
       </button>
-      {pages.map((page) => {
-        const Icon = pageIcon(page);
-        const selected = view === `page:${page.key}`;
-        return (
-          <button key={page.key} role="tab" aria-selected={selected} onClick={() => execute({ type: "ui.view", view: `page:${page.key}` })} className={tab(selected)}>
-            <Icon size={12} />
-            {page.title}
-          </button>
-        );
-      })}
+      <PageTabs tab={tab} />
     </div>
   );
 }

@@ -12,7 +12,7 @@ import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
 import { providerName, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
 import { isThemeId, THEMES } from "@/features/theme/themes";
-import { pluginTools } from "@/features/plugins/plugins";
+import { pluginPages, pluginTools } from "@/features/plugins/plugins";
 import { preferredEditor, useEditors } from "@/features/editors/editors";
 
 export interface ToolContext {
@@ -303,6 +303,15 @@ export const TOOLS: ToolDef[] = [
       { title: "Overview of all workspaces", args: {} },
       { title: "Back to the workspace view", args: { back: true } },
     ],
+  },
+  {
+    id: "open_plugin_page",
+    title: "Open plugin page",
+    description: "Open one of the plugin pages (e.g. task board, secrets, database explorer), pinned to the title bar or not",
+    risk: "safe",
+    params: { page: { kind: "enum", ask: "Which page?", options: () => Object.fromEntries(pluginPages().map((p) => [p.key, p.title])) } },
+    toCommands: (args) => (typeof args.page === "string" ? [{ type: "ui.view", view: `page:${args.page}` }] : []),
+    palette: () => pluginPages().map((p) => ({ title: `Open page: ${p.title}`, args: { page: p.key } })),
   },
   {
     id: "show_progress",

@@ -107,6 +107,8 @@ interface WorkspaceState {
   view: View;
   /** Terminal font size in px (zoom with Mod+= / Mod+- / Mod+0 or Ctrl+wheel). */
   terminalFontSize: number;
+  /** Plugin page keys shown as title bar tabs, in order; the rest live in the Apps menu. null = not chosen yet. */
+  pinnedPages: string[] | null;
   /** The overview tiles every session of every workspace; same shape as a workspace's layout. */
   overview: OverviewLayout;
   /** Review inbox: run tests / take screenshots automatically when an agent finishes. */
@@ -169,6 +171,7 @@ interface WorkspaceState {
   toggleTheme: () => void;
   setView: (view: View) => void;
   setTerminalFontSize: (size: number) => void;
+  setPinnedPages: (keys: string[]) => void;
   updateOverview: (fn: (o: OverviewLayout) => Partial<OverviewLayout>) => void;
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
@@ -249,6 +252,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   theme: DEFAULT_THEME,
   view: "workspace",
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
+  pinnedPages: null,
   overview: { layout: null, zoomedPaneId: null, presetIndex: GRID },
   reviewConfig: {},
   progressConfig: {},
@@ -303,6 +307,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       theme: isThemeId(ui.theme) ? ui.theme : DEFAULT_THEME,
       view: ui.view ?? "workspace",
       terminalFontSize: ui.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
+      pinnedPages: ui.pinnedPages ?? null,
       overview: { layout: ui.overviewLayout ?? null, zoomedPaneId: null, presetIndex: GRID },
       reviewConfig: ui.review ?? {},
       progressConfig: ui.progress ?? {},
@@ -489,6 +494,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setView: (view) => set({ view }),
   setTerminalFontSize: (size) =>
     set({ terminalFontSize: Math.round(Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, size)) * 2) / 2 }),
+  setPinnedPages: (pinnedPages) => set({ pinnedPages: [...new Set(pinnedPages)] }),
   updateOverview: (fn) => set((s) => ({ overview: { ...s.overview, ...fn(s.overview) } })),
   setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
   setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
@@ -547,6 +553,7 @@ interface Snapshot {
     theme?: Theme;
     view?: View;
     terminalFontSize?: number;
+    pinnedPages?: string[] | null;
     overviewLayout?: LayoutNode | null;
     review?: { autoTests?: boolean; screenshots?: boolean };
     progress?: { enabled?: boolean; intervalSec?: number };
@@ -570,7 +577,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, recentSessions: s.recentSessions },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, recentSessions: s.recentSessions },
   };
 }
 
