@@ -32,6 +32,9 @@ reads files bigger than its 20,000-character output limit in chunks, and draws a
 API and the NuGet package with their models) and shows the contracts, endpoints and packages they
 share as an SVG map; its analysis is pure functions tested in `scripts/cross-project.test.mjs`, and
 `pnpm dev` with `?xp` opens it on three demo projects.
+[`plugins/screen-recorder`](../../plugins/screen-recorder) records the browser panel or the Android
+mirror to MP4: their canvases carry `data-winfer-capture="browser"` / `"android"`, which plugins can
+capture with `captureStream()`.
 [`plugins/db-explorer`](../../plugins/db-explorer) runs psql, mysql or sqlite3 read-only with the
 connection from the vault, and [`plugins/prompt-library`](../../plugins/prompt-library) re-registers
 its palette and voice tool whenever the prompts change; `pnpm dev` with `?db` opens both on a fake
@@ -98,10 +101,12 @@ export function deactivate() {}  // optional
 | `describePane(paneId)` | `{ paneId, workspaceId, workspaceName, cwd, provider, label }` like an agent tool's `caller`, or null. |
 | `readPane(paneId, lines?)` | The last `lines` (default 40) of a pane's terminal as plain text, or null. |
 | `readFile(path)` | A file's text, by absolute path (or `~/…`). Much faster than `vault.exec` for big files, whose output keeps only the last 20,000 characters. |
+| `writeFile(path, data)` | Writes a string, `Uint8Array`, `ArrayBuffer` or `Blob` to a file (absolute or `~/…`), creating its folder; resolves to the absolute path. |
+| `revealFile(path)` | Shows a file in Finder / Explorer. |
 | `paneRequest(paneId)` | What an agent in `needs-input` asks: `{ kind: "approval" \| "question", text }`, or null. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
 | `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
-| `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, database, file, globe, key, lock, puzzle, shield, star, terminal. |
+| `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, database, file, globe, key, lock, puzzle, shield, star, terminal, video. |
 | `openPage(id)` | Shows one of the plugin's pages. |
 | `registerAgentTool({ name, description, inputSchema?, run(args, caller) })` | A tool agents started by winfer can call (served by winfer's MCP server). `caller` has `paneId`, `workspaceId`, `workspaceName`, `cwd`, `provider` and `label`; return the text the agent sees, or throw. |
 | `vault` | Secrets in the OS keychain, per plugin (below). |

@@ -220,6 +220,8 @@ mockIPC(
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
       case "plugins_read_file":
         return knowledgeBaseFile(a.path);
+      case "plugins_write_file":
+        return "/Users/you/Movies/winfer/recording.mp4";
       case "browser_fill_secret":
         return null;
       case "plugins_set_enabled": {

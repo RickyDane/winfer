@@ -13,6 +13,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
 import type { Command } from "@/commands/bus";
 import type { Args, ParamDef, ToolDef } from "@/tools/registry";
@@ -165,6 +166,10 @@ export interface PluginApi {
   paneRequest(paneId: string): Promise<AgentRequest | null>;
   /** A file's text (UTF-8), by absolute path or one starting with "~"; reads big files much faster than `vault.exec`. */
   readFile(path: string): Promise<string>;
+  /** Writes text or bytes to a file (absolute or "~/…"), creating its folder; resolves to the absolute path. */
+  writeFile(path: string, data: string | Uint8Array | ArrayBuffer | Blob): Promise<string>;
+  /** Shows a file in Finder / Explorer. */
+  revealFile(path: string): Promise<void>;
   /** The agent's final reply from its last finished turn, when its hooks report it; else null. */
   lastReply(paneId: string): string | null;
   toast(text: string, kind?: "info" | "success" | "error"): void;
@@ -445,6 +450,8 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
     describePane: (paneId) => agentCaller(paneId),
     readPane: (paneId, lines = 40) => readPane(paneId, lines),
     readFile: async (path) => new TextDecoder().decode(await invoke<ArrayBuffer>("plugins_read_file", { path })),
+    writeFile: (path, data) => writeFile(path, data),
+    revealFile: (path) => revealItemInDir(path),
     async paneRequest(paneId) {
       const screen = await readPane(paneId, 40);
       return screen === null ? null : describeRequest(screen);
@@ -452,6 +459,14 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
     lastReply: (paneId) => lastReply(paneId),
     toast: (text, kind = "info") => void toast(text, kind),
   };
+}
+
+async function writeFile(path: string, data: string | Uint8Array | ArrayBuffer | Blob): Promise<string> {
+  const bytes =
+    typeof data === "string" ? new TextEncoder().encode(data) : data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : new Uint8Array(data);
+  // The path rides in a header (ASCII only), so it's base64 of its UTF-8.
+  const header = btoa(Array.from(new TextEncoder().encode(path), (b) => String.fromCharCode(b)).join(""));
+  return invoke<string>("plugins_write_file", bytes, { headers: { "x-path": header } });
 }
 
 async function readPane(paneId: string, lines: number): Promise<string | null> {

@@ -43,6 +43,7 @@ interface Entry {
   opened: boolean;
   spawned: boolean;
   exited: boolean;
+  pid?: number | null;
   lastOutput: number;
   decoder: TextDecoder;
   observer?: ResizeObserver;
@@ -58,9 +59,10 @@ let started = false;
 export function startTerminalEvents() {
   if (started) return;
   started = true;
-  void listen<{ paneId: string; code: number }>("pty://exit", ({ payload }) => {
+  void listen<{ paneId: string; code: number; pid: number | null }>("pty://exit", ({ payload }) => {
     const entry = entries.get(payload.paneId);
-    if (!entry) return;
+    // A restarted pane's old process exits after the new one started: not this entry's.
+    if (!entry || (payload.pid != null && entry.pid != null && payload.pid !== entry.pid)) return;
     entry.exited = true;
     entry.term.write(`\r\n\x1b[2m[process exited with code ${payload.code}]\x1b[0m\r\n`);
     reportStatus(payload.paneId, payload.code === 0 ? "done" : "error", `exited with code ${payload.code}`);
@@ -214,7 +216,7 @@ async function spawn(entry: Entry) {
     detectDevServer(entry, data);
   };
   try {
-    await invoke("pty_spawn", {
+    const { pid } = await invoke<{ pid: number | null }>("pty_spawn", {
       req: {
         paneId: entry.pane.id,
         providerId: entry.pane.provider,
@@ -230,6 +232,7 @@ async function spawn(entry: Entry) {
       },
       onData: channel,
     });
+    entry.pid = pid;
     useWorkspaces.getState().setPaneStatus(entry.pane.id, entry.pane.provider === "shell" ? "idle" : "working");
   } catch (err) {
     clearTimeout(giveUp);
@@ -364,25 +367,32 @@ export function focusTerminal(paneId: string) {
   entries.get(paneId)?.term.focus();
 }
 
-/** Restarts a pane's process in place (e.g. with a different model), resuming its session. */
-export function restartTerminal(pane: Pane) {
+/**
+ * Restarts a pane's process in place (e.g. with a different model), resuming its session:
+ * kills the old process group, then starts a fresh terminal and focuses it.
+ */
+export async function restartTerminal(pane: Pane) {
   const slot = entries.get(pane.id)?.host.parentElement ?? null;
-  closeTerminal(pane.id);
-  if (slot) attachTerminal(pane, slot);
-  else startDetached(pane);
+  // Wait for the kill so the new process isn't spawned next to (or replaced by) the old one.
+  await closeTerminal(pane.id);
+  if (slot) {
+    attachTerminal(pane, slot);
+    focusTerminal(pane.id);
+  } else startDetached(pane);
 }
 
 /** Id of a workspace's side-panel shell (it isn't one of the workspace's panes). */
 export const sideTerminalId = (workspaceId: string) => `side-terminal-${workspaceId}`;
 
 /** Kills the PTY and disposes the terminal. */
-export function closeTerminal(paneId: string) {
+export function closeTerminal(paneId: string): Promise<void> {
   const entry = entries.get(paneId);
-  void invoke("pty_kill", { paneId });
+  const killed = invoke<void>("pty_kill", { paneId }).catch(() => {});
   setStarting(paneId, null);
-  if (!entry) return;
+  if (!entry) return killed;
   entry.observer?.disconnect();
   entry.term.dispose();
   entry.host.remove();
   entries.delete(paneId);
+  return killed;
 }

@@ -91,6 +91,8 @@ pub struct SpawnResult {
 struct ExitEvent {
     pane_id: String,
     code: u32,
+    /// Lets the UI ignore a killed process's exit once the pane has been respawned.
+    pid: Option<u32>,
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
@@ -314,7 +316,7 @@ pub fn pty_spawn(
             sessions.remove(&pane_id);
         }
         drop(sessions);
-        let _ = app.emit("pty://exit", ExitEvent { pane_id, code });
+        let _ = app.emit("pty://exit", ExitEvent { pane_id, code, pid });
     });
 
     sessions.insert(
@@ -394,12 +396,19 @@ pub fn pty_kill(state: State<'_, PtyManager>, pane_id: String) {
         return;
     };
     // The child is a session leader (setsid), so its pid is also its process group id:
-    // hang up the whole group so tools the agent started go away too.
+    // hang up the whole group so tools the agent started go away too, then force-kill
+    // whatever ignored the hangup (a stuck command, a shell trapping SIGHUP).
     #[cfg(unix)]
     if let Some(pid) = session.pid {
         unsafe {
             libc::kill(-(pid as i32), libc::SIGHUP);
         }
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        });
     }
     let _ = session.killer.kill();
 }

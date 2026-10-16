@@ -121,6 +121,7 @@ pub fn run() {
             plugins::plugins_dir,
             plugins::plugins_source,
             plugins::plugins_read_file,
+            plugins::plugins_write_file,
             plugins::plugins_catalog,
             plugins::plugins_install,
             plugins::plugins_uninstall,

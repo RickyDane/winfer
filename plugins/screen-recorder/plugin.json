@@ -1,0 +1,17 @@
+{
+  "id": "screen-recorder",
+  "name": "Screen Recorder",
+  "version": "1.0.0",
+  "description": "Record the browser panel or the Android mirror and save it as an MP4, from the palette, by voice or by an agent showing off what it built.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": [
+    "video",
+    "recording",
+    "mp4",
+    "browser",
+    "android",
+    "demo",
+    "agents"
+  ]
+}

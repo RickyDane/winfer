@@ -15,6 +15,7 @@ import {
   SquareKanban,
   Star,
   Terminal,
+  Video,
   Waypoints,
   type LucideIcon,
 } from "lucide-react";
@@ -39,6 +40,7 @@ export const PAGE_ICONS: Record<string, LucideIcon> = {
   "square-kanban": SquareKanban,
   star: Star,
   terminal: Terminal,
+  video: Video,
   waypoints: Waypoints,
 };
 

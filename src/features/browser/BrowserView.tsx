@@ -192,6 +192,7 @@ export function BrowserView({ workspaceId, tabId, device }: { workspaceId: strin
     >
       <canvas
         ref={canvas}
+        data-winfer-capture="browser"
         onMouseDown={mouse("mousePressed")}
         onMouseUp={mouse("mouseReleased")}
         onMouseMove={onMove}

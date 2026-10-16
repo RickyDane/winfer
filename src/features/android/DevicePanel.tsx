@@ -195,6 +195,7 @@ function Mirror({ device }: { device: Device }) {
       <div className="relative flex min-h-0 flex-1 items-center justify-center bg-app p-3">
         <canvas
           ref={canvas}
+          data-winfer-capture="android"
           tabIndex={0}
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}

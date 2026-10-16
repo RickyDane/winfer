@@ -393,6 +393,33 @@ pub async fn plugins_read_file(path: String) -> Result<tauri::ipc::Response, Str
     .map_err(|e| e.to_string())?
 }
 
+/// Writes bytes to a file (creating its folder), for plugins saving what they make (a screen
+/// recording). The body is the raw bytes; the `x-path` header is the base64 of the UTF-8 path,
+/// absolute or starting with `~`. Plugins can already write any file through `vault.exec`.
+#[tauri::command]
+pub async fn plugins_write_file(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    use base64::Engine;
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("expected the file's bytes as the request body".into());
+    };
+    let encoded = request.headers().get("x-path").and_then(|v| v.to_str().ok()).ok_or("missing x-path header")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| format!("bad x-path header: {e}"))?;
+    let path = crate::editors::expand_home(&String::from_utf8(bytes).map_err(|e| e.to_string())?);
+    if !path.is_absolute() {
+        return Err(format!("{} isn't an absolute path", path.display()));
+    }
+    let data = data.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
+        }
+        std::fs::write(&path, data).map_err(|e| format!("can't write {}: {e}", path.display()))?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The plugins the store offers.
 #[tauri::command]
 pub async fn plugins_catalog() -> Result<Vec<CatalogEntry>, String> {
