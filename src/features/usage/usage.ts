@@ -33,6 +33,21 @@ export interface Context {
   tokens: number;
   window: number;
   at: number;
+  /** Where the conversation is kept (transcript, session log or session id), for the breakdown. */
+  source?: string;
+}
+
+/** One part of what fills a context window (estimated, see src-tauri/src/context_breakdown.rs). */
+export interface ContextPart {
+  kind: string;
+  label: string;
+  tokens: number;
+}
+
+/** What a pane's context is made of; null when the agent's session can't be read. */
+export async function contextBreakdown(provider: string, context: Context): Promise<ContextPart[] | null> {
+  if (!context.source) return null;
+  return invoke<ContextPart[] | null>("usage_context_breakdown", { provider, source: context.source, tokens: context.tokens }).catch(() => null);
 }
 
 export interface Spend {

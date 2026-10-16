@@ -1,6 +1,7 @@
 mod android;
 mod browser;
 mod chatgpt;
+mod context_breakdown;
 mod editors;
 mod env;
 mod hooks;
@@ -193,6 +194,7 @@ pub fn run() {
             mcp::mcp_respond,
             usage::usage_codex,
             usage::usage_codex_context,
+            context_breakdown::usage_context_breakdown,
             usage::usage_opencode,
             usage::usage_opencode_context,
             usage::usage_opencode_model,

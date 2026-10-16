@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
-import { contextColor, duration, leftNow, levelColor, runsOutAt, tightest, tokens, useUsage, when, windowKey, type UsageWindow } from "./usage";
+import { contextBreakdown, contextColor, duration, leftNow, levelColor, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type UsageWindow } from "./usage";
 import { UsageSummary } from "./UsageHistory";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
@@ -347,16 +347,60 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
   );
 }
 
-/** Pane header: how full the agent's context window is, as a short bar and a percentage. */
-export function ContextMeter({ paneId }: { paneId: string }) {
+/** Colour per part of the context (see ContextPart.kind). */
+const PART_COLORS: Record<string, string> = {
+  setup: "#8a94a8",
+  system: "#8a94a8",
+  tools: "#5b8def",
+  mcp: "#9b7bea",
+  instructions: "#c79a3e",
+  messages: "#e5735a",
+  replies: "#d867a8",
+  thinking: "#a3b85a",
+  toolCalls: "#6dbf67",
+  toolResults: "#3fb5a3",
+};
+
+const CONTEXT_CARD_WIDTH = 280;
+
+/** Pane header: how full the agent's context window is, as a short bar and a percentage; hovering shows what fills it. */
+export function ContextMeter({ paneId, provider }: { paneId: string; provider: string }) {
   const context = useUsage((s) => s.context[paneId]);
+  const [hover, setHover] = useState<{ left: number; top: number } | null>(null);
+  // The breakdown and the reading it belongs to.
+  const [parts, setParts] = useState<{ at: number; parts: ContextPart[] | null } | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const anchor = useRef<HTMLSpanElement>(null);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  useEffect(() => {
+    if (!hover || !context || parts?.at === context.at) return;
+    let live = true;
+    void contextBreakdown(provider, context).then((p) => live && setParts({ at: context.at, parts: p }));
+    return () => {
+      live = false;
+    };
+  }, [hover, context, provider, parts?.at]);
+
   if (!context) return null;
   const used = Math.min(100, Math.max(0, context.usedPercent));
+  const enter = () => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      const r = anchor.current?.getBoundingClientRect();
+      if (r) setHover({ left: Math.max(8, Math.min(r.right - CONTEXT_CARD_WIDTH, window.innerWidth - CONTEXT_CARD_WIDTH - 8)), top: r.bottom + 6 });
+    }, 200);
+  };
+  const leave = () => {
+    window.clearTimeout(timer.current);
+    setHover(null);
+  };
+  const breakdown = parts?.at === context.at ? parts.parts : undefined;
+  const free = Math.max(0, context.window - context.tokens);
+  const pct = (n: number) => (context.window ? (n * 100) / context.window : 0);
+
   return (
-    <span
-      className="flex shrink-0 items-center gap-1"
-      title={`Context: ${tokens(context.tokens)} of ${tokens(context.window)} tokens (${Math.round(used)}% used)`}
-    >
+    <span ref={anchor} className="flex shrink-0 items-center gap-1" onMouseEnter={enter} onMouseLeave={leave}>
       <span className="h-1 w-8 overflow-hidden rounded-full bg-hover">
         <span
           className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out"
@@ -366,6 +410,52 @@ export function ContextMeter({ paneId }: { paneId: string }) {
       <span className="hidden font-mono text-[10px] @[15rem]:inline" style={{ color: used >= 60 ? contextColor(used) : "var(--color-fg-subtle)" }}>
         {Math.round(used)}%
       </span>
+      {hover &&
+        createPortal(
+          <div
+            className="anim-menu pointer-events-none fixed z-[1000] space-y-2.5 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl"
+            style={{ left: hover.left, top: hover.top, width: CONTEXT_CARD_WIDTH }}
+          >
+            <div className="flex items-baseline gap-2 text-xs">
+              <span className="flex-1 font-medium text-fg">Context</span>
+              <span className="font-mono text-[11px] text-fg-muted">
+                {tokens(context.tokens)} / {tokens(context.window)} · {Math.round(used)}%
+              </span>
+            </div>
+            <div className="flex h-2 overflow-hidden rounded-full bg-hover">
+              {breakdown?.length ? (
+                breakdown.map((p) => <span key={p.kind} className="h-full" style={{ width: `${pct(p.tokens)}%`, background: PART_COLORS[p.kind] ?? "var(--color-fg-subtle)" }} />)
+              ) : (
+                <span className="h-full" style={{ width: `${used}%`, background: contextColor(used) }} />
+              )}
+            </div>
+            {breakdown === undefined ? (
+              <div className="text-[11px] text-fg-subtle">Reading the session…</div>
+            ) : breakdown?.length ? (
+              <div className="space-y-1">
+                {breakdown.map((p) => (
+                  <ContextRow key={p.kind} color={PART_COLORS[p.kind] ?? "var(--color-fg-subtle)"} label={p.label} tokens={p.tokens} percent={pct(p.tokens)} />
+                ))}
+                <ContextRow color="var(--color-hover)" label="Free space" tokens={free} percent={pct(free)} muted />
+                <div className="pt-1 text-[10px] text-fg-subtle">Estimated from the session's conversation.</div>
+              </div>
+            ) : (
+              <div className="text-[11px] text-fg-subtle">{tokens(free)} tokens free. No breakdown for this session.</div>
+            )}
+          </div>,
+          document.body,
+        )}
     </span>
+  );
+}
+
+function ContextRow({ color, label, tokens: n, percent, muted }: { color: string; label: string; tokens: number; percent: number; muted?: boolean }) {
+  return (
+    <div className="flex items-center gap-2 text-[11px]">
+      <span className="size-2 shrink-0 rounded-sm" style={{ background: color, outline: muted ? "1px solid var(--color-border-strong)" : undefined }} />
+      <span className={cn("flex-1 truncate", muted ? "text-fg-subtle" : "text-fg-muted")}>{label}</span>
+      <span className="font-mono text-fg">{tokens(n)}</span>
+      <span className="w-10 text-right font-mono text-fg-subtle">{percent < 1 && n > 0 ? "<1" : Math.round(percent)}%</span>
+    </div>
   );
 }

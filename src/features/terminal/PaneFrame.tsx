@@ -97,7 +97,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
             {paneTitle(pane) ?? pane.title}
           </span>
         )}
-        <ContextMeter paneId={pane.id} />
+        <ContextMeter paneId={pane.id} provider={pane.provider} />
         <PaneCost pane={pane} />
         {showProgress && (
           <span title={progressLabel(progress)} className="font-mono text-[11px] text-fg-subtle">

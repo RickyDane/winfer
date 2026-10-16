@@ -55,6 +55,10 @@ pub struct Context {
     pub window: u64,
     /// Unix ms.
     pub at: i64,
+    /// Where the session's conversation is kept, for the breakdown (Claude's transcript, Codex's
+    /// session log, OpenCode's session id).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 // Claude Code ------------------------------------------------------------------------------------
@@ -65,7 +69,8 @@ pub fn claude_context(input: &Value) -> Option<Context> {
     let window = c["context_window_size"].as_u64().filter(|w| *w > 0)?;
     let tokens = c["total_input_tokens"].as_u64().unwrap_or(0);
     let used_percent = c["used_percentage"].as_f64().unwrap_or(tokens as f64 * 100.0 / window as f64);
-    Some(Context { used_percent, tokens, window, at: now_ms() })
+    let source = input["transcript_path"].as_str().filter(|p| !p.is_empty()).map(String::from);
+    Some(Context { used_percent, tokens, window, at: now_ms(), source })
 }
 
 const CLAUDE_WINDOWS: [(&str, &str, &str); 4] = [
@@ -329,7 +334,7 @@ pub fn codex_context_in(log: &str) -> Option<Context> {
         let window = info["model_context_window"].as_u64().filter(|w| *w > 0)?;
         let tokens = info["last_token_usage"]["total_tokens"].as_u64()?;
         let at = v["timestamp"].as_str().and_then(parse_rfc3339).unwrap_or_else(now_ms);
-        Some(Context { used_percent: tokens as f64 * 100.0 / window as f64, tokens, window, at })
+        Some(Context { used_percent: tokens as f64 * 100.0 / window as f64, tokens, window, at, source: None })
     })
 }
 
@@ -356,7 +361,8 @@ pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option
     tauri::async_runtime::spawn_blocking(move || {
         let root = codex_sessions()?;
         let log = codex_log_for(&root, session.as_deref(), &cwd)?;
-        codex_context_in(&tail(&log, 1024 * 1024)?)
+        let context = codex_context_in(&tail(&log, 1024 * 1024)?)?;
+        Some(Context { source: Some(log.to_string_lossy().into_owned()), ..context })
     })
     .await
     .ok()
@@ -565,7 +571,7 @@ fn opencode_context_at(conn: &rusqlite::Connection, cwd: &str) -> Option<Context
     // The message names its model; the session's model is the fallback.
     let model = Some(data["model"].clone()).filter(|m| m.is_object()).or_else(|| model.and_then(|m| serde_json::from_str(&m).ok()))?;
     let window = opencode_model_window(conn, model["providerID"].as_str()?, model["id"].as_str()?)?;
-    Some(Context { used_percent: tokens as f64 * 100.0 / window as f64, tokens, window, at })
+    Some(Context { used_percent: tokens as f64 * 100.0 / window as f64, tokens, window, at, source: Some(session) })
 }
 
 /// Context use of the OpenCode session in a pane's folder (OpenCode 2; older versions: None).
