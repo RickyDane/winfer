@@ -49,10 +49,7 @@ export function UsageSettings({ children }: { children?: React.ReactNode }) {
         ))}
       </div>
       {tab === "usage" ? (
-        <>
-          {children}
-          <UsageHistory />
-        </>
+        <UsageHistory>{children}</UsageHistory>
       ) : (
         <LimitsTab />
       )}

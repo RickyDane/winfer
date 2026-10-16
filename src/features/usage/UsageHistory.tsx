@@ -235,7 +235,7 @@ const Stat = ({ label, value, detail }: { label: string; value: string; detail?:
 );
 
 /** Tokens the agents used and what they'd cost on the API, over a chosen range of the last 90 days. */
-export function UsageHistory() {
+export function UsageHistory({ children }: { children?: React.ReactNode }) {
   const [range, pick] = useSaved<Range>("winfer.usageRange", RANGES.map((r) => r.id), "7d");
   const [metric, setMetric] = useState<Metric>("cost");
   const [kind, setKind] = useSaved<ChartKind>("winfer.usageChart", ["bars", "line"], "bars");
@@ -362,6 +362,8 @@ export function UsageHistory() {
               </tbody>
             </table>
           )}
+
+          {children}
 
           <ByTask days={RANGES.find((r) => r.id === range)!.days} />
         </>
