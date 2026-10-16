@@ -12,6 +12,7 @@ import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
 import { UsageSettings } from "@/features/usage/UsagePage";
+import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates } from "@/features/providers/updates";
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
@@ -298,8 +299,71 @@ function AgentSettings() {
           })}
         </Card>
       )}
+      <VersionSettings />
       <AutoApproveSettings />
     </>
+  );
+}
+
+/** Each installed agent's version, and updating it to the newest one. */
+function VersionSettings() {
+  const { providers } = useWorkspaces();
+  const { versions, checking, updating, checkedAt } = useProviderUpdates();
+  const agents = providers.filter((p) => p.installed && p.command);
+  // Opening the page checks unless a check ran in the last few minutes.
+  useEffect(() => {
+    if (!checkedAt || Date.now() - checkedAt > 5 * 60_000) void checkProviderUpdates(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!agents.length) return null;
+  return (
+    <Card title="Versions" description="Updating changes the CLI on disk; running panes keep their version until restarted.">
+      {agents.map((p) => {
+        const v = versions[p.id];
+        const busy = updating.includes(p.id);
+        return (
+          <Row
+            key={p.id}
+            label={
+              <>
+                {p.name}
+                {v?.current && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{v.current}</span>}
+              </>
+            }
+            hint={
+              !v
+                ? checking
+                  ? "Checking…"
+                  : undefined
+                : v.outdated
+                  ? `${v.latest} is available${v.updatable ? `, updates via ${installLabel(v)}` : ""}.`
+                  : v.latest
+                    ? "Up to date."
+                    : v.updatable
+                      ? `Can't tell the newest version; updating asks ${installLabel(v)}.`
+                      : undefined
+            }
+          >
+            {busy && <Loader2 size={13} className="animate-spin text-fg-subtle" />}
+            {v?.updatable && (v.outdated || !v.latest) && (
+              <button
+                disabled={busy}
+                onClick={() => void updateProvider(p.id)}
+                className={v.outdated ? "flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:brightness-110 disabled:opacity-50" : buttonClass}
+              >
+                <Download size={12} />
+                {v.outdated ? `Update to ${v.latest}` : "Update"}
+              </button>
+            )}
+          </Row>
+        );
+      })}
+      <Row label="Check for agent updates" hint="winfer also checks every few hours and tells you when one is out.">
+        <button onClick={() => void checkProviderUpdates()} disabled={checking} className={buttonClass}>
+          {checking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          Check now
+        </button>
+      </Row>
+    </Card>
   );
 }
 

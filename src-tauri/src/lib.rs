@@ -10,6 +10,7 @@ mod notify;
 mod plugins;
 #[cfg(target_os = "macos")]
 mod menu;
+mod provider_updates;
 mod providers;
 mod pty;
 mod review;
@@ -116,6 +117,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             providers::providers_list,
             providers::providers_models,
+            provider_updates::providers_versions,
+            provider_updates::providers_update,
             plugins::plugins_list,
             plugins::plugins_set_enabled,
             plugins::plugins_dir,

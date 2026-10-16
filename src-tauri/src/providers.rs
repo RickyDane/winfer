@@ -48,6 +48,25 @@ pub struct Provider {
     /// Launch flags that skip permission prompts, added when auto-approve is on in settings.
     #[serde(default)]
     pub auto_approve_args: Vec<String>,
+    /// Where to find the newest version and how the CLI updates itself (see provider_updates.rs).
+    #[serde(default)]
+    pub update: Option<UpdateSource>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSource {
+    /// Subcommand that updates the CLI in place, e.g. `["update"]`.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// npm package whose `latest` tag is the newest version; also how npm installs are updated.
+    #[serde(default)]
+    pub npm: Option<String>,
+    /// A page that names the newest version right after `after`, e.g. an install script.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub after: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

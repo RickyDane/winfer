@@ -43,7 +43,13 @@
     "modelCommand": "/model {model}",
     "autoApproveArgs": [
       "--dangerously-skip-permissions"
-    ]
+    ],
+    "update": {
+      "args": [
+        "update"
+      ],
+      "npm": "@anthropic-ai/claude-code"
+    }
   },
   {
     "id": "codex",
@@ -69,7 +75,13 @@
     "modelArg": "--model",
     "autoApproveArgs": [
       "--dangerously-bypass-approvals-and-sandbox"
-    ]
+    ],
+    "update": {
+      "args": [
+        "update"
+      ],
+      "npm": "@openai/codex"
+    }
   },
   {
     "id": "agy",
@@ -88,7 +100,12 @@
     "resumeArgs": [
       "--continue"
     ],
-    "promptFlag": "--prompt-interactive"
+    "promptFlag": "--prompt-interactive",
+    "update": {
+      "args": [
+        "update"
+      ]
+    }
   },
   {
     "id": "grok",
@@ -123,7 +140,13 @@
     "statusHooks": true,
     "autoApproveArgs": [
       "--auto"
-    ]
+    ],
+    "update": {
+      "args": [
+        "upgrade"
+      ],
+      "npm": "opencode-ai"
+    }
   },
   {
     "id": "cursor",
@@ -141,7 +164,14 @@
     "resumeArgs": [
       "--continue"
     ],
-    "promptArg": true
+    "promptArg": true,
+    "update": {
+      "args": [
+        "update"
+      ],
+      "url": "https://cursor.com/install",
+      "after": "downloads.cursor.com/lab/"
+    }
   },
   {
     "id": "shell",

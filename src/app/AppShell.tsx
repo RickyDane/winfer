@@ -28,6 +28,7 @@ import { UsageMeter } from "@/features/usage/UsageMeter";
 import { startUsageTracking } from "@/features/usage/usage";
 import { startWakes } from "@/features/usage/agentUsage";
 import { startUpdateChecks } from "@/features/updates/updater";
+import { startProviderUpdateChecks } from "@/features/providers/updates";
 import { WhatsNew } from "@/features/updates/WhatsNew";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
@@ -163,6 +164,7 @@ export function AppShell() {
     startUsageTracking();
     startWakes();
     startUpdateChecks();
+    startProviderUpdateChecks();
     startPluginEvents();
     void loadPlugins().catch((err) => console.error("plugins failed to load", err));
   }, [loadProviders, hydrate]);
