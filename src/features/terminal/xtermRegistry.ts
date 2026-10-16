@@ -43,12 +43,21 @@ interface Entry {
   opened: boolean;
   spawned: boolean;
   exited: boolean;
+  /** Undefined until pty_spawn returns; null where the OS gives no pid. */
   pid?: number | null;
+  /** Exits that arrived before pty_spawn returned, settled once the pid is known. */
+  earlyExits?: ExitPayload[];
   lastOutput: number;
   decoder: TextDecoder;
   observer?: ResizeObserver;
   frame?: number;
   resizeTimer?: number;
+}
+
+interface ExitPayload {
+  paneId: string;
+  code: number;
+  pid: number | null;
 }
 
 const entries = new Map<string, Entry>();
@@ -59,14 +68,22 @@ let started = false;
 export function startTerminalEvents() {
   if (started) return;
   started = true;
-  void listen<{ paneId: string; code: number; pid: number | null }>("pty://exit", ({ payload }) => {
+  void listen<ExitPayload>("pty://exit", ({ payload }) => {
     const entry = entries.get(payload.paneId);
-    // A restarted pane's old process exits after the new one started: not this entry's.
-    if (!entry || (payload.pid != null && entry.pid != null && payload.pid !== entry.pid)) return;
-    entry.exited = true;
-    entry.term.write(`\r\n\x1b[2m[process exited with code ${payload.code}]\x1b[0m\r\n`);
-    reportStatus(payload.paneId, payload.code === 0 ? "done" : "error", `exited with code ${payload.code}`);
+    if (!entry) return;
+    // A restarted pane's old process often exits while the new one is still spawning:
+    // hold the exit until the new pid is known, then decide whose it was.
+    if (entry.pid === undefined) (entry.earlyExits ??= []).push(payload);
+    else onExit(entry, payload);
   });
+}
+
+function onExit(entry: Entry, { code, pid }: ExitPayload) {
+  // Not this entry's process (the one a restart killed).
+  if (pid != null && entry.pid != null && pid !== entry.pid) return;
+  entry.exited = true;
+  entry.term.write(`\r\n\x1b[2m[process exited with code ${code}]\x1b[0m\r\n`);
+  reportStatus(entry.pane.id, code === 0 ? "done" : "error", `exited with code ${code}`);
 }
 
 function create(pane: Pane): Entry {
@@ -234,9 +251,13 @@ async function spawn(entry: Entry) {
     });
     entry.pid = pid;
     useWorkspaces.getState().setPaneStatus(entry.pane.id, entry.pane.provider === "shell" ? "idle" : "working");
+    entry.earlyExits?.forEach((exit) => onExit(entry, exit));
+    entry.earlyExits = undefined;
   } catch (err) {
     clearTimeout(giveUp);
     setStarting(id, null);
+    entry.pid = null;
+    entry.earlyExits = undefined;
     entry.exited = true;
     entry.term.write(`\x1b[31mFailed to start ${entry.pane.provider}: ${err}\x1b[0m\r\n`);
     useWorkspaces.getState().setPaneStatus(entry.pane.id, "error");
