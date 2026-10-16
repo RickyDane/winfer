@@ -48,6 +48,8 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
   const [attachError, setAttachError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
+  /** Attaching before the panel is measured would size the page 1×1, and its frames would read as an agent's size. */
+  const measured = panel.width > 0 && panel.height > 0;
   const own = size ?? (device === "mobile" ? MOBILE : null);
   const page = own ?? panel;
   const room = own ? { width: panel.width - 2 * GUTTER, height: panel.height - 2 * GUTTER } : panel;
@@ -75,6 +77,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
   }, []);
 
   useEffect(() => {
+    if (!measured) return;
     const cv = canvas.current!;
     const ctx = cv.getContext("2d")!;
     let disposed = false;
@@ -128,7 +131,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       attached.current = false;
       void invoke("browser_detach", { workspaceId, attachId });
     };
-  }, [workspaceId, tabId, device, attempt]);
+  }, [workspaceId, tabId, device, attempt, measured]);
 
   /** Sends the page size to the browser when it changed. */
   const sync = () => {
