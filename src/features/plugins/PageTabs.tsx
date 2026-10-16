@@ -71,7 +71,8 @@ export function PageTabs({ tab }: { tab: (active: boolean) => string }) {
             title={page.title}
           >
             <Icon size={12} />
-            <span className="max-w-32 truncate">{page.title}</span>
+            {/* Narrow windows show just the icon; the title is in the tooltip. */}
+            <span className="max-w-32 truncate max-xl:hidden">{page.title}</span>
           </button>
         );
       })}
@@ -141,10 +142,10 @@ function AppsMenu({ pages, pinned, unpinned, tab }: { pages: PluginPage[]; pinne
         aria-expanded={open}
         onClick={() => setOpen(!open)}
         className={tab(!!current || open)}
-        title="All plugin pages"
+        title={current ? `${current.title} · all plugin pages` : "All plugin pages"}
       >
         <CurrentIcon size={12} />
-        <span className="max-w-32 truncate">{current ? current.title : "Apps"}</span>
+        <span className="max-w-32 truncate max-lg:hidden">{current ? current.title : "Apps"}</span>
         {!current && unpinned.length > 0 && <span className="font-mono text-[10px] text-fg-subtle">{unpinned.length}</span>}
         <ChevronDown size={11} className="text-fg-subtle" />
       </button>
