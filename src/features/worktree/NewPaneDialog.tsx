@@ -15,7 +15,7 @@ type Row = { kind: "auto" } | { kind: "new"; name: string } | { kind: "branch"; 
  * one already checked out somewhere opens in that folder, any other gets a worktree of its own.
  */
 export function NewPaneDialog() {
-  const { overlay, setOverlay, providers } = useWorkspaces();
+  const { overlay, setOverlay, providers, newPaneProvider } = useWorkspaces();
   const workspace = useActiveWorkspace();
   const [branches, setBranches] = useState<Branch[] | null>(null);
   const [worktrees, setWorktrees] = useState<ExistingWorktree[]>([]);
@@ -57,7 +57,7 @@ export function NewPaneDialog() {
     ...matches.map((branch) => ({ kind: "branch" as const, branch })),
   ].filter((r): r is Row => r !== null);
   const current = Math.min(index, Math.max(rows.length - 1, 0));
-  const provider = defaultProviderId();
+  const provider = newPaneProvider ?? defaultProviderId();
   const agent = providerName(providers, provider);
 
   const open = async (row: Row) => {

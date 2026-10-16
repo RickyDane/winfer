@@ -96,7 +96,7 @@ export type Command =
   /** Toggles settings; with a page, opens settings on that page. */
   | { type: "ui.settings"; page?: string }
   | { type: "ui.theme"; theme: string }
-  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" }
+  | { type: "ui.overlay"; overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane"; provider?: ProviderId }
   /** Speaks how far each working agent is ("how far are the agents?"). */
   | { type: "progress.readAloud" }
   /** Terminal text size: bigger, smaller or back to the default. */
@@ -426,8 +426,10 @@ export function execute(cmd: Command): void {
       return s.setView(cmd.view === "toggle" ? (s.view === "overview" ? "workspace" : "overview") : cmd.view);
     case "ui.overlay":
       // Nothing to choose without worktrees: the new pane opens straight away.
-      if (cmd.overlay === "newPane" && s.overlay !== "newPane" && !active().useWorktrees) return execute({ type: "pane.spawn", provider: "default" });
-      return s.setOverlay(s.overlay === cmd.overlay ? null : cmd.overlay);
+      if (cmd.overlay === "newPane" && s.overlay !== "newPane" && !active().useWorktrees) return execute({ type: "pane.spawn", provider: cmd.provider ?? "default" });
+      // The new pane dialog switches agent when asked for another one, and closes on a repeat.
+      if (s.overlay === cmd.overlay && (s.overlay !== "newPane" || s.newPaneProvider === (cmd.provider ?? null))) return s.setOverlay(null);
+      return s.setOverlay(cmd.overlay, cmd.provider ?? null);
   }
 }
 

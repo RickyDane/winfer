@@ -137,6 +137,8 @@ export const TOOLS: ToolDef[] = [
       // Palette only: skip the worktree even when the workspace always makes one.
       const worktree = args.noWorktree ? false : undefined;
       const named = Object.entries((args.counts as Record<string, number>) ?? {}).filter(([, n]) => n > 0);
+      // Palette only: ask for the branch like ⌘T does, for the chosen agent.
+      if (args.pickBranch && named.length === 1) return [{ type: "ui.overlay", overlay: "newPane", provider: named[0][0] }];
       // "Open five windows" names no agent: open the default agent that many times.
       if (named.length === 0) {
         const count = Math.max(1, Number(args.total) || 1);
@@ -145,7 +147,7 @@ export const TOOLS: ToolDef[] = [
       return named.map(([provider, count]) => ({ type: "pane.spawn", provider, count, prompt, worktree, model: modelFor(ctx, provider, args.model) }));
     },
     palette: (ctx) => [
-      ...ctx.providers.filter((p) => p.installed).map((p) => ({ title: `New pane: ${p.name}`, args: { counts: { [p.id]: 1 } } })),
+      ...ctx.providers.filter((p) => p.installed).map((p) => ({ title: `New pane: ${p.name}`, args: { counts: { [p.id]: 1 }, pickBranch: true } })),
       ...(ctx.active.useWorktrees ? [{ title: "New pane without worktree", args: { noWorktree: true } }] : []),
     ],
   },

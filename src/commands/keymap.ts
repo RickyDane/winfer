@@ -50,7 +50,7 @@ const SPECS: BindingSpec[] = [
       group: "Panes",
       command: () => {
         const provider = useWorkspaces.getState().providers.filter((p) => p.installed)[n - 1];
-        return provider ? { type: "pane.spawn", provider: provider.id } : null;
+        return provider ? { type: "ui.overlay", overlay: "newPane", provider: provider.id } : null;
       },
     }),
   ),

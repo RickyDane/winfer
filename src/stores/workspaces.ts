@@ -81,6 +81,8 @@ interface WorkspaceState {
   settingsPage: string;
   /** Open overlay for agent orchestration and recipes. */
   overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null;
+  /** Agent the new pane dialog starts; null for the default agent. */
+  newPaneProvider: ProviderId | null;
   /** User-saved recipes (persisted). */
   recipes: Recipe[];
   /** Models each provider offers (from its CLI), loaded in the background. */
@@ -153,7 +155,7 @@ interface WorkspaceState {
   setDiffPane: (id: string | null) => void;
   /** Opens or closes settings, optionally on a given page. */
   setSettings: (open: boolean, page?: string) => void;
-  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null) => void;
+  setOverlay: (overlay: "race" | "broadcast" | "recipes" | "model" | "review" | "progress" | "history" | "branch" | "newPane" | null, newPaneProvider?: ProviderId | null) => void;
   setRecipes: (recipes: Recipe[]) => void;
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
@@ -239,6 +241,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   settingsOpen: false,
   settingsPage: "general",
   overlay: null,
+  newPaneProvider: null,
   recipes: [],
   models: {},
   agentModels: {},
@@ -459,7 +462,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setCheatSheet: (open) => set(open ? { cheatSheetOpen: true, paletteQuery: null, settingsOpen: false, overlay: null } : { cheatSheetOpen: false }),
   setDiffPane: (id) => set({ diffPaneId: id, paletteQuery: null, cheatSheetOpen: false }),
   setSettings: (open, page) => set({ settingsOpen: open, paletteQuery: null, cheatSheetOpen: false, ...(page ? { settingsPage: page } : {}) }),
-  setOverlay: (overlay) => set({ overlay, paletteQuery: null, cheatSheetOpen: false }),
+  setOverlay: (overlay, newPaneProvider = null) => set({ overlay, newPaneProvider, paletteQuery: null, cheatSheetOpen: false }),
   setRecipes: (recipes) => set({ recipes }),
   loadModels: async (provider) => {
     const cached = get().models[provider];
