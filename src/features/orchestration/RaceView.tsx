@@ -184,7 +184,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
           <RefreshCw size={12} />
         </button>
       </div>
-      {!isolated && <p className="text-[11px] text-warning">Some agents aren't in their own worktree (the folder isn't a git repo), so they share files.</p>}
+      {!isolated && <p className="text-[11px] text-warning">Some agents have no worktree, so they weren't started: races and A/B tests need the folder to be a git repository.</p>}
       <div className="divide-y divide-border rounded-lg border border-border">
         {panes.map((pane) => {
           const st = stats[pane.id];

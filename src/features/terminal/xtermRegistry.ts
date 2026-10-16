@@ -197,19 +197,34 @@ function setStarting(paneId: string, phase: "worktree" | "process" | null) {
   }, true);
 }
 
-/** Gives an agent pane its own git worktree before it starts (if the folder is a repo). */
-async function prepareWorktree(entry: Entry) {
+/**
+ * Gives an agent pane its own git worktree before it starts (if the folder is a repo).
+ * Race and A/B panes must never share a folder, so for them a missing worktree is fatal:
+ * returns false and the agent isn't started.
+ */
+async function prepareWorktree(entry: Entry): Promise<boolean> {
   const pane = entry.pane;
-  if (!pane.wantsWorktree || pane.worktree) return;
+  if (!pane.wantsWorktree || pane.worktree) return true;
+  const required = !!pane.raceId;
   try {
     const worktree = await createWorktree(pane.cwd, pane.provider);
     const patch = worktree ? { worktree, cwd: worktree.path, wantsWorktree: false } : { wantsWorktree: false };
     useWorkspaces.getState().updatePane(pane.id, patch);
     entry.pane = { ...pane, ...patch };
-    if (worktree) entry.term.write(`\x1b[2mworktree ${worktree.branch} (from ${worktree.base}) at ${worktree.path}\x1b[0m\r\n`);
+    if (worktree) {
+      entry.term.write(`\x1b[2mworktree ${worktree.branch} (from ${worktree.base}) at ${worktree.path}\x1b[0m\r\n`);
+      return true;
+    }
+    if (required) entry.term.write(`\x1b[31m${pane.cwd} isn't a git repository. Races and A/B tests need a worktree per agent, so this agent wasn't started.\x1b[0m\r\n`);
+    return !required;
   } catch (err) {
     useWorkspaces.getState().updatePane(pane.id, { wantsWorktree: false });
-    entry.term.write(`\x1b[33mCouldn't create a worktree, starting in ${pane.cwd}: ${err}\x1b[0m\r\n`);
+    entry.term.write(
+      required
+        ? `\x1b[31mCouldn't create a worktree, so this agent wasn't started (races and A/B tests need one per agent): ${err}\x1b[0m\r\n`
+        : `\x1b[33mCouldn't create a worktree, starting in ${pane.cwd}: ${err}\x1b[0m\r\n`,
+    );
+    return !required;
   }
 }
 
@@ -219,7 +234,13 @@ async function spawn(entry: Entry) {
   setStarting(id, entry.pane.wantsWorktree && !entry.pane.worktree ? "worktree" : "process");
   // Some programs stay silent until they get input; don't leave the overlay up forever.
   const giveUp = window.setTimeout(() => setStarting(id, null), 15_000);
-  await prepareWorktree(entry);
+  if (!(await prepareWorktree(entry))) {
+    clearTimeout(giveUp);
+    setStarting(id, null);
+    entry.exited = true;
+    useWorkspaces.getState().setPaneStatus(id, "error");
+    return;
+  }
   if (entries.get(id) === entry) setStarting(id, "process");
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (data) => {
