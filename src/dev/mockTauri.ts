@@ -11,7 +11,6 @@ import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript 
 import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
 import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
-import { ERD_CONNECTION, ERD_DEMO, schemaDiagramExec } from "./schemaDiagram";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
@@ -49,16 +48,11 @@ if (XP_DEMO) {
 }
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
-// `?db` starts with DB Explorer (one fake Postgres connection, see ./dbExplorer.ts) and Prompt Library.
+// `?db` starts with Databases (one fake Postgres shop, see ./dbExplorer.ts) and Prompt Library.
 if (DB_DEMO) {
   installMockPlugin("db-explorer");
   installMockPlugin("prompt-library");
   vault.set(DB_CONNECTION.key, { info: { key: DB_CONNECTION.key, meta: DB_CONNECTION.meta, updatedAt: Date.now() }, value: DB_CONNECTION.value });
-}
-// `?erd` starts with Schema Diagram on a fake shop database (see ./schemaDiagram.ts).
-if (ERD_DEMO) {
-  installMockPlugin("schema-diagram");
-  vault.set(ERD_CONNECTION.key, { info: { key: ERD_CONNECTION.key, meta: ERD_CONNECTION.meta, updatedAt: Date.now() }, value: ERD_CONNECTION.value });
 }
 
 const SAMPLE_DIFF = `diff --git a/src/common/guards/subscription.guard.ts b/src/common/guards/subscription.guard.ts
@@ -253,7 +247,6 @@ mockIPC(
         if (a.plugin === "knowledge-base") return knowledgeBaseExec(a.command);
         if (a.plugin === "cross-project") return crossProjectExec(a.command, a.cwd);
         if (a.plugin === "db-explorer") return dbExplorerExec(a.command);
-        if (a.plugin === "schema-diagram") return schemaDiagramExec(a.command);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
       case "plugins_read_file":
         return knowledgeBaseFile(a.path);

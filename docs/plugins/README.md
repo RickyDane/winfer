@@ -35,16 +35,16 @@ share as an SVG map; its analysis is pure functions tested in `scripts/cross-pro
 [`plugins/screen-recorder`](../../plugins/screen-recorder) records the browser panel or the Android
 mirror to MP4: their canvases carry `data-winfer-capture="browser"` / `"android"`, which plugins can
 capture with `captureStream()`.
-[`plugins/db-explorer`](../../plugins/db-explorer) runs psql, mysql or sqlite3 read-only with the
-connection from the vault, and [`plugins/prompt-library`](../../plugins/prompt-library) re-registers
-its palette and voice tool whenever the prompts change; `pnpm dev` with `?db` opens both on a fake
-database. Their pure functions are tested in `scripts/db-explorer.test.mjs` and
+[`plugins/db-explorer`](../../plugins/db-explorer) (Databases) runs psql, mysql, sqlite3 or sqlcmd
+read-only with the connection from the vault: a page with a Query view (tables, editor, history)
+and a Diagram view that draws the catalog (tables, views, keys, indexes, foreign keys) as a pannable
+SVG class diagram with crow's-foot or UML cardinalities, join tables and relations inferred from
+column names. SQL Server takes a URL or an ADO.NET / ODBC / JDBC connection string and is schema
+only, since it has no read-only session. [`plugins/prompt-library`](../../plugins/prompt-library)
+re-registers its palette and voice tool whenever the prompts change; `pnpm dev` with `?db` opens
+both on a fake shop database. Their pure functions (introspection SQL, model, layout, exporters,
+connection strings) are tested in `scripts/db-explorer.test.mjs` and
 `scripts/prompt-library.test.mjs`.
-[`plugins/schema-diagram`](../../plugins/schema-diagram) reads a database's catalog (tables, views,
-keys, indexes, foreign keys) and draws it as a pannable SVG class diagram with crow's-foot or UML
-cardinalities, join tables and relations inferred from column names; its introspection SQL, model,
-layout and Mermaid/PlantUML exporters are tested in `scripts/schema-diagram.test.mjs`, and `pnpm dev`
-with `?erd` opens it on a fake shop database.
 
 ## plugin.json
 
