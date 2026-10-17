@@ -39,6 +39,13 @@ ureq = { version = "3.4.2", features = ["json"] }
 keyring = "4.2.0"
 sha2 = "0.11.1"
 hex = "0.4.3"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color", "layout-cache"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
+similar = "3.2.0"
+ignore = "0.4.33"
+globset = "0.4"
+unicode-width = "0.2.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

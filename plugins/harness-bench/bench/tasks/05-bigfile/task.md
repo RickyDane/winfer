@@ -1,0 +1,1 @@
+logs/app.log is a large application log. Write report.py that prints the 3 most frequent error codes among ERROR lines, one per line as `CODE COUNT`, most frequent first. Run it and save its output to REPORT.txt. Lines that aren't ERROR level (including ones that mention an error code) don't count, and the log has a few malformed lines that must be skipped.

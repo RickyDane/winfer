@@ -230,6 +230,41 @@
     }
   },
   {
+    "id": "winfer",
+    "name": "winfer code",
+    "command": "winfer",
+    "args": [
+      "code"
+    ],
+    "aliases": [
+      "winfer",
+      "winfer code",
+      "winfer agent"
+    ],
+    "resumeArgs": [
+      "--continue"
+    ],
+    "resumeSessionArgs": [
+      "--resume",
+      "{session}"
+    ],
+    "statusHooks": true,
+    "promptArg": true,
+    "approveInput": "y",
+    "modelArg": "--model",
+    "modelsCommand": [
+      "code",
+      "--list-models"
+    ],
+    "autoApproveArgs": [
+      "--yolo"
+    ],
+    "systemPromptArgs": [
+      "--append-system-prompt",
+      "{prompt}"
+    ]
+  },
+  {
     "id": "shell",
     "name": "Shell",
     "command": null,

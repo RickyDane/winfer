@@ -175,6 +175,10 @@ export interface PluginVault {
 /** What a plugin's `activate` receives. */
 export interface PluginApi {
   readonly id: string;
+  /** The plugin's folder (absolute), e.g. for files shipped with it. */
+  readonly dir: string;
+  /** The winfer executable, e.g. to run `winfer code`. */
+  appExe(): Promise<string>;
   registerTool(spec: ToolSpec): Disposer;
   registerPage(spec: PageSpec): Disposer;
   registerAgentTool(spec: AgentToolSpec): Disposer;
@@ -439,13 +443,15 @@ export function setPluginDispatch(fn: (cmd: Command) => void) {
   dispatch = fn;
 }
 
-function makeApi(id: string, runtime: Runtime): PluginApi {
+function makeApi(id: string, dir: string, runtime: Runtime): PluginApi {
   const track = (d: Disposer) => {
     runtime.disposers.push(d);
     return d;
   };
   return {
     id,
+    dir,
+    appExe: () => invoke<string>("plugins_app_exe"),
     registerTool(spec) {
       const tool = toolFromSpec(id, spec);
       runtime.tools = [...runtime.tools.filter((t) => t.id !== tool.id), tool];
@@ -584,7 +590,7 @@ async function activate(plugin: PluginInfo) {
       runtime.module = await importModule(plugin.id);
       // Disabled again while loading.
       if (runtimes.get(plugin.id) !== runtime) return;
-      const dispose = await runtime.module.activate?.(makeApi(plugin.id, runtime));
+      const dispose = await runtime.module.activate?.(makeApi(plugin.id, plugin.dir, runtime));
       if (typeof dispose === "function") runtime.disposers.push(dispose);
     } catch (err) {
       problems.push(`main: ${err instanceof Error ? err.message : String(err)}`);

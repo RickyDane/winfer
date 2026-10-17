@@ -1,0 +1,161 @@
+{
+  "_comment": "argv: {prompt}, {model} and {winfer} are replaced. model: default; models: suggestions shown in the UI. parser reads the JSON output: winfer, claude, codex, pi or none. Compare harnesses on the same model.",
+  "winfer-chatgpt": {
+    "label": "winfer code \u00b7 ChatGPT",
+    "argv": [
+      "{winfer}",
+      "code",
+      "-p",
+      "--json",
+      "--mode",
+      "yolo",
+      "-m",
+      "chatgpt/{model}",
+      "{prompt}"
+    ],
+    "model": "gpt-6.1-sol",
+    "models": [
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna"
+    ],
+    "parser": "winfer"
+  },
+  "winfer-claude": {
+    "label": "winfer code \u00b7 Claude",
+    "argv": [
+      "{winfer}",
+      "code",
+      "-p",
+      "--json",
+      "--mode",
+      "yolo",
+      "-m",
+      "claude/{model}",
+      "{prompt}"
+    ],
+    "model": "sonnet",
+    "models": [
+      "fable",
+      "opus",
+      "sonnet",
+      "haiku"
+    ],
+    "parser": "winfer"
+  },
+  "winfer-codex": {
+    "label": "winfer code \u00b7 Codex",
+    "argv": [
+      "{winfer}",
+      "code",
+      "-p",
+      "--json",
+      "--mode",
+      "yolo",
+      "-m",
+      "codex/{model}",
+      "{prompt}"
+    ],
+    "model": "gpt-6.1-sol",
+    "models": [
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna"
+    ],
+    "parser": "winfer"
+  },
+  "codex": {
+    "label": "Codex",
+    "argv": [
+      "codex",
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "-m",
+      "{model}",
+      "{prompt}"
+    ],
+    "model": "gpt-6.1-sol",
+    "models": [
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna"
+    ],
+    "parser": "codex"
+  },
+  "claude": {
+    "label": "Claude Code",
+    "argv": [
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--dangerously-skip-permissions",
+      "--model",
+      "{model}",
+      "{prompt}"
+    ],
+    "model": "sonnet",
+    "models": [
+      "fable",
+      "opus",
+      "sonnet",
+      "haiku"
+    ],
+    "parser": "claude"
+  },
+  "pi": {
+    "label": "pi",
+    "argv": [
+      "pi",
+      "-p",
+      "--mode",
+      "json",
+      "--model",
+      "{model}",
+      "{prompt}"
+    ],
+    "model": "openai/gpt-6.1-sol",
+    "models": [
+      "openai/gpt-6.1-sol",
+      "openai/gpt-6-luna",
+      "anthropic/claude-sonnet-5-5"
+    ],
+    "parser": "pi"
+  },
+  "opencode": {
+    "label": "OpenCode",
+    "argv": [
+      "opencode",
+      "run",
+      "--standalone",
+      "--format",
+      "json",
+      "-m",
+      "{model}",
+      "{prompt}"
+    ],
+    "model": "openai/gpt-6.1-sol",
+    "models": [
+      "openai/gpt-6.1-sol"
+    ],
+    "parser": "opencode"
+  },
+  "oracle": {
+    "label": "Reference solutions",
+    "argv": [],
+    "parser": "oracle"
+  },
+  "noop": {
+    "label": "No-op (checks must fail)",
+    "argv": [
+      "true"
+    ],
+    "parser": "none"
+  }
+}

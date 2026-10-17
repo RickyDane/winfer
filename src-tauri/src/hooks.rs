@@ -67,6 +67,10 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
         ("pi", "agent_start" | "ui_prompt_end") => Some("working"),
         ("pi", "ui_prompt_start") => Some("needs-input"),
         ("pi", "agent_settled") => Some("done"),
+        ("winfer", "session_start" | "interrupted") => Some("idle"),
+        ("winfer", "turn_start" | "approved") => Some("working"),
+        ("winfer", "needs_input") => Some("needs-input"),
+        ("winfer", "turn_done") => Some("done"),
         _ => None,
     }
 }

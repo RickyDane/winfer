@@ -10,6 +10,10 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("hook") {
         return winfer_lib::run_hook(&std::env::args().skip(2).collect::<Vec<_>>());
     }
+    // `winfer code`: winfer's own coding agent in the terminal (see harness/).
+    if std::env::args().nth(1).as_deref() == Some("code") {
+        return winfer_lib::run_code(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
     // `winfer statusline`: Claude Code's status line inside winfer (see usage.rs).
     if std::env::args().nth(1).as_deref() == Some("statusline") {
         return winfer_lib::run_statusline();

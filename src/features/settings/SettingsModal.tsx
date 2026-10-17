@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Bot, ChartColumn, Check, ChevronDown, Download, FolderOpen, Keyboard, Loader2, Mic, Palette, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, X, type LucideIcon } from "lucide-react";
+import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Loader2, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
@@ -16,6 +16,26 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
+import {
+  copySkill,
+  customSources,
+  FEATURED_SOURCES,
+  fetchInstalledSkills,
+  fetchRepoSkills,
+  fetchTargets,
+  installSkill,
+  isOutdated,
+  normalizeRepo,
+  saveCustomSources,
+  savedTargets,
+  saveTargets,
+  skillOrigin,
+  uninstallSkill,
+  type InstalledSkill,
+  type RepoListing,
+  type RepoSkill,
+  type SkillTarget,
+} from "@/features/skills/skills";
 
 /* Building blocks: a titled card of rows, each row a label with its hint on the left and the
    control on the right, like macOS System Settings. */
@@ -798,6 +818,223 @@ function AiSettings() {
   );
 }
 
+/* winfer code */
+
+interface HarnessSettings {
+  model: string;
+  effort: string | null;
+  mode: "ask" | "auto-edit" | "plan" | "yolo";
+  trimAt: number;
+  compactAt: number;
+  allowedCommands: string[];
+  mcpServers: Record<string, unknown>;
+  leanBridges: boolean;
+}
+
+interface HarnessModel {
+  spec: string;
+  label: string;
+  detail: string;
+}
+
+const HARNESS_BACKENDS: { id: string; label: string }[] = [
+  { id: "chatgpt", label: "ChatGPT account" },
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+];
+/** winfer code's provider id (providers.json); its `autoApproveArgs` is `--yolo`. */
+const WINFER_PROVIDER = "winfer";
+const PERCENTS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95];
+// Models load once per app run (asking Codex and OpenAI takes a few seconds).
+let harnessModelsCache: HarnessModel[] | null = null;
+
+function HarnessSettings() {
+  const [settings, setSettings] = useState<HarnessSettings | null>(null);
+  const [models, setModels] = useState<HarnessModel[] | null>(harnessModelsCache);
+  const [mcpText, setMcpText] = useState("");
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const autoApproveOn = useWorkspaces((s) => s.autoApprove.includes(WINFER_PROVIDER));
+  const setAutoApprove = useWorkspaces((s) => s.setAutoApprove);
+
+  useEffect(() => {
+    void invoke<HarnessSettings>("harness_settings").then((s) => {
+      setSettings(s);
+      setMcpText(Object.keys(s.mcpServers).length ? JSON.stringify(s.mcpServers, null, 2) : "");
+    });
+    if (!harnessModelsCache) {
+      void invoke<HarnessModel[]>("harness_models").then((m) => {
+        harnessModelsCache = m;
+        setModels(m);
+      });
+    }
+  }, []);
+
+  if (!settings) {
+    return (
+      <Card title="winfer code">
+        <Row label="Loading…">
+          <Loader2 size={13} className="animate-spin text-fg-subtle" />
+        </Row>
+      </Card>
+    );
+  }
+
+  const save = async (patch: Partial<HarnessSettings>) => {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    try {
+      await invoke("harness_set_settings", { settings: next });
+      setResult(null);
+    } catch (err) {
+      setResult({ ok: false, text: String(err) });
+    }
+  };
+
+  const saveMcp = (text: string) => {
+    if (!text.trim()) return void save({ mcpServers: {} });
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected an object of servers");
+      void save({ mcpServers: parsed as Record<string, unknown> });
+    } catch (err) {
+      setResult({ ok: false, text: `MCP servers: ${err instanceof Error ? err.message : String(err)}` });
+    }
+  };
+
+  const percent = (value: number, onChange: (v: number) => void, label: string) => (
+    <Select aria-label={label} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-28">
+      <option value={0}>Off</option>
+      {PERCENTS.map((p) => (
+        <option key={p} value={p}>
+          {p}%
+        </option>
+      ))}
+    </Select>
+  );
+  // A saved model that isn't in the list (or the list hasn't loaded) still shows.
+  const known = models?.some((m) => m.spec === settings.model);
+  const overlap = settings.trimAt > 0 && settings.compactAt > 0 && settings.trimAt >= settings.compactAt;
+
+  return (
+    <>
+      <Card
+        title="Defaults"
+        description={
+          <>
+            For <span className="font-mono">winfer code</span>, winfer's own coding agent (pick “winfer code” as an agent, or run{" "}
+            <span className="font-mono">winfer code</span> in a terminal). New sessions start with these; /model, /effort, /mode and /compaction change
+            them from inside a session too.
+          </>
+        }
+      >
+        <Row label="Model" hint="Automatic uses your ChatGPT account when signed in (Settings → AI), else Claude Code or Codex.">
+          {models === null && <Loader2 size={13} className="animate-spin text-fg-subtle" />}
+          <Select value={settings.model} onChange={(e) => void save({ model: e.target.value })} className="w-64">
+            <option value="">Automatic</option>
+            {settings.model && !known && <option value={settings.model}>{settings.model}</option>}
+            {HARNESS_BACKENDS.map((b) => {
+              const list = (models ?? []).filter((m) => m.spec.startsWith(`${b.id}/`));
+              return (
+                list.length > 0 && (
+                  <optgroup key={b.id} label={b.label}>
+                    {list.map((m) => (
+                      <option key={m.spec} value={m.spec}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              );
+            })}
+          </Select>
+        </Row>
+        <Row label="Reasoning effort">
+          <Select value={settings.effort ?? ""} onChange={(e) => void save({ effort: e.target.value || null })} className="w-40">
+            <option value="">Model default</option>
+            {["minimal", "low", "medium", "high", "xhigh", "max"].map((e) => (
+              <option key={e} value={e}>
+                {e}
+              </option>
+            ))}
+          </Select>
+        </Row>
+        <Row label="Permission mode" hint={settings.mode === "yolo" ? "Nothing asks before editing files or running commands." : "Shift+Tab cycles it inside a session."}>
+          <Select value={settings.mode} onChange={(e) => void save({ mode: e.target.value as HarnessSettings["mode"] })} className="w-56">
+            <option value="ask">Ask before edits and commands</option>
+            <option value="auto-edit">Auto-edit (commands still ask)</option>
+            <option value="plan">Plan (read-only)</option>
+            <option value="yolo">Yolo (never ask)</option>
+          </Select>
+        </Row>
+        <Row
+          label="Auto-approve in panes"
+          hint={
+            autoApproveOn
+              ? "winfer code panes start in yolo mode (--yolo), overriding the permission mode above. Applies to panes started or restarted after the change."
+              : "Start winfer code panes in yolo mode: nothing asks before editing files or running commands."
+          }
+        >
+          <Toggle label="Auto-approve in panes" checked={autoApproveOn} onChange={(on) => setAutoApprove(WINFER_PROVIDER, on)} />
+        </Row>
+      </Card>
+
+      <Card title="Claude Code" description="When winfer code runs a Claude model, it drives the Claude Code CLI.">
+        <Row
+          label="Lean setup"
+          hint="Start it with a short system prompt and only the tools coding needs (Bash, Read, Edit, Write, Grep, Glob, TodoWrite; no user MCP servers, skills or user hooks). In the bench: 71% fewer input tokens, 79% fewer at full price, same pass rate. Project CLAUDE.md still loads. Codex is left as is: its default setup is already cached, so trimming it costs more."
+        >
+          <Toggle label="Lean setup" checked={settings.leanBridges} onChange={(leanBridges) => void save({ leanBridges })} />
+        </Row>
+      </Card>
+
+      <Card title="Context compaction" description="When a conversation fills the model's context window, these keep it going and save tokens.">
+        <Row label="Micro-compact at" hint="Trims old tool output and file contents from earlier turns (ChatGPT account).">
+          {percent(settings.trimAt, (trimAt) => void save({ trimAt }), "Micro-compact at")}
+        </Row>
+        <Row
+          label="Full compact at"
+          hint={overlap ? <span className="text-warning">At or below micro-compact's level, so micro-compact never runs.</span> : "Summarizes the conversation; Claude Code and Codex are asked to compact."}
+        >
+          {percent(settings.compactAt, (compactAt) => void save({ compactAt }), "Full compact at")}
+        </Row>
+      </Card>
+
+      <Card title="Tools" description="With the ChatGPT account, winfer code uses its own tools; Claude Code and Codex use theirs.">
+        <Row label="Always-allowed commands" hint="Commands starting with these run without asking, e.g. git, cargo, pnpm (ChatGPT account).">
+          <input
+            key={settings.allowedCommands.join(",")}
+            defaultValue={settings.allowedCommands.join(", ")}
+            onBlur={(e) => void save({ allowedCommands: e.target.value.split(/[,\s]+/).filter(Boolean) })}
+            placeholder="git, cargo, pnpm"
+            className={cn(inputClass, "w-56")}
+          />
+        </Row>
+        <Row
+          stacked
+          label="MCP servers"
+          hint={
+            <>
+              Extra servers for every backend, as JSON: <span className="font-mono">{`{ "name": { "command": "…", "args": [], "env": {} } }`}</span>. winfer's own server is added
+              automatically in panes.
+            </>
+          }
+        >
+          <textarea
+            value={mcpText}
+            onChange={(e) => setMcpText(e.target.value)}
+            onBlur={(e) => saveMcp(e.target.value)}
+            spellCheck={false}
+            rows={4}
+            placeholder="{}"
+            className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
+          />
+        </Row>
+      </Card>
+      <Result result={result} />
+    </>
+  );
+}
+
 const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.ReactNode }[] = [
   {
     id: "general",
@@ -826,6 +1063,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   },
   { id: "voice", label: "Voice", icon: Mic, render: () => <VoiceSettings /> },
   { id: "ai", label: "AI", icon: Sparkles, render: () => <AiSettings /> },
+  { id: "winfer-code", label: "winfer code", icon: SquareTerminal, render: () => <HarnessSettings /> },
   {
     id: "usage",
     label: "Usage",
@@ -837,6 +1075,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
     ),
   },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
+  { id: "skills", label: "Skills", icon: Wand2, render: () => <SkillSettings /> },
 ];
 
 /** What a plugin adds, e.g. "2 tools · 1 agent · code". */
@@ -862,25 +1101,150 @@ async function togglePlugin(plugin: PluginInfo, enabled: boolean) {
 // The store's catalog, kept while the app runs so reopening the page is instant.
 let catalogCache: StoreEntry[] | null = null;
 
-/** Opt-in: plugin page tabs in the title bar show only their icon. */
-function PageTabSettings() {
-  const iconsOnly = useWorkspaces((s) => s.pageTabIconsOnly);
+type StoreTab = "discover" | "installed";
+
+/** The sticky bar on the Plugins and Skills pages: Discover / Installed tabs and a search box. */
+function StoreToolbar({
+  tab,
+  onTab,
+  counts,
+  updates,
+  query,
+  onQuery,
+  placeholder,
+}: {
+  tab: StoreTab;
+  onTab: (tab: StoreTab) => void;
+  counts: Record<StoreTab, number | null>;
+  updates: boolean;
+  query: string;
+  onQuery: (query: string) => void;
+  placeholder: string;
+}) {
+  const tabs: { id: StoreTab; label: string; icon: LucideIcon }[] = [
+    { id: "discover", label: "Discover", icon: Store },
+    { id: "installed", label: "Installed", icon: PackageCheck },
+  ];
   return (
-    <Card title="Title bar">
-      <Row label="Hide names on plugin tabs" hint="Plugin page tabs show just their icon. Hover a tab to see its name.">
-        <Toggle label="Hide names on plugin tabs" checked={iconsOnly} onChange={(on) => useWorkspaces.getState().setPageTabIconsOnly(on)} />
-      </Row>
-    </Card>
+    <div className="sticky -top-5 z-10 -mx-6 -mt-5 flex items-center gap-3 border-b border-border bg-panel-raised/95 px-6 py-3 backdrop-blur">
+      <div role="tablist" className="flex shrink-0 rounded-lg border border-border bg-panel p-0.5">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => onTab(t.id)}
+            className={cn("relative flex h-7 items-center gap-1.5 rounded-md px-3 text-xs transition-colors", tab === t.id ? "bg-active text-fg shadow-sm" : "text-fg-muted hover:text-fg")}
+          >
+            <t.icon size={12} />
+            {t.label}
+            {counts[t.id] !== null && <span className="font-mono text-[10px] text-fg-subtle">{counts[t.id]}</span>}
+            {t.id === "installed" && updates && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" title="Updates available" />}
+          </button>
+        ))}
+      </div>
+      <div className="relative min-w-0 flex-1">
+        <Search size={13} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-subtle" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          placeholder={placeholder}
+          autoFocus
+          className="h-8 w-full rounded-lg border border-border-strong bg-panel pr-2.5 pl-8 text-xs text-fg outline-none focus:border-accent"
+        />
+      </div>
+    </div>
   );
 }
 
-/** The plugin store: search, install, update, turn on/off and uninstall plugins. */
+/** "N updates are available" with an Update all button, atop an Installed tab. */
+const UpdateBanner = ({ text, label, busy, disabled, onClick }: { text: string; label: string; busy: boolean; disabled: boolean; onClick: () => void }) => (
+  <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent-soft px-3.5 py-2.5">
+    <ArrowUpCircle size={15} className="shrink-0 text-accent" />
+    <p className="flex-1 text-xs text-fg">{text}</p>
+    <button disabled={disabled} onClick={onClick} className={primaryButtonClass}>
+      {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+      {label}
+    </button>
+  </div>
+);
+
+/** Grey placeholder cards while a listing loads. */
+const SkeletonGrid = () => (
+  <div className="grid grid-cols-2 gap-3">
+    {[0, 1, 2, 3].map((i) => (
+      <div key={i} className="h-40 animate-pulse rounded-lg border border-border bg-panel" />
+    ))}
+  </div>
+);
+
+const primaryButtonClass =
+  "flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:brightness-110 disabled:opacity-50";
+const iconButtonClass = "flex size-7 shrink-0 items-center justify-center rounded-md text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-50";
+
+/** A plugin's monogram ("Cross-Project Knowledge" → "CK") on a tile tinted by its id. */
+function PluginTile({ id, name, size = "md" }: { id: string; name: string; size?: "md" | "lg" }) {
+  let hash = 0;
+  for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  const hue = Math.abs(hash) % 360;
+  const words = name.replace(/[^\p{L}\p{N}\s-]/gu, " ").split(/[\s-]+/).filter(Boolean);
+  const letters = (words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] ?? id).slice(0, 2)).toUpperCase();
+  return (
+    <div
+      aria-hidden
+      className={cn("flex shrink-0 items-center justify-center rounded-lg font-semibold tracking-tight", size === "lg" ? "size-10 text-sm" : "size-9 text-xs")}
+      style={{ background: `hsl(${hue} 65% 55% / 0.14)`, color: `color-mix(in oklab, hsl(${hue} 65% 50%) 70%, var(--color-fg))`, boxShadow: `inset 0 0 0 1px hsl(${hue} 65% 55% / 0.22)` }}
+    >
+      {letters}
+    </div>
+  );
+}
+
+const Pill = ({ children, tone = "neutral", title }: { children: React.ReactNode; tone?: "neutral" | "accent" | "warning" | "danger"; title?: string }) => (
+  <span
+    title={title}
+    className={cn(
+      "inline-flex h-[18px] shrink-0 items-center gap-1 rounded px-1.5 text-[10px] font-medium",
+      tone === "neutral" && "bg-active text-fg-muted",
+      tone === "accent" && "bg-accent-soft text-accent",
+      tone === "warning" && "bg-warning/15 text-warning",
+      tone === "danger" && "bg-danger/15 text-danger",
+    )}
+  >
+    {children}
+  </span>
+);
+
+/** Empty or loading state in the middle of a tab. */
+const EmptyState = ({ icon: Icon, title, hint, children }: { icon: LucideIcon; title: string; hint?: React.ReactNode; children?: React.ReactNode }) => (
+  <div className="flex flex-col items-center rounded-lg border border-dashed border-border-strong px-6 py-10 text-center">
+    <Icon size={20} className="text-fg-subtle" />
+    <p className="mt-3 text-[13px] text-fg">{title}</p>
+    {hint && <p className="mt-1 max-w-sm text-xs leading-relaxed text-fg-subtle">{hint}</p>}
+    {children && <div className="mt-4 flex gap-2">{children}</div>}
+  </div>
+);
+
+// The tab the page last showed, kept while the app runs.
+let lastStoreTab: StoreTab | null = null;
+
+/** The plugin store: browse and install plugins, and turn on, update or uninstall installed ones. */
 function PluginSettings() {
   const { plugins, runtimeErrors } = usePlugins();
+  const iconsOnly = useWorkspaces((s) => s.pageTabIconsOnly);
   const [catalog, setCatalog] = useState<StoreEntry[] | null>(catalogCache);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [tab, setTabState] = useState<StoreTab>(lastStoreTab ?? (plugins.some((p) => p.manifest) ? "installed" : "discover"));
   const [query, setQuery] = useState("");
+  const [tag, setTag] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+
+  const setTab = (next: StoreTab) => {
+    lastStoreTab = next;
+    setTabState(next);
+  };
 
   const loadCatalog = () => {
     setCatalogError(null);
@@ -917,134 +1281,645 @@ function PluginSettings() {
       await uninstallPlugin(plugin.id);
     });
 
+  const latestFor = (p: PluginInfo) => (p.fromStore ? catalog?.find((e) => e.id === p.id && e.version !== (p.storeVersion ?? p.manifest?.version)) : undefined);
+  const updates = plugins.map((p) => latestFor(p)).filter((e) => e !== undefined);
+  const updateAll = () =>
+    run("*", async () => {
+      for (const entry of updates) await installPlugin(entry.id);
+      toast(`Updated ${updates.length} plugin${updates.length === 1 ? "" : "s"}`, "success");
+    });
+
+  const notInstalled = (catalog ?? []).filter((e) => !plugins.some((p) => p.id === e.id));
+  // The most used tags among plugins left to install, as filters.
+  const tagCounts = new Map<string, number>();
+  for (const e of notInstalled) for (const t of e.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  const topTags = [...tagCounts].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8).map(([t]) => t);
+  if (tag && !topTags.includes(tag)) topTags.push(tag);
+
   const installed = plugins.filter((p) => matchesSearch(query, [p.id, p.manifest?.name, p.manifest?.description]));
-  const available = (catalog ?? []).filter(
-    (e) => !plugins.some((p) => p.id === e.id) && matchesSearch(query, [e.id, e.name, e.description, e.author, ...e.tags]),
+  const available = notInstalled.filter((e) => (!tag || e.tags.includes(tag)) && matchesSearch(query, [e.id, e.name, e.description, e.author, ...e.tags]));
+  const enabledCount = plugins.filter((p) => p.enabled && !p.error).length;
+
+  return (
+    <div className="space-y-5">
+      <StoreToolbar
+        tab={tab}
+        onTab={setTab}
+        counts={{ discover: catalog ? notInstalled.length : null, installed: plugins.length }}
+        updates={updates.length > 0}
+        query={query}
+        onQuery={setQuery}
+        placeholder={tab === "discover" ? "Search the store" : "Search installed plugins"}
+      />
+
+      {tab === "discover" ? (
+        <>
+          {catalogError ? (
+            <EmptyState icon={CloudOff} title="Couldn't load the plugin store" hint={catalogError}>
+              <button onClick={loadCatalog} className={buttonClass}>
+                <RefreshCw size={12} />
+                Retry
+              </button>
+            </EmptyState>
+          ) : catalog === null ? (
+            <SkeletonGrid />
+          ) : (
+            <>
+              {topTags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Chip active={tag === null} onClick={() => setTag(null)}>
+                    All
+                  </Chip>
+                  {topTags.map((t) => (
+                    <Chip key={t} active={tag === t} onClick={() => setTag(tag === t ? null : t)}>
+                      {t}
+                    </Chip>
+                  ))}
+                </div>
+              )}
+              {available.length === 0 ? (
+                notInstalled.length === 0 ? (
+                  <EmptyState icon={PackageCheck} title="You have every plugin from the store" hint="New plugins show up here when they're published." />
+                ) : (
+                  <EmptyState icon={Search} title={`Nothing in the store matches${query ? ` “${query}”` : ""}${tag ? ` in ${tag}` : ""}`}>
+                    <button onClick={() => (setQuery(""), setTag(null))} className={buttonClass}>
+                      Clear filters
+                    </button>
+                  </EmptyState>
+                )
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {available.map((e) => {
+                    const open = expanded === e.id;
+                    return (
+                      <article key={e.id} className="group flex flex-col rounded-lg border border-border bg-panel p-3.5 transition-colors hover:border-border-strong">
+                        <div className="flex items-start gap-3">
+                          <PluginTile id={e.id} name={e.name} />
+                          <div className="min-w-0 flex-1">
+                            <h4 className="truncate text-[13px] font-medium text-fg" title={e.name}>
+                              {e.name}
+                            </h4>
+                            <p className="truncate text-[11px] text-fg-subtle">
+                              {e.author ? `by ${e.author}` : "Unknown author"}
+                              {e.version && <span className="font-mono"> · {e.version}</span>}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setExpanded(open ? null : e.id)}
+                          title={open ? "Show less" : "Show more"}
+                          className={cn("mt-2.5 text-left text-xs leading-relaxed text-fg-muted hover:text-fg", !open && "line-clamp-3")}
+                        >
+                          {e.description || "No description."}
+                        </button>
+                        <div className="mt-auto flex items-end gap-2 pt-3">
+                          <div className={cn("flex min-w-0 flex-1 gap-1", open ? "flex-wrap" : "overflow-hidden")}>
+                            {e.tags.slice(0, open ? undefined : 2).map((t) => (
+                              <button
+                                key={t}
+                                onClick={() => setTag(t)}
+                                className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px] hover:text-fg", t === tag ? "bg-accent-soft text-accent" : "bg-active text-fg-subtle")}
+                              >
+                                {t}
+                              </button>
+                            ))}
+                            {!open && e.tags.length > 2 && (
+                              <button onClick={() => setExpanded(e.id)} className="shrink-0 px-1 py-0.5 text-[10px] text-fg-subtle hover:text-fg">
+                                +{e.tags.length - 2}
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            disabled={!!busy}
+                            onClick={() => void install(e, false)}
+                            className={primaryButtonClass}
+                          >
+                            {busy === e.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                            Install
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          {updates.length > 0 && !query && (
+            <UpdateBanner
+              text={updates.length === 1 ? `An update for ${updates[0].name} is available.` : `${updates.length} plugin updates are available.`}
+              label={updates.length === 1 ? "Update" : "Update all"}
+              busy={busy === "*"}
+              disabled={!!busy}
+              onClick={() => void (updates.length === 1 ? install(updates[0], true) : updateAll())}
+            />
+          )}
+
+          {installed.length === 0 ? (
+            plugins.length === 0 ? (
+              <EmptyState icon={Puzzle} title="No plugins installed" hint="Plugins add pages, agents, recipes, commands, voice actions and tools for your agents.">
+                <button onClick={() => setTab("discover")} className="flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:brightness-110">
+                  <Store size={12} />
+                  Browse the store
+                </button>
+              </EmptyState>
+            ) : (
+              <EmptyState icon={Search} title={`No installed plugin matches “${query}”`} />
+            )
+          ) : (
+            <section className="space-y-2">
+              <p className="px-1 text-[11px] text-fg-subtle">
+                {enabledCount} of {plugins.length} on
+              </p>
+              <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
+                {installed.map((p) => {
+                  const error = p.error ?? (p.enabled ? runtimeErrors[p.id] : undefined);
+                  const name = p.manifest?.name ?? p.id;
+                  const latest = latestFor(p);
+                  const version = p.storeVersion ?? p.manifest?.version;
+                  const adds = contributions(p);
+                  return (
+                    <div key={p.id} className={cn("group flex gap-3 px-3.5 py-3 transition-opacity", !p.enabled && !error && "[&>.wf-dim]:opacity-60")}>
+                      <div className="wf-dim">
+                        <PluginTile id={p.id} name={name} />
+                      </div>
+                      <div className="wf-dim min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <h4 className="truncate text-[13px] font-medium text-fg">{name}</h4>
+                          {version && <span className="shrink-0 font-mono text-[11px] text-fg-subtle">{version}</span>}
+                          {!p.fromStore && <Pill title="From your plugins folder">local</Pill>}
+                          {latest && <Pill tone="accent">{latest.version} available</Pill>}
+                        </div>
+                        {p.manifest?.description && <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-fg-muted" title={p.manifest.description}>{p.manifest.description}</p>}
+                        {adds && <p className="mt-1 text-[11px] text-fg-subtle">Adds {adds}</p>}
+                        {error && (
+                          <p className="mt-2 flex items-start gap-1.5 rounded-md bg-danger/10 px-2 py-1.5 text-[11px] leading-relaxed text-danger">
+                            <TriangleAlert size={12} className="mt-px shrink-0" />
+                            <span className="min-w-0 break-words">{error}</span>
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-start gap-1.5">
+                        {busy === p.id && <Loader2 size={13} className="mt-1.5 animate-spin text-fg-subtle" />}
+                        {latest && (
+                          <button disabled={!!busy} onClick={() => void install(latest, true)} className={buttonClass}>
+                            <Download size={12} />
+                            Update
+                          </button>
+                        )}
+                        <button
+                          disabled={!!busy}
+                          onClick={() => void uninstall(p)}
+                          aria-label={`Uninstall ${name}`}
+                          title="Uninstall"
+                          className="flex size-7 items-center justify-center rounded-md text-fg-subtle opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-danger focus-visible:opacity-100 disabled:opacity-50"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                        {!p.error && (
+                          <div className="flex h-7 items-center">
+                            <Toggle label={`Turn on ${name}`} checked={p.enabled} onChange={(enabled) => void togglePlugin(p, enabled)} />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          <Card title="Options">
+            <Row label="Hide names on plugin tabs" hint="Plugin page tabs in the title bar show just their icon. Hover a tab to see its name.">
+              <Toggle label="Hide names on plugin tabs" checked={iconsOnly} onChange={(on) => useWorkspaces.getState().setPageTabIconsOnly(on)} />
+            </Row>
+            <Row label="Your own plugins" hint="A folder with a plugin.json in the plugins folder shows up here, off until you turn it on. Reload after changing one.">
+              <button onClick={() => void pluginsDir().then((dir) => revealItemInDir(dir)).catch(() => {})} className={buttonClass}>
+                <FolderOpen size={12} />
+                Open folder
+              </button>
+              <button onClick={() => void loadPlugins()} aria-label="Reload plugins" title="Reload plugins" className={cn(buttonClass, "w-7 justify-center px-0")}>
+                <RefreshCw size={12} />
+              </button>
+            </Row>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* Skills */
+
+// Repo listings, kept while the app runs so reopening the page is instant.
+const skillListings = new Map<string, RepoListing>();
+
+const Chip = ({ active, onClick, children, title }: { active: boolean; onClick?: () => void; children: React.ReactNode; title?: string }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    aria-pressed={active}
+    className={cn(
+      "flex h-6 items-center gap-1 rounded-md border px-2 text-[11px] transition-colors",
+      active ? "border-accent/60 bg-accent/15 text-fg" : "border-border-strong text-fg-muted hover:bg-hover hover:text-fg",
+    )}
+  >
+    {active && <Check size={11} className="text-accent" />}
+    {children}
+  </button>
+);
+
+// The tab the page last showed, kept while the app runs.
+let lastSkillTab: StoreTab | null = null;
+
+/** Installs agent skills (SKILL.md folders) from GitHub repos into each agent's skills folder. */
+function SkillSettings() {
+  const [targets, setTargets] = useState<SkillTarget[]>([]);
+  const [selected, setSelected] = useState<string[]>(savedTargets);
+  const [installed, setInstalled] = useState<InstalledSkill[] | null>(null);
+  const [sources, setSources] = useState<string[]>(customSources);
+  const [source, setSource] = useState(FEATURED_SOURCES[0].repo);
+  const [listings, setListings] = useState<Map<string, RepoListing>>(() => new Map(skillListings));
+  const [listingError, setListingError] = useState<string | null>(null);
+  const [newRepo, setNewRepo] = useState("");
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [tab, setTabState] = useState<StoreTab>(lastSkillTab ?? "installed");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const setTab = (next: StoreTab) => {
+    lastSkillTab = next;
+    setTabState(next);
+  };
+
+  const reload = () => fetchInstalledSkills().then(setInstalled, (err) => toast(String(err), "error"));
+  useEffect(() => {
+    fetchTargets().then(setTargets, (err) => toast(String(err), "error"));
+    void reload();
+  }, []);
+
+  const loadListing = (repo: string, fresh = false) => {
+    setListingError(null);
+    if (fresh) skillListings.delete(repo);
+    setListings(new Map(skillListings));
+    return fetchRepoSkills(repo, fresh).then(
+      (listing) => {
+        skillListings.set(repo, listing);
+        setListings(new Map(skillListings));
+      },
+      (err) => {
+        if (repo === source) setListingError(String(err));
+      },
+    );
+  };
+  useEffect(() => {
+    if (!skillListings.has(source)) void loadListing(source);
+  }, [source]);
+  // The repos installed skills came from, for their updates.
+  useEffect(() => {
+    const repos = new Set((installed ?? []).map(skillOrigin).filter((o) => o !== null).map((o) => o.repo));
+    for (const repo of repos) if (!skillListings.has(repo)) void fetchRepoSkills(repo).then((l) => (skillListings.set(repo, l), setListings(new Map(skillListings))), () => {});
+  }, [installed]);
+
+  const toggleTarget = (id: string) => {
+    const next = selected.includes(id) ? selected.filter((t) => t !== id) : [...selected, id];
+    setSelected(next);
+    saveTargets(next);
+  };
+  const label = (id: string) => targets.find((t) => t.id === id)?.label ?? id;
+  const names = (ids: string[]) => ids.map(label).join(", ");
+
+  const run = async (key: string, work: () => Promise<void>) => {
+    setBusy(key);
+    try {
+      await work();
+    } catch (err) {
+      toast(String(err), "error");
+    } finally {
+      setBusy(null);
+      void reload();
+    }
+  };
+  const install = (repo: string, skill: RepoSkill, update: boolean, into: string[]) =>
+    run(skill.name, async () => {
+      if (into.length === 0) throw new Error("Pick at least one agent under “Install for”.");
+      await installSkill(repo, skill.path, into);
+      toast(update ? `Updated ${skill.name}` : `Installed ${skill.name} for ${names(into)}`, "success");
+    });
+  const update = (skill: InstalledSkill) => {
+    const origin = skillOrigin(skill)!;
+    const latest = listings.get(origin.repo)?.skills.find((s) => s.path === origin.path);
+    // Every copy that came from the repo is replaced.
+    if (latest) void install(origin.repo, latest, true, skill.copies.filter((c) => c.origin).map((c) => c.target));
+  };
+  const remove = (skill: InstalledSkill) =>
+    run(skill.name, async () => {
+      const where = skill.copies.map((c) => c.target);
+      if (!(await ask(`Remove “${skill.name}” from ${names(where)}?`, { title: "Remove skill", kind: "warning", okLabel: "Remove" }))) return;
+      await uninstallSkill(skill.name, where);
+    });
+  const copyToSelected = (skill: InstalledSkill, missing: string[]) =>
+    run(skill.name, async () => {
+      await copySkill(skill.name, skill.copies[0].target, missing);
+      toast(`Added ${skill.name} to ${names(missing)}`, "success");
+    });
+  const addSource = () => {
+    const repo = normalizeRepo(newRepo);
+    if (!repo) return toast("Enter a GitHub repo as owner/repo or its URL", "error");
+    if (!FEATURED_SOURCES.some((f) => f.repo.toLowerCase() === repo.toLowerCase()) && !sources.includes(repo)) {
+      const next = [...sources, repo];
+      setSources(next);
+      saveCustomSources(next);
+    }
+    setNewRepo("");
+    setSource(repo);
+  };
+  const removeSource = (repo: string) => {
+    const next = sources.filter((r) => r !== repo);
+    setSources(next);
+    saveCustomSources(next);
+    if (source === repo) setSource(FEATURED_SOURCES[0].repo);
+  };
+
+  const byName = new Map((installed ?? []).map((s) => [s.name, s]));
+  const shownInstalled = (installed ?? []).filter((s) => matchesSearch(query, [s.name, s.description, skillOrigin(s)?.repo]));
+  const listing = listings.get(source);
+  const shownRepo = (listing?.skills ?? []).filter((s) => matchesSearch(query, [s.name, s.description, s.path]));
+  const featured = FEATURED_SOURCES.find((f) => f.repo === source);
+  const outdatedSkills = (installed ?? []).filter((s) => {
+    const origin = skillOrigin(s);
+    return origin && isOutdated(s, listings.get(origin.repo));
+  });
+  const updateAll = () =>
+    run("*", async () => {
+      for (const skill of outdatedSkills) {
+        const origin = skillOrigin(skill)!;
+        const latest = listings.get(origin.repo)?.skills.find((s) => s.path === origin.path);
+        if (latest) await installSkill(origin.repo, latest.path, skill.copies.filter((c) => c.origin).map((c) => c.target));
+      }
+      toast(`Updated ${outdatedSkills.length} skill${outdatedSkills.length === 1 ? "" : "s"}`, "success");
+    });
+
+  // Where new installs go; shown on both tabs since "Add" on an installed skill uses it too.
+  const installFor = (
+    <div className="flex items-start gap-3 rounded-lg border border-border bg-panel px-3.5 py-2.5">
+      <span className="mt-1 shrink-0 text-xs text-fg-muted">Install for</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap gap-1.5">
+          {targets.map((t) => (
+            <Chip key={t.id} active={selected.includes(t.id)} onClick={() => toggleTarget(t.id)} title={t.dir + (t.detected ? "" : " (agent not found on this machine)")}>
+              {t.label}
+              {!t.detected && <span className="text-fg-subtle">·&nbsp;not found</span>}
+            </Chip>
+          ))}
+        </div>
+        <p className={cn("mt-1.5 text-[11px] leading-relaxed", selected.length === 0 ? "text-danger" : "text-fg-subtle")}>
+          {selected.length === 0 ? "Pick at least one agent." : "Codex, OpenCode, Cursor and other agents also read the shared .agents folder."}
+        </p>
+      </div>
+    </div>
   );
 
   return (
-    <>
-      <div className="relative">
-        <Search size={13} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-subtle" />
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search plugins"
-          autoFocus
-          className="h-8 w-full rounded-md border border-border-strong bg-panel pr-2.5 pl-8 text-xs text-fg outline-none focus:border-accent"
-        />
-      </div>
+    <div className="space-y-5">
+      <StoreToolbar
+        tab={tab}
+        onTab={setTab}
+        counts={{ discover: listing ? listing.skills.length : null, installed: installed ? installed.length : null }}
+        updates={outdatedSkills.length > 0}
+        query={query}
+        onQuery={setQuery}
+        placeholder={tab === "discover" ? `Search ${featured?.label ?? source}` : "Search installed skills"}
+      />
 
-      <Card title="Installed">
-        {installed.length === 0 ? (
-          <Row label={plugins.length === 0 ? "No plugins installed" : `No installed plugin matches “${query}”`} hint={plugins.length === 0 ? "Install one from the store below." : undefined} />
-        ) : (
-          installed.map((p) => {
-            const error = p.error ?? (p.enabled ? runtimeErrors[p.id] : undefined);
-            const name = p.manifest?.name ?? p.id;
-            const latest = catalog?.find((e) => e.id === p.id);
-            const installedVersion = p.storeVersion ?? p.manifest?.version;
-            const outdated = p.fromStore && latest && latest.version !== installedVersion;
-            return (
-              <Row
-                key={p.id}
-                label={
-                  <>
-                    {name}
-                    {installedVersion && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{installedVersion}</span>}
-                    {!p.fromStore && <span className="ml-1.5 rounded bg-active px-1.5 py-0.5 text-[10px] text-fg-subtle">local</span>}
-                  </>
-                }
-                hint={
-                  <>
-                    {p.manifest?.description && <span className="block">{p.manifest.description}</span>}
-                    {contributions(p) && <span className="block">{contributions(p)}</span>}
-                    {error && <span className="block text-danger">{error}</span>}
-                  </>
-                }
-              >
-                {busy === p.id && <Loader2 size={13} className="animate-spin text-fg-subtle" />}
-                {outdated && (
-                  <button disabled={!!busy} onClick={() => void install(latest, true)} className={buttonClass}>
-                    <Download size={12} />
-                    Update to {latest.version}
+      {tab === "discover" ? (
+        <>
+          <section className="space-y-2.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {FEATURED_SOURCES.map((f) => (
+                <Chip key={f.repo} active={source === f.repo} onClick={() => setSource(f.repo)} title={f.repo}>
+                  {f.label}
+                </Chip>
+              ))}
+              {sources.map((repo) => (
+                <span key={repo} className="group relative">
+                  <Chip active={source === repo} onClick={() => setSource(repo)}>
+                    {repo}
+                  </Chip>
+                  <button onClick={() => removeSource(repo)} aria-label={`Remove ${repo}`} className="absolute -top-1.5 -right-1.5 hidden rounded-full bg-panel-raised p-0.5 text-fg-subtle ring-1 ring-border-strong group-hover:block hover:text-danger">
+                    <X size={9} />
                   </button>
-                )}
-                <button disabled={!!busy} onClick={() => void uninstall(p)} className="h-7 rounded-md px-2 text-xs text-fg-subtle hover:bg-hover hover:text-danger disabled:opacity-50">
-                  Uninstall
+                </span>
+              ))}
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  addSource();
+                }}
+              >
+                <input value={newRepo} onChange={(e) => setNewRepo(e.target.value)} placeholder="Add owner/repo" aria-label="GitHub repo" className={cn(inputClass, "h-6 w-36")} />
+                <button type="submit" disabled={!newRepo.trim()} aria-label="Add repo" className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40">
+                  <Plus size={13} />
                 </button>
-                {!p.error && <Toggle label={`Turn on ${name}`} checked={p.enabled} onChange={(enabled) => void togglePlugin(p, enabled)} />}
-              </Row>
-            );
-          })
-        )}
-      </Card>
-
-      <PageTabSettings />
-
-      <Card title="Plugin store" description="Plugins add pages, agents, recipes, commands, voice actions and tools for your agents.">
-        {catalogError ? (
-          <Row label="Couldn't load the plugin store" hint={catalogError}>
-            <button onClick={loadCatalog} className={buttonClass}>
-              <RefreshCw size={12} />
-              Retry
-            </button>
-          </Row>
-        ) : catalog === null ? (
-          <Row label="Loading the plugin store…">
-            <Loader2 size={13} className="animate-spin text-fg-subtle" />
-          </Row>
-        ) : available.length === 0 ? (
-          <Row label={query ? `Nothing in the store matches “${query}”` : "You have every plugin from the store"} />
-        ) : (
-          available.map((e) => (
-            <Row
-              key={e.id}
-              label={
-                <>
-                  {e.name}
-                  <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{e.version}</span>
-                </>
-              }
-              hint={
-                <>
-                  <span className="block">{e.description}</span>
-                  {(e.tags.length > 0 || e.author) && (
-                    <span className="mt-1 flex flex-wrap items-center gap-1">
-                      {e.tags.map((t) => (
-                        <button key={t} onClick={() => setQuery(t)} className="rounded bg-active px-1.5 py-0.5 text-[10px] text-fg-muted hover:text-fg">
-                          {t}
-                        </button>
-                      ))}
-                      {e.author && <span className="text-[11px] text-fg-subtle">by {e.author}</span>}
-                    </span>
-                  )}
-                </>
-              }
-            >
-              <button disabled={!!busy} onClick={() => void install(e, false)} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:brightness-110 disabled:opacity-50">
-                {busy === e.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                Install
+              </form>
+            </div>
+            <div className="flex items-center gap-2 px-1">
+              <p className="min-w-0 flex-1 truncate text-xs text-fg-muted" title={featured?.description}>
+                <span className="font-mono text-fg-subtle">{source}</span>
+                {featured && <> · {featured.description}</>}
+              </p>
+              <button onClick={() => void loadListing(source, true)} aria-label="Refresh" title="Check the repo again" className={cn(iconButtonClass, "size-6")}>
+                <RefreshCw size={12} />
               </button>
-            </Row>
-          ))
-        )}
-      </Card>
+            </div>
+          </section>
 
-      <Card title="Your own plugins" description="A folder with a plugin.json in the plugins folder shows up under Installed (off until you turn it on).">
-        <Row label="Plugins folder" hint="Reload after adding or changing a plugin.">
-          <button onClick={() => void pluginsDir().then((dir) => revealItemInDir(dir)).catch(() => {})} className={buttonClass}>
-            <FolderOpen size={12} />
-            Open folder
-          </button>
-          <button onClick={() => void loadPlugins()} className={buttonClass}>
-            <RefreshCw size={12} />
-            Reload
-          </button>
-        </Row>
-      </Card>
-    </>
+          {installFor}
+
+          {listingError ? (
+            <EmptyState icon={CloudOff} title={`Couldn't load ${source}`} hint={listingError}>
+              <button onClick={() => void loadListing(source, true)} className={buttonClass}>
+                <RefreshCw size={12} />
+                Retry
+              </button>
+            </EmptyState>
+          ) : !listing ? (
+            <SkeletonGrid />
+          ) : shownRepo.length === 0 ? (
+            listing.skills.length === 0 ? (
+              <EmptyState icon={Wand2} title={`${source} has no skills`} hint="No folder in it has a SKILL.md." />
+            ) : (
+              <EmptyState icon={Search} title={`No skill in ${source} matches “${query}”`}>
+                <button onClick={() => setQuery("")} className={buttonClass}>
+                  Clear search
+                </button>
+              </EmptyState>
+            )
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {shownRepo.map((skill) => {
+                const have = byName.get(skill.name);
+                const origin = have && skillOrigin(have);
+                const sameSkill = origin && origin.repo.toLowerCase() === listing.repo.toLowerCase() && origin.path === skill.path;
+                const outdated = have && sameSkill && isOutdated(have, listing);
+                const everywhere = have && selected.every((t) => have.copies.some((c) => c.target === t));
+                const open = expanded === skill.path;
+                return (
+                  <article key={skill.path} className="flex flex-col rounded-lg border border-border bg-panel p-3.5 transition-colors hover:border-border-strong">
+                    <div className="flex items-start gap-3">
+                      <PluginTile id={skill.name} name={skill.name} />
+                      <div className="min-w-0 flex-1">
+                        <h4 className="truncate font-mono text-[12px] font-medium text-fg" title={skill.name}>
+                          {skill.name}
+                        </h4>
+                        <p className="truncate text-[11px] text-fg-subtle" title={skill.path}>
+                          {skill.path} · {skill.files} file{skill.files === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setExpanded(open ? null : skill.path)}
+                      title={open ? "Show less" : "Show more"}
+                      className={cn("mt-2.5 text-left text-xs leading-relaxed text-fg-muted hover:text-fg", !open && "line-clamp-3")}
+                    >
+                      {skill.description || "No description."}
+                    </button>
+                    {have && !sameSkill && (
+                      <p className="mt-2 flex items-start gap-1.5 rounded-md bg-warning/10 px-2 py-1.5 text-[11px] leading-relaxed text-warning">
+                        <TriangleAlert size={12} className="mt-px shrink-0" />
+                        <span>A different “{skill.name}” is installed; installing replaces it.</span>
+                      </p>
+                    )}
+                    <div className="mt-auto flex items-center justify-end gap-2 pt-3">
+                      {have && sameSkill && !outdated && (
+                        <span className="mr-auto flex min-w-0 items-center gap-1 truncate text-[11px] text-success">
+                          <Check size={12} className="shrink-0" />
+                          {everywhere ? "Installed" : `For ${names(have.copies.map((c) => c.target))}`}
+                        </span>
+                      )}
+                      {!(have && everywhere && !outdated) && (
+                        <button
+                          disabled={!!busy || selected.length === 0}
+                          onClick={() => void install(listing.repo, skill, !!outdated, outdated ? [...new Set([...have!.copies.map((c) => c.target), ...selected])] : selected)}
+                          title={selected.length ? `Install for ${names(selected)}` : "Pick an agent under “Install for”"}
+                          className={primaryButtonClass}
+                        >
+                          {busy === skill.name ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                          {outdated ? "Update" : have && sameSkill ? "Install for more" : "Install"}
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          <p className="px-1 text-[11px] leading-relaxed text-fg-subtle">
+            Every folder with a SKILL.md in a GitHub repo is a skill. Skills are instructions and scripts your agents follow, so install them from repos you trust.
+          </p>
+        </>
+      ) : (
+        <>
+          {outdatedSkills.length > 0 && !query && (
+            <UpdateBanner
+              text={outdatedSkills.length === 1 ? `An update for ${outdatedSkills[0].name} is available.` : `${outdatedSkills.length} skill updates are available.`}
+              label={outdatedSkills.length === 1 ? "Update" : "Update all"}
+              busy={busy === "*"}
+              disabled={!!busy}
+              onClick={() => (outdatedSkills.length === 1 ? update(outdatedSkills[0]) : void updateAll())}
+            />
+          )}
+
+          {installed === null ? (
+            <div className="space-y-2">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-16 animate-pulse rounded-lg border border-border bg-panel" />
+              ))}
+            </div>
+          ) : shownInstalled.length === 0 ? (
+            installed.length === 0 ? (
+              <EmptyState icon={Wand2} title="No skills installed" hint="Skills are folders with a SKILL.md that agents load from their skills folder.">
+                <button onClick={() => setTab("discover")} className={primaryButtonClass}>
+                  <Store size={12} />
+                  Browse skills
+                </button>
+              </EmptyState>
+            ) : (
+              <EmptyState icon={Search} title={`No installed skill matches “${query}”`} />
+            )
+          ) : (
+            <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
+              {shownInstalled.map((skill) => {
+                const origin = skillOrigin(skill);
+                const outdated = isOutdated(skill, origin ? listings.get(origin.repo) : undefined);
+                const missing = selected.filter((t) => !skill.copies.some((c) => c.target === t));
+                return (
+                  <div key={skill.name} className="group flex gap-3 px-3.5 py-3">
+                    <PluginTile id={skill.name} name={skill.name} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1">
+                        <h4 className="mr-0.5 truncate font-mono text-[12px] font-medium text-fg">{skill.name}</h4>
+                        {outdated && <Pill tone="accent">update available</Pill>}
+                      </div>
+                      {skill.description && (
+                        <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-fg-muted" title={skill.description}>
+                          {skill.description}
+                        </p>
+                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        {skill.copies.map((c) => (
+                          <Pill key={c.target} title={c.dir + (c.link ? " (link)" : "")}>
+                            {label(c.target)}
+                            {c.link && " ↗"}
+                          </Pill>
+                        ))}
+                        <span className="ml-1 truncate text-[11px] text-fg-subtle">{origin ? `from ${origin.repo}` : "added by hand"}</span>
+                      </div>
+                      {(outdated || missing.length > 0) && (
+                        <div className="mt-2.5 flex flex-wrap gap-1.5">
+                          {outdated && (
+                            <button disabled={!!busy} onClick={() => update(skill)} className={primaryButtonClass}>
+                              <Download size={12} />
+                              Update
+                            </button>
+                          )}
+                          {missing.length > 0 && (
+                            <button disabled={!!busy} onClick={() => void copyToSelected(skill, missing)} title={`Also install for ${names(missing)}`} className={buttonClass}>
+                              <Copy size={12} />
+                              Add for {names(missing)}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-start gap-1">
+                      {busy === skill.name && <Loader2 size={13} className="mt-1.5 animate-spin text-fg-subtle" />}
+                      <button onClick={() => void revealItemInDir(skill.copies[0].dir + "/SKILL.md").catch(() => {})} aria-label={`Show ${skill.name} in Finder`} title="Show the folder" className={iconButtonClass}>
+                        <FolderOpen size={13} />
+                      </button>
+                      <button
+                        disabled={!!busy}
+                        onClick={() => void remove(skill)}
+                        aria-label={`Remove ${skill.name}`}
+                        title="Remove"
+                        className={cn(iconButtonClass, "opacity-0 group-hover:opacity-100 hover:text-danger focus-visible:opacity-100")}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {installFor}
+        </>
+      )}
+    </div>
   );
 }
 

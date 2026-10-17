@@ -307,7 +307,7 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
 /// `OPENCODE_CONFIG_CONTENT`). `existing` is the variable's current value, if the user set one:
 /// ours are added to it. pi's winfer extension registers the servers in `WINFER_PI_MCP`.
 pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, auto_approve: bool, existing: Option<&str>) -> Vec<(String, String)> {
-    if provider_id == "pi" {
+    if provider_id == "pi" || provider_id == "winfer" {
         if servers.is_empty() {
             return Vec::new();
         }
@@ -318,7 +318,8 @@ pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, au
                 (s.name.to_string(), json!({ "command": s.command, "args": s.args, "env": env }))
             })
             .collect();
-        return vec![("WINFER_PI_MCP".into(), Value::Object(config).to_string())];
+        let var = if provider_id == "pi" { "WINFER_PI_MCP" } else { "WINFER_HARNESS_MCP" };
+        return vec![(var.into(), Value::Object(config).to_string())];
     }
     if (servers.is_empty() && plugin.is_none() && !auto_approve) || provider_id != "opencode" {
         return Vec::new();

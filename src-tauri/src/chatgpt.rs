@@ -65,6 +65,7 @@ fn load() -> Option<Account> {
 }
 
 fn save(account: &Account) -> Result<(), String> {
+    *TOKEN.lock().unwrap() = None;
     entry(ACCOUNT_KEY)?
         .set_password(&serde_json::to_string(account).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
@@ -336,14 +337,23 @@ fn sign_in(open: impl Fn(&str) -> Result<(), String>) -> Result<Account, String>
     Ok(account)
 }
 
+/// The current access token and its expiry, so requests don't read the keychain each time.
+static TOKEN: Mutex<Option<(String, u64)>> = Mutex::new(None);
+
 /// Serializes refreshes: refresh tokens rotate, so two at once would invalidate each other.
 static REFRESH: Mutex<()> = Mutex::new(());
 
 /// A valid access token, refreshed when it's about to expire.
-fn access_token() -> Result<String, String> {
+pub(crate) fn access_token() -> Result<String, String> {
     let _guard = REFRESH.lock().unwrap();
+    if let Some((token, expires)) = TOKEN.lock().unwrap().clone() {
+        if expires > now() + 120 {
+            return Ok(token);
+        }
+    }
     let mut account = load().filter(Account::signed_in).ok_or("Sign in with ChatGPT in Settings first.")?;
     if account.expires_at > now() + 120 {
+        *TOKEN.lock().unwrap() = Some((account.access_token.clone(), account.expires_at));
         return Ok(account.access_token);
     }
     match token_request(&[
@@ -354,6 +364,7 @@ fn access_token() -> Result<String, String> {
         Ok(tokens) => {
             apply_tokens(&mut account, &tokens);
             save(&account)?;
+            *TOKEN.lock().unwrap() = Some((account.access_token.clone(), account.expires_at));
             Ok(account.access_token)
         }
         Err(code)
@@ -371,7 +382,7 @@ fn access_token() -> Result<String, String> {
 }
 
 /// Turns an OpenAI error body into a message for the user (`code` is kept for callers).
-fn api_error(status: u16, body: &Value) -> (String, String) {
+pub(crate) fn api_error(status: u16, body: &Value) -> (String, String) {
     let code = body["error"]["code"].as_str().unwrap_or("").to_string();
     let message = match code.as_str() {
         "subscription_sharing_usage_limit_exceeded" => "Your ChatGPT plan's limit for winfer is used up (ChatGPT settings → Usage).".into(),
@@ -431,6 +442,38 @@ pub fn respond(model: &str, instructions: &str, input: &str) -> Result<String, S
         return Err(api_error(status, &json).1);
     }
     read_stream(res.body_mut().as_reader())
+}
+
+/// Whether a ChatGPT account is signed in (no network, no refresh).
+pub(crate) fn signed_in() -> bool {
+    load().is_some_and(|a| a.signed_in())
+}
+
+/// Opens a streaming Responses API call for `winfer code` (tools, reasoning, long turns): the
+/// caller reads the server-sent events. Unlike [`http`], there is no overall timeout.
+pub(crate) fn open_stream(body: &Value) -> Result<impl std::io::Read + Send + use<>, String> {
+    let token = access_token()?;
+    // One agent for the session: its connection pool keeps TLS connections alive between turns.
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    let agent = AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            .build()
+            .into()
+    });
+    let mut res = agent
+        .post(&format!("{API}/responses"))
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Accept", "text/event-stream")
+        .send_json(body)
+        .map_err(|e| format!("couldn't reach OpenAI: {e}"))?;
+    let status = res.status().as_u16();
+    if !(200..300).contains(&status) {
+        let json: Value = res.body_mut().read_json().unwrap_or(Value::Null);
+        return Err(api_error(status, &json).1);
+    }
+    Ok(res.into_body().into_reader())
 }
 
 /// Default model for the LLM: fast enough for voice, smart enough to plan.

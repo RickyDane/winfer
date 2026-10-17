@@ -4,11 +4,13 @@ mod chatgpt;
 mod context_breakdown;
 mod editors;
 mod env;
+mod harness;
 mod hooks;
 mod llm;
 mod mcp;
 mod notify;
 mod plugins;
+mod skills;
 #[cfg(target_os = "macos")]
 mod menu;
 mod provider_updates;
@@ -32,6 +34,11 @@ pub fn run_mcp_stdio() {
 /// `winfer statusline`: reports Claude Code's usage limits, then runs the user's status line.
 pub fn run_statusline() {
     usage::run_statusline();
+}
+
+/// `winfer code [args]`: winfer's own coding agent TUI (see harness/).
+pub fn run_code(args: &[String]) {
+    harness::run(args);
 }
 
 /// `winfer hook <provider> <event> [json]`: forwards an agent hook event to the running app.
@@ -129,6 +136,12 @@ pub fn run() {
             plugins::plugins_catalog,
             plugins::plugins_install,
             plugins::plugins_uninstall,
+            skills::skills_targets,
+            skills::skills_list,
+            skills::skills_repo,
+            skills::skills_install,
+            skills::skills_uninstall,
+            skills::skills_copy,
             vault::vault_list,
             vault::vault_set,
             vault::vault_delete,
@@ -209,6 +222,10 @@ pub fn run() {
             chatgpt::chatgpt_cancel_sign_in,
             chatgpt::chatgpt_sign_out,
             chatgpt::chatgpt_models,
+            plugins::plugins_app_exe,
+            harness::harness_settings,
+            harness::harness_set_settings,
+            harness::harness_models,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

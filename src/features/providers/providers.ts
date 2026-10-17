@@ -44,4 +44,5 @@ export const PROVIDER_COLORS: Record<string, string> = {
   opencode: "#f5b544",
   cursor: "#a0a0ff",
   pi: "#7ee787",
+  winfer: "var(--color-accent)",
 };

@@ -486,6 +486,12 @@ pub fn plugins_dir() -> Result<String, String> {
     Ok(registry()?.read().unwrap().root.to_string_lossy().into_owned())
 }
 
+/// winfer's own executable (plugins run `winfer code` and other modes with it).
+#[tauri::command]
+pub fn plugins_app_exe() -> Result<String, String> {
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
+}
+
 /// The source of an enabled plugin's `main` module.
 #[tauri::command]
 pub fn plugins_source(id: String) -> Result<String, String> {

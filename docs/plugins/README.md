@@ -44,6 +44,10 @@ re-registers its palette and voice tool whenever the prompts change; `pnpm dev` 
 both on a fake shop database. Their pure functions (introspection SQL, model, layout, exporters,
 connection strings) are tested in `scripts/db-explorer.test.mjs` and
 `scripts/prompt-library.test.mjs`.
+[`plugins/harness-bench`](../../plugins/harness-bench) (Bench) ships a benchmark suite (`bench/`:
+tasks, hidden checks, a Python runner) and runs it detached through `vault.exec` with `api.dir` and
+`api.appExe()`, polling a status file with `readFile` for live progress; `pnpm dev` with `?bench`
+opens it on a fake runner.
 
 ## plugin.json
 
@@ -97,6 +101,8 @@ export function deactivate() {}  // optional
 | `api.` | |
 |---|---|
 | `id` | The plugin's id. |
+| `dir` | The plugin's folder (absolute path), for files shipped with it. |
+| `appExe()` | Resolves to winfer's own executable, e.g. to run `winfer code -p`. |
 | `registerTool(spec)` | Like a `tools` entry; `run(args)` may replace `commands`. |
 | `registerCommand(name, handler)` | Handler for `{ type: "plugin.run", plugin, command, args }`, usable from declarative tools too. |
 | `execute(command)` | Runs any Command Bus command. |

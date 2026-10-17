@@ -56,6 +56,16 @@ export interface Spend {
   sessions: number;
 }
 
+/** What a pane's agent spent this session, as it reports it (winfer code). */
+export interface PaneSpend {
+  /** At API prices; null when the backend doesn't say (e.g. billed to a ChatGPT plan). */
+  cost: number | null;
+  input: number;
+  output: number;
+  cached: number;
+  at: number;
+}
+
 interface UsageState {
   snapshots: Record<string, Snapshot>;
   opencode: Spend | null;
@@ -65,11 +75,13 @@ interface UsageState {
   context: Record<string, Context>;
   /** Codex session (thread) id per pane, from its turn-complete hook. */
   codexSessions: Record<string, string>;
+  /** Spend per pane, for agents that report it themselves (not saved: it restarts with the agent). */
+  paneSpend: Record<string, PaneSpend>;
 }
 
 const STORAGE = "winfer.usage";
 
-function load(): Omit<UsageState, "opencode"> {
+function load(): Omit<UsageState, "opencode" | "paneSpend"> {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE) ?? "{}");
     return { snapshots: saved.snapshots ?? {}, samples: saved.samples ?? {}, context: saved.context ?? {}, codexSessions: saved.codexSessions ?? {} };
@@ -78,7 +90,7 @@ function load(): Omit<UsageState, "opencode"> {
   }
 }
 
-export const useUsage = create<UsageState>(() => ({ ...load(), opencode: null }));
+export const useUsage = create<UsageState>(() => ({ ...load(), opencode: null, paneSpend: {} }));
 
 useUsage.subscribe((s) =>
   localStorage.setItem(STORAGE, JSON.stringify({ snapshots: s.snapshots, samples: s.samples, context: s.context, codexSessions: s.codexSessions })),
@@ -242,9 +254,11 @@ let started = false;
 export function startUsageTracking() {
   if (started) return;
   started = true;
-  void listen<{ provider: string; paneId: string; report: { windows?: UsageWindow[]; context?: Context | null } }>("usage://report", ({ payload }) => {
+  void listen<{ provider: string; paneId: string; report: { windows?: UsageWindow[]; context?: Context | null; spend?: PaneSpend | null } }>("usage://report", ({ payload }) => {
     if (payload.report.windows?.length) record({ provider: payload.provider, windows: payload.report.windows, at: Date.now() });
     if (payload.report.context) setContext(payload.paneId, payload.report.context);
+    const spend = payload.report.spend;
+    if (spend) useUsage.setState((s) => ({ paneSpend: { ...s.paneSpend, [payload.paneId]: spend } }));
   });
   // Codex writes its numbers after each turn; a turn ending is the moment to look.
   void listen<{ provider: string; paneId: string; session?: string | null }>("agent://status", ({ payload }) => {

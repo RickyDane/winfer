@@ -1,0 +1,1 @@
+Rename the function `compute_tax` to `calculate_tax` everywhere in this project (definition, imports, call sites, docs). Behavior must not change and `python3 -m unittest discover -s tests` must still pass. Don't rename anything else.

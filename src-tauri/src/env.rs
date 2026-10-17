@@ -15,6 +15,13 @@ pub fn login_env() -> &'static HashMap<String, String> {
     LOGIN_ENV.get_or_init(|| resolve().unwrap_or_else(|| std::env::vars().collect()))
 }
 
+/// Uses this process's own environment instead of a login shell's: for CLI modes started from
+/// a terminal, which already has the user's environment (and where an interactive shell would
+/// take over the terminal).
+pub fn use_process_env() {
+    let _ = LOGIN_ENV.set(std::env::vars().collect());
+}
+
 /// The login PATH. Looked up case-insensitively: Windows spells it `Path`.
 pub fn path_var() -> String {
     login_env()
@@ -27,6 +34,10 @@ pub fn path_var() -> String {
 /// Full path of a program on the login PATH. On Windows this also finds npm shims like
 /// `codex.cmd`, which `Command::new("codex")` would miss.
 pub fn find_command(command: &str) -> Option<PathBuf> {
+    // winfer's own agent (`winfer code`) is this binary.
+    if command == "winfer" {
+        return std::env::current_exe().ok();
+    }
     let cwd = dirs::home_dir().unwrap_or_default();
     which::which_in(command, Some(path_var()), cwd).ok()
 }

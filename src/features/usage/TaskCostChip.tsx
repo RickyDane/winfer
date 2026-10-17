@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { formatCost, formatTokens } from "./history";
+import { useUsage, type PaneSpend } from "./usage";
 import { refreshSessionCosts, refreshTaskCosts, useSessionCost, useTaskCost, type DirUsage } from "./taskCost";
 
 /** "Opus 5.5 $1.20 · 1.4M tokens" lines, for a tooltip. */
@@ -34,6 +35,32 @@ function CostChip({ usage, where, className }: { usage: DirUsage | undefined; wh
  */
 export function PaneCost({ pane }: { pane: Pane }) {
   const show = useWorkspaces((s) => s.showPaneCost);
+  const reported = useUsage((s) => s.paneSpend[pane.id]);
+  if (show && reported) return <ReportedCost spend={reported} />;
+  return <LoggedCost pane={pane} show={show && pane.provider !== "winfer"} />;
+}
+
+/** What the agent itself says it spent this session (winfer code reports it after each turn). */
+function ReportedCost({ spend }: { spend: PaneSpend }) {
+  const tokens = spend.input + spend.output;
+  if (tokens === 0) return null;
+  const title = [
+    "This session" + (spend.cost !== null ? ", at API prices:" : ":"),
+    `${formatTokens(spend.input)} in (${formatTokens(spend.cached)} cached) · ${formatTokens(spend.output)} out`,
+    spend.cost !== null ? `Cost: ${formatCost(spend.cost)} (your plan may cover it)` : "No price reported (billed to your plan)",
+  ].join("\n");
+  return (
+    <span className="hidden @[24rem]:contents">
+      <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-fg-muted" title={title}>
+        <Coins size={11} className="text-fg-subtle" />
+        {spend.cost !== null ? formatCost(spend.cost) : "—"}
+        <span className="text-fg-subtle">· {formatTokens(tokens)}</span>
+      </span>
+    </span>
+  );
+}
+
+function LoggedCost({ pane, show }: { pane: Pane; show: boolean }) {
   const dir = show ? pane.worktree?.path : undefined;
   const session = show && !dir ? pane.sessionId : null;
   const status = pane.status;

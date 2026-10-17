@@ -10,6 +10,7 @@ import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript 
 import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
 import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
+import { BENCH_DEMO, harnessBenchExec, harnessBenchFile } from "./harnessBench";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
@@ -20,8 +21,11 @@ const providers = [
   { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: false },
   { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], resumeSessionArgs: ["--session", "{session}"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--auto"], installed: true },
+  { id: "winfer", name: "winfer code", command: "winfer", args: ["code"], resumeArgs: ["--continue"], resumeSessionArgs: ["--resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: "y", modelArg: "--model", modelCommand: null, autoApproveArgs: ["--yolo"], installed: true },
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
+
+let harnessSettings = { model: "", effort: null, mode: "ask", trimAt: 0, compactAt: 0, allowedCommands: ["git"], mcpServers: {}, leanBridges: true };
 
 // Fake plugins: the store is the repo's plugins/ folder; one local plugin is broken.
 const storeManifests = import.meta.glob<Record<string, unknown>>("../../plugins/*/plugin.json", { eager: true, import: "default" });
@@ -45,6 +49,8 @@ if (XP_DEMO) {
   installMockPlugin("cross-project");
   seedCrossProject();
 }
+// `?bench` starts with Harness Bench and a fake runner (see ./harnessBench.ts).
+if (BENCH_DEMO) installMockPlugin("harness-bench");
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
 // `?db` starts with Databases (one fake Postgres shop, see ./dbExplorer.ts) and Prompt Library.
@@ -198,6 +204,49 @@ function emitTabs(workspaceId: string) {
 }
 let worktreeCounter = 0;
 
+// Skills: a few installed, two repos to install from.
+const skillTargets = [
+  { id: "claude", label: "Claude Code", dir: "~/.claude/skills", detected: true },
+  { id: "agents", label: "Shared (.agents)", dir: "~/.agents/skills", detected: true },
+  { id: "codex", label: "Codex", dir: "~/.codex/skills", detected: true },
+  { id: "gemini", label: "Gemini / Antigravity", dir: "~/.gemini/skills", detected: false },
+  { id: "pi", label: "pi", dir: "~/.pi/agent/skills", detected: true },
+];
+const skillRepos: Record<string, { rev: string; skills: { name: string; description: string; path: string; files: number; hash: string }[] }> = {
+  "JuliusBrussee/caveman": {
+    rev: "r2",
+    skills: [
+      { name: "caveman", description: "Terse caveman voice: answer first, fluff gone, every technical fact kept.", path: "skills/caveman", files: 2, hash: "h-caveman-2" },
+      { name: "ultracave", description: "Maximum compression caveman mode.", path: "skills/ultracave", files: 2, hash: "h-ultra" },
+      { name: "caveman-commit", description: "Terse commit messages.", path: "skills/caveman-commit", files: 1, hash: "h-commit" },
+    ],
+  },
+  "anthropics/skills": {
+    rev: "a1",
+    skills: [
+      { name: "pdf", description: "Read, fill and create PDF files.", path: "skills/pdf", files: 9, hash: "h-pdf" },
+      { name: "frontend-design", description: "Distinctive, production-grade frontend interfaces.", path: "skills/frontend-design", files: 2, hash: "h-fd" },
+    ],
+  },
+};
+const mockSkills: { name: string; description: string; copies: { target: string; dir: string; link: boolean; origin: { repo: string; path: string; rev: string; hash: string } | null }[] }[] = [
+  {
+    name: "caveman",
+    description: "Terse caveman voice: answer first, fluff gone, every technical fact kept.",
+    copies: [{ target: "claude", dir: "~/.claude/skills/caveman", link: false, origin: { repo: "JuliusBrussee/caveman", path: "skills/caveman", rev: "r1", hash: "h-caveman-1" } }],
+  },
+  { name: "graphify", description: "Any input to knowledge graph.", copies: [{ target: "claude", dir: "~/.claude/skills/graphify", link: true, origin: null }] },
+];
+function installMockSkill(name: string, description: string, targets: string[], origin: (typeof mockSkills)[number]["copies"][number]["origin"]) {
+  let skill = mockSkills.find((s) => s.name === name);
+  if (!skill) mockSkills.push((skill = { name, description, copies: [] }));
+  for (const target of targets) {
+    skill.copies = skill.copies.filter((c) => c.target !== target);
+    skill.copies.push({ target, dir: `~/${target}/skills/${name}`, link: false, origin });
+  }
+  skill.copies.sort((a, b) => skillTargets.findIndex((t) => t.id === a.target) - skillTargets.findIndex((t) => t.id === b.target));
+}
+
 mockWindows("main");
 mockIPC(
   (cmd, args) => {
@@ -205,6 +254,13 @@ mockIPC(
     switch (cmd) {
       case "providers_list":
         return providers;
+      case "harness_settings":
+        return harnessSettings;
+      case "harness_set_settings":
+        harnessSettings = a.settings;
+        return null;
+      case "harness_models":
+        return [{ spec: "chatgpt/gpt-6.1-sol", label: "GPT-6.1 Sol", detail: "" }, { spec: "claude/sonnet", label: "Sonnet", detail: "" }];
       case "editors_list":
         return [{ id: "vscode", name: "VS Code" }, { id: "cursor", name: "Cursor" }, { id: "zed", name: "Zed" }];
       case "editor_open":
@@ -227,6 +283,34 @@ mockIPC(
         if (i >= 0) mockPlugins.splice(i, 1);
         return null;
       }
+      case "skills_targets":
+        return skillTargets;
+      case "skills_list":
+        return structuredClone(mockSkills).sort((x, y) => x.name.localeCompare(y.name));
+      case "skills_repo":
+        return new Promise((resolve, reject) =>
+          setTimeout(() => (skillRepos[a.repo] ? resolve({ repo: a.repo, ...skillRepos[a.repo] }) : reject(`${a.repo}: not found on GitHub (is the repo public?)`)), 400),
+        );
+      case "skills_install":
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            const repo = skillRepos[a.repo];
+            const skill = repo.skills.find((s) => s.path === a.path)!;
+            installMockSkill(skill.name, skill.description, a.targets, { repo: a.repo, path: a.path, rev: repo.rev, hash: skill.hash });
+            resolve(skill.name);
+          }, 500),
+        );
+      case "skills_copy": {
+        const skill = mockSkills.find((s) => s.name === a.name)!;
+        installMockSkill(skill.name, skill.description, a.targets, skill.copies[0].origin);
+        return null;
+      }
+      case "skills_uninstall": {
+        const skill = mockSkills.find((s) => s.name === a.name);
+        if (skill) skill.copies = skill.copies.filter((c) => !a.targets.includes(c.target));
+        mockSkills.splice(0, mockSkills.length, ...mockSkills.filter((s) => s.copies.length));
+        return null;
+      }
       case "vault_list":
         return [...vault.values()].map((v) => v.info).sort((x, y) => x.key.localeCompare(y.key));
       case "vault_set": {
@@ -246,9 +330,15 @@ mockIPC(
         if (a.plugin === "knowledge-base") return knowledgeBaseExec(a.command);
         if (a.plugin === "cross-project") return crossProjectExec(a.command, a.cwd);
         if (a.plugin === "db-explorer") return dbExplorerExec(a.command);
+        if (a.plugin === "harness-bench") return harnessBenchExec(a.command);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
-      case "plugins_read_file":
+      case "plugins_read_file": {
+        const bench = harnessBenchFile(a.path);
+        if (bench !== null) return new TextEncoder().encode(bench).buffer;
         return knowledgeBaseFile(a.path);
+      }
+      case "plugins_app_exe":
+        return "/Applications/winfer.app/Contents/MacOS/winfer";
       case "plugins_write_file":
         return "/Users/you/Movies/winfer/recording.mp4";
       case "browser_fill_secret":

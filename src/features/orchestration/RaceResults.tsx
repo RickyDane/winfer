@@ -1,4 +1,4 @@
-import { BarChart3, RefreshCw, X } from "lucide-react";
+import { BarChart3, RefreshCw, Trophy, X } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -8,7 +8,9 @@ import { normDir, refreshSessionCosts, refreshTaskCosts, type DirUsage } from "@
 import { worktreeDiff } from "@/features/worktree/worktree";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { closeRaceResults, useRaceResults } from "./resultsStore";
-import { activeMs, useRunTimes } from "./runTimes";
+import { pickRaceWinner } from "./RaceView";
+import { activeMs, isFinished, useRunTimes } from "./runTimes";
+import { judge, type Verdict } from "./winner";
 
 interface Changes {
   files: number;
@@ -152,6 +154,20 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
     return m.better === "lower" ? Math.min(...known) : Math.max(...known);
   };
 
+  const verdict = judge(
+    panes.map((p) => {
+      const ch = c(p);
+      return {
+        timeMs: active(p) ?? wall(p),
+        cost: u(p)?.cost ?? null,
+        tokens: u(p)?.tokens ?? null,
+        changed: ch ? ch.files + ch.adds + ch.dels : null,
+        errored: p.status === "error",
+        finished: isFinished(p),
+      };
+    }),
+  );
+
   const label = (p: Pane) => p.customTitle ?? providerName(providers, p.provider);
   const models = (p: Pane) => [...new Set(u(p)?.models.map((m) => m.model) ?? [])].join(", ") || p.model || "default";
 
@@ -175,6 +191,7 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
                     <StatusDot status={p.status} />
                     <ProviderIcon provider={p.provider} size={12} />
                     <span className="truncate">{label(p)}</span>
+                    {verdict.winner !== null && panes[verdict.winner].id === p.id && <Trophy size={11} className="shrink-0 text-success" />}
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] font-normal">
                     {ab && (
@@ -206,9 +223,26 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
                 </tr>
               );
             })}
+            <tr className="bg-panel">
+              <td className="px-3 py-1.5 font-medium text-fg" title="Cost and time weigh 40% each, tokens 20%; each against the best agent">
+                Overall score
+              </td>
+              {panes.map((p, i) => (
+                <td key={p.id} className={cn("px-3 py-1.5 font-mono", i === verdict.winner ? "font-semibold text-success" : "text-fg")}>
+                  {verdict.out[i] ? (
+                    <span className="text-danger">{verdict.out[i]}</span>
+                  ) : verdict.scores[i] === null ? (
+                    <span className="text-fg-subtle">—</span>
+                  ) : (
+                    Math.round(verdict.scores[i]! * 100)
+                  )}
+                </td>
+              ))}
+            </tr>
           </tbody>
         </table>
       </div>
+      <WinnerBanner verdict={verdict} panes={panes} name={(p) => (ab ? (p.plain ? "Plain" : "With tools") : label(p))} />
       {ab && <Summary panes={panes} metrics={metrics} />}
       {panes.some((p) => typeof changes[p.id] === "string") && (
         <p className="text-[11px] text-danger">{panes.map((p) => changes[p.id]).filter((x) => typeof x === "string").join(" · ")}</p>
@@ -217,6 +251,40 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
         Cost is at API prices, read from the agents' usage logs per worktree; it can lag a few seconds behind. Working time is measured while winfer runs.
         {ab && " The plain run started without winfer's tools, the browser, and your own MCP servers and skills."}
       </p>
+    </div>
+  );
+}
+
+/** The automatic verdict, with a one-click merge of the winner. */
+function WinnerBanner({ verdict, panes, name }: { verdict: Verdict; panes: Pane[]; name: (p: Pane) => string }) {
+  const [merging, setMerging] = useState(false);
+  const winner = verdict.winner !== null ? panes[verdict.winner] : null;
+  return (
+    <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-xs", winner ? "border-success/40 bg-success/10" : "border-border bg-panel")}>
+      <Trophy size={13} className={winner ? "text-success" : "text-fg-subtle"} />
+      <span className="flex-1 text-fg-muted">
+        {winner ? (
+          <>
+            <span className="font-medium text-fg">{verdict.final ? "Winner" : "Leading"}: {name(winner)}</span> · {verdict.reason}
+            {!verdict.final && " Not every agent has finished yet."}
+          </>
+        ) : (
+          verdict.reason
+        )}
+      </span>
+      {winner?.worktree && verdict.final && (
+        <button
+          disabled={merging}
+          onClick={async () => {
+            setMerging(true);
+            if (await pickRaceWinner(winner, panes)) closeRaceResults();
+            setMerging(false);
+          }}
+          className="flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-on-accent hover:opacity-90 disabled:opacity-40"
+        >
+          <Trophy size={11} /> Merge winner
+        </button>
+      )}
     </div>
   );
 }
