@@ -495,7 +495,7 @@ fn glob(cwd: &Path, args: &Value) -> Outcome {
     let mut hits: Vec<_> = walk(&root, 200_000).into_iter().filter(|(p, _)| matcher.is_match(p)).collect();
     hits.sort_by(|a, b| b.1.cmp(&a.1));
     let total = hits.len();
-    let mut s: Vec<String> = hits.iter().take(GLOB_MAX).map(|(p, _)| p.to_string_lossy().into_owned()).collect();
+    let mut s: Vec<String> = hits.iter().take(GLOB_MAX).map(|(p, _)| p.to_string_lossy().replace('\\', "/")).collect();
     if total > GLOB_MAX {
         s.push(format!("… {} more", total - GLOB_MAX));
     }
