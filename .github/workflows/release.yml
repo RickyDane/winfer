@@ -111,6 +111,58 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Developer ID signing + notarization. tauri imports APPLE_CERTIFICATE into a temporary
+      # keychain, signs the .app with the hardened runtime and Entitlements.plist, submits it to
+      # Apple's notary service and staples the ticket (the .dmg and updater .app.tar.gz are built
+      # from the stapled app). Exported only when the secrets exist: GitHub passes a missing secret
+      # as "", which tauri would try to use, so without them the build stays ad-hoc signed ("-"
+      # in tauri.conf.json) and isn't notarized.
+      #   APPLE_CERTIFICATE           base64 of the "Developer ID Application" .p12
+      #   APPLE_CERTIFICATE_PASSWORD  the .p12's export password
+      #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)" (optional)
+      #   notarization, either an App Store Connect API key (preferred):
+      #     APPLE_API_KEY (key ID), APPLE_API_ISSUER (issuer ID), APPLE_API_KEY_P8 (the .p8's text)
+      #   or an Apple ID: APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
+      - name: macOS signing and notarization credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_CERTIFICATE_PASSWORD" ]; then
+            echo "::warning::No Developer ID certificate secrets; building ad-hoc signed and not notarized"
+            exit 0
+          fi
+          put() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_ENV"; }
+          # Multi-line safe: the certificate is one base64 line, but strip any wrapping anyway.
+          put APPLE_CERTIFICATE "$(printf '%s' "$APPLE_CERTIFICATE" | tr -d '\r\n ')"
+          put APPLE_CERTIFICATE_PASSWORD "$APPLE_CERTIFICATE_PASSWORD"
+          [ -n "$APPLE_SIGNING_IDENTITY" ] && put APPLE_SIGNING_IDENTITY "$APPLE_SIGNING_IDENTITY"
+          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            key_path="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$key_path"
+            chmod 600 "$key_path"
+            put APPLE_API_KEY "$APPLE_API_KEY"
+            put APPLE_API_ISSUER "$APPLE_API_ISSUER"
+            put APPLE_API_KEY_PATH "$key_path"
+          elif [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            put APPLE_ID "$APPLE_ID"
+            put APPLE_PASSWORD "$APPLE_PASSWORD"
+            put APPLE_TEAM_ID "$APPLE_TEAM_ID"
+          else
+            echo "::error::Developer ID certificate set but no notarization credentials (APPLE_API_* or APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID)"
+            exit 1
+          fi
+          echo "WINFER_NOTARIZED=1" >> "$GITHUB_ENV"
+
       - name: Build and upload to the release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -125,6 +177,19 @@ jobs:
           # The updater-json job writes it once every bundle is up; three jobs merging into
           # one file at once could drop a platform.
           includeUpdaterJson: false
+
+      # Fail the release if the shipped app isn't what Gatekeeper accepts on a fresh Mac.
+      - name: Verify signature and notarization
+        if: runner.os == 'macOS' && env.WINFER_NOTARIZED == '1'
+        shell: bash
+        run: |
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/winfer.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          info=$(codesign -dv --verbose=4 "$app" 2>&1)
+          grep -q 'Authority=Developer ID Application' <<<"$info" || { echo "::error::Not Developer ID signed"; exit 1; }
+          grep -q 'flags=.*runtime' <<<"$info" || { echo "::error::Hardened runtime missing"; exit 1; }
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
 
       - name: sccache stats
         if: always()
