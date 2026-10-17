@@ -210,7 +210,7 @@ export async function pickTier(plan, policy, ask) {
   if (TIERS.includes(hint)) return { tier: hint, via: "hint", reason: "requested by the caller" };
   const task = taskOf(plan);
   const ruled = classifyRules(task, policy.rules);
-  if (ruled) return { tier: ruled.tier, via: "rule", reason: `rule “${ruled.rule}”` };
+  if (ruled) return { tier: ruled.tier, via: "rule", reason: `matched the “${ruled.rule}” rule` };
   if (task && policy.llmFallback && ask) {
     try {
       const verdict = parseLlmVerdict(await ask(task));
@@ -726,7 +726,8 @@ function h(tag, attrs = {}, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
     else if (key === "class") el.className = value;
-    else if (key in el && typeof value !== "string") el[key] = value;
+    // `value` as a property: a textarea ignores the attribute.
+    else if (key in el && (typeof value !== "string" || key === "value")) el[key] = value;
     else el.setAttribute(key, value === true ? "" : value);
   }
   for (const child of children.flat()) {
@@ -736,29 +737,158 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+const PROVIDER_NAMES = { claude: "Claude Code", codex: "Codex" };
+
+const TIER_INFO = {
+  cheap: { label: "Cheap", blurb: "Searching, reading, listing, summarizing" },
+  standard: { label: "Standard", blurb: "Clear, well-scoped edits and tests" },
+  frontier: { label: "Frontier", blurb: "Design, hard debugging, cross-cutting work" },
+};
+
+const STATUS_TONE = { planning: "accent", running: "accent", reviewing: "warning", done: "success", failed: "danger", cancelled: "muted", waiting: "muted" };
+
+const ICONS = {
+  route: "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM18 9a9 9 0 0 1-9 9",
+  flow: "M3 6h6v6H3zM15 12h6v6h-6zM9 9h3a3 3 0 0 1 3 3v3",
+  sliders: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
+  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  play: "m6 3 14 9-14 9V3z",
+  plus: "M12 5v14M5 12h14",
+  trash: "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6",
+  stop: "M6 6h12v12H6z",
+  bolt: "M13 2 3 14h9l-1 8 10-12h-9l1-8z",
+};
+
+/** A stroked 24×24 icon. */
+function icon(name, size = 14) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", size);
+  svg.setAttribute("height", size);
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("class", "mr-icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICONS[name]);
+  svg.append(path);
+  return svg;
+}
+
+const ago = (at) => {
+  const s = Math.round((Date.now() - at) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return new Date(at).toLocaleDateString();
+};
+
 const CSS = `
-.mr-page { max-width: 1040px; padding: 28px 32px 48px; gap: 20px; }
+.mr-page { max-width: 1080px; gap: 22px; container-type: inline-size; }
+.mr-icon { flex-shrink: 0; }
+.mr-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+@container (max-width: 720px) { .mr-tabs { order: 3; width: 100%; } .mr-tab { flex: 1; justify-content: center; } }
+.mr-logo { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: var(--color-accent); background: var(--color-accent-soft); }
+.mr-head-text { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; }
+.mr-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--color-panel-raised); border: 1px solid var(--color-border); }
+.mr-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--color-fg-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.mr-tab:hover { color: var(--color-fg); }
+.mr-tab.mr-on { background: var(--color-active); color: var(--color-fg); box-shadow: 0 1px 2px rgb(0 0 0 / .15); }
+.mr-count { font-size: 10px; padding: 0 5px; border-radius: 999px; background: var(--color-accent-soft); color: var(--color-accent); font-variant-numeric: tabular-nums; }
+
+.mr-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@container (max-width: 760px) { .mr-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mr-tile { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--color-border); background: var(--color-panel-raised); overflow: hidden; }
+.mr-tile::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: var(--mr-tone); opacity: .9; }
+.mr-tile-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: .04em; }
+.mr-tile-value { font-size: 24px; font-weight: 600; color: var(--color-fg); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.mr-tile-sub { font-size: 11px; color: var(--color-fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-bar { height: 4px; border-radius: 2px; background: var(--color-active); overflow: hidden; }
+.mr-bar > span { display: block; height: 100%; background: var(--mr-tone); border-radius: 2px; transition: width .3s; }
+
+.mr-tone-cheap { --mr-tone: var(--color-success); }
+.mr-tone-standard { --mr-tone: var(--color-accent); }
+.mr-tone-frontier { --mr-tone: var(--color-warning); }
+.mr-tone-accent { --mr-tone: var(--color-accent); }
+.mr-tone-success { --mr-tone: var(--color-success); }
+.mr-tone-warning { --mr-tone: var(--color-warning); }
+.mr-tone-danger { --mr-tone: var(--color-danger); }
+.mr-tone-claude { --mr-tone: var(--color-claude); }
+.mr-tone-muted { --mr-tone: var(--color-fg-subtle); }
+
 .mr-section { display: flex; flex-direction: column; gap: 10px; }
-.mr-toggles { display: flex; flex-direction: column; gap: 10px; }
-.mr-toggle { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--color-fg); }
-.mr-toggle small { display: block; color: var(--color-fg-muted); font-size: 12px; margin-top: 2px; }
-.mr-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.mr-table th { text-align: left; font-weight: 600; color: var(--color-fg-muted); padding: 6px 8px; border-bottom: 1px solid var(--color-border); }
-.mr-table td { padding: 6px 8px; border-bottom: 1px solid var(--color-border); vertical-align: middle; color: var(--color-fg); }
-.mr-table .wf-input, .mr-table .wf-select { height: 28px; font-size: 12px; }
-.mr-pair { display: flex; gap: 6px; }
-.mr-pair .wf-input { width: 120px; }
-.mr-pattern { width: 100%; font-family: var(--font-mono); }
-.mr-tier { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-.mr-cheap { background: color-mix(in srgb, var(--color-success) 18%, transparent); color: var(--color-success); }
-.mr-standard { background: var(--color-accent-soft); color: var(--color-accent); }
-.mr-frontier { background: color-mix(in srgb, var(--color-danger, #d33) 16%, transparent); color: var(--color-danger, #d33); }
-.mr-task { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-fg-muted); }
-.mr-stats { display: flex; gap: 18px; font-size: 12px; color: var(--color-fg-muted); flex-wrap: wrap; }
-.mr-wf { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--color-border); }
-.mr-wf-goal { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.mr-summary { font-size: 12px; line-height: 1.5; white-space: pre-wrap; color: var(--color-fg-muted); padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--color-success) 8%, transparent); }
-.mr-stats b { color: var(--color-fg); font-variant-numeric: tabular-nums; }
+.mr-section-head { display: flex; align-items: baseline; gap: 10px; }
+.mr-section-head .wf-h2 { font-weight: 600; }
+.mr-section-head .wf-subtle { flex: 1; }
+.mr-card { border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-panel-raised); overflow: hidden; }
+.mr-setting { display: flex; align-items: center; gap: 16px; padding: 14px 16px; cursor: pointer; }
+.mr-setting + .mr-setting { border-top: 1px solid var(--color-border); }
+.mr-setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mr-setting-title { font-size: 13px; font-weight: 500; color: var(--color-fg); }
+.mr-setting-desc { font-size: 12px; line-height: 1.5; color: var(--color-fg-muted); }
+
+.mr-pill { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; color: var(--mr-tone); background: color-mix(in srgb, var(--mr-tone) 14%, transparent); }
+.mr-list-row > .mr-pill, .mr-task-row > .mr-pill { justify-self: start; }
+.mr-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mr-tone); flex-shrink: 0; }
+.mr-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--color-fg); background: var(--color-active); white-space: nowrap; }
+.mr-chip-dim { color: var(--color-fg-muted); }
+
+.mr-list-row { display: grid; grid-template-columns: 76px 86px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 16px; font-size: 12px; }
+.mr-list-row + .mr-list-row { border-top: 1px solid var(--color-border); }
+.mr-time { color: var(--color-fg-subtle); font-variant-numeric: tabular-nums; }
+.mr-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mr-title { color: var(--color-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-sub { color: var(--color-fg-subtle); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-right { display: flex; gap: 6px; align-items: center; }
+@container (max-width: 640px) { .mr-list-row { grid-template-columns: 70px minmax(0, 1fr); } .mr-list-row > :nth-child(2), .mr-list-row > .mr-right { display: none; } }
+.mr-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 16px; text-align: center; color: var(--color-fg-subtle); font-size: 12px; }
+.mr-empty .mr-icon { color: var(--color-fg-subtle); opacity: .7; }
+.mr-link { border: 0; background: none; padding: 0; color: var(--color-accent); font: inherit; font-size: 12px; cursor: pointer; }
+
+.mr-composer { display: flex; flex-direction: column; border: 1px solid var(--color-border-strong); border-radius: 10px; background: var(--color-panel-raised); transition: border-color .15s, box-shadow .15s; }
+.mr-composer:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.mr-composer textarea { resize: none; min-height: 64px; padding: 12px 14px 4px; border: 0; outline: none; background: transparent; color: var(--color-fg); font: inherit; font-size: 13px; line-height: 1.5; }
+.mr-composer-foot { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; }
+.mr-composer-foot .wf-select { height: 28px; font-size: 12px; }
+.mr-composer-foot label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-fg-muted); }
+.mr-spacer { flex: 1; }
+.mr-steps { display: flex; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--color-fg-subtle); }
+.mr-steps span { display: inline-flex; align-items: center; gap: 6px; }
+.mr-steps span + span::before { content: "→"; margin-right: 2px; opacity: .6; }
+
+.mr-wf { display: flex; flex-direction: column; }
+.mr-wf-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+.mr-wf-goal { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; color: var(--color-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-wf-meta { display: flex; align-items: center; gap: 10px; padding: 0 16px 12px; font-size: 11px; color: var(--color-fg-subtle); }
+.mr-wf-meta .mr-bar { flex: 1; max-width: 240px; }
+.mr-task-row { display: grid; grid-template-columns: 28px 92px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 16px; font-size: 12px; border-top: 1px solid var(--color-border); }
+.mr-num { font-family: var(--font-mono); color: var(--color-fg-subtle); }
+.mr-summary { margin: 0 16px 14px; padding: 10px 12px; border-radius: 8px; font-size: 12px; line-height: 1.55; white-space: pre-wrap; color: var(--color-fg-muted); background: color-mix(in srgb, var(--color-success) 8%, transparent); border: 1px solid color-mix(in srgb, var(--color-success) 20%, transparent); }
+
+.mr-tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@container (max-width: 820px) { .mr-tiers { grid-template-columns: minmax(0, 1fr); } }
+.mr-tier-card { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 10px; border: 1px solid var(--color-border); background: var(--color-panel-raised); overflow: hidden; }
+.mr-tier-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: var(--mr-tone); }
+.mr-tier-blurb { font-size: 11px; color: var(--color-fg-subtle); margin-top: -6px; }
+.mr-provider { display: flex; flex-direction: column; gap: 6px; }
+.mr-provider-name { font-size: 11px; font-weight: 500; color: var(--color-fg-muted); }
+.mr-pair { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 6px; }
+.mr-pair .wf-input, .mr-pair .wf-select { height: 30px; font-size: 12px; min-width: 0; }
+
+.mr-rule { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 16px; }
+.mr-rule + .mr-rule { border-top: 1px solid var(--color-border); }
+.mr-rule .wf-select { height: 28px; font-size: 12px; width: 100%; }
+.mr-rule-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.mr-rule-note { border: 0; outline: none; background: transparent; padding: 0; height: 20px; font: inherit; font-size: 13px; color: var(--color-fg); }
+.mr-rule-note::placeholder { color: var(--color-fg-subtle); }
+.mr-pattern { display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 30px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-panel); color: var(--color-fg-muted); font-family: var(--font-mono); font-size: 11px; line-height: 1.5; outline: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mr-pattern:focus { color: var(--color-fg); border-color: var(--color-accent); white-space: pre-wrap; overflow: auto; min-height: 76px; word-break: break-all; }
+.mr-icon-btn { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--color-fg-subtle); cursor: pointer; }
+.mr-icon-btn:hover { background: var(--color-hover); color: var(--color-danger); }
+.mr-card-foot { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-panel) 50%, transparent); }
+.mr-card-foot .wf-button { display: inline-flex; align-items: center; gap: 6px; }
 `;
 
 function mountPage(root, api, store, flow) {
@@ -766,226 +896,300 @@ function mountPage(root, api, store, flow) {
   const page = h("div", { class: "wf-page mr-page" });
   root.append(style, page);
 
+  // Kept across redraws, which happen whenever the log or a workflow changes.
+  let tab = "overview";
+  let draft = "";
+  let parallel = 3;
+
   const update = (fn) => {
     const policy = clone(store.policy);
     fn(policy);
     store.setPolicy(policy);
   };
 
-  function toggle(key, title, detail) {
-    return h(
-      "label",
-      { class: "mr-toggle" },
-      h("input", { type: "checkbox", class: "wf-switch", checked: store.policy[key], onchange: (e) => update((p) => (p[key] = e.target.checked)) }),
-      h("span", {}, title, h("small", {}, detail)),
-    );
-  }
+  const pill = (tone, label, dot = true) => h("span", { class: `mr-pill mr-tone-${tone}` }, dot ? h("span", { class: "mr-dot" }) : null, label);
+  const tierPill = (tier) => (tier ? pill(tier, TIER_INFO[tier]?.label ?? tier) : pill("muted", "Auto"));
+  const runsOn = (model, effort) => h("span", { class: "mr-right" }, h("span", { class: "mr-chip" }, model ?? "default"), effort ? h("span", { class: "mr-chip mr-chip-dim" }, effort) : null);
+  const empty = (iconName, text, action) => h("div", { class: "mr-empty" }, icon(iconName, 22), h("div", {}, text), action ?? null);
+  const section = (title, subtitle, body, extra) =>
+    h("div", { class: "mr-section" }, h("div", { class: "mr-section-head" }, h("h2", { class: "wf-h2" }, title), h("span", { class: "wf-subtle" }, subtitle ?? ""), extra ?? null), body);
 
-  function tierTable() {
-    const providers = [...new Set(TIERS.flatMap((t) => Object.keys(store.policy.tiers[t])))];
-    const cell = (tier, provider) => {
-      const choice = store.policy.tiers[tier][provider] ?? { model: "", effort: "" };
-      const efforts = EFFORTS[provider] ?? [];
-      return h(
-        "td",
-        {},
-        h(
-          "div",
-          { class: "mr-pair" },
-          h("input", {
-            class: "wf-input",
-            value: choice.model,
-            placeholder: "default model",
-            onchange: (e) => update((p) => (p.tiers[tier][provider] = { ...choice, model: e.target.value.trim() })),
-          }),
-          h(
-            "select",
-            { class: "wf-select", onchange: (e) => update((p) => (p.tiers[tier][provider] = { ...choice, effort: e.target.value })) },
-            h("option", { value: "", selected: !choice.effort }, "default effort"),
-            efforts.map((level) => h("option", { value: level, selected: choice.effort === level }, level)),
-          ),
-        ),
-      );
-    };
-    return h(
-      "table",
-      { class: "mr-table" },
-      h("thead", {}, h("tr", {}, h("th", {}, "Tier"), providers.map((p) => h("th", {}, p)))),
-      h("tbody", {}, TIERS.map((tier) => h("tr", {}, h("td", {}, h("span", { class: `mr-tier mr-${tier}` }, tier)), providers.map((p) => cell(tier, p))))),
-    );
-  }
-
-  function rulesTable() {
-    const rows = store.policy.rules.map((rule, i) =>
-      h(
-        "tr",
-        {},
-        h(
-          "td",
-          {},
-          h(
-            "select",
-            { class: "wf-select", onchange: (e) => update((p) => (p.rules[i].tier = e.target.value)) },
-            TIERS.map((t) => h("option", { value: t, selected: rule.tier === t }, t)),
-          ),
-        ),
-        h(
-          "td",
-          { style: "width:100%" },
-          h("input", {
-            class: "wf-input mr-pattern",
-            value: rule.pattern,
-            title: rule.note,
-            onchange: (e) => {
-              if (!compile(e.target.value)) return api.toast("That isn't a valid regular expression.", "error");
-              update((p) => (p.rules[i].pattern = e.target.value.trim()));
-            },
-          }),
-        ),
-        h("td", {}, h("button", { class: "wf-button wf-ghost", onclick: () => update((p) => p.rules.splice(i, 1)) }, "Remove")),
-      ),
-    );
+  function header() {
+    const activeFlows = store.workflows.filter((w) => ["planning", "running", "reviewing"].includes(w.status)).length;
+    const tabs = [
+      ["overview", "Overview", "route"],
+      ["workflows", "Workflows", "flow", activeFlows],
+      ["policy", "Policy", "sliders"],
+      ["log", "Log", "list"],
+    ];
     return h(
       "div",
-      { class: "wf-stack" },
-      h("table", { class: "mr-table" }, h("thead", {}, h("tr", {}, h("th", {}, "Tier"), h("th", {}, "Pattern (regex, first match wins)"), h("th", {}))), h("tbody", {}, rows)),
+      { class: "mr-head" },
+      h("div", { class: "mr-logo" }, icon("route", 18)),
+      h("div", { class: "mr-head-text" }, h("h1", { class: "wf-h1" }, "Model router"), h("div", { class: "wf-subtle" }, "Top-tier models only where the work needs them.")),
       h(
         "div",
-        { class: "wf-row" },
-        h("button", { class: "wf-button", onclick: () => update((p) => p.rules.push({ id: `r${Date.now()}`, tier: "cheap", pattern: "\\bexample\\b", note: "" })) }, "Add rule"),
-        h("button", { class: "wf-button wf-ghost", onclick: () => update((p) => (p.rules = clone(DEFAULT_RULES))) }, "Restore defaults"),
-      ),
-    );
-  }
-
-  function logTable() {
-    if (!store.log.length) return h("div", { class: "wf-empty" }, "Nothing routed yet. Agents that start other agents (spawn_agent) and workflows show up here.");
-    return h(
-      "table",
-      { class: "mr-table" },
-      h("thead", {}, h("tr", {}, ["When", "Agent", "Tier", "Runs on", "Why", "Task"].map((t) => h("th", {}, t)))),
-      h(
-        "tbody",
-        {},
-        store.log.slice(0, 50).map((e) =>
-          h(
-            "tr",
-            {},
-            h("td", {}, new Date(e.at).toLocaleTimeString()),
-            h("td", {}, e.provider),
-            h("td", {}, h("span", { class: `mr-tier mr-${e.tier}` }, e.tier)),
-            h("td", { class: "wf-mono" }, [e.model ?? "default", e.effort].filter(Boolean).join(" · ")),
-            h("td", {}, `${e.via}${e.reason ? `: ${e.reason}` : ""}`),
-            h("td", { class: "mr-task", title: e.task }, e.task || "—"),
-          ),
+        { class: "mr-tabs" },
+        tabs.map(([id, label, ic, count]) =>
+          h("button", { class: `mr-tab${tab === id ? " mr-on" : ""}`, onclick: () => ((tab = id), render()) }, icon(ic, 13), label, count ? h("span", { class: "mr-count" }, count) : null),
         ),
       ),
     );
   }
 
-  // Kept across redraws, which happen whenever the log or a workflow changes.
-  let draft = "";
-  function workflows() {
-    const goal = h("input", { class: "wf-input wf-grow", value: draft, placeholder: "Goal for a new workflow, e.g. add dark mode to the settings page", oninput: (e) => (draft = e.target.value) });
+  function tiles() {
+    const total = store.log.length;
+    const byTier = Object.fromEntries(TIERS.map((t) => [t, store.log.filter((e) => e.tier === t).length]));
+    const delegated = Object.entries(store.delegations).sort((a, b) => b[1] - a[1]);
+    const handed = delegated.reduce((n, [, c]) => n + c, 0);
+    const tile = (tone, label, value, sub, share) =>
+      h(
+        "div",
+        { class: `mr-tile mr-tone-${tone}` },
+        h("div", { class: "mr-tile-label" }, h("span", { class: "mr-dot" }), label),
+        h("div", { class: "mr-tile-value" }, value),
+        share === undefined ? null : h("div", { class: "mr-bar" }, h("span", { style: `width:${total ? Math.round((share / total) * 100) : 0}%` })),
+        h("div", { class: "mr-tile-sub" }, sub),
+      );
+    return h(
+      "div",
+      { class: "mr-tiles" },
+      TIERS.map((t) => {
+        const choice = resolveTier(store.policy, "claude", t);
+        return tile(t, `${TIER_INFO[t].label} spawns`, byTier[t], `runs ${[choice?.model ?? "default", choice?.effort].filter(Boolean).join(" · ")}`, byTier[t]);
+      }),
+      tile("claude", "Subagent calls", handed, delegated.length ? delegated.map(([n, c]) => `${n} ${c}`).join(" · ") : "none seen yet"),
+    );
+  }
+
+  function settings() {
+    const row = (key, title, desc) => {
+      const input = h("input", { type: "checkbox", class: "wf-switch", checked: store.policy[key], onchange: (e) => update((p) => (p[key] = e.target.checked)) });
+      return h("label", { class: "mr-setting" }, h("div", { class: "mr-setting-text" }, h("div", { class: "mr-setting-title" }, title), h("div", { class: "mr-setting-desc" }, desc)), input);
+    };
+    const cheap = resolveTier(store.policy, "claude", "cheap")?.model ?? "cheap";
+    const standard = resolveTier(store.policy, "claude", "standard")?.model ?? "standard";
+    return section(
+      "Routing",
+      "Applies to agents started after a change.",
+      h(
+        "div",
+        { class: "mr-card" },
+        row("delegation", "Cheap subagents for Claude Code", `Sessions get a ${cheap} scout for searching and reading and a ${standard} worker for mechanical edits, and are told to use them. Only subagents cheaper than the session are added.`),
+        row("routeSpawns", "Route agents started by agents", "spawn_agent and workflow panes without an explicit model run on the tier their task needs. Panes you start keep your model."),
+        row("llmFallback", "Ask an LLM when no rule matches", "One short Haiku call per new task, cached. Off: unmatched work counts as standard."),
+      ),
+    );
+  }
+
+  function logRows(entries) {
+    return entries.map((e) =>
+      h(
+        "div",
+        { class: "mr-list-row" },
+        h("span", { class: "mr-time", title: new Date(e.at).toLocaleString() }, ago(e.at)),
+        tierPill(e.tier),
+        h("div", { class: "mr-main" }, h("span", { class: "mr-title", title: e.task }, e.task || "(no task given)"), h("span", { class: "mr-sub" }, `${PROVIDER_NAMES[e.provider] ?? e.provider} · ${e.via === "llm" ? `LLM: ${e.reason || "no reason given"}` : e.reason}`)),
+        runsOn(e.model, e.effort),
+      ),
+    );
+  }
+
+  function recent() {
+    const list = store.log.slice(0, 5);
+    return section(
+      "Recent routing",
+      "",
+      h("div", { class: "mr-card" }, list.length ? logRows(list) : empty("route", "Nothing routed yet. Agents started by other agents and by workflows show up here.")),
+      store.log.length > 5 ? h("button", { class: "mr-link", onclick: () => ((tab = "log"), render()) }, `View all ${store.log.length}`) : null,
+    );
+  }
+
+  function composer() {
+    const goal = h("textarea", { placeholder: "Describe a goal for a team of agents, e.g. add dark mode to the settings page", rows: 2, value: draft, oninput: (e) => (draft = e.target.value) });
     const startIt = async () => {
       const g = goal.value.trim();
       if (!g) return goal.focus();
       try {
         draft = "";
-        const wf = await flow.start(g, { workspaceId: api.state().activeWorkspaceId });
+        const wf = await flow.start(g, { workspaceId: api.state().activeWorkspaceId, maxParallel: parallel });
         api.toast(`Workflow ${wf.id} started.`, "success");
       } catch (err) {
         api.toast(String(err?.message ?? err), "error");
       }
     };
-    goal.addEventListener("keydown", (e) => e.key === "Enter" && startIt());
-    const card = (wf) => {
-      const active = wf.status === "planning" || wf.status === "running" || wf.status === "reviewing";
-      return h(
-        "div",
-        { class: "mr-wf" },
-        h(
-          "div",
-          { class: "wf-row" },
-          h("span", { class: "wf-badge" + (active ? " wf-accent" : "") }, wf.status),
-          h("b", { class: "wf-grow mr-wf-goal", title: wf.goal }, wf.goal.split("\n")[0]),
-          h("span", { class: "wf-subtle wf-mono" }, wf.id),
-          active
-            ? h("button", { class: "wf-button wf-ghost", onclick: () => flow.cancel(wf.id) }, "Stop")
-            : h("button", { class: "wf-button wf-ghost", onclick: () => flow.remove(wf.id) }, "Remove"),
-        ),
-        wf.tasks.length
-          ? h(
-              "table",
-              { class: "mr-table" },
-              h(
-                "tbody",
-                {},
-                wf.tasks.map((t) => {
-                  const pane = flow.paneOf(t.paneId);
-                  return h(
-                    "tr",
-                    {},
-                    h("td", { class: "wf-mono" }, `#${t.n}`),
-                    h("td", {}, h("span", { class: "wf-badge" }, t.status)),
-                    h("td", { class: "mr-task", title: `${t.title}\n\n${t.details}${t.summary ? `\n\nResult: ${t.summary}` : ""}` }, t.title),
-                    h("td", {}, t.tier ? h("span", { class: `mr-tier mr-${t.tier}` }, t.tier) : "auto"),
-                    h("td", { class: "wf-mono" }, pane ? [pane.provider, pane.model ?? "default", pane.effort].filter(Boolean).join(" · ") : "—"),
-                  );
-                }),
-              ),
-            )
-          : h("div", { class: "wf-subtle" }, wf.status === "planning" ? "The planner is splitting the goal into tasks…" : "No tasks."),
-        wf.summary ? h("div", { class: "mr-summary" }, wf.summary) : null,
-      );
-    };
+    goal.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startIt();
+    });
     return h(
       "div",
-      { class: "wf-card mr-section" },
-      h("h2", { class: "wf-h2" }, "Workflows"),
-      h("div", { class: "wf-subtle" }, "A planner splits the goal into tasks, agents on the cheapest suitable models work on them in parallel worktrees, then a reviewer checks the branches."),
-      h("div", { class: "wf-row" }, goal, h("button", { class: "wf-button wf-primary", onclick: startIt }, "Start")),
-      store.workflows.map(card),
+      { class: "mr-composer" },
+      goal,
+      h(
+        "div",
+        { class: "mr-composer-foot" },
+        h("div", { class: "mr-steps" }, h("span", {}, "Planner"), h("span", {}, "Parallel workers"), h("span", {}, "Reviewer")),
+        h("span", { class: "mr-spacer" }),
+        h(
+          "label",
+          {},
+          "At once",
+          h(
+            "select",
+            { class: "wf-select", onchange: (e) => (parallel = Number(e.target.value)) },
+            [1, 2, 3, 4, 5, 6].map((n) => h("option", { value: n, selected: n === parallel }, n)),
+          ),
+        ),
+        h("button", { class: "wf-button wf-primary", onclick: startIt, title: "⌘↵" }, icon("play", 12), " Start"),
+      ),
     );
   }
 
-  function stats() {
-    const byTier = Object.fromEntries(TIERS.map((t) => [t, store.log.filter((e) => e.tier === t).length]));
-    const delegated = Object.entries(store.delegations).sort((a, b) => b[1] - a[1]);
+  function workflowCard(wf) {
+    const active = ["planning", "running", "reviewing"].includes(wf.status);
+    const done = wf.tasks.filter((t) => t.status === "done").length;
+    const tone = STATUS_TONE[wf.status] ?? "muted";
     return h(
       "div",
-      { class: "mr-stats" },
-      TIERS.map((t) => h("span", {}, h("b", {}, byTier[t]), ` routed ${t}`)),
-      delegated.length ? delegated.map(([name, n]) => h("span", {}, h("b", {}, n), ` handed to ${name}`)) : h("span", {}, "No subagent calls seen yet"),
+      { class: "mr-card mr-wf" },
+      h(
+        "div",
+        { class: "mr-wf-head" },
+        pill(tone, wf.status),
+        h("span", { class: "mr-wf-goal", title: wf.goal }, wf.goal.split("\n")[0]),
+        h("span", { class: "wf-subtle wf-mono" }, wf.id),
+        active
+          ? h("button", { class: "wf-button wf-ghost", onclick: () => flow.cancel(wf.id) }, icon("stop", 11), " Stop")
+          : h("button", { class: "mr-icon-btn", title: "Remove", onclick: () => flow.remove(wf.id) }, icon("trash", 14)),
+      ),
+      h(
+        "div",
+        { class: `mr-wf-meta mr-tone-${tone}` },
+        wf.tasks.length ? h("div", { class: "mr-bar" }, h("span", { style: `width:${Math.round((done / wf.tasks.length) * 100)}%` })) : null,
+        h("span", {}, wf.tasks.length ? `${done} of ${wf.tasks.length} tasks done` : wf.status === "planning" ? "Planner is splitting the goal into tasks…" : "No tasks"),
+        h("span", {}, `· ${wf.maxParallel} at once · started ${ago(wf.startedAt)}`),
+      ),
+      wf.tasks.map((t) => {
+        const pane = flow.paneOf(t.paneId);
+        return h(
+          "div",
+          { class: "mr-task-row" },
+          h("span", { class: "mr-num" }, `#${t.n}`),
+          pill(STATUS_TONE[t.status] ?? "muted", t.status),
+          h("div", { class: "mr-main" }, h("span", { class: "mr-title", title: t.details }, t.title), t.summary ? h("span", { class: "mr-sub", title: t.summary }, t.summary) : null),
+          h("span", { class: "mr-right" }, tierPill(t.tier), pane ? runsOn(pane.model, pane.effort) : null),
+        );
+      }),
+      wf.summary ? h("div", { class: "mr-summary" }, wf.summary) : null,
+    );
+  }
+
+  function workflows() {
+    return [
+      section("New workflow", "A planner splits the goal, agents on the cheapest fitting models work in parallel worktrees, a reviewer checks the branches.", composer()),
+      section(
+        "Workflows",
+        "",
+        store.workflows.length ? h("div", { class: "wf-stack" }, store.workflows.map(workflowCard)) : h("div", { class: "mr-card" }, empty("flow", "No workflows yet. Describe a goal above, or let an agent call workflow_start.")),
+      ),
+    ];
+  }
+
+  function tiers() {
+    const providers = [...new Set(TIERS.flatMap((t) => Object.keys(store.policy.tiers[t])))];
+    const field = (tier, provider) => {
+      const choice = store.policy.tiers[tier][provider] ?? { model: "", effort: "" };
+      return h(
+        "div",
+        { class: "mr-provider" },
+        h("span", { class: "mr-provider-name" }, PROVIDER_NAMES[provider] ?? provider),
+        h(
+          "div",
+          { class: "mr-pair" },
+          h("input", { class: "wf-input wf-mono", value: choice.model, placeholder: "default model", onchange: (e) => update((p) => (p.tiers[tier][provider] = { ...choice, model: e.target.value.trim() })) }),
+          h(
+            "select",
+            { class: "wf-select", onchange: (e) => update((p) => (p.tiers[tier][provider] = { ...choice, effort: e.target.value })) },
+            h("option", { value: "", selected: !choice.effort }, "default"),
+            (EFFORTS[provider] ?? []).map((level) => h("option", { value: level, selected: choice.effort === level }, level)),
+          ),
+        ),
+      );
+    };
+    return section(
+      "Tiers",
+      "Model and effort per tier and agent. Empty keeps the CLI's default.",
+      h(
+        "div",
+        { class: "mr-tiers" },
+        TIERS.map((tier) =>
+          h("div", { class: `mr-tier-card mr-tone-${tier}` }, h("div", {}, tierPill(tier)), h("div", { class: "mr-tier-blurb" }, TIER_INFO[tier].blurb), providers.map((p) => field(tier, p))),
+        ),
+      ),
+    );
+  }
+
+  function rules() {
+    const rows = store.policy.rules.map((rule, i) =>
+      h(
+        "div",
+        { class: "mr-rule" },
+        h(
+          "select",
+          { class: "wf-select", onchange: (e) => update((p) => (p.rules[i].tier = e.target.value)) },
+          TIERS.map((t) => h("option", { value: t, selected: rule.tier === t }, TIER_INFO[t].label)),
+        ),
+        h(
+          "div",
+          { class: "mr-rule-body" },
+          h("input", { class: "mr-rule-note", value: rule.note, placeholder: "Describe this rule", onchange: (e) => update((p) => (p.rules[i].note = e.target.value.trim())) }),
+          h(
+            "textarea",
+            {
+              class: "mr-pattern",
+              rows: 1,
+              spellcheck: false,
+              value: rule.pattern,
+              onchange: (e) => {
+                if (!compile(e.target.value)) return api.toast("That isn't a valid regular expression.", "error");
+                update((p) => (p.rules[i].pattern = e.target.value.trim()));
+              },
+            },
+          ),
+        ),
+        h("button", { class: "mr-icon-btn", title: "Remove rule", onclick: () => update((p) => p.rules.splice(i, 1)) }, icon("trash", 14)),
+      ),
+    );
+    return section(
+      "Rules",
+      "Regular expressions on the task, case-insensitive. First match wins.",
+      h(
+        "div",
+        { class: "mr-card" },
+        rows.length ? rows : empty("sliders", "No rules: every task goes to the LLM, or counts as standard."),
+        h(
+          "div",
+          { class: "mr-card-foot" },
+          h("button", { class: "wf-button", onclick: () => update((p) => p.rules.push({ id: `r${Date.now()}`, tier: "cheap", pattern: "\\bexample\\b", note: "" })) }, icon("plus", 12), "Add rule"),
+          h("span", { class: "mr-spacer" }),
+          h("button", { class: "wf-button wf-ghost", onclick: () => update((p) => (p.rules = clone(DEFAULT_RULES))) }, "Restore defaults"),
+        ),
+      ),
+    );
+  }
+
+  function log() {
+    return section(
+      "Routing log",
+      `${store.log.length} decision${store.log.length === 1 ? "" : "s"}, newest first`,
+      h("div", { class: "mr-card" }, store.log.length ? logRows(store.log.slice(0, 100)) : empty("list", "Nothing routed yet.")),
+      store.log.length ? h("button", { class: "wf-button wf-ghost", onclick: () => store.reset() }, "Clear") : null,
     );
   }
 
   function render() {
-    page.replaceChildren(
-      h("div", { class: "wf-header" }, h("div", {}, h("h1", { class: "wf-h1" }, "Model router"), h("div", { class: "wf-subtle" }, "Cheaper models for work that doesn't need the best one. Applies to agents started after a change."))),
-      stats(),
-      h(
-        "div",
-        { class: "wf-card mr-section" },
-        h("h2", { class: "wf-h2" }, "Routing"),
-        h(
-          "div",
-          { class: "mr-toggles" },
-          toggle("delegation", "Cheap subagents for Claude Code", "Sessions get a Haiku scout for searching and reading and a Sonnet worker for mechanical edits, and are told to use them. Only subagents cheaper than the session's model are added."),
-          toggle("routeSpawns", "Route agents started by agents", "spawn_agent and workflow panes without an explicit model run on the tier their task needs. Panes you start keep your model."),
-          toggle("llmFallback", "Ask an LLM when no rule matches", "A one-line Haiku call per new task (cached); otherwise unmatched work counts as standard."),
-        ),
-      ),
-      workflows(),
-      h("div", { class: "wf-card mr-section" }, h("h2", { class: "wf-h2" }, "Tiers"), h("div", { class: "wf-subtle" }, "Model and effort each tier runs on, per agent. Empty keeps the CLI's default."), tierTable()),
-      h("div", { class: "wf-card mr-section" }, h("h2", { class: "wf-h2" }, "Rules"), rulesTable()),
-      h(
-        "div",
-        { class: "wf-card mr-section" },
-        h("div", { class: "wf-row" }, h("h2", { class: "wf-h2 wf-grow" }, "Routing log"), h("button", { class: "wf-button wf-ghost", onclick: () => store.reset() }, "Clear")),
-        logTable(),
-      ),
-    );
+    const body = { overview: () => [tiles(), settings(), recent()], workflows, policy: () => [tiers(), rules()], log: () => [log()] }[tab]();
+    page.replaceChildren(header(), ...body);
   }
 
   render();
