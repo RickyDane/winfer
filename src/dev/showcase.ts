@@ -1,11 +1,27 @@
 /**
  * Dev-only demo data for marketing screenshots: open the dev server with `?showcase=<scene>`
- * (hero, overview, review, usage, sessions, light) and the mock backend serves this state,
+ * (hero, overview, review, usage, sessions, light, knowledge, bench) and the mock backend serves this state,
  * realistic agent sessions and a fake app in the browser. `scripts/screenshots.sh` captures
  * every scene into docs/screenshots.
  */
 
 export const SHOWCASE = new URLSearchParams(location.search).get("showcase");
+
+/** Scenes that show a plugin page instead of the workspace, keyed by scene. */
+const PAGE_SCENES: Record<string, string> = {
+  knowledge: "page:knowledge-base/galaxy",
+  bench: "page:harness-bench/bench",
+};
+// Headless Chrome's virtual time (scripts/screenshots.sh) leaves CSS animations and transitions
+// half-done in the capture, so the showcase shows every element in its final state.
+if (SHOWCASE) {
+  const style = document.createElement("style");
+  style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
+  document.head.append(style);
+}
+
+/** Scenes without the browser panel. */
+const NO_BROWSER = SHOWCASE === "overview" || SHOWCASE === "review" || (SHOWCASE ?? "") in PAGE_SCENES;
 
 const ROOT = "/Users/maya/code";
 const wt = (repo: string, name: string, branch = `winfer/${name}`) => ({
@@ -174,7 +190,7 @@ export function showcaseState() {
     ui: {
       activeWorkspaceId: "ws-web",
       sidebarOpen: true,
-      browserOpen: SHOWCASE !== "overview" && SHOWCASE !== "review",
+      browserOpen: !NO_BROWSER,
       browserWidth: 520,
       sidePanel: "browser",
       theme,
@@ -250,7 +266,7 @@ const TRANSCRIPTS: Record<string, string> = {
     ),
   "p-e2e": lines(
     `${bold(">_ OpenAI Codex")} ${gray("(v0.162.1)")}`,
-    gray("model: gpt-5.5   directory: ~/code/orbit-web"),
+    gray("model: gpt-6.1-sol   directory: ~/code/orbit-web"),
     "",
     `${gray("›")} The checkout e2e test fails every few runs,`,
     `  find out why and fix it`,
@@ -477,7 +493,7 @@ export async function seedShowcase() {
     ],
   });
   // The browser panel shows the app the agents are working on.
-  if (SHOWCASE === "overview" || SHOWCASE === "review") return;
+  if (NO_BROWSER) return;
   browser.execute({ type: "browser.open", url: "http://localhost:5173/settings" });
 }
 
@@ -503,5 +519,11 @@ export async function stageScene() {
     meter?.click();
   }
   if (SHOWCASE === "overview") s.setActiveWorkspace("ws-web");
+  const page = PAGE_SCENES[SHOWCASE ?? ""];
+  if (page) {
+    s.setView(page as `page:${string}`);
+    // Let the page load its data (and the graph settle) before the capture.
+    await new Promise((r) => setTimeout(r, 2500));
+  }
   document.documentElement.dataset.showcaseReady = "1";
 }

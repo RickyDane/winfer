@@ -38,7 +38,7 @@ pub struct Launch {
 
 pub const COMMANDS: [(&str, &str); 22] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
-    ("/effort", "Set reasoning effort"),
+    ("/effort", "Set reasoning effort (ctrl+r cycles)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo"),
     ("/new", "Start a new conversation"),
     ("/resume", "Resume a past session"),
@@ -778,7 +778,7 @@ impl App {
     }
 
     fn help(&mut self) {
-        let mut s = String::from("Keys\n  enter send · shift/alt+enter or ctrl+j newline · esc interrupt · ctrl+c clear/quit\n  shift+tab permission mode · ctrl+o expand details · ctrl+p command palette · ctrl+t model · ctrl+g subagents (ctrl+x there stops one) · ctrl+x plan (or click it)\n  ↑/↓ history · pgup/pgdn or wheel scroll · @ attach file · ctrl+v paste image · ! run shell command\n  drag to select and copy · double-click a word · triple-click a line · shift+drag for the terminal's own selection\n\nCommands\n");
+        let mut s = String::from("Keys\n  enter send · shift/alt+enter or ctrl+j newline · esc interrupt · ctrl+c clear/quit\n  shift+tab permission mode · ctrl+o expand details · ctrl+p command palette · ctrl+t model · ctrl+r effort · ctrl+g subagents (ctrl+x there stops one) · ctrl+x plan (or click it)\n  ↑/↓ history · pgup/pgdn or wheel scroll · @ attach file · ctrl+v paste image · ! run shell command\n  drag to select and copy · double-click a word · triple-click a line · shift+drag for the terminal's own selection\n\nCommands\n");
         for (c, d) in COMMANDS {
             s.push_str(&format!("  {c:<10} {d}\n"));
         }
@@ -1143,6 +1143,22 @@ impl App {
             }
         }
         self.saved.model = self.spec();
+    }
+
+    /// The effort levels ctrl+r steps through for this backend ("" = the model's default).
+    fn effort_levels(&self) -> &'static [&'static str] {
+        match self.kind {
+            Kind::Claude => &["", "low", "medium", "high", "xhigh", "max"],
+            _ => &["", "minimal", "low", "medium", "high", "xhigh"],
+        }
+    }
+
+    /// ctrl+r: next effort level, applied to the running session.
+    fn cycle_effort(&mut self) {
+        let levels = self.effort_levels();
+        let cur = self.config.effort.as_deref().unwrap_or("");
+        let next = levels.iter().position(|l| *l == cur).map_or(0, |i| (i + 1) % levels.len());
+        self.set_effort(levels[next]);
     }
 
     fn set_effort(&mut self, e: &str) {
@@ -1532,6 +1548,7 @@ impl App {
             KeyCode::Char('o') if ctrl => self.toggle_expanded(),
             KeyCode::Char('p') if ctrl => self.open_palette(),
             KeyCode::Char('t') if ctrl => self.open_models(),
+            KeyCode::Char('r') if ctrl => self.cycle_effort(),
             KeyCode::Char('g') if ctrl => self.open_agents(),
             KeyCode::Char('x') if ctrl => self.plan_open = !self.plan_open,
             KeyCode::Char('l') if ctrl => self.scroll = 0,
@@ -1794,6 +1811,20 @@ mod tests {
 
     fn key(app: &mut App, code: KeyCode) {
         app.on_term(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn ctrl_r_cycles_effort() {
+        let mut a = app();
+        let ctrl_r = |a: &mut App| a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)));
+        ctrl_r(&mut a);
+        assert_eq!(a.config.effort.as_deref(), Some("low"));
+        for _ in 0..4 {
+            ctrl_r(&mut a);
+        }
+        assert_eq!(a.config.effort.as_deref(), Some("max"));
+        ctrl_r(&mut a);
+        assert_eq!(a.config.effort, None);
     }
 
     #[test]

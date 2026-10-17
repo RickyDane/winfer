@@ -59,6 +59,23 @@ an agent that still has room — same worktree, with the task and its progress.
 
 ![Usage limits for Claude Code, Codex and OpenCode](docs/screenshots/usage.png)
 
+## See your codebase the way the agents do
+
+The **Knowledge** plugin turns each project into a graphify knowledge graph you explore as a live
+3D galaxy, a flat galaxy or a plain 2D map. Ask it questions, trace paths and impact, replay call
+flows step by step — and watch which parts of the code each agent is looking at right now. Agents
+query the same graph with tools.
+
+![The Knowledge page: a project's knowledge graph with the agents' positions on it](docs/screenshots/knowledge.png)
+
+## Pick the best harness for the job
+
+**Harness Bench** runs winfer code, Codex, Claude Code, pi and OpenCode on the same tasks with the
+models you pick, and compares pass rate, time, tokens and tool calls — with an overall winner, a
+timeline of every run and charts per task.
+
+![Harness Bench: winfer code and Codex compared on the same tasks](docs/screenshots/bench.png)
+
 ## Also in the box
 
 - **Agents can use the browser.** The built-in Chromium is shared with Claude Code, Codex and
@@ -71,6 +88,8 @@ an agent that still has room — same worktree, with the task and its progress.
 - **Worktrees without the bookkeeping.** Existing worktrees and branches show up in the sidebar
   with their age and whether they're merged; start an agent on any branch.
 - **A terminal tab** next to the browser for quick commands, and plain shell panes anywhere.
+- **A plugin store** in Settings → Plugins: Databases, Task Board, Prompt Library, Secrets,
+  Telegram, Screen Recorder, Cross-Project Knowledge and more — or [write your own](docs/plugins/README.md).
 - **Every shortcut can be changed**, light and dark mode, resizable everything.
 
 ![winfer in light mode](docs/screenshots/light.png)
@@ -94,6 +113,8 @@ cd src-tauri && cargo test
 ```
 
 `pnpm dev` alone runs the UI in a browser against a mock backend. The screenshots above come from
-its showcase mode: start `pnpm dev`, then run `scripts/screenshots.sh`.
+its showcase mode (`?showcase=hero`, `overview`, `review`, `usage`, `sessions`, `light`, `knowledge`
+or `bench`): start `pnpm dev`, then run `scripts/screenshots.sh` (or `scripts/screenshots.sh bench`
+for one scene).
 
 See [TESTING.md](TESTING.md) for the manual test checklist.

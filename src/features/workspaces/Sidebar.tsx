@@ -212,7 +212,7 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
             onDoubleClick={() => setRenaming(pane.id)}
             onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane, () => setRenaming(pane.id)) })}
             className={cn(
-              "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] cursor-default rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+              "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] cursor-pointer rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
               focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
               drag?.id === pane.id && "opacity-50",
             )}
@@ -299,7 +299,7 @@ export function Sidebar() {
                 onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
                 title={`${ws.rootDir}\nDouble-click to open · drag to reorder`}
                 className={cn(
-                  "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+                  "group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
                   active ? "font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
                 )}
               >

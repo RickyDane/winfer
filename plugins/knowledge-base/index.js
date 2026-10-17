@@ -2584,8 +2584,14 @@ function searchNodes(g, text, limit = 12) {
 }
 
 function countUp(el, to) {
-  const start = performance.now();
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    el.textContent = to.toLocaleString();
+    return;
+  }
+  // Times from the first frame: performance.now() can run ahead of frame times (headless virtual time).
+  let start = null;
   const step = (t) => {
+    start ??= t;
     const k = Math.min(1, (t - start) / 900);
     el.textContent = Math.round(to * easeOut(k)).toLocaleString();
     if (k < 1 && el.isConnected) requestAnimationFrame(step);

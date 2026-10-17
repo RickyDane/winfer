@@ -275,7 +275,12 @@ impl Bridge {
             }
             Cmd::SetModel(model) => self.control(proc, json!({ "subtype": "set_model", "model": model })),
             Cmd::SetMode(mode) => self.control(proc, json!({ "subtype": "set_permission_mode", "mode": permission_mode(mode) })),
-            Cmd::SetEffort(_) => self.emit(Ev::Notice("Effort applies to the next Claude Code session (/new).".into())),
+            // Live: Claude Code applies `effortLevel` from flag settings to the running session (as
+            // its own /effort does); null goes back to the model's default.
+            Cmd::SetEffort(e) => {
+                let level = e.map(|e| if e == "minimal" { "low".to_string() } else { e });
+                self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } }));
+            }
             Cmd::Compact => {
                 self.busy = true;
                 self.emit(Ev::TurnStart);

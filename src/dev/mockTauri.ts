@@ -42,15 +42,15 @@ function installMockPlugin(id: string) {
   if (i >= 0) mockPlugins[i] = plugin;
   else mockPlugins.push(plugin);
 }
-// `?kb` starts with the Knowledge Base plugin installed (see ./knowledgeBase.ts).
-if (KB_DEMO) installMockPlugin("knowledge-base");
+// `?kb` starts with the Knowledge Base plugin installed (see ./knowledgeBase.ts); so does showcase mode.
+if (KB_DEMO || SHOWCASE) installMockPlugin("knowledge-base");
 // `?xp` starts with the Cross-Project Knowledge plugin and three linked demo projects (see ./crossProject.ts).
 if (XP_DEMO) {
   installMockPlugin("cross-project");
   seedCrossProject();
 }
-// `?bench` starts with Harness Bench and a fake runner (see ./harnessBench.ts).
-if (BENCH_DEMO) installMockPlugin("harness-bench");
+// `?bench` starts with Harness Bench and a fake runner (see ./harnessBench.ts); so does showcase mode.
+if (BENCH_DEMO || SHOWCASE) installMockPlugin("harness-bench");
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
 // `?db` starts with Databases (one fake Postgres shop, see ./dbExplorer.ts) and Prompt Library.
