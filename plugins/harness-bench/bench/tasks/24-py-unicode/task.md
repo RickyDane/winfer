@@ -1,0 +1,1 @@
+The helpers in textutils.py only work for ASCII text and `python3 -m unittest discover -s tests` fails. Fix them so they follow the spec in README.md for any Unicode input (standard library only). Don't change the tests or the function signatures.

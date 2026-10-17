@@ -1,0 +1,8 @@
+Write a Node CLI `toc.mjs` (ES module, no dependencies) so that `node toc.mjs FILE.md` rewrites FILE.md in place, putting a table of contents between the lines `<!-- toc -->` and `<!-- tocstop -->` (replacing whatever is there). Spec:
+- Headings are ATX lines: 1–6 `#` at the very start of the line, then a space or tab, then the text. Strip an optional closing sequence of `#`s (preceded by a space) and surrounding whitespace. `#tag` (no space) is not a heading; setext headings are ignored.
+- Lines inside fenced code blocks are never headings. A fence opens with ``` or ~~~ (3 or more, indented by at most 3 spaces) and closes with a line of the same character, at least as long, and nothing else but whitespace.
+- The TOC lists headings of level 2–6 in document order as `- [text](#slug)`, indented by 2 spaces per level below 2 (level 2: none, level 3: 2 spaces, ...). The link text is the heading text unchanged.
+- Slugs (GitHub style): lowercase the text, remove every character that is not a Unicode letter, number, mark, space, hyphen or underscore, then replace each space with `-` (no collapsing). If the same slug was already produced by an earlier heading (any level 1–6, counting all headings in the file), append `-1`, `-2`, ... for its 2nd, 3rd, ... occurrence.
+- The marker lines stay as they are; the TOC lines go between them with no blank lines; everything else in the file stays byte-for-byte identical. Running it again must not change the file.
+- If the file has no `<!-- toc -->` … `<!-- tocstop -->` pair, print an error to stderr, exit with code 1 and leave the file unchanged.
+docs/example.md shows the expected output for a small document.

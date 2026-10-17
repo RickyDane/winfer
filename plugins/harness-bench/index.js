@@ -190,7 +190,11 @@ const STYLE = `
 .hb-hname { font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hb-hmodel { grid-column: 2 / 4; display: flex; gap: 6px; align-items: center; }
 .hb-hmodel input { width: 100%; height: 26px; font-size: 11.5px; }
-.hb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hb-chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 400px; overflow-y: auto; }
+.hb-tasks-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.hb-tasks-all { display: flex; gap: 2px; margin-bottom: 8px; }
+.hb-tasks-all button { border: 0; background: transparent; color: var(--color-fg-muted); font: inherit; font-size: 11px; padding: 2px 6px; border-radius: 5px; cursor: pointer; }
+.hb-tasks-all button:hover { background: var(--color-active); color: var(--color-fg); }
 .hb-chip { border: 1px solid var(--color-border-strong); background: transparent; color: var(--color-fg-muted); border-radius: 999px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-family: inherit; }
 .hb-chip[aria-pressed="true"] { background: var(--color-accent-soft); border-color: var(--color-accent); color: var(--color-fg); }
 .hb-seg { display: flex; border: 1px solid var(--color-border-strong); border-radius: 7px; padding: 2px; gap: 2px; }
@@ -628,7 +632,9 @@ export async function activate(api) {
     return `<aside class="hb-aside">
       <div class="hb-panel"><div class="hb-label">Harnesses & models</div>${hs}
         <p class="hb-sub" style="margin:10px 0 0">Compare on the same model for a fair read. Colors stay with each harness in every chart.</p></div>
-      <div class="hb-panel"><div class="hb-label">Tasks</div><div class="hb-chips">${tasks}</div></div>
+      <div class="hb-panel"><div class="hb-tasks-head"><div class="hb-label">Tasks · ${c.tasks.filter(taskOn).length}/${c.tasks.length}</div>
+        <div class="hb-tasks-all"><button data-tasks-all="on" title="Select every task">All</button><button data-tasks-all="off" title="Deselect every task">None</button></div></div>
+        <div class="hb-chips">${tasks}</div></div>
       <div class="hb-panel"><div class="hb-label">Run</div>
         <div class="hb-seg" role="group" aria-label="Parallel">${seg("harness", "Per harness", "All harnesses at once, each working through its tasks in turn")}${seg("all", "Everything", "Every run at once")}${seg("none", "Sequential", "One run at a time")}</div>
         <div class="hb-opts" style="margin-top:12px">
@@ -910,6 +916,11 @@ export async function activate(api) {
       if (bd.action === "selftest") return void start(true);
       if (bd.action === "stop") return void stop();
       if (bd.action === "reveal" && state.viewing) return void api.revealFile(state.viewing);
+      if (bd.tasksAll) {
+        const on = bd.tasksAll === "on";
+        setPrefs({ tasks: Object.fromEntries((state.catalog?.tasks ?? []).map((x) => [x.id, on])) });
+        return render();
+      }
       if (bd.task) {
         setPrefs({ tasks: { ...(prefs().tasks ?? {}), [bd.task]: bd.task && !(prefs().tasks?.[bd.task] ?? true) } });
         return render();
@@ -972,7 +983,7 @@ export async function activate(api) {
   return api.registerPage({
     id: "bench",
     title: "Bench",
-    icon: "star",
+    icon: "gauge",
     mount(el) {
       root = el;
       tip = document.createElement("div");

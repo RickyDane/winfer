@@ -44,11 +44,42 @@ impl Selection {
     }
 }
 
+/// The transcript's lines: a shared, cached head (everything that has stopped changing) and
+/// a tail rendered fresh each frame. Indexes as one list without copying either part.
+#[derive(Debug, Clone, Default)]
+pub struct Lines {
+    pub head: std::sync::Arc<Vec<Line<'static>>>,
+    pub tail: Vec<Line<'static>>,
+}
+
+impl Lines {
+    pub fn len(&self) -> usize {
+        self.head.len() + self.tail.len()
+    }
+
+    pub fn get(&self, i: usize) -> Option<&Line<'static>> {
+        if i < self.head.len() { self.head.get(i) } else { self.tail.get(i - self.head.len()) }
+    }
+}
+
+impl std::ops::Index<usize> for Lines {
+    type Output = Line<'static>;
+    fn index(&self, i: usize) -> &Line<'static> {
+        self.get(i).expect("line index in range")
+    }
+}
+
+impl From<Vec<Line<'static>>> for Lines {
+    fn from(v: Vec<Line<'static>>) -> Self {
+        Lines { head: std::sync::Arc::new(v), tail: Vec::new() }
+    }
+}
+
 /// Where the transcript was last drawn, to map mouse cells to transcript points.
 #[derive(Debug, Clone, Default)]
 pub struct View {
     /// Every transcript line, as rendered.
-    pub lines: Vec<Line<'static>>,
+    pub lines: Lines,
     /// The transcript's screen area (rows `top..bottom`).
     pub top: u16,
     pub bottom: u16,
@@ -88,6 +119,11 @@ impl View {
         for i in a.line..=b.line.min(self.lines.len().saturating_sub(1)) {
             let Some((from, to)) = sel.cols(i) else { continue };
             let s = slice(&self.lines[i], from, to);
+            // Panel edges and bars are decoration, not text.
+            if !s.trim().is_empty() && s.trim().chars().all(|c| c == '▄' || c == '▀') {
+                continue;
+            }
+            let s = s.strip_prefix("▌ ").unwrap_or(&s);
             rows.push((s.trim_end().to_string(), from == 0));
         }
         let indent = rows.iter().filter(|(s, whole)| *whole && !s.is_empty()).map(|(s, _)| s.len() - s.trim_start().len()).min().unwrap_or(0);
@@ -176,7 +212,7 @@ mod tests {
     use super::*;
 
     fn view(lines: &[&str]) -> View {
-        View { lines: lines.iter().map(|l| Line::from(l.to_string())).collect(), top: 0, bottom: 10, x: 1, y: 0, start: 0, shown: lines.len() }
+        View { lines: lines.iter().map(|l| Line::from(l.to_string())).collect::<Vec<_>>().into(), top: 0, bottom: 10, x: 1, y: 0, start: 0, shown: lines.len() }
     }
 
     #[test]

@@ -226,6 +226,7 @@ pub fn run() {
             harness::harness_settings,
             harness::harness_set_settings,
             harness::harness_models,
+            harness::harness_claude_skills,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

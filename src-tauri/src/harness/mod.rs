@@ -3,6 +3,7 @@
 //! stream-json) and Codex (`codex app-server`), each with its own tools and login.
 
 pub mod backend;
+pub mod claude_skills;
 pub mod config;
 pub mod diff;
 pub mod event;
@@ -28,6 +29,9 @@ pub struct Settings {
     allowed_commands: Vec<String>,
     mcp_servers: serde_json::Map<String, serde_json::Value>,
     lean_bridges: bool,
+    lean_all_skills: bool,
+    lean_skills: Vec<String>,
+    plan_sidebar: bool,
 }
 
 #[tauri::command]
@@ -42,7 +46,16 @@ pub fn harness_settings() -> Settings {
         allowed_commands: c.allowed_commands,
         mcp_servers: c.mcp_servers,
         lean_bridges: c.lean_bridges,
+        lean_all_skills: c.lean_all_skills,
+        lean_skills: c.lean_skills,
+        plan_sidebar: c.plan_sidebar,
     }
+}
+
+/// The skills Claude Code can load from the user's setup, to pick from for lean mode.
+#[tauri::command]
+pub fn harness_claude_skills() -> Vec<claude_skills::ClaudeSkill> {
+    claude_skills::available()
 }
 
 #[tauri::command]
@@ -59,6 +72,9 @@ pub fn harness_set_settings(settings: Settings) -> Result<(), String> {
         c.allowed_commands = settings.allowed_commands.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         c.mcp_servers = settings.mcp_servers;
         c.lean_bridges = settings.lean_bridges;
+        c.lean_all_skills = settings.lean_all_skills;
+        c.lean_skills = settings.lean_skills;
+        c.plan_sidebar = settings.plan_sidebar;
     });
     Ok(())
 }
@@ -192,6 +208,7 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
             trim_at: cfg.trim_at,
             compact_at: cfg.compact_at,
             lean: cfg.lean_bridges && !full_prompt,
+            skills: cfg.lean_skills(),
         },
         tx,
     );
@@ -199,7 +216,22 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
     let mut out = std::io::stdout();
     let mut code = 0;
     let mut wrote = false;
-    for ev in rx {
+    // Background subagents still running, and whether the turn is over: the run ends once both
+    // are done, and after a last report the backend may start a turn on it.
+    let mut running: std::collections::HashSet<String> = Default::default();
+    let mut idle = false;
+    loop {
+        let ev = if idle && running.is_empty() {
+            match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+                Ok(ev) => ev,
+                Err(_) => break,
+            }
+        } else {
+            match rx.recv() {
+                Ok(ev) => ev,
+                Err(_) => break,
+            }
+        };
         if json {
             let _ = writeln!(out, "{}", event_json(&ev));
         }
@@ -233,7 +265,18 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
                 }
                 return 1;
             }
-            Ev::TurnDone => break,
+            Ev::TurnStart => idle = false,
+            Ev::Task(t) => match t.status.as_deref() {
+                Some("running" | "pending") => {
+                    running.insert(t.id);
+                }
+                Some(_) => {
+                    running.remove(&t.id);
+                }
+                None => {}
+            },
+            Ev::TurnDone if running.is_empty() => break,
+            Ev::TurnDone => idle = true,
             _ => {}
         }
     }
@@ -256,6 +299,7 @@ fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::ToolOutput { id, chunk } => json!({ "type": "tool_output", "id": id, "chunk": chunk }),
         Ev::ToolEnd { id, ok, output, diff } => json!({ "type": "tool_end", "id": id, "ok": ok, "output": output, "diff": diff }),
         Ev::Approval(a) => json!({ "type": "approval", "id": a.id, "tool": a.tool, "title": a.title }),
+        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status }),
         Ev::Todos(t) => json!({ "type": "todos", "todos": t }),
         Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost }),
         Ev::Notice(n) => json!({ "type": "notice", "text": n }),

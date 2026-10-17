@@ -35,21 +35,38 @@ pub enum Block {
 
 pub struct Item {
     pub block: Block,
+    /// When it appeared, for the fade-in.
+    pub born: Instant,
+    /// Changes whenever the item does (see `touch`); the view caches by it.
+    pub version: u64,
     cache: Option<(usize, bool, Vec<Line<'static>>)>,
 }
 
+fn next_version() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How long a new block takes to fade in, and a finished tool's dot to settle.
+const FADE_IN: Duration = Duration::from_millis(320);
+const SETTLE: Duration = Duration::from_millis(700);
+
 impl Item {
     pub fn new(block: Block) -> Self {
-        Item { block, cache: None }
+        Item { block, born: Instant::now(), version: next_version(), cache: None }
     }
 
     pub fn touch(&mut self) {
         self.cache = None;
+        self.version = next_version();
     }
 
     pub fn animated(&self) -> bool {
+        if self.born.elapsed() < FADE_IN {
+            return true;
+        }
         match &self.block {
-            Block::Tool { status, .. } => *status == Status::Running,
+            Block::Tool { status, ended, .. } => *status == Status::Running || ended.is_some_and(|e| e.elapsed() < SETTLE),
             Block::Reasoning { ended, .. } => ended.is_none(),
             _ => false,
         }
@@ -63,7 +80,11 @@ impl Item {
                 }
             }
         }
-        let lines = render(&self.block, width, expanded, now, epoch);
+        let mut lines = render(&self.block, width, expanded, now, epoch);
+        let age = now.saturating_duration_since(self.born);
+        if age < FADE_IN {
+            anim::fade(&mut lines, age.as_secs_f32() / FADE_IN.as_secs_f32());
+        }
         if !self.animated() {
             self.cache = Some((width, expanded, lines.clone()));
         }
@@ -75,31 +96,24 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
     let t = now.duration_since(epoch);
     match block {
         Block::User { text } => {
-            let bar = Span::styled("▌ ", theme::fg(theme::ACCENT));
-            let style = Style::default().fg(theme::FG).bg(theme::SURFACE);
+            let style = theme::bold(theme::FG());
             let mut out = Vec::new();
-            for line in text.lines() {
-                let spans = vec![Span::styled(line.to_string(), style)];
-                for l in wrap(spans, width.saturating_sub(1), vec![bar.clone()], vec![bar.clone()]) {
-                    // Fill the row so the block reads as one bubble.
-                    let w = l.width();
-                    let mut spans = l.spans;
-                    spans.push(Span::styled(" ".repeat(width.saturating_sub(w + 1)), style));
-                    if let Some(first) = spans.get_mut(0) {
-                        first.style = first.style.bg(theme::SURFACE);
-                    }
-                    out.push(Line::from(spans));
-                }
+            for (i, line) in text.lines().enumerate() {
+                let first = if i == 0 { vec![Span::styled("❯ ", theme::bold(theme::nebula(0.45)))] } else { vec![Span::raw("  ")] };
+                out.extend(wrap(vec![Span::styled(line.to_string(), style)], width, first, vec![Span::raw("  ")]));
             }
             if out.is_empty() {
-                out.push(Line::from(vec![bar]));
+                out.push(Line::from(Span::styled("❯", theme::bold(theme::nebula(0.45)))));
             }
             out
         }
         Block::Assistant { text, .. } => {
             let mut lines = markdown::render(text, width.saturating_sub(2));
+            while lines.last().is_some_and(|l| l.width() == 0) {
+                lines.pop();
+            }
             for (i, l) in lines.iter_mut().enumerate() {
-                let lead = if i == 0 { Span::styled("◆ ", theme::fg(theme::ACCENT)) } else { Span::raw("  ") };
+                let lead = if i == 0 { Span::styled("✦ ", theme::fg(theme::nebula(0.2))) } else { Span::raw("  ") };
                 l.spans.insert(0, lead);
             }
             lines
@@ -108,29 +122,30 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let mut out = Vec::new();
             match ended {
                 None => {
-                    let mut head = vec![Span::styled(format!("{} ", anim::orb(t)), theme::fg(theme::ACCENT))];
-                    head.extend(anim::shimmer("Thinking…", t, theme::DIM, theme::FG));
+                    let mut head = vec![Span::styled(format!("{} ", anim::moon_spin(t)), theme::fg(theme::nebula(t.as_secs_f32() * 0.3)))];
+                    head.extend(anim::nebula_shimmer("thinking", t, theme::DIM()));
+                    let secs = now.duration_since(*started).as_secs();
+                    if secs >= 1 {
+                        head.push(Span::styled(format!("  {secs}s"), theme::dim()));
+                    }
                     out.push(Line::from(head));
                 }
                 // Redacted thinking (no text) isn't worth a line once it's over.
                 Some(_) if text.trim().is_empty() => return Vec::new(),
                 Some(end) => {
                     let secs = end.duration_since(*started).as_secs().max(1);
-                    let hint = if expanded || text.trim().is_empty() { String::new() } else { "  (ctrl+o)".into() };
-                    out.push(Line::from(vec![
-                        Span::styled("✻ ", theme::dim()),
-                        Span::styled(format!("Thought for {secs}s"), theme::dim().add_modifier(Modifier::ITALIC)),
-                        Span::styled(hint, theme::fg(theme::FAINT)),
-                    ]));
+                    let mut head = vec![Span::styled("◌ ", theme::fg(theme::DIM())), Span::styled(format!("thought for {secs}s"), theme::dim())];
+                    if !expanded {
+                        head.push(Span::styled("  ctrl+o", theme::dim()));
+                    }
+                    out.push(Line::from(head));
                 }
             }
             let body = text.trim();
             if !body.is_empty() && (expanded || ended.is_none()) {
                 let style = theme::dim().add_modifier(Modifier::ITALIC);
-                let all: Vec<Line> = body
-                    .lines()
-                    .flat_map(|l| wrap(vec![Span::styled(l.to_string(), style)], width, vec![Span::raw("  ")], vec![Span::raw("  ")]))
-                    .collect();
+                let rail = || vec![Span::styled("┊ ", theme::fg(theme::FAINT()))];
+                let all: Vec<Line> = body.lines().flat_map(|l| wrap(vec![Span::styled(l.to_string(), style)], width, rail(), rail())).collect();
                 let keep = if expanded { all.len() } else { 3 };
                 let skip = all.len().saturating_sub(keep);
                 out.extend(all.into_iter().skip(skip));
@@ -139,87 +154,174 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
         }
         Block::Tool { name, title, output, diff, status, started, ended, .. } => {
             let mut out = Vec::new();
-            let (dot, color) = match status {
-                Status::Running => (anim::spinner(t).to_string(), theme::ACCENT),
-                Status::Ok => ("●".into(), theme::GREEN),
-                Status::Failed => ("●".into(), theme::RED),
-            };
-            let mut head = vec![Span::styled(format!("{dot} "), theme::fg(color)), Span::styled(name.clone(), theme::bold(theme::FG))];
-            let room = width.saturating_sub(name.width() + 4 + 10);
-            if !title.is_empty() {
-                head.push(Span::raw("  "));
-                head.push(Span::styled(truncate(title, room), theme::muted()));
-            }
             let took = ended.unwrap_or(now).duration_since(*started);
-            if *status == Status::Running && took > Duration::from_secs(2) {
-                head.push(Span::styled(format!("  {}", anim::elapsed(took)), theme::dim()));
-            }
-            out.push(Line::from(head));
-            let gutter = || vec![Span::styled("  ⎿ ", theme::fg(theme::FAINT))];
-            let pad = || vec![Span::raw("    ")];
+            // A finished dot flashes bright and settles into its color.
+            let settle = ended.map(|e| (now.saturating_duration_since(e).as_secs_f32() / SETTLE.as_secs_f32()).min(1.0)).unwrap_or(1.0);
+            let (dot, color) = match status {
+                Status::Running => (anim::moon_spin(t), theme::nebula(t.as_secs_f32() * 0.3)),
+                Status::Ok => ("●", theme::mix(theme::GREEN(), theme::MUTED(), anim::ease_out(settle))),
+                Status::Failed => ("○", theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle))),
+            };
+            let (label, kind) = tool_kind(name);
+            let mut head = vec![Span::styled(format!("{dot} "), theme::bold(color))];
+            head.extend(chip(&label, kind));
+            // Right-aligned readout: diff stat, failure, duration.
+            let mut right: Vec<Span<'static>> = Vec::new();
             if let Some(d) = diff.as_deref().filter(|d| !d.trim().is_empty()) {
                 let (add, del) = crate::harness::diff::stat(d);
-                let mut first = gutter();
-                first.push(Span::styled(format!("+{add}", ), theme::fg(theme::GREEN)));
-                first.push(Span::styled(format!(" -{del}"), theme::fg(theme::RED)));
-                out.push(Line::from(first));
-                let lines = diff_lines(d, width.saturating_sub(4));
-                let max = if expanded { usize::MAX } else { 16 };
-                let total = lines.len();
-                for l in lines.into_iter().take(max) {
-                    let mut spans = pad();
-                    spans.extend(l.spans);
-                    out.push(Line::from(spans));
+                right.push(Span::styled(format!("+{add}"), theme::fg(theme::GREEN())));
+                right.push(Span::styled(format!(" −{del}"), theme::fg(theme::RED())));
+            }
+            if *status == Status::Failed {
+                right.push(Span::styled("failed", theme::fg(theme::RED())));
+            }
+            if *status == Status::Running && took > Duration::from_secs(1) || *status != Status::Running && took >= Duration::from_millis(1000) {
+                if !right.is_empty() {
+                    right.push(Span::styled(" · ", theme::dim()));
                 }
-                if total > max {
-                    out.push(Line::from(vec![Span::raw("    "), Span::styled(format!("… +{} lines (ctrl+o to expand)", total - max), theme::dim())]));
+                right.push(Span::styled(anim::elapsed(took), theme::dim()));
+            }
+            let rw: usize = right.iter().map(|s| s.content.width()).sum();
+            let lw: usize = head.iter().map(|s| s.content.width()).sum();
+            if !title.is_empty() {
+                let room = width.saturating_sub(lw + rw + 3);
+                head.push(Span::raw(" "));
+                head.push(Span::styled(truncate(title, room), theme::fg(theme::FG())));
+            }
+            if rw > 0 {
+                let used: usize = head.iter().map(|s| s.content.width()).sum();
+                head.push(Span::raw(" ".repeat(width.saturating_sub(used + rw).max(2))));
+                head.extend(right);
+            }
+            out.push(Line::from(head));
+            let rail = || vec![Span::styled("│  ", theme::fg(theme::FAINT()))];
+            if let Some(d) = diff.as_deref().filter(|d| !d.trim().is_empty()) {
+                let lines = diff_lines(d, width.saturating_sub(3));
+                // Collapsed: just the first changed lines; ctrl+o shows the whole diff.
+                let lines: Vec<Line> = if expanded { lines } else { lines.into_iter().filter(is_change).collect() };
+                let total = lines.len();
+                let max = if expanded { usize::MAX } else { PREVIEW };
+                let shown = total.min(max);
+                for (i, l) in lines.into_iter().take(max).enumerate() {
+                    let mut spans = rail();
+                    spans.extend(l.spans);
+                    out.push(with_more(spans, if i + 1 == shown { total - shown } else { 0 }, width));
                 }
                 return out;
             }
             let text = output.trim_end();
             if text.is_empty() {
-                if *status == Status::Failed {
-                    let mut l = gutter();
-                    l.push(Span::styled("failed", theme::fg(theme::RED)));
-                    out.push(Line::from(l));
-                }
                 return out;
             }
-            let style = if *status == Status::Failed { theme::fg(theme::RED) } else { theme::dim() };
-            let raw: Vec<&str> = text.lines().collect();
-            let max = if expanded { usize::MAX } else if *status == Status::Running { 5 } else { 4 };
+            let style = if *status == Status::Failed { theme::fg(theme::mix(theme::RED(), theme::DIM(), 0.3)) } else { theme::dim() };
+            // Markdown scaffolding (fences, headings, blank lines) says nothing in a preview.
+            let raw: Vec<String> = text
+                .lines()
+                .map(|l| crate::harness::tools::strip_ansi(l).replace('\t', "  "))
+                .filter(|l| expanded || !(l.trim().is_empty() || l.trim_start().starts_with("```") || l.trim_start().starts_with('#')))
+                .collect();
+            let max = if expanded { usize::MAX } else { PREVIEW };
             // While running, show the tail (live output); when done, the head.
-            let (shown, hidden): (Vec<&str>, usize) = if *status == Status::Running {
+            let (shown, hidden): (Vec<String>, usize) = if *status == Status::Running {
                 let skip = raw.len().saturating_sub(max);
                 (raw[skip..].to_vec(), skip)
             } else {
-                (raw.iter().take(max).copied().collect(), raw.len().saturating_sub(max))
+                let hidden = raw.len().saturating_sub(max);
+                (raw.into_iter().take(max).collect(), hidden)
             };
-            for (i, line) in shown.iter().enumerate() {
-                let first = if i == 0 { gutter() } else { pad() };
-                let line = truncate(&crate::harness::tools::strip_ansi(line).replace('\t', "  "), width.saturating_sub(5).max(10));
-                out.push(Line::from([first, vec![Span::styled(line, style)]].concat()));
-            }
-            if hidden > 0 {
-                out.push(Line::from(vec![Span::raw("    "), Span::styled(format!("… +{hidden} lines (ctrl+o to expand)"), theme::fg(theme::FAINT))]));
+            let n = shown.len();
+            for (i, line) in shown.into_iter().enumerate() {
+                let line = truncate(&line, width.saturating_sub(14).max(10));
+                out.push(with_more([rail(), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
             }
             out
         }
         Block::Notice { text, kind } => {
-            let (mark, style) = match kind {
-                NoticeKind::Info => ("· ", theme::dim()),
-                NoticeKind::Error => ("✗ ", theme::fg(theme::RED)),
-                NoticeKind::Success => ("✓ ", theme::fg(theme::GREEN)),
+            let (mark, color, text_style) = match kind {
+                NoticeKind::Info => ("· ", theme::DIM(), theme::muted()),
+                NoticeKind::Error => ("✗ ", theme::RED(), theme::fg(theme::RED())),
+                NoticeKind::Success => ("✓ ", theme::GREEN(), theme::muted()),
             };
             text.lines()
                 .enumerate()
                 .flat_map(|(i, l)| {
-                    let first = if i == 0 { vec![Span::styled(mark, style)] } else { vec![Span::raw("  ")] };
-                    wrap(vec![Span::styled(l.to_string(), style)], width, first, vec![Span::raw("  ")])
+                    let first = if i == 0 { vec![Span::styled(mark, theme::bold(color))] } else { vec![Span::raw("  ")] };
+                    wrap(vec![Span::styled(l.to_string(), text_style)], width, first, vec![Span::raw("  ")])
                 })
                 .collect()
         }
     }
+}
+
+/// Output lines a collapsed tool card shows (ctrl+o shows all).
+const PREVIEW: usize = 2;
+
+/// A preview row, with "+N lines" right-aligned when the card hides more.
+fn with_more(mut spans: Vec<Span<'static>>, hidden: usize, width: usize) -> Line<'static> {
+    if hidden > 0 {
+        let tag = format!("+{hidden} line{}", if hidden == 1 { "" } else { "s" });
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        spans.push(Span::raw(" ".repeat(width.saturating_sub(used + tag.width()).max(2))));
+        spans.push(Span::styled(tag, theme::dim()));
+    }
+    Line::from(spans)
+}
+
+/// Whether a `diff_lines` row is an added or removed line (not context or a file header).
+fn is_change(l: &Line) -> bool {
+    l.spans.get(1).is_some_and(|s| s.content.starts_with('+') || s.content.starts_with('-'))
+}
+
+/// What a tool does, for its chip color.
+#[derive(Clone, Copy)]
+pub enum ToolKind {
+    Read,
+    Edit,
+    Shell,
+    Agent,
+    Mcp,
+    Skill,
+    Other,
+}
+
+/// A tool's chip: a small glyph in its kind's color, then its name in grey:
+/// "◇ read", "✎ edit", "❯ bash", "◈ navigate" (MCP), "✦ agent", "✧ skill".
+fn chip(label: &str, kind: ToolKind) -> Vec<Span<'static>> {
+    let (icon, color) = match kind {
+        ToolKind::Read => ("◇", theme::BLUE()),
+        ToolKind::Edit => ("✎", theme::YELLOW()),
+        ToolKind::Shell => ("❯", theme::PINK()),
+        ToolKind::Agent => ("✦", theme::VIOLET()),
+        ToolKind::Mcp => ("◈", theme::VIOLET()),
+        ToolKind::Skill => ("✧", theme::GREEN()),
+        ToolKind::Other => ("·", theme::DIM()),
+    };
+    vec![Span::styled(format!(" {icon} "), theme::fg(color)), Span::styled(format!("{label:<5}"), theme::muted())]
+}
+
+/// Short lowercase label and kind for a tool: `Bash` → `bash`, an MCP tool
+/// `winfer-browser · browser_navigate` → `navigate`, the plan tools → `plan`.
+pub fn tool_kind(name: &str) -> (String, ToolKind) {
+    if matches!(name, "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet") {
+        return ("plan".into(), ToolKind::Other);
+    }
+    if let Some((server, tool)) = name.split_once(" · ").or_else(|| name.strip_prefix("mcp__").and_then(|r| r.split_once("__"))) {
+        // Drop a prefix the server name already says: winfer-browser's browser_click → click.
+        let tool = match tool.split_once('_') {
+            Some((head, rest)) if !rest.is_empty() && server.to_lowercase().contains(&head.to_lowercase()) => rest,
+            _ => tool,
+        };
+        return (truncate(&tool.to_lowercase(), 16), ToolKind::Mcp);
+    }
+    let kind = match name {
+        "Read" | "Grep" | "Glob" | "LS" | "WebFetch" | "WebSearch" | "read_file" | "list_dir" | "search" | "grep" | "glob" => ToolKind::Read,
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch" | "edit_file" | "write_file" | "edit" | "write" => ToolKind::Edit,
+        "Bash" | "shell" | "exec" | "exec_command" | "bash" => ToolKind::Shell,
+        "Agent" | "Task" => ToolKind::Agent,
+        "Skill" => ToolKind::Skill,
+        _ => ToolKind::Other,
+    };
+    (truncate(&name.to_lowercase(), 16), kind)
 }
 
 pub fn truncate(s: &str, max: usize) -> String {
@@ -252,7 +354,7 @@ pub fn diff_lines(diff: &str, width: usize) -> Vec<Line<'static>> {
         if let Some(path) = line.strip_prefix("--- ") {
             let path = path.trim_start_matches("a/");
             if path != "/dev/null" && diff.matches("\n--- ").count() + usize::from(diff.starts_with("--- ")) > 1 {
-                out.push(Line::from(Span::styled(path.to_string(), theme::bold(theme::MUTED))));
+                out.push(Line::from(vec![Span::styled("◇ ", theme::fg(theme::VIOLET())), Span::styled(path.to_string(), theme::bold(theme::MUTED()))]));
             }
             first_hunk = true;
             continue;
@@ -270,17 +372,17 @@ pub fn diff_lines(diff: &str, width: usize) -> Vec<Line<'static>> {
             new_n = rest[plus..].split(|c: char| !c.is_ascii_digit()).find_map(|s| s.parse().ok()).unwrap_or(old_n);
             let _ = nums;
             if !first_hunk {
-                out.push(Line::from(Span::styled("    ⋯", theme::fg(theme::FAINT))));
+                out.push(Line::from(Span::styled("   ┈┈", theme::fg(theme::FAINT()))));
             }
             first_hunk = false;
             continue;
         }
         let (num, sign, style) = if let Some(rest) = line.strip_prefix('+') {
             new_n += 1;
-            (new_n - 1, "+", (rest, Style::default().fg(theme::GREEN).bg(theme::DIFF_ADD_BG)))
+            (new_n - 1, "+", (rest, Style::default().fg(theme::mix(theme::GREEN(), theme::FG(), 0.55)).bg(theme::DIFF_ADD_BG())))
         } else if let Some(rest) = line.strip_prefix('-') {
             old_n += 1;
-            (old_n - 1, "-", (rest, Style::default().fg(theme::RED).bg(theme::DIFF_DEL_BG)))
+            (old_n - 1, "-", (rest, Style::default().fg(theme::mix(theme::RED(), theme::FG(), 0.45)).bg(theme::DIFF_DEL_BG())))
         } else if line.starts_with('\\') {
             continue;
         } else {
@@ -291,7 +393,8 @@ pub fn diff_lines(diff: &str, width: usize) -> Vec<Line<'static>> {
         let (text, style) = style;
         let text = truncate(&text.replace('\t', "    "), width.saturating_sub(8).max(10));
         let fill = width.saturating_sub(7 + text.width());
-        let mut spans = vec![Span::styled(format!("{num:>4} "), theme::fg(theme::FAINT)), Span::styled(format!("{sign} "), style), Span::styled(text, style)];
+        let gutter = if sign == " " { theme::dim() } else { Style::default().fg(theme::mix(style.fg.unwrap_or(theme::DIM()), theme::DIM(), 0.5)).bg(style.bg.unwrap_or_default()) };
+        let mut spans = vec![Span::styled(format!("{num:>4} "), gutter), Span::styled(format!("{sign} "), style), Span::styled(text, style)];
         if sign != " " {
             spans.push(Span::styled(" ".repeat(fill), style));
         }
@@ -316,5 +419,34 @@ mod tests {
     fn truncates_with_ellipsis() {
         assert_eq!(truncate("hello world", 6), "hello…");
         assert_eq!(truncate("hi", 6), "hi");
+    }
+
+    fn plain(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>().trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn tool_cards_stay_compact() {
+        let now = Instant::now();
+        let tool = |name: &str, output: &str, diff: Option<String>| Block::Tool { id: "1".into(), name: name.into(), title: "t".into(), output: output.into(), diff, status: Status::Ok, started: now, ended: Some(now) };
+        // Header plus two preview lines; markdown scaffolding is skipped; the rest is counted.
+        let out = "### Result\n\n```js\nawait page.goto('x');\n```\nline a\nline b\nline c";
+        let lines = plain(&render(&tool("winfer-browser · browser_navigate", out, None), 80, false, now, now));
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].contains(" navigate ") && lines[1].contains("await page.goto") && lines[2].contains("line a") && lines[2].ends_with("+2 lines"), "{lines:?}");
+        // Expanded shows everything.
+        assert!(render(&tool("Bash", out, None), 80, true, now, now).len() > 5);
+        // Diffs: only changed lines, two at most.
+        let d = crate::harness::diff::unified("a.txt", "a\nb\nc\nd\n", "a\nB\nc\nD\n");
+        let lines = plain(&render(&tool("Edit", "", Some(d)), 80, false, now, now));
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[1].contains("- b") && lines[2].contains("+ B") && lines[2].ends_with("+2 lines"), "{lines:?}");
+    }
+
+    #[test]
+    fn chips_are_an_icon_and_a_name() {
+        let text = |kind| chip("bash", kind).iter().map(|s| s.content.to_string()).collect::<String>();
+        assert_eq!(text(ToolKind::Shell), " ❯ bash ");
+        assert_eq!(text(ToolKind::Read), " ◇ bash ");
     }
 }

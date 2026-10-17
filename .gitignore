@@ -35,3 +35,4 @@ spikes/**/server.log
 src/dev/test-stream.h264
 graphify-out/
 .playwright-mcp/
+m-video/

@@ -22,6 +22,9 @@ pub enum Ev {
     /// `diff` is a unified diff for file edits.
     ToolEnd { id: String, ok: bool, output: String, diff: Option<String> },
     Approval(Approval),
+    /// Progress of a task the backend runs on its own (Claude Code's subagents, which keep
+    /// running in the background after their tool call returns).
+    Task(TaskEv),
     Todos(Vec<Todo>),
     Usage(Usage),
     Notice(String),
@@ -30,6 +33,21 @@ pub enum Ev {
     TurnDone,
     /// The backend process ended; the session can't continue.
     Exited(String),
+}
+
+/// One update about a background task; unset fields are unchanged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TaskEv {
+    pub id: String,
+    /// The tool call that started it (an Agent card), if any.
+    pub tool_id: Option<String>,
+    pub title: Option<String>,
+    /// Set for subagents (their type, e.g. "general-purpose"); unset for background shells.
+    pub agent: Option<String>,
+    pub tools: Option<u64>,
+    pub last: Option<String>,
+    /// "running", or how it ended: "completed", "failed", "stopped", "killed".
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +113,8 @@ pub enum Cmd {
     SetCompaction { trim: u8, compact: u8 },
     /// Undo the file changes of the last turn (ChatGPT, and Claude Code via its file checkpoints).
     Undo,
+    /// Stop one background task (a subagent), by its `TaskEv` id.
+    StopTask(String),
     Shutdown,
 }
 

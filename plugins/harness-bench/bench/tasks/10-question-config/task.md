@@ -1,0 +1,1 @@
+Which environment variable actually sets the effective HTTP request timeout that relay's HTTP client uses when it sends a request? Trace it through the config loading code (defaults, config file, environment, command line), don't trust the docs. Write the exact variable name as the only content of ANSWER.txt. Don't change any other file.

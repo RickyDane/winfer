@@ -25,7 +25,7 @@ const providers = [
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 
-let harnessSettings = { model: "", effort: null, mode: "ask", trimAt: 0, compactAt: 0, allowedCommands: ["git"], mcpServers: {}, leanBridges: true };
+let harnessSettings = { model: "", effort: null, mode: "ask", trimAt: 0, compactAt: 0, allowedCommands: ["git"], mcpServers: {}, leanBridges: true, leanAllSkills: false, leanSkills: ["graphify"], planSidebar: true };
 
 // Fake plugins: the store is the repo's plugins/ folder; one local plugin is broken.
 const storeManifests = import.meta.glob<Record<string, unknown>>("../../plugins/*/plugin.json", { eager: true, import: "default" });
@@ -259,6 +259,12 @@ mockIPC(
       case "harness_set_settings":
         harnessSettings = a.settings;
         return null;
+      case "harness_claude_skills":
+        return [
+          { id: "graphify", name: "graphify", description: "Any input to knowledge graph", source: "user", dir: "" },
+          { id: "cloudflare", name: "cloudflare", description: "Cloudflare platform", source: "user", dir: "" },
+          { id: "caveman:caveman", name: "caveman", description: "Ultra-compressed communication mode", source: "caveman", dir: "" },
+        ];
       case "harness_models":
         return [{ spec: "chatgpt/gpt-6.1-sol", label: "GPT-6.1 Sol", detail: "" }, { spec: "claude/sonnet", label: "Sonnet", detail: "" }];
       case "editors_list":

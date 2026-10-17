@@ -7,6 +7,8 @@ pub mod composer;
 pub mod markdown;
 pub mod picker;
 pub mod selection;
+#[cfg(test)]
+mod snapshot;
 pub mod theme;
 pub mod transcript;
 pub mod view;
@@ -25,6 +27,9 @@ use app::{App, Launch, Msg};
 
 pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
+    // Match the terminal's theme before anything else reads stdin.
+    let (bg, fg) = theme::detect(std::time::Duration::from_millis(250));
+    theme::init(bg, fg);
     let mut out = std::io::stdout();
     let enhanced = ratatui::crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     let _ = execute!(out, EnableBracketedPaste);
@@ -41,14 +46,33 @@ pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
     app::spawn_input(tx.clone());
     let mut app = App::new(tx, launch);
     let result = (|| -> std::io::Result<()> {
+        // Redraws at most every FRAME for streamed output; keys draw at once.
+        const FRAME: Duration = Duration::from_millis(33);
         loop {
             terminal.draw(|f| view::draw(f, &mut app))?;
+            let drawn = std::time::Instant::now();
             if app.quit {
                 break;
             }
-            let wait = if app.animating() { Duration::from_millis(16) } else { Duration::from_millis(1000) };
+            // ~25 fps while something moves: smooth enough for the spinners and sweeps, and light on
+            // the terminal, which has to draw every frame (several panes may animate at once).
+            let wait = if app.animating() { Duration::from_millis(40) } else { Duration::from_millis(1000) };
             match rx.recv_timeout(wait) {
-                Ok(m) => app::drain(&mut app, &rx, m),
+                Ok(m) => {
+                    let mut key = matches!(m, Msg::Term(_));
+                    app::drain(&mut app, &rx, m);
+                    // Coalesce a burst of agent events (streamed text, tool output) into one frame.
+                    while !key && !app.quit && drawn.elapsed() < FRAME {
+                        match rx.recv_timeout(FRAME - drawn.elapsed()) {
+                            Ok(m) => {
+                                key = matches!(m, Msg::Term(_));
+                                app::drain(&mut app, &rx, m);
+                            }
+                            Err(RecvTimeoutError::Timeout) => break,
+                            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                        }
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }

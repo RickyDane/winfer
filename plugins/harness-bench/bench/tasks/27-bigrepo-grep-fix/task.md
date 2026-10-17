@@ -1,0 +1,1 @@
+One invoice total in `python3 -m unittest discover -s tests` is wrong. Find the bug in the ledger package and fix it with the smallest possible change: touch exactly one file and change as few lines as you can. Don't change the tests and don't leave any other files behind.

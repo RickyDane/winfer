@@ -1,7 +1,7 @@
 {
   "id": "harness-bench",
   "name": "Harness Bench",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Benchmark coding-agent harnesses (winfer code, Codex, Claude Code, pi, OpenCode) on the same tasks: pass rate, time, tokens and tool calls, with the models you pick.",
   "author": "winfer",
   "tags": ["benchmark", "agents", "tokens", "evaluation"],

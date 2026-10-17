@@ -95,6 +95,8 @@ pub struct Opts {
     /// Start Claude Code lean: a short system prompt and only the tools a coding task needs,
     /// instead of its full default setup (see [`LEAN_PROMPT`]). Codex stays as it is.
     pub lean: bool,
+    /// The skills Claude Code loads in lean mode.
+    pub skills: crate::harness::claude_skills::LeanSkills,
 }
 
 /// The system prompt for Claude Code in lean mode: the essentials of its long default (which runs

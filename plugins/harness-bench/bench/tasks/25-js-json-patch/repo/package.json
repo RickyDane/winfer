@@ -1,0 +1,7 @@
+{
+  "name": "tiny-json-patch",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/patch.js",
+  "scripts": { "test": "node --test" }
+}

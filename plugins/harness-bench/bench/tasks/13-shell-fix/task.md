@@ -1,0 +1,1 @@
+backup.sh is buggy: it breaks on file and directory names with spaces, keeps the wrong number of backups, and its exit codes are wrong. Fix it so it does exactly what the comment at the top of the script says. It must stay a POSIX sh script (run as `sh backup.sh ...`).

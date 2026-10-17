@@ -26,6 +26,12 @@ pub struct Config {
     pub compact_at: u8,
     /// Start Claude Code with a short prompt and only the tools coding needs.
     pub lean_bridges: bool,
+    /// In lean mode, load every skill of the user's (with their settings, hooks and plugins)…
+    pub lean_all_skills: bool,
+    /// …or only these ([`super::claude_skills::ClaudeSkill`] ids).
+    pub lean_skills: Vec<String>,
+    /// Show the plan in a sidebar on the right when the terminal is wide enough.
+    pub plan_sidebar: bool,
 }
 
 impl Default for Config {
@@ -40,6 +46,9 @@ impl Default for Config {
             trim_at: 60,
             compact_at: 85,
             lean_bridges: true,
+            lean_all_skills: true,
+            lean_skills: Vec::new(),
+            plan_sidebar: true,
         }
     }
 }
@@ -49,6 +58,15 @@ pub fn dir() -> PathBuf {
 }
 
 impl Config {
+    /// The skills Claude Code gets in lean mode.
+    pub fn lean_skills(&self) -> super::claude_skills::LeanSkills {
+        if self.lean_all_skills {
+            super::claude_skills::LeanSkills::All
+        } else {
+            super::claude_skills::LeanSkills::Only(self.lean_skills.clone())
+        }
+    }
+
     pub fn load() -> Self {
         std::fs::read_to_string(dir().join("config.json"))
             .ok()

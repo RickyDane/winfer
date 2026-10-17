@@ -118,7 +118,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// `name` and `description` from a SKILL.md's front matter (folded and quoted values included).
-fn front_matter(text: &str) -> (Option<String>, String) {
+pub(crate) fn front_matter(text: &str) -> (Option<String>, String) {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
         return (None, String::new());

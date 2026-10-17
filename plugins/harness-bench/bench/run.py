@@ -157,7 +157,8 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
     started = time.time()
     out, err, code, timed_out = "", "", 0, False
     if spec["parser"] == "oracle":
-        shutil.copytree(task / "solution", work, dirs_exist_ok=True)
+        if (task / "solution").exists():
+            shutil.copytree(task / "solution", work, dirs_exist_ok=True)
         if (task / "solution.sh").exists():
             subprocess.run(["sh", str(task / "solution.sh")], cwd=work, check=True)
     else:

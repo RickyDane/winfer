@@ -1,0 +1,1 @@
+The tests in tests/ fail. Fix the bugs in the pager package (page numbers, cursors, the list endpoint) so that `python3 -m unittest discover -s tests` passes and everything behaves as the docstrings say. Don't change the tests.

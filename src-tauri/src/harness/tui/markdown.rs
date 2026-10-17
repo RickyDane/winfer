@@ -18,12 +18,15 @@ fn syntaxes() -> &'static SyntaxSet {
     S.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
+/// Syntax colors that suit the terminal: a dark or a light theme.
 fn highlight_theme() -> &'static syntect::highlighting::Theme {
-    static T: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
-    T.get_or_init(|| {
+    static DARK: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
+    static LIGHT: OnceLock<syntect::highlighting::Theme> = OnceLock::new();
+    let load = |name: &str| {
         let mut set = ThemeSet::load_defaults();
-        set.themes.remove("base16-ocean.dark").unwrap_or_else(|| set.themes.into_values().next().unwrap())
-    })
+        set.themes.remove(name).unwrap_or_else(|| set.themes.into_values().next().unwrap())
+    };
+    if theme::pal().light { LIGHT.get_or_init(|| load("InspiredGitHub")) } else { DARK.get_or_init(|| load("base16-ocean.dark")) }
 }
 
 /// Syntax-highlights `code` (one span list per line).
@@ -170,7 +173,7 @@ impl Renderer {
     fn prefix(&self) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
         let mut base = Vec::new();
         for _ in 0..self.quote {
-            base.push(Span::styled("│ ", theme::fg(theme::FAINT)));
+            base.push(Span::styled("│ ", theme::fg(theme::FAINT())));
         }
         let depth = self.lists.len();
         let indent = "  ".repeat(depth.saturating_sub(1));
@@ -178,7 +181,7 @@ impl Renderer {
             Some(b) => {
                 let mut first = base.clone();
                 first.push(Span::raw(indent.clone()));
-                first.push(Span::styled(b.clone(), theme::fg(theme::ACCENT)));
+                first.push(Span::styled(b.clone(), theme::fg(theme::VIOLET())));
                 let mut rest = base;
                 rest.push(Span::raw(format!("{indent}{}", " ".repeat(b.width()))));
                 (first, rest)
@@ -232,19 +235,16 @@ impl Renderer {
 
     fn code_block(&mut self, lang: &str, code: &str) {
         self.blank();
-        let label = if lang.is_empty() { String::new() } else { format!(" {lang} ") };
-        let w = self.width.saturating_sub(2).max(4);
-        let bar = Style::default().fg(theme::FAINT);
-        self.out.push(Line::from(vec![
-            Span::styled("╭", bar),
-            Span::styled(label.clone(), theme::dim()),
-            Span::styled("─".repeat(w.saturating_sub(label.width() + 1)), bar),
-        ]));
-        for spans in highlight(code.trim_end_matches('\n'), lang) {
-            let wrapped = wrap(spans, self.width, vec![Span::styled("│ ", bar)], vec![Span::styled("│ ", bar)]);
-            self.out.extend(wrapped);
+        let bar = theme::fg(theme::FAINT());
+        let mut head = vec![Span::styled("╭─", bar)];
+        if !lang.is_empty() {
+            head.push(Span::styled(format!(" {lang}"), theme::dim()));
         }
-        self.out.push(Line::from(Span::styled(format!("╰{}", "─".repeat(w.saturating_sub(1))), bar)));
+        self.out.push(Line::from(head));
+        for spans in highlight(code.trim_end_matches('\n'), lang) {
+            self.out.extend(wrap(spans, self.width, vec![Span::styled("│ ", bar)], vec![Span::styled("│ ", bar)]));
+        }
+        self.out.push(Line::from(Span::styled("╰─", bar)));
         self.out.push(Line::default());
     }
 
@@ -267,22 +267,18 @@ impl Renderer {
             let i = (0..cols).max_by_key(|&i| widths[i]).unwrap();
             widths[i] -= 1;
         }
-        let border = theme::fg(theme::FAINT);
-        let rule = |l: &str, m: &str, r: &str| {
-            let mut s = l.to_string();
-            for (i, w) in widths.iter().enumerate() {
-                s.push_str(&"─".repeat(w + 2));
-                s.push_str(if i + 1 == cols { r } else { m });
-            }
-            Line::from(Span::styled(s, border))
+        let border = theme::fg(theme::FAINT());
+        let rule = |_l: &str, _m: &str, _r: &str| {
+            let w: usize = widths.iter().map(|w| w + 3).sum::<usize>().saturating_sub(1);
+            Line::from(Span::styled("─".repeat(w), border))
         };
-        self.out.push(rule("┌", "┬", "┐"));
+        
         for (ri, row) in t.rows.iter().enumerate() {
-            let mut spans = vec![Span::styled("│", border)];
+            let mut spans = vec![];
             for (i, w) in widths.iter().enumerate() {
                 let cell = row.get(i).cloned().unwrap_or_default();
                 let text: String = cell.iter().map(|s| s.content.as_ref()).collect();
-                let style = if ri == 0 { theme::bold(theme::FG) } else { cell.first().map(|s| s.style).unwrap_or_default() };
+                let style = if ri == 0 { theme::bold(theme::MUTED()) } else { cell.first().map(|s| s.style).unwrap_or_default() };
                 let mut shown: String = String::new();
                 let mut used = 0;
                 for c in text.chars() {
@@ -293,17 +289,15 @@ impl Renderer {
                     shown.push(c);
                     used += cw;
                 }
-                spans.push(Span::raw(" "));
                 spans.push(Span::styled(shown, style));
-                spans.push(Span::raw(" ".repeat(w - used + 1)));
-                spans.push(Span::styled("│", border));
+                spans.push(Span::raw(" ".repeat(w - used + 3)));
             }
             self.out.push(Line::from(spans));
             if ri == 0 {
                 self.out.push(rule("├", "┼", "┤"));
             }
         }
-        self.out.push(rule("└", "┴", "┘"));
+        
         self.out.push(Line::default());
     }
 
@@ -315,16 +309,16 @@ impl Renderer {
                     self.blank();
                     self.heading = Some(level);
                     let color = match level {
-                        HeadingLevel::H1 => theme::ACCENT,
-                        HeadingLevel::H2 => theme::CYAN,
-                        _ => theme::FG,
+                        HeadingLevel::H1 => theme::FG(),
+                        HeadingLevel::H2 => theme::FG(),
+                        _ => theme::MUTED(),
                     };
                     self.push_style(|s| s.fg(color).add_modifier(Modifier::BOLD));
                 }
                 Tag::BlockQuote(_) => {
                     self.flush();
                     self.quote += 1;
-                    self.push_style(|s| s.fg(theme::MUTED).add_modifier(Modifier::ITALIC));
+                    self.push_style(|s| s.fg(theme::MUTED()).add_modifier(Modifier::ITALIC));
                 }
                 Tag::CodeBlock(kind) => {
                     self.flush();
@@ -363,7 +357,7 @@ impl Renderer {
                 Tag::Strikethrough => self.push_style(|s| s.add_modifier(Modifier::CROSSED_OUT)),
                 Tag::Link { dest_url, .. } => {
                     self.link = Some(dest_url.to_string());
-                    self.push_style(|s| s.fg(theme::CYAN).add_modifier(Modifier::UNDERLINED));
+                    self.push_style(|s| s.fg(theme::CYAN()).add_modifier(Modifier::UNDERLINED));
                 }
                 Tag::Table(_) => {
                     self.flush();
@@ -382,8 +376,17 @@ impl Renderer {
                 }
                 TagEnd::Heading(_) => {
                     let level = self.heading.take();
-                    if level == Some(HeadingLevel::H1) {
-                        self.spans.insert(0, Span::styled("▍", theme::fg(theme::ACCENT)));
+                    match level {
+                        Some(HeadingLevel::H1) => {
+                            // Nebula-tinted title.
+                            let mut i = 0;
+                            for s in &mut self.spans {
+                                let n = s.content.chars().count();
+                                s.style = s.style.fg(theme::nebula(i as f32 / 60.0));
+                                i += n;
+                            }
+                        }
+                        _ => {}
                     }
                     self.flush();
                     self.styles.pop();
@@ -440,7 +443,7 @@ impl Renderer {
             },
             Event::Text(t) => self.text(&t),
             Event::Code(c) => {
-                let span = Span::styled(c.to_string(), Style::default().fg(theme::YELLOW));
+                let span = Span::styled(c.to_string(), Style::default().fg(theme::mix(theme::VIOLET(), theme::FG(), 0.4)));
                 if let Some(t) = &mut self.table {
                     t.cell.push(span);
                 } else {
@@ -451,7 +454,7 @@ impl Renderer {
             Event::HardBreak => self.flush(),
             Event::Rule => {
                 self.flush();
-                self.out.push(Line::from(Span::styled("─".repeat(self.width.min(80)), theme::fg(theme::FAINT))));
+                self.out.push(Line::from(Span::styled("─".repeat(self.width.min(80)), theme::fg(theme::FAINT()))));
                 self.out.push(Line::default());
             }
             Event::TaskListMarker(done) => {
@@ -470,7 +473,7 @@ pub fn render(text: &str, width: usize) -> Vec<Line<'static>> {
         width: width.max(10),
         out: Vec::new(),
         spans: Vec::new(),
-        styles: vec![Style::default().fg(theme::FG)],
+        styles: vec![Style::default().fg(theme::FG())],
         lists: Vec::new(),
         quote: 0,
         bullet: None,
@@ -519,7 +522,7 @@ mod tests {
     #[test]
     fn renders_tables() {
         let out = plain(&render("| a | b |\n|---|---|\n| 1 | 22 |\n", 40));
-        assert!(out.iter().any(|l| l.contains("│ a │ b  │")), "{out:?}");
+        assert!(out.iter().any(|l| l.starts_with("a   b")) && out.iter().any(|l| l.starts_with("1   22")), "{out:?}");
     }
 
     #[test]

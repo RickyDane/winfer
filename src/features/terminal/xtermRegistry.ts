@@ -19,8 +19,11 @@ import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
 import { terminalTheme } from "@/features/theme/themes";
+import { optionTypedChar } from "./optionKey";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
+/** Glyph-atlas pages a terminal may grow before the WebGL renderer's atlas is cleared. */
+const MAX_ATLAS_PAGES = 4;
 
 // Recolor every live terminal when the app theme changes; refit them all when zoomed.
 useWorkspaces.subscribe((s, prev) => {
@@ -109,7 +112,18 @@ function create(pane: Pane): Entry {
 
   // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows, plus any the user assigned) must reach
   // the app, not the PTY. Returning false skips xterm only; the browser still fires copy/paste events.
-  term.attachCustomKeyEventHandler((e) => !((IS_MAC ? e.metaKey : e.ctrlKey && e.shiftKey) || isAppChord(e)));
+  term.attachCustomKeyEventHandler((e) => {
+    if ((IS_MAC ? e.metaKey : e.ctrlKey && e.shiftKey) || isAppChord(e)) return false;
+    // Option is Meta in panes, except for the characters a keyboard layout types with it
+    // (Option+L is "@" on German layouts): type those.
+    const typed = IS_MAC ? optionTypedChar(e) : null;
+    if (typed) {
+      e.preventDefault();
+      term.input(typed, true);
+      return false;
+    }
+    return true;
+  });
 
   // What the user types, line by line: a submitted line is the agent's new task (progress bars).
   let typed = "";
@@ -343,6 +357,17 @@ export function attachTerminal(pane: Pane, slot: HTMLElement) {
     try {
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => webgl.dispose());
+      // The glyph atlas grows a page whenever a program paints glyphs in colors it hasn't
+      // cached yet; TUIs that animate in truecolor can add pages endlessly, and past a few,
+      // xterm's WebGL renderer starts drawing garbled glyphs (and slows down). Start the atlas
+      // over before that. It's shared by panes with the same font, so this helps all of them.
+      let pages = 0;
+      webgl.onAddTextureAtlasCanvas(() => {
+        if (++pages <= MAX_ATLAS_PAGES) return;
+        pages = 0;
+        setTimeout(() => webgl.clearTextureAtlas(), 0);
+      });
+      webgl.onRemoveTextureAtlasCanvas(() => (pages = Math.max(0, pages - 1)));
       entry.term.loadAddon(webgl);
     } catch {
       // Falls back to the DOM renderer.

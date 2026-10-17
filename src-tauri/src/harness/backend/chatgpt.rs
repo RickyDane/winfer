@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, Usage, UserMsg};
 use crate::harness::mcp_client;
 use crate::harness::tools::{self, Risk};
 
@@ -32,7 +32,33 @@ pub fn models() -> Vec<ModelInfo> {
         .collect()
 }
 
-const SYSTEM: &str = "You are winfer code, a terminal coding agent. Explore with grep/glob/read; read before edit; verify with bash. Put every tool call you can already make into one response (e.g. read all relevant files at once); chain shell steps in one bash call. Use todo only for long multi-step work, never just to tick off the last item. If a call is declined, ask. Reply tersely in Markdown; cite path:line.";
+const SYSTEM: &str = "You are winfer code, a terminal coding agent. Explore with grep/glob/read; read before edit; verify with bash. Put every tool call you can already make into one response (e.g. read all relevant files at once); chain shell steps in one bash call. Use todo only for long multi-step work, never just to tick off the last item. Hand broad searches and independent subtasks to agent (several in one response run in parallel; background: true keeps you working meanwhile). If a call is declined, ask. Reply tersely in Markdown; cite path:line.";
+
+/// A subagent's instructions, in place of `SYSTEM`.
+const SUB_SYSTEM: &str = "You are a winfer code subagent: another agent handed you one task. Work on it alone with your tools (explore with grep/glob/read; read before edit; verify with bash; batch independent calls in one response). You can't ask questions: if something is ambiguous, pick the sensible reading and say so. End with a compact report of what you found or did (paths as path:line, what changed, anything left open); that report is all the other agent sees.";
+
+/// Tool steps a subagent gets before it has to report.
+const SUB_STEPS: usize = 100;
+
+/// winfer's tools plus `agent`, which subagents don't get.
+pub fn tool_definitions() -> Vec<Value> {
+    let mut tools = tools::definitions();
+    tools.push(json!({
+        "type": "function",
+        "name": "agent",
+        "description": "Hand a self-contained task to a subagent with a fresh context and the same tools; returns its final report. background: true returns at once and the report arrives in a later message (don't poll).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": { "type": "string", "description": "3-5 word title" },
+                "prompt": { "type": "string", "description": "The whole task: goal, context, paths, what to report" },
+                "background": { "type": "boolean" },
+            },
+            "required": ["description", "prompt"],
+        },
+    }));
+    tools
+}
 
 /// What a turn shares with the backend thread.
 struct State {
@@ -64,6 +90,44 @@ struct Shared {
     /// mid-session (that would break the prompt cache).
     mcp_start: Mutex<Option<std::thread::JoinHandle<()>>>,
     reads: tools::ReadCache,
+    /// Answers to approval requests, by request id, until the asker takes them.
+    decisions: Mutex<HashMap<String, Decision>>,
+    /// Approval requests still waiting for an answer.
+    asking: Mutex<HashSet<String>>,
+    /// Stop flags of running subagents, by task id.
+    agents: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    next_agent: AtomicU64,
+    /// Reports of background subagents not yet seen by the main conversation.
+    notes: Mutex<Vec<String>>,
+}
+
+/// A subagent's own conversation.
+struct Sub {
+    id: String,
+    title: String,
+    items: Mutex<Vec<Value>>,
+    stop: Arc<AtomicBool>,
+    /// Background agents outlive the turn; foreground ones stop with it.
+    background: bool,
+    reads: tools::ReadCache,
+    instructions: String,
+    tools: AtomicU64,
+}
+
+/// Whether the work of `sub` (or the main turn) should stop.
+fn stopped(shared: &Shared, sub: Option<&Sub>) -> bool {
+    match sub {
+        Some(s) => s.stop.load(Ordering::Relaxed) || (!s.background && shared.stop.load(Ordering::Relaxed)),
+        None => shared.stop.load(Ordering::Relaxed),
+    }
+}
+
+/// Adds items to the conversation of `sub`, or the main one.
+fn push_items(shared: &Shared, sub: Option<&Sub>, items: impl IntoIterator<Item = Value>) {
+    match sub {
+        Some(s) => s.items.lock().unwrap().extend(items),
+        None => shared.state.lock().unwrap().items.extend(items),
+    }
 }
 
 pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
@@ -97,6 +161,11 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         mcp: Mutex::new(Vec::new()),
         mcp_start: Mutex::new(None),
         reads: Default::default(),
+        decisions: Mutex::new(HashMap::new()),
+        asking: Mutex::new(HashSet::new()),
+        agents: Mutex::new(HashMap::new()),
+        next_agent: AtomicU64::new(0),
+        notes: Mutex::new(Vec::new()),
     });
     let _ = events.send(Ev::Session(session));
     let _ = events.send(Ev::Model(shared.state.lock().unwrap().model.clone()));
@@ -120,8 +189,6 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
 
     let mut worker: Option<std::thread::JoinHandle<()>> = None;
     let mut queue: Vec<Job> = Vec::new();
-    let (approve_tx, approve_rx) = channel::<(String, Decision)>();
-    let approve_rx = Arc::new(Mutex::new(approve_rx));
     let (done_tx, done_rx) = channel::<()>();
 
     loop {
@@ -130,15 +197,19 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             if let Some(w) = worker.take() {
                 let _ = w.join();
             }
+            // A background subagent finished while nothing ran: let the model see its report.
+            if queue.is_empty() && !shared.notes.lock().unwrap().is_empty() {
+                queue.push(Job::Notes);
+            }
             if !queue.is_empty() {
                 let job = queue.remove(0);
                 shared.stop.store(false, Ordering::Relaxed);
                 let shared = shared.clone();
-                let approvals = approve_rx.clone();
                 let done = done_tx.clone();
                 worker = Some(std::thread::spawn(move || {
                     match job {
-                        Job::Turn(msg) => turn(&shared, msg, &approvals),
+                        Job::Turn(msg) => turn(&shared, Some(msg)),
+                        Job::Notes => turn(&shared, None),
                         Job::Compact => compact(&shared),
                     }
                     let _ = done.send(());
@@ -160,9 +231,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             Cmd::Interrupt => {
                 queue.clear();
                 shared.stop.store(true, Ordering::Relaxed);
+                // The UI drops open approvals on interrupt, background subagents' too.
+                let mut decisions = shared.decisions.lock().unwrap();
+                for id in shared.asking.lock().unwrap().iter() {
+                    decisions.insert(id.clone(), Decision::Deny);
+                }
             }
             Cmd::Approve(id, d) => {
-                let _ = approve_tx.send((id, d));
+                shared.decisions.lock().unwrap().insert(id, d);
             }
             Cmd::SetModel(m) => shared.state.lock().unwrap().model = m,
             Cmd::SetEffort(e) => shared.state.lock().unwrap().effort = e,
@@ -173,8 +249,17 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
                 st.compact_at = compact;
             }
             Cmd::Undo => undo(&shared),
+            Cmd::StopTask(id) => match shared.agents.lock().unwrap().get(&id) {
+                Some(stop) => stop.store(true, Ordering::Relaxed),
+                None => {
+                    let _ = shared.events.send(Ev::Notice("That subagent isn't running.".into()));
+                }
+            },
             Cmd::Shutdown => {
                 shared.stop.store(true, Ordering::Relaxed);
+                for stop in shared.agents.lock().unwrap().values() {
+                    stop.store(true, Ordering::Relaxed);
+                }
                 break;
             }
         }
@@ -183,6 +268,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
 
 enum Job {
     Turn(UserMsg),
+    /// A turn on background subagents' reports alone.
+    Notes,
     Compact,
 }
 
@@ -272,28 +359,38 @@ enum Stream {
     End,
 }
 
-/// One model request: streams deltas to the UI; returns the output items, or None if stopped.
-fn request(shared: &Shared, tools_on: bool) -> Result<Option<Vec<Value>>, String> {
+/// One model request for the main conversation, or a subagent's (`sub`): streams the main
+/// one's deltas to the UI; returns the output items, or None if stopped.
+fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<Vec<Value>>, String> {
     if let Some(start) = shared.mcp_start.lock().unwrap().take() {
         let _ = start.join();
     }
     let (body, model) = {
         let st = shared.state.lock().unwrap();
-        let mut tools = if tools_on { tools::definitions() } else { Vec::new() };
+        let mut tools = match (tools_on, sub) {
+            (false, _) => Vec::new(),
+            (true, Some(_)) => tools::definitions(),
+            (true, None) => tool_definitions(),
+        };
         if tools_on {
             if let Some(meta) = mcp_client::meta_tool(&shared.mcp.lock().unwrap()) {
                 tools.push(meta);
             }
         }
+        let (instructions, input, cache_key) = match sub {
+            // Subagents share one cache key: their instructions and tools are the same.
+            Some(s) => (s.instructions.as_str(), json!(*s.items.lock().unwrap()), format!("{}-agents", shared.session)),
+            None => (shared.instructions.as_str(), json!(st.items), shared.session.clone()),
+        };
         let mut body = json!({
             "model": st.model,
-            "instructions": shared.instructions,
-            "input": st.items,
+            "instructions": instructions,
+            "input": input,
             "store": false,
             "stream": true,
             "include": ["reasoning.encrypted_content"],
             "reasoning": { "summary": "auto" },
-            "prompt_cache_key": shared.session,
+            "prompt_cache_key": cache_key,
         });
         if !tools.is_empty() {
             body["tools"] = json!(tools);
@@ -329,14 +426,14 @@ fn request(shared: &Shared, tools_on: bool) -> Result<Option<Vec<Value>>, String
     let mut out = Vec::new();
     let mut partial: HashMap<String, String> = HashMap::new();
     loop {
-        if shared.stop.load(Ordering::Relaxed) {
+        if stopped(shared, sub) {
             // Keep what was said so far.
             for (_, text) in partial {
                 if !text.is_empty() {
                     out.push(json!({ "role": "assistant", "content": [{ "type": "output_text", "text": text }] }));
                 }
             }
-            shared.state.lock().unwrap().items.extend(out);
+            push_items(shared, sub, out);
             return Ok(None);
         }
         let ev = match rx.recv_timeout(Duration::from_millis(50)) {
@@ -348,16 +445,22 @@ fn request(shared: &Shared, tools_on: bool) -> Result<Option<Vec<Value>>, String
         let emit = |e: Ev| {
             let _ = shared.events.send(e);
         };
+        // A subagent's text and reasoning stay out of the transcript.
+        let stream = |e: Ev| {
+            if sub.is_none() {
+                emit(e);
+            }
+        };
         let id = ev["item_id"].as_str().unwrap_or("").to_string();
         match ev["type"].as_str().unwrap_or("") {
             "response.output_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("").to_string();
                 partial.entry(id.clone()).or_default().push_str(&d);
-                emit(Ev::TextDelta { id, text: d });
+                stream(Ev::TextDelta { id, text: d });
             }
-            "response.reasoning_summary_text.delta" => emit(Ev::ReasoningDelta { id, text: ev["delta"].as_str().unwrap_or("").into() }),
+            "response.reasoning_summary_text.delta" => stream(Ev::ReasoningDelta { id, text: ev["delta"].as_str().unwrap_or("").into() }),
             "response.reasoning_summary_part.added" if ev["summary_index"].as_u64().unwrap_or(0) > 0 => {
-                emit(Ev::ReasoningDelta { id, text: "\n\n".into() })
+                stream(Ev::ReasoningDelta { id, text: "\n\n".into() })
             }
             "response.output_item.done" => {
                 let item = &ev["item"];
@@ -374,23 +477,28 @@ fn request(shared: &Shared, tools_on: bool) -> Result<Option<Vec<Value>>, String
                 let output = u["output_tokens"].as_u64().unwrap_or(0);
                 let usage = {
                     let mut st = shared.state.lock().unwrap();
-                    st.usage.context = input + output;
+                    // A subagent's tokens count toward the totals, not the main context.
+                    if sub.is_none() {
+                        st.usage.context = input + output;
+                    }
                     st.usage.input += input;
                     st.usage.output += output;
                     let cached = u["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
                     st.usage.cached += cached;
-                    if cached > 0 {
-                        st.cache = Some(true);
-                    } else if input >= 2048 && st.cache.is_none() {
-                        st.cache_misses += 1;
-                        if st.cache_misses >= 2 {
-                            st.cache = Some(false);
+                    if sub.is_none() {
+                        if cached > 0 {
+                            st.cache = Some(true);
+                        } else if input >= 2048 && st.cache.is_none() {
+                            st.cache_misses += 1;
+                            if st.cache_misses >= 2 {
+                                st.cache = Some(false);
+                            }
                         }
                     }
                     st.usage.clone()
                 };
                 emit(Ev::Usage(usage));
-                if ev["type"] == "response.incomplete" {
+                if ev["type"] == "response.incomplete" && sub.is_none() {
                     let why = r["incomplete_details"]["reason"].as_str().unwrap_or("unknown");
                     emit(Ev::Notice(format!("The answer was cut short ({why}).")));
                 }
@@ -405,7 +513,7 @@ fn request(shared: &Shared, tools_on: bool) -> Result<Option<Vec<Value>>, String
     }
 }
 
-fn turn(shared: &Shared, msg: UserMsg, approvals: &Mutex<Receiver<(String, Decision)>>) {
+fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
     let emit = |e: Ev| {
         let _ = shared.events.send(e);
     };
@@ -431,19 +539,28 @@ fn turn(shared: &Shared, msg: UserMsg, approvals: &Mutex<Receiver<(String, Decis
     }
     {
         let mut st = shared.state.lock().unwrap();
-        st.items.push(user_item(&msg));
+        if let Some(msg) = &msg {
+            st.items.push(user_item(msg));
+        }
         st.undo.push(HashMap::new());
     }
     let mut steps = 0;
     loop {
         steps += 1;
+        // Reports of background subagents that finished meanwhile.
+        let notes = std::mem::take(&mut *shared.notes.lock().unwrap());
+        if !notes.is_empty() {
+            shared.state.lock().unwrap().items.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": notes.join("\n\n") }] }));
+        } else if msg.is_none() && steps == 1 {
+            break;
+        }
         if steps > 1 {
             let mut st = shared.state.lock().unwrap();
             if st.cache == Some(false) && trim_stale(&mut st.items, KEEP_RECENT_OUTPUTS) > 0 {
                 shared.reads.lock().unwrap().clear();
             }
         }
-        let out = match request(shared, true) {
+        let out = match request(shared, true, None) {
             Ok(Some(out)) => out,
             Ok(None) => break,
             Err(e) => {
@@ -456,32 +573,7 @@ fn turn(shared: &Shared, msg: UserMsg, approvals: &Mutex<Receiver<(String, Decis
         if calls.is_empty() || steps > 200 {
             break;
         }
-        // Read-only calls next to each other run in parallel; the rest one at a time.
-        let mut i = 0;
-        while i < calls.len() {
-            let mut j = i + 1;
-            if read_only(&calls[i]) {
-                while j < calls.len() && read_only(&calls[j]) {
-                    j += 1;
-                }
-            }
-            let outputs: Vec<String> = if j - i > 1 {
-                std::thread::scope(|scope| {
-                    let handles: Vec<_> = calls[i..j].iter().map(|c| scope.spawn(|| run_call(shared, c, approvals))).collect();
-                    handles.into_iter().map(|h| h.join().unwrap_or_else(|_| "tool crashed".into())).collect()
-                })
-            } else if shared.stop.load(Ordering::Relaxed) {
-                vec!["Interrupted by the user before this ran.".to_string()]
-            } else {
-                vec![run_call(shared, &calls[i], approvals)]
-            };
-            let mut st = shared.state.lock().unwrap();
-            for (call, output) in calls[i..j].iter().zip(outputs) {
-                st.items.push(json!({ "type": "function_call_output", "call_id": call["call_id"], "output": output }));
-            }
-            drop(st);
-            i = j;
-        }
+        run_calls(shared, &calls, None);
         if shared.stop.load(Ordering::Relaxed) {
             break;
         }
@@ -496,21 +588,63 @@ fn turn(shared: &Shared, msg: UserMsg, approvals: &Mutex<Receiver<(String, Decis
     emit(Ev::TurnDone);
 }
 
-/// Runs one tool call (asking first when needed); returns the output the model sees.
-fn run_call(shared: &Shared, call: &Value, approvals: &Mutex<Receiver<(String, Decision)>>) -> String {
+/// Runs a response's tool calls for the main conversation or `sub`, and adds their outputs to
+/// it. Read-only calls and subagents next to each other run in parallel; the rest one at a time.
+fn run_calls(shared: &Arc<Shared>, calls: &[Value], sub: Option<&Sub>) {
+    let mut i = 0;
+    while i < calls.len() {
+        let mut j = i + 1;
+        if parallel(&calls[i]) {
+            while j < calls.len() && parallel(&calls[j]) {
+                j += 1;
+            }
+        }
+        let outputs: Vec<String> = if j - i > 1 {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = calls[i..j].iter().map(|c| scope.spawn(|| run_call(shared, c, sub))).collect();
+                handles.into_iter().map(|h| h.join().unwrap_or_else(|_| "tool crashed".into())).collect()
+            })
+        } else if stopped(shared, sub) {
+            vec!["Interrupted by the user before this ran.".to_string()]
+        } else {
+            vec![run_call(shared, &calls[i], sub)]
+        };
+        let items = calls[i..j].iter().zip(outputs).map(|(call, output)| json!({ "type": "function_call_output", "call_id": call["call_id"], "output": output }));
+        push_items(shared, sub, items.collect::<Vec<_>>());
+        i = j;
+    }
+}
+
+/// Runs one tool call (asking first when needed) for the main conversation or `sub`; returns
+/// the output the model sees. A subagent's calls show as progress on its task, not as cards.
+fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     let emit = |e: Ev| {
         let _ = shared.events.send(e);
+    };
+    let card = |e: Ev| {
+        if sub.is_none() {
+            emit(e);
+        }
     };
     let name = call["name"].as_str().unwrap_or("");
     let id = call["call_id"].as_str().unwrap_or("").to_string();
     let args: Value = serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));
+    if name == "agent" && sub.is_none() {
+        return run_agent(shared, &id, &args);
+    }
     let mcp = (name == "mcp").then(|| (args["server"].as_str().unwrap_or("").to_string(), args["tool"].as_str().unwrap_or("").to_string()));
     let (display, title) = match &mcp {
         Some((server, tool)) if tool.is_empty() => (format!("{server} · tools"), String::new()),
         Some((server, tool)) => (format!("{server} · {tool}"), tools::title("", &args["args"])),
         None => (display_name(name).to_string(), tools::title(name, &args)),
     };
-    emit(Ev::ToolStart { id: id.clone(), name: display.clone(), title: title.clone(), input: args.clone() });
+    match sub {
+        Some(s) => {
+            let n = s.tools.fetch_add(1, Ordering::Relaxed) + 1;
+            emit(Ev::Task(TaskEv { id: s.id.clone(), tools: Some(n), last: Some(display.clone()), ..Default::default() }));
+        }
+        None => emit(Ev::ToolStart { id: id.clone(), name: display.clone(), title: title.clone(), input: args.clone() }),
+    }
 
     let risk = match &mcp {
         Some((_, tool)) if tool.is_empty() => Risk::Read,
@@ -531,7 +665,7 @@ fn run_call(shared: &Shared, call: &Value, approvals: &Mutex<Receiver<(String, D
         (Risk::Read, _) | (_, Mode::Yolo) => false,
         (_, Mode::Plan) => {
             let msg = "Plan mode is on: this is read-only. Describe the change instead of making it.".to_string();
-            emit(Ev::ToolEnd { id, ok: false, output: msg.clone(), diff: None });
+            card(Ev::ToolEnd { id, ok: false, output: msg.clone(), diff: None });
             return msg;
         }
         (Risk::Edit, Mode::AutoEdit) => false,
@@ -543,23 +677,24 @@ fn run_call(shared: &Shared, call: &Value, approvals: &Mutex<Receiver<(String, D
             id: approval_id.clone(),
             tool: display,
             title,
-            detail: String::new(),
+            detail: sub.map(|s| format!("Asked by subagent “{}”.", s.title)).unwrap_or_default(),
             diff: tools::preview(&shared.cwd, name, &args),
         }));
+        shared.asking.lock().unwrap().insert(approval_id.clone());
         let decision = loop {
-            if shared.stop.load(Ordering::Relaxed) {
+            if stopped(shared, sub) {
                 break Decision::Deny;
             }
-            match approvals.lock().unwrap().recv_timeout(Duration::from_millis(100)) {
-                Ok((got, d)) if got == approval_id => break d,
-                Ok(_) | Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break Decision::Deny,
+            if let Some(d) = shared.decisions.lock().unwrap().remove(&approval_id) {
+                break d;
             }
+            std::thread::sleep(Duration::from_millis(50));
         };
+        shared.asking.lock().unwrap().remove(&approval_id);
         match decision {
             Decision::Deny => {
                 let msg = "The user declined this tool call. Don't retry it; ask how to proceed.".to_string();
-                emit(Ev::ToolEnd { id, ok: false, output: "Declined".into(), diff: None });
+                card(Ev::ToolEnd { id, ok: false, output: "Declined".into(), diff: None });
                 return msg;
             }
             Decision::Always => {
@@ -577,18 +712,23 @@ fn run_call(shared: &Shared, call: &Value, approvals: &Mutex<Receiver<(String, D
             None => (false, format!("no MCP server {server}")),
         };
         let text = tools::clip(&text, 10_000);
-        emit(Ev::ToolEnd { id, ok, output: text.clone(), diff: None });
+        card(Ev::ToolEnd { id, ok, output: text.clone(), diff: None });
         return text;
     }
 
     let events = shared.events.clone();
     let out_id = id.clone();
+    let live = sub.is_none();
     let output = move |chunk: &str| {
-        let _ = events.send(Ev::ToolOutput { id: out_id.clone(), chunk: chunk.to_string() });
+        if live {
+            let _ = events.send(Ev::ToolOutput { id: out_id.clone(), chunk: chunk.to_string() });
+        }
     };
     let mut snapshots = HashMap::new();
     let outcome = {
-        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop: shared.stop.clone(), output: &output, snapshots: &mut snapshots, reads: &shared.reads };
+        let stop = sub.map_or_else(|| shared.stop.clone(), |s| s.stop.clone());
+        let reads = sub.map_or(&shared.reads, |s| &s.reads);
+        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, snapshots: &mut snapshots, reads };
         tools::run(name, &args, &mut ctx)
     };
     if !snapshots.is_empty() {
@@ -599,11 +739,121 @@ fn run_call(shared: &Shared, call: &Value, approvals: &Mutex<Receiver<(String, D
             }
         }
     }
-    if let Some(todos) = outcome.todos.clone() {
+    // A subagent's task list is its own business.
+    if let Some(todos) = outcome.todos.clone().filter(|_| sub.is_none()) {
         emit(Ev::Todos(todos));
     }
-    emit(Ev::ToolEnd { id, ok: outcome.ok, output: outcome.output.clone(), diff: outcome.diff.clone() });
+    card(Ev::ToolEnd { id, ok: outcome.ok, output: outcome.output.clone(), diff: outcome.diff.clone() });
     outcome.output
+}
+
+/// The `agent` tool: a subagent with its own conversation works on the task. In the foreground
+/// the call returns its report; in the background the call returns at once and the report
+/// reaches the main conversation when it's done (waking it if idle).
+fn run_agent(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
+    let emit = |e: Ev| {
+        let _ = shared.events.send(e);
+    };
+    let title = args["description"].as_str().map(str::trim).filter(|t| !t.is_empty()).unwrap_or("subagent").to_string();
+    let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
+    let background = args["background"].as_bool() == Some(true);
+    emit(Ev::ToolStart { id: call_id.to_string(), name: "Agent".into(), title: title.clone(), input: args.clone() });
+    if prompt.is_empty() {
+        let msg = "agent needs a prompt: the whole task for the subagent.".to_string();
+        emit(Ev::ToolEnd { id: call_id.to_string(), ok: false, output: msg.clone(), diff: None });
+        return msg;
+    }
+    let id = format!("agent-{}", shared.next_agent.fetch_add(1, Ordering::Relaxed) + 1);
+    let stop = Arc::new(AtomicBool::new(false));
+    shared.agents.lock().unwrap().insert(id.clone(), stop.clone());
+    let sub = Sub {
+        id: id.clone(),
+        title: title.clone(),
+        items: Mutex::new(vec![json!({ "role": "user", "content": [{ "type": "input_text", "text": prompt }] })]),
+        stop,
+        background,
+        reads: Default::default(),
+        instructions: format!("{SUB_SYSTEM}{}", shared.instructions.strip_prefix(SYSTEM).unwrap_or("")),
+        tools: AtomicU64::new(0),
+    };
+    emit(Ev::Task(TaskEv {
+        id: id.clone(),
+        tool_id: Some(call_id.to_string()),
+        title: Some(title.clone()),
+        agent: Some("general".into()),
+        status: Some("running".into()),
+        ..Default::default()
+    }));
+    if background {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            let note = match agent_run(&shared, &sub) {
+                Ok(report) => format!("Background subagent {} (“{}”) finished. Its report:\n\n{report}", sub.id, sub.title),
+                Err(None) => format!("Background subagent {} (“{}”) was stopped by the user before it finished.", sub.id, sub.title),
+                Err(Some(e)) => format!("Background subagent {} (“{}”) failed: {e}", sub.id, sub.title),
+            };
+            shared.notes.lock().unwrap().push(note);
+        });
+        emit(Ev::ToolEnd { id: call_id.to_string(), ok: true, output: format!("Running in the background as {id}."), diff: None });
+        return format!("Started subagent {id} in the background. Its report arrives in a later message when it's done; don't wait or poll for it.");
+    }
+    let (ok, report) = match agent_run(shared, &sub) {
+        Ok(report) => (true, report),
+        Err(None) => (false, "The user stopped this subagent before it finished.".to_string()),
+        Err(Some(e)) => (false, format!("The subagent failed: {e}")),
+    };
+    emit(Ev::ToolEnd { id: call_id.to_string(), ok, output: report.clone(), diff: None });
+    report
+}
+
+/// Runs a subagent to its report; `Err(None)` when it was stopped. Ends its task either way.
+fn agent_run(shared: &Arc<Shared>, sub: &Sub) -> Result<String, Option<String>> {
+    let result = agent_loop(shared, sub);
+    shared.agents.lock().unwrap().remove(&sub.id);
+    let status = match &result {
+        Ok(_) => "completed",
+        Err(None) => "stopped",
+        Err(Some(_)) => "failed",
+    };
+    let _ = shared.events.send(Ev::Task(TaskEv { id: sub.id.clone(), status: Some(status.into()), ..Default::default() }));
+    result
+}
+
+fn agent_loop(shared: &Arc<Shared>, sub: &Sub) -> Result<String, Option<String>> {
+    for step in 0..=SUB_STEPS {
+        if step == SUB_STEPS {
+            sub.items.lock().unwrap().push(json!({ "role": "user", "content": [{ "type": "input_text", "text": "You're out of tool steps. Report now: what you found or did, and what's left." }] }));
+        } else if step > 0 && shared.state.lock().unwrap().cache == Some(false) && trim_stale(&mut sub.items.lock().unwrap(), KEEP_RECENT_OUTPUTS) > 0 {
+            sub.reads.lock().unwrap().clear();
+        }
+        let out = match request(shared, step < SUB_STEPS, Some(sub)) {
+            Ok(Some(out)) => out,
+            Ok(None) => return Err(None),
+            Err(e) => return Err(Some(e)),
+        };
+        let calls: Vec<Value> = out.iter().filter(|i| i["type"] == "function_call").cloned().collect();
+        let text = output_text(&out);
+        push_items(shared, Some(sub), out);
+        if calls.is_empty() {
+            return Ok(if text.trim().is_empty() { "(The subagent finished without a report.)".into() } else { text });
+        }
+        run_calls(shared, &calls, Some(sub));
+        if stopped(shared, Some(sub)) {
+            return Err(None);
+        }
+    }
+    Ok("(The subagent ran out of steps before reporting.)".into())
+}
+
+/// The text of a response's messages.
+fn output_text(items: &[Value]) -> String {
+    items
+        .iter()
+        .filter(|i| i["type"] == "message")
+        .flat_map(|i| i["content"].as_array().cloned().unwrap_or_default())
+        .filter_map(|c| c["text"].as_str().map(str::to_string))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn display_name(name: &str) -> &str {
@@ -616,6 +866,7 @@ fn display_name(name: &str) -> &str {
         "glob" => "Glob",
         "fetch" | "web_fetch" => "Fetch",
         "todo" | "todo_write" => "Todos",
+        "agent" => "Agent",
         other => other,
     }
 }
@@ -647,13 +898,13 @@ fn over(usage: &Usage, percent: u8) -> bool {
     percent > 0 && usage.window > 0 && usage.context * 100 > usage.window * percent as u64
 }
 
-/// Calls that can run alongside others: read-only tools, and MCP schema lookups.
-fn read_only(call: &Value) -> bool {
-    let name = call["name"].as_str().unwrap_or("");
-    if name == "mcp" {
-        return false;
+/// Calls that can run alongside others: read-only tools and subagents.
+fn parallel(call: &Value) -> bool {
+    match call["name"].as_str().unwrap_or("") {
+        "mcp" => false,
+        "agent" => true,
+        name => tools::risk(name) == Risk::Read,
     }
-    tools::risk(name) == Risk::Read
 }
 
 /// Shrinks history older than the last `keep` user turns: long tool outputs and file contents
@@ -725,14 +976,8 @@ fn summarize(shared: &Shared) -> bool {
         st.items.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": "Summarize this conversation so far so that work can continue from the summary alone: the user's goals and requests, decisions made, files changed (with paths), commands that matter, current state, and what's left to do. Be thorough but compact. Reply with the summary only." }] }));
         saved
     };
-    let summary = match request(shared, false) {
-        Ok(Some(out)) => out
-            .iter()
-            .filter(|i| i["type"] == "message")
-            .flat_map(|i| i["content"].as_array().cloned().unwrap_or_default())
-            .filter_map(|c| c["text"].as_str().map(str::to_string))
-            .collect::<Vec<_>>()
-            .join("\n"),
+    let summary = match request(shared, false, None) {
+        Ok(Some(out)) => output_text(&out),
         Ok(None) => String::new(),
         Err(e) => {
             let _ = shared.events.send(Ev::Error(format!("Couldn't compact: {e}")));
@@ -825,6 +1070,135 @@ mod tests {
         assert!(outs[0] < 300 && outs[1] == 5);
         assert_eq!(outs[2], 5000);
         assert_eq!(trim_stale(&mut items, 6), 0);
+    }
+
+    fn shared(mode: Mode) -> (Arc<Shared>, Receiver<Ev>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("winfer-agent-test-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
+        let (events, rx) = channel();
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State {
+                items: Vec::new(),
+                model: DEFAULT_MODEL.into(),
+                effort: None,
+                mode,
+                allowed: HashSet::new(),
+                usage: Usage::default(),
+                trim_at: 0,
+                compact_at: 0,
+                cache: None,
+                cache_misses: 0,
+                undo: vec![HashMap::new()],
+            }),
+            events,
+            stop: Arc::new(AtomicBool::new(false)),
+            cwd: dir.clone(),
+            instructions: format!("{SYSTEM}\n\ncwd x"),
+            session: "s".into(),
+            mcp: Mutex::new(Vec::new()),
+            mcp_start: Mutex::new(None),
+            reads: Default::default(),
+            decisions: Mutex::new(HashMap::new()),
+            asking: Mutex::new(HashSet::new()),
+            agents: Mutex::new(HashMap::new()),
+            next_agent: AtomicU64::new(0),
+            notes: Mutex::new(Vec::new()),
+        });
+        (shared, rx, dir)
+    }
+
+    fn sub(background: bool) -> Sub {
+        Sub {
+            id: "agent-1".into(),
+            title: "Probe".into(),
+            items: Mutex::new(Vec::new()),
+            stop: Arc::new(AtomicBool::new(false)),
+            background,
+            reads: Default::default(),
+            instructions: SUB_SYSTEM.into(),
+            tools: AtomicU64::new(0),
+        }
+    }
+
+    fn call(id: &str, name: &str, args: Value) -> Value {
+        json!({ "type": "function_call", "call_id": id, "name": name, "arguments": args.to_string() })
+    }
+
+    #[test]
+    fn only_the_main_agent_gets_the_agent_tool() {
+        let names = |tools: Vec<Value>| tools.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert!(names(tool_definitions()).contains(&"agent".to_string()));
+        assert!(!names(tools::definitions()).contains(&"agent".to_string()));
+        assert!(parallel(&call("1", "agent", json!({}))) && parallel(&call("2", "read", json!({}))));
+        assert!(!parallel(&call("3", "bash", json!({}))) && !parallel(&call("4", "mcp", json!({}))));
+    }
+
+    #[test]
+    fn subagent_calls_are_task_progress_not_cards() {
+        let (shared, rx, dir) = shared(Mode::Ask);
+        let s = sub(false);
+        run_calls(&shared, &[call("c1", "read", json!({ "path": "a.txt" })), call("c2", "glob", json!({ "pattern": "*.txt" }))], Some(&s));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(!evs.iter().any(|e| matches!(e, Ev::ToolStart { .. } | Ev::ToolEnd { .. } | Ev::ToolOutput { .. })), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.id == "agent-1" && t.tools == Some(2))));
+        // The outputs land in the subagent's conversation, not the main one.
+        let items = s.items.lock().unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items[0]["output"].as_str().unwrap().contains("hello"));
+        assert!(shared.state.lock().unwrap().items.is_empty());
+        // It reads with its own cache: the main conversation hasn't seen the file.
+        assert!(shared.reads.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn subagent_approvals_wait_for_their_own_answer() {
+        let (shared, rx, dir) = shared(Mode::Ask);
+        let s = sub(true);
+        let answer = {
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                let approval = loop {
+                    if let Ok(Ev::Approval(a)) = rx.recv() {
+                        break a;
+                    }
+                };
+                assert!(approval.detail.contains("Probe"));
+                // Another request's answer doesn't wake it.
+                shared.decisions.lock().unwrap().insert("a-other".into(), Decision::Allow);
+                shared.decisions.lock().unwrap().insert(approval.id, Decision::Allow);
+            })
+        };
+        let out = run_call(&shared, &call("w1", "write", json!({ "path": "b.txt", "content": "new" })), Some(&s));
+        answer.join().unwrap();
+        assert!(!out.contains("declined"), "{out}");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "new");
+        assert!(shared.decisions.lock().unwrap().contains_key("a-other"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn interrupting_stops_foreground_subagents_only() {
+        let (shared, _rx, dir) = shared(Mode::Ask);
+        shared.stop.store(true, Ordering::Relaxed);
+        assert!(stopped(&shared, Some(&sub(false))));
+        assert!(!stopped(&shared, Some(&sub(true))));
+        let s = sub(true);
+        s.stop.store(true, Ordering::Relaxed);
+        assert!(stopped(&shared, Some(&s)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn agent_without_a_prompt_fails_its_card() {
+        let (shared, rx, dir) = shared(Mode::Ask);
+        let out = run_call(&shared, &call("g1", "agent", json!({ "description": "Look around" })), None);
+        assert!(out.contains("needs a prompt"));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&evs[0], Ev::ToolStart { name, title, .. } if name == "Agent" && title == "Look around"));
+        assert!(matches!(&evs[1], Ev::ToolEnd { ok: false, .. }));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

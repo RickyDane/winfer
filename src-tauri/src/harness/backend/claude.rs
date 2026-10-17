@@ -8,8 +8,9 @@ use std::sync::mpsc::{Receiver, Sender};
 use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
+use crate::harness::claude_skills::{self, LeanSkills};
 use crate::harness::diff;
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, Todo, Usage, UserMsg};
 
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("claude").is_none() {
@@ -39,8 +40,9 @@ fn permission_mode(mode: Mode) -> &'static str {
     }
 }
 
-/// Claude Code's tools in lean mode.
-const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite";
+/// Claude Code's tools in lean mode; `Skill` comes on top when it has skills to load.
+/// TodoWrite is the plan tool of older Claude Code versions; newer ones plan with the Task* tools.
+const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent";
 
 pub fn args(opts: &Opts) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -70,19 +72,29 @@ pub fn args(opts: &Opts) -> Vec<String> {
         args.extend(["--resume".into(), session.clone()]);
     }
     if opts.lean {
-        // Only the tools a coding task needs, no user MCP servers, skills or user-level settings
-        // (hooks, plugins), and a short system prompt: about 5k tokens per request instead of 26k.
-        // winfer's own MCP servers still come in through --mcp-config; project CLAUDE.md still loads.
+        // Only the tools a coding task needs, no user MCP servers or user-level settings (hooks,
+        // plugins) unless all skills are wanted, and a short system prompt: about 5k tokens per
+        // request instead of 26k. winfer's own MCP servers still come in through --mcp-config;
+        // project CLAUDE.md and project skills still load.
+        let picked = match &opts.skills {
+            LeanSkills::All => None,
+            LeanSkills::Only(ids) if ids.is_empty() => Some(None),
+            LeanSkills::Only(ids) => Some(claude_skills::prepare(ids)),
+        };
+        let skills = !matches!(picked, Some(None));
         args.extend([
             "--tools".into(),
-            LEAN_TOOLS.into(),
+            if skills { format!("{LEAN_TOOLS},Skill") } else { LEAN_TOOLS.into() },
             "--strict-mcp-config".into(),
-            "--disable-slash-commands".into(),
             "--setting-sources".into(),
-            "project,local".into(),
-            "--system-prompt".into(),
-            format!("{}\n\n{}", super::LEAN_PROMPT, super::environment(&opts.cwd)),
+            if picked.is_none() { "user,project,local" } else { "project,local" }.into(),
         ]);
+        match picked {
+            Some(None) => args.push("--disable-slash-commands".into()),
+            Some(Some(dir)) => args.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]),
+            None => {}
+        }
+        args.extend(["--system-prompt".into(), format!("{}\n\n{}", super::LEAN_PROMPT, super::environment(&opts.cwd))]);
     }
     if let Some(system) = &opts.system {
         args.extend(["--append-system-prompt".into(), system.clone()]);
@@ -118,13 +130,67 @@ struct Bridge {
     edited: bool,
     /// Told to Claude with the next message after an undo, so it doesn't trust stale file state.
     note: Option<String>,
+    plan: Plan,
+}
+
+/// The plan Claude Code keeps with its TaskCreate/TaskUpdate tools, mirrored as todos.
+#[derive(Default)]
+struct Plan {
+    tasks: Vec<(String, Todo)>,
+}
+
+impl Plan {
+    /// A TaskCreate result ("Task #3 created successfully: …") adds the task.
+    fn created(&mut self, input: &Value, result: &str) -> bool {
+        let Some(id) = result.split_once("Task #").and_then(|(_, r)| r.split(|c: char| !c.is_ascii_digit()).next()).filter(|id| !id.is_empty()) else {
+            return false;
+        };
+        let content = input["subject"].as_str().or_else(|| input["description"].as_str()).unwrap_or("").trim().to_string();
+        // Claude Code keeps tasks for the whole session; a new plan after a finished one starts clean.
+        if self.tasks.iter().all(|(_, t)| t.status == "completed") {
+            self.tasks.clear();
+        }
+        self.tasks.retain(|(i, _)| i != id);
+        self.tasks.push((id.to_string(), Todo { content, status: "pending".into() }));
+        true
+    }
+
+    /// A TaskUpdate call: new status ("deleted" removes it) or subject.
+    fn update(&mut self, input: &Value) -> bool {
+        let id = match &input["taskId"] {
+            Value::String(s) => s.trim_start_matches('#').to_string(),
+            Value::Number(n) => n.to_string(),
+            _ => return false,
+        };
+        let Some(i) = self.tasks.iter().position(|(t, _)| *t == id) else { return false };
+        if input["status"] == "deleted" {
+            self.tasks.remove(i);
+            return true;
+        }
+        let todo = &mut self.tasks[i].1;
+        if let Some(st) = input["status"].as_str().filter(|s| matches!(*s, "pending" | "in_progress" | "completed")) {
+            todo.status = st.to_string();
+        }
+        if let Some(subject) = input["subject"].as_str().filter(|s| !s.trim().is_empty()) {
+            todo.content = subject.trim().to_string();
+        }
+        true
+    }
+
+    fn todos(&self) -> Vec<Todo> {
+        self.tasks.iter().map(|(_, t)| t.clone()).collect()
+    }
 }
 
 /// Tools whose changes Claude Code's file checkpoints cover.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
-    let mut proc = match LineProcess::spawn("claude", &args(&opts), &[("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true")], &opts.cwd, me) {
+    let mut proc = match LineProcess::spawn("claude", &args(&opts), &[
+        ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
+        // Headless Claude Code has no plan tool unless asked for one (TaskCreate/TaskUpdate).
+        ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "true"),
+    ], &opts.cwd, me) {
         Ok(p) => p,
         Err(e) => {
             let _ = events.send(Ev::Exited(e));
@@ -144,6 +210,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         checkpoints: Vec::new(),
         edited: false,
         note: None,
+        plan: Plan::default(),
     };
     while let Some(msg) = super::recv(&rx) {
         match msg {
@@ -226,6 +293,7 @@ impl Bridge {
                     self.emit(Ev::Notice("Nothing to undo.".into()));
                 }
             }
+            Cmd::StopTask(id) => self.control(proc, json!({ "subtype": "stop_task", "task_id": id })),
             Cmd::Shutdown => return false,
         }
         true
@@ -256,6 +324,11 @@ impl Bridge {
                     }
                 }
                 Some("compact_boundary") => self.emit(Ev::Notice("Context compacted.".into())),
+                Some("task_started" | "task_progress" | "task_updated" | "task_notification") => {
+                    if let Some(t) = task_event(v) {
+                        self.emit(Ev::Task(t));
+                    }
+                }
                 _ => {}
             },
             "stream_event" => self.on_stream(&v["event"]),
@@ -283,6 +356,9 @@ impl Bridge {
                                     self.emit(Ev::Todos(todos));
                                 }
                             }
+                            if name == "TaskUpdate" && self.plan.update(&input) {
+                                self.emit(Ev::Todos(self.plan.todos()));
+                            }
                             self.edited |= EDIT_TOOLS.contains(&name.as_str());
                             self.emit(Ev::ToolStart { id: tool_id.clone(), name: display_name(&name), title: title(&name, &input), input: input.clone() });
                             self.calls.insert(tool_id, Call { name, input });
@@ -299,7 +375,13 @@ impl Bridge {
                     let id = block["tool_use_id"].as_str().unwrap_or("").to_string();
                     let ok = !block["is_error"].as_bool().unwrap_or(false);
                     let output = content_text(&block["content"]);
-                    let diff = self.calls.remove(&id).and_then(|c| ok.then(|| edit_diff(&c.name, &c.input)).flatten());
+                    let call = self.calls.remove(&id);
+                    if let Some(c) = call.as_ref().filter(|c| ok && c.name == "TaskCreate") {
+                        if self.plan.created(&c.input, &output) {
+                            self.emit(Ev::Todos(self.plan.todos()));
+                        }
+                    }
+                    let diff = call.and_then(|c| ok.then(|| edit_diff(&c.name, &c.input)).flatten());
                     self.emit(Ev::ToolEnd { id, ok, output, diff });
                 }
             }
@@ -410,6 +492,31 @@ impl Bridge {
     }
 }
 
+/// Claude Code's `system` task events (task_started, task_progress, task_updated,
+/// task_notification) as one update.
+fn task_event(v: &Value) -> Option<TaskEv> {
+    let id = v["task_id"].as_str().filter(|s| !s.is_empty())?.to_string();
+    let s = |k: &Value| k.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut t = TaskEv { id, tool_id: s(&v["tool_use_id"]), title: s(&v["description"]), agent: s(&v["subagent_type"]), ..Default::default() };
+    match v["subtype"].as_str() {
+        Some("task_started") => t.status = Some("running".into()),
+        Some("task_progress") => {
+            t.tools = v["usage"]["tool_uses"].as_u64();
+            t.last = s(&v["last_tool_name"]);
+        }
+        Some("task_updated") => {
+            t.status = s(&v["patch"]["status"]);
+            t.title = t.title.or_else(|| s(&v["patch"]["description"]));
+        }
+        Some("task_notification") => {
+            t.status = s(&v["status"]).or_else(|| Some("completed".into()));
+            t.tools = v["usage"]["tool_uses"].as_u64();
+        }
+        _ => return None,
+    }
+    Some(t)
+}
+
 fn user_message(msg: &UserMsg) -> Value {
     let mut content = vec![json!({ "type": "text", "text": msg.text })];
     for path in &msg.images {
@@ -458,6 +565,12 @@ pub fn title(name: &str, input: &Value) -> String {
         "WebSearch" => s("query"),
         "Task" | "Agent" => s("description"),
         "TodoWrite" => "update todos".into(),
+        "TaskCreate" => s("subject"),
+        "TaskUpdate" => {
+            let id = input["taskId"].as_str().map(str::to_string).or_else(|| input["taskId"].as_u64().map(|n| n.to_string())).unwrap_or_default();
+            let what = if input["status"].is_string() { s("status").replace('_', " ") } else { "updated".into() };
+            format!("#{id} {what}")
+        }
         _ => input
             .as_object()
             .and_then(|o| o.values().find_map(|v| v.as_str().map(str::to_string)))
@@ -506,13 +619,14 @@ mod tests {
             checkpoints: Vec::new(),
             edited: false,
             note: None,
+            plan: Plan::default(),
         };
         (b, rx)
     }
 
     #[test]
     fn lean_mode_trims_the_setup() {
-        let opts = |lean| Opts {
+        let opts = |lean, skills| Opts {
             cwd: std::env::temp_dir(),
             model: String::new(),
             effort: None,
@@ -524,11 +638,18 @@ mod tests {
             trim_at: 60,
             compact_at: 85,
             lean,
+            skills,
         };
-        let lean = args(&opts(true));
-        assert!(lean.windows(2).any(|w| w[0] == "--tools" && w[1] == LEAN_TOOLS));
+        let has = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
+        let lean = args(&opts(true, LeanSkills::Only(Vec::new())));
+        assert!(has(&lean, "--tools", LEAN_TOOLS) && has(&lean, "--setting-sources", "project,local"));
         assert!(lean.iter().any(|a| a == "--strict-mcp-config") && lean.iter().any(|a| a == "--system-prompt"));
-        let full = args(&opts(false));
+        assert!(lean.iter().any(|a| a == "--disable-slash-commands"));
+        // All skills: the user's settings load, and the Skill tool comes with them.
+        let all = args(&opts(true, LeanSkills::All));
+        assert!(has(&all, "--tools", &format!("{LEAN_TOOLS},Skill")) && has(&all, "--setting-sources", "user,project,local"));
+        assert!(!all.iter().any(|a| a == "--disable-slash-commands" || a == "--add-dir"));
+        let full = args(&opts(false, LeanSkills::All));
         assert!(!full.iter().any(|a| a == "--tools" || a == "--system-prompt"));
     }
 
@@ -577,5 +698,41 @@ mod tests {
         assert!(b.note.as_deref().is_some_and(|n| n.contains("/x/a")));
         let id = new_uuid();
         assert_eq!((id.len(), &id[14..15]), (36, "4"));
+    }
+
+    #[test]
+    fn task_events_become_updates() {
+        let started = json!({ "type": "system", "subtype": "task_started", "task_id": "a1", "tool_use_id": "toolu_1", "description": "Find auth code", "subagent_type": "Explore", "is_backgrounded": true });
+        let t = task_event(&started).unwrap();
+        assert_eq!((t.id.as_str(), t.tool_id.as_deref(), t.title.as_deref(), t.agent.as_deref(), t.status.as_deref()), ("a1", Some("toolu_1"), Some("Find auth code"), Some("Explore"), Some("running")));
+        let progress = json!({ "type": "system", "subtype": "task_progress", "task_id": "a1", "usage": { "tool_uses": 3, "total_tokens": 900, "duration_ms": 5 }, "last_tool_name": "Grep" });
+        let t = task_event(&progress).unwrap();
+        assert_eq!((t.tools, t.last.as_deref(), t.status), (Some(3), Some("Grep"), None));
+        let done = json!({ "type": "system", "subtype": "task_notification", "task_id": "a1", "status": "completed", "summary": "ok" });
+        assert_eq!(task_event(&done).unwrap().status.as_deref(), Some("completed"));
+        let updated = json!({ "type": "system", "subtype": "task_updated", "task_id": "a1", "patch": { "status": "killed" } });
+        assert_eq!(task_event(&updated).unwrap().status.as_deref(), Some("killed"));
+        assert!(task_event(&json!({ "type": "system", "subtype": "task_started" })).is_none());
+    }
+
+    #[test]
+    fn task_tools_become_the_plan() {
+        let mut p = Plan::default();
+        assert!(p.created(&json!({ "subject": "Read the file", "description": "x" }), "Task #1 created successfully: Read the file"));
+        assert!(p.created(&json!({ "subject": "Write the summary" }), "Task #2 created successfully: Write the summary"));
+        assert!(p.update(&json!({ "taskId": "1", "status": "in_progress" })));
+        assert!(p.update(&json!({ "taskId": 2, "subject": "Write a short summary" })));
+        let t = p.todos();
+        assert_eq!((t[0].content.as_str(), t[0].status.as_str()), ("Read the file", "in_progress"));
+        assert_eq!((t[1].content.as_str(), t[1].status.as_str()), ("Write a short summary", "pending"));
+        assert!(p.update(&json!({ "taskId": "1", "status": "deleted" })));
+        assert_eq!(p.todos().len(), 1);
+        assert!(!p.update(&json!({ "taskId": "9", "status": "completed" })));
+        assert!(!p.created(&json!({ "subject": "x" }), "Error: no"));
+        // Once everything is done, the next task starts a new plan.
+        assert!(p.update(&json!({ "taskId": "2", "status": "completed" })));
+        assert!(p.created(&json!({ "subject": "Next thing" }), "Task #3 created successfully: Next thing"));
+        assert_eq!(p.todos().iter().map(|t| t.content.as_str()).collect::<Vec<_>>(), ["Next thing"]);
+        assert_eq!(title("TaskUpdate", &json!({ "taskId": "1", "status": "in_progress" })), "#1 in progress");
     }
 }

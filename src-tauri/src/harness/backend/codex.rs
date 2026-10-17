@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, Todo, Usage, UserMsg};
 
 fn approval_policy(mode: Mode) -> &'static str {
     match mode {
@@ -71,6 +71,22 @@ struct Bridge {
     approvals: HashMap<String, (Value, &'static str)>,
     /// Diffs of file-change items, for their result card.
     diffs: HashMap<String, String>,
+    /// Subagent threads by thread id. Their events arrive on the same stream as the main
+    /// thread's and become progress on the subagent's task instead of transcript items.
+    children: HashMap<String, Child>,
+    /// The main thread's own token usage, before the subagents' is added.
+    usage: Usage,
+}
+
+#[derive(Default)]
+struct Child {
+    /// The running turn, for stopping it.
+    turn: Option<String>,
+    tools: u64,
+    /// Token totals of this thread.
+    input: u64,
+    output: u64,
+    cached: u64,
 }
 
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
@@ -98,6 +114,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         cwd: cwd.clone(),
         approvals: HashMap::new(),
         diffs: HashMap::new(),
+        children: HashMap::new(),
+        usage: Usage::default(),
     };
     b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": null }), Pending::Init);
     let mut thread_params = json!({
@@ -211,6 +229,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
                 Cmd::SetCompaction { .. } => {}
                 Cmd::Undo => b.emit(Ev::Notice("Undo isn't available with Codex; ask it to revert instead.".into())),
+                Cmd::StopTask(thread) => {
+                    match b.children.get(&thread).and_then(|c| c.turn.clone()) {
+                        Some(turn) => b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore),
+                        None => b.emit(Ev::Notice("That subagent isn't running.".into())),
+                    }
+                }
                 Cmd::Shutdown => return,
             },
         }
@@ -282,7 +306,10 @@ impl Bridge {
             _ => None,
         };
         match approval {
-            Some(a) => {
+            Some(mut a) => {
+                if p["threadId"].as_str().is_some_and(|t| self.children.contains_key(t)) && a.detail.is_empty() {
+                    a.detail = "Asked by a subagent.".into();
+                }
                 self.approvals.insert(key, (id, "approval"));
                 self.emit(Ev::Approval(a));
             }
@@ -294,6 +321,10 @@ impl Bridge {
     }
 
     fn on_notification(&mut self, method: &str, p: &Value) {
+        if let Some(thread) = p["threadId"].as_str().filter(|t| self.thread.as_deref().is_some_and(|main| main != *t)) {
+            let thread = thread.to_string();
+            return self.on_child(&thread, method, p);
+        }
         match method {
             "turn/started" => self.turn = p["turn"]["id"].as_str().map(str::to_string),
             "turn/completed" => {
@@ -334,14 +365,15 @@ impl Bridge {
             "thread/tokenUsage/updated" => {
                 let u = &p["tokenUsage"];
                 let n = |part: &str, k: &str| u[part][k].as_u64().unwrap_or(0);
-                self.emit(Ev::Usage(Usage {
+                self.usage = Usage {
                     context: n("last", "inputTokens") + n("last", "outputTokens"),
                     window: u["modelContextWindow"].as_u64().unwrap_or(272_000),
                     input: n("total", "inputTokens"),
                     output: n("total", "outputTokens"),
                     cached: n("total", "cachedInputTokens"),
                     cost: None,
-                }));
+                };
+                self.emit_usage();
             }
             "thread/compacted" => self.emit(Ev::Notice("Context compacted.".into())),
             "model/rerouted" => {
@@ -355,28 +387,171 @@ impl Bridge {
         }
     }
 
-    fn item_started(&mut self, item: &Value) {
+    /// The main usage plus every subagent's tokens (their context isn't the main one's).
+    fn emit_usage(&self) {
+        let mut u = self.usage.clone();
+        for c in self.children.values() {
+            u.input += c.input;
+            u.output += c.output;
+            u.cached += c.cached;
+        }
+        self.emit(Ev::Usage(u));
+    }
+
+    fn task(&self, t: TaskEv) {
+        self.emit(Ev::Task(t));
+    }
+
+    /// An event of a subagent's thread: progress on its task.
+    fn on_child(&mut self, thread: &str, method: &str, p: &Value) {
+        let task = |status: Option<&str>| TaskEv { id: thread.to_string(), agent: Some("codex".into()), status: status.map(str::to_string), ..Default::default() };
+        match method {
+            "turn/started" => {
+                self.children.entry(thread.to_string()).or_default().turn = p["turn"]["id"].as_str().map(str::to_string);
+                self.task(task(Some("running")));
+            }
+            "turn/completed" => {
+                self.children.entry(thread.to_string()).or_default().turn = None;
+                let status = match p["turn"]["status"].as_str() {
+                    Some("failed") => "failed",
+                    Some("interrupted") => "stopped",
+                    _ => "completed",
+                };
+                self.task(task(Some(status)));
+            }
+            "item/started" => {
+                let item = &p["item"];
+                // A subagent's own subagents.
+                if item["type"] == "subAgentActivity" {
+                    return self.sub_agent_activity(item, false);
+                }
+                let Some((name, _)) = self.tool_card(item) else { return };
+                let child = self.children.entry(thread.to_string()).or_default();
+                child.tools += 1;
+                let tools = child.tools;
+                self.task(TaskEv { tools: Some(tools), last: Some(name), ..task(None) });
+            }
+            "item/completed" => {
+                self.diffs.remove(p["item"]["id"].as_str().unwrap_or(""));
+            }
+            "thread/tokenUsage/updated" => {
+                let u = &p["tokenUsage"]["total"];
+                let child = self.children.entry(thread.to_string()).or_default();
+                child.input = u["inputTokens"].as_u64().unwrap_or(0);
+                child.output = u["outputTokens"].as_u64().unwrap_or(0);
+                child.cached = u["cachedInputTokens"].as_u64().unwrap_or(0);
+                self.emit_usage();
+            }
+            _ => {}
+        }
+    }
+
+    /// `subAgentActivity` (Codex 0.16x): a subagent started, was messaged, stopped or finished.
+    /// Starting one shows an Agent card that returns at once; the agent runs on as its task.
+    /// `card`: show it in the transcript (it's the main thread's).
+    fn sub_agent_activity(&mut self, item: &Value, card: bool) {
+        let thread = s(item, "agentThreadId");
+        if thread.is_empty() {
+            return;
+        }
+        let name = agent_name(&s(item, "agentPath"));
+        let status = match item["kind"].as_str() {
+            Some("started") => {
+                self.children.entry(thread.clone()).or_default();
+                let id = s(item, "id");
+                if card {
+                    self.emit(Ev::ToolStart { id: id.clone(), name: "Agent".into(), title: name.clone(), input: item.clone() });
+                    self.emit(Ev::ToolEnd { id: id.clone(), ok: true, output: format!("Started {name}."), diff: None });
+                }
+                self.task(TaskEv { id: thread, tool_id: Some(id).filter(|_| card), title: Some(name), agent: Some("codex".into()), status: Some("running".into()), ..Default::default() });
+                return;
+            }
+            Some("completed") => "completed",
+            Some("interrupted") => "stopped",
+            _ => return,
+        };
+        self.task(TaskEv { id: thread, agent: Some("codex".into()), status: Some(status.into()), ..Default::default() });
+    }
+
+    /// The card a tool-like item shows as: (name, title).
+    fn tool_card(&mut self, item: &Value) -> Option<(String, String)> {
         let id = s(item, "id");
-        let (name, title) = match item["type"].as_str().unwrap_or("") {
+        Some(match item["type"].as_str().unwrap_or("") {
             "commandExecution" => ("Bash".to_string(), strip_shell(item["command"].as_str().unwrap_or(""))),
             "fileChange" => {
                 let diff = changes_diff(item);
-                self.diffs.insert(id.clone(), diff);
+                self.diffs.insert(id, diff);
                 ("Edit".into(), changed_paths(item))
             }
             "mcpToolCall" => (format!("{} · {}", s(item, "server"), s(item, "tool")), first_arg(&item["arguments"])),
             "dynamicToolCall" => (s(item, "tool"), first_arg(&item["arguments"])),
             "webSearch" => ("WebSearch".into(), s(item, "query")),
-            "collabAgentToolCall" => ("Agent".into(), s(item, "prompt").lines().next().unwrap_or("").to_string()),
+            "collabAgentToolCall" => {
+                let prompt = s(item, "prompt").lines().next().unwrap_or("").to_string();
+                match item["tool"].as_str().unwrap_or("") {
+                    "spawnAgent" => ("Agent".into(), prompt),
+                    "wait" => ("WaitAgents".into(), agent_count(item)),
+                    "sendInput" | "sendMessage" | "followupTask" => ("MessageAgent".into(), prompt),
+                    "resumeAgent" => ("ResumeAgent".into(), agent_count(item)),
+                    "closeAgent" => ("CloseAgent".into(), agent_count(item)),
+                    "interruptAgent" => ("InterruptAgent".into(), agent_count(item)),
+                    "listAgents" => ("ListAgents".into(), String::new()),
+                    other => (other.to_string(), prompt),
+                }
+            }
             "imageView" => ("ViewImage".into(), crate::harness::tools::short_path(&s(item, "path"))),
-            _ => return,
-        };
-        self.emit(Ev::ToolStart { id, name, title, input: item.clone() });
+            _ => return None,
+        })
+    }
+
+    fn item_started(&mut self, item: &Value) {
+        if item["type"] == "subAgentActivity" {
+            return self.sub_agent_activity(item, true);
+        }
+        let Some((name, title)) = self.tool_card(item) else { return };
+        self.emit(Ev::ToolStart { id: s(item, "id"), name, title, input: item.clone() });
+    }
+
+    /// A finished collab call (Codex before 0.16x): what it says about each agent it touched.
+    fn collab_done(&mut self, item: &Value) -> String {
+        let id = s(item, "id");
+        let spawn = item["tool"] == "spawnAgent";
+        let mut lines = Vec::new();
+        for thread in item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            self.children.entry(thread.to_string()).or_default();
+            let state = &item["agentsStates"][thread];
+            let status = match state["status"].as_str() {
+                Some("pendingInit" | "running") => Some("running"),
+                Some("completed") => Some("completed"),
+                Some("errored" | "notFound") => Some("failed"),
+                Some("interrupted" | "shutdown") => Some("stopped"),
+                _ if spawn => Some("running"),
+                _ => None,
+            };
+            let title = spawn.then(|| s(item, "prompt").lines().next().unwrap_or("").to_string()).filter(|t| !t.is_empty());
+            self.task(TaskEv {
+                id: thread.to_string(),
+                tool_id: Some(id.clone()).filter(|_| spawn),
+                title,
+                agent: Some("codex".into()),
+                status: status.map(str::to_string),
+                ..Default::default()
+            });
+            if let Some(m) = state["message"].as_str().filter(|m| !m.is_empty()) {
+                lines.push(m.to_string());
+            }
+        }
+        lines.join("\n\n")
     }
 
     fn item_completed(&mut self, item: &Value) {
         let id = s(item, "id");
         match item["type"].as_str().unwrap_or("") {
+            "collabAgentToolCall" => {
+                let output = self.collab_done(item);
+                let ok = item["status"] != "failed";
+                self.emit(Ev::ToolEnd { id, ok, output, diff: None });
+            }
             "agentMessage" => self.emit(Ev::Text { id, text: s(item, "text") }),
             "commandExecution" => {
                 let ok = item["exitCode"].as_i64() == Some(0) || item["status"] == "completed" && item["exitCode"].is_null();
@@ -403,7 +578,7 @@ impl Bridge {
                 };
                 self.emit(Ev::ToolEnd { id, ok, output, diff: None });
             }
-            "webSearch" | "collabAgentToolCall" | "imageView" => self.emit(Ev::ToolEnd { id, ok: true, output: String::new(), diff: None }),
+            "webSearch" | "imageView" => self.emit(Ev::ToolEnd { id, ok: true, output: String::new(), diff: None }),
             "contextCompaction" => self.emit(Ev::Notice("Context compacted.".into())),
             _ => {}
         }
@@ -416,6 +591,21 @@ impl Bridge {
 
 fn s(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or("").to_string()
+}
+
+/// `/root/auth_probe` → `auth probe`.
+fn agent_name(path: &str) -> String {
+    let last = path.rsplit('/').find(|p| !p.is_empty()).unwrap_or("subagent");
+    last.replace(['_', '-'], " ")
+}
+
+/// "2 agents" for a collab call that targets agents.
+fn agent_count(item: &Value) -> String {
+    match item["receiverThreadIds"].as_array().map_or(0, Vec::len) {
+        0 => String::new(),
+        1 => "1 agent".into(),
+        n => format!("{n} agents"),
+    }
 }
 
 fn first_arg(args: &Value) -> String {
@@ -525,6 +715,71 @@ mod tests {
         assert_eq!(strip_shell("/bin/zsh -lc 'curl -s x | head'"), "curl -s x | head");
         assert_eq!(strip_shell("/bin/zsh -lc \"printf 'hi' > a.txt\""), "printf 'hi' > a.txt");
         assert_eq!(strip_shell("ls"), "ls");
+    }
+
+    fn bridge() -> (Bridge, Receiver<Ev>) {
+        let (events, rx) = channel();
+        let (me, _) = channel();
+        let proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let b = Bridge {
+            events,
+            proc,
+            next: 0,
+            pending: HashMap::new(),
+            thread: Some("main".into()),
+            turn: Some("t0".into()),
+            queued: Vec::new(),
+            mode: Mode::Ask,
+            model: None,
+            effort: None,
+            cwd: String::new(),
+            approvals: HashMap::new(),
+            diffs: HashMap::new(),
+            children: HashMap::new(),
+            usage: Usage::default(),
+        };
+        (b, rx)
+    }
+
+    #[test]
+    fn subagent_threads_become_task_progress() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        let spawn = json!({ "type": "subAgentActivity", "id": "call_1", "kind": "started", "agentThreadId": "kid", "agentPath": "/root/shell_probe" });
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": spawn }));
+        n(&mut b, "turn/started", json!({ "threadId": "kid", "turn": { "id": "kt" } }));
+        n(&mut b, "item/started", json!({ "threadId": "kid", "item": { "type": "agentMessage", "id": "m" } }));
+        n(&mut b, "item/agentMessage/delta", json!({ "threadId": "kid", "itemId": "m", "delta": "child text" }));
+        n(&mut b, "item/started", json!({ "threadId": "kid", "item": { "type": "commandExecution", "id": "c", "command": "ls" } }));
+        n(&mut b, "thread/tokenUsage/updated", json!({ "threadId": "kid", "tokenUsage": { "total": { "inputTokens": 100, "outputTokens": 5, "cachedInputTokens": 0 } } }));
+        n(&mut b, "turn/completed", json!({ "threadId": "kid", "turn": { "id": "kt", "status": "completed" } }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        // The card returns at once; the agent runs on as a task bound to it.
+        assert!(matches!(&evs[0], Ev::ToolStart { id, name, title, .. } if id == "call_1" && name == "Agent" && title == "shell probe"));
+        assert!(matches!(&evs[1], Ev::ToolEnd { id, .. } if id == "call_1"));
+        assert!(matches!(&evs[2], Ev::Task(t) if t.id == "kid" && t.tool_id.as_deref() == Some("call_1") && t.status.as_deref() == Some("running")));
+        assert!(evs.iter().any(|e| matches!(e, Ev::Task(t) if t.tools == Some(1) && t.last.as_deref() == Some("Bash"))));
+        assert!(matches!(evs.last(), Some(Ev::Task(t)) if t.status.as_deref() == Some("completed")));
+        // Nothing of the child's leaks into the main transcript or ends the main turn.
+        assert!(!evs.iter().any(|e| matches!(e, Ev::TextDelta { .. } | Ev::TurnDone)));
+        assert!(!evs.iter().any(|e| matches!(e, Ev::ToolStart { id, .. } if id == "c")));
+        assert!(matches!(evs.iter().find(|e| matches!(e, Ev::Usage(_))), Some(Ev::Usage(u)) if u.input == 100 && u.context == 0));
+        assert_eq!(b.turn.as_deref(), Some("t0"));
+    }
+
+    #[test]
+    fn collab_calls_bind_spawned_threads() {
+        let (mut b, rx) = bridge();
+        let item = json!({ "type": "collabAgentToolCall", "id": "c1", "tool": "spawnAgent", "status": "completed", "prompt": "Map the repo\nmore", "receiverThreadIds": ["kid"], "agentsStates": { "kid": { "status": "running" } } });
+        b.on_notification("item/started", &json!({ "threadId": "main", "item": item }));
+        b.on_notification("item/completed", &json!({ "threadId": "main", "item": item }));
+        let wait = json!({ "type": "collabAgentToolCall", "id": "c2", "tool": "wait", "status": "completed", "receiverThreadIds": ["kid"], "agentsStates": { "kid": { "status": "completed", "message": "42 files" } } });
+        b.on_notification("item/completed", &json!({ "threadId": "main", "item": wait }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&evs[0], Ev::ToolStart { name, title, .. } if name == "Agent" && title == "Map the repo"));
+        assert!(matches!(&evs[1], Ev::Task(t) if t.tool_id.as_deref() == Some("c1") && t.status.as_deref() == Some("running")));
+        assert!(matches!(&evs[3], Ev::Task(t) if t.id == "kid" && t.tool_id.is_none() && t.status.as_deref() == Some("completed")));
+        assert!(matches!(&evs[4], Ev::ToolEnd { id, output, .. } if id == "c2" && output == "42 files"));
     }
 
     #[test]

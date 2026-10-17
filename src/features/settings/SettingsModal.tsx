@@ -829,6 +829,17 @@ interface HarnessSettings {
   allowedCommands: string[];
   mcpServers: Record<string, unknown>;
   leanBridges: boolean;
+  leanAllSkills: boolean;
+  leanSkills: string[];
+  planSidebar: boolean;
+}
+
+/** A skill Claude Code can load from the user's setup (`~/.claude/skills` or an enabled plugin). */
+interface ClaudeSkill {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
 }
 
 interface HarnessModel {
@@ -852,6 +863,7 @@ function HarnessSettings() {
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   const [models, setModels] = useState<HarnessModel[] | null>(harnessModelsCache);
   const [mcpText, setMcpText] = useState("");
+  const [claudeSkills, setClaudeSkills] = useState<ClaudeSkill[] | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const autoApproveOn = useWorkspaces((s) => s.autoApprove.includes(WINFER_PROVIDER));
   const setAutoApprove = useWorkspaces((s) => s.setAutoApprove);
@@ -861,6 +873,7 @@ function HarnessSettings() {
       setSettings(s);
       setMcpText(Object.keys(s.mcpServers).length ? JSON.stringify(s.mcpServers, null, 2) : "");
     });
+    void invoke<ClaudeSkill[]>("harness_claude_skills").then(setClaudeSkills, () => setClaudeSkills([]));
     if (!harnessModelsCache) {
       void invoke<HarnessModel[]>("harness_models").then((m) => {
         harnessModelsCache = m;
@@ -976,15 +989,69 @@ function HarnessSettings() {
         >
           <Toggle label="Auto-approve in panes" checked={autoApproveOn} onChange={(on) => setAutoApprove(WINFER_PROVIDER, on)} />
         </Row>
+        <Row
+          label="Plan sidebar"
+          hint="Shows the agent's plan in a sidebar on the right when the pane is wide enough; otherwise it stays above the prompt. /sidebar toggles it inside a session."
+        >
+          <Toggle label="Plan sidebar" checked={settings.planSidebar} onChange={(planSidebar) => void save({ planSidebar })} />
+        </Row>
       </Card>
 
       <Card title="Claude Code" description="When winfer code runs a Claude model, it drives the Claude Code CLI.">
         <Row
           label="Lean setup"
-          hint="Start it with a short system prompt and only the tools coding needs (Bash, Read, Edit, Write, Grep, Glob, TodoWrite; no user MCP servers, skills or user hooks). In the bench: 71% fewer input tokens, 79% fewer at full price, same pass rate. Project CLAUDE.md still loads. Codex is left as is: its default setup is already cached, so trimming it costs more."
+          hint="Start it with a short system prompt and only the tools coding needs (Bash, Read, Edit, Write, Grep, Glob, the plan tools, Agent, plus Skill when it has skills; no user MCP servers). In the bench: 71% fewer input tokens, 79% fewer at full price, same pass rate. Project CLAUDE.md and project skills still load. Codex is left as is: its default setup is already cached, so trimming it costs more."
         >
           <Toggle label="Lean setup" checked={settings.leanBridges} onChange={(leanBridges) => void save({ leanBridges })} />
         </Row>
+        {settings.leanBridges && (
+          <Row
+            label="Skills in lean setup"
+            hint={
+              settings.leanAllSkills
+                ? "Loads all your skills, along with your user settings, hooks and plugins. Each skill's description goes into every request."
+                : "Loads only the skills you pick below, without your user settings, hooks or plugins. Picking none turns skills off. Claude Code's built-in skills still come along."
+            }
+          >
+            <Select
+              aria-label="Skills in lean setup"
+              value={settings.leanAllSkills ? "all" : "selected"}
+              onChange={(e) => void save({ leanAllSkills: e.target.value === "all" })}
+            >
+              <option value="all">All skills</option>
+              <option value="selected">Selected only</option>
+            </Select>
+          </Row>
+        )}
+        {settings.leanBridges && !settings.leanAllSkills && (
+          <Row
+            stacked
+            label={`Selected skills (${settings.leanSkills.filter((id) => claudeSkills?.some((s) => s.id === id)).length})`}
+            hint="Comes from ~/.claude/skills and your enabled Claude Code plugins. Applies to sessions started after the change."
+          >
+            {claudeSkills === null ? (
+              <Loader2 size={13} className="animate-spin text-fg-subtle" />
+            ) : claudeSkills.length === 0 ? (
+              <span className="text-xs text-fg-subtle">No skills found.</span>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {claudeSkills.map((skill) => {
+                  const on = settings.leanSkills.includes(skill.id);
+                  return (
+                    <Chip
+                      key={skill.id}
+                      active={on}
+                      title={skill.description || skill.id}
+                      onClick={() => void save({ leanSkills: on ? settings.leanSkills.filter((id) => id !== skill.id) : [...settings.leanSkills, skill.id] })}
+                    >
+                      {skill.source === "user" ? skill.name : `${skill.source}:${skill.name}`}
+                    </Chip>
+                  );
+                })}
+              </div>
+            )}
+          </Row>
+        )}
       </Card>
 
       <Card title="Context compaction" description="When a conversation fills the model's context window, these keep it going and save tokens.">

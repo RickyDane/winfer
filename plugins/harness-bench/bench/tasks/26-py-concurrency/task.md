@@ -1,0 +1,1 @@
+downloader.py simulates a download queue with worker threads. Under load its statistics (`completed`, `failed`, `bytes_by_host`, `attempts`) come out wrong and it sometimes hangs forever. Fix the thread-safety bugs without changing the public API or serializing the downloads themselves (fetches must still run in parallel). Don't change the tests.

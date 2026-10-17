@@ -1,0 +1,1 @@
+`node --test` fails: the date-range utilities in src/ranges.js have bugs. Fix the source so all tests in test/ pass — don't change the tests. All ranges are half-open `[start, end)` and all day boundaries are UTC.

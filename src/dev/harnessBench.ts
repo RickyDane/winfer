@@ -16,19 +16,43 @@ const harnesses = [
   { id: "opencode", label: "OpenCode", model: "openai/gpt-6.1-sol", models: [], installed: false },
 ];
 const tasks = [
-  ["01-bugfix", "The tests in tests/ fail. Find and fix the bugs in the shop package…"],
-  ["02-feature", "Extend the todo CLI in todo.py: priorities, sorting and clear-done…"],
-  ["03-rename", "Rename the function `compute_tax` to `calculate_tax` everywhere…"],
-  ["04-question", "When the user clicks the \"Export\" button, which function writes the file?"],
-  ["05-bigfile", "logs/app.log is a large application log. Write report.py…"],
-  ["06-js-lru", "Implement the cache described in README.md in src/lru.js…"],
+  ["01-bugfix", "The tests in tests/ fail. Find and fix the bugs in the shop package so that `…"],
+  ["02-feature", "Extend the todo CLI in todo.py:"],
+  ["03-rename", "Rename the function `compute_tax` to `calculate_tax` everywhere in this proje…"],
+  ["04-question", "When the user clicks the \"Export\" button in the toolbar, which function final…"],
+  ["05-bigfile", "logs/app.log is a large application log. Write report.py that prints the 3 mo…"],
+  ["06-js-lru", "Implement the cache described in README.md in src/lru.js (ES module, no depen…"],
+  ["07-py-perf", "`dedupe_contacts` and `count_paths` in datatools/ are far too slow on real in…"],
+  ["08-js-async-bug", "`node --test` fails: the async helpers in src/async.js (`mapLimit` and `retry…"],
+  ["09-py-csv-import", "Implement the CSV importer specified in README.md: `parse` and `load` in impo…"],
+  ["10-question-config", "Which environment variable actually sets the effective HTTP request timeout t…"],
+  ["11-py-pagination", "The tests in tests/ fail. Fix the bugs in the pager package (page numbers, cu…"],
+  ["12-sqlite-migration", "The contacts app stores a single `people.name` column. Split it into `first_n…"],
+  ["13-shell-fix", "backup.sh is buggy: it breaks on file and directory names with spaces, keeps …"],
+  ["14-py-deprecation", "`Client.fetch(url, timeout)` in app/http/client.py is deprecated. Migrate eve…"],
+  ["15-js-event-emitter", "Implement the event emitter described in README.md in src/emitter.js (ES modu…"],
+  ["16-py-ttl-cache", "Implement the `ttl_cache` decorator described in README.md in ttlcache/__init…"],
+  ["17-js-cli-args", "Implement the command-line argument parser described in README.md in src/args…"],
+  ["18-py-path-traversal", "Security report: the static file server in fileserver/static.py has a path tr…"],
+  ["19-question-callers", "How many distinct functions in this project call `audit.log_event` (the funct…"],
+  ["20-py-multi-module-bug", "Bug report: after a reservation is cancelled, restocking the item makes the c…"],
+  ["21-js-fix-tests", "`node --test` fails: the date-range utilities in src/ranges.js have bugs. Fix…"],
+  ["22-py-dataclass-json", "Implement `to_json` and `from_json` in app/serde.py as described in its docst…"],
+  ["23-py-refactor-dedupe", "`sales_report`, `refund_report` and `inventory_report` in reports.py are near…"],
+  ["24-py-unicode", "The helpers in textutils.py only work for ASCII text and `python3 -m unittest…"],
+  ["25-js-json-patch", "Implement `applyPatch` in src/patch.js as described in README.md (JSON Patch,…"],
+  ["26-py-concurrency", "downloader.py simulates a download queue with worker threads. Under load its …"],
+  ["27-bigrepo-grep-fix", "One invoice total in `python3 -m unittest discover -s tests` is wrong. Find t…"],
+  ["28-js-markdown-toc", "Write a Node CLI `toc.mjs` (ES module, no dependencies) so that `node toc.mjs…"],
+  ["29-py-cli-argparse", "todo.py parses `sys.argv` by hand. Rewrite its command-line handling with `ar…"],
+  ["30-question-git-blame-free", "Which registered config key's default value, if changed, would change the ret…"],
 ].map(([id, prompt]) => ({ id, prompt, hash: "demo" }));
 
 const result = (task: string, harness: string, model: string, pass: boolean, seconds: number, input: number, cached: number, output: number, tools: number, started = 0, cost: number | null = null) => ({
   task, harness, model, pass, started, seconds, input, cached, output, tools, cost, timed_out: false, why: pass ? "" : "expected:\nE1001 2682\ngot:\nE5000 5935", dir: null,
 });
 
-// A past run: two harnesses side by side on all six tasks.
+// A past run: two harnesses side by side on the first six tasks.
 const t0 = Date.now() / 1000 - 3600;
 const past: object[] = [];
 const profiles: Record<string, { t: number[]; u: number[]; c: number }> = {
@@ -37,7 +61,7 @@ const profiles: Record<string, { t: number[]; u: number[]; c: number }> = {
 };
 for (const [harness, p] of Object.entries(profiles)) {
   let at = t0;
-  tasks.forEach((task, i) => {
+  tasks.slice(0, 6).forEach((task, i) => {
     const uncached = p.u[i];
     const input = Math.round(uncached / (1 - p.c));
     past.push(result(task.id, harness, "gpt-6.1-sol", !(harness === "codex" && i === 4), p.t[i], input, input - uncached, 500 + i * 220, 5 + (i % 4), at));

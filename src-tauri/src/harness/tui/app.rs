@@ -15,7 +15,7 @@ use super::selection::{self, Clicks, Selection};
 use super::transcript::{Block, Item, NoticeKind, Status};
 use crate::harness::backend::{self, Handle, Kind, Opts};
 use crate::harness::config::{self, Config};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, TaskEv, Todo, Usage, UserMsg};
 use crate::harness::session::{self, Entry, Saved};
 use crate::harness::tools;
 
@@ -36,7 +36,7 @@ pub struct Launch {
     pub system: Option<String>,
 }
 
-pub const COMMANDS: [(&str, &str); 20] = [
+pub const COMMANDS: [(&str, &str); 22] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
     ("/effort", "Set reasoning effort"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo"),
@@ -50,22 +50,58 @@ pub const COMMANDS: [(&str, &str); 20] = [
     ("/cost", "Token usage and cost"),
     ("/copy", "Copy the last reply"),
     ("/export", "Save the conversation as Markdown"),
+    ("/agents", "Subagents running and finished (ctrl+g)"),
     ("/mcp", "MCP servers in use"),
     ("/login", "How to sign in to each backend"),
     ("/help", "Keys and commands"),
     ("/clear", "Clear the screen and start over"),
     ("/review", "Review uncommitted changes"),
     ("/status", "Session, model and directory"),
+    ("/sidebar", "Show the plan in a right sidebar when wide (on/off)"),
     ("/quit", "Exit"),
 ];
 
-const VERBS: [&str; 10] = ["Thinking", "Working", "Pondering", "Crafting", "Tinkering", "Brewing", "Wrangling", "Cooking", "Noodling", "Forging"];
+const VERBS: [&str; 10] = ["Orbiting", "Charting", "Drifting", "Calibrating", "Navigating", "Stargazing", "Launching", "Docking", "Transmitting", "Warping"];
 
 pub struct Completion {
     pub items: Vec<PickItem>,
     pub selected: usize,
     pub start: usize,
     pub slash: bool,
+}
+
+/// A subagent as the status bar and `/agents` show it.
+pub struct Subagent<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub status: Status,
+    pub started: Instant,
+    pub ended: Option<Instant>,
+    /// Tool calls it has made so far and the latest one (while it runs).
+    pub steps: usize,
+    pub last: &'a str,
+    /// Index of its card in `App::items`.
+    pub item: usize,
+}
+
+/// A task the backend runs on its own, as its events describe it (see `Ev::Task`).
+#[derive(Debug, Clone)]
+pub struct Task {
+    pub id: String,
+    pub tool_id: Option<String>,
+    pub title: String,
+    pub agent: bool,
+    pub status: Status,
+    pub started: Instant,
+    pub ended: Option<Instant>,
+    pub tools: usize,
+    pub last: String,
+}
+
+/// Tool cards that are subagents: Claude Code's Task/Agent tool, Codex's subagents and
+/// winfer code's `agent` tool all show as "Agent".
+pub fn is_subagent(name: &str) -> bool {
+    matches!(name, "Agent" | "Task")
 }
 
 pub struct App {
@@ -91,6 +127,14 @@ pub struct App {
     pub overlay: Tween,
     pub completion: Option<Completion>,
     pub todos: Vec<Todo>,
+    /// When every step of the plan got done (it shows briefly, then hides).
+    pub plan_done: Option<Instant>,
+    /// The plan above the prompt shows every step (else one compact line); click or ctrl+x.
+    pub plan_open: bool,
+    /// Screen rows of the plan above the prompt, from the last draw (for clicks).
+    pub plan_rows: Option<(u16, u16)>,
+    /// Background tasks (subagents keep running after their Agent card's call returns).
+    pub tasks: Vec<Task>,
     pub usage: Usage,
     pub ctx_shown: Tween,
     pub queue: Vec<UserMsg>,
@@ -101,6 +145,10 @@ pub struct App {
     /// Text marked with the mouse in the transcript, and where the transcript was last drawn.
     pub selection: Option<Selection>,
     pub view: selection::View,
+    /// The settled part of the transcript as last rendered.
+    pub tcache: super::view::TranscriptCache,
+    /// First transcript line of each item (usize::MAX if it drew nothing), from the last draw.
+    pub item_rows: Vec<usize>,
     clicks: Clicks,
     pub expanded: bool,
     pub quit_armed: Option<Instant>,
@@ -163,6 +211,10 @@ impl App {
             overlay: Tween::new(0.0),
             completion: None,
             todos: Vec::new(),
+            plan_done: None,
+            plan_open: false,
+            plan_rows: None,
+            tasks: Vec::new(),
             usage: Usage::default(),
             ctx_shown: Tween::new(0.0),
             queue: Vec::new(),
@@ -172,6 +224,8 @@ impl App {
             scroll: 0,
             selection: None,
             view: selection::View::default(),
+            tcache: Default::default(),
+            item_rows: Vec::new(),
             clicks: Clicks::default(),
             expanded: false,
             quit_armed: None,
@@ -231,6 +285,7 @@ impl App {
             trim_at: self.config.trim_at,
             compact_at: self.config.compact_at,
             lean: self.config.lean_bridges && !crate::harness::LEAN_OFF.load(std::sync::atomic::Ordering::Relaxed),
+            skills: self.config.lean_skills(),
         };
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.alive = true;
@@ -258,10 +313,12 @@ impl App {
         self.busy
             || self.items.is_empty()
             || self.overlay.moving()
+            || self.picker.is_some()
             || self.ctx_shown.moving()
             || !self.approvals.is_empty()
             || self.toast.as_ref().is_some_and(|t| t.1.elapsed() < Duration::from_millis(4000))
             || self.items.iter().rev().take(8).any(Item::animated)
+            || self.running_subagents() > 0
     }
 
     // ---- agent events ----
@@ -385,7 +442,12 @@ impl App {
                 self.approvals.push_back(a);
                 self.scroll = 0;
             }
-            Ev::Todos(t) => self.todos = t,
+            Ev::Task(t) => self.on_task(t),
+            Ev::Todos(t) => {
+                let done = !t.is_empty() && t.iter().all(|t| t.status == "completed");
+                self.plan_done = if done { self.plan_done.or(Some(Instant::now())) } else { None };
+                self.todos = t;
+            }
             Ev::Usage(u) => {
                 let pct = if u.window > 0 { u.context as f32 / u.window as f32 } else { 0.0 };
                 self.ctx_shown.set(pct, 600);
@@ -684,6 +746,17 @@ impl App {
             "/diff" => self.diff(),
             "/cost" | "/usage" => self.cost(),
             "/status" => self.status(),
+            "/sidebar" => {
+                let on = match arg {
+                    "on" => true,
+                    "off" => false,
+                    _ => !self.config.plan_sidebar,
+                };
+                self.config.plan_sidebar = on;
+                config::Config::update(|c| c.plan_sidebar = on);
+                self.toast(if on { "Plan sidebar on (shows when the pane is wide enough)" } else { "Plan sidebar off" }, NoticeKind::Success);
+            }
+            "/agents" | "/subagents" | "/tasks" => self.open_agents(),
             "/copy" => self.copy_last(),
             "/export" => self.export(),
             "/mcp" => {
@@ -705,7 +778,7 @@ impl App {
     }
 
     fn help(&mut self) {
-        let mut s = String::from("Keys\n  enter send · shift/alt+enter or ctrl+j newline · esc interrupt · ctrl+c clear/quit\n  shift+tab permission mode · ctrl+o expand details · ctrl+p command palette · ctrl+t model\n  ↑/↓ history · pgup/pgdn or wheel scroll · @ attach file · ctrl+v paste image · ! run shell command\n  drag to select and copy · double-click a word · triple-click a line · shift+drag for the terminal's own selection\n\nCommands\n");
+        let mut s = String::from("Keys\n  enter send · shift/alt+enter or ctrl+j newline · esc interrupt · ctrl+c clear/quit\n  shift+tab permission mode · ctrl+o expand details · ctrl+p command palette · ctrl+t model · ctrl+g subagents (ctrl+x there stops one) · ctrl+x plan (or click it)\n  ↑/↓ history · pgup/pgdn or wheel scroll · @ attach file · ctrl+v paste image · ! run shell command\n  drag to select and copy · double-click a word · triple-click a line · shift+drag for the terminal's own selection\n\nCommands\n");
         for (c, d) in COMMANDS {
             s.push_str(&format!("  {c:<10} {d}\n"));
         }
@@ -839,6 +912,167 @@ impl App {
         self.toast(msg, NoticeKind::Success);
     }
 
+    /// Subagents of this conversation (Claude Code Task/Agent calls, Codex collab agents), read
+    /// off their tool cards: running ones first, oldest first, then finished ones, newest first.
+    pub fn subagents(&self) -> Vec<Subagent<'_>> {
+        let mut out: Vec<Subagent> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(item, i)| match &i.block {
+                Block::Tool { id, name, title, output, status, started, ended, .. } if is_subagent(name) && !id.is_empty() => {
+                    // A background subagent's call returns at once; its task says how it really is.
+                    let task = self.tasks.iter().find(|t| t.tool_id.as_deref() == Some(id.as_str()));
+                    let call = *status;
+                    let status = task.map_or(call, |t| t.status);
+                    let running = status == Status::Running;
+                    let ended = if running { None } else { task.and_then(|t| t.ended).or(*ended) };
+                    // While its call runs (a foreground agent), Claude Code's bridge streams one
+                    // line per tool the subagent calls; a backgrounded call's output is just a receipt.
+                    let steps: Vec<&str> = if running && call == Status::Running { output.lines().filter(|l| !l.trim().is_empty()).collect() } else { Vec::new() };
+                    let last = match task.filter(|t| !t.last.is_empty()) {
+                        Some(t) => t.last.as_str(),
+                        None => steps.last().copied().unwrap_or(""),
+                    };
+                    Some(Subagent { id, title, status, started: *started, ended, steps: steps.len().max(task.map_or(0, |t| t.tools)), last, item })
+                }
+                _ => None,
+            })
+            .collect();
+        // Subagent tasks with no card (e.g. started before this session was resumed).
+        for t in &self.tasks {
+            let carded = t.tool_id.as_deref().is_some_and(|id| out.iter().any(|a| a.id == id));
+            if t.agent && !carded {
+                out.push(Subagent { id: &t.id, title: &t.title, status: t.status, started: t.started, ended: t.ended, steps: t.tools, last: &t.last, item: usize::MAX });
+            }
+        }
+        out.sort_by_key(|a| (a.status != Status::Running, if a.status == Status::Running { a.item as i64 } else { -(a.item as i64) }));
+        out
+    }
+
+    pub fn running_subagents(&self) -> usize {
+        self.subagents().iter().filter(|a| a.status == Status::Running).count()
+    }
+
+    #[cfg(test)]
+    pub fn on_agent_task(&mut self, t: TaskEv) {
+        self.on_task(t);
+    }
+
+    fn on_task(&mut self, t: TaskEv) {
+        let i = match self.tasks.iter().position(|x| x.id == t.id) {
+            Some(i) => i,
+            None => {
+                self.tasks.push(Task {
+                    id: t.id.clone(),
+                    tool_id: None,
+                    title: String::new(),
+                    agent: false,
+                    status: Status::Running,
+                    started: Instant::now(),
+                    ended: None,
+                    tools: 0,
+                    last: String::new(),
+                });
+                self.tasks.len() - 1
+            }
+        };
+        let task = &mut self.tasks[i];
+        if t.tool_id.is_some() {
+            task.tool_id = t.tool_id;
+        }
+        if let Some(title) = t.title {
+            task.title = title;
+        }
+        task.agent |= t.agent.is_some();
+        if let Some(n) = t.tools {
+            task.tools = n as usize;
+        }
+        if let Some(l) = t.last {
+            task.last = l;
+        }
+        match t.status.as_deref() {
+            Some("running" | "pending") => {
+                task.status = Status::Running;
+                task.ended = None;
+            }
+            Some("completed") => {
+                task.status = Status::Ok;
+                task.ended.get_or_insert_with(Instant::now);
+            }
+            Some(_) => {
+                task.status = Status::Failed;
+                task.ended.get_or_insert_with(Instant::now);
+            }
+            None => {}
+        }
+    }
+
+    fn agent_items(&self) -> Vec<PickItem> {
+        let now = Instant::now();
+        self.subagents()
+            .into_iter()
+            .take(60)
+            .map(|a| {
+                let took = super::anim::elapsed(a.ended.unwrap_or(now).duration_since(a.started));
+                let detail = match a.status {
+                    Status::Running if a.steps > 0 => format!("{took} · {} tool{} · {}", a.steps, if a.steps == 1 { "" } else { "s" }, a.last),
+                    Status::Running => format!("{took} · starting"),
+                    Status::Ok => format!("done in {took}"),
+                    Status::Failed => format!("stopped after {took}"),
+                };
+                let label = if a.title.trim().is_empty() { "(subagent)".to_string() } else { a.title.to_string() };
+                PickItem::new(label, detail, a.id).group(if a.status == Status::Running { "Running" } else { "Finished" })
+            })
+            .collect()
+    }
+
+    pub fn open_agents(&mut self) {
+        let items = self.agent_items();
+        if items.is_empty() {
+            self.toast("No subagents in this conversation yet.", NoticeKind::Info);
+            return;
+        }
+        self.open(Picker::new(PickKind::Agents, "Subagents", items));
+    }
+
+    /// Stops the running subagent picked in `/agents` (by its card id or task id).
+    fn stop_agent(&mut self, value: &str) {
+        let task = self.tasks.iter().find(|t| t.id == value || t.tool_id.as_deref() == Some(value));
+        match task {
+            Some(t) if t.status == Status::Running => {
+                let id = t.id.clone();
+                self.send(Cmd::StopTask(id));
+                self.toast("Stopping subagent…", NoticeKind::Info);
+            }
+            Some(_) => self.toast("That subagent already finished.", NoticeKind::Info),
+            // A foreground agent with no task: only interrupting the turn stops it.
+            None => self.toast("Can't stop that one on its own; esc interrupts the turn.", NoticeKind::Info),
+        }
+    }
+
+    /// Keeps an open subagent list live: new agents, progress and elapsed times.
+    pub fn refresh_agents(&mut self) {
+        if !self.picker.as_ref().is_some_and(|p| p.kind == PickKind::Agents) {
+            return;
+        }
+        let items = self.agent_items();
+        let Some(p) = &mut self.picker else { return };
+        let chosen = p.chosen().map(|i| i.value.clone());
+        p.items = items;
+        let visible = p.visible();
+        p.selected = chosen.and_then(|c| visible.iter().position(|&i| p.items[i].value == c)).unwrap_or(0).min(visible.len().saturating_sub(1));
+    }
+
+    /// Scrolls the transcript so the tool card with this id is at the top.
+    fn jump_to_tool(&mut self, id: &str) {
+        let Some(idx) = self.items.iter().position(|i| matches!(&i.block, Block::Tool { id: t, .. } if t == id)) else { return };
+        let Some(&row) = self.item_rows.get(idx).filter(|r| **r != usize::MAX) else { return };
+        let h = self.view.bottom.saturating_sub(self.view.top) as usize;
+        self.scroll = self.view.lines.len().saturating_sub(row + h);
+        self.selection = None;
+    }
+
     pub fn open_palette(&mut self) {
         let items = COMMANDS.iter().map(|(c, d)| PickItem::new(*c, *d, *c)).collect();
         self.open(Picker::new(PickKind::Palette, "Commands", items));
@@ -868,6 +1102,7 @@ impl App {
                     self.set_compaction(p.kind == PickKind::TrimAt, percent);
                 }
             }
+            PickKind::Agents => self.jump_to_tool(&item.value),
             PickKind::Session => {
                 if self.busy {
                     self.send(Cmd::Interrupt);
@@ -932,6 +1167,7 @@ impl App {
         }
         self.items.clear();
         self.todos.clear();
+        self.tasks.clear();
         self.queue.clear();
         self.usage = Usage::default();
         self.ctx_shown = Tween::new(0.0);
@@ -987,7 +1223,7 @@ impl App {
         match (u.cost, self.kind) {
             (Some(c), _) => s.push_str(&format!("\nCost: ${c:.4} (API pricing; your plan may cover it)")),
             (None, Kind::ChatGpt) => {
-                let tools = serde_json::to_string(&tools::definitions()).map(|t| t.len()).unwrap_or(0);
+                let tools = serde_json::to_string(&crate::harness::backend::chatgpt::tool_definitions()).map(|t| t.len()).unwrap_or(0);
                 s.push_str(&format!("\nBilled to your ChatGPT plan · tools ≈{} tokens per request", tools / 4));
             }
             (None, _) => {}
@@ -1079,6 +1315,11 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll += 3,
             MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(3),
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.picker.is_none() && self.plan_rows.is_some_and(|(top, bottom)| m.row >= top && m.row < bottom) {
+                    self.plan_open = !self.plan_open;
+                    self.selection = None;
+                    return;
+                }
                 if self.picker.is_some() || !self.view.contains(m.row) {
                     self.selection = None;
                     return;
@@ -1189,6 +1430,11 @@ impl App {
                 KeyCode::Down | KeyCode::Tab => p.move_by(1),
                 KeyCode::Char('p') | KeyCode::Char('k') if ctrl => p.move_by(-1),
                 KeyCode::Char('n') | KeyCode::Char('j') if ctrl => p.move_by(1),
+                KeyCode::Char('x') if ctrl && p.kind == PickKind::Agents => {
+                    if let Some(value) = p.chosen().map(|i| i.value.clone()) {
+                        self.stop_agent(&value);
+                    }
+                }
                 KeyCode::PageUp => p.move_by(-8),
                 KeyCode::PageDown => p.move_by(8),
                 KeyCode::Backspace => {
@@ -1286,6 +1532,8 @@ impl App {
             KeyCode::Char('o') if ctrl => self.toggle_expanded(),
             KeyCode::Char('p') if ctrl => self.open_palette(),
             KeyCode::Char('t') if ctrl => self.open_models(),
+            KeyCode::Char('g') if ctrl => self.open_agents(),
+            KeyCode::Char('x') if ctrl => self.plan_open = !self.plan_open,
             KeyCode::Char('l') if ctrl => self.scroll = 0,
             KeyCode::Char('a') if ctrl => self.composer.home(),
             KeyCode::Char('e') if ctrl => self.composer.end(),
@@ -1563,6 +1811,140 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_plan_opens_and_collapses_it() {
+        let mut a = app();
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.busy = true;
+        a.todos = vec![
+            Todo { content: "Read the code".into(), status: "completed".into() },
+            Todo { content: "Fix the pager".into(), status: "in_progress".into() },
+            Todo { content: "Write a test".into(), status: "pending".into() },
+        ];
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains("▸ plan") && !s.contains("Write a test"), "{s}");
+        let (top, _) = a.plan_rows.expect("plan drawn");
+        let click = |a: &mut App| a.on_term(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 5, row: top, modifiers: KeyModifiers::NONE }));
+        click(&mut a);
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains("▾ plan") && s.contains("Read the code") && s.contains("Write a test"), "{s}");
+        let (top, _) = a.plan_rows.unwrap();
+        let click = |a: &mut App| a.on_term(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 5, row: top, modifiers: KeyModifiers::NONE }));
+        click(&mut a);
+        assert!(!a.plan_open);
+        // ctrl+x does the same.
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)));
+        assert!(a.plan_open);
+    }
+
+    #[test]
+    fn finished_plan_clears_away() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.busy = true;
+        let todo = |s: &str| Todo { content: "Ship it".into(), status: s.into() };
+        a.on_agent(g, Ev::Todos(vec![todo("in_progress")]));
+        assert!(screen(&mut a, 100, 30).contains("Ship it"));
+        a.on_agent(g, Ev::Todos(vec![todo("completed")]));
+        // Still up for a moment, even while the agent keeps working…
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains("1/1") && s.contains("all done"), "{s}");
+        // …then gone.
+        a.plan_done = Some(Instant::now() - Duration::from_secs(10));
+        assert!(!screen(&mut a, 100, 30).contains("1/1"));
+    }
+
+    #[test]
+    fn plan_goes_to_a_sidebar_when_wide() {
+        let mut a = app();
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.busy = true;
+        a.todos = vec![
+            Todo { content: "Read the code".into(), status: "completed".into() },
+            Todo { content: "Fix the off-by-one in the pager".into(), status: "in_progress".into() },
+        ];
+        a.config.plan_sidebar = true;
+        let wide = screen(&mut a, 140, 30);
+        let row = |s: &str, needle: &str| s.lines().find(|l| l.contains(needle)).map(|l| l.find(needle).unwrap()).unwrap_or(0);
+        // On the right, next to the conversation.
+        assert!(row(&wide, "Fix the off-by-one") > 90, "{wide}");
+        assert!(wide.contains("plan") && wide.contains("1/2"), "{wide}");
+        // Narrow: above the prompt instead.
+        let narrow = screen(&mut a, 100, 30);
+        // Narrow: one compact line above the prompt (the finished step isn't listed).
+        assert!(narrow.lines().any(|l| l.contains("plan") && l.contains("1/2") && l.contains("Fix the off-by-one")), "{narrow}");
+        assert!(!narrow.contains("Read the code"), "{narrow}");
+        // Off: never on the side.
+        a.config.plan_sidebar = false;
+        let off = screen(&mut a, 140, 30);
+        assert!(off.lines().any(|l| l.contains("1/2") && l.contains("Fix the off-by-one")), "{off}");
+    }
+
+    #[test]
+    fn background_subagents_stay_running_until_their_task_ends() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.on_agent(g, Ev::ToolStart { id: "t1".into(), name: "Agent".into(), title: "Map the repo".into(), input: json!({}) });
+        // Claude Code returns a backgrounded agent's call at once.
+        a.on_agent(g, Ev::ToolEnd { id: "t1".into(), ok: true, output: "Launched in the background".into(), diff: None });
+        assert_eq!(a.running_subagents(), 0);
+        let task = |status: Option<&str>, tools: Option<u64>| Ev::Task(TaskEv { id: "k1".into(), tool_id: Some("t1".into()), agent: Some("Explore".into()), status: status.map(str::to_string), tools, last: Some("Grep".into()), ..Default::default() });
+        a.on_agent(g, task(Some("running"), None));
+        a.on_agent(g, task(None, Some(4)));
+        assert_eq!(a.running_subagents(), 1);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("1 agent · Map the repo · 4 tools · Grep"), "{s}");
+        a.on_agent(g, task(Some("completed"), None));
+        assert_eq!(a.running_subagents(), 0);
+        let s = screen(&mut a, 120, 30);
+        assert!(!s.contains("1 agent"), "{s}");
+    }
+
+    #[test]
+    fn subagents_show_in_the_status_bar_and_their_picker() {
+        let mut a = app();
+        let g = a.generation;
+        let start = |a: &mut App, id: &str, title: &str| a.on_agent(g, Ev::ToolStart { id: id.into(), name: "Agent".into(), title: title.into(), input: json!({}) });
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        start(&mut a, "t1", "Find auth code");
+        start(&mut a, "t2", "Review tests");
+        a.on_agent(g, Ev::ToolOutput { id: "t1".into(), chunk: "Grep login src\nRead auth.rs\n".into() });
+        a.on_agent(g, Ev::ToolEnd { id: "t2".into(), ok: true, output: "fine".into(), diff: None });
+        assert_eq!(a.running_subagents(), 1);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("1 agent · Find auth code"), "{s}");
+
+        start(&mut a, "t3", "Check docs");
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("2 agents"), "{s}");
+
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)));
+        assert_eq!(a.picker.as_ref().unwrap().kind, PickKind::Agents);
+        a.overlay = Tween::new(1.0);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("Subagents") && s.contains("Running") && s.contains("Finished") && s.contains("ctrl+x stop"), "{s}");
+        assert!(s.contains("2 tools · Read auth.rs") && s.contains("done in"), "{s}");
+
+        // The list stays live while open.
+        a.on_agent(g, Ev::ToolEnd { id: "t1".into(), ok: true, output: "found".into(), diff: None });
+        screen(&mut a, 120, 30);
+        let p = a.picker.as_ref().unwrap();
+        assert_eq!(p.items.iter().filter(|i| i.group == "Running").count(), 1);
+
+        // Enter jumps to the chosen agent's card.
+        for _ in 0..30 {
+            a.items.push(Item::new(Block::Assistant { id: format!("m{}", a.items.len()), text: "filler".into() }));
+        }
+        screen(&mut a, 120, 30);
+        key(&mut a, KeyCode::Enter);
+        assert!(a.picker.is_none());
+        assert!(a.scroll > 0);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("Check docs"), "{s}");
+    }
+
+    #[test]
     fn renders_the_welcome_and_a_conversation() {
         let mut a = app();
         let s = screen(&mut a, 90, 30);
@@ -1602,7 +1984,7 @@ mod tests {
         assert_eq!(a.view.text(&sel), "beta\n\ngamma");
         let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
         term.draw(|f| super::super::view::draw(f, &mut a)).unwrap();
-        assert_eq!(term.backend().buffer()[(x0, y0)].bg, super::super::theme::SELECTION);
+        assert_eq!(term.backend().buffer()[(x0, y0)].bg, super::super::theme::SELECTION());
         // A key press drops the mark.
         key(&mut a, KeyCode::Esc);
         assert!(a.selection.is_none());

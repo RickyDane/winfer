@@ -1,4 +1,4 @@
-//! Fuzzy-filtered lists: the model picker, command palette, session browser, completions.
+//! Fuzzy-filtered lists: the model picker, command palette, session browser, subagents, completions.
 
 use std::time::Instant;
 
@@ -35,6 +35,8 @@ pub enum PickKind {
     Compaction,
     TrimAt,
     CompactAt,
+    /// Live list of subagents; enter jumps to the agent's card.
+    Agents,
 }
 
 pub struct Picker {

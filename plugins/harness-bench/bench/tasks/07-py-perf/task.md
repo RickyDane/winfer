@@ -1,0 +1,1 @@
+`dedupe_contacts` and `count_paths` in datatools/ are far too slow on real inputs (100k+ contacts, grids of several hundred cells per side). Make both fast without changing their results or signatures; read the docstrings for the exact behavior. `python3 -m unittest discover -s tests` must still pass.
