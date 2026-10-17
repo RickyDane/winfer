@@ -56,16 +56,12 @@ fn tools() -> Value {
         },
         {
             "name": "spawn_agent",
-            "description": "Start a new agent pane in this workspace, optionally with a first prompt. By default it gets its own git worktree so it can't overwrite other agents' files. Providers: claude, codex, agy, grok, opencode, cursor, shell (only installed ones work); default is your own. Leave model and effort out to let winfer pick them: give a tier, or a short task description, and simple work (searching, mechanical edits) runs on a cheaper model.",
+            "description": "Start a new agent pane in this workspace, optionally with a first prompt. By default it gets its own git worktree so it can't overwrite other agents' files. Providers: claude, codex, agy, grok, opencode, cursor, pi, shell (only installed ones work).",
             "inputSchema": { "type": "object", "properties": {
                 "provider": { "type": "string" },
                 "prompt": { "type": "string" },
-                "worktree": { "type": "boolean" },
-                "model": { "type": "string", "description": "Model to run, e.g. sonnet; overrides routing" },
-                "effort": { "type": "string", "description": "Reasoning effort, e.g. low, medium, high" },
-                "tier": { "type": "string", "enum": ["cheap", "standard", "frontier", "auto"], "description": "How capable a model the work needs" },
-                "task": { "type": "string", "description": "One line on what the agent will do, used to pick a model" }
-            } }
+                "worktree": { "type": "boolean" }
+            }, "required": ["provider"] }
         },
         {
             "name": "open_url",
@@ -253,7 +249,8 @@ pub fn winfer_server(pane_id: &str) -> Option<Server> {
     })
 }
 
-/// CLI arguments that register `servers` with an agent (Claude Code or Codex; OpenCode: [`agent_env`]).
+/// CLI arguments that register `servers` with an agent (Claude Code or Codex; OpenCode and pi:
+/// [`agent_env`]).
 pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
     if servers.is_empty() {
         return Vec::new();
@@ -308,8 +305,21 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
 /// Environment that registers `servers` (and winfer's status `plugin`, a directory) with an
 /// agent configured through its environment (OpenCode reads extra config from
 /// `OPENCODE_CONFIG_CONTENT`). `existing` is the variable's current value, if the user set one:
-/// ours are added to it.
+/// ours are added to it. pi's winfer extension registers the servers in `WINFER_PI_MCP`.
 pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, auto_approve: bool, existing: Option<&str>) -> Vec<(String, String)> {
+    if provider_id == "pi" {
+        if servers.is_empty() {
+            return Vec::new();
+        }
+        let config: serde_json::Map<String, Value> = servers
+            .iter()
+            .map(|s| {
+                let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+                (s.name.to_string(), json!({ "command": s.command, "args": s.args, "env": env }))
+            })
+            .collect();
+        return vec![("WINFER_PI_MCP".into(), Value::Object(config).to_string())];
+    }
     if (servers.is_empty() && plugin.is_none() && !auto_approve) || provider_id != "opencode" {
         return Vec::new();
     }
@@ -387,6 +397,23 @@ mod tests {
         let config: Value = serde_json::from_str(&env[0].1).unwrap();
         assert_eq!(config["permission"], json!({"bash": "ask", "edit": "allow", "webfetch": "allow"}));
         assert!(agent_env("opencode", &[], None, false, None).is_empty());
+    }
+
+    #[test]
+    fn pi_gets_servers_through_its_extension_env() {
+        let servers = [Server {
+            name: "winfer",
+            command: "/app/winfer".into(),
+            args: vec!["mcp-stdio".into()],
+            env: vec![("WINFER_PANE_ID", "p-1".into())],
+        }];
+        assert!(agent_env("pi", &[], None, false, None).is_empty());
+        let env = agent_env("pi", &servers, None, false, None);
+        assert_eq!(env[0].0, "WINFER_PI_MCP");
+        let config: Value = serde_json::from_str(&env[0].1).unwrap();
+        assert_eq!(config["winfer"]["command"], "/app/winfer");
+        assert_eq!(config["winfer"]["args"], json!(["mcp-stdio"]));
+        assert_eq!(config["winfer"]["env"]["WINFER_PANE_ID"], "p-1");
     }
 
     fn env() -> (String, String, String) {

@@ -1,8 +1,8 @@
 //! Agent status via the agents' own hook systems.
 //!
 //! A tiny HTTP server on 127.0.0.1 (random port, random token) receives events from
-//! Claude Code hooks, the Codex `notify` program and OpenCode 2's plugin
-//! (resources/opencode-plugin.js), and forwards them to the webview as
+//! Claude Code hooks, the Codex `notify` program, OpenCode 2's plugin
+//! (resources/opencode-plugin.js) and pi's extension (resources/pi-extension.js), and forwards them to the webview as
 //! `agent://status`. PTYs get `WINFER_HOOK` / `WINFER_TOKEN` so the hook program
 //! (`winfer hook`, see [`run_hook`]) can reach it.
 
@@ -21,6 +21,8 @@ pub struct HookServer {
     pub claude_settings: PathBuf,
     /// Directory of the OpenCode plugin, listed in its `plugins` config.
     pub opencode_plugin: PathBuf,
+    /// pi extension file, passed via `--extension`; it also registers winfer's MCP servers.
+    pub pi_extension: PathBuf,
 }
 
 static SERVER: OnceLock<HookServer> = OnceLock::new();
@@ -45,10 +47,6 @@ struct StatusEvent {
     session: Option<String>,
     /// The agent's final reply of the turn, on "done" events that carry it.
     reply: Option<String>,
-    /// The tool that just ran (Claude Code's PostToolUse), and the subagent it handed work to
-    /// when that tool was `Agent`; plugins see which work got delegated.
-    tool: Option<String>,
-    subagent: Option<String>,
 }
 
 /// Maps a provider hook event to a pane status.
@@ -65,6 +63,10 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
         ("opencode", "permission.asked" | "form.created" | "session.execution.failed") => Some("needs-input"),
         ("opencode", "session.execution.succeeded") => Some("done"),
         ("opencode", "session.execution.interrupted") => Some("idle"),
+        ("pi", "session_start" | "agent_aborted") => Some("idle"),
+        ("pi", "agent_start" | "ui_prompt_end") => Some("working"),
+        ("pi", "ui_prompt_start") => Some("needs-input"),
+        ("pi", "agent_settled") => Some("done"),
         _ => None,
     }
 }
@@ -125,16 +127,6 @@ fn transcript_reply(path: &str) -> Option<String> {
     None
 }
 
-/// The subagent a Claude Code `Agent` (formerly `Task`) tool call went to; built-in agents
-/// without a type count as "general-purpose".
-fn subagent_of(json: &Value) -> Option<String> {
-    if !matches!(json.get("tool_name")?.as_str()?, "Agent" | "Task") {
-        return None;
-    }
-    let kind = json.get("tool_input").and_then(|i| i.get("subagent_type")).and_then(Value::as_str);
-    Some(kind.filter(|k| !k.is_empty()).unwrap_or("general-purpose").to_string())
-}
-
 /// The hook program: `winfer hook <provider> <event>`, run without a shell (Claude Code's
 /// exec form, Codex's `notify` argv). A shell command wouldn't work everywhere: on Windows,
 /// Claude Code runs hooks in PowerShell when Git Bash isn't installed, and Codex uses no shell.
@@ -185,6 +177,10 @@ pub fn provider_args(provider_id: &str) -> Vec<String> {
                 .collect();
             vec!["-c".into(), format!("notify=[{}]", argv.join(","))]
         }
+        "pi" => vec![
+            "--extension".into(),
+            server.pi_extension.to_string_lossy().into_owned(),
+        ],
         _ => Vec::new(),
     }
 }
@@ -241,6 +237,8 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
     )?;
     let opencode_plugin = data_dir.join("opencode-plugin");
     write_opencode_plugin(&opencode_plugin)?;
+    let pi_extension = data_dir.join("pi-extension.js");
+    std::fs::write(&pi_extension, include_str!("../resources/pi-extension.js"))?;
 
     let token = format!("{:032x}", rand::random::<u128>());
     let status_app = app.clone();
@@ -260,6 +258,7 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
         token,
         claude_settings: settings_path,
         opencode_plugin,
+        pi_extension,
     });
     Ok(())
 }
@@ -321,8 +320,6 @@ fn serve(
                         let message = field("message");
                         let session = field("thread-id").or_else(|| field("session_id"));
                         let reply = if status == "done" { json.as_ref().and_then(last_reply) } else { None };
-                        let tool = field("tool_name");
-                        let subagent = json.as_ref().and_then(subagent_of);
                         emit(StatusEvent {
                             pane_id: pane_id.clone(),
                             provider: provider.clone(),
@@ -331,8 +328,6 @@ fn serve(
                             message,
                             session,
                             reply,
-                            tool,
-                            subagent,
                         });
                     }
                     204
@@ -371,14 +366,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_the_subagent_of_agent_calls() {
-        let call = |tool: &str, input: Value| json!({ "tool_name": tool, "tool_input": input });
-        assert_eq!(subagent_of(&call("Agent", json!({ "subagent_type": "scout" }))).as_deref(), Some("scout"));
-        assert_eq!(subagent_of(&call("Task", json!({}))).as_deref(), Some("general-purpose"));
-        assert_eq!(subagent_of(&call("Bash", json!({ "subagent_type": "scout" }))), None);
-    }
-
-    #[test]
     fn maps_events_to_statuses() {
         assert_eq!(status_for("claude", "Stop"), Some("done"));
         assert_eq!(status_for("claude", "Notification"), Some("needs-input"));
@@ -386,6 +373,10 @@ mod tests {
         assert_eq!(status_for("opencode", "permission.asked"), Some("needs-input"));
         assert_eq!(status_for("opencode", "form.created"), Some("needs-input"));
         assert_eq!(status_for("opencode", "session.execution.succeeded"), Some("done"));
+        assert_eq!(status_for("pi", "agent_start"), Some("working"));
+        assert_eq!(status_for("pi", "ui_prompt_start"), Some("needs-input"));
+        assert_eq!(status_for("pi", "agent_settled"), Some("done"));
+        assert_eq!(status_for("pi", "agent_aborted"), Some("idle"));
         assert_eq!(status_for("claude", "Unknown"), None);
     }
 

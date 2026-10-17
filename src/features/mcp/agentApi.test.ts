@@ -21,7 +21,7 @@ const terminal = await import("@/features/terminal/xtermRegistry");
 
 const pane = (id: string, provider: string) => ({
   id, workspaceId: "ws", provider, title: "api", cwd: "~", status: "idle" as const, worktree: null,
-  wantsWorktree: false, resume: false, sessionId: null, unseen: false, devUrl: null, raceId: null, plain: false, prompt: null, model: null, effort: null, route: null, agentTitle: null, customTitle: null,
+  wantsWorktree: false, resume: false, sessionId: null, unseen: false, devUrl: null, raceId: null, plain: false, prompt: null, model: null, agentTitle: null, customTitle: null,
 });
 
 beforeEach(() => {

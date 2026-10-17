@@ -11,7 +11,6 @@ import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
 import { execute } from "@/commands/bus";
 import { describeRequest } from "./request";
 import { setLastReply } from "./replies";
-import { emitPluginEvent } from "@/features/plugins/plugins";
 import { logActivity } from "@/stores/activity";
 import { speak } from "@/features/voice/readback";
 import { agentFinished } from "@/features/review/reviews";
@@ -139,11 +138,7 @@ export function startStatusTracking() {
   if (started) return;
   started = true;
   void listen<Parameters<typeof onNotificationAction>[0]>("notification://action", ({ payload }) => onNotificationAction(payload));
-  void listen<{ paneId: string; provider: string; status: AgentStatus; message?: string; reply?: string | null; session?: string | null; tool?: string | null; subagent?: string | null }>("agent://status", ({ payload }) => {
-    if (payload.tool) {
-      const pane = useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === payload.paneId);
-      if (pane) emitPluginEvent({ type: "pane.tool", paneId: pane.id, workspaceId: pane.workspaceId, provider: pane.provider, tool: payload.tool, subagent: payload.subagent ?? null });
-    }
+  void listen<{ paneId: string; status: AgentStatus; message?: string; reply?: string | null; session?: string | null }>("agent://status", ({ payload }) => {
     // Remembered so the pane (or its worktree, reopened later) resumes this very session.
     if (payload.session) useWorkspaces.getState().setPaneSession(payload.paneId, payload.session);
     // Set before the status change so plugins see the reply with the "done" event.

@@ -78,25 +78,16 @@ export async function runTool(call: Call): Promise<string> {
       return `Sent to ${describe(ws, pane)}.`;
     }
     case "spawn_agent": {
-      const wanted = a.provider ?? self.provider;
-      const provider = s.providers.find((p) => p.id === wanted && p.installed);
+      const provider = s.providers.find((p) => p.id === a.provider && p.installed);
       if (!provider) {
         const available = s.providers.filter((p) => p.installed).map((p) => p.id).join(", ");
-        throw new ToolError(`Unknown or uninstalled provider “${String(wanted)}”. Available: ${available}.`);
-      }
-      const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
-      const effort = text(a.effort);
-      if (effort && provider.efforts?.length && !provider.efforts.includes(effort)) {
-        throw new ToolError(`${provider.name} has no effort “${effort}”. Use one of: ${provider.efforts.join(", ")}.`);
+        throw new ToolError(`Unknown or uninstalled provider “${String(a.provider)}”. Available: ${available}.`);
       }
       const id = s.addPane(provider.id, {
         workspaceId: ws.id,
-        prompt: text(a.prompt),
+        prompt: typeof a.prompt === "string" ? a.prompt : undefined,
         worktree: a.worktree === undefined ? undefined : Boolean(a.worktree),
         splitFrom: self.id,
-        model: text(a.model),
-        effort,
-        route: { origin: "agent", tier: text(a.tier), task: text(a.task) ?? text(a.prompt), explicitModel: !!text(a.model) },
       });
       const fresh = useWorkspaces.getState().workspaces.find((w) => w.id === ws.id)!;
       const pane = fresh.panes.find((p) => p.id === id)!;

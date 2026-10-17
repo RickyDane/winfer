@@ -45,26 +45,10 @@ export interface Pane {
   prompt: string | null;
   /** Model the agent runs with; null means the CLI's default. */
   model: string | null;
-  /** Reasoning effort the agent runs with (one of its provider's `efforts`); null means the CLI's default. */
-  effort: string | null;
-  /** Why and by whom the pane was started, for plugins that pick its model (see `RouteHint`). */
-  route: RouteHint | null;
   /** Title the agent gave its terminal (Claude Code: the session's topic), cleaned up. */
   agentTitle: string | null;
   /** Name the user gave the session; replaces the agent's title wherever the pane is shown. */
   customTitle: string | null;
-}
-
-/** How a pane came to be, so a router plugin can pick a model and effort for it. */
-export interface RouteHint {
-  /** Started by the user, by another agent (`spawn_agent`) or by a plugin's workflow. */
-  origin: "user" | "agent" | "workflow";
-  /** Requested capability: "cheap", "standard", "frontier", or "auto" to let the router decide. */
-  tier?: string;
-  /** Short description of the work, for routing. */
-  task?: string;
-  /** A model was named explicitly; routers keep it. */
-  explicitModel?: boolean;
 }
 
 export interface Workspace {
@@ -160,7 +144,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; effort?: string; route?: RouteHint; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
   ) => string;
   removePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
@@ -316,7 +300,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !!p.sessionId || !resumed.has(key);
         if (!p.sessionId) resumed.add(key);
-        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, effort: p.effort ?? null, route: p.route ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -432,8 +416,6 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             plain: opts?.plain ?? false,
             prompt: opts?.prompt ?? null,
             model: opts?.model ?? get().agentModels[provider] ?? null,
-            effort: opts?.effort ?? null,
-            route: opts?.route ?? (opts?.model ? { origin: "user", explicitModel: true } : null),
           },
         ],
         layout: insertDwindle(w.layout, id, opts?.splitFrom ?? (background ? null : focusedPaneId)),
@@ -573,7 +555,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; plain?: boolean; model?: string | null; effort?: string | null; route?: RouteHint | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; plain?: boolean; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -619,7 +601,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, effort, route, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, effort, route, agentTitle, customTitle, sessionId })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
     })),
     ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions },
   };

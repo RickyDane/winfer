@@ -22,10 +22,6 @@ export interface Provider {
   modelArg: string | null;
   /** Typed into a running session to switch models (`{model}` is replaced), if supported. */
   modelCommand: string | null;
-  /** Reasoning effort levels the CLI accepts at launch, lowest first (empty: no effort flag). */
-  efforts?: string[];
-  /** Takes subagent definitions at launch (Claude Code's `--agents`). */
-  agentsArg?: string | null;
   /** Launch flags that skip permission prompts (offered as "auto-approve" in settings). */
   autoApproveArgs?: string[];
   installed: boolean;
@@ -47,4 +43,5 @@ export const PROVIDER_COLORS: Record<string, string> = {
   grok: "var(--color-fg-muted)",
   opencode: "#f5b544",
   cursor: "#a0a0ff",
+  pi: "#7ee787",
 };

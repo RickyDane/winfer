@@ -71,13 +71,6 @@ pub struct SpawnRequest {
     /// Model to launch with (the provider's `modelArg`); `None` uses the CLI's default.
     #[serde(default)]
     model: Option<String>,
-    /// Reasoning effort (the provider's `effortArgs`); a level it doesn't list is ignored.
-    #[serde(default)]
-    effort: Option<String>,
-    /// Subagent definitions passed with the provider's `agentsArg` (Claude's `--agents`), keyed by
-    /// name; e.g. cheaper models the agent can hand work to.
-    #[serde(default)]
-    agents: Option<serde_json::Value>,
     /// Skip the agent's permission prompts (its `autoApproveArgs`), from settings.
     #[serde(default)]
     auto_approve: bool,
@@ -193,26 +186,13 @@ fn system_prompt_args(provider: &providers::Provider, prompt: &str) -> Vec<Strin
         .collect()
 }
 
-/// The provider's effort flags and subagent definitions. An effort it doesn't list, or empty
-/// agents, add nothing.
-fn launch_args(provider: &providers::Provider, effort: Option<&str>, agents: Option<&serde_json::Value>) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(effort) = effort.filter(|e| provider.efforts.iter().any(|x| x == e)) {
-        args.extend(provider.effort_args.iter().map(|a| a.replace("{effort}", effort)));
-    }
-    let agents = agents.filter(|a| a.as_object().is_some_and(|o| !o.is_empty()));
-    if let (Some(flag), Some(agents)) = (&provider.agents_arg, agents) {
-        args.extend([flag.clone(), agents.to_string()]);
-    }
-    args
-}
-
 /// Arguments that keep an agent from loading the user's own MCP servers and skills, for a
 /// plain A/B test run. Simple flags, so they're safe in the MCP position of [`agent_args`].
 fn plain_args(provider_id: &str) -> Vec<String> {
     match provider_id {
         "claude" => vec!["--strict-mcp-config".into(), "--disable-slash-commands".into()],
         "codex" => vec!["-c".into(), "mcp_servers={}".into()],
+        "pi" => vec!["--no-mcp".into(), "--no-skills".into()],
         _ => Vec::new(),
     }
 }
@@ -250,12 +230,6 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             // Multi-line text doesn't survive cmd.exe, so batch launchers go without.
             if let (Some(system), false) = (&req.system_prompt, launcher.batch) {
                 let extra = system_prompt_args(&provider, system);
-                provider.args.extend(extra);
-            }
-            // Global options, so in `args` they precede the model and subcommands. Quoted and JSON
-            // values don't survive cmd.exe; plain A/B runs get no extra agents.
-            if !launcher.batch {
-                let extra = launch_args(&provider, req.effort.as_deref(), req.agents.as_ref().filter(|_| !req.plain));
                 provider.args.extend(extra);
             }
             // Only OpenCode 2 plugins have the API ours uses (and OpenCode 1 reads `plugin`).
@@ -513,8 +487,6 @@ mod tests {
             session: None,
             prompt: None,
             model: None,
-            effort: None,
-            agents: None,
             auto_approve: false,
             system_prompt: None,
             plain: false,
@@ -606,22 +578,6 @@ mod tests {
     }
 
     #[test]
-    fn effort_and_agents_become_launch_flags() {
-        let claude = &providers::find("claude").unwrap();
-        let agents = serde_json::json!({ "scout": { "description": "search", "prompt": "find", "model": "haiku" } });
-        assert_eq!(
-            launch_args(claude, Some("low"), Some(&agents)),
-            ["--effort".to_string(), "low".into(), "--agents".into(), agents.to_string()]
-        );
-        // Levels the CLI doesn't know and empty agent lists are left out.
-        assert!(launch_args(claude, Some("minimal"), Some(&serde_json::json!({}))).is_empty());
-        let codex = &providers::find("codex").unwrap();
-        assert_eq!(launch_args(codex, Some("minimal"), Some(&agents)), ["-c", "model_reasoning_effort=\"minimal\""]);
-        let opencode = &providers::find("opencode").unwrap();
-        assert!(launch_args(opencode, Some("high"), None).is_empty());
-    }
-
-    #[test]
     fn system_prompt_goes_in_a_flag_or_the_start_prompt() {
         let req = |provider: &str, prompt: Option<&str>, resume: bool| SpawnRequest {
             pane_id: "p".into(),
@@ -632,8 +588,6 @@ mod tests {
             session: None,
             prompt: prompt.map(Into::into),
             model: None,
-            effort: None,
-            agents: None,
             auto_approve: false,
             system_prompt: Some("Use your tools.".into()),
             plain: false,
@@ -686,8 +640,6 @@ mod tests {
             session: None,
             prompt: None,
             model: None,
-            effort: None,
-            agents: None,
             auto_approve: false,
             system_prompt: None,
             plain: false,

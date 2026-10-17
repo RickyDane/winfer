@@ -1,7 +1,8 @@
 //! Token use over the last 90 days and what it would cost at API prices.
 //!
 //! The agents' own logs are the source: Claude Code's transcripts (`~/.claude/projects`),
-//! Codex's session logs (`~/.codex/sessions`) and OpenCode's database. They're read
+//! Codex's session logs (`~/.codex/sessions`), Pi's (`~/.pi/agent/sessions`) and OpenCode's
+//! database. They're read
 //! incrementally into `usage.db` (one row per model call), so the history survives the
 //! agents cleaning up their logs (Claude Code deletes transcripts after 30 days). Rows older
 //! than 90 days are dropped.
@@ -146,6 +147,11 @@ impl UsageHistory {
         if let Some(root) = codex_sessions() {
             for file in jsonl_files(&root, cutoff) {
                 let _ = scan_file(&mut conn, &file, cutoff, codex_events);
+            }
+        }
+        if let Some(root) = pi_sessions() {
+            for file in jsonl_files(&root, cutoff) {
+                let _ = scan_file(&mut conn, &file, cutoff, pi_events);
             }
         }
         let _ = scan_opencode(&mut conn, cutoff);
@@ -547,6 +553,50 @@ fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<E
     })
 }
 
+// Pi --------------------------------------------------------------------------------------------
+
+fn pi_sessions() -> Option<PathBuf> {
+    let dir = std::env::var_os("PI_CODING_AGENT_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".pi").join("agent")))?;
+    Some(dir.join("sessions"))
+}
+
+/// An assistant message in a session log. The first line names the session and its folder;
+/// `state` carries both across scans. Pi reports the cost at API prices itself.
+fn pi_events(line: &str, _path: &Path, _at: u64, state: &mut Value) -> Option<Event> {
+    if line.starts_with(r#"{"type":"session""#) {
+        let v: Value = serde_json::from_str(line).ok()?;
+        state["session"] = v["id"].clone();
+        if let Some(cwd) = v["cwd"].as_str() {
+            state["cwd"] = norm_dir(cwd).into();
+        }
+        return None;
+    }
+    if !line.contains("\"usage\"") || !line.contains("\"assistant\"") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    let m = &v["message"];
+    if v["type"] != "message" || m["role"] != "assistant" {
+        return None;
+    }
+    let u = &m["usage"];
+    let session = state["session"].as_str();
+    Some(Event {
+        id: format!("pi:{}:{}", session.unwrap_or(""), v["id"].as_str()?),
+        at: timestamp(&v)?,
+        provider: "pi".into(),
+        model: m["model"].as_str()?.into(),
+        input: n(&u["input"]),
+        output: n(&u["output"]),
+        cache_read: n(&u["cacheRead"]),
+        cache_write: n(&u["cacheWrite"]),
+        cost: u["cost"]["total"].as_f64().filter(|c| *c > 0.0),
+        cwd: state["cwd"].as_str().map(String::from),
+        session: session.map(String::from),
+    })
+    .filter(|e| e.input + e.output + e.cache_read + e.cache_write > 0)
+}
+
 // OpenCode --------------------------------------------------------------------------------------
 
 /// Assistant messages updated since the last scan (with a day's margin for ones still running).
@@ -908,6 +958,19 @@ mod tests {
         assert_eq!(e.cwd.as_deref(), Some("/w/codex-1"));
         assert!(codex_events(&count(1050), path, 20, &mut state).is_none());
         assert!(codex_events(&count(2100), path, 30, &mut state).is_some());
+    }
+
+    #[test]
+    fn reads_pi_sessions() {
+        let mut state = Value::Null;
+        let path = Path::new("s.jsonl");
+        let head = r#"{"type":"session","version":3,"id":"s1","timestamp":"2026-10-17T09:02:36.379Z","cwd":"/w/pi-1/"}"#;
+        let msg = r#"{"type":"message","id":"d72a326c","timestamp":"2026-10-17T09:02:45.913Z","message":{"role":"assistant","model":"gpt-6.1-sol","usage":{"input":1341,"output":122,"cacheRead":12288,"cacheWrite":0,"cost":{"total":0.0051}}}}"#;
+        assert!(pi_events(head, path, 0, &mut state).is_none());
+        let e = pi_events(msg, path, 10, &mut state).unwrap();
+        assert_eq!((e.id.as_str(), e.model.as_str(), e.input, e.output, e.cache_read), ("pi:s1:d72a326c", "gpt-6.1-sol", 1341, 122, 12288));
+        assert_eq!((e.cwd.as_deref(), e.session.as_deref(), e.cost), (Some("/w/pi-1"), Some("s1"), Some(0.0051)));
+        assert!(pi_events(r#"{"type":"message","message":{"role":"user"}}"#, path, 20, &mut state).is_none());
     }
 
     #[test]

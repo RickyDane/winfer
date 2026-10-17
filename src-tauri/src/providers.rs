@@ -45,15 +45,6 @@ pub struct Provider {
     /// Typed into a running session to switch models; `{model}` is replaced.
     #[serde(default)]
     pub model_command: Option<String>,
-    /// Launch flags that set the reasoning effort; `{effort}` is replaced.
-    #[serde(default)]
-    pub effort_args: Vec<String>,
-    /// Effort levels the CLI accepts, lowest first; others are never passed.
-    #[serde(default)]
-    pub efforts: Vec<String>,
-    /// Flag that takes subagent definitions as JSON, e.g. Claude's `--agents`.
-    #[serde(default)]
-    pub agents_arg: Option<String>,
     /// Launch flags that skip permission prompts, added when auto-approve is on in settings.
     #[serde(default)]
     pub auto_approve_args: Vec<String>,
@@ -89,7 +80,8 @@ pub struct ModelInfo {
     pub label: String,
 }
 
-/// Parses a CLI's model list: `id<TAB>label`, `id - label` or bare ids; skips headers and noise.
+/// Parses a CLI's model list: `id<TAB>label`, `id - label`, bare ids, or a `provider  model ...`
+/// table (pi's `--list-models`, read as `provider/model`); skips headers and noise.
 pub fn parse_models(output: &str) -> Vec<ModelInfo> {
     let ansi = |s: &str| {
         let mut out = String::new();
@@ -115,11 +107,20 @@ pub fn parse_models(output: &str) -> Vec<ModelInfo> {
                 .all(|c| c.is_ascii_alphanumeric() || "-._/:#@[]".contains(c))
     };
     let mut seen = std::collections::HashSet::new();
+    let mut table = false;
     output
         .lines()
         .map(|l| ansi(l).trim().to_string())
         .filter_map(|line| {
-            let (id, label) = if let Some((id, label)) = line.split_once('\t') {
+            let columns: Vec<&str> = line.split_whitespace().collect();
+            if columns.len() > 2 && columns[0] == "provider" && columns[1] == "model" {
+                table = true;
+                return None;
+            }
+            let (id, label) = if table && columns.len() > 1 {
+                let id = format!("{}/{}", columns[0], columns[1]);
+                (id.clone(), id)
+            } else if let Some((id, label)) = line.split_once('\t') {
                 (id.trim().to_string(), label.trim().to_string())
             } else if let Some((id, label)) = line.split_once(" - ") {
                 (id.trim().to_string(), label.trim().to_string())
@@ -209,19 +210,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effort_flags_name_a_placeholder_and_levels() {
-        for p in builtin().iter().filter(|p| !p.effort_args.is_empty()) {
-            assert!(p.effort_args.iter().any(|a| a.contains("{effort}")), "{} effortArgs lack {{effort}}", p.id);
-            assert!(!p.efforts.is_empty(), "{} has effortArgs but no efforts", p.id);
-        }
-    }
-
-    #[test]
     fn reads_opencode_major_version() {
         assert_eq!(opencode_major("opencode v2.0.28\n"), Some(2));
         assert_eq!(opencode_major("0.15.3"), Some(0));
         assert_eq!(opencode_major("1.4.0"), Some(1));
         assert_eq!(opencode_major(""), None);
+    }
+
+    #[test]
+    fn parses_the_pi_model_table() {
+        let pi = "provider  model          context  max-out  thinking  images\nopenai    gpt-4.1        1.0M     32.8K    no        yes\nanthropic claude-opus-4-6 200K   64K      yes       yes\n";
+        let ids: Vec<String> = parse_models(pi).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec!["openai/gpt-4.1", "anthropic/claude-opus-4-6"]);
     }
 
     #[test]
@@ -346,7 +346,7 @@ mod live {
     #[test]
     #[ignore]
     fn live_model_lists() {
-        for id in ["claude", "agy", "cursor", "opencode", "codex"] {
+        for id in ["claude", "agy", "cursor", "opencode", "codex", "pi"] {
             let p = super::find(id).unwrap();
             if !super::is_installed(&p) {
                 continue;

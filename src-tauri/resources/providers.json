@@ -41,18 +41,6 @@
       }
     ],
     "modelCommand": "/model {model}",
-    "effortArgs": [
-      "--effort",
-      "{effort}"
-    ],
-    "efforts": [
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max"
-    ],
-    "agentsArg": "--agents",
     "autoApproveArgs": [
       "--dangerously-skip-permissions"
     ],
@@ -89,17 +77,6 @@
     "promptArg": true,
     "approveInput": "y",
     "modelArg": "--model",
-    "effortArgs": [
-      "-c",
-      "model_reasoning_effort=\"{effort}\""
-    ],
-    "efforts": [
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh"
-    ],
     "autoApproveArgs": [
       "--dangerously-bypass-approvals-and-sandbox"
     ],
@@ -202,6 +179,54 @@
       ],
       "url": "https://cursor.com/install",
       "after": "downloads.cursor.com/lab/"
+    }
+  },
+  {
+    "id": "pi",
+    "name": "Pi",
+    "command": "pi",
+    "args": [],
+    "aliases": [
+      "pi",
+      "pie",
+      "pi agent"
+    ],
+    "resumeArgs": [
+      "--continue"
+    ],
+    "resumeSessionArgs": [
+      "--session",
+      "{session}"
+    ],
+    "statusHooks": true,
+    "promptArg": true,
+    "modelArg": "--model",
+    "modelsCommand": [
+      "--list-models"
+    ],
+    "effortArgs": [
+      "--thinking",
+      "{effort}"
+    ],
+    "efforts": [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "systemPromptArgs": [
+      "--append-system-prompt",
+      "{prompt}"
+    ],
+    "update": {
+      "args": [
+        "update",
+        "--self"
+      ],
+      "npm": "@earendil-works/pi-coding-agent"
     }
   },
   {

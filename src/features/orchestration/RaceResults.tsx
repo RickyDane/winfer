@@ -4,7 +4,7 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { formatCost, formatTokens } from "@/features/usage/history";
-import { refreshTaskCosts, type DirUsage } from "@/features/usage/taskCost";
+import { normDir, refreshSessionCosts, refreshTaskCosts, type DirUsage } from "@/features/usage/taskCost";
 import { worktreeDiff } from "@/features/worktree/worktree";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { closeRaceResults, useRaceResults } from "./resultsStore";
@@ -89,11 +89,18 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
         ),
       ),
     ]);
-    const norm = (d: string) => d.replace(/\\/g, "/").replace(/(.)\/+$/, "$1");
-    setUsage(Object.fromEntries(withTree.flatMap((p) => {
-      const u = found.find((d) => norm(d.dir) === norm(p.worktree!.path));
-      return u ? [[p.id, u]] : [];
-    })));
+    const byPane = new Map(withTree.flatMap((p) => {
+      const u = found.find((d) => normDir(d.dir) === normDir(p.worktree!.path));
+      return u ? [[p.id, u] as const] : [];
+    }));
+    // An agent can move its session out of the worktree (OpenCode's own worktrees): its session's spend stands in.
+    const moved = panes.filter((p) => p.sessionId && !byPane.get(p.id)?.calls);
+    const sessions = await refreshSessionCosts(moved.map((p) => p.sessionId!));
+    for (const p of moved) {
+      const u = sessions.find((d) => d.dir === p.sessionId);
+      if (u?.calls) byPane.set(p.id, u);
+    }
+    setUsage(Object.fromEntries(byPane));
     setLoading(false);
   }, [panes]);
 
