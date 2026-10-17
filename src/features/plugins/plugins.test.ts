@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 
-import { fillTemplate, loadPlugins, runPanelAction, usePlugins, matchesSearch, pluginAgentToolList, pluginPages, runPluginAgentTool, pluginRecipes, pluginToolId, pluginTools, runPluginCommand, setPluginDispatch, toolFromSpec } from "./plugins";
+import { applySpawnPatch, applySpawnTransforms, type SpawnPlan, fillTemplate, loadPlugins, runPanelAction, usePlugins, matchesSearch, pluginAgentToolList, pluginPages, runPluginAgentTool, pluginRecipes, pluginToolId, pluginTools, runPluginCommand, setPluginDispatch, toolFromSpec } from "./plugins";
 import { toast } from "@/stores/toasts";
 import { useWorkspaces } from "@/stores/workspaces";
 
@@ -185,5 +185,43 @@ describe("store search", () => {
     expect(matchesSearch("key secr", ["Secrets", "Keep API keys"])).toBe(true);
     expect(matchesSearch("passwords", ["Secrets", null, "security passwords"])).toBe(true);
     expect(matchesSearch("docker", ["Secrets"])).toBe(false);
+  });
+});
+
+describe("spawn transforms", () => {
+  const plan: SpawnPlan = {
+    paneId: "p1", workspaceId: "w1", provider: "claude", cwd: "/repo", model: "opus", effort: null, prompt: "go",
+    systemPrompt: "Be brief.", agents: null, route: null, resume: false, plain: false,
+  };
+
+  it("appends system prompts, merges agents and replaces the rest", () => {
+    const scout = { description: "d", prompt: "p", model: "haiku" };
+    const next = applySpawnPatch(applySpawnPatch(plan, { model: "sonnet", effort: "low", systemPrompt: "Delegate.", agents: { scout } }), { agents: { worker: scout } });
+    expect(next).toMatchObject({ model: "sonnet", effort: "low", prompt: "go", systemPrompt: "Be brief.\n\nDelegate." });
+    expect(Object.keys(next.agents!)).toEqual(["scout", "worker"]);
+    expect(applySpawnPatch(plan, undefined)).toBe(plan);
+  });
+
+  it("chains transforms and skips ones that throw or hang", async () => {
+    vi.useFakeTimers();
+    try {
+      const seen: (string | null)[] = [];
+      const result = applySpawnTransforms(plan, [
+        () => ({ model: "sonnet" }),
+        () => {
+          throw new Error("broken");
+        },
+        () => new Promise(() => {}),
+        (p) => {
+          seen.push(p.model);
+          return { effort: "medium" };
+        },
+      ]);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await result).toMatchObject({ model: "sonnet", effort: "medium" });
+      expect(seen).toEqual(["sonnet"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

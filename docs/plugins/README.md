@@ -100,7 +100,7 @@ export function deactivate() {}  // optional
 | `registerTool(spec)` | Like a `tools` entry; `run(args)` may replace `commands`. |
 | `registerCommand(name, handler)` | Handler for `{ type: "plugin.run", plugin, command, args }`, usable from declarative tools too. |
 | `execute(command)` | Runs any Command Bus command. |
-| `on(type, handler)` | Events: `pane.opened`, `pane.closed`, `pane.status` (`status`, `previous`: idle / working / needs-input / done / error). |
+| `on(type, handler)` | Events: `pane.opened`, `pane.closed`, `pane.status` (`status`, `previous`: idle / working / needs-input / done / error), `pane.tool` (`tool` an agent ran, from its hooks — Claude Code only; `subagent` names the subagent of an `Agent` call). |
 | `state()` | Snapshot of `workspaces` (with panes), `activeWorkspaceId`, `focusedPaneId`. |
 | `describePane(paneId)` | `{ paneId, workspaceId, workspaceName, cwd, provider, label }` like an agent tool's `caller`, or null. |
 | `readPane(paneId, lines?)` | The last `lines` (default 40) of a pane's terminal as plain text, or null. |
@@ -115,6 +115,10 @@ export function deactivate() {}  // optional
 | `registerPanelAction({ id, panel, title, icon?, label?, active?, run() })` | A button on a side panel's toolbar: `panel` is `"browser"` (the address bar) or `"android"` (the mirror's device bar). `title` is the tooltip, `label` short text beside the icon, `active` draws it highlighted. Icons as for pages, plus camera, record and stop. |
 | `updatePanelAction(id, { title?, icon?, label?, active? })` | Changes how one of the plugin's panel buttons looks, e.g. to show a running time. |
 | `registerAgentTool({ name, description, inputSchema?, run(args, caller) })` | A tool agents started by winfer can call (served by winfer's MCP server). `caller` has `paneId`, `workspaceId`, `workspaceName`, `cwd`, `provider` and `label`; return the text the agent sees, or throw. |
+| `registerSpawnTransform(fn)` | Runs before every agent pane starts. `fn(plan)` gets `{ paneId, workspaceId, provider, cwd, model, effort, prompt, systemPrompt, agents, route, resume, plain }` and may return (or resolve to) a patch of `model`, `effort`, `prompt`, `systemPrompt` (appended) and `agents` (merged; Claude Code subagents `{ description, prompt, tools?, model?, effort? }` by name). `route` says who started the pane (`origin`: user / agent / workflow) and may carry a `tier` and `task`. Transforms run in plugin order; one that throws or takes over 3s is skipped. |
+| `llm({ system, user, provider?, model? })` | One question to an LLM through a local CLI (`provider` `"claude"` or `"codex"`); without `provider`, the one set in Settings → AI. |
+| `spawnAgent({ provider, workspaceId?, prompt?, worktree?, model?, effort?, route?, splitFrom? })` | Starts an agent pane (off-screen if its workspace isn't shown); resolves to its pane id. Spawn transforms see `route` (default `{ origin: "workflow" }`). |
+| `callAgentTool(name, args, asPaneId)` | Runs a plugin agent tool (e.g. the task board's `board_post`) as the agent in that pane. |
 | `vault` | Secrets in the OS keychain, per plugin (below). |
 
 Each `register*` and `on` returns a function that undoes it; everything is undone when the plugin

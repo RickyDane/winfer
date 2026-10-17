@@ -21,7 +21,7 @@ import type { Args, ParamDef, ToolDef } from "@/tools/registry";
 import type { Recipe } from "@/features/recipes/recipes";
 import { PRESETS } from "@/features/layout/tree";
 import { toast } from "@/stores/toasts";
-import { providerName, useWorkspaces, type AgentStatus, type Pane, type Workspace } from "@/stores/workspaces";
+import { providerName, useWorkspaces, type AgentStatus, type Pane, type RouteHint, type Workspace } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { describeRequest, type AgentRequest } from "@/features/status/request";
 import { lastReply } from "@/features/status/replies";
@@ -78,7 +78,42 @@ export interface ToolSpec {
 export type PluginEvent =
   | { type: "pane.status"; paneId: string; workspaceId: string; provider: string; status: AgentStatus; previous: AgentStatus }
   | { type: "pane.opened"; paneId: string; workspaceId: string; provider: string }
-  | { type: "pane.closed"; paneId: string; workspaceId: string; provider: string };
+  | { type: "pane.closed"; paneId: string; workspaceId: string; provider: string }
+  /** A tool the agent ran (from its hooks; Claude Code only); `subagent` names who got an `Agent` call. */
+  | { type: "pane.tool"; paneId: string; workspaceId: string; provider: string; tool: string; subagent: string | null };
+
+/** A subagent a Claude Code session can hand work to (its `--agents` JSON). */
+export interface SubagentDef {
+  description: string;
+  prompt: string;
+  tools?: string[];
+  model?: string;
+  effort?: string;
+}
+
+/** What a new agent pane is about to start with; spawn transforms may change parts of it. */
+export interface SpawnPlan {
+  paneId: string;
+  workspaceId: string;
+  provider: string;
+  cwd: string;
+  model: string | null;
+  effort: string | null;
+  prompt: string | null;
+  /** Added to the agent's system prompt (the user's from settings, then what transforms add). */
+  systemPrompt: string | null;
+  /** Subagents, for providers that take them (`agentsArg`, i.e. Claude Code). */
+  agents: Record<string, SubagentDef> | null;
+  route: RouteHint | null;
+  /** Restoring an earlier session: its model shouldn't change. */
+  resume: boolean;
+  /** A/B baseline: should run without additions. */
+  plain: boolean;
+}
+
+/** What a spawn transform may change. `systemPrompt` is appended and `agents` merged. */
+export type SpawnPatch = Partial<Pick<SpawnPlan, "model" | "effort" | "prompt" | "systemPrompt" | "agents">>;
+export type SpawnTransform = (plan: Readonly<SpawnPlan>) => SpawnPatch | void | Promise<SpawnPatch | void>;
 
 type Disposer = () => void;
 
@@ -179,6 +214,17 @@ export interface PluginApi {
   registerPage(spec: PageSpec): Disposer;
   registerAgentTool(spec: AgentToolSpec): Disposer;
   registerPanelAction(spec: PanelActionSpec): Disposer;
+  /** Runs before every agent pane starts and may change its model, effort, prompts and subagents. */
+  registerSpawnTransform(fn: SpawnTransform): Disposer;
+  /** One question to an LLM through a local CLI; without `provider` it's the one set in Settings → AI. */
+  llm(opts: { system: string; user: string; provider?: "claude" | "codex"; model?: string }): Promise<string>;
+  /**
+   * Starts an agent pane (in the background if its workspace isn't shown) and resolves to its id.
+   * `route` defaults to `{ origin: "workflow" }`, so a router plugin may pick its model.
+   */
+  spawnAgent(opts: { provider: string; workspaceId?: string; prompt?: string; worktree?: boolean; model?: string; effort?: string; route?: RouteHint; splitFrom?: string }): Promise<string>;
+  /** Calls an agent tool (winfer's plugins', e.g. `board_post`) as if the agent in `asPaneId` had. */
+  callAgentTool(name: string, args: Record<string, unknown>, asPaneId: string): Promise<string>;
   /** Changes how one of this plugin's panel buttons looks. */
   updatePanelAction(id: string, look: Partial<PanelActionLook>): void;
   /** Shows one of this plugin's pages. */
@@ -219,6 +265,7 @@ interface Runtime {
   tools: ToolDef[];
   pages: PluginPage[];
   agentTools: AgentToolSpec[];
+  spawnTransforms: SpawnTransform[];
   commands: Map<string, (args: Args) => void | Promise<void>>;
   listeners: Set<(e: PluginEvent) => void>;
   disposers: Disposer[];
@@ -397,6 +444,41 @@ export function agentCaller(paneId: string): AgentCaller | null {
   };
 }
 
+const TRANSFORM_TIMEOUT_MS = 3000;
+
+/** Merges a transform's patch into the plan: `systemPrompt` is appended, `agents` merged. */
+export function applySpawnPatch(plan: SpawnPlan, patch: SpawnPatch | void): SpawnPlan {
+  if (!patch) return plan;
+  const next = { ...plan };
+  if (patch.model !== undefined) next.model = patch.model;
+  if (patch.effort !== undefined) next.effort = patch.effort;
+  if (patch.prompt !== undefined) next.prompt = patch.prompt;
+  if (patch.systemPrompt?.trim()) next.systemPrompt = [plan.systemPrompt, patch.systemPrompt].filter((p) => p?.trim()).join("\n\n");
+  if (patch.agents) next.agents = { ...plan.agents, ...patch.agents };
+  return next;
+}
+
+/**
+ * Runs every enabled plugin's spawn transforms in order. One that throws or takes longer than 3s
+ * is skipped, so a broken plugin can't keep agents from starting.
+ */
+export async function applySpawnTransforms(plan: SpawnPlan, transforms = enabledPlugins().flatMap((p) => runtimes.get(p.id)?.spawnTransforms ?? [])): Promise<SpawnPlan> {
+  for (const transform of transforms) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out")), TRANSFORM_TIMEOUT_MS);
+      });
+      plan = applySpawnPatch(plan, await Promise.race([Promise.resolve(transform(structuredClone(plan))), timeout]));
+    } catch (err) {
+      console.error("spawn transform failed", err);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return plan;
+}
+
 /** Recipes from every enabled plugin; invalid ones are skipped. */
 export function pluginRecipes(): Recipe[] {
   return enabledPlugins().flatMap((p) =>
@@ -474,6 +556,38 @@ function makeApi(id: string, runtime: Runtime): PluginApi {
       return track(() => {
         runtime.agentTools = runtime.agentTools.filter((t) => t !== spec);
       });
+    },
+    registerSpawnTransform(fn) {
+      if (typeof fn !== "function") throw new Error("a spawn transform must be a function");
+      runtime.spawnTransforms = [...runtime.spawnTransforms, fn];
+      return track(() => {
+        runtime.spawnTransforms = runtime.spawnTransforms.filter((t) => t !== fn);
+      });
+    },
+    async llm({ system, user, provider, model }) {
+      if (!provider) return (await import("@/features/llm/llm")).llmCompose(system, user);
+      return invoke<string>("llm_compose", { req: { provider, model: model ?? "", system, user } });
+    },
+    async spawnAgent({ provider, workspaceId, prompt, worktree, model, effort, route, splitFrom }) {
+      const s = useWorkspaces.getState();
+      if (!s.providers.some((p) => p.id === provider && p.installed)) throw new Error(`${provider} isn't installed`);
+      const target = workspaceId ?? s.activeWorkspaceId;
+      if (!s.workspaces.some((w) => w.id === target)) throw new Error(`no workspace ${target}`);
+      const paneId = s.addPane(provider, { workspaceId: target, prompt, worktree, model, effort, route: route ?? { origin: "workflow", explicitModel: !!model }, splitFrom });
+      if (target !== useWorkspaces.getState().activeWorkspaceId) {
+        // Imported here: the terminal registry imports the Command Bus, which imports this module.
+        const { startDetached } = await import("@/features/terminal/xtermRegistry");
+        const pane = useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === paneId);
+        if (pane) startDetached(pane);
+      }
+      return paneId;
+    },
+    async callAgentTool(name, args, asPaneId) {
+      const caller = agentCaller(asPaneId);
+      if (!caller) throw new Error(`pane ${asPaneId} is gone`);
+      const result = await runPluginAgentTool(name, args, caller);
+      if (result === null) throw new Error(`no plugin offers the agent tool ${name}`);
+      return result;
     },
     registerPanelAction(spec) {
       if (!spec?.id || !spec.title || typeof spec.run !== "function") throw new Error("a panel action needs id, title and run");
@@ -567,7 +681,7 @@ async function importModule(id: string): Promise<PluginModule> {
 
 async function activate(plugin: PluginInfo) {
   const manifest = plugin.manifest!;
-  const runtime: Runtime = { tools: [], pages: [], agentTools: [], commands: new Map(), listeners: new Set(), disposers: [], module: null };
+  const runtime: Runtime = { tools: [], pages: [], agentTools: [], spawnTransforms: [], commands: new Map(), listeners: new Set(), disposers: [], module: null };
   runtimes.set(plugin.id, runtime);
   setRuntimeError(plugin.id, null);
   const problems: string[] = [];
@@ -660,7 +774,8 @@ export function matchesSearch(query: string, fields: (string | null | undefined)
   return query.toLowerCase().split(/\s+/).filter(Boolean).every((word) => haystack.includes(word));
 }
 
-function emit(event: PluginEvent) {
+/** Hands an event to every plugin listening for its type. */
+export function emitPluginEvent(event: PluginEvent) {
   for (const runtime of runtimes.values()) {
     for (const listener of runtime.listeners) {
       try {
@@ -687,11 +802,11 @@ export function startPluginEvents() {
     for (const [id, pane] of current) {
       const before = previous.get(id);
       const base = { paneId: id, workspaceId: pane.workspaceId, provider: pane.provider };
-      if (!before) emit({ type: "pane.opened", ...base });
-      else if (before.status !== pane.status) emit({ type: "pane.status", ...base, status: pane.status, previous: before.status });
+      if (!before) emitPluginEvent({ type: "pane.opened", ...base });
+      else if (before.status !== pane.status) emitPluginEvent({ type: "pane.status", ...base, status: pane.status, previous: before.status });
     }
     for (const [id, pane] of previous) {
-      if (!current.has(id)) emit({ type: "pane.closed", paneId: id, workspaceId: pane.workspaceId, provider: pane.provider });
+      if (!current.has(id)) emitPluginEvent({ type: "pane.closed", paneId: id, workspaceId: pane.workspaceId, provider: pane.provider });
     }
     previous = current;
   });

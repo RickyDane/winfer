@@ -1,0 +1,16 @@
+{
+  "id": "model-router",
+  "name": "Model Router",
+  "version": "1.0.0",
+  "description": "Spends top-model tokens only where they matter. Claude Code sessions get cheap subagents (Haiku for searching and reading, Sonnet for mechanical edits) they hand simple work to, and agents started by other agents run on the cheapest model and effort the task needs, picked by rules with an LLM fallback.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": [
+    "agents",
+    "models",
+    "cost",
+    "routing",
+    "effort",
+    "subagents"
+  ]
+}

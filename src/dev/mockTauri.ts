@@ -15,8 +15,8 @@ const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
 
 const providers = [
-  { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: ["--continue"], resumeSessionArgs: ["--resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--dangerously-skip-permissions"], installed: true },
-  { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], resumeSessionArgs: ["resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--dangerously-bypass-approvals-and-sandbox"], installed: true },
+  { id: "claude", name: "Claude Code", command: "claude", args: [], resumeArgs: ["--continue"], resumeSessionArgs: ["--resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, efforts: ["low", "medium", "high", "xhigh", "max"], agentsArg: "--agents", autoApproveArgs: ["--dangerously-skip-permissions"], installed: true },
+  { id: "codex", name: "Codex", command: "codex", args: [], resumeArgs: ["resume", "--last"], resumeSessionArgs: ["resume", "{session}"], aliases: [], statusHooks: true, promptArg: true, approveInput: null, modelArg: null, modelCommand: null, efforts: ["minimal", "low", "medium", "high", "xhigh"], autoApproveArgs: ["--dangerously-bypass-approvals-and-sandbox"], installed: true },
   { id: "agy", name: "Antigravity", command: "agy", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
   { id: "grok", name: "Grok Build", command: "grok", args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: false },
   { id: "opencode", name: "OpenCode", command: "opencode", args: [], resumeArgs: ["--continue"], resumeSessionArgs: ["--session", "{session}"], aliases: [], statusHooks: !!SHOWCASE, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, autoApproveArgs: ["--auto"], installed: true },
@@ -272,13 +272,14 @@ mockIPC(
         localStorage.setItem("winfer-mock-state", JSON.stringify(a.snapshot));
         return null;
       case "pty_spawn": {
-        const { paneId, providerId, cwd, resume, prompt } = a.req;
+        const { paneId, providerId, cwd, resume, prompt, model, effort, agents } = a.req;
         channels.set(paneId, a.onData);
         if (SHOWCASE && transcript(paneId)) {
           send(a.onData, transcript(paneId)!);
           return { attached: false, pid: 1 };
         }
-        send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}${prompt ? ` · prompt: ${prompt}` : ""}\x1b[0m\r\n$ `);
+        const launch = [model && `model ${model}`, effort && `effort ${effort}`, agents && `subagents ${Object.keys(agents).join(", ")}`].filter(Boolean).join(" · ");
+        send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}${launch ? ` · ${launch}` : ""}${prompt ? ` · prompt: ${prompt}` : ""}\x1b[0m\r\n$ `);
         return { attached: false, pid: 1 };
       }
       case "pty_write": {

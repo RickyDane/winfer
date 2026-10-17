@@ -19,6 +19,7 @@ import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
 import { terminalTheme } from "@/features/theme/themes";
+import { applySpawnTransforms } from "@/features/plugins/plugins";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 
@@ -254,19 +255,40 @@ async function spawn(entry: Entry) {
     detectDevServer(entry, data);
   };
   try {
+    const pane = entry.pane;
+    // Plugins (e.g. a model router) may pick the model and effort and add subagents.
+    const plan = pane.provider === "shell" ? null : await applySpawnTransforms({
+      paneId: pane.id,
+      workspaceId: pane.workspaceId,
+      provider: pane.provider,
+      cwd: pane.worktree?.path ?? pane.cwd,
+      model: pane.model,
+      effort: pane.effort,
+      prompt: pane.prompt,
+      systemPrompt: systemPromptOf(useWorkspaces.getState()),
+      agents: null,
+      route: pane.route,
+      resume: pane.resume,
+      plain: pane.plain,
+    });
+    if (plan && (plan.model !== pane.model || plan.effort !== pane.effort)) {
+      useWorkspaces.getState().updatePane(pane.id, { model: plan.model, effort: plan.effort });
+    }
     const { pid } = await invoke<{ pid: number | null }>("pty_spawn", {
       req: {
-        paneId: entry.pane.id,
-        providerId: entry.pane.provider,
-        cwd: entry.pane.cwd,
-        workspaceId: entry.pane.workspaceId,
-        resume: entry.pane.resume,
-        session: entry.pane.resume ? entry.pane.sessionId : null,
-        prompt: entry.pane.prompt,
-        model: entry.pane.model,
-        autoApprove: useWorkspaces.getState().autoApprove.includes(entry.pane.provider),
-        systemPrompt: systemPromptOf(useWorkspaces.getState()),
-        plain: entry.pane.plain,
+        paneId: pane.id,
+        providerId: pane.provider,
+        cwd: pane.cwd,
+        workspaceId: pane.workspaceId,
+        resume: pane.resume,
+        session: pane.resume ? pane.sessionId : null,
+        prompt: plan ? plan.prompt : pane.prompt,
+        model: plan ? plan.model : pane.model,
+        effort: plan ? plan.effort : pane.effort,
+        agents: plan?.agents ?? null,
+        autoApprove: useWorkspaces.getState().autoApprove.includes(pane.provider),
+        systemPrompt: plan ? plan.systemPrompt : systemPromptOf(useWorkspaces.getState()),
+        plain: pane.plain,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },

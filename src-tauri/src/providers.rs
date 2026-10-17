@@ -45,6 +45,15 @@ pub struct Provider {
     /// Typed into a running session to switch models; `{model}` is replaced.
     #[serde(default)]
     pub model_command: Option<String>,
+    /// Launch flags that set the reasoning effort; `{effort}` is replaced.
+    #[serde(default)]
+    pub effort_args: Vec<String>,
+    /// Effort levels the CLI accepts, lowest first; others are never passed.
+    #[serde(default)]
+    pub efforts: Vec<String>,
+    /// Flag that takes subagent definitions as JSON, e.g. Claude's `--agents`.
+    #[serde(default)]
+    pub agents_arg: Option<String>,
     /// Launch flags that skip permission prompts, added when auto-approve is on in settings.
     #[serde(default)]
     pub auto_approve_args: Vec<String>,
@@ -198,6 +207,14 @@ pub async fn providers_models(id: String) -> Result<Vec<ModelInfo>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_flags_name_a_placeholder_and_levels() {
+        for p in builtin().iter().filter(|p| !p.effort_args.is_empty()) {
+            assert!(p.effort_args.iter().any(|a| a.contains("{effort}")), "{} effortArgs lack {{effort}}", p.id);
+            assert!(!p.efforts.is_empty(), "{} has effortArgs but no efforts", p.id);
+        }
+    }
 
     #[test]
     fn reads_opencode_major_version() {

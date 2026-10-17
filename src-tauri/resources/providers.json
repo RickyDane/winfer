@@ -41,6 +41,18 @@
       }
     ],
     "modelCommand": "/model {model}",
+    "effortArgs": [
+      "--effort",
+      "{effort}"
+    ],
+    "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "agentsArg": "--agents",
     "autoApproveArgs": [
       "--dangerously-skip-permissions"
     ],
@@ -77,6 +89,17 @@
     "promptArg": true,
     "approveInput": "y",
     "modelArg": "--model",
+    "effortArgs": [
+      "-c",
+      "model_reasoning_effort=\"{effort}\""
+    ],
+    "efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "autoApproveArgs": [
       "--dangerously-bypass-approvals-and-sandbox"
     ],

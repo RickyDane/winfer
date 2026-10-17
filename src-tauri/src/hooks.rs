@@ -45,6 +45,10 @@ struct StatusEvent {
     session: Option<String>,
     /// The agent's final reply of the turn, on "done" events that carry it.
     reply: Option<String>,
+    /// The tool that just ran (Claude Code's PostToolUse), and the subagent it handed work to
+    /// when that tool was `Agent`; plugins see which work got delegated.
+    tool: Option<String>,
+    subagent: Option<String>,
 }
 
 /// Maps a provider hook event to a pane status.
@@ -119,6 +123,16 @@ fn transcript_reply(path: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The subagent a Claude Code `Agent` (formerly `Task`) tool call went to; built-in agents
+/// without a type count as "general-purpose".
+fn subagent_of(json: &Value) -> Option<String> {
+    if !matches!(json.get("tool_name")?.as_str()?, "Agent" | "Task") {
+        return None;
+    }
+    let kind = json.get("tool_input").and_then(|i| i.get("subagent_type")).and_then(Value::as_str);
+    Some(kind.filter(|k| !k.is_empty()).unwrap_or("general-purpose").to_string())
 }
 
 /// The hook program: `winfer hook <provider> <event>`, run without a shell (Claude Code's
@@ -307,6 +321,8 @@ fn serve(
                         let message = field("message");
                         let session = field("thread-id").or_else(|| field("session_id"));
                         let reply = if status == "done" { json.as_ref().and_then(last_reply) } else { None };
+                        let tool = field("tool_name");
+                        let subagent = json.as_ref().and_then(subagent_of);
                         emit(StatusEvent {
                             pane_id: pane_id.clone(),
                             provider: provider.clone(),
@@ -315,6 +331,8 @@ fn serve(
                             message,
                             session,
                             reply,
+                            tool,
+                            subagent,
                         });
                     }
                     204
@@ -351,6 +369,14 @@ fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_the_subagent_of_agent_calls() {
+        let call = |tool: &str, input: Value| json!({ "tool_name": tool, "tool_input": input });
+        assert_eq!(subagent_of(&call("Agent", json!({ "subagent_type": "scout" }))).as_deref(), Some("scout"));
+        assert_eq!(subagent_of(&call("Task", json!({}))).as_deref(), Some("general-purpose"));
+        assert_eq!(subagent_of(&call("Bash", json!({ "subagent_type": "scout" }))), None);
+    }
 
     #[test]
     fn maps_events_to_statuses() {

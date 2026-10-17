@@ -56,12 +56,16 @@ fn tools() -> Value {
         },
         {
             "name": "spawn_agent",
-            "description": "Start a new agent pane in this workspace, optionally with a first prompt. By default it gets its own git worktree so it can't overwrite other agents' files. Providers: claude, codex, agy, grok, opencode, cursor, shell (only installed ones work).",
+            "description": "Start a new agent pane in this workspace, optionally with a first prompt. By default it gets its own git worktree so it can't overwrite other agents' files. Providers: claude, codex, agy, grok, opencode, cursor, shell (only installed ones work); default is your own. Leave model and effort out to let winfer pick them: give a tier, or a short task description, and simple work (searching, mechanical edits) runs on a cheaper model.",
             "inputSchema": { "type": "object", "properties": {
                 "provider": { "type": "string" },
                 "prompt": { "type": "string" },
-                "worktree": { "type": "boolean" }
-            }, "required": ["provider"] }
+                "worktree": { "type": "boolean" },
+                "model": { "type": "string", "description": "Model to run, e.g. sonnet; overrides routing" },
+                "effort": { "type": "string", "description": "Reasoning effort, e.g. low, medium, high" },
+                "tier": { "type": "string", "enum": ["cheap", "standard", "frontier", "auto"], "description": "How capable a model the work needs" },
+                "task": { "type": "string", "description": "One line on what the agent will do, used to pick a model" }
+            } }
         },
         {
             "name": "open_url",
