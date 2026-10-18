@@ -681,15 +681,19 @@ impl Bridge {
 // stock vs 26.1k with a lean prompt, 20.4k with just unused features off).
 
 /// Codex loads a skill by reading its SKILL.md with the shell: `cat ~/.agents/skills/caveman/SKILL.md`
-/// → `caveman`. Commands that do anything else stay Bash cards.
+/// (or `Get-Content -LiteralPath 'C:\…\caveman\SKILL.md'` on Windows) → `caveman`. Commands that
+/// do anything else stay Bash cards.
 fn skill_reads(command: &str) -> Option<String> {
+    let command = command.replace('\\', "/");
     let mut words = command.split_whitespace();
-    if !matches!(words.next()?, "cat" | "sed" | "head" | "nl" | "less" | "bat") || command.contains(['|', ';', '>', '&']) {
+    let reader = words.next()?.to_ascii_lowercase();
+    let readers = ["cat", "sed", "head", "nl", "less", "bat", "get-content", "gc", "type"];
+    if !readers.contains(&reader.as_str()) || command.contains(['|', ';', '>', '&']) {
         return None;
     }
     let names: Vec<&str> = words
         .filter_map(|w| w.trim_matches(['\'', '"']).strip_suffix("/SKILL.md"))
-        .filter_map(|dir| dir.rsplit('/').next())
+        .filter_map(|dir| dir.trim_end_matches('/').rsplit('/').next())
         .filter(|n| !n.is_empty())
         .collect();
     (!names.is_empty()).then(|| names.join(", "))
@@ -722,17 +726,42 @@ fn first_arg(args: &Value) -> String {
 
 /// `/bin/zsh -lc 'ls -la'` → `ls -la`.
 fn strip_shell(command: &str) -> String {
+    let unquote = |rest: &str| {
+        let rest = rest.trim();
+        let unquoted = rest
+            .strip_prefix('\'')
+            .and_then(|r| r.strip_suffix('\''))
+            .or_else(|| rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')));
+        unquoted.unwrap_or(rest).to_string()
+    };
     for prefix in ["/bin/zsh -lc ", "/bin/bash -lc ", "bash -lc ", "zsh -lc ", "/bin/sh -c "] {
         if let Some(rest) = command.strip_prefix(prefix) {
-            let rest = rest.trim();
-            let unquoted = rest
-                .strip_prefix('\'')
-                .and_then(|r| r.strip_suffix('\''))
-                .or_else(|| rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')));
-            return unquoted.unwrap_or(rest).to_string();
+            return unquote(rest);
         }
     }
-    command.to_string()
+    strip_powershell(command).map(unquote).unwrap_or_else(|| command.to_string())
+}
+
+/// On Windows Codex runs commands as `"C:\…\pwsh.exe" -Command "…"` (or powershell.exe, maybe
+/// with -NoProfile/-NoLogo first): the part after `-Command`.
+fn strip_powershell(command: &str) -> Option<&str> {
+    let (exe, rest) = match command.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"')?,
+        None => command.split_once(' ')?,
+    };
+    let exe = exe.rsplit(['\\', '/']).next()?.to_ascii_lowercase();
+    if !matches!(exe.as_str(), "pwsh" | "pwsh.exe" | "powershell" | "powershell.exe") {
+        return None;
+    }
+    let mut rest = rest.trim_start();
+    loop {
+        let (flag, after) = rest.split_once(' ')?;
+        match flag.to_ascii_lowercase().as_str() {
+            "-command" | "-c" => return Some(after),
+            "-noprofile" | "-nologo" | "-noninteractive" => rest = after.trim_start(),
+            _ => return None,
+        }
+    }
 }
 
 fn changed_paths(item: &Value) -> String {
@@ -850,6 +879,12 @@ mod tests {
         assert_eq!(skill_reads("sed -n 1,200p '/x/skills/graphify/SKILL.md'").as_deref(), Some("graphify"));
         assert_eq!(skill_reads("cat /x/skills/caveman/SKILL.md | wc -l"), None);
         assert_eq!(skill_reads("cat README.md"), None);
+        let pwsh = r#""C:\Program Files\PowerShell\7\pwsh.exe" -Command "Get-Content -LiteralPath 'C:\Users\rp\.agents\skills\caveman\SKILL.md'""#;
+        assert_eq!(skill_reads(&strip_shell(pwsh)).as_deref(), Some("caveman"));
+        let escaped = r#""C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-Content -LiteralPath 'C:\\Users\\rp\\.agents\\skills\\caveman\\SKILL.md'""#;
+        assert_eq!(skill_reads(&strip_shell(escaped)).as_deref(), Some("caveman"));
+        assert_eq!(strip_shell(r#"powershell.exe -NoProfile -Command "git status""#), "git status");
+        assert_eq!(strip_shell("pwsh.exe -File x.ps1"), "pwsh.exe -File x.ps1");
     }
 
     #[test]

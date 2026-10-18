@@ -32,8 +32,9 @@ pub fn attach_console(args: Vec<String>) -> Vec<String> {
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
     use windows_sys::Win32::System::Console::{
         ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-        SetStdHandle,
+        SetConsoleCP, SetConsoleOutputCP, SetStdHandle,
     };
+    const CP_UTF8: u32 = 65001;
 
     // SAFETY: plain Win32 calls with valid, NUL-terminated names; runs before any other thread.
     unsafe {
@@ -61,6 +62,9 @@ pub fn attach_console(args: Vec<String>) -> Vec<String> {
                 }
             }
         }
+        // The TUI writes UTF-8; under the console's OEM code page (850, 437…) `❯` shows as `ÔØ»`.
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
     }
 
     let Some(passed) = std::env::var(CODE_ARGS_ENV)
