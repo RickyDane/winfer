@@ -298,6 +298,7 @@ async function spawn(entry: Entry) {
         autoApprove: useWorkspaces.getState().autoApprove.includes(entry.pane.provider),
         systemPrompt: systemPromptOf(useWorkspaces.getState()),
         plain: entry.pane.plain,
+        lean: entry.pane.provider === "codex" && useWorkspaces.getState().leanCodex,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },

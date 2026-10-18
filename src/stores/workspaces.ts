@@ -95,6 +95,8 @@ interface WorkspaceState {
   agentModels: Record<ProviderId, string>;
   /** Agents started with their permission prompts skipped (persisted). */
   autoApprove: ProviderId[];
+  /** Start Codex without its bundled apps, plugins and extra tools (persisted, default on). */
+  leanCodex: boolean;
   /** Added to every agent's system prompt at start (persisted); null = DEFAULT_SYSTEM_PROMPT, "" = none. */
   systemPrompt: string | null;
   /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
@@ -172,6 +174,7 @@ interface WorkspaceState {
   loadModels: (provider: ProviderId) => Promise<ModelInfo[]>;
   setAgentModel: (provider: ProviderId, model: string | null) => void;
   setAutoApprove: (provider: ProviderId, on: boolean) => void;
+  setLeanCodex: (on: boolean) => void;
   setSystemPrompt: (prompt: string | null) => void;
   setDefaultProvider: (provider: ProviderId | null) => void;
   setEditor: (editor: string | null) => void;
@@ -271,6 +274,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   models: {},
   agentModels: {},
   autoApprove: [],
+  leanCodex: true,
   systemPrompt: null,
   defaultProvider: null,
   editor: null,
@@ -330,6 +334,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       recipes: ui.recipes ?? [],
       agentModels: ui.agentModels ?? {},
       autoApprove: ui.autoApprove ?? [],
+      leanCodex: ui.leanCodex ?? true,
       systemPrompt: ui.systemPrompt ?? null,
       defaultProvider: ui.defaultProvider ?? null,
       editor: ui.editor ?? null,
@@ -513,6 +518,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       return { agentModels };
     }),
   setAutoApprove: (provider, on) => set((s) => ({ autoApprove: [...s.autoApprove.filter((p) => p !== provider), ...(on ? [provider] : [])] })),
+  setLeanCodex: (leanCodex) => set({ leanCodex }),
   setSystemPrompt: (systemPrompt) => set({ systemPrompt }),
   setDefaultProvider: (provider) => set({ defaultProvider: provider }),
   setEditor: (editor) => set({ editor }),
@@ -584,6 +590,7 @@ interface Snapshot {
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
     autoApprove?: ProviderId[];
+    leanCodex?: boolean;
     systemPrompt?: string | null;
     defaultProvider?: ProviderId | null;
     editor?: string | null;
@@ -627,7 +634,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
   };
 }
 

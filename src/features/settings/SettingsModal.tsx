@@ -871,6 +871,8 @@ function HarnessSettings() {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const autoApproveOn = useWorkspaces((s) => s.autoApprove.includes(WINFER_PROVIDER));
   const setAutoApprove = useWorkspaces((s) => s.setAutoApprove);
+  const leanCodex = useWorkspaces((s) => s.leanCodex);
+  const setLeanCodex = useWorkspaces((s) => s.setLeanCodex);
 
   useEffect(() => {
     void invoke<HarnessSettings>("harness_settings").then((s) => {
@@ -1001,60 +1003,68 @@ function HarnessSettings() {
         </Row>
       </Card>
 
-      <Card title="Claude Code" description="When winfer code runs a Claude model, it drives the Claude Code CLI.">
+      <Card title="Lean setup" description="Starts agents with fewer tools and skills, so every request is smaller. Applies to sessions started (or restarted) after the change.">
         <Row
-          label="Lean setup"
-          hint="Start it with a short system prompt and only the tools coding needs (Bash, Read, Edit, Write, Grep, Glob, the plan tools, Agent, plus Skill when it has skills; no user MCP servers). In the bench: 71% fewer input tokens, 79% fewer at full price, same pass rate. Project CLAUDE.md and project skills still load. Codex is left as is: its default setup is already cached, so trimming it costs more."
+          label="Claude Code"
+          hint="When winfer code runs a Claude model: a short system prompt and only the tools coding needs (Bash, Read, Edit, Write, Grep, Glob, the plan tools, Agent, plus Skill when it has skills; no user MCP servers). In the bench: 71% fewer input tokens, 79% fewer at full price, same pass rate. Project CLAUDE.md and project skills still load."
         >
-          <Toggle label="Lean setup" checked={settings.leanBridges} onChange={(leanBridges) => void save({ leanBridges })} />
+          <Toggle label="Lean Claude Code" checked={settings.leanBridges} onChange={(leanBridges) => void save({ leanBridges })} />
         </Row>
-        {settings.leanBridges && (
-          <Row
-            label="Skills in lean setup"
-            hint={
-              settings.leanAllSkills
-                ? "Loads all your skills, along with your user settings, hooks and plugins. Each skill's description goes into every request."
-                : "Loads only the skills you pick below, without your user settings, hooks or plugins. Picking none turns skills off. Claude Code's built-in skills still come along."
-            }
-          >
-            <Select
-              aria-label="Skills in lean setup"
-              value={settings.leanAllSkills ? "all" : "selected"}
-              onChange={(e) => void save({ leanAllSkills: e.target.value === "all" })}
+        <Row
+          label="Codex"
+          hint="Codex panes leave out ChatGPT apps (Sites, Spaces, Pets…), plugins and their skills, bundled skills, image generation, computer use, Codex's own browser and goals: about 100 fewer tools. winfer's tools stay."
+        >
+          <Toggle label="Lean Codex" checked={leanCodex} onChange={setLeanCodex} />
+        </Row>
+        {(settings.leanBridges || leanCodex) && (
+          <>
+            <Row
+              label="Skills"
+              hint={
+                settings.leanAllSkills
+                  ? "Loads all your skills (Claude Code also gets your user settings, hooks and plugins). Each skill's description goes into every request."
+                  : "Loads only the skills you pick below (Claude Code without your user settings, hooks or plugins). Picking none turns skills off. Claude Code's built-in skills and project skills still come along."
+              }
             >
-              <option value="all">All skills</option>
-              <option value="selected">Selected only</option>
-            </Select>
-          </Row>
-        )}
-        {settings.leanBridges && !settings.leanAllSkills && (
-          <Row
-            stacked
-            label={`Selected skills (${settings.leanSkills.filter((id) => claudeSkills?.some((s) => s.id === id)).length})`}
-            hint="Comes from ~/.claude/skills and your enabled Claude Code plugins. Applies to sessions started after the change."
-          >
-            {claudeSkills === null ? (
-              <Spinner size={13} className="text-fg-subtle" />
-            ) : claudeSkills.length === 0 ? (
-              <span className="text-xs text-fg-subtle">No skills found.</span>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {claudeSkills.map((skill) => {
-                  const on = settings.leanSkills.includes(skill.id);
-                  return (
-                    <Chip
-                      key={skill.id}
-                      active={on}
-                      title={skill.description || skill.id}
-                      onClick={() => void save({ leanSkills: on ? settings.leanSkills.filter((id) => id !== skill.id) : [...settings.leanSkills, skill.id] })}
-                    >
-                      {skill.source === "user" ? skill.name : `${skill.source}:${skill.name}`}
-                    </Chip>
-                  );
-                })}
-              </div>
+              <Select
+                aria-label="Skills in lean setup"
+                value={settings.leanAllSkills ? "all" : "selected"}
+                onChange={(e) => void save({ leanAllSkills: e.target.value === "all" })}
+              >
+                <option value="all">All skills</option>
+                <option value="selected">Selected only</option>
+              </Select>
+            </Row>
+            {!settings.leanAllSkills && (
+              <Row
+                stacked
+                label={`Selected skills (${settings.leanSkills.filter((id) => claudeSkills?.some((s) => s.id === id)).length})`}
+                hint="Comes from ~/.claude/skills, your enabled Claude Code plugins, ~/.codex/skills and ~/.agents/skills. A skill counts for both agents by name."
+              >
+                {claudeSkills === null ? (
+                  <Spinner size={13} className="text-fg-subtle" />
+                ) : claudeSkills.length === 0 ? (
+                  <span className="text-xs text-fg-subtle">No skills found.</span>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {claudeSkills.map((skill) => {
+                      const on = settings.leanSkills.includes(skill.id);
+                      return (
+                        <Chip
+                          key={skill.id}
+                          active={on}
+                          title={skill.description || skill.id}
+                          onClick={() => void save({ leanSkills: on ? settings.leanSkills.filter((id) => id !== skill.id) : [...settings.leanSkills, skill.id] })}
+                        >
+                          {skill.source === "user" ? skill.name : `${skill.source}:${skill.name}`}
+                        </Chip>
+                      );
+                    })}
+                  </div>
+                )}
+              </Row>
             )}
-          </Row>
+          </>
         )}
       </Card>
 

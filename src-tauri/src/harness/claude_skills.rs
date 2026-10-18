@@ -1,7 +1,8 @@
 //! Skills for Claude Code in lean mode. Lean mode leaves out the user's settings (and with them
 //! `~/.claude/skills` and plugin skills), so it either loads them all (`--setting-sources user,…`)
 //! or only the ones picked in Settings: those are linked into a folder of their own, passed with
-//! `--add-dir`, whose `.claude/skills` Claude Code loads like a project's.
+//! `--add-dir`, whose `.claude/skills` Claude Code loads like a project's. Lean Codex panes follow
+//! the same choice: the user's Codex skills not picked are turned off with `skills.config`.
 
 use std::path::{Path, PathBuf};
 
@@ -87,6 +88,56 @@ pub fn available() -> Vec<ClaudeSkill> {
     dirs::home_dir().map(|h| available_in(&h)).unwrap_or_default()
 }
 
+/// The user skill folders Codex loads (its bundled `.system` skills are left out).
+const CODEX_DIRS: &[&str] = &[".codex/skills", ".agents/skills"];
+
+/// The skills Codex loads from the user's folders, id `codex:name`. A name can come twice (once per folder).
+pub fn codex_in(home: &Path) -> Vec<ClaudeSkill> {
+    CODEX_DIRS
+        .iter()
+        .flat_map(|d| skill_dirs(&home.join(d)))
+        .map(|(name, dir)| ClaudeSkill { id: format!("codex:{name}"), description: describe(&dir), name, source: "codex".into(), dir })
+        .collect()
+}
+
+/// The skills to pick from in Settings: Claude Code's, then the Codex ones it has no skill of that name for.
+pub fn pickable_in(home: &Path) -> Vec<ClaudeSkill> {
+    let mut out = available_in(home);
+    for skill in codex_in(home) {
+        if !out.iter().any(|o| o.name == skill.name) {
+            out.push(skill);
+        }
+    }
+    out
+}
+
+pub fn pickable() -> Vec<ClaudeSkill> {
+    dirs::home_dir().map(|h| pickable_in(&h)).unwrap_or_default()
+}
+
+/// Codex `-c` arguments that turn off each of the user's Codex skills not `selected`. Skills match
+/// by name, so picking a Claude Code skill keeps Codex's skill of the same name too.
+pub fn codex_args_in(home: &Path, selected: &[String]) -> Vec<String> {
+    let names: Vec<&str> = selected.iter().map(|id| id.rsplit(':').next().unwrap_or(id)).collect();
+    let off: Vec<String> = codex_in(home)
+        .into_iter()
+        .filter(|s| !names.contains(&s.name.as_str()))
+        .map(|s| format!("{{path={},enabled=false}}", serde_json::json!(s.dir.join("SKILL.md"))))
+        .collect();
+    if off.is_empty() {
+        return Vec::new();
+    }
+    vec!["-c".into(), format!("skills.config=[{}]", off.join(","))]
+}
+
+/// [`codex_args_in`] for the lean skill choice in Settings; none when all skills are on.
+pub fn codex_args(skills: &LeanSkills) -> Vec<String> {
+    match (skills, dirs::home_dir()) {
+        (LeanSkills::Only(ids), Some(home)) => codex_args_in(&home, ids),
+        _ => Vec::new(),
+    }
+}
+
 /// A folder whose `.claude/skills` links to just the `selected` skills, for `--add-dir`. The same
 /// selection always gets the same folder, so Claude Code's prompt (and its cache) stays the same.
 /// `None` if none of them exist any more.
@@ -170,6 +221,29 @@ mod tests {
         let both = prepare_in(&home, &base, &["caveman".into(), "caveman:caveman".into()]).unwrap();
         assert!(both.join(".claude/skills/caveman-caveman/SKILL.md").is_file());
         assert_eq!(prepare_in(&home, &base, &["gone".into()]), None);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn codex_keeps_only_picked_skills_by_name() {
+        let home = std::env::temp_dir().join(format!("winfer-codex-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        skill(&home.join(".claude/skills/graphify"), "Graphs");
+        skill(&home.join(".codex/skills/graphify"), "Graphs");
+        skill(&home.join(".codex/skills/wrangler"), "Workers");
+        skill(&home.join(".agents/skills/caveman"), "Talk less");
+        skill(&home.join(".codex/skills/.system/imagegen"), "Bundled");
+
+        let ids: Vec<_> = pickable_in(&home).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["graphify", "codex:wrangler", "codex:caveman"]);
+
+        let args = codex_args_in(&home, &["graphify".into(), "plugin:caveman".into()]);
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-c");
+        assert!(args[1].starts_with("skills.config=[{path=\""));
+        assert!(args[1].contains("/.codex/skills/wrangler/SKILL.md\",enabled=false}"));
+        assert!(!args[1].contains("graphify") && !args[1].contains("caveman") && !args[1].contains(".system"));
+        assert!(codex_args_in(&home, &["graphify".into(), "codex:wrangler".into(), "caveman".into()]).is_empty());
         let _ = std::fs::remove_dir_all(&home);
     }
 }

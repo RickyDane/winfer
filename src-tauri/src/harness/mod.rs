@@ -118,7 +118,7 @@ pub fn harness_settings() -> Settings {
 /// The skills Claude Code can load from the user's setup, to pick from for lean mode.
 #[tauri::command]
 pub fn harness_claude_skills() -> Vec<claude_skills::ClaudeSkill> {
-    claude_skills::available()
+    claude_skills::pickable()
 }
 
 #[tauri::command]

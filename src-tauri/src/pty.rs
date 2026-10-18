@@ -81,6 +81,9 @@ pub struct SpawnRequest {
     /// user's own MCP servers and skills (see [`plain_args`]). Status hooks stay on.
     #[serde(default)]
     plain: bool,
+    /// Start the agent without its bundled extras (see [`lean_args`]), from settings.
+    #[serde(default)]
+    lean: bool,
     cols: u16,
     rows: u16,
 }
@@ -197,6 +200,30 @@ fn plain_args(provider_id: &str) -> Vec<String> {
     }
 }
 
+/// Arguments that turn off an agent's bundled extras winfer's panes don't need, so its tool list
+/// and skill catalog stay small. Codex: ChatGPT apps (`mcp__codex_apps__*`), plugins and their
+/// skills, the bundled system skills, image generation, computer use, its own browser (winfer's
+/// stays), goals, plugin-install suggestions and the sleep tool. `code_mode_host` stays on:
+/// without it Codex's `exec` tool fails closed.
+fn lean_args(provider_id: &str) -> Vec<String> {
+    const CODEX: &[&str] = &[
+        "features.apps=false",
+        "features.plugins=false",
+        "features.remote_plugin=false",
+        "features.image_generation=false",
+        "features.computer_use=false",
+        "features.browser_use=false",
+        "features.goals=false",
+        "features.tool_suggest=false",
+        "features.sleep_tool=false",
+        "skills.bundled.enabled=false",
+    ];
+    match provider_id {
+        "codex" => CODEX.iter().flat_map(|o| ["-c".to_string(), o.to_string()]).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// `winfer code` runs this GUI-subsystem binary, which Windows doesn't attach to the pane's
 /// pseudoconsole (its TUI aborted with exit code 0xC0000409). cmd.exe, a console program, holds
 /// the console and waits for it (`start /b /wait`, which also passes on its exit code); winfer
@@ -275,7 +302,16 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             } else if req.plain {
                 (plain_args(&provider.id), hooks::provider_args(&provider.id))
             } else {
-                (mcp::agent_args(&provider.id, &servers), hooks::provider_args(&provider.id))
+                let mut mcp = mcp::agent_args(&provider.id, &servers);
+                if req.lean {
+                    mcp.extend(lean_args(&provider.id));
+                    // Same skill choice as winfer code's lean Claude Code (Settings → winfer code).
+                    if provider.id == "codex" {
+                        let skills = crate::harness::config::Config::load().lean_skills();
+                        mcp.extend(crate::harness::claude_skills::codex_args(&skills));
+                    }
+                }
+                (mcp, hooks::provider_args(&provider.id))
             };
             cmd.args(agent_args(
                 &provider,
@@ -519,6 +555,7 @@ mod tests {
             auto_approve: false,
             system_prompt: None,
             plain: false,
+            lean: false,
             cols: 80,
             rows: 24,
         };
@@ -620,6 +657,7 @@ mod tests {
             auto_approve: false,
             system_prompt: Some("Use your tools.".into()),
             plain: false,
+            lean: false,
             cols: 80,
             rows: 24,
         };
@@ -654,6 +692,16 @@ mod tests {
     }
 
     #[test]
+    fn lean_codex_turns_off_bundled_extras() {
+        let args = lean_args("codex");
+        assert!(args.chunks(2).all(|p| p[0] == "-c"));
+        assert!(args.contains(&"features.apps=false".to_string()));
+        assert!(args.contains(&"skills.bundled.enabled=false".to_string()));
+        assert!(!args.iter().any(|a| a.contains("code_mode_host")));
+        assert!(lean_args("claude").is_empty());
+    }
+
+    #[test]
     fn login_env_has_path() {
         assert!(login_env().contains_key("PATH"));
     }
@@ -672,6 +720,7 @@ mod tests {
             auto_approve: false,
             system_prompt: None,
             plain: false,
+            lean: false,
             cols: 80,
             rows: 24,
         };
