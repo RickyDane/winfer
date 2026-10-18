@@ -124,7 +124,7 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let mut out = Vec::new();
             match ended {
                 None => {
-                    let mut head = vec![Span::styled(format!("{} ", anim::moon_spin(t)), theme::fg(theme::nebula(t.as_secs_f32() * 0.3)))];
+                    let mut head = vec![Span::styled(format!("{} ", anim::dots_spin(t)), anim::spin_style())];
                     head.extend(anim::nebula_shimmer("thinking", t, theme::DIM()));
                     let secs = now.duration_since(*started).as_secs();
                     if secs >= 1 {
@@ -159,13 +159,13 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let took = ended.unwrap_or(now).duration_since(*started);
             // A finished dot flashes bright and settles into its color.
             let settle = ended.map(|e| (now.saturating_duration_since(e).as_secs_f32() / SETTLE.as_secs_f32()).min(1.0)).unwrap_or(1.0);
-            let (dot, color) = match status {
-                Status::Running => (anim::moon_spin(t), theme::nebula(t.as_secs_f32() * 0.3)),
-                Status::Ok => ("●", theme::mix(theme::GREEN(), theme::MUTED(), anim::ease_out(settle))),
-                Status::Failed => ("○", theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle))),
+            let (dot, dot_style) = match status {
+                Status::Running => (anim::dots_spin(t), anim::spin_style()),
+                Status::Ok => ("●", theme::bold(theme::mix(theme::GREEN(), theme::MUTED(), anim::ease_out(settle)))),
+                Status::Failed => ("○", theme::bold(theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle)))),
             };
             let (label, kind) = tool_kind(name);
-            let mut head = vec![Span::styled(format!("{dot} "), theme::bold(color))];
+            let mut head = vec![Span::styled(format!("{dot} "), dot_style)];
             head.extend(chip(&label, kind));
             if background {
                 head.push(Span::styled(" ⇢ bg", theme::fg(theme::PINK())));
@@ -201,7 +201,9 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
                 head.extend(right);
             }
             out.push(Line::from(head));
-            let rail = || vec![Span::styled("│  ", theme::fg(theme::FAINT()))];
+            // The rail runs down the output and curls right under its last line, but only once the
+            // output is really over: still running or cut short, it stays straight.
+            let rail = |last: bool| vec![Span::styled(if last { "╰─ " } else { "│  " }, theme::fg(theme::FAINT()))];
             if let Some(d) = diff.as_deref().filter(|d| !d.trim().is_empty()) {
                 let lines = diff_lines(d, width.saturating_sub(3));
                 // Collapsed: just the first changed lines; ctrl+o shows the whole diff.
@@ -210,7 +212,7 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
                 let max = if expanded { usize::MAX } else { PREVIEW };
                 let shown = total.min(max);
                 for (i, l) in lines.into_iter().take(max).enumerate() {
-                    let mut spans = rail();
+                    let mut spans = rail(i + 1 == shown && total == shown && *status != Status::Running);
                     spans.extend(l.spans);
                     out.push(with_more(spans, if i + 1 == shown { total - shown } else { 0 }, width));
                 }
@@ -239,7 +241,7 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let n = shown.len();
             for (i, line) in shown.into_iter().enumerate() {
                 let line = truncate(&line, width.saturating_sub(14).max(10));
-                out.push(with_more([rail(), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
+                out.push(with_more([rail(i + 1 == n && hidden == 0 && *status != Status::Running), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
             }
             out
         }

@@ -65,14 +65,28 @@ pub fn tokens(n: u64) -> String {
 
 const MOON: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
-/// A turning moon, the "working" spinner.
+/// A turning moon, the mark for running background agents on the status line.
 pub fn moon_spin(t: Duration) -> &'static str {
     MOON[(t.as_millis() / 130) as usize % MOON.len()]
 }
 
+const DOTS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Spinning braille dots ("dots" from sindresorhus/cli-spinners, 80ms a frame): the spinner
+/// for async and background work.
+pub fn dots_spin(t: Duration) -> &'static str {
+    DOTS[(t.as_millis() / 80) as usize % DOTS.len()]
+}
+
+/// How every dots spinner is drawn: one steady violet, never bold (bold braille renders as a
+/// heavy full grid in many terminal fonts).
+pub fn spin_style() -> Style {
+    theme::fg(theme::nebula(0.37))
+}
+
 const STAR: [&str; 6] = ["✶", "✷", "✸", "✹", "✺", "✹"];
 
-/// A pulsing star, the "agent is working" mark (tools and plan items use the moon).
+/// A pulsing star, the "agent is working" mark (tools, plan items and background work use the dots).
 pub fn star_spin(t: Duration) -> &'static str {
     STAR[(t.as_millis() / 140) as usize % STAR.len()]
 }

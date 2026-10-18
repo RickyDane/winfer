@@ -330,7 +330,7 @@ fn sidebar(f: &mut Frame, app: &App, area: Rect, t: Duration) {
     for todo in &app.todos {
         let (mark, mark_style, text_style) = match todo.status.as_str() {
             "completed" => ("●", theme::fg(theme::DIM()), theme::dim()),
-            "in_progress" => (anim::moon_spin(t), theme::fg(theme::nebula(t.as_secs_f32() * 0.3)), theme::bold(theme::FG())),
+            "in_progress" => (anim::dots_spin(t), anim::spin_style(), theme::bold(theme::FG())),
             _ => ("○", theme::fg(theme::DIM()), theme::muted()),
         };
         if todo.status == "in_progress" && current.is_none() {
@@ -376,7 +376,7 @@ fn todo_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     spans.push(Span::styled(format!(" {done}/{total}"), theme::dim()));
     let step_style = |status: &str| match status {
         "completed" => ("●".to_string(), theme::fg(theme::DIM()), theme::dim()),
-        "in_progress" => (anim::moon_spin(t).to_string(), theme::fg(theme::nebula(t.as_secs_f32() * 0.3)), theme::bold(theme::FG())),
+        "in_progress" => (anim::dots_spin(t).to_string(), anim::spin_style(), theme::bold(theme::FG())),
         _ => ("○".to_string(), theme::fg(theme::DIM()), theme::muted()),
     };
     if app.plan_open {
@@ -834,7 +834,7 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
         Line::from(vec![
             Span::styled(" ⌕ ", theme::fg(theme::VIOLET())),
             if p.filter.is_empty() { Span::styled("type to filter", theme::fg(theme::DIM())) } else { Span::styled(p.filter.clone(), theme::bold(theme::FG())) },
-            if p.loading { Span::styled(format!("   {} loading models", anim::moon_spin(t)), theme::dim()) } else { Span::raw("") },
+            if p.loading { Span::styled(format!("   {} loading models", anim::dots_spin(t)), theme::dim()) } else { Span::raw("") },
         ]),
         Line::default(),
     ];
