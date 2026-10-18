@@ -177,8 +177,21 @@ def python_shims() -> str:
     return str(d)
 
 
+@lru_cache(maxsize=None)
+def temp_dir() -> str:
+    """The temp folder for work folders, harnesses and checks. On Windows %TEMP% is often an 8.3
+    short path (C:\\Users\\RICKYP~1\\...) that realpath() expands to the long one, so a path
+    built from it and the same path resolved don't compare equal: use the long form."""
+    t = tempfile.gettempdir()
+    return os.path.realpath(t) if WINDOWS else t
+
+
+def temp_env() -> dict:
+    return {"TEMP": temp_dir(), "TMP": temp_dir()} if WINDOWS else {}
+
+
 def script_env(**extra) -> dict:
-    env = {**os.environ, **extra}
+    env = {**os.environ, **temp_env(), **extra}
     if WINDOWS:
         env["PATH"] = os.pathsep.join([python_shims(), *unix_tool_dirs(), env.get("PATH", "")])
     return env
@@ -276,6 +289,14 @@ def prepare(task: Path, work: Path) -> None:
         subprocess.run([sys.executable, str(task / "setup.py"), str(work)], check=True)
     git = lambda *a: subprocess.run(["git", *a], cwd=work, check=True, capture_output=True)
     git("init", "-q")
+    # Keep files byte for byte whatever the user's Git config says. With core.autocrlf=true (Git
+    # for Windows' default) a file can be committed with one line ending and compared with the
+    # other, and the checks' `git diff --quiet HEAD -- tests` then reports untouched tests as
+    # modified. Repo-local config and info/attributes win over global/system config.
+    git("config", "core.autocrlf", "false")
+    git("config", "core.safecrlf", "false")
+    (work / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    (work / ".git" / "info" / "attributes").write_text("* -text\n", encoding="utf-8")
     git("add", "-A")
     git("-c", "user.name=bench", "-c", "user.email=bench@local", "commit", "-q", "--allow-empty", "-m", "start")
 
@@ -411,8 +432,15 @@ def harness_argv(spec, model: str, effort: str, prompt: str):
     return [a.replace("{prompt}", prompt).replace("{model}", model_arg) for a in argv]
 
 
+def changed_files(work: Path) -> str:
+    """The tracked files that differ from the start commit, for a check's "was modified" message."""
+    r = subprocess.run(["git", "-c", "core.quotepath=off", "diff", "--stat=80", "HEAD"], cwd=work,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return "\n" + "\n".join(r.stdout.strip().splitlines()[-6:]) if r.stdout.strip() else ""
+
+
 def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", effort: str = ""):
-    work = Path(tempfile.mkdtemp(prefix=f"bench-{task.name}-{name}-"))
+    work = Path(tempfile.mkdtemp(prefix=f"bench-{task.name}-{name}-", dir=temp_dir()))
     prepare(task, work)
     server, site = serve_site(task)
     prompt = (task / "task.md").read_text(encoding="utf-8").strip().replace("{site}", site)
@@ -429,7 +457,7 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", e
         argv = launcher([winfer_bin() if a == "{winfer}" else a for a in argv])
         try:
             # Some CLIs take their project folder from $PWD rather than the real working directory.
-            env = {**os.environ, "PWD": str(work)}
+            env = {**os.environ, **temp_env(), "PWD": str(work)}
             r = subprocess.run(argv, cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
             out, err, code = r.stdout, r.stderr, r.returncode
         except FileNotFoundError as e:
@@ -442,6 +470,9 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", e
         server.server_close()
     env = script_env(VERIFY_DIR=str(task / "verify"))
     check = subprocess.run([posix_sh(), str(task / "verify/check.sh")], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    why = (check.stdout + check.stderr).strip()[-400:] if check.returncode else ""
+    if "was modified" in why:
+        why += changed_files(work)
     i, c, o, tools, cost = PARSERS.get(spec["parser"], PARSERS["none"])(out)
     cost_estimated = False
     if cost is None:
@@ -466,7 +497,7 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", e
         "cost": cost,
         "cost_estimated": cost_estimated,
         "timed_out": timed_out,
-        "why": (check.stdout + check.stderr).strip()[-400:] if check.returncode else "",
+        "why": why,
         "dir": str(work) if keep else None,
     }
     (work / ".bench-output.jsonl").write_text(out, encoding="utf-8")

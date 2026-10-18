@@ -1,3 +1,6 @@
 # Store plugins are served byte for byte from GitHub and checked against the sha256 hashes in
 # plugins/catalog.json, so they must not get CRLF line endings on Windows checkouts.
 plugins/** -text
+# The bench's task sources are copied into the work folders as they are: keep them LF on Windows
+# too, like the packed suites.tar.gz, so the scripts run and the tests compare the same everywhere.
+plugins-src/harness-bench/** -text

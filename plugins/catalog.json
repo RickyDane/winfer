@@ -85,7 +85,7 @@
     {
       "id": "harness-bench",
       "name": "winfer bench",
-      "version": "0.9.1",
+      "version": "0.9.2",
       "description": "Benchmark coding-agent harnesses (winfer code, Codex, Claude Code, pi, OpenCode) on the same tasks in four suites (coding, understanding, research, discipline): pass rate, time, tokens and tool calls, with the models you pick.",
       "author": "winfer",
       "tags": [
@@ -109,7 +109,7 @@
         },
         {
           "path": "bench/run.py",
-          "sha256": "86d13b02b42706e98e1026e9e894b431945a0a1bfc679c78e5e75b2104f9f6ac"
+          "sha256": "5957d9c5b12e715d4f690c739e903021783d7156f89e32dac2ba41978558521a"
         },
         {
           "path": "bench/suites.tar.gz",
@@ -117,7 +117,7 @@
         },
         {
           "path": "bench/test_run.py",
-          "sha256": "c643da7b82604d2a493347ae2112cc9f988e881e72bf2f855078043ad3cc71dd"
+          "sha256": "0ca0320b10f9fe1e783808e2895758512aef0159d103f836cc6ebb39d3afe731"
         },
         {
           "path": "index.js",
@@ -129,7 +129,7 @@
         },
         {
           "path": "plugin.json",
-          "sha256": "f6fd1e143cc8b1ab7a3225a5cc140c271563b7aabf823b681748d3551de14f7f"
+          "sha256": "2cc42648a142d4767e2a30bed8b93d841cee121c6b187fa1194ba26a4d5f16ce"
         }
       ]
     },

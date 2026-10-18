@@ -233,6 +233,43 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(shipped, sources, "run `python3 run.py --pack`")
 
 
+class PrepareTests(unittest.TestCase):
+    """Work folders behave the same under any Git line-ending config (Git for Windows sets
+    core.autocrlf=true), so untouched tests never count as modified."""
+
+    def test_line_endings_are_kept_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / "gitconfig").write_text("[core]\n\tautocrlf = true\n\tsafecrlf = warn\n")
+            task = folder / "task"
+            (task / "repo" / "tests").mkdir(parents=True)
+            (task / "repo" / "tests" / "test_lf.py").write_bytes(b"a = 1\nb = 2\n")
+            (task / "repo" / "tests" / "test_crlf.py").write_bytes(b"a = 1\r\nb = 2\r\n")
+            work = folder / "work"
+            with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(folder / "gitconfig")}):
+                bench.prepare(task, work)
+                time.sleep(1.1)  # past racy-git: the next diff reads the files again
+                for f in (work / "tests").iterdir():
+                    os.utime(f)
+                git = lambda *a: subprocess.run(["git", *a], cwd=work, capture_output=True, text=True)
+                diff = git("diff", "--quiet", "HEAD", "--", "tests")
+                self.assertEqual((diff.returncode, diff.stderr), (0, ""))
+                blob = subprocess.run(["git", "show", "HEAD:tests/test_crlf.py"], cwd=work, capture_output=True).stdout
+                self.assertEqual(blob, b"a = 1\r\nb = 2\r\n")
+                (work / "tests" / "test_crlf.py").write_bytes(b"a = 1\nb = 2\n")
+                self.assertEqual(git("diff", "--quiet", "HEAD", "--", "tests").returncode, 1)
+                self.assertIn("test_crlf.py", bench.changed_files(work))
+
+    def test_windows_temp_is_the_long_path(self):
+        bench.temp_dir.cache_clear()
+        try:
+            with patch.object(bench, "WINDOWS", True), patch.object(bench.tempfile, "gettempdir", return_value="C:/X/RICKYP~1/Temp"), \
+                    patch.object(bench.os.path, "realpath", return_value="C:/X/rickyperlick/Temp"):
+                self.assertEqual(bench.temp_env(), {"TEMP": "C:/X/rickyperlick/Temp", "TMP": "C:/X/rickyperlick/Temp"})
+        finally:
+            bench.temp_dir.cache_clear()
+
+
 class ControlTests(unittest.TestCase):
     """The commands the plugin runs instead of POSIX shell lines (so Windows works too)."""
 
