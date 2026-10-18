@@ -1,7 +1,7 @@
 //! Codex bridge: `codex app-server` (JSON-RPC over stdio), with Codex's own tools, sandbox and
 //! login. Approval requests from the server are answered by the TUI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
@@ -87,6 +87,11 @@ struct Bridge {
     undo: Vec<Vec<Value>>,
     /// Told to Codex with the next message after an undo, so it doesn't trust stale file state.
     note: Option<String>,
+    /// The main thread's commands still running: item id → card title.
+    commands: HashMap<String, String>,
+    /// Commands that outlived their turn (Codex keeps them running as background terminals),
+    /// shown as background shells until they exit.
+    background: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -132,6 +137,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         turn_changes: Vec::new(),
         undo: Vec::new(),
         note: None,
+        commands: HashMap::new(),
+        background: HashSet::new(),
     };
     b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": null }), Pending::Init);
     let mut thread_params = json!({
@@ -429,6 +436,13 @@ impl Bridge {
                     self.emit(Ev::Error(format!("Codex: {message}")));
                 }
                 self.turn = None;
+                // Codex ends the turn without waiting for long commands (watchers, servers): they
+                // run on as background terminals, so their cards become background shells
+                // instead of being failed with the turn.
+                for (id, title) in std::mem::take(&mut self.commands) {
+                    self.task(TaskEv { id: id.clone(), tool_id: Some(id.clone()), title: Some(title), status: Some("running".into()), ..Default::default() });
+                    self.background.insert(id);
+                }
                 let changes = std::mem::take(&mut self.turn_changes);
                 if !changes.is_empty() {
                     self.undo.push(changes);
@@ -615,6 +629,9 @@ impl Bridge {
             return self.sub_agent_activity(item, true);
         }
         let Some((name, title)) = self.tool_card(item) else { return };
+        if item["type"] == "commandExecution" {
+            self.commands.insert(s(item, "id"), title.clone());
+        }
         self.emit(Ev::ToolStart { id: s(item, "id"), name, title, input: item.clone() });
     }
 
@@ -661,6 +678,12 @@ impl Bridge {
             "agentMessage" => self.emit(Ev::Text { id, text: s(item, "text") }),
             "commandExecution" => {
                 let ok = item["exitCode"].as_i64() == Some(0) || item["status"] == "completed" && item["exitCode"].is_null();
+                self.commands.remove(&id);
+                if self.background.remove(&id) {
+                    let exit_code = item["exitCode"].as_i64().and_then(|n| i32::try_from(n).ok());
+                    let status = if ok { "completed" } else { "failed" };
+                    self.task(TaskEv { id: id.clone(), status: Some(status.into()), exit_code, ..Default::default() });
+                }
                 self.emit(Ev::ToolEnd { id, ok, output: s(item, "aggregatedOutput"), diff: None });
             }
             "fileChange" => {
@@ -746,11 +769,7 @@ fn first_arg(args: &Value) -> String {
 fn strip_shell(command: &str) -> String {
     let unquote = |rest: &str| {
         let rest = rest.trim();
-        let unquoted = rest
-            .strip_prefix('\'')
-            .and_then(|r| r.strip_suffix('\''))
-            .or_else(|| rest.strip_prefix('"').and_then(|r| r.strip_suffix('"')));
-        unquoted.unwrap_or(rest).to_string()
+        shell_word(rest).unwrap_or_else(|| rest.to_string())
     };
     for prefix in ["/bin/zsh -lc ", "/bin/bash -lc ", "bash -lc ", "zsh -lc ", "/bin/sh -c "] {
         if let Some(rest) = command.strip_prefix(prefix) {
@@ -758,6 +777,45 @@ fn strip_shell(command: &str) -> String {
         }
     }
     strip_powershell(command).map(unquote).unwrap_or_else(|| command.to_string())
+}
+
+/// The text of one quoted POSIX shell word, the way Codex quotes the script it runs:
+/// `'it'"'"'s'` and `'$a='"'Stop'; "'$b'` (shlex mixes quote styles) → `it's`, `$a='Stop'; $b`.
+/// None when it isn't a single quoted word.
+fn shell_word(word: &str) -> Option<String> {
+    if !word.starts_with(['\'', '"']) {
+        return None;
+    }
+    let mut out = String::new();
+    let mut chars = word.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => loop {
+                match chars.next()? {
+                    '\'' => break,
+                    c => out.push(c),
+                }
+            },
+            '"' => loop {
+                match chars.next()? {
+                    '"' => break,
+                    '\\' => match chars.next()? {
+                        c @ ('"' | '\\' | '$' | '`') => out.push(c),
+                        '\n' => {}
+                        c => {
+                            out.push('\\');
+                            out.push(c);
+                        }
+                    },
+                    c => out.push(c),
+                }
+            },
+            '\\' => out.push(chars.next()?),
+            c if c.is_whitespace() => return None,
+            c => out.push(c),
+        }
+    }
+    Some(out)
 }
 
 /// The card name for a command Codex ran: `PowerShell` when it went through pwsh/powershell
@@ -953,6 +1011,40 @@ mod tests {
         assert_eq!(strip_shell("/bin/zsh -lc 'curl -s x | head'"), "curl -s x | head");
         assert_eq!(strip_shell("/bin/zsh -lc \"printf 'hi' > a.txt\""), "printf 'hi' > a.txt");
         assert_eq!(strip_shell("ls"), "ls");
+        // shlex mixes quote styles around the script's own quotes.
+        let watch = r#"powershell.exe -NoProfile -Command '$ErrorActionPreference='"'Stop'; "'$old = @(Get-CimInstance Win32_Process)'"#;
+        assert_eq!(strip_shell(watch), "$ErrorActionPreference='Stop'; $old = @(Get-CimInstance Win32_Process)");
+        assert_eq!(strip_shell(r#"/bin/zsh -lc 'echo '"'"'hi'"'"''"#), "echo 'hi'");
+        assert_eq!(strip_shell(r#"/bin/zsh -lc "echo \"\$HOME\" \\n""#), r#"echo "$HOME" \n"#);
+        // Not one quoted word: left as it is.
+        assert_eq!(strip_shell("pwsh -Command git status"), "git status");
+        assert_eq!(strip_shell("/bin/zsh -lc 'a' 'b'"), "'a' 'b'");
+        assert_eq!(strip_shell("/bin/zsh -lc 'unterminated"), "'unterminated");
+    }
+
+    #[test]
+    fn commands_outliving_their_turn_become_background_shells() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        let cmd = |status: &str, exit: Value| json!({ "type": "commandExecution", "id": "c1", "command": "/bin/zsh -lc 'gh run watch 811'", "status": status, "exitCode": exit });
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": cmd("inProgress", Value::Null) }));
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": { "type": "commandExecution", "id": "c2", "command": "ls" } }));
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "commandExecution", "id": "c2", "command": "ls", "status": "completed", "exitCode": 0 } }));
+        n(&mut b, "turn/completed", json!({ "threadId": "main", "turn": { "id": "t0", "status": "completed" } }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        let tasks: Vec<&TaskEv> = evs.iter().filter_map(|e| if let Ev::Task(t) = e { Some(t) } else { None }).collect();
+        assert_eq!(tasks.len(), 1, "{evs:?}");
+        assert!(tasks[0].id == "c1" && tasks[0].tool_id.as_deref() == Some("c1") && tasks[0].status.as_deref() == Some("running") && tasks[0].agent.is_none());
+        assert_eq!(tasks[0].title.as_deref(), Some("gh run watch 811"));
+        // The task is up before the turn ends, so the card isn't failed with the turn.
+        let task_at = evs.iter().position(|e| matches!(e, Ev::Task(_))).unwrap();
+        assert!(task_at < evs.iter().position(|e| matches!(e, Ev::TurnDone)).unwrap());
+
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": cmd("failed", json!(3)) }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&evs[0], Ev::Task(t) if t.id == "c1" && t.status.as_deref() == Some("failed") && t.exit_code == Some(3)), "{evs:?}");
+        assert!(matches!(&evs[1], Ev::ToolEnd { id, ok: false, .. } if id == "c1"));
+        assert!(b.background.is_empty() && b.commands.is_empty());
     }
 
     #[test]
@@ -992,6 +1084,8 @@ mod tests {
             turn_changes: Vec::new(),
             undo: Vec::new(),
             note: None,
+            commands: HashMap::new(),
+            background: HashSet::new(),
         };
         (b, rx)
     }
