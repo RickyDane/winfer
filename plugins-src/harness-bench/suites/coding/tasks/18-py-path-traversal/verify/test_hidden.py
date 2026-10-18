@@ -13,6 +13,10 @@ class Hidden(unittest.TestCase):
         # On macOS the temp dir itself is behind a symlink (/var -> /private/var).
         self.tmp = tempfile.TemporaryDirectory()
         base = self.tmp.name
+        if os.name == "nt":
+            # %TEMP% can be an 8.3 short path, use forward slashes or the wrong case; symlink
+            # targets built from it then don't match the root's real path. Use the canonical form.
+            base = os.path.realpath(base)
         self.root = os.path.join(base, "public")
         self.outside = os.path.join(base, "private")
         sibling = os.path.join(base, "public2")
@@ -29,11 +33,12 @@ class Hidden(unittest.TestCase):
         self.put(self.outside, "index.html", SECRET)
         self.put(sibling, "secret.txt", SECRET)
         self.put(base, "secret.txt", SECRET)
-        os.symlink(self.outside, os.path.join(self.root, "evil_dir"))
+        # Windows needs to know a link points at a directory, or it can't be traversed.
+        os.symlink(self.outside, os.path.join(self.root, "evil_dir"), target_is_directory=True)
         os.symlink(os.path.join(self.outside, "secret.txt"), os.path.join(self.root, "evil.txt"))
         os.symlink(os.path.join(self.root, "docs", "deep", "x.txt"), os.path.join(self.root, "good.txt"))
-        os.symlink(os.path.join(self.root, "docs"), os.path.join(self.root, "a", "docs_link"))
-        os.symlink("../../private/secret.txt", os.path.join(self.root, "docs", "rel_evil.txt"))
+        os.symlink(os.path.join(self.root, "docs"), os.path.join(self.root, "a", "docs_link"), target_is_directory=True)
+        os.symlink(os.path.join("..", "..", "private", "secret.txt"), os.path.join(self.root, "docs", "rel_evil.txt"))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -45,7 +50,14 @@ class Hidden(unittest.TestCase):
             f.write(data)
 
     def ok(self, url, body, root=None):
-        status, headers, got = handle(root or self.root, "GET", url)
+        root = root or self.root
+        status, headers, got = handle(root, "GET", url)
+        if (status, got) != (200, body):
+            try:
+                r = repr(resolve(root, url))
+            except Exception as e:  # noqa: BLE001
+                r = f"{type(e).__name__}: {e}"
+            url = f"{url}\n  resolve() -> {r}\n  realpath(root) = {os.path.realpath(root)}\n  realpath(file) = {os.path.realpath(os.path.join(root, url.lstrip('/').split('?')[0]))}"
         self.assertEqual((status, got), (200, body), url)
 
     def blocked(self, url):
