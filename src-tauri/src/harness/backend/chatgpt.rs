@@ -277,12 +277,27 @@ fn new_id() -> String {
     format!("{:016x}", rand::random::<u64>())
 }
 
-fn session_path(id: &str) -> PathBuf {
+/// The conversation's items (Responses API input), saved after each turn.
+pub(crate) fn session_path(id: &str) -> PathBuf {
     crate::harness::config::dir().join("chatgpt").join(format!("{id}.json"))
 }
 
 fn load_items(id: &str) -> Vec<Value> {
     std::fs::read_to_string(session_path(id)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Beside the items: how big the instructions and tools sent with them are, for winfer's
+/// context breakdown (`{ system, tools, mcp }` in characters).
+pub(crate) fn setup_path(id: &str) -> PathBuf {
+    session_path(id).with_extension("setup.json")
+}
+
+fn save_setup(id: &str, instructions: &str, tools: &[Value], mcp: Option<&Value>) {
+    let size = |v: &Value| v.to_string().len();
+    let setup = json!({ "system": instructions.len(), "tools": tools.iter().map(size).sum::<usize>(), "mcp": mcp.map_or(0, size) });
+    let path = setup_path(id);
+    let _ = std::fs::create_dir_all(path.parent().unwrap());
+    let _ = std::fs::write(path, setup.to_string());
 }
 
 fn save_items(id: &str, items: &[Value]) {
@@ -372,11 +387,11 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
             (true, Some(_)) => tools::definitions(),
             (true, None) => tool_definitions(),
         };
-        if tools_on {
-            if let Some(meta) = mcp_client::meta_tool(&shared.mcp.lock().unwrap()) {
-                tools.push(meta);
-            }
+        let meta = if tools_on { mcp_client::meta_tool(&shared.mcp.lock().unwrap()) } else { None };
+        if sub.is_none() {
+            save_setup(&shared.session, &shared.instructions, &tools, meta.as_ref());
         }
+        tools.extend(meta);
         let (instructions, input, cache_key) = match sub {
             // Subagents share one cache key: their instructions and tools are the same.
             Some(s) => (s.instructions.as_str(), json!(*s.items.lock().unwrap()), format!("{}-agents", shared.session)),

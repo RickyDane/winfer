@@ -215,7 +215,8 @@ fn codex_injected(text: &str) -> bool {
 }
 
 fn codex_item(t: &mut Tally, item: &Value) {
-    let kind = item["type"].as_str().unwrap_or_default();
+    // Input messages may leave out their type (winfer code's ChatGPT backend does).
+    let kind = item["type"].as_str().unwrap_or(if item["role"].is_string() { "message" } else { "" });
     match kind {
         "message" => {
             let text = item["content"].as_array().and_then(|c| c.first()).and_then(|c| c["text"].as_str()).unwrap_or_default();
@@ -268,6 +269,23 @@ pub fn codex_breakdown(log: &str, total: u64) -> Vec<Part> {
     t.parts(total)
 }
 
+// winfer code's ChatGPT backend ------------------------------------------------------------------
+
+/// From a ChatGPT-backend session (`winfer code`): its saved items, which are Responses API items
+/// like Codex's, and the size of the instructions and tools sent with them when known.
+pub fn chatgpt_breakdown(items: &str, setup: Option<&str>, total: u64) -> Option<Vec<Part>> {
+    let items: Vec<Value> = serde_json::from_str(items).ok()?;
+    let mut t = Tally::default();
+    items.iter().for_each(|item| codex_item(&mut t, item));
+    if let Some(setup) = setup.and_then(|s| serde_json::from_str::<Value>(s).ok()) {
+        let n = |k: &str| setup[k].as_u64().unwrap_or(0);
+        t.chars[SYSTEM] = n("system");
+        t.chars[TOOLS] = n("tools");
+        t.chars[MCP] = n("mcp");
+    }
+    Some(t.parts(total))
+}
+
 // OpenCode ---------------------------------------------------------------------------------------
 
 /// From an OpenCode session's messages.
@@ -318,6 +336,11 @@ pub async fn usage_context_breakdown(provider: String, source: String, tokens: u
             "claude" => Some(claude_breakdown(&log()?, tokens)),
             "codex" => Some(codex_breakdown(&log()?, tokens)),
             "opencode" => opencode_breakdown(&crate::usage::opencode_db()?, &source, tokens),
+            "chatgpt" => {
+                let path = std::path::Path::new(&source);
+                let setup = std::fs::read_to_string(path.with_extension("setup.json")).ok();
+                chatgpt_breakdown(&std::fs::read_to_string(path).ok()?, setup.as_deref(), tokens)
+            }
             _ => None,
         }
     })
@@ -392,6 +415,15 @@ mod tests {
     }
 
     #[test]
+    fn splits_a_chatgpt_session() {
+        let items = r#"[{"role":"user","content":[{"type":"input_text","text":"fix it"}]},{"type":"function_call","name":"read","arguments":"{\"path\":\"a\"}","call_id":"c"},{"type":"function_call_output","call_id":"c","output":"lots of file content here"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]"#;
+        let parts = chatgpt_breakdown(items, Some(r#"{"system":400,"tools":800,"mcp":0}"#), 1000).unwrap();
+        assert!(get(&parts, "tools") > get(&parts, "system") && get(&parts, "system") > get(&parts, "toolResults"), "{parts:?}");
+        assert!(get(&parts, "messages") > 0 && get(&parts, "toolCalls") > 0 && get(&parts, "replies") > 0);
+        assert_eq!(get(&parts, "mcp"), 0);
+    }
+
+    #[test]
     fn splits_an_opencode_session() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -419,5 +451,28 @@ mod tests {
             .max_by_key(|p| p.metadata().unwrap().modified().unwrap())
             .unwrap();
         println!("{newest:?}\n{:#?}", claude_breakdown(&std::fs::read_to_string(&newest).unwrap(), 100_000));
+    }
+
+    /// Breakdowns of this machine's newest Codex log and OpenCode session:
+    /// `cargo test breakdowns_on_this_machine -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn breakdowns_on_this_machine() {
+        let cwd = env!("CARGO_MANIFEST_DIR").trim_end_matches("/src-tauri");
+        if let Some(log) = crate::usage::codex_log(None, cwd) {
+            println!("codex {log:?}\n{:#?}", codex_breakdown(&std::fs::read_to_string(&log).unwrap(), 100_000));
+        }
+        if let Some(conn) = crate::usage::opencode_db() {
+            let session: Option<String> = conn.query_row("select session_id from session_message where type = 'assistant' and json_extract(data, '$.tokens.input') > 0 order by rowid desc limit 1", [], |r| r.get(0)).ok();
+            if let Some(session) = session {
+                println!("opencode {session}\n{:#?}", opencode_breakdown(&conn, &session, 100_000));
+            }
+        }
+        let chatgpt = crate::harness::config::dir().join("chatgpt");
+        let newest = std::fs::read_dir(chatgpt).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| !p.to_string_lossy().ends_with(".setup.json")).max_by_key(|p| p.metadata().unwrap().modified().unwrap());
+        if let Some(items) = newest {
+            let setup = std::fs::read_to_string(items.with_extension("setup.json")).ok();
+            println!("chatgpt {items:?}\n{:#?}", chatgpt_breakdown(&std::fs::read_to_string(&items).unwrap(), setup.as_deref(), 100_000));
+        }
     }
 }

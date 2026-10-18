@@ -411,6 +411,28 @@ fn codex_log_for(root: &Path, session: Option<&str>, cwd: &str) -> Option<PathBu
     })
 }
 
+/// A Codex thread's session log (for `winfer code`'s Codex backend).
+pub fn codex_log(session: Option<&str>, cwd: &str) -> Option<PathBuf> {
+    codex_log_for(&codex_sessions()?, session, cwd)
+}
+
+/// A Claude Code session's transcript: `projects/<cwd, non-alphanumerics as ->/<id>.jsonl`,
+/// else wherever a transcript with that id is (the folder naming may differ).
+pub fn claude_transcript(session: &str, cwd: &str) -> Option<PathBuf> {
+    if session.is_empty() {
+        return None;
+    }
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".claude")))?;
+    let projects = config.join("projects");
+    let file = format!("{session}.jsonl");
+    let folder: String = cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let direct = projects.join(folder).join(&file);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    std::fs::read_dir(&projects).ok()?.flatten().map(|e| e.path().join(&file)).find(|p| p.is_file())
+}
+
 #[tauri::command]
 pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option<Context> {
     tauri::async_runtime::spawn_blocking(move || {

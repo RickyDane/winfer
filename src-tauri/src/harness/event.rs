@@ -124,7 +124,8 @@ pub enum Cmd {
     Compact,
     /// Context fill (%) for trimming and for full compaction; 0 = off.
     SetCompaction { trim: u8, compact: u8 },
-    /// Undo the file changes of the last turn (ChatGPT, and Claude Code via its file checkpoints).
+    /// Undo the file changes of the last turn (ChatGPT, Claude Code via its file checkpoints, Codex by
+    /// reverse-applying the patches it reported).
     Undo,
     /// Stop one background task (a subagent), by its `TaskEv` id.
     StopTask(String),

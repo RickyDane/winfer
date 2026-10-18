@@ -36,7 +36,7 @@ pub struct Launch {
     pub system: Option<String>,
 }
 
-pub const COMMANDS: [(&str, &str); 22] = [
+pub const COMMANDS: [(&str, &str); 23] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo"),
@@ -44,7 +44,8 @@ pub const COMMANDS: [(&str, &str); 22] = [
     ("/resume", "Resume a past session"),
     ("/compact", "Summarize the conversation to free context"),
     ("/compaction", "When to trim and auto-compact (% of context)"),
-    ("/undo", "Revert the last turn's file changes (ChatGPT, Claude Code)"),
+    ("/undo", "Revert the last turn's file changes"),
+    ("/revert", "Same as /undo"),
     ("/init", "Create an AGENTS.md for this project"),
     ("/diff", "Show uncommitted git changes"),
     ("/cost", "Token usage and cost"),
@@ -163,6 +164,8 @@ pub struct App {
     shell_context: Vec<String>,
     shell_seq: u64,
     hooked: bool,
+    /// The backend session and where it's kept (transcript or log), for winfer's context breakdown.
+    usage_source: Option<(String, String)>,
     /// Whether winfer was last told this pane is working (a turn or background task runs).
     reported_working: bool,
 }
@@ -243,6 +246,7 @@ impl App {
             shell_context: Vec::new(),
             shell_seq: 0,
             hooked: false,
+            usage_source: None,
             reported_working: false,
         };
         app.saved.model = app.spec();
@@ -390,6 +394,47 @@ impl App {
         }
     }
 
+    /// Where the backend keeps this session's conversation: Claude Code's transcript, Codex's
+    /// session log, the ChatGPT backend's saved items. Looked up once per backend session.
+    fn usage_source(&mut self) -> Option<String> {
+        if std::env::var("WINFER_PANE_ID").map_or(true, |p| p.is_empty()) {
+            return None;
+        }
+        let session = self.saved.backend_session.clone()?;
+        if let Some((s, path)) = &self.usage_source {
+            if *s == session {
+                return Some(path.clone());
+            }
+        }
+        let path = match self.kind {
+            Kind::Claude => crate::usage::claude_transcript(&session, &self.saved.cwd),
+            Kind::Codex => crate::usage::codex_log(Some(&session), &self.saved.cwd).filter(|p| p.to_string_lossy().contains(&session)),
+            Kind::ChatGpt => Some(backend::chatgpt::session_path(&session)),
+        }?;
+        let path = path.to_string_lossy().into_owned();
+        self.usage_source = Some((session, path.clone()));
+        Some(path)
+    }
+
+    /// Sends context fill and spend to winfer for the pane header's meter and cost chip, with
+    /// the backend and its session's log so winfer can break the context down and know whose
+    /// plan limits apply.
+    fn report_usage(&mut self, u: &Usage) {
+        if u.window == 0 {
+            return;
+        }
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let source = self.usage_source();
+        hook(
+            "usage",
+            json!({
+                "backend": self.kind.id(),
+                "context": { "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at, "source": source, "provider": self.kind.id() },
+                "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "at": at },
+            }),
+        );
+    }
+
     fn apply_agent(&mut self, ev: Ev) {
         match ev {
             Ev::Session(s) => {
@@ -508,7 +553,7 @@ impl App {
             Ev::Usage(u) => {
                 let pct = if u.window > 0 { u.context as f32 / u.window as f32 } else { 0.0 };
                 self.ctx_shown.set(pct, 600);
-                report_usage(&u);
+                self.report_usage(&u);
                 self.usage = u;
             }
             Ev::Notice(n) => self.notice(n, NoticeKind::Info),
@@ -805,7 +850,7 @@ impl App {
                 }
             }
             "/compaction" | "/autocompact" => self.compaction_command(arg),
-            "/undo" => self.send(Cmd::Undo),
+            "/undo" | "/revert" => self.send(Cmd::Undo),
             "/init" => {
                 let prompt = "Analyze this codebase and create an AGENTS.md file at the repository root with concise guidance for coding agents: what the project is, how it's laid out, how to build, run, test and lint it, code style and conventions, and anything non-obvious. If one exists, improve it instead.";
                 self.composer.set(prompt);
@@ -1825,20 +1870,6 @@ pub fn hook(event: &str, body: serde_json::Value) {
     std::thread::spawn(move || crate::hooks::send_hook(&addr, &token, &pane, "winfer", &event, body.to_string()));
 }
 
-/// Sends context fill and spend to winfer for the pane header's meter and cost chip.
-fn report_usage(u: &Usage) {
-    if u.window == 0 {
-        return;
-    }
-    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    hook(
-        "usage",
-        json!({
-            "context": { "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at },
-            "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "at": at },
-        }),
-    );
-}
 
 fn bell() {
     use std::io::Write;

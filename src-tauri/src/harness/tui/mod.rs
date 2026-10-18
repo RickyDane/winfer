@@ -21,12 +21,72 @@ use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use ratatui::crossterm::execute;
+use ratatui::crossterm::cursor::Hide;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+use ratatui::crossterm::{execute, queue};
 
 use app::{App, Launch, Msg};
 
+/// Collects terminal output and writes each frame to stdout in one go. ratatui flushes several
+/// times per frame (cells, then show cursor, then move it), so the terminal could show the cursor
+/// jumping across the screen mid-frame; on Windows, ConPTY renders such in-between states, which
+/// made the cursor flicker during animations. While `holding`, flushes are deferred to [`commit`].
+///
+/// [`commit`]: FrameOut::commit
+/// Cloning shares the buffer, so the draw loop can hold and commit what ratatui writes.
+#[derive(Clone, Default)]
+struct FrameOut(std::rc::Rc<std::cell::RefCell<Frame>>);
+
+#[derive(Default)]
+struct Frame {
+    buf: Vec<u8>,
+    holding: bool,
+}
+
+impl FrameOut {
+    fn hold(&self, holding: bool) {
+        self.0.borrow_mut().holding = holding;
+    }
+
+    fn commit(&self) -> std::io::Result<()> {
+        let mut frame = self.0.borrow_mut();
+        let mut out = std::io::stdout().lock();
+        let result = out.write_all(&frame.buf).and_then(|_| out.flush());
+        frame.buf.clear();
+        result
+    }
+}
+
+impl Write for FrameOut {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().buf.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.0.borrow().holding { Ok(()) } else { self.commit() }
+    }
+}
+
+type Term = ratatui::Terminal<ratatui::backend::CrosstermBackend<FrameOut>>;
+
+/// Draws one frame as a single synchronized write, the cursor hidden until it's placed (ratatui
+/// shows it again at the composer, or keeps it hidden).
+fn draw(terminal: &mut Term, out: &mut FrameOut, app: &mut App) -> std::io::Result<()> {
+    out.hold(true);
+    let _ = queue!(out, BeginSynchronizedUpdate, Hide);
+    let drawn = terminal.draw(|f| view::draw(f, app)).map(|_| ());
+    let _ = queue!(out, EndSynchronizedUpdate);
+    out.hold(false);
+    drawn.and(out.commit())
+}
+
 pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
-    let mut terminal = ratatui::init();
+    // Raw mode, the alternate screen and a panic hook that restores the terminal; its stdout
+    // backend is swapped for one that writes whole frames.
+    drop(ratatui::init());
+    let mut frames = FrameOut::default();
+    let mut terminal = Term::new(ratatui::backend::CrosstermBackend::new(frames.clone()))?;
     // Match the terminal's theme before anything else reads stdin.
     let (bg, fg) = theme::detect(std::time::Duration::from_millis(250));
     theme::init(bg, fg);
@@ -49,7 +109,7 @@ pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
         // Redraws at most every FRAME for streamed output; keys draw at once.
         const FRAME: Duration = Duration::from_millis(33);
         loop {
-            terminal.draw(|f| view::draw(f, &mut app))?;
+            draw(&mut terminal, &mut frames, &mut app)?;
             let drawn = std::time::Instant::now();
             if app.quit {
                 break;

@@ -79,6 +79,12 @@ struct Bridge {
     usage: Usage,
     /// Skills Codex found (`skills/list`): name → SKILL.md path.
     skills: HashMap<String, String>,
+    /// File changes Codex applied in the running turn, in order.
+    turn_changes: Vec<Value>,
+    /// The file changes of each finished turn that edited files, newest last, for /undo.
+    undo: Vec<Vec<Value>>,
+    /// Told to Codex with the next message after an undo, so it doesn't trust stale file state.
+    note: Option<String>,
 }
 
 #[derive(Default)]
@@ -120,6 +126,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         children: HashMap::new(),
         usage: Usage::default(),
         skills: HashMap::new(),
+        turn_changes: Vec::new(),
+        undo: Vec::new(),
+        note: None,
     };
     b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": null }), Pending::Init);
     let mut thread_params = json!({
@@ -237,7 +246,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     }
                 }
                 Cmd::SetCompaction { .. } => {}
-                Cmd::Undo => b.emit(Ev::Notice("Undo isn't available with Codex; ask it to revert instead.".into())),
+                Cmd::Undo => b.undo(),
                 Cmd::StopTask(thread) => {
                     match b.children.get(&thread).and_then(|c| c.turn.clone()) {
                         Some(turn) => b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore),
@@ -261,8 +270,11 @@ impl Bridge {
         let _ = self.proc.write(&json!({ "id": self.next, "method": method, "params": params }));
     }
 
-    fn start_turn(&mut self, msg: UserMsg) {
+    fn start_turn(&mut self, mut msg: UserMsg) {
         let Some(thread) = self.thread.clone() else { return };
+        if let Some(note) = self.note.take() {
+            msg.text = format!("{note}\n\n{}", msg.text);
+        }
         // An explicit skill goes as Codex's own skill input (what `$name` does in its TUI), so
         // the model gets the SKILL.md itself instead of finding and reading it.
         let (text, skill) = match &msg.skill {
@@ -287,6 +299,39 @@ impl Bridge {
             params["effort"] = json!(e);
         }
         self.request("turn/start", params, Pending::Turn);
+    }
+
+    /// Reverts the file changes of the last turn that made any, newest first. Codex's app server
+    /// can only drop turns from its history (`thread/revert`), so the patches it reported are
+    /// undone here; edits made through shell commands aren't tracked.
+    fn undo(&mut self) {
+        if self.turn.is_some() {
+            return self.emit(Ev::Notice("Wait for the turn to finish (or press Esc) before /undo.".into()));
+        }
+        let Some(changes) = self.undo.pop() else {
+            return self.emit(Ev::Notice("Nothing to undo.".into()));
+        };
+        let cwd = std::path::PathBuf::from(&self.cwd);
+        let mut names = Vec::new();
+        let mut failed = Vec::new();
+        for c in changes.iter().rev() {
+            let raw = c["path"].as_str().unwrap_or("");
+            let name = crate::harness::tools::short_path(raw);
+            match revert_change(&cwd, c) {
+                Ok(()) => names.push(name),
+                Err(e) => failed.push(format!("{name} ({e})")),
+            }
+        }
+        names.sort();
+        names.dedup();
+        if !names.is_empty() {
+            let list = names.join(", ");
+            self.note = Some(format!("(The user reverted your file changes from the last turn: {list}. Re-read files before editing them.)"));
+            self.emit(Ev::Notice(format!("Reverted {list}")));
+        }
+        if !failed.is_empty() {
+            self.emit(Ev::Error(format!("Couldn't revert {}", failed.join(", "))));
+        }
     }
 
     /// Remembers the enabled skills of a `skills/list` result and returns them for the TUI.
@@ -367,6 +412,10 @@ impl Bridge {
                     self.emit(Ev::Error(format!("Codex: {message}")));
                 }
                 self.turn = None;
+                let changes = std::mem::take(&mut self.turn_changes);
+                if !changes.is_empty() {
+                    self.undo.push(changes);
+                }
                 self.emit(Ev::TurnDone);
             }
             "error" => {
@@ -600,6 +649,9 @@ impl Bridge {
                 let diff = changes_diff(item);
                 self.diffs.remove(&id);
                 let ok = item["status"] == "completed";
+                if ok {
+                    self.turn_changes.extend(item["changes"].as_array().into_iter().flatten().cloned());
+                }
                 self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: Some(diff).filter(|d| !d.is_empty()) });
             }
             "mcpToolCall" | "dynamicToolCall" => {
@@ -721,6 +773,34 @@ fn changes_diff(item: &Value) -> String {
     out
 }
 
+/// Undoes one change of a Codex `fileChange` item: added files are removed, deleted ones
+/// rewritten, and updates (and moves) reverse-applied.
+fn revert_change(cwd: &std::path::Path, c: &Value) -> Result<(), String> {
+    let path = crate::harness::tools::resolve(cwd, c["path"].as_str().unwrap_or(""));
+    let raw = c["diff"].as_str().unwrap_or("");
+    let io = |e: std::io::Error| e.to_string();
+    match c["kind"]["type"].as_str() {
+        Some("add") => std::fs::remove_file(&path).map_err(io),
+        Some("delete") => {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(io)?;
+            }
+            std::fs::write(&path, raw).map_err(io)
+        }
+        _ => {
+            let moved = c["kind"]["move_path"].as_str().map(|m| crate::harness::tools::resolve(cwd, m));
+            let now = moved.as_ref().unwrap_or(&path);
+            let current = std::fs::read_to_string(now).map_err(io)?;
+            let old = crate::harness::diff::reverse(&current, raw).ok_or("changed since")?;
+            std::fs::write(&path, old).map_err(io)?;
+            if let Some(m) = moved.filter(|m| *m != path) {
+                std::fs::remove_file(m).map_err(io)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Models from `model/list`, through a short-lived app server.
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("codex").is_none() {
@@ -812,6 +892,9 @@ mod tests {
             children: HashMap::new(),
             usage: Usage::default(),
             skills: HashMap::new(),
+            turn_changes: Vec::new(),
+            undo: Vec::new(),
+            note: None,
         };
         (b, rx)
     }
@@ -855,6 +938,33 @@ mod tests {
         assert!(matches!(&evs[1], Ev::Task(t) if t.tool_id.as_deref() == Some("c1") && t.status.as_deref() == Some("running")));
         assert!(matches!(&evs[3], Ev::Task(t) if t.id == "kid" && t.tool_id.is_none() && t.status.as_deref() == Some("completed")));
         assert!(matches!(&evs[4], Ev::ToolEnd { id, output, .. } if id == "c2" && output == "42 files"));
+    }
+
+    #[test]
+    fn undo_reverts_the_last_turns_patches() {
+        let (mut b, rx) = bridge();
+        let dir = std::env::temp_dir().join(format!("winfer-codex-undo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        b.cwd = dir.to_string_lossy().into_owned();
+        std::fs::write(dir.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+        let changes = json!([
+            { "path": "a.txt", "kind": { "type": "update" }, "diff": "@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n" },
+            { "path": "new.txt", "kind": { "type": "add" }, "diff": "fresh\n" },
+            { "path": "gone.txt", "kind": { "type": "delete" }, "diff": "old\n" },
+        ]);
+        let item = json!({ "type": "fileChange", "id": "f", "status": "completed", "changes": changes });
+        b.on_notification("item/completed", &json!({ "threadId": "main", "item": item }));
+        b.on_notification("turn/completed", &json!({ "threadId": "main", "turn": { "id": "t0", "status": "completed" } }));
+        b.undo();
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ntwo\nthree\n");
+        assert!(!dir.join("new.txt").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("gone.txt")).unwrap(), "old\n");
+        assert!(b.note.is_some());
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Notice(n) if n.starts_with("Reverted"))));
+        b.undo();
+        assert!(matches!(rx.try_iter().last(), Some(Ev::Notice(n)) if n == "Nothing to undo."));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

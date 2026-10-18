@@ -35,6 +35,8 @@ export interface Context {
   at: number;
   /** Where the conversation is kept (transcript, session log or session id), for the breakdown. */
   source?: string;
+  /** Whose format `source` is in when it isn't the pane's agent's: winfer code's backend (claude, codex, chatgpt). */
+  provider?: string;
 }
 
 /** One part of what fills a context window (estimated, see src-tauri/src/context_breakdown.rs). */
@@ -47,7 +49,7 @@ export interface ContextPart {
 /** What a pane's context is made of; null when the agent's session can't be read. */
 export async function contextBreakdown(provider: string, context: Context): Promise<ContextPart[] | null> {
   if (!context.source) return null;
-  return invoke<ContextPart[] | null>("usage_context_breakdown", { provider, source: context.source, tokens: context.tokens }).catch(() => null);
+  return invoke<ContextPart[] | null>("usage_context_breakdown", { provider: context.provider ?? provider, source: context.source, tokens: context.tokens }).catch(() => null);
 }
 
 export interface Spend {

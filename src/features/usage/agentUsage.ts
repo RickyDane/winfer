@@ -12,11 +12,23 @@ import { duration, leftNow, refreshClaude, refreshCodex, runsOutAt, tightest, us
 /** OpenCode's model providers whose account sign-in shares the limits of a plan winfer tracks. */
 const PLAN_OF: Record<string, string> = { openai: "codex", anthropic: "claude" };
 
+/** winfer code's backends and the plan whose limits each uses (ChatGPT's are Codex's). */
+const WINFER_BACKEND_PLAN: Record<string, string> = { claude: "claude", codex: "codex", chatgpt: "codex" };
+const WINFER_BACKEND_NAME: Record<string, string> = { claude: "Claude Code", codex: "Codex", chatgpt: "your ChatGPT account" };
+
 /**
- * Whose limits a pane's agent uses: its own, or for OpenCode those of the plan it's signed in
- * to for the model it runs (ChatGPT for OpenAI models, the same limits as Codex). `note` says so.
+ * Whose limits a pane's agent uses: its own; for winfer code those of its backend (as its usage
+ * reports say); for OpenCode those of the plan it's signed in to for the model it runs (ChatGPT
+ * for OpenAI models, the same limits as Codex). `note` says so.
  */
 export async function limitsOf(pane: Pane): Promise<{ provider: string; note: string | null }> {
+  if (pane.provider === "winfer") {
+    const backend = useUsage.getState().context[pane.id]?.provider;
+    const plan = backend ? WINFER_BACKEND_PLAN[backend] : undefined;
+    if (!backend || !plan) return { provider: "winfer", note: null };
+    const name = providerName(useWorkspaces.getState().providers, plan);
+    return { provider: plan, note: `winfer code is running on ${WINFER_BACKEND_NAME[backend]}, so ${name}'s plan limits apply.` };
+  }
   if (pane.provider !== "opencode") return { provider: pane.provider, note: null };
   const model = await invoke<{ provider: string; model: string; plan: boolean } | null>("usage_opencode_model", { cwd: pane.cwd }).catch(() => null);
   const plan = model?.plan ? PLAN_OF[model.provider] : undefined;
@@ -53,6 +65,9 @@ export function usageReport(provider: string, now = Date.now()): string {
     }
     if (provider === "claude" || provider === "codex") {
       return `winfer has no usage numbers for ${name} yet. They are reported after the agent's first answer in winfer; ask again after your next reply. (Sessions signed in with an API key have no plan limits.)`;
+    }
+    if (provider === "winfer") {
+      return `winfer doesn't know yet which backend ${name} runs on (Claude Code, Codex or ChatGPT). It's reported after the agent's first answer; ask again after your next reply.`;
     }
     return `winfer can't read usage limits for ${name}.`;
   }
