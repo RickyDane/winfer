@@ -18,7 +18,7 @@ import { reportInput, reportOutput, reportStatus, reportTerminalNotice } from "@
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
-import { terminalTheme } from "@/features/theme/themes";
+import { terminalMinContrast, terminalTheme } from "@/features/theme/themes";
 import { optionTypedChar } from "./optionKey";
 import { fileLinkProvider, openTerminalUri } from "@/features/viewer/terminalLinks";
 
@@ -28,7 +28,12 @@ const MAX_ATLAS_PAGES = 4;
 
 // Recolor every live terminal when the app theme changes; refit them all when zoomed.
 useWorkspaces.subscribe((s, prev) => {
-  if (s.theme !== prev.theme) for (const entry of entries.values()) entry.term.options.theme = terminalTheme(s.theme);
+  if (s.theme !== prev.theme) {
+    for (const entry of entries.values()) {
+      entry.term.options.theme = terminalTheme(s.theme);
+      entry.term.options.minimumContrastRatio = terminalMinContrast(s.theme);
+    }
+  }
   if (s.terminalFontSize !== prev.terminalFontSize) {
     for (const entry of entries.values()) {
       entry.term.options.fontSize = s.terminalFontSize;
@@ -106,6 +111,7 @@ function create(pane: Pane): Entry {
     macOptionIsMeta: true,
     allowProposedApi: true,
     theme: terminalTheme(useWorkspaces.getState().theme),
+    minimumContrastRatio: terminalMinContrast(useWorkspaces.getState().theme),
     // OSC 8 hyperlinks: files open in the viewer, web links in the default browser.
     linkHandler: {
       activate: (event, uri) => openTerminalUri(event, uri, cwdOf(pane.id, pane.cwd)),

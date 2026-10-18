@@ -172,6 +172,13 @@ const TOKENS: Record<keyof Ui, string> = {
   claude: "--color-claude",
 };
 
+/**
+ * xterm's minimumContrastRatio for a theme. Agent TUIs often pick colors for a dark
+ * background (near-white truecolor text, ANSI white), which vanish on light themes, so
+ * light themes make xterm darken any text that falls below WCAG AA contrast.
+ */
+export const terminalMinContrast = (id: string): number => (themeById(id).mode === "light" ? 4.5 : 1);
+
 /** Writes a theme's tokens onto <html>, overriding the defaults in globals.css. */
 export function applyTheme(id: string) {
   const { ui, mode } = themeById(id);
