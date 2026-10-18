@@ -95,7 +95,7 @@ interface WorkspaceState {
   agentModels: Record<ProviderId, string>;
   /** Agents started with their permission prompts skipped (persisted). */
   autoApprove: ProviderId[];
-  /** Start Codex without its bundled apps, plugins and extra tools (persisted, default on). */
+  /** Start Codex without its bundled apps, plugins and extra tools (persisted, default off: may cost more, see harness bench). */
   leanCodex: boolean;
   /** Added to every agent's system prompt at start (persisted); null = DEFAULT_SYSTEM_PROMPT, "" = none. */
   systemPrompt: string | null;
@@ -274,7 +274,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   models: {},
   agentModels: {},
   autoApprove: [],
-  leanCodex: true,
+  leanCodex: false,
   systemPrompt: null,
   defaultProvider: null,
   editor: null,
@@ -334,7 +334,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       recipes: ui.recipes ?? [],
       agentModels: ui.agentModels ?? {},
       autoApprove: ui.autoApprove ?? [],
-      leanCodex: ui.leanCodex ?? true,
+      leanCodex: ui.leanCodex ?? false,
       systemPrompt: ui.systemPrompt ?? null,
       defaultProvider: ui.defaultProvider ?? null,
       editor: ui.editor ?? null,

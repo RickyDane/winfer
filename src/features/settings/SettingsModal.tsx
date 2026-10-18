@@ -1012,7 +1012,7 @@ function HarnessSettings() {
         </Row>
         <Row
           label="Codex"
-          hint="Codex panes leave out ChatGPT apps (Sites, Spaces, Pets…), plugins and their skills, bundled skills, image generation, computer use, Codex's own browser and goals: about 100 fewer tools. winfer's tools stay."
+          hint="Codex panes leave out ChatGPT apps (Sites, Spaces, Pets…), plugins and their skills, bundled skills, image generation, computer use, Codex's own browser and goals: about 100 fewer tools. winfer's tools stay. Off by default: turning Codex features off can break its prompt-cache prefix, so it may cost more."
         >
           <Toggle label="Lean Codex" checked={leanCodex} onChange={setLeanCodex} />
         </Row>
