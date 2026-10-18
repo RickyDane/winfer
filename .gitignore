@@ -36,3 +36,6 @@ src/dev/test-stream.h264
 graphify-out/
 .playwright-mcp/
 m-video/
+
+# Harness Bench fixtures ship .env.local files on purpose
+!plugins-src/**/*.local
