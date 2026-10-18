@@ -1,6 +1,6 @@
 [package]
 name = "winfer"
-version = "0.1.84"
+version = "0.1.85"
 description = "Orchestrate coding agents across tiled terminals"
 authors = ["Ricky Perlick"]
 edition = "2024"
