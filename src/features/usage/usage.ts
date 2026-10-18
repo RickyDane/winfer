@@ -252,7 +252,8 @@ export function refreshClaude() {
 export async function refreshUsage() {
   const { providers } = useWorkspaces.getState();
   const known = useUsage.getState().snapshots;
-  const installed = (id: string) => !!known[id] || providers.some((p) => p.id === id && p.installed);
+  // Before the provider list loads, fall back to agents that reported before.
+  const installed = (id: string) => (providers.length ? providers.some((p) => p.id === id && p.installed) : !!known[id]);
   await Promise.all([
     installed("codex") ? refreshCodex() : undefined,
     installed("claude") ? refreshClaude() : undefined,
@@ -331,13 +332,17 @@ export function startUsageTracking() {
   window.setTimeout(pollOpencodeContext, 3000);
   window.setInterval(pollOpencodeContext, 20_000);
   window.setInterval(() => codexPanes().filter((p) => p.status === "working").forEach((p) => void refreshCodexContext(p)), 30_000);
-  const installed = (id: string) => useWorkspaces.getState().providers.some((p) => p.id === id && p.installed);
+  const installed = (id: string) => {
+    const { providers } = useWorkspaces.getState();
+    // Before the provider list loads, fall back to agents that reported before.
+    return providers.length ? providers.some((p) => p.id === id && p.installed) : !!useUsage.getState().snapshots[id];
+  };
   // Just a look at a few log files (nothing if Codex was never used), so no need to wait for
   // the provider list.
   let claudePolledAt = 0;
   const poll = () => {
     void refreshCodex();
-    if ((installed("claude") || useUsage.getState().snapshots.claude) && Date.now() - Math.max(claudePolledAt, claudeLiveAt) >= 5 * 60_000) {
+    if (installed("claude") && Date.now() - Math.max(claudePolledAt, claudeLiveAt) >= 5 * 60_000) {
       claudePolledAt = Date.now();
       void refreshClaude();
     }

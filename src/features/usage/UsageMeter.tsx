@@ -179,7 +179,7 @@ function useLimited() {
   const installed = (id: string) => providers.some((p) => p.id === id && p.installed);
   const limited = Object.values(snapshots).filter((s) => installed(s.provider) && s.windows.length > 0);
   const showOpencode = installed("opencode") && opencode !== null;
-  return { limited, showOpencode };
+  return { limited, showOpencode, installed };
 }
 
 const CARD = "w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl";
@@ -190,13 +190,13 @@ export function Limits({ chart = "bars", refresh = true }: { chart?: ChartKind; 
   const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
   const errors = useUsage((s) => s.errors);
-  const { limited, showOpencode } = useLimited();
-  const claudeInstalled = providers.some((p) => p.id === "claude" && p.installed);
+  const { limited, showOpencode, installed } = useLimited();
+  const claudeInstalled = installed("claude");
   const Window = chart === "line" ? WindowLine : WindowBar;
   return (
     <div className="space-y-4">
       {refresh && <div className="flex justify-end"><RefreshUsageButton /></div>}
-      {Object.entries(errors).map(([provider, error]) => error && (
+      {Object.entries(errors).map(([provider, error]) => error && installed(provider) && (
         <p key={provider} role="status" className="text-[11px] text-warning">
           {providerName(providers, provider)}: {error}{(snapshots[provider] || (provider === "opencode" && opencode)) && " Previous reading kept."}
         </p>
