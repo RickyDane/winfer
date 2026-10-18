@@ -12,6 +12,23 @@ import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
 import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
 import { BENCH_DEMO, harnessBenchExec, harnessBenchFile, harnessBenchWrite } from "./harnessBench";
 
+// Fake files for the file viewer: the repo's own docs, under /Users/you/winfer.
+const REPO = "/Users/you/winfer";
+const repoDocs = import.meta.glob<string>(["../../*.md", "../../docs/**/*.md"], { eager: true, query: "?raw", import: "default" });
+const repoImages = import.meta.glob<string>("../../docs/screenshots/*.png", { eager: true, query: "?url", import: "default" });
+const repoFile = (rel: string) => repoDocs[`../../${rel}`] ?? null;
+function mockResolve(cwd: string, path: string) {
+  const full = path.startsWith("/") ? path : `${cwd.replace(/^~/, "/Users/you").replace(/\/$/, "")}/${path}`;
+  const parts: string[] = [];
+  for (const part of full.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part && part !== ".") parts.push(part);
+  }
+  const abs = `/${parts.join("/")}`;
+  const rel = abs.startsWith(`${REPO}/`) ? abs.slice(REPO.length + 1) : null;
+  return rel && (repoFile(rel) !== null || repoImages[`../../${rel}`]) ? abs : null;
+}
+
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
 
@@ -358,6 +375,20 @@ mockIPC(
         if (a.plugin === "db-explorer") return dbExplorerExec(a.command);
         if (a.plugin === "harness-bench") return harnessBenchExec(a.command);
         return { code: 0, timedOut: false, output: `$ ${a.command}\n${a.keys.map((k: string) => `${k}=[secret ${k}]`).join("\n")}` };
+      case "files_resolve":
+        return (a.paths as string[]).map((p) => mockResolve(a.cwd || REPO, p));
+      case "files_read_text": {
+        const text = String(a.path).startsWith(`${REPO}/`) ? repoFile(String(a.path).slice(REPO.length + 1)) : null;
+        if (text === null) throw new Error(`can't open ${a.path}: No such file or directory`);
+        return { path: a.path, text, modified: 1 };
+      }
+      case "files_modified":
+        return mockResolve("/", a.path) ? 1 : null;
+      case "files_read_bytes": {
+        const url = repoImages[`../../${String(a.path).slice(REPO.length + 1)}`];
+        if (!url) throw new Error(`can't open ${a.path}`);
+        return fetch(url).then((r) => r.arrayBuffer());
+      }
       case "plugins_read_file": {
         const bench = harnessBenchFile(a.path);
         if (bench !== null) return new TextEncoder().encode(bench).buffer;
@@ -395,7 +426,11 @@ mockIPC(
           send(a.onData, transcript(paneId)!);
           return { attached: false, pid: 1 };
         }
-        send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}${prompt ? ` · prompt: ${prompt}` : ""}\x1b[0m\r\n$ `);
+        send(a.onData, `\x1b[2m[mock] ${providerId}${resume ? " (resumed)" : ""} in ${cwd}${prompt ? ` · prompt: ${prompt}` : ""}\x1b[0m\r\n`);
+        // File mentions as agents print them, to try the file viewer.
+        if (providerId !== "shell" && !SHOWCASE)
+          send(a.onData, `⏺ Read(README.md) · Update(docs/plugins/README.md:40) · ${REPO}/TESTING.md · \x1b]8;;file://${REPO}/README.md#L20\x1b\\README (OSC 8)\x1b]8;;\x1b\\ · missing/nope.md\r\n`);
+        send(a.onData, "$ ");
         return { attached: false, pid: 1 };
       }
       case "pty_write": {

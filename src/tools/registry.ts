@@ -9,7 +9,7 @@
 import type { Command, PaneRef } from "@/commands/bus";
 import type { ModelInfo, Provider } from "@/features/providers/providers";
 import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
-import { providerName, type Workspace } from "@/stores/workspaces";
+import { providerName, type SidePanelTab, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
 import { isThemeId, THEMES } from "@/features/theme/themes";
 import { pluginPages, pluginTools } from "@/features/plugins/plugins";
@@ -588,20 +588,21 @@ export const TOOLS: ToolDef[] = [
   {
     id: "show_side_panel",
     title: "Show side panel tab",
-    description: "Show the browser, the Android device mirror or the terminal in the side panel (or hide it if that tab is already showing)",
+    description: "Show the browser, the Android device mirror, the terminal or the file viewer (markdown documents) in the side panel (or hide it if that tab is already showing)",
     risk: "safe",
     params: {
       panel: {
         kind: "enum",
-        ask: "Which side panel tab: the web browser, the Android phone/emulator screen, or the terminal?",
-        options: () => ({ browser: "Browser", device: "Android device", terminal: "Terminal" }),
+        ask: "Which side panel tab: the web browser, the Android phone/emulator screen, the terminal, or the file viewer (markdown docs)?",
+        options: () => ({ browser: "Browser", device: "Android device", terminal: "Terminal", viewer: "File viewer" }),
       },
     },
-    toCommands: (args) => [{ type: "ui.sidePanel", panel: args.panel as "browser" | "device" | "terminal" }],
+    toCommands: (args) => [{ type: "ui.sidePanel", panel: args.panel as SidePanelTab }],
     palette: () => [
       { title: "Side panel: terminal", args: { panel: "terminal" } },
       { title: "Side panel: Android device", args: { panel: "device" } },
       { title: "Side panel: browser", args: { panel: "browser" } },
+      { title: "Side panel: file viewer", args: { panel: "viewer" } },
     ],
   },
   {

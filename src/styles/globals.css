@@ -243,3 +243,37 @@ body.resizing * {
   .wf-dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 0.4); }
   .wf-dialog { width: min(480px, 92vw); border-radius: 12px; border: 1px solid var(--color-border-strong); background: var(--color-panel-raised); padding: 20px; box-shadow: 0 20px 50px rgb(0 0 0 / 0.4); display: flex; flex-direction: column; gap: 14px; }
 }
+
+/* Rendered markdown in the side panel's file viewer (src/features/viewer). */
+@layer components {
+  .md-body { max-width: 860px; margin: 0 auto; color: var(--color-fg); font-size: 13.5px; line-height: 1.65; user-select: text; overflow-wrap: break-word; }
+  .md-body > :first-child { margin-top: 0; }
+  .md-body :where(p, ul, ol, blockquote, pre, table, details, hr) { margin: 0 0 14px; }
+  .md-body :where(h1, h2, h3, h4, h5, h6) { margin: 24px 0 12px; font-weight: 600; line-height: 1.3; scroll-margin-top: 12px; }
+  .md-body h1 { font-size: 1.75em; padding-bottom: 0.3em; border-bottom: 1px solid var(--color-border); }
+  .md-body h2 { font-size: 1.4em; padding-bottom: 0.3em; border-bottom: 1px solid var(--color-border); }
+  .md-body h3 { font-size: 1.18em; }
+  .md-body h4 { font-size: 1em; }
+  .md-body :where(h5, h6) { font-size: 0.9em; color: var(--color-fg-muted); }
+  .md-body a { color: var(--color-accent); text-decoration: none; cursor: pointer; }
+  .md-body a:hover { text-decoration: underline; }
+  .md-body :where(ul, ol) { padding-left: 1.6em; }
+  .md-body ul { list-style: disc; }
+  .md-body ol { list-style: decimal; }
+  .md-body li + li { margin-top: 3px; }
+  .md-body li > :where(ul, ol) { margin: 3px 0 0; }
+  .md-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+  .md-body input[type="checkbox"] { margin-right: 6px; vertical-align: middle; }
+  .md-body blockquote { padding: 0 1em; color: var(--color-fg-muted); border-left: 3px solid var(--color-border-strong); }
+  .md-body code { font-family: var(--font-mono); font-size: 0.86em; padding: 0.15em 0.4em; border-radius: 4px; background: var(--color-active); }
+  .md-body pre { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; padding: 12px 14px; border-radius: 8px; background: var(--color-panel-raised); border: 1px solid var(--color-border); overflow-x: auto; }
+  .md-body pre code { padding: 0; background: none; font-size: inherit; }
+  .md-body table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
+  .md-body :where(th, td) { padding: 6px 12px; border: 1px solid var(--color-border-strong); }
+  .md-body th { font-weight: 600; background: var(--color-panel-raised); }
+  .md-body tr:nth-child(2n) td { background: color-mix(in srgb, var(--color-panel-raised) 50%, transparent); }
+  .md-body hr { height: 1px; border: 0; background: var(--color-border-strong); }
+  .md-body img { display: inline-block; max-width: 100%; border-radius: 4px; }
+  .md-body summary { cursor: pointer; }
+  .md-body kbd { font-family: var(--font-mono); font-size: 0.8em; padding: 1px 5px; border: 1px solid var(--color-border-strong); border-bottom-width: 2px; border-radius: 4px; }
+}

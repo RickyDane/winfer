@@ -138,3 +138,19 @@ describe("usage tools", async () => {
     await expect(runTool({ id: "1", tool: "wait_for_usage_reset", args: {}, paneId: "p-2" })).rejects.toThrow("doesn't know when");
   });
 });
+
+describe("open_file", () => {
+  it("shows the file in the side panel's viewer", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (cmd, args) =>
+      cmd === "files_resolve" ? (args as { paths: string[] }).paths.map((p) => (p === "docs/PLAN.md" ? "/home/api/docs/PLAN.md" : null)) : null,
+    );
+    useWorkspaces.setState({ view: "workspace", sidePanel: "browser", viewer: { docs: [], active: null } });
+    expect(await call("open_file", { path: "docs/PLAN.md", line: 12 })).toContain("Showing /home/api/docs/PLAN.md");
+    expect(invoke).toHaveBeenCalledWith("files_resolve", { cwd: "~", paths: ["docs/PLAN.md"] });
+    const s = useWorkspaces.getState();
+    expect(s.viewer).toEqual({ docs: ["/home/api/docs/PLAN.md"], active: "/home/api/docs/PLAN.md" });
+    expect(s.sidePanel).toBe("viewer");
+    await expect(call("open_file", { path: "nope.md" })).rejects.toThrow("No file at nope.md");
+  });
+});

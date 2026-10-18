@@ -1,8 +1,9 @@
 import { SideTerminal } from "@/features/terminal/SideTerminal";
 import { DevicePanel } from "@/features/android/DevicePanel";
+import { ViewerPanel } from "@/features/viewer/ViewerPanel";
 import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
-import { ArrowLeft, ArrowRight, Crosshair, Download, Globe, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Crosshair, Download, FileText, Globe, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
@@ -291,7 +292,7 @@ export function BrowserPanel() {
   );
 }
 
-/** The right-hand panel: the browser, or a mirrored Android device. */
+/** The right-hand panel: the browser, a mirrored Android device, a terminal, or the file viewer. */
 export function SidePanel() {
   const width = useWorkspaces((s) => s.browserWidth);
   const panel = useWorkspaces((s) => s.sidePanel);
@@ -310,8 +311,11 @@ export function SidePanel() {
         <button role="tab" aria-selected={panel === "terminal"} onClick={() => setPanel("terminal")} className={tab(panel === "terminal")}>
           <SquareTerminal size={12} /> Terminal
         </button>
+        <button role="tab" aria-selected={panel === "viewer"} onClick={() => setPanel("viewer")} className={tab(panel === "viewer")}>
+          <FileText size={12} /> Viewer
+        </button>
       </div>
-      {panel === "device" ? <DevicePanel /> : panel === "terminal" ? <SideTerminal /> : <BrowserPanel />}
+      {panel === "device" ? <DevicePanel /> : panel === "terminal" ? <SideTerminal /> : panel === "viewer" ? <ViewerPanel /> : <BrowserPanel />}
     </aside>
   );
 }

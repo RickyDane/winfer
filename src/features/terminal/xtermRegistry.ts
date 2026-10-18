@@ -20,6 +20,7 @@ import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
 import { terminalTheme } from "@/features/theme/themes";
 import { optionTypedChar } from "./optionKey";
+import { fileLinkProvider, openTerminalUri } from "@/features/viewer/terminalLinks";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 /** Glyph-atlas pages a terminal may grow before the WebGL renderer's atlas is cleared. */
@@ -90,6 +91,11 @@ function onExit(entry: Entry, { code, pid }: ExitPayload) {
   reportStatus(entry.pane.id, code === 0 ? "done" : "error", `exited with code ${code}`);
 }
 
+/** The pane's current folder (its worktree once it has one), where the paths it prints are relative to. */
+function cwdOf(id: string, fallback: string) {
+  return useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === id)?.cwd ?? fallback;
+}
+
 function create(pane: Pane): Entry {
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace',
@@ -100,6 +106,11 @@ function create(pane: Pane): Entry {
     macOptionIsMeta: true,
     allowProposedApi: true,
     theme: terminalTheme(useWorkspaces.getState().theme),
+    // OSC 8 hyperlinks: files open in the viewer, web links in the default browser.
+    linkHandler: {
+      activate: (event, uri) => openTerminalUri(event, uri, cwdOf(pane.id, pane.cwd)),
+      allowNonHttpProtocols: true,
+    },
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -110,6 +121,7 @@ function create(pane: Pane): Entry {
     if (entry) entry.searchResults = { index: resultIndex, count: resultCount };
   });
   term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)));
+  term.registerLinkProvider(fileLinkProvider(term, () => cwdOf(pane.id, pane.cwd)));
 
   // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows, plus any the user assigned) must reach
   // the app, not the PTY. Returning false skips xterm only; the browser still fires copy/paste events.
@@ -243,6 +255,9 @@ async function prepareWorktree(entry: Entry): Promise<boolean> {
   }
 }
 
+const paneStatus = (id: string) =>
+  useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === id)?.status;
+
 async function spawn(entry: Entry) {
   entry.spawned = true;
   const id = entry.pane.id;
@@ -257,6 +272,7 @@ async function spawn(entry: Entry) {
     return;
   }
   if (entries.get(id) === entry) setStarting(id, "process");
+  const statusBefore = paneStatus(id);
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (data) => {
     if (!entry.lastOutput) {
@@ -288,7 +304,11 @@ async function spawn(entry: Entry) {
       onData: channel,
     });
     entry.pid = pid;
-    useWorkspaces.getState().setPaneStatus(entry.pane.id, entry.pane.provider === "shell" ? "idle" : "working");
+    // Only a fresh agent given a start prompt is busy right away. A resumed or promptless one
+    // waits for input, and agents without a session-start hook (Codex, OpenCode) would otherwise
+    // stay "working" forever. A status a hook reported while spawning wins.
+    const busy = entry.pane.provider !== "shell" && !entry.pane.resume && !!entry.pane.prompt?.trim();
+    if (paneStatus(id) === statusBefore) useWorkspaces.getState().setPaneStatus(id, busy ? "working" : "idle");
     entry.earlyExits?.forEach((exit) => onExit(entry, exit));
     entry.earlyExits = undefined;
   } catch (err) {

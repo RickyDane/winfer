@@ -18,6 +18,8 @@ export interface WorktreeInfo {
   base: string;
 }
 
+export type SidePanelTab = "browser" | "device" | "terminal" | "viewer";
+
 export interface Pane {
   id: string;
   workspaceId: string;
@@ -103,8 +105,10 @@ interface WorkspaceState {
   shortcuts: Record<string, string>;
   /** Browser panel width in px. */
   browserWidth: number;
-  /** What the side panel shows: the browser or a mirrored Android device. */
-  sidePanel: "browser" | "device" | "terminal";
+  /** What the side panel shows: the browser, a mirrored Android device, a terminal or the file viewer. */
+  sidePanel: SidePanelTab;
+  /** Files open in the side panel's viewer (absolute paths) and the one shown. */
+  viewer: { docs: string[]; active: string | null };
   /** Device the Android panel mirrors (adb serial). */
   androidSerial: string | null;
   /** Color theme id (see features/theme/themes.ts). */
@@ -175,7 +179,8 @@ interface WorkspaceState {
   setShortcut: (id: string, chord: string | null) => void;
   resetShortcuts: () => void;
   setBrowserWidth: (width: number) => void;
-  setSidePanel: (panel: "browser" | "device" | "terminal") => void;
+  setSidePanel: (panel: SidePanelTab) => void;
+  setViewer: (viewer: { docs: string[]; active: string | null }) => void;
   setAndroidSerial: (serial: string | null) => void;
   setTheme: (theme: Theme) => void;
   /** Switch to the theme's light/dark counterpart. */
@@ -272,6 +277,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
   sidePanel: "browser",
+  viewer: { docs: [], active: null },
   androidSerial: null,
   theme: DEFAULT_THEME,
   view: "workspace",
@@ -330,6 +336,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       sidePanel: ui.sidePanel ?? "browser",
+      viewer: { docs: ui.viewer?.docs ?? [], active: ui.viewer?.active ?? null },
       androidSerial: ui.androidSerial ?? null,
       theme: isThemeId(ui.theme) ? ui.theme : DEFAULT_THEME,
       view: ui.view ?? "workspace",
@@ -519,6 +526,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   resetShortcuts: () => set({ shortcuts: {} }),
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
   setSidePanel: (panel) => set({ sidePanel: panel, browserOpen: true }),
+  setViewer: (viewer) => set({ viewer }),
   setAndroidSerial: (serial) => set({ androidSerial: serial }),
   setTheme: (theme) => set({ theme: isThemeId(theme) ? theme : DEFAULT_THEME }),
   toggleTheme: () => set((s) => ({ theme: themeById(s.theme).pair })),
@@ -581,7 +589,8 @@ interface Snapshot {
     editor?: string | null;
     shortcuts?: Record<string, string>;
     browserWidth?: number;
-    sidePanel?: "browser" | "device" | "terminal";
+    sidePanel?: SidePanelTab;
+    viewer?: { docs?: string[]; active?: string | null };
     androidSerial?: string | null;
     theme?: Theme;
     view?: View;
@@ -618,7 +627,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
   };
 }
 

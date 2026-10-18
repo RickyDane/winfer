@@ -25,7 +25,7 @@ import { readProgressAloud, setTask } from "@/features/progress/progress";
 import { openInEditor } from "@/features/editors/editors";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
-import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, providerName, useWorkspaces, type View, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
+import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, providerName, useWorkspaces, type SidePanelTab, type View, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 import { runPluginCommand, setPluginDispatch } from "@/features/plugins/plugins";
 import type { Args } from "@/tools/registry";
@@ -92,7 +92,7 @@ export type Command =
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   /** Shows that tab of the side panel, or hides the panel if it's already showing it (unless `show`, which never hides). */
-  | { type: "ui.sidePanel"; panel: "browser" | "device" | "terminal"; show?: boolean }
+  | { type: "ui.sidePanel"; panel: SidePanelTab; show?: boolean }
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
   /** Toggles settings; with a page, opens settings on that page. */

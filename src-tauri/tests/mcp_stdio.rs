@@ -74,7 +74,7 @@ fn stdio_server_forwards_tool_calls() {
         "one response per request, none for the notification"
     );
     assert_eq!(lines[0]["result"]["serverInfo"]["name"], "winfer");
-    assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 8);
+    assert_eq!(lines[1]["result"]["tools"].as_array().unwrap().len(), 9);
     assert_eq!(
         lines[2]["result"]["content"][0]["text"],
         r#"secret:"read_pane":"p-9":2"#

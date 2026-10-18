@@ -83,6 +83,12 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 
 - [ ] Terminal tab (or Ctrl+`): a shell in the workspace folder; it keeps running when switching tabs or workspaces (each workspace has its own); the ↻ button restarts it. Ctrl+` again hides the panel.
 
+- [ ] Viewer tab: in Claude Code, Codex, OpenCode and a shell (`ls *.md`), hovering a file path the agent printed (`Read(docs/PLAN.md)`, `Edited src/x.rs`, `README.md:12`, `~/notes/a.md`, absolute paths) underlines it; click opens it in the Viewer tab (markdown rendered, images shown, other files with line numbers, scrolled to the `:line`); ⌘-click (Ctrl-click) opens it in the code editor. Paths that don't exist aren't links. Paths in a worktree pane resolve inside its worktree.
+- [ ] OSC 8 links to files (`printf '\e]8;;file://%s/README.md\e\\README\e]8;;\e\\\n' "$PWD"`, Codex's `vscode://file/…` citations) open in the Viewer too; web links still open in the default browser.
+- [ ] In a rendered document: links to other files open them in a new viewer tab (`#heading` and `file.md#heading` scroll), web links open in winfer's browser, relative images and README-style HTML (`<p align="center"><img …>`) show; `<>` shows the source. Editing the file (e.g. by an agent) updates the view within ~2 s, keeping the scroll position.
+- [ ] Viewer toolbar: copy path, show in Finder/Explorer, open in editor; "+" opens files from a dialog; middle-click closes a tab; open tabs survive a restart.
+- [ ] Ask an agent to "show me PLAN.md in winfer" → it calls `open_file` and the Viewer shows it.
+
 - [ ] OpenCode 2.x pane (status plugin): while you're in another app, it asking permission (e.g. a `bash` command with `"permission": {"bash": "ask"}`) or asking a question (question tool) shows a notification, and finishing a turn shows "OpenCode finished" (subagents finishing don't). Status dot follows working / waiting / done. OpenCode 1.x keeps the output-quiet heuristic.
 - [ ] OpenCode pane: ask it to open a page and click something / take a screenshot (tools `winfer-browser_*`), and to "notify me when you're done" (`winfer_notify_user`); a native notification appears. Works with OpenCode 1.x and 2.x (2.x is started with `--standalone`).
 

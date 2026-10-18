@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { leaves } from "@/features/layout/tree";
 import { openUrl, shownWorkspaceId } from "@/features/browser/browser";
 import { reportStatus } from "@/features/status/agentStatus";
+import { openFile, resolveFiles } from "@/features/viewer/viewer";
 import { pasteText, readTerminal, sendText, startDetached } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
@@ -106,6 +107,17 @@ export async function runTool(call: Call): Promise<string> {
       else await invoke("browser_new_tab", { workspaceId: ws.id, url });
       logActivity(ws.id, `${describe(ws, self)} opened ${url}`, self.provider);
       return `Opened ${url} in the browser panel.`;
+    }
+    case "open_file": {
+      const path = String(a.path ?? "").trim();
+      if (!path) throw new ToolError("path is empty");
+      const [found] = await resolveFiles(self.cwd, [path]);
+      if (!found) throw new ToolError(`No file at ${path} (relative paths start from ${self.cwd}).`);
+      // Takes over the side panel only when the user is looking at this workspace.
+      const onScreen = s.view === "workspace" && ws.id === s.activeWorkspaceId;
+      openFile(found, { line: typeof a.line === "number" ? a.line : undefined, background: !onScreen });
+      logActivity(ws.id, `${describe(ws, self)} opened ${found}`, self.provider);
+      return onScreen ? `Showing ${found} in the file viewer.` : `Added ${found} to the file viewer (the user is in another workspace).`;
     }
     case "notify_user": {
       reportStatus(self.id, "needs-input", String(a.message ?? "An agent needs you"));

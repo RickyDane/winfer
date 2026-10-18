@@ -311,6 +311,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "winfer");
+    // xterm.js renders OSC 8 hyperlinks, but CLIs only emit them for terminals they know: this makes
+    // Claude Code link the files it reads and edits, and OpenCode its markdown links (opened in the viewer).
+    cmd.env("FORCE_HYPERLINK", "1");
     cmd.env("WINFER_PANE_ID", &req.pane_id);
     if let Some(server) = hooks::server() {
         cmd.env("WINFER_HOOK", &server.addr);

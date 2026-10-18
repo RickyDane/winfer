@@ -69,6 +69,14 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "url": { "type": "string" }, "new_tab": { "type": "boolean" } }, "required": ["url"] }
         },
         {
+            "name": "open_file",
+            "description": "Show a file in the user's winfer file viewer (a side panel tab next to the browser): markdown is rendered, images shown, other text files with line numbers. Use it to present a plan, report or doc you wrote. The view follows later edits to the file.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "Absolute, or relative to your working directory" },
+                "line": { "type": "number", "description": "Line to scroll to" }
+            }, "required": ["path"] }
+        },
+        {
             "name": "notify_user",
             "description": "Get the user's attention with a short message (desktop notification and pane highlight), e.g. when you need a decision.",
             "inputSchema": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"] }
@@ -453,6 +461,7 @@ mod tests {
                 "send_to_pane",
                 "spawn_agent",
                 "open_url",
+                "open_file",
                 "notify_user",
                 "usage_status",
                 "wait_for_usage_reset"

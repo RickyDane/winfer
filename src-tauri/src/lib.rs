@@ -4,6 +4,7 @@ mod chatgpt;
 mod context_breakdown;
 mod editors;
 mod env;
+mod files;
 mod harness;
 mod hooks;
 mod llm;
@@ -135,6 +136,10 @@ pub fn run() {
             plugins::plugins_dir,
             plugins::plugins_source,
             plugins::plugins_read_file,
+            files::files_resolve,
+            files::files_read_text,
+            files::files_modified,
+            files::files_read_bytes,
             plugins::plugins_write_file,
             plugins::plugins_catalog,
             plugins::plugins_install,
