@@ -252,15 +252,16 @@ export const METRICS = [
   { id: "uncached", label: "Full-price tokens", short: "cost" },
   { id: "seconds", label: "Time", short: "speed" },
   { id: "input", label: "Total input tokens", short: "volume" },
+  { id: "output", label: "Output tokens", short: "output" },
   { id: "tools", label: "Tool calls", short: "steps" },
 ];
 
 /** Weight presets (relative; they're normalized). */
 export const PRESETS = {
-  balanced: { label: "Balanced", weights: { pass: 50, uncached: 20, seconds: 20, input: 5, tools: 5 } },
-  cheap: { label: "Cheapest", weights: { pass: 40, uncached: 40, seconds: 10, input: 5, tools: 5 } },
-  fast: { label: "Fastest", weights: { pass: 40, uncached: 10, seconds: 45, input: 0, tools: 5 } },
-  quality: { label: "Quality only", weights: { pass: 100, uncached: 0, seconds: 0, input: 0, tools: 0 } },
+  balanced: { label: "Balanced", weights: { pass: 50, uncached: 20, seconds: 20, input: 5, output: 5, tools: 5 } },
+  cheap: { label: "Cheapest", weights: { pass: 40, uncached: 40, seconds: 10, input: 5, output: 10, tools: 5 } },
+  fast: { label: "Fastest", weights: { pass: 40, uncached: 10, seconds: 45, input: 0, output: 0, tools: 5 } },
+  quality: { label: "Quality only", weights: { pass: 100, uncached: 0, seconds: 0, input: 0, output: 0, tools: 0 } },
 };
 
 /**
@@ -272,7 +273,7 @@ export const PRESETS = {
 export function scoreRows(rows, weights) {
   const counted = rows.filter((r) => r.runs > 0);
   const total = METRICS.reduce((a, m) => a + Math.max(0, weights[m.id] ?? 0), 0) || 1;
-  const tokenMetric = (id) => id === "uncached" || id === "input";
+  const tokenMetric = (id) => id === "uncached" || id === "input" || id === "output";
   const best = {};
   for (const m of METRICS) {
     if (m.id === "pass") continue;
@@ -890,7 +891,7 @@ export async function activate(api) {
           ? `${labelOf(lane)} · ${r.task}\nrunning for ${secs(now - r.started)}`
           : r.error
             ? `${labelOf(lane)} · ${r.task}\n⚠ harness error after ${secs(r.seconds)} (not counted)\n${r.error}`
-            : `${labelOf(lane)} · ${r.task}\n${r.pass ? "✓ passed" : "✗ failed"} in ${secs(r.seconds)}\n${tokens(r.input - r.cached)} uncached · ${tokens(r.input)} input · ${r.tools} tool calls`;
+            : `${labelOf(lane)} · ${r.task}\n${r.pass ? "✓ passed" : "✗ failed"} in ${secs(r.seconds)}\n${tokens(r.input - r.cached)} uncached · ${tokens(r.input)} input · ${tokens(r.output)} output · ${r.tools} tool calls`;
         svg += `<rect x="${x0}" y="${y}" width="${w}" height="14" rx="4" fill="${fill}" ${r.live ? `class="hb-pulse" opacity=".7"` : ""} ${!r.live && !r.pass ? `stroke="var(--color-${r.error ? "warning" : "danger"})" stroke-width="1" ${r.error ? `stroke-dasharray="3 2"` : ""}` : ""}/>`;
         if (w > 64) svg += `<text x="${x0 + 6}" y="${y + 11}" style="font-size:10px;fill:#fff;opacity:.92">${esc(taskName(r.task))}</text>`;
         svg += `<rect class="hit" x="${x0}" y="${y - 6}" width="${w}" height="26" data-tip="${esc(tipText)}"/>`;
@@ -1200,6 +1201,7 @@ export async function activate(api) {
     const missing = noTokens.length
       ? `<p class="hb-sub" style="margin:8px 0 0">No token counts from ${esc(noTokens.map((r) => labelOf(r.harness)).join(", "))}, so ${noTokens.length === 1 ? "it's" : "they're"} not shown.</p>`
       : "";
+    const byOutput = [...withTokens].sort((a, b) => a.output - b.output);
     const byTime = [...named].sort((a, b) => a.seconds - b.seconds);
     const plan = state.running?.plan;
     const jobs = state.running ? runningJobs(state.progress) : [];
@@ -1214,8 +1216,10 @@ export async function activate(api) {
           ? `<div class="hb-panel"><h2>Input tokens per task</h2><p class="hb-sub">Median per run. Solid is paid at full price; the lighter part was served from the prompt cache.</p>
               <div class="hb-legend"><span><i class="hb-key" style="background:var(--color-fg-muted)"></i>uncached</span><span><i class="hb-key" style="background:var(--color-fg-muted);opacity:.3"></i>cached</span></div>
               ${byTokens.length ? barChart(byTokens, { width: half, fmt: tokens, parts: [{ value: (r) => r.uncached }, { value: (r) => r.cached, opacity: 0.3 }] }) : ""}${missing}</div>
-            <div class="hb-panel"><h2>Time per task</h2><p class="hb-sub">Median wall time of one run, start to finish.</p>
-              ${barChart(byTime, { width: half, fmt: secs, parts: [{ value: (r) => r.seconds }] })}</div>
+            <div class="hb-panel"><h2>Output tokens per task</h2><p class="hb-sub">Median per run. Everything the model generated, including reasoning; billed at the output rate.</p>
+              ${byOutput.length ? barChart(byOutput, { width: half, fmt: tokens, parts: [{ value: (r) => r.output }] }) : ""}${missing}</div>
+            <div class="hb-panel hb-wide"><h2>Time per task</h2><p class="hb-sub">Median wall time of one run, start to finish.</p>
+              ${barChart(byTime, { width: full, fmt: secs, parts: [{ value: (r) => r.seconds }] })}</div>
             <div class="hb-panel hb-wide"><h2>Speed vs. tokens</h2><p class="hb-sub">Bottom-left is best: fast and lean. Uses medians over every run.</p>${byTokens.length ? `${legend(withTokens)}${scatter(withTokens, full)}` : ""}${missing}</div>`
           : ""
       }
@@ -1252,9 +1256,9 @@ export async function activate(api) {
       const why = notes.length ? `${name}\n${notes.join("\n\n")}` : "";
       return `<td><div class="hb-cell ${all ? "pass" : "fail"}${errored.length ? " has-error" : ""}" ${why ? `data-why="${esc(why)}"` : ""}>
         <div class="st">${all ? "✓ passed" : `✗ ${counted.length > 1 ? `${passed}/${counted.length}` : "failed"}`}${errored.length ? ` <span style="color:var(--color-warning)" title="harness errors">⚠${errored.length}</span>` : ""}</div>
-        <div class="m">${secs(median(counted.map((r) => r.seconds)))}${counted.some((r) => r.input > 0) ? ` · ${tokens(median(counted.map((r) => r.input - r.cached)))} tok` : ""}</div></div></td>`;
+        <div class="m">${secs(median(counted.map((r) => r.seconds)))}${counted.some((r) => r.input > 0) ? ` · ${tokens(median(counted.map((r) => r.input - r.cached)))} in · ${tokens(median(counted.map((r) => r.output)))} out` : ""}</div></div></td>`;
     };
-    return `<div class="hb-panel"><h2>Per task</h2><p class="hb-sub">Pass or fail with median time and uncached tokens. Hover a failed cell for the reason.</p>
+    return `<div class="hb-panel"><h2>Per task</h2><p class="hb-sub">Pass or fail with median time, uncached input tokens and output tokens. Hover a failed cell for the reason.</p>
       <div style="overflow-x:auto"><table class="hb-grid-table">
         <tr><th></th>${cols.map((c) => `<th><span class="hb-dot" style="display:inline-block;margin-right:6px;background:${colorOf(c.split("|")[0])}"></span>${esc(labelOf(c.split("|")[0]))}</th>`).join("")}</tr>
         ${groups

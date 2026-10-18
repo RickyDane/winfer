@@ -83,9 +83,56 @@
       ]
     },
     {
+      "id": "harness-bench",
+      "name": "winfer bench",
+      "version": "0.8.0",
+      "description": "Benchmark coding-agent harnesses (winfer code, Codex, Claude Code, pi, OpenCode) on the same tasks in four suites (coding, understanding, research, discipline): pass rate, time, tokens and tool calls, with the models you pick.",
+      "author": "winfer",
+      "tags": [
+        "benchmark",
+        "agents",
+        "tokens",
+        "evaluation"
+      ],
+      "files": [
+        {
+          "path": "bench/README.md",
+          "sha256": "7ee8355c9ce4df8b135f8086778817be858b77f0b59b424e65cbf0dbf95afa4e"
+        },
+        {
+          "path": "bench/harnesses.json",
+          "sha256": "9b8e77f077f9d9243701ea6f86b75a0765c719a2d497ddbe011865d8500df525"
+        },
+        {
+          "path": "bench/run.py",
+          "sha256": "914e7d1745030a8ad51b8ef9d4700df57c5a77a8880313922ea713dc51f01fbb"
+        },
+        {
+          "path": "bench/suites.tar.gz",
+          "sha256": "8e1712aa5a41e3124c2dbf732c493ec31f1cfc6be3e2c54d8e714cd59374f405"
+        },
+        {
+          "path": "bench/test_run.py",
+          "sha256": "e4d86c4c6783331a567ad5c1c0bbf0a336cf2ae89589e9afff43a125984b6f81"
+        },
+        {
+          "path": "index.js",
+          "sha256": "cd43f6caa206d9479f34cc79970871428956bd22297bc572774d101f39fc4ea5"
+        },
+        {
+          "path": "index.test.js",
+          "sha256": "54b0d90e4095aeef78a4c18936ddeb2060b46947cdefaecb06aa4388e81275a2"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "6cd25bc5bc204f34ca4d4e7b80f74f32a7e4e307e9d1dbd6cb11cb59942a4025"
+        }
+      ]
+    },
+    {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "description": "Turns each project into a graphify knowledge graph you explore as a live 3D galaxy, a flat glowing galaxy or a plain 2D map, and replay call flows step by step. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -99,11 +146,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "0b8d9352ebec5680ac9a6dd82c271424781219cbf83767a3bcf90967433e81fe"
+          "sha256": "de2076858cc2365d60221745dd316d2b61301f73b995c909ad91007aaa0f12cd"
         },
         {
           "path": "plugin.json",
-          "sha256": "a07eacb3f75c196ce57cd6bdef9003b1596e92fae21b1e848fb4cf896b6ce3a9"
+          "sha256": "244947a2a9b8fd8755ae280d1bc5653130122c7c26d59970e57d41640c636935"
         }
       ]
     },

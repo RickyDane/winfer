@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import catalog from "./bench/harnesses.json";
-import { clock, isLimitError, planOf, quoteArg, runLabel, trackUsage, usageRows, runOverview, suiteMatrix, suiteOf, suitesIn, summarize, taskName, withEstimatedCost } from "./index.js";
+import { clock, scoreRows, PRESETS, isLimitError, planOf, quoteArg, runLabel, trackUsage, usageRows, runOverview, suiteMatrix, suiteOf, suitesIn, summarize, taskName, withEstimatedCost } from "./index.js";
 
 const run = (patch = {}) => ({
   harness: "codex", model: "gpt-6.1-sol", task: "01-bugfix", pass: true,
@@ -163,5 +163,23 @@ describe("shell quoting for run.py arguments", () => {
     expect(quoteArg("C:\\Users\\me\\harness bench", true)).toBe(`"C:\\Users\\me\\harness bench"`);
     expect(quoteArg('C:\\dir\\', true)).toBe(`"C:\\dir\\\\"`);
     expect(quoteArg('codex="x"', true)).toBe(`"codex=x"`);
+  });
+});
+
+describe("output tokens", () => {
+  it("summarizes the median output and scores it like input", () => {
+    const lean = summarize([run({ output: 1000 }), run({ output: 3000 })])[0];
+    expect(lean.output).toBe(2000);
+    const chatty = { ...lean, key: "x", harness: "claude", output: 20_000 };
+    const ranked = scoreRows([chatty, lean], { output: 1 });
+    expect(ranked[0].harness).toBe("codex");
+    expect(ranked[1].parts.output).toBeCloseTo((2001 / 20_001) * 100);
+    expect(PRESETS.balanced.weights.output).toBeGreaterThan(0);
+  });
+
+  it("gives no output points to a harness without token counts", () => {
+    const none = summarize([run({ input: 0, cached: 0, output: 0 })])[0];
+    expect(none.hasTokens).toBe(false);
+    expect(scoreRows([none], { output: 1 })[0].parts.output).toBe(0);
   });
 });
