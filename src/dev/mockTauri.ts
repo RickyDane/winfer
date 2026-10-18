@@ -229,20 +229,40 @@ const skillRepos: Record<string, { rev: string; skills: { name: string; descript
     ],
   },
 };
-const mockSkills: { name: string; description: string; copies: { target: string; dir: string; link: boolean; origin: { repo: string; path: string; rev: string; hash: string } | null }[] }[] = [
+type MockCopy = { target: string; label: string; kind: "skill" | "command"; dir: string; project: string | null; link: boolean; origin: { repo: string; path: string; rev: string; hash: string } | null };
+const mockCopy = (target: string, dir: string, extra: Partial<MockCopy> = {}): MockCopy => ({
+  target,
+  label: skillTargets.find((t) => t.id === target)?.label ?? target,
+  kind: "skill",
+  dir,
+  project: null,
+  link: false,
+  origin: null,
+  ...extra,
+});
+const mockSkills: { name: string; description: string; copies: MockCopy[] }[] = [
   {
     name: "caveman",
     description: "Terse caveman voice: answer first, fluff gone, every technical fact kept.",
-    copies: [{ target: "claude", dir: "~/.claude/skills/caveman", link: false, origin: { repo: "JuliusBrussee/caveman", path: "skills/caveman", rev: "r1", hash: "h-caveman-1" } }],
+    copies: [mockCopy("claude", "~/.claude/skills/caveman", { origin: { repo: "JuliusBrussee/caveman", path: "skills/caveman", rev: "r1", hash: "h-caveman-1" } })],
   },
-  { name: "graphify", description: "Any input to knowledge graph.", copies: [{ target: "claude", dir: "~/.claude/skills/graphify", link: true, origin: null }] },
+  { name: "graphify", description: "Any input to knowledge graph.", copies: [mockCopy("claude", "~/.claude/skills/graphify", { link: true })] },
+  {
+    name: "specsmd-fire",
+    description: "FIRE orchestrator - Fast Intent-Run Engineering main entry point",
+    copies: [
+      mockCopy("codex", "~/Coding/winfer/.codex/skills/specsmd-fire", { project: "~/Coding/winfer" }),
+      mockCopy("claude", "~/Coding/winfer/.claude/commands/specsmd-fire.md", { kind: "command", project: "~/Coding/winfer" }),
+      mockCopy("cursor", "~/Coding/winfer/.cursor/commands/specsmd-fire.md", { kind: "command", label: "Cursor", project: "~/Coding/winfer" }),
+    ],
+  },
 ];
 function installMockSkill(name: string, description: string, targets: string[], origin: (typeof mockSkills)[number]["copies"][number]["origin"]) {
   let skill = mockSkills.find((s) => s.name === name);
   if (!skill) mockSkills.push((skill = { name, description, copies: [] }));
   for (const target of targets) {
-    skill.copies = skill.copies.filter((c) => c.target !== target);
-    skill.copies.push({ target, dir: `~/${target}/skills/${name}`, link: false, origin });
+    skill.copies = skill.copies.filter((c) => c.target !== target || c.kind !== "skill" || c.project);
+    skill.copies.push(mockCopy(target, `~/${target}/skills/${name}`, { origin }));
   }
   skill.copies.sort((a, b) => skillTargets.findIndex((t) => t.id === a.target) - skillTargets.findIndex((t) => t.id === b.target));
 }
@@ -308,12 +328,12 @@ mockIPC(
         );
       case "skills_copy": {
         const skill = mockSkills.find((s) => s.name === a.name)!;
-        installMockSkill(skill.name, skill.description, a.targets, skill.copies[0].origin);
+        installMockSkill(skill.name, skill.description, a.targets, skill.copies.find((c) => c.dir === a.from)?.origin ?? null);
         return null;
       }
       case "skills_uninstall": {
         const skill = mockSkills.find((s) => s.name === a.name);
-        if (skill) skill.copies = skill.copies.filter((c) => !a.targets.includes(c.target));
+        if (skill) skill.copies = skill.copies.filter((c) => !a.dirs.includes(c.dir));
         mockSkills.splice(0, mockSkills.length, ...mockSkills.filter((s) => s.copies.length));
         return null;
       }

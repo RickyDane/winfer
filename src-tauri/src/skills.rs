@@ -60,12 +60,54 @@ pub struct Origin {
     pub hash: String,
 }
 
+/// What a copy is: a `SKILL.md` folder or a slash-command file (`<name>.md`).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    Skill,
+    Command,
+}
+
+/// A folder winfer only lists (installs go to `TARGETS`): skill folders and slash-command files,
+/// in the home folder or in a project. Tools like specs.md install these into the project.
+struct Source {
+    /// A `TARGETS` id when the folder is one, so "add for" knows it's there.
+    target: &'static str,
+    label: &'static str,
+    kind: Kind,
+    /// Relative to the home folder (None: not read from home).
+    home: Option<&'static str>,
+    /// Relative to a project folder (None: not read from projects).
+    project: Option<&'static str>,
+}
+
+const SOURCES: &[Source] = &[
+    Source { target: "claude", label: "Claude Code", kind: Kind::Skill, home: Some(".claude/skills"), project: Some(".claude/skills") },
+    Source { target: "agents", label: "Shared (.agents)", kind: Kind::Skill, home: Some(".agents/skills"), project: Some(".agents/skills") },
+    Source { target: "codex", label: "Codex", kind: Kind::Skill, home: Some(".codex/skills"), project: Some(".codex/skills") },
+    Source { target: "gemini", label: "Gemini / Antigravity", kind: Kind::Skill, home: Some(".gemini/skills"), project: Some(".gemini/skills") },
+    Source { target: "pi", label: "pi", kind: Kind::Skill, home: Some(".pi/agent/skills"), project: Some(".pi/skills") },
+    Source { target: "opencode", label: "OpenCode", kind: Kind::Skill, home: Some(".config/opencode/skill"), project: Some(".opencode/skill") },
+    Source { target: "opencode", label: "OpenCode", kind: Kind::Skill, home: Some(".config/opencode/skills"), project: Some(".opencode/skills") },
+    Source { target: "cursor", label: "Cursor", kind: Kind::Skill, home: Some(".cursor/skills"), project: Some(".cursor/skills") },
+    Source { target: "claude", label: "Claude Code", kind: Kind::Command, home: Some(".claude/commands"), project: Some(".claude/commands") },
+    Source { target: "cursor", label: "Cursor", kind: Kind::Command, home: Some(".cursor/commands"), project: Some(".cursor/commands") },
+    Source { target: "opencode", label: "OpenCode", kind: Kind::Command, home: Some(".config/opencode/command"), project: Some(".opencode/command") },
+    Source { target: "opencode", label: "OpenCode", kind: Kind::Command, home: Some(".config/opencode/commands"), project: Some(".opencode/commands") },
+    Source { target: "codex", label: "Codex", kind: Kind::Command, home: Some(".codex/prompts"), project: None },
+];
+
 /// One copy of a skill in one agent's folder.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillCopy {
     pub target: String,
+    pub label: String,
+    pub kind: Kind,
+    /// The skill's folder, or the command's file.
     pub dir: String,
+    /// The project folder it's in (None: the home folder, read by every project).
+    pub project: Option<String>,
     /// A symlink to a folder elsewhere (removing it leaves that folder alone).
     pub link: bool,
     pub origin: Option<Origin>,
@@ -158,31 +200,76 @@ pub(crate) fn front_matter(text: &str) -> (Option<String>, String) {
 // ---------------------------------------------------------------------------------------------
 // Installed skills
 
-fn scan_target(home: &Path, target: &Target, out: &mut BTreeMap<String, InstalledSkill>) {
-    let root = home.join(target.dir);
-    let Ok(entries) = std::fs::read_dir(&root) else { return };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let dir = entry.path();
-        if name.starts_with('.') || !dir.join("SKILL.md").is_file() {
+fn scan_source(root: &Path, source: &Source, project: Option<&Path>, out: &mut BTreeMap<String, InstalledSkill>) {
+    let Ok(mut entries) = std::fs::read_dir(root).map(|e| e.flatten().collect::<Vec<_>>()) else { return };
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        let (name, doc) = match source.kind {
+            Kind::Skill => (file_name.clone(), path.join("SKILL.md")),
+            Kind::Command => (file_name.strip_suffix(".md").unwrap_or_default().to_string(), path.clone()),
+        };
+        if name.is_empty() || file_name.starts_with('.') || !doc.is_file() {
             continue;
         }
         let link = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-        let origin = std::fs::read(dir.join(MARKER)).ok().and_then(|b| serde_json::from_slice::<Origin>(&b).ok());
+        let origin = match source.kind {
+            Kind::Skill => std::fs::read(path.join(MARKER)).ok().and_then(|b| serde_json::from_slice::<Origin>(&b).ok()),
+            Kind::Command => None,
+        };
         let skill = out.entry(name.clone()).or_insert_with(|| InstalledSkill { name: name.clone(), description: String::new(), copies: Vec::new() });
-        if skill.description.is_empty() && let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) {
+        if skill.description.is_empty() && let Ok(text) = std::fs::read_to_string(&doc) {
             skill.description = front_matter(&text).1;
         }
-        skill.copies.push(SkillCopy { target: target.id.to_string(), dir: dir.to_string_lossy().into_owned(), link, origin });
+        skill.copies.push(SkillCopy {
+            target: source.target.to_string(),
+            label: source.label.to_string(),
+            kind: source.kind,
+            dir: path.to_string_lossy().into_owned(),
+            project: project.map(|p| p.to_string_lossy().into_owned()),
+            link,
+            origin,
+        });
     }
 }
 
-fn list_installed(home: &Path) -> Vec<InstalledSkill> {
+/// Skills and commands in the home folder and in each project folder.
+fn list_installed(home: &Path, projects: &[PathBuf]) -> Vec<InstalledSkill> {
     let mut skills = BTreeMap::new();
-    for target in TARGETS {
-        scan_target(home, target, &mut skills);
+    for source in SOURCES {
+        if let Some(dir) = source.home {
+            scan_source(&home.join(dir), source, None, &mut skills);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for project in projects {
+        // A project at the home folder is already covered (and its folders are the home ones).
+        let key = std::fs::canonicalize(project).unwrap_or_else(|_| project.clone());
+        if key == std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf()) || !seen.insert(key) {
+            continue;
+        }
+        for source in SOURCES {
+            if let Some(dir) = source.project {
+                scan_source(&project.join(dir), source, Some(project), &mut skills);
+            }
+        }
     }
     skills.into_values().collect()
+}
+
+fn project_paths(projects: Option<Vec<String>>) -> Vec<PathBuf> {
+    projects.unwrap_or_default().into_iter().filter(|p| !p.trim().is_empty()).map(PathBuf::from).filter(|p| p.is_absolute() && p.is_dir()).collect()
+}
+
+/// The copy at `dir` among the listed ones, so only skills and commands winfer lists get removed
+/// or copied.
+fn find_copy(home: &Path, projects: &[PathBuf], name: &str, dir: &str) -> Result<SkillCopy, String> {
+    list_installed(home, projects)
+        .into_iter()
+        .find(|s| s.name == name)
+        .and_then(|s| s.copies.into_iter().find(|c| c.dir == dir))
+        .ok_or_else(|| format!("{name} isn't at {dir}"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -456,30 +543,31 @@ fn install(home: &Path, repo: &str, path: &str, targets: &[String]) -> Result<St
     Ok(name)
 }
 
-fn uninstall(home: &Path, name: &str, targets: &[String]) -> Result<(), String> {
-    if !valid_name(name) {
-        return Err(format!("“{name}” isn't a valid skill name"));
-    }
-    for id in targets {
-        let dir = home.join(target(id)?.dir).join(name);
-        if std::fs::symlink_metadata(&dir).is_ok() {
-            remove_skill_dir(&dir).map_err(|e| format!("couldn't remove {}: {e}", dir.display()))?;
-        }
+/// Removes the given copies (skill folders or command files) of a listed skill.
+fn uninstall(home: &Path, projects: &[PathBuf], name: &str, dirs: &[String]) -> Result<(), String> {
+    for dir in dirs {
+        find_copy(home, projects, name, dir)?;
+        remove_skill_dir(Path::new(dir)).map_err(|e| format!("couldn't remove {dir}: {e}"))?;
     }
     Ok(())
 }
 
-/// Copies an installed skill into more agents' folders (a symlinked copy is copied as files).
-fn copy_to(home: &Path, name: &str, from: &str, targets: &[String]) -> Result<(), String> {
+/// Copies a listed skill folder (`from`) into more agents' home folders (a symlinked copy is
+/// copied as files).
+fn copy_to(home: &Path, projects: &[PathBuf], name: &str, from: &str, targets: &[String]) -> Result<(), String> {
     if !valid_name(name) {
         return Err(format!("“{name}” isn't a valid skill name"));
     }
-    let source = home.join(target(from)?.dir).join(name);
-    if !source.join("SKILL.md").is_file() {
-        return Err(format!("{name} isn't installed for {from}"));
+    let copy = find_copy(home, projects, name, from)?;
+    if copy.kind != Kind::Skill {
+        return Err(format!("{name} is a command, not a skill folder"));
     }
-    for id in targets.iter().filter(|t| *t != from) {
+    let source = PathBuf::from(&copy.dir);
+    for id in targets {
         let root = home.join(target(id)?.dir);
+        if root.join(name) == source {
+            continue;
+        }
         std::fs::create_dir_all(&root).map_err(|e| format!("couldn't create {}: {e}", root.display()))?;
         let staging = root.join(format!(".install-{name}"));
         let _ = std::fs::remove_dir_all(&staging);
@@ -509,10 +597,10 @@ pub fn skills_targets() -> Result<Vec<TargetInfo>, String> {
         .collect())
 }
 
-/// Every skill installed in any agent's folder.
+/// Every skill and slash command in any agent's home folder or in the given project folders.
 #[tauri::command]
-pub async fn skills_list() -> Result<Vec<InstalledSkill>, String> {
-    blocking(|| Ok(list_installed(&home()?))).await
+pub async fn skills_list(projects: Option<Vec<String>>) -> Result<Vec<InstalledSkill>, String> {
+    blocking(move || Ok(list_installed(&home()?, &project_paths(projects)))).await
 }
 
 /// The skills a GitHub repo offers (`fresh` skips the few-minute cache).
@@ -527,16 +615,16 @@ pub async fn skills_install(repo: String, path: String, targets: Vec<String>) ->
     blocking(move || install(&home()?, &repo, &path, &targets)).await
 }
 
-/// Removes a skill from the given agents' folders.
+/// Removes copies of a skill (their folders or command files, as listed).
 #[tauri::command]
-pub async fn skills_uninstall(name: String, targets: Vec<String>) -> Result<(), String> {
-    blocking(move || uninstall(&home()?, &name, &targets)).await
+pub async fn skills_uninstall(name: String, dirs: Vec<String>, projects: Option<Vec<String>>) -> Result<(), String> {
+    blocking(move || uninstall(&home()?, &project_paths(projects), &name, &dirs)).await
 }
 
-/// Copies an installed skill from one agent's folder into others.
+/// Copies a listed skill folder (`from`) into other agents' home folders.
 #[tauri::command]
-pub async fn skills_copy(name: String, from: String, targets: Vec<String>) -> Result<(), String> {
-    blocking(move || copy_to(&home()?, &name, &from, &targets)).await
+pub async fn skills_copy(name: String, from: String, targets: Vec<String>, projects: Option<Vec<String>>) -> Result<(), String> {
+    blocking(move || copy_to(&home()?, &project_paths(projects), &name, &from, &targets)).await
 }
 
 #[cfg(test)]
@@ -598,8 +686,9 @@ mod tests {
         assert!(write_skill(&home, "x", &[("../evil".into(), vec![]), ("SKILL.md".into(), vec![])], &origin, &[target("claude").unwrap()]).is_err());
         assert!(!home.join(".claude/skills/.install-x").exists());
 
-        copy_to(&home, "demo", "claude", &["codex".into()]).unwrap();
-        let skills = list_installed(&home);
+        let claude_dir = home.join(".claude/skills/demo").to_string_lossy().into_owned();
+        copy_to(&home, &[], "demo", &claude_dir, &["codex".into()]).unwrap();
+        let skills = list_installed(&home, &[]);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].description, "A demo.");
         assert_eq!(skills[0].copies.iter().map(|c| c.target.as_str()).collect::<Vec<_>>(), ["claude", "codex"]);
@@ -609,9 +698,14 @@ mod tests {
         write_skill(&home, "demo", &files[..1], &origin, &[target("claude").unwrap()]).unwrap();
         assert!(!home.join(".claude/skills/demo/scripts").exists());
 
-        uninstall(&home, "demo", &["claude".into(), "codex".into()]).unwrap();
-        assert!(list_installed(&home).is_empty());
-        assert!(uninstall(&home, "../x", &["claude".into()]).is_err());
+        let dirs: Vec<String> = list_installed(&home, &[])[0].copies.iter().map(|c| c.dir.clone()).collect();
+        uninstall(&home, &[], "demo", &dirs).unwrap();
+        assert!(list_installed(&home, &[]).is_empty());
+        // Only listed copies can be removed.
+        let elsewhere = home.join("keep");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert!(uninstall(&home, &[], "keep", &[elsewhere.to_string_lossy().into_owned()]).is_err());
+        assert!(elsewhere.is_dir());
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -624,9 +718,51 @@ mod tests {
         std::fs::write(source.join("SKILL.md"), "---\nname: linked\n---").unwrap();
         std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
         std::os::unix::fs::symlink(&source, home.join(".claude/skills/linked")).unwrap();
-        assert!(list_installed(&home)[0].copies[0].link);
-        uninstall(&home, "linked", &["claude".into()]).unwrap();
+        let copy = list_installed(&home, &[])[0].copies[0].clone();
+        assert!(copy.link);
+        uninstall(&home, &[], "linked", &[copy.dir]).unwrap();
+        assert!(!home.join(".claude/skills/linked").exists());
         assert!(source.join("SKILL.md").is_file());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn lists_project_skills_and_commands() {
+        let home = temp_home("project");
+        let project = home.join("code/app");
+        let write = |rel: &str, text: &str| {
+            let path = project.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        // What `npx specsmd install` writes for Codex, Claude Code, Cursor and OpenCode.
+        write(".codex/skills/fire/SKILL.md", "---\nname: fire\ndescription: \"FIRE orchestrator\"\n---\n");
+        write(".claude/commands/fire.md", "---\ndescription: FIRE orchestrator\n---\n");
+        write(".cursor/commands/fire.md", "---\ndescription: FIRE orchestrator\n---\n");
+        write(".opencode/command/fire.md", "---\ndescription: FIRE orchestrator\nagent: build\n---\n");
+        write(".claude/commands/notes.txt", "not a command");
+        std::fs::create_dir_all(home.join(".codex/prompts")).unwrap();
+        std::fs::write(home.join(".codex/prompts/review.md"), "Review the diff.").unwrap();
+
+        assert_eq!(list_installed(&home, &[]).iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["review"]);
+        // The same project twice (or the home folder as a project) is read once.
+        let skills = list_installed(&home, &[project.clone(), project.clone(), home.clone()]);
+        assert_eq!(skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["fire", "review"]);
+        let fire = &skills[0];
+        assert_eq!(fire.description, "FIRE orchestrator");
+        let copies: Vec<_> = fire.copies.iter().map(|c| (c.target.as_str(), c.kind)).collect();
+        assert_eq!(copies, [("codex", Kind::Skill), ("claude", Kind::Command), ("cursor", Kind::Command), ("opencode", Kind::Command)]);
+        assert!(fire.copies.iter().all(|c| c.project.as_deref() == Some(project.to_string_lossy().as_ref())));
+
+        // A project skill can be copied into the home folders; a command can't.
+        let projects = [project.clone()];
+        copy_to(&home, &projects, "fire", &fire.copies[0].dir, &["claude".into()]).unwrap();
+        assert!(home.join(".claude/skills/fire/SKILL.md").is_file());
+        assert!(copy_to(&home, &projects, "fire", &fire.copies[1].dir, &["claude".into()]).is_err());
+
+        uninstall(&home, &projects, "fire", &[fire.copies[1].dir.clone()]).unwrap();
+        assert!(!project.join(".claude/commands/fire.md").exists());
+        assert!(project.join(".cursor/commands/fire.md").is_file());
         let _ = std::fs::remove_dir_all(&home);
     }
 }
@@ -646,7 +782,7 @@ mod network {
         let home = std::env::temp_dir().join(format!("winfer-skills-net-{}", std::process::id()));
         install(&home, "github.com/JuliusBrussee/caveman", "skills/caveman", &["claude".into()]).unwrap();
         assert!(home.join(".claude/skills/caveman/SKILL.md").is_file());
-        assert_eq!(list_installed(&home)[0].copies[0].origin.as_ref().unwrap().repo, "JuliusBrussee/caveman");
+        assert_eq!(list_installed(&home, &[])[0].copies[0].origin.as_ref().unwrap().repo, "JuliusBrussee/caveman");
         let _ = std::fs::remove_dir_all(&home);
     }
 }

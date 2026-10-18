@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
@@ -18,12 +18,15 @@ import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
 import {
+  copyFile,
+  copyLabel,
   copySkill,
   customSources,
   FEATURED_SOURCES,
   fetchInstalledSkills,
   fetchRepoSkills,
   fetchTargets,
+  homeSkillCopies,
   installSkill,
   isOutdated,
   normalizeRepo,
@@ -1622,11 +1625,17 @@ function SkillSettings() {
     setTabState(next);
   };
 
-  const reload = () => fetchInstalledSkills().then(setInstalled, (err) => toast(String(err), "error"));
+  // Project-level skills and commands (e.g. specs.md's) live in the workspaces' folders.
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  const projectKey = [...new Set(workspaces.map((w) => w.rootDir).filter(Boolean))].join("\n");
+  const projects = useMemo(() => (projectKey ? projectKey.split("\n") : []), [projectKey]);
+  const reload = () => fetchInstalledSkills(projects).then(setInstalled, (err) => toast(String(err), "error"));
   useEffect(() => {
     fetchTargets().then(setTargets, (err) => toast(String(err), "error"));
-    void reload();
   }, []);
+  useEffect(() => {
+    void reload();
+  }, [projects]);
 
   const loadListing = (repo: string, fresh = false) => {
     setListingError(null);
@@ -1680,17 +1689,18 @@ function SkillSettings() {
     const origin = skillOrigin(skill)!;
     const latest = listings.get(origin.repo)?.skills.find((s) => s.path === origin.path);
     // Every copy that came from the repo is replaced.
-    if (latest) void install(origin.repo, latest, true, skill.copies.filter((c) => c.origin).map((c) => c.target));
+    if (latest) void install(origin.repo, latest, true, homeSkillCopies(skill).filter((c) => c.origin).map((c) => c.target));
   };
   const remove = (skill: InstalledSkill) =>
     run(skill.name, async () => {
-      const where = skill.copies.map((c) => c.target);
-      if (!(await ask(`Remove “${skill.name}” from ${names(where)}?`, { title: "Remove skill", kind: "warning", okLabel: "Remove" }))) return;
-      await uninstallSkill(skill.name, where);
+      if (!(await ask(`Remove “${skill.name}” from ${skill.copies.map(copyLabel).join(", ")}?`, { title: "Remove skill", kind: "warning", okLabel: "Remove" }))) return;
+      await uninstallSkill(skill.name, skill.copies.map((c) => c.dir), projects);
     });
   const copyToSelected = (skill: InstalledSkill, missing: string[]) =>
     run(skill.name, async () => {
-      await copySkill(skill.name, skill.copies[0].target, missing);
+      const from = homeSkillCopies(skill)[0] ?? skill.copies.find((c) => c.kind === "skill");
+      if (!from) throw new Error(`${skill.name} is a command, not a skill folder`);
+      await copySkill(skill.name, from.dir, missing, projects);
       toast(`Added ${skill.name} to ${names(missing)}`, "success");
     });
   const addSource = () => {
@@ -1725,7 +1735,7 @@ function SkillSettings() {
       for (const skill of outdatedSkills) {
         const origin = skillOrigin(skill)!;
         const latest = listings.get(origin.repo)?.skills.find((s) => s.path === origin.path);
-        if (latest) await installSkill(origin.repo, latest.path, skill.copies.filter((c) => c.origin).map((c) => c.target));
+        if (latest) await installSkill(origin.repo, latest.path, homeSkillCopies(skill).filter((c) => c.origin).map((c) => c.target));
       }
       toast(`Updated ${outdatedSkills.length} skill${outdatedSkills.length === 1 ? "" : "s"}`, "success");
     });
@@ -1833,7 +1843,7 @@ function SkillSettings() {
                 const origin = have && skillOrigin(have);
                 const sameSkill = origin && origin.repo.toLowerCase() === listing.repo.toLowerCase() && origin.path === skill.path;
                 const outdated = have && sameSkill && isOutdated(have, listing);
-                const everywhere = have && selected.every((t) => have.copies.some((c) => c.target === t));
+                const everywhere = have && selected.every((t) => homeSkillCopies(have).some((c) => c.target === t));
                 const open = expanded === skill.path;
                 return (
                   <article key={skill.path} className="flex flex-col rounded-lg border border-border bg-panel p-3.5 transition-colors hover:border-border-strong">
@@ -1865,13 +1875,13 @@ function SkillSettings() {
                       {have && sameSkill && !outdated && (
                         <span className="mr-auto flex min-w-0 items-center gap-1 truncate text-[11px] text-success">
                           <Check size={12} className="shrink-0" />
-                          {everywhere ? "Installed" : `For ${names(have.copies.map((c) => c.target))}`}
+                          {everywhere ? "Installed" : `For ${names(homeSkillCopies(have).map((c) => c.target))}`}
                         </span>
                       )}
                       {!(have && everywhere && !outdated) && (
                         <button
                           disabled={!!busy || selected.length === 0}
-                          onClick={() => void install(listing.repo, skill, !!outdated, outdated ? [...new Set([...have!.copies.map((c) => c.target), ...selected])] : selected)}
+                          onClick={() => void install(listing.repo, skill, !!outdated, outdated ? [...new Set([...homeSkillCopies(have!).map((c) => c.target), ...selected])] : selected)}
                           title={selected.length ? `Install for ${names(selected)}` : "Pick an agent under “Install for”"}
                           className={primaryButtonClass}
                         >
@@ -1909,7 +1919,7 @@ function SkillSettings() {
             </div>
           ) : shownInstalled.length === 0 ? (
             installed.length === 0 ? (
-              <EmptyState icon={Wand2} title="No skills installed" hint="Skills are folders with a SKILL.md that agents load from their skills folder.">
+              <EmptyState icon={Wand2} title="No skills installed" hint="Skills are folders with a SKILL.md that agents load from their skills folder, in your home folder or a project's.">
                 <button onClick={() => setTab("discover")} className={primaryButtonClass}>
                   <Store size={12} />
                   Browse skills
@@ -1923,7 +1933,8 @@ function SkillSettings() {
               {shownInstalled.map((skill) => {
                 const origin = skillOrigin(skill);
                 const outdated = isOutdated(skill, origin ? listings.get(origin.repo) : undefined);
-                const missing = selected.filter((t) => !skill.copies.some((c) => c.target === t));
+                const canCopy = skill.copies.some((c) => c.kind === "skill");
+                const missing = canCopy ? selected.filter((t) => !homeSkillCopies(skill).some((c) => c.target === t)) : [];
                 return (
                   <div key={skill.name} className="group flex gap-3 px-3.5 py-3">
                     <PluginTile id={skill.name} name={skill.name} />
@@ -1939,12 +1950,12 @@ function SkillSettings() {
                       )}
                       <div className="mt-1.5 flex flex-wrap items-center gap-1">
                         {skill.copies.map((c) => (
-                          <Pill key={c.target} title={c.dir + (c.link ? " (link)" : "")}>
-                            {label(c.target)}
+                          <Pill key={c.dir} title={c.dir + (c.link ? " (link)" : "")}>
+                            {copyLabel(c)}
                             {c.link && " ↗"}
                           </Pill>
                         ))}
-                        <span className="ml-1 truncate text-[11px] text-fg-subtle">{origin ? `from ${origin.repo}` : "added by hand"}</span>
+                        <span className="ml-1 truncate text-[11px] text-fg-subtle">{origin ? `from ${origin.repo}` : skill.copies.every((c) => c.project) ? "in the project" : "added by hand"}</span>
                       </div>
                       {(outdated || missing.length > 0) && (
                         <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -1965,7 +1976,7 @@ function SkillSettings() {
                     </div>
                     <div className="flex shrink-0 items-start gap-1">
                       {busy === skill.name && <Spinner size={13} className="mt-1.5 text-fg-subtle" />}
-                      <button onClick={() => void revealItemInDir(skill.copies[0].dir + "/SKILL.md").catch(() => {})} aria-label={`Show ${skill.name} in Finder`} title="Show the folder" className={iconButtonClass}>
+                      <button onClick={() => void revealItemInDir(copyFile(skill.copies[0])).catch(() => {})} aria-label={`Show ${skill.name} in Finder`} title="Show the folder" className={iconButtonClass}>
                         <FolderOpen size={13} />
                       </button>
                       <button

@@ -17,10 +17,23 @@ export interface SkillOrigin {
   hash: string;
 }
 
+export interface SkillCopy {
+  target: string;
+  label: string;
+  /** A SKILL.md folder, or a slash-command file (e.g. .claude/commands/<name>.md). */
+  kind: "skill" | "command";
+  /** The skill's folder, or the command's file. */
+  dir: string;
+  /** The project folder it's in; null for the home folder. */
+  project: string | null;
+  link: boolean;
+  origin: SkillOrigin | null;
+}
+
 export interface InstalledSkill {
   name: string;
   description: string;
-  copies: { target: string; dir: string; link: boolean; origin: SkillOrigin | null }[];
+  copies: SkillCopy[];
 }
 
 export interface RepoSkill {
@@ -73,11 +86,26 @@ export function normalizeRepo(input: string): string | null {
 }
 
 export const fetchTargets = () => invoke<SkillTarget[]>("skills_targets");
-export const fetchInstalledSkills = () => invoke<InstalledSkill[]>("skills_list");
+/** Skills and commands in the home folder and in the given project folders. */
+export const fetchInstalledSkills = (projects: string[]) => invoke<InstalledSkill[]>("skills_list", { projects });
 export const fetchRepoSkills = (repo: string, fresh = false) => invoke<RepoListing>("skills_repo", { repo, fresh });
 export const installSkill = (repo: string, path: string, targets: string[]) => invoke<string>("skills_install", { repo, path, targets });
-export const uninstallSkill = (name: string, targets: string[]) => invoke<void>("skills_uninstall", { name, targets });
-export const copySkill = (name: string, from: string, targets: string[]) => invoke<void>("skills_copy", { name, from, targets });
+/** Removes copies (by their `dir`). */
+export const uninstallSkill = (name: string, dirs: string[], projects: string[]) => invoke<void>("skills_uninstall", { name, dirs, projects });
+/** Copies the skill folder at `from` into the targets' home folders. */
+export const copySkill = (name: string, from: string, targets: string[], projects: string[]) => invoke<void>("skills_copy", { name, from, targets, projects });
+
+/** Copies winfer installs into and updates: skill folders in the home folder. */
+export const homeSkillCopies = (skill: InstalledSkill) => skill.copies.filter((c) => c.kind === "skill" && !c.project);
+
+/** The file to reveal for a copy. */
+export const copyFile = (copy: SkillCopy) => (copy.kind === "skill" ? `${copy.dir}/SKILL.md` : copy.dir);
+
+/** A copy's short label, e.g. "Cursor command · winfer". */
+export function copyLabel(copy: SkillCopy): string {
+  const project = copy.project?.split(/[\\/]/).filter(Boolean).pop();
+  return `${copy.label}${copy.kind === "command" ? " command" : ""}${project ? ` · ${project}` : ""}`;
+}
 
 /** The origin of the first copy installed from a repo. */
 export const skillOrigin = (skill: InstalledSkill) => skill.copies.find((c) => c.origin)?.origin ?? null;

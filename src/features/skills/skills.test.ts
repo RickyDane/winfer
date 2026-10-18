@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isOutdated, normalizeRepo, type InstalledSkill, type RepoListing } from "./skills";
+import { copyLabel, isOutdated, normalizeRepo, type InstalledSkill, type RepoListing, type SkillCopy } from "./skills";
 
 describe("normalizeRepo", () => {
   it("accepts owner/repo and GitHub URLs", () => {
@@ -15,7 +15,7 @@ describe("isOutdated", () => {
   const skill = (hash: string, rev = "r1"): InstalledSkill => ({
     name: "caveman",
     description: "",
-    copies: [{ target: "claude", dir: "/x", link: false, origin: { repo: "JuliusBrussee/caveman", path: "skills/caveman", rev, hash } }],
+    copies: [{ target: "claude", label: "Claude Code", kind: "skill", project: null, dir: "/x", link: false, origin: { repo: "JuliusBrussee/caveman", path: "skills/caveman", rev, hash } }],
   });
   const listing = (hash: string): RepoListing => ({ repo: "JuliusBrussee/caveman", rev: "r2", skills: [{ name: "caveman", description: "", path: "skills/caveman", files: 1, hash }] });
 
@@ -28,7 +28,15 @@ describe("isOutdated", () => {
     expect(isOutdated(skill("", "r2"), listing("h1"))).toBe(false);
   });
   it("ignores skills from elsewhere", () => {
-    expect(isOutdated({ name: "x", description: "", copies: [{ target: "claude", dir: "/x", link: true, origin: null }] }, listing("h"))).toBe(false);
+    expect(isOutdated({ name: "x", description: "", copies: [{ target: "claude", label: "Claude Code", kind: "skill", project: null, dir: "/x", link: true, origin: null }] }, listing("h"))).toBe(false);
     expect(isOutdated(skill("h1"), undefined)).toBe(false);
+  });
+});
+
+describe("copyLabel", () => {
+  const copy = (kind: SkillCopy["kind"], project: string | null): SkillCopy => ({ target: "cursor", label: "Cursor", kind, project, dir: "/x", link: false, origin: null });
+  it("names the agent, commands and the project", () => {
+    expect(copyLabel(copy("skill", null))).toBe("Cursor");
+    expect(copyLabel(copy("command", "/Users/me/Coding/winfer/"))).toBe("Cursor command · winfer");
   });
 });
