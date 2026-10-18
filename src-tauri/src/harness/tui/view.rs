@@ -35,7 +35,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Bottom-up layout.
     let agents = agents_line(app, width, t);
     let status_h = 1 + u16::from(agents.is_some());
-    let (bottom_lines, cursor) = if app.approvals.is_empty() { composer_lines(app, width, t) } else { (approval_lines(app, width, t), None) };
+    let (bottom_lines, cursor) = match app.approvals.front() {
+        None => composer_lines(app, width, t),
+        Some(a) if !a.questions.is_empty() => (question_lines(app, width, t), None),
+        Some(_) => (approval_lines(app, width, t), None),
+    };
     let bottom_h = (bottom_lines.len() as u16).min(area.height.saturating_sub(4));
     let activity_h = 1u16;
     // The plan goes in a right sidebar when there's room (and it's on); else above the prompt.
@@ -169,7 +173,18 @@ fn transcript(f: &mut Frame, app: &mut App, area: Rect, now: Instant) {
 
     let h = area.height as usize;
     let total = lines.len();
-    let max_scroll = total.saturating_sub(h);
+    // A clicked card keeps its header on the same row: it opens downward, pushing what follows
+    // past the bottom. Only a card that itself runs past the bottom lifts, just enough to show it.
+    if let Some((idx, row)) = app.anchor.take() {
+        if let Some(&r) = rows.get(idx).filter(|r| **r != usize::MAX && h > 0) {
+            let card_end = rows[idx + 1..].iter().copied().find(|&r| r != usize::MAX).unwrap_or(total);
+            let end = (r + h - row.min(h - 1)).max(card_end.min(r + h));
+            app.scroll = total.saturating_sub(end);
+            app.hold = app.scroll;
+        }
+    }
+    app.hold = app.hold.min(app.scroll);
+    let max_scroll = total.saturating_sub(h).max(app.hold.min(total.saturating_sub(1)));
     app.scroll = app.scroll.min(max_scroll);
     let end = total - app.scroll;
     let start = end.saturating_sub(h);
@@ -425,7 +440,10 @@ fn activity(app: &App, width: usize, t: Duration) -> Line<'static> {
         return Line::from(vec![
             Span::raw(pad),
             Span::styled("◆ ", theme::fg(theme::mix(theme::YELLOW(), theme::FG(), k * 0.6))),
-            Span::styled("waiting for your approval", theme::fg(theme::YELLOW())),
+            Span::styled(
+                if app.approvals[0].questions.is_empty() { "waiting for your approval" } else { "waiting for your answer" },
+                theme::fg(theme::YELLOW()),
+            ),
             if app.approvals.len() > 1 { Span::styled(format!("  +{} more", app.approvals.len() - 1), theme::dim()) } else { Span::raw("") },
         ]);
     }
@@ -637,6 +655,67 @@ fn approval_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     } else {
         out.push(Line::from(spans));
     }
+    out.push(Line::default());
+    out
+}
+
+/// The agent's questions, one at a time: its options, then a row to type an answer.
+fn question_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
+    let a = app.approvals.front().unwrap();
+    let i = app.answering.index.min(a.questions.len() - 1);
+    let q = &a.questions[i];
+    let k = anim::pulse(t, 1600);
+    let amber = theme::mix(theme::mix(theme::YELLOW(), theme::FAINT(), 0.5), theme::YELLOW(), k);
+    let body = " ".repeat(MARGIN as usize + 2);
+    let inner = width.saturating_sub(MARGIN as usize * 2 + 2);
+    let mut out = vec![Line::from(Span::styled("─".repeat(width), theme::fg(theme::mix(theme::FAINT(), theme::YELLOW(), 0.2 + 0.35 * k))))];
+    let mut head = vec![Span::raw(pad_str()), Span::styled("◆ ", theme::bold(amber))];
+    head.push(Span::styled(if q.header.is_empty() { "Question".to_string() } else { q.header.clone() }, theme::bold(theme::YELLOW())));
+    if a.questions.len() > 1 {
+        head.push(Span::styled(format!("  {}/{}", i + 1, a.questions.len()), theme::dim()));
+    }
+    out.push(Line::from(head));
+    let indent = vec![Span::raw(body.clone())];
+    out.extend(super::markdown::wrap(vec![Span::styled(q.question.clone(), theme::bold(theme::FG()))], width.saturating_sub(MARGIN as usize), indent.clone(), indent));
+    out.push(Line::default());
+    let row = |selected: bool, mark: String, label: String, label_style: Style, extra: Vec<Span<'static>>| {
+        let mut spans = vec![
+            Span::raw(body.clone()),
+            Span::styled(if selected { "❯ " } else { "  " }, theme::bold(theme::nebula(t.as_secs_f32() * 0.3))),
+            Span::styled(mark, if selected { theme::fg(theme::FG()) } else { theme::fg(theme::DIM()) }),
+            Span::styled(label, label_style),
+        ];
+        spans.extend(extra);
+        spans
+    };
+    for (n, (label, description)) in q.options.iter().enumerate() {
+        let selected = n == app.approval_choice;
+        let mark = if q.multi {
+            if app.answering.picked.contains(&n) { "[x] ".to_string() } else { "[ ] ".to_string() }
+        } else {
+            format!("{}. ", n + 1)
+        };
+        let used = 2 + mark.width() + label.width();
+        let extra = if description.is_empty() || used + 5 > inner {
+            Vec::new()
+        } else {
+            vec![Span::styled(format!("  {}", truncate(description, inner - used - 2)), theme::dim())]
+        };
+        let style = if selected { theme::bold(theme::FG()) } else { theme::muted() };
+        out.push(Line::from(row(selected, mark, label.clone(), style, extra)));
+    }
+    let typing = app.approval_choice >= q.options.len();
+    let other = &app.answering.other;
+    let (label, style) = if other.is_empty() {
+        ("Type your own answer".to_string(), if typing { theme::fg(theme::MUTED()) } else { theme::dim() })
+    } else {
+        (truncate(other, inner.saturating_sub(8)), if typing { theme::bold(theme::FG()) } else { theme::muted() })
+    };
+    let caret = if typing { vec![Span::styled("▏", theme::bold(theme::VIOLET()))] } else { Vec::new() };
+    out.push(Line::from(row(typing, "✎  ".into(), label, style, caret)));
+    out.push(Line::default());
+    let hint = if q.multi { "↑↓ move · space tick · enter confirm · esc decline" } else { "↑↓ move · enter choose · esc decline" };
+    out.push(Line::from(vec![Span::raw(body), Span::styled(hint, theme::dim())]));
     out.push(Line::default());
     out
 }

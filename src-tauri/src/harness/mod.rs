@@ -3,6 +3,7 @@
 //! stream-json) and Codex (`codex app-server`), each with its own tools and login.
 
 pub mod backend;
+pub mod checkpoint;
 pub mod claude_skills;
 pub mod config;
 pub mod diff;
@@ -370,5 +371,6 @@ fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::TurnStart => json!({ "type": "turn_start" }),
         Ev::TurnDone => json!({ "type": "turn_done" }),
         Ev::Exited(e) => json!({ "type": "exited", "text": e }),
+        Ev::Undone(r) => json!({ "type": "undone", "files": r.as_ref().ok(), "error": r.as_ref().err() }),
     }
 }

@@ -35,6 +35,9 @@ pub enum Ev {
     TurnDone,
     /// The backend process ended; the session can't continue.
     Exited(String),
+    /// Answer to [`Cmd::Undo`]: the last user turn is gone from the conversation, with the files
+    /// the backend reverted itself (when asked to); or why it couldn't be undone.
+    Undone(Result<Vec<String>, String>),
 }
 
 /// One update about a background task; unset fields are unchanged.
@@ -55,13 +58,27 @@ pub struct TaskEv {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Approval {
     pub id: String,
     pub tool: String,
     pub title: String,
     pub detail: String,
     pub diff: Option<String>,
+    /// Questions the agent asks the user (Claude Code's AskUserQuestion); answered with
+    /// [`Cmd::Answer`] instead of a [`Decision`] (declining still goes through `Approve`).
+    pub questions: Vec<Question>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Question {
+    /// Short label, e.g. "Auth method".
+    pub header: String,
+    pub question: String,
+    /// (label, description)
+    pub options: Vec<(String, String)>,
+    /// Whether more than one option can be picked.
+    pub multi: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,15 +135,19 @@ pub enum Cmd {
     Send(UserMsg),
     Interrupt,
     Approve(String, Decision),
+    /// Answers to an approval's questions, one per question in order.
+    Answer(String, Vec<String>),
     SetModel(String),
     SetEffort(Option<String>),
     SetMode(Mode),
     Compact,
     /// Context fill (%) for trimming and for full compaction; 0 = off.
     SetCompaction { trim: u8, compact: u8 },
-    /// Undo the file changes of the last turn (ChatGPT, Claude Code via its file checkpoints, Codex by
-    /// reverse-applying the patches it reported).
-    Undo,
+    /// Undo the last user turn: drop it (the user's message and everything after) from the
+    /// conversation, answered with [`Ev::Undone`]. With `files`, the backend also reverts the
+    /// file changes it tracked (ChatGPT its tools' snapshots, Claude Code its file checkpoints,
+    /// Codex the patches it reported); without, the TUI restores them from its own checkpoints.
+    Undo { files: bool },
     /// Stop one background task (a subagent), by its `TaskEv` id.
     StopTask(String),
     Shutdown,

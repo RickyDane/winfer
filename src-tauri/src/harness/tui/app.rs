@@ -14,6 +14,7 @@ use super::picker::{PickItem, PickKind, Picker};
 use super::selection::{self, Clicks, Selection};
 use super::transcript::{Block, Item, NoticeKind, Status};
 use crate::harness::backend::{self, Handle, Kind, Opts};
+use crate::harness::checkpoint::{self, Done, Job};
 use crate::harness::config::{self, Config};
 use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
 use crate::harness::session::{self, Entry, Saved};
@@ -25,6 +26,20 @@ pub enum Msg {
     Models(Vec<ModelInfo>),
     Files(Vec<String>),
     Shell { id: String, command: String, output: String, ok: bool },
+    Checkpoint(Done),
+}
+
+/// A user turn, for /undo: its message in the transcript and whether the workspace was
+/// snapshotted before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Turn {
+    pub id: u64,
+    /// The user's message in `items`.
+    pub item: usize,
+    /// Handed to the backend (queued and starting turns aren't yet).
+    pub sent: bool,
+    /// The checkpoint thread snapshotted the workspace before it.
+    pub checkpoint: bool,
 }
 
 pub struct Launch {
@@ -44,7 +59,7 @@ pub const COMMANDS: [(&str, &str); 23] = [
     ("/resume", "Resume a past session"),
     ("/compact", "Summarize the conversation to free context"),
     ("/compaction", "When to trim and auto-compact (% of context)"),
-    ("/undo", "Revert the last turn's file changes"),
+    ("/undo", "Undo the last turn: its messages and file changes"),
     ("/revert", "Same as /undo"),
     ("/init", "Create an AGENTS.md for this project"),
     ("/diff", "Show uncommitted git changes"),
@@ -108,6 +123,20 @@ pub fn is_subagent(name: &str) -> bool {
     matches!(name, "Agent" | "Task")
 }
 
+/// Progress through an approval's questions (Claude Code's AskUserQuestion); `approval_choice`
+/// is the highlighted row: an option, or the last row for a typed answer.
+#[derive(Debug, Default)]
+pub struct Answering {
+    /// The question on screen.
+    pub index: usize,
+    /// Options ticked so far (multi-select questions).
+    pub picked: Vec<usize>,
+    /// The typed answer.
+    pub other: String,
+    /// Answers to the questions before this one.
+    pub answers: Vec<String>,
+}
+
 pub struct App {
     pub tx: Sender<Msg>,
     pub epoch: Instant,
@@ -127,6 +156,7 @@ pub struct App {
     pub verb: &'static str,
     pub approvals: VecDeque<Approval>,
     pub approval_choice: usize,
+    pub answering: Answering,
     pub picker: Option<Picker>,
     pub overlay: Tween,
     pub completion: Option<Completion>,
@@ -148,6 +178,11 @@ pub struct App {
     /// Skills the backend can run, invoked as `/name args`.
     pub skills: Vec<Skill>,
     pub scroll: usize,
+    /// A clicked card's item and the transcript row its header sat on: the next draw keeps it there,
+    /// so the card opens downward and pushes what follows past the bottom.
+    pub anchor: Option<(usize, usize)>,
+    /// How far `scroll` may exceed the transcript's height for a held card (only ever shrinks).
+    pub hold: usize,
     /// Text marked with the mouse in the transcript, and where the transcript was last drawn.
     pub selection: Option<Selection>,
     pub view: selection::View,
@@ -168,11 +203,24 @@ pub struct App {
     usage_source: Option<(String, String)>,
     /// Whether winfer was last told this pane is working (a turn or background task runs).
     reported_working: bool,
+    /// Snapshots the workspace around turns, for /undo (None in tests).
+    checkpoints: Option<checkpoint::Worker>,
+    /// User turns of this backend session, oldest first.
+    pub turns: Vec<Turn>,
+    next_turn: u64,
+    /// The message waiting for its turn's snapshot before it goes to the backend.
+    starting: Option<(u64, UserMsg)>,
+    /// An undo was sent to the backend and not yet answered.
+    undoing: bool,
 }
 
 impl App {
     pub fn new(tx: Sender<Msg>, launch: Launch) -> App {
         let mut app = App::blank(tx, &launch);
+        let reply = app.tx.clone();
+        app.checkpoints = Some(checkpoint::Worker::start(app.cwd.clone(), checkpoint::store(), session::new_id(), move |d| {
+            let _ = reply.send(Msg::Checkpoint(d));
+        }));
         let resume = launch.resume.clone().or_else(|| {
             launch.cont.then(|| session::list().into_iter().find(|s| s.cwd == app.saved.cwd).map(|s| s.id)).flatten()
         });
@@ -217,6 +265,7 @@ impl App {
             verb: VERBS[0],
             approvals: VecDeque::new(),
             approval_choice: 0,
+            answering: Answering::default(),
             picker: None,
             overlay: Tween::new(0.0),
             completion: None,
@@ -233,6 +282,8 @@ impl App {
             files: Vec::new(),
             skills: Vec::new(),
             scroll: 0,
+            anchor: None,
+            hold: 0,
             selection: None,
             view: selection::View::default(),
             tcache: Default::default(),
@@ -248,6 +299,11 @@ impl App {
             hooked: false,
             usage_source: None,
             reported_working: false,
+            checkpoints: None,
+            turns: Vec::new(),
+            next_turn: 0,
+            starting: None,
+            undoing: false,
         };
         app.saved.model = app.spec();
         app
@@ -537,7 +593,9 @@ impl App {
             Ev::Approval(a) => {
                 if self.approvals.is_empty() {
                     self.approval_choice = 0;
-                    hook("needs_input", json!({ "session_id": self.saved.id, "message": format!("{}: {}", a.tool, a.title) }));
+                    self.answering = Answering::default();
+                    let message = if a.questions.is_empty() { format!("{}: {}", a.tool, a.title) } else { a.title.clone() };
+                    hook("needs_input", json!({ "session_id": self.saved.id, "message": message }));
                     bell();
                 }
                 self.approvals.push_back(a);
@@ -566,6 +624,7 @@ impl App {
                 }
             }
             Ev::TurnDone => self.turn_done(),
+            Ev::Undone(result) => self.undone(result),
             Ev::Exited(reason) => {
                 self.alive = false;
                 self.busy = false;
@@ -598,6 +657,11 @@ impl App {
     }
 
     fn turn_done(&mut self) {
+        // The workspace as the turn left it (a later turn the backend starts on its own, e.g. on a
+        // background task's report, counts as part of the last user turn).
+        if let (Some(w), Some(t)) = (&self.checkpoints, self.turns.iter().rev().find(|t| t.sent && t.checkpoint)) {
+            w.send(Job::End(t.id));
+        }
         let was_busy = self.busy;
         self.busy = false;
         self.approvals.clear();
@@ -631,7 +695,8 @@ impl App {
             };
             transcript.push(Entry { role: role.into(), text });
         }
-        if transcript.iter().all(|e| e.role != "user") {
+        // (A session whose only turn was undone is still saved, emptied.)
+        if transcript.iter().all(|e| e.role != "user") && self.saved.transcript.is_empty() {
             return;
         }
         self.saved.transcript = transcript;
@@ -668,6 +733,7 @@ impl App {
         }
         let resume = saved.backend_session.clone();
         self.saved = saved;
+        self.forget_turns();
         self.notice(format!("Resumed session · {}", session::ago(self.saved.updated)), NoticeKind::Success);
         self.start_backend(resume);
     }
@@ -706,6 +772,8 @@ impl App {
             full = format!("{}\n\n{full}", std::mem::take(&mut self.shell_context).join("\n\n"));
         }
         self.items.push(Item::new(Block::User { text: shown.trim_end().to_string() }));
+        self.turns.push(Turn { id: self.next_turn, item: self.items.len() - 1, sent: false, checkpoint: false });
+        self.next_turn += 1;
         if self.saved.title.is_empty() {
             self.saved.title = shown.lines().next().unwrap_or("").chars().take(80).collect();
         }
@@ -738,12 +806,97 @@ impl App {
             self.send(Cmd::SetCompaction { trim: saved.trim_at, compact: saved.compact_at });
         }
         if !self.alive {
+            // The new backend doesn't know the old one's turns.
+            self.turns.retain(|t| !t.sent);
             self.start_backend(self.saved.backend_session.clone());
         }
         self.busy = true;
         self.turn_started = Instant::now();
         self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
-        self.send(Cmd::Send(msg));
+        // Snapshot the workspace first, so /undo can put back whatever the turn changes.
+        match (&self.checkpoints, self.turns.iter().find(|t| !t.sent).map(|t| t.id)) {
+            (Some(w), Some(id)) => {
+                w.send(Job::Begin(id));
+                self.starting = Some((id, msg));
+            }
+            (_, id) => {
+                if let Some(t) = self.turns.iter_mut().find(|t| Some(t.id) == id) {
+                    t.sent = true;
+                }
+                self.send(Cmd::Send(msg));
+            }
+        }
+    }
+
+    /// The checkpoint thread's answers.
+    pub fn on_checkpoint(&mut self, done: Done) {
+        match done {
+            Done::Began(id, ok) => {
+                let Some((_, msg)) = self.starting.take_if(|(s, _)| *s == id) else { return };
+                if let Some(t) = self.turns.iter_mut().find(|t| t.id == id) {
+                    t.sent = true;
+                    t.checkpoint = ok;
+                }
+                self.send(Cmd::Send(msg));
+            }
+            Done::Restored(Ok(paths)) => self.notice(undone_text(&paths), NoticeKind::Success),
+            Done::Restored(Err(e)) => self.notice(format!("Undid the last turn, but couldn't restore its files: {e}"), NoticeKind::Error),
+        }
+    }
+
+    /// A fresh conversation: nothing to undo.
+    fn forget_turns(&mut self) {
+        self.turns.clear();
+        self.starting = None;
+        self.undoing = false;
+        if let Some(w) = &self.checkpoints {
+            w.send(Job::Clear);
+        }
+    }
+
+    /// /undo: drops the last turn from the conversation (the backend first, then the
+    /// transcript) and puts back the files it changed.
+    fn undo(&mut self) {
+        if self.busy || self.starting.is_some() {
+            self.toast("Wait for the turn to finish (or press Esc) before /undo.", NoticeKind::Error);
+        } else if self.undoing {
+            self.toast("Already undoing…", NoticeKind::Info);
+        } else if !self.alive {
+            self.toast("The agent isn't running; nothing to undo.", NoticeKind::Error);
+        } else if let Some(turn) = self.turns.last() {
+            self.undoing = true;
+            // Without a workspace snapshot, the backend reverts what file changes it tracked.
+            self.send(Cmd::Undo { files: !turn.checkpoint });
+        } else {
+            self.toast("Nothing to undo in this session.", NoticeKind::Info);
+        }
+    }
+
+    /// The backend's answer to /undo.
+    fn undone(&mut self, result: Result<Vec<String>, String>) {
+        self.undoing = false;
+        let files = match result {
+            Ok(files) => files,
+            Err(e) => return self.notice(format!("Couldn't undo: {e}"), NoticeKind::Error),
+        };
+        let Some(turn) = self.turns.pop() else { return };
+        // The transcript goes back to before the message, which returns to the prompt to edit.
+        if let Some(Block::User { text }) = self.items.get(turn.item).map(|i| &i.block) {
+            let text = text.clone();
+            self.items.truncate(turn.item);
+            if self.composer.text.trim().is_empty() {
+                self.composer.set(&text);
+            }
+        }
+        self.todos.clear();
+        self.approvals.clear();
+        self.scroll = 0;
+        self.selection = None;
+        match &self.checkpoints {
+            Some(w) if turn.checkpoint => w.send(Job::Restore(turn.id)),
+            _ => self.notice(undone_text(&files), NoticeKind::Success),
+        }
+        self.save();
     }
 
     /// `@path` mentions: images are attached, small text files inlined.
@@ -850,7 +1003,7 @@ impl App {
                 }
             }
             "/compaction" | "/autocompact" => self.compaction_command(arg),
-            "/undo" | "/revert" => self.send(Cmd::Undo),
+            "/undo" | "/revert" => self.undo(),
             "/init" => {
                 let prompt = "Analyze this codebase and create an AGENTS.md file at the repository root with concise guidance for coding agents: what the project is, how it's laid out, how to build, run, test and lint it, code style and conventions, and anything non-obvious. If one exists, improve it instead.";
                 self.composer.set(prompt);
@@ -1323,6 +1476,7 @@ impl App {
             self.saved.backend_session = None;
             self.usage = Usage::default();
             self.ctx_shown.set(0.0, 300);
+            self.forget_turns();
             self.start_backend(None);
             if fresh {
                 self.notice(format!("Switched to {label}. It starts with a fresh context."), NoticeKind::Info);
@@ -1377,6 +1531,7 @@ impl App {
         self.ctx_shown = Tween::new(0.0);
         self.saved = Saved { id: session::new_id(), cwd: self.cwd.to_string_lossy().into_owned(), model: self.spec(), ..Default::default() };
         self.hooked = false;
+        self.forget_turns();
         self.start_backend(None);
         self.epoch = Instant::now();
     }
@@ -1501,6 +1656,10 @@ impl App {
                 if let Some(p) = &mut self.picker {
                     let f = format!("{}{}", p.filter, s.trim());
                     p.set_filter(f);
+                } else if let Some(n) = self.approvals.front().and_then(|a| a.questions.get(self.answering.index)).map(|q| q.options.len()) {
+                    // A pasted answer goes to the typed-answer row.
+                    self.approval_choice = n;
+                    self.answering.other.push_str(&s.split_whitespace().collect::<Vec<_>>().join(" "));
                 } else if s.trim().is_empty() {
                     // Terminals paste nothing when the clipboard holds only an image.
                     self.paste_image();
@@ -1574,6 +1733,86 @@ impl App {
         let Some(item) = self.items.get_mut(idx).filter(|i| matches!(i.block, Block::Tool { .. })) else { return };
         item.open = !item.open;
         item.touch();
+        let row = (self.view.y - self.view.top) as usize + line.saturating_sub(self.view.start);
+        self.anchor = Some((idx, row));
+    }
+
+    /// Keys while the agent's questions are on screen: ↑↓ pick a row, space ticks an option of a
+    /// multi-select question, digits pick an option, typing goes to the last row, enter answers
+    /// and moves on (the last answer sends them all), esc declines.
+    fn on_question_key(&mut self, a: &Approval, code: KeyCode, ctrl: bool) {
+        let q = &a.questions[self.answering.index.min(a.questions.len() - 1)];
+        let n = q.options.len();
+        let typing = self.approval_choice >= n;
+        let toggle = |app: &mut App, i: usize| match app.answering.picked.iter().position(|&p| p == i) {
+            Some(at) => {
+                app.answering.picked.remove(at);
+            }
+            None => app.answering.picked.push(i),
+        };
+        let mut answer = None;
+        match code {
+            KeyCode::Esc => {
+                self.approvals.pop_front();
+                self.approval_choice = 0;
+                self.answering = Answering::default();
+                self.send(Cmd::Approve(a.id.clone(), Decision::Deny));
+                self.toast("Declined", NoticeKind::Info);
+                hook("approved", json!({ "session_id": self.saved.id }));
+                return;
+            }
+            KeyCode::Up | KeyCode::BackTab => self.approval_choice = (self.approval_choice + n) % (n + 1),
+            KeyCode::Down | KeyCode::Tab => self.approval_choice = (self.approval_choice + 1) % (n + 1),
+            KeyCode::PageUp => self.scroll += 10,
+            KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
+            KeyCode::Backspace if typing => {
+                self.answering.other.pop();
+            }
+            KeyCode::Char(c) if typing && !ctrl => self.answering.other.push(c),
+            KeyCode::Char(' ') if q.multi => toggle(self, self.approval_choice),
+            KeyCode::Char(c @ '1'..='9') if !ctrl && (c as usize - '1' as usize) < n => {
+                let i = c as usize - '1' as usize;
+                self.approval_choice = i;
+                if q.multi {
+                    toggle(self, i);
+                } else {
+                    answer = Some(q.options[i].0.clone());
+                }
+            }
+            KeyCode::Enter => {
+                let other = self.answering.other.trim().to_string();
+                answer = if q.multi {
+                    let mut picked = self.answering.picked.clone();
+                    if picked.is_empty() && !typing {
+                        picked.push(self.approval_choice);
+                    }
+                    picked.sort_unstable();
+                    let mut parts: Vec<String> = picked.iter().map(|&i| q.options[i].0.clone()).collect();
+                    if !other.is_empty() {
+                        parts.push(other);
+                    }
+                    Some(parts.join(", "))
+                } else if typing {
+                    Some(other)
+                } else {
+                    Some(q.options[self.approval_choice].0.clone())
+                };
+            }
+            _ => {}
+        }
+        let Some(answer) = answer.filter(|a| !a.is_empty()) else { return };
+        let done = &mut self.answering;
+        done.answers.push(answer);
+        done.index += 1;
+        done.picked.clear();
+        done.other.clear();
+        self.approval_choice = 0;
+        if self.answering.index >= a.questions.len() {
+            let answers = std::mem::take(&mut self.answering).answers;
+            self.approvals.pop_front();
+            self.send(Cmd::Answer(a.id.clone(), answers));
+            hook("approved", json!({ "session_id": self.saved.id }));
+        }
     }
 
     /// Copies the marked text to the clipboard; the mark stays until the next click or key.
@@ -1665,10 +1904,16 @@ impl App {
             return;
         }
 
+        if let Some(a) = self.approvals.front().filter(|a| !a.questions.is_empty()).cloned() {
+            self.on_question_key(&a, k.code, ctrl);
+            return;
+        }
+
         if let Some(a) = self.approvals.front().cloned() {
             let decide = |app: &mut App, d: Decision| {
                 app.approvals.pop_front();
                 app.approval_choice = 0;
+                app.answering = Answering::default();
                 app.send(Cmd::Approve(a.id.clone(), d));
                 if d == Decision::Deny {
                     app.toast("Declined", NoticeKind::Info);
@@ -1798,9 +2043,13 @@ impl App {
 
     /// Stops all work: the running turn and every background subagent and shell.
     fn interrupt(&mut self) {
-        if self.busy {
+        if self.starting.take().is_some() {
+            // The backend never got the message.
+            self.busy = false;
+        } else if self.busy {
             self.send(Cmd::Interrupt);
         }
+        self.turns.retain(|t| t.sent);
         let running: Vec<String> = self.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.id.clone()).collect();
         for id in &running {
             self.send(Cmd::StopTask(id.clone()));
@@ -1868,6 +2117,15 @@ impl App {
         } else {
             self.composer.replace_word(c.start, &format!("@{} ", item.value));
         }
+    }
+}
+
+/// What /undo did, for the transcript.
+fn undone_text(paths: &[String]) -> String {
+    match paths.len() {
+        0 => "Undid the last turn (no file changes to revert).".into(),
+        n if n <= 8 => format!("Undid the last turn · reverted {}", paths.join(", ")),
+        n => format!("Undid the last turn · reverted {} and {} more", paths[..6].join(", "), n - 6),
     }
 }
 
@@ -1960,6 +2218,7 @@ pub fn drain(app: &mut App, rx: &Receiver<Msg>, first: Msg) {
         }
         Msg::Files(f) => app.files = f,
         Msg::Shell { id, command, output, ok } => app.on_shell(id, command, output, ok),
+        Msg::Checkpoint(d) => app.on_checkpoint(d),
     };
     handle(app, first);
     while let Ok(m) = rx.try_recv() {
@@ -1979,6 +2238,80 @@ mod tests {
         let mut a = App::blank(tx, &launch);
         a.config = Config::default();
         a
+    }
+
+    #[test]
+    fn undo_drops_the_last_turn_and_returns_its_message() {
+        let mut a = app();
+        a.alive = true;
+        let g = a.generation;
+        let turn = |a: &mut App, text: &str, reply: &str| {
+            a.composer.set(text);
+            a.submit();
+            a.on_agent(g, Ev::TurnStart);
+            a.on_agent(g, Ev::Text { id: format!("m-{text}"), text: reply.into() });
+            a.on_agent(g, Ev::TurnDone);
+        };
+        turn(&mut a, "first", "one");
+        turn(&mut a, "second", "two");
+        assert_eq!(a.turns.len(), 2);
+        assert!(a.turns.iter().all(|t| t.sent && !t.checkpoint));
+        let users = |a: &App| a.items.iter().filter(|i| matches!(i.block, Block::User { .. })).count();
+
+        // Busy: refused.
+        a.busy = true;
+        a.command("/undo");
+        assert!(!a.undoing);
+        a.busy = false;
+
+        a.command("/undo");
+        assert!(a.undoing);
+        // The backend couldn't: the transcript stays.
+        a.on_agent(g, Ev::Undone(Err("nope".into())));
+        assert!(!a.undoing && users(&a) == 2 && a.turns.len() == 2);
+
+        a.command("/undo");
+        a.on_agent(g, Ev::Undone(Ok(vec!["a.txt".into()])));
+        assert_eq!(users(&a), 1);
+        assert_eq!(a.turns.len(), 1);
+        assert_eq!(a.composer.text, "second");
+        assert!(!a.items.iter().any(|i| matches!(&i.block, Block::Assistant { text, .. } if text == "two")));
+        assert!(matches!(&a.items.last().unwrap().block, Block::Notice { text, .. } if text.contains("reverted a.txt")));
+
+        // A message typed meanwhile isn't overwritten.
+        a.composer.set("draft");
+        a.command("/undo");
+        a.on_agent(g, Ev::Undone(Ok(Vec::new())));
+        assert_eq!((users(&a), a.composer.text.as_str()), (0, "draft"));
+        a.command("/undo");
+        assert!(!a.undoing);
+    }
+
+    #[test]
+    fn a_turn_waits_for_its_snapshot_and_esc_cancels_it() {
+        let mut a = app();
+        a.alive = true;
+        let (tx, rx) = channel();
+        a.checkpoints = Some(checkpoint::Worker::start(PathBuf::from("/nonexistent-winfer-dir"), std::env::temp_dir(), "t".into(), move |d| {
+            let _ = tx.send(d);
+        }));
+        a.composer.set("go");
+        a.submit();
+        assert!(a.busy && a.starting.is_some() && !a.turns[0].sent);
+        // No usable folder: the turn starts without a checkpoint.
+        let done = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        a.on_checkpoint(done);
+        assert!(a.starting.is_none() && a.turns[0].sent && !a.turns[0].checkpoint);
+
+        a.busy = false;
+        a.composer.set("again");
+        a.submit();
+        assert!(a.starting.is_some());
+        a.interrupt();
+        assert!(!a.busy && a.starting.is_none() && a.turns.len() == 1);
+        // Its late answer is ignored.
+        a.on_checkpoint(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        assert_eq!(a.turns.len(), 1);
     }
 
     #[test]
@@ -2064,6 +2397,46 @@ mod tests {
         click(&mut a);
         let s = screen(&mut a, 100, 30);
         assert!(s.contains("▸") && !s.contains("+ E"), "{s}");
+    }
+
+    #[test]
+    fn an_opened_tool_card_keeps_its_header_in_place_and_pushes_the_rest_down() {
+        // Short transcripts (bottom-aligned) and long ones (following the bottom) alike.
+        for before in [0, 40] {
+            let mut a = app();
+            let now = Instant::now();
+            for i in 0..before {
+                a.items.push(Item::new(Block::User { text: format!("message {i}") }));
+            }
+            let output: String = (1..=8).map(|i| format!("line {i}\n")).collect();
+            a.items.push(Item::new(Block::Tool { id: "1".into(), name: "Bash".into(), title: "seq 8".into(), output, diff: None, status: Status::Ok, started: now, ended: Some(now) }));
+            a.items.push(Item::new(Block::Assistant { id: "a".into(), text: "after the card\n\none\n\ntwo\n\nthree\n\nfour".into() }));
+            for i in &mut a.items {
+                i.born = now - Duration::from_secs(5);
+            }
+            let card = before;
+            let header = |a: &mut App| {
+                screen(a, 100, 30);
+                a.view.y + (a.item_rows[card] - a.view.start) as u16
+            };
+            let row = header(&mut a);
+            // Different columns each time, so the clicks don't count as a double-click.
+            let click = |a: &mut App, row: u16, column: u16| {
+                for kind in [MouseEventKind::Down(MouseButton::Left), MouseEventKind::Up(MouseButton::Left)] {
+                    a.on_term(Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }));
+                }
+            };
+            click(&mut a, row, 10);
+            assert!(a.items[card].open);
+            assert_eq!(header(&mut a), row, "opening moved the header (before={before})");
+            let s = screen(&mut a, 100, 30);
+            assert!(s.contains("line 8") && !s.contains("four") && a.scroll > 0, "{s}");
+            click(&mut a, row, 30);
+            assert!(!a.items[card].open);
+            assert_eq!(header(&mut a), row, "collapsing moved the header (before={before})");
+            let s = screen(&mut a, 100, 30);
+            assert!(s.contains("four") && a.scroll == 0, "{s}");
+        }
     }
 
     #[test]
@@ -2319,9 +2692,45 @@ mod tests {
     }
 
     #[test]
+    fn answers_the_agents_questions_one_by_one() {
+        use crate::harness::event::Question;
+        let mut a = app();
+        let opts = |l: &[&str]| l.iter().map(|o| (o.to_string(), format!("about {o}"))).collect();
+        let questions = vec![
+            Question { header: "Lib".into(), question: "Which library?".into(), options: opts(&["serde", "nom"]), multi: false },
+            Question { header: "Targets".into(), question: "Which targets?".into(), options: opts(&["mac", "linux", "windows"]), multi: true },
+            Question { header: "Name".into(), question: "Crate name?".into(), options: Vec::new(), multi: false },
+        ];
+        let g = a.generation;
+        a.on_agent(g, Ev::Approval(Approval { id: "q".into(), tool: "AskUserQuestion".into(), title: "Which library?".into(), questions, ..Default::default() }));
+        let s = screen(&mut a, 90, 30);
+        assert!(s.contains("Which library?") && s.contains("1. serde") && s.contains("about nom") && s.contains("1/3") && s.contains("waiting for your answer"), "{s}");
+        key(&mut a, KeyCode::Char('2'));
+        assert_eq!(a.answering.answers, ["nom"]);
+        // Multi-select: tick two, enter.
+        key(&mut a, KeyCode::Char(' '));
+        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Char(' '));
+        assert!(screen(&mut a, 90, 30).contains("[x] windows"));
+        key(&mut a, KeyCode::Enter);
+        assert_eq!(a.answering.answers, ["nom", "mac, windows"]);
+        // No options: typing goes straight to the answer; enter with nothing typed does nothing.
+        key(&mut a, KeyCode::Enter);
+        assert_eq!(a.answering.answers.len(), 2);
+        for c in "fastx".chars() {
+            key(&mut a, KeyCode::Char(c));
+        }
+        key(&mut a, KeyCode::Backspace);
+        assert!(screen(&mut a, 90, 30).contains("fast▏"));
+        key(&mut a, KeyCode::Enter);
+        assert!(a.approvals.is_empty() && a.answering.answers.is_empty());
+    }
+
+    #[test]
     fn renders_an_approval() {
         let mut a = app();
-        a.approvals.push_back(Approval { id: "x".into(), tool: "Bash".into(), title: "rm -rf build".into(), detail: String::new(), diff: None });
+        a.approvals.push_back(Approval { id: "x".into(), tool: "Bash".into(), title: "rm -rf build".into(), detail: String::new(), diff: None, ..Default::default() });
         let s = screen(&mut a, 90, 30);
         assert!(s.contains("Allow Bash?") && s.contains("rm -rf build"), "{s}");
         key(&mut a, KeyCode::Char('n'));

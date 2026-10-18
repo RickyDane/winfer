@@ -74,8 +74,17 @@ struct State {
     /// big old tool output costs full price every request, so it's trimmed as the turn goes on.
     cache: Option<bool>,
     cache_misses: u8,
-    /// File snapshots of each turn, newest last, for /undo.
-    undo: Vec<HashMap<PathBuf, Option<String>>>,
+    /// The user turns, newest last, for /undo.
+    undo: Vec<UndoTurn>,
+}
+
+/// Where a user turn starts in the conversation, and the files its tools changed.
+#[derive(Default)]
+struct UndoTurn {
+    /// User items before the turn's message (trimming drops reasoning items, never user ones).
+    users: usize,
+    /// Original contents (None: didn't exist).
+    files: HashMap<PathBuf, Option<String>>,
 }
 
 struct Shared {
@@ -240,6 +249,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             Cmd::Approve(id, d) => {
                 shared.decisions.lock().unwrap().insert(id, d);
             }
+            Cmd::Answer(..) => {}
             Cmd::SetModel(m) => shared.state.lock().unwrap().model = m,
             Cmd::SetEffort(e) => shared.state.lock().unwrap().effort = e,
             Cmd::SetMode(m) => shared.state.lock().unwrap().mode = m,
@@ -248,7 +258,13 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
                 st.trim_at = trim;
                 st.compact_at = compact;
             }
-            Cmd::Undo => undo(&shared),
+            Cmd::Undo { files } => {
+                if worker.as_ref().is_some_and(|w| !w.is_finished()) || !queue.is_empty() {
+                    let _ = shared.events.send(Ev::Undone(Err("Wait for the turn to finish (or press Esc) before /undo.".into())));
+                } else {
+                    undo(&shared, files);
+                }
+            }
             Cmd::StopTask(id) => match shared.agents.lock().unwrap().get(&id) {
                 Some(stop) => stop.store(true, Ordering::Relaxed),
                 None => {
@@ -556,9 +572,10 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
     {
         let mut st = shared.state.lock().unwrap();
         if let Some(msg) = &msg {
+            let users = st.items.iter().filter(|i| i["role"] == "user").count();
+            st.undo.push(UndoTurn { users, files: HashMap::new() });
             st.items.push(user_item(msg));
         }
-        st.undo.push(HashMap::new());
     }
     let mut steps = 0;
     loop {
@@ -595,10 +612,7 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         }
     }
     {
-        let mut st = shared.state.lock().unwrap();
-        if st.undo.last().is_some_and(HashMap::is_empty) {
-            st.undo.pop();
-        }
+        let st = shared.state.lock().unwrap();
         save_items(&shared.session, &st.items);
     }
     emit(Ev::TurnDone);
@@ -695,6 +709,7 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
             title,
             detail: sub.map(|s| format!("Asked by subagent “{}”.", s.title)).unwrap_or_default(),
             diff: tools::preview(&shared.cwd, name, &args),
+            ..Default::default()
         }));
         shared.asking.lock().unwrap().insert(approval_id.clone());
         let decision = loop {
@@ -751,7 +766,7 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
         let mut st = shared.state.lock().unwrap();
         if let Some(turn) = st.undo.last_mut() {
             for (k, v) in snapshots {
-                turn.entry(k).or_insert(v);
+                turn.files.entry(k).or_insert(v);
             }
         }
     }
@@ -1006,6 +1021,8 @@ fn summarize(shared: &Shared) -> bool {
         return false;
     }
     st.items = vec![json!({ "role": "user", "content": [{ "type": "input_text", "text": format!("(Summary of the conversation so far, compacted to save context.)\n\n{summary}") }] })];
+    // The turns before are only in the summary now.
+    st.undo.clear();
     shared.reads.lock().unwrap().clear();
     st.usage.context = 0;
     true
@@ -1022,28 +1039,74 @@ fn compact(shared: &Shared) {
     let _ = shared.events.send(Ev::TurnDone);
 }
 
-fn undo(shared: &Shared) {
+/// Drops the last user turn from the conversation, and with `files` puts back the files its
+/// tools changed.
+fn undo(shared: &Shared, files: bool) {
     let mut st = shared.state.lock().unwrap();
     let Some(turn) = st.undo.pop() else {
-        let _ = shared.events.send(Ev::Notice("Nothing to undo.".into()));
+        let _ = shared.events.send(Ev::Undone(Err("Nothing to undo (compacted turns can't be undone).".into())));
         return;
     };
-    let mut names = Vec::new();
-    for (path, content) in &turn {
-        let _ = match content {
-            Some(text) => std::fs::write(path, text),
-            None => std::fs::remove_file(path),
-        };
-        names.push(tools::short_path(&path.to_string_lossy()));
+    let start = st.items.iter().enumerate().filter(|(_, i)| i["role"] == "user").nth(turn.users).map(|(n, _)| n);
+    if let Some(start) = start {
+        st.items.truncate(start);
     }
-    names.sort();
-    st.items.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": format!("(The user reverted your file changes from the last turn: {}.)", names.join(", ")) }] }));
-    let _ = shared.events.send(Ev::Notice(format!("Reverted {}", names.join(", "))));
+    let mut names = Vec::new();
+    if files {
+        for (path, content) in &turn.files {
+            let _ = match content {
+                Some(text) => std::fs::write(path, text),
+                None => std::fs::remove_file(path),
+            };
+            names.push(tools::short_path(&path.to_string_lossy()));
+        }
+        names.sort();
+    }
+    // What the model read in that turn is gone from its view.
+    shared.reads.lock().unwrap().clear();
+    save_items(&shared.session, &st.items);
+    let _ = shared.events.send(Ev::Undone(Ok(names)));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undo_drops_the_last_user_turn_and_its_files() {
+        let (sh, rx, dir) = shared(Mode::Yolo);
+        let user = |t: &str| json!({ "role": "user", "content": [{ "type": "input_text", "text": t }] });
+        {
+            let mut st = sh.state.lock().unwrap();
+            st.undo = vec![UndoTurn { users: 0, files: HashMap::new() }];
+            st.items = vec![user("one"), json!({ "type": "message", "role": "assistant", "content": "ok" })];
+            let files = HashMap::from([(dir.join("a.txt"), Some("hello\n".to_string())), (dir.join("new.txt"), None)]);
+            st.undo.push(UndoTurn { users: 1, files });
+            st.items.extend([
+                user("two"),
+                json!({ "type": "function_call", "call_id": "1", "name": "write", "arguments": "{}" }),
+                json!({ "type": "function_call_output", "call_id": "1", "output": "ok" }),
+                user("(a background agent's report)"),
+                json!({ "type": "message", "role": "assistant", "content": "done" }),
+            ]);
+        }
+        std::fs::write(dir.join("a.txt"), "changed\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "x\n").unwrap();
+        undo(&sh, true);
+        assert_eq!(sh.state.lock().unwrap().items.len(), 2);
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "hello\n");
+        assert!(!dir.join("new.txt").exists());
+        assert!(matches!(rx.try_recv(), Ok(Ev::Undone(Ok(f))) if f.len() == 2));
+        // Files are left alone when the TUI restores them itself.
+        std::fs::write(dir.join("a.txt"), "again\n").unwrap();
+        undo(&sh, false);
+        assert!(sh.state.lock().unwrap().items.is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "again\n");
+        assert!(matches!(rx.try_recv(), Ok(Ev::Undone(Ok(f))) if f.is_empty()));
+        undo(&sh, false);
+        assert!(matches!(rx.try_recv(), Ok(Ev::Undone(Err(_)))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn items_replay_without_ids() {
@@ -1105,7 +1168,7 @@ mod tests {
                 compact_at: 0,
                 cache: None,
                 cache_misses: 0,
-                undo: vec![HashMap::new()],
+                undo: vec![UndoTurn::default()],
             }),
             events,
             stop: Arc::new(AtomicBool::new(false)),

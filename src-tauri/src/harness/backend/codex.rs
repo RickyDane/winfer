@@ -56,7 +56,18 @@ enum Pending {
     /// Stopping these background shells: one terminal (`thread/backgroundTerminals/terminate`),
     /// else all of the thread's (`clean`).
     StopShells { ids: Vec<String>, all: bool },
+    /// `thread/revert` for /undo; whether to revert the turn's file changes too.
+    Revert { files: bool },
     Ignore,
+}
+
+/// A user turn, for /undo.
+#[derive(Default)]
+struct UserTurn {
+    /// Codex's turn id, once `turn/start` answered.
+    id: Option<String>,
+    /// File changes Codex applied in it, in order.
+    changes: Vec<Value>,
 }
 
 struct Bridge {
@@ -84,12 +95,8 @@ struct Bridge {
     usage: Usage,
     /// Skills Codex found (`skills/list`): name → SKILL.md path.
     skills: HashMap<String, String>,
-    /// File changes Codex applied in the running turn, in order.
-    turn_changes: Vec<Value>,
-    /// The file changes of each finished turn that edited files, newest last, for /undo.
-    undo: Vec<Vec<Value>>,
-    /// Told to Codex with the next message after an undo, so it doesn't trust stale file state.
-    note: Option<String>,
+    /// The user turns, newest last, for /undo.
+    turns: Vec<UserTurn>,
     /// The main thread's commands still running: item id → card title.
     commands: HashMap<String, String>,
     /// Commands that outlived their turn (Codex keeps them running as background terminals),
@@ -139,9 +146,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         children: HashMap::new(),
         usage: Usage::default(),
         skills: HashMap::new(),
-        turn_changes: Vec::new(),
-        undo: Vec::new(),
-        note: None,
+        turns: Vec::new(),
         commands: HashMap::new(),
         background: HashSet::new(),
         processes: HashMap::new(),
@@ -164,6 +169,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         thread_params["developerInstructions"] = json!(system);
     }
     let resume = opts.resume.clone();
+    // New threads keep paginated history, which `thread/revert` (/undo) needs.
+    let mut start_params = thread_params.clone();
+    start_params["historyMode"] = json!("paginated");
 
     while let Some(msg) = super::recv(&rx) {
         match msg {
@@ -180,11 +188,13 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         } else if let Some(Pending::StopShells { ids, all: false }) = kind {
                             // Its process id didn't work: clean the thread's terminals instead.
                             b.clean_shells(ids);
+                        } else if matches!(kind, Some(Pending::Revert { .. })) {
+                            b.emit(Ev::Undone(Err(format!("Codex couldn't drop the turn: {message}"))));
                         } else if matches!(kind, Some(Pending::StopShells { .. })) {
                             b.emit(Ev::Notice(format!("Couldn't stop the background shells: {message}")));
                         } else if matches!(kind, Some(Pending::Thread)) && resume.is_some() {
                             b.emit(Ev::Notice(format!("Couldn't resume that Codex thread ({message}); starting a new one.")));
-                            b.request("thread/start", thread_params.clone(), Pending::Thread);
+                            b.request("thread/start", start_params.clone(), Pending::Thread);
                         } else {
                             b.emit(Ev::Error(format!("Codex: {message}")));
                         }
@@ -202,7 +212,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                                     p["excludeTurns"] = json!(true);
                                     b.request("thread/resume", p, Pending::Thread);
                                 }
-                                None => b.request("thread/start", thread_params.clone(), Pending::Thread),
+                                None => b.request("thread/start", start_params.clone(), Pending::Thread),
                             }
                         }
                         Some(Pending::Thread) => {
@@ -220,8 +230,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         Some(Pending::Turn) => {
                             if let Some(id) = result["turn"]["id"].as_str() {
                                 b.turn = Some(id.to_string());
+                                if let Some(t) = b.turns.last_mut().filter(|t| t.id.is_none()) {
+                                    t.id = Some(id.to_string());
+                                }
                             }
                         }
+                        Some(Pending::Revert { files }) => b.reverted(files),
                         Some(Pending::Skills) => {
                             let list = b.take_skills(result);
                             b.emit(Ev::Skills(list));
@@ -264,6 +278,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     };
                     let _ = b.proc.write(&json!({ "id": rpc, "result": { "decision": decision } }));
                 }
+                Cmd::Answer(..) => {}
                 Cmd::SetModel(m) => b.model = Some(m),
                 Cmd::SetEffort(e) => b.effort = e,
                 Cmd::SetMode(m) => b.mode = m,
@@ -274,7 +289,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     }
                 }
                 Cmd::SetCompaction { .. } => {}
-                Cmd::Undo => b.undo(),
+                Cmd::Undo { files } => b.undo(files),
                 Cmd::StopTask(id) if b.background.contains(&id) => b.stop_shell(id),
                 Cmd::StopTask(thread) => {
                     match b.children.get(&thread).and_then(|c| c.turn.clone()) {
@@ -328,11 +343,9 @@ impl Bridge {
         }
     }
 
-    fn start_turn(&mut self, mut msg: UserMsg) {
+    fn start_turn(&mut self, msg: UserMsg) {
         let Some(thread) = self.thread.clone() else { return };
-        if let Some(note) = self.note.take() {
-            msg.text = format!("{note}\n\n{}", msg.text);
-        }
+        self.turns.push(UserTurn::default());
         // An explicit skill goes as Codex's own skill input (what `$name` does in its TUI), so
         // the model gets the SKILL.md itself instead of finding and reading it.
         let (text, skill) = match &msg.skill {
@@ -366,22 +379,30 @@ impl Bridge {
         self.request("turn/start", params, Pending::Turn);
     }
 
-    /// Reverts the file changes of the last turn that made any, newest first. Codex's app server
-    /// can only drop turns from its history (`thread/revert`), so the patches it reported are
-    /// undone here; edits made through shell commands aren't tracked.
-    fn undo(&mut self) {
+    /// Drops the last user turn from the thread (`thread/revert`, which leaves files alone);
+    /// [`Self::reverted`] finishes once Codex has.
+    fn undo(&mut self, files: bool) {
         if self.turn.is_some() {
-            return self.emit(Ev::Notice("Wait for the turn to finish (or press Esc) before /undo.".into()));
+            return self.emit(Ev::Undone(Err("Wait for the turn to finish (or press Esc) before /undo.".into())));
         }
-        let Some(changes) = self.undo.pop() else {
-            return self.emit(Ev::Notice("Nothing to undo.".into()));
+        let (Some(thread), Some(turn)) = (self.thread.clone(), self.turns.last()) else {
+            return self.emit(Ev::Undone(Err("Nothing to undo.".into())));
         };
+        let Some(id) = turn.id.clone() else {
+            return self.emit(Ev::Undone(Err("Codex never started that turn.".into())));
+        };
+        self.request("thread/revert", json!({ "threadId": thread, "beforeTurnId": id }), Pending::Revert { files });
+    }
+
+    /// Codex dropped the last user turn; with `files`, its patches are undone here, newest first
+    /// (edits made through shell commands aren't tracked).
+    fn reverted(&mut self, files: bool) {
+        let Some(turn) = self.turns.pop() else { return };
         let cwd = std::path::PathBuf::from(&self.cwd);
         let mut names = Vec::new();
         let mut failed = Vec::new();
-        for c in changes.iter().rev() {
-            let raw = c["path"].as_str().unwrap_or("");
-            let name = crate::harness::tools::short_path(raw);
+        for c in turn.changes.iter().rev().filter(|_| files) {
+            let name = crate::harness::tools::short_path(c["path"].as_str().unwrap_or(""));
             match revert_change(&cwd, c) {
                 Ok(()) => names.push(name),
                 Err(e) => failed.push(format!("{name} ({e})")),
@@ -389,14 +410,10 @@ impl Bridge {
         }
         names.sort();
         names.dedup();
-        if !names.is_empty() {
-            let list = names.join(", ");
-            self.note = Some(format!("(The user reverted your file changes from the last turn: {list}. Re-read files before editing them.)"));
-            self.emit(Ev::Notice(format!("Reverted {list}")));
-        }
         if !failed.is_empty() {
             self.emit(Ev::Error(format!("Couldn't revert {}", failed.join(", "))));
         }
+        self.emit(Ev::Undone(Ok(names)));
     }
 
     /// Remembers the enabled skills of a `skills/list` result and returns them for the TUI.
@@ -428,6 +445,7 @@ impl Bridge {
                     title: command,
                     detail: p["reason"].as_str().unwrap_or("").to_string(),
                     diff: None,
+                    ..Default::default()
                 })
             }
             "item/fileChange/requestApproval" | "applyPatchApproval" => {
@@ -438,6 +456,7 @@ impl Bridge {
                     title: p["grantRoot"].as_str().map(|r| format!("write access to {r}")).unwrap_or_else(|| "apply changes".into()),
                     detail: p["reason"].as_str().unwrap_or("").to_string(),
                     diff: self.diffs.get(item).cloned(),
+                    ..Default::default()
                 })
             }
             "item/permissions/requestApproval" => Some(Approval {
@@ -446,6 +465,7 @@ impl Bridge {
                 title: p["reason"].as_str().unwrap_or("more access").to_string(),
                 detail: String::new(),
                 diff: None,
+                ..Default::default()
             }),
             _ => None,
         };
@@ -484,10 +504,6 @@ impl Bridge {
                 for (id, title) in std::mem::take(&mut self.commands) {
                     self.task(TaskEv { id: id.clone(), tool_id: Some(id.clone()), title: Some(title), status: Some("running".into()), ..Default::default() });
                     self.background.insert(id);
-                }
-                let changes = std::mem::take(&mut self.turn_changes);
-                if !changes.is_empty() {
-                    self.undo.push(changes);
                 }
                 self.emit(Ev::TurnDone);
             }
@@ -736,8 +752,8 @@ impl Bridge {
                 let diff = changes_diff(item);
                 self.diffs.remove(&id);
                 let ok = item["status"] == "completed";
-                if ok {
-                    self.turn_changes.extend(item["changes"].as_array().into_iter().flatten().cloned());
+                if let Some(turn) = self.turns.last_mut().filter(|_| ok) {
+                    turn.changes.extend(item["changes"].as_array().into_iter().flatten().cloned());
                 }
                 self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: Some(diff).filter(|d| !d.is_empty()) });
             }
@@ -1154,9 +1170,7 @@ mod tests {
             children: HashMap::new(),
             usage: Usage::default(),
             skills: HashMap::new(),
-            turn_changes: Vec::new(),
-            undo: Vec::new(),
-            note: None,
+            turns: Vec::new(),
             commands: HashMap::new(),
             background: HashSet::new(),
             processes: HashMap::new(),
@@ -1219,16 +1233,20 @@ mod tests {
             { "path": "gone.txt", "kind": { "type": "delete" }, "diff": "old\n" },
         ]);
         let item = json!({ "type": "fileChange", "id": "f", "status": "completed", "changes": changes });
+        b.thread = Some("main".into());
+        b.turns.push(UserTurn { id: Some("t0".into()), changes: Vec::new() });
         b.on_notification("item/completed", &json!({ "threadId": "main", "item": item }));
         b.on_notification("turn/completed", &json!({ "threadId": "main", "turn": { "id": "t0", "status": "completed" } }));
-        b.undo();
+        b.undo(true);
+        let (_, kind) = b.pending.iter().max_by_key(|(id, _)| **id).unwrap();
+        assert!(matches!(kind, Pending::Revert { files: true }));
+        b.reverted(true);
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ntwo\nthree\n");
         assert!(!dir.join("new.txt").exists());
         assert_eq!(std::fs::read_to_string(dir.join("gone.txt")).unwrap(), "old\n");
-        assert!(b.note.is_some());
-        assert!(rx.try_iter().any(|e| matches!(e, Ev::Notice(n) if n.starts_with("Reverted"))));
-        b.undo();
-        assert!(matches!(rx.try_iter().last(), Some(Ev::Notice(n)) if n == "Nothing to undo."));
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Undone(Ok(f)) if f.len() == 3)));
+        b.undo(true);
+        assert!(matches!(rx.try_iter().last(), Some(Ev::Undone(Err(n))) if n == "Nothing to undo."));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

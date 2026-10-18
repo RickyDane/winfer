@@ -114,7 +114,7 @@ fn busy(a: &mut App) {
 fn approval(a: &mut App) {
     conversation(a);
     a.items.truncate(3);
-    a.approvals.push_back(Approval { id: "x".into(), tool: "Edit".into(), title: "src/lib/format.ts".into(), detail: "Replace 2 lines, add 2".into(), diff: Some(DIFF.into()) });
+    a.approvals.push_back(Approval { id: "x".into(), tool: "Edit".into(), title: "src/lib/format.ts".into(), detail: "Replace 2 lines, add 2".into(), diff: Some(DIFF.into()), ..Default::default() });
 }
 
 fn picker(a: &mut App) {

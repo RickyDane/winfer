@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{In, LineProcess, Opts};
 use crate::harness::claude_skills::{self, LeanSkills};
 use crate::harness::diff;
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, Skill, TaskEv, Todo, Usage, UserMsg};
 
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("claude").is_none() {
@@ -42,7 +42,8 @@ fn permission_mode(mode: Mode) -> &'static str {
 
 /// Claude Code's tools in lean mode; `Skill` comes on top when it has skills to load.
 /// TodoWrite is the plan tool of older Claude Code versions; newer ones plan with the Task* tools.
-const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent";
+/// AskUserQuestion's questions come to the TUI as an approval with `questions`.
+const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion";
 
 pub fn args(opts: &Opts) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -105,6 +106,36 @@ pub fn args(opts: &Opts) -> Vec<String> {
     args
 }
 
+/// AskUserQuestion's questions.
+fn questions(input: &Value) -> Vec<Question> {
+    let text = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
+    input["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|q| Question {
+            header: text(&q["header"]),
+            question: text(&q["question"]),
+            options: q["options"].as_array().into_iter().flatten().map(|o| (text(&o["label"]), text(&o["description"]))).collect(),
+            multi: q["multiSelect"].as_bool().unwrap_or(false),
+        })
+        .filter(|q| !q.question.is_empty())
+        .collect()
+}
+
+/// AskUserQuestion's input with the user's answers, which it takes as `answers`: question → answer.
+fn answered(mut input: Value, answers: Vec<String>) -> Value {
+    let map: serde_json::Map<String, Value> = input["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(answers)
+        .map(|(q, a)| (q["question"].as_str().unwrap_or("").to_string(), json!(a)))
+        .collect();
+    input["answers"] = Value::Object(map);
+    input
+}
+
 /// What we remember about a tool call between its start and its result.
 struct Call {
     name: String,
@@ -123,14 +154,21 @@ struct Bridge {
     message: String,
     busy: bool,
     seq: u64,
-    /// Checkpoints for /undo, newest last: the uuid of each user message whose turn edited files.
-    /// Claude Code snapshots files before each user message; rewinding to one undoes its turn.
-    checkpoints: Vec<String>,
-    /// Whether the current turn has run an edit tool (only such turns get a checkpoint).
-    edited: bool,
-    /// Told to Claude with the next message after an undo, so it doesn't trust stale file state.
-    note: Option<String>,
+    /// The user turns for /undo, newest last. Claude Code snapshots files before each user
+    /// message and can rewind its conversation to one, both by the message's uuid.
+    checkpoints: Vec<Checkpoint>,
+    /// An undo waiting on Claude Code: the files it reverted so far.
+    undoing: Option<Vec<String>>,
+    /// Lines to write to Claude Code once the current one is handled.
+    outbox: Vec<Value>,
     plan: Plan,
+}
+
+struct Checkpoint {
+    /// The uuid given to the user's message.
+    uuid: String,
+    /// Whether the turn ran an edit tool (else there are no file changes to rewind).
+    edited: bool,
 }
 
 /// The plan Claude Code keeps with its TaskCreate/TaskUpdate tools, mirrored as todos.
@@ -182,6 +220,11 @@ impl Plan {
     }
 }
 
+/// Claude Code's request to drop a user message and everything after it from the conversation.
+fn rewind_conversation(uuid: &str) -> Value {
+    json!({ "subtype": "rewind_conversation", "target_message_uuid": uuid, "interrupt_if_running": false })
+}
+
 /// Tools whose changes Claude Code's file checkpoints cover.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
@@ -208,8 +251,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         busy: false,
         seq: 0,
         checkpoints: Vec::new(),
-        edited: false,
-        note: None,
+        undoing: None,
+        outbox: Vec::new(),
         plan: Plan::default(),
     };
     while let Some(msg) = super::recv(&rx) {
@@ -217,6 +260,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             In::Line(line) => {
                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
                     b.on_line(&v);
+                }
+                for out in std::mem::take(&mut b.outbox) {
+                    let _ = proc.write(&out);
                 }
             }
             In::Closed => {
@@ -245,15 +291,11 @@ impl Bridge {
 
     fn on_cmd(&mut self, cmd: Cmd, proc: &mut LineProcess) -> bool {
         match cmd {
-            Cmd::Send(mut msg) => {
+            Cmd::Send(msg) => {
                 self.busy = true;
                 self.emit(Ev::TurnStart);
-                if let Some(note) = self.note.take() {
-                    msg.text = format!("{note}\n\n{}", msg.text);
-                }
                 let uuid = new_uuid();
-                self.checkpoints.push(uuid.clone());
-                self.edited = false;
+                self.checkpoints.push(Checkpoint { uuid: uuid.clone(), edited: false });
                 let mut line = user_message(&msg);
                 line["uuid"] = json!(uuid);
                 if let Err(e) = proc.write(&line) {
@@ -273,6 +315,14 @@ impl Bridge {
                     "response": { "subtype": "success", "request_id": id, "response": response },
                 }));
             }
+            Cmd::Answer(id, answers) => {
+                let Some((input, _)) = self.pending.remove(&id) else { return true };
+                let input = answered(input, answers);
+                let _ = proc.write(&json!({
+                    "type": "control_response",
+                    "response": { "subtype": "success", "request_id": id, "response": { "behavior": "allow", "updatedInput": input } },
+                }));
+            }
             Cmd::SetModel(model) => self.control(proc, json!({ "subtype": "set_model", "model": model })),
             Cmd::SetMode(mode) => self.control(proc, json!({ "subtype": "set_permission_mode", "mode": permission_mode(mode) })),
             // Live: Claude Code applies `effortLevel` from flag settings to the running session (as
@@ -287,15 +337,22 @@ impl Bridge {
                 let _ = proc.write(&user_message(&UserMsg { text: "/compact".into(), images: Vec::new(), skill: None }));
             }
             Cmd::SetCompaction { .. } => {}
-            Cmd::Undo => {
-                if self.busy {
-                    self.emit(Ev::Notice("Wait for the turn to finish (or press Esc) before /undo.".into()));
-                } else if let Some(uuid) = self.checkpoints.pop() {
+            Cmd::Undo { files } => {
+                if self.busy || self.undoing.is_some() {
+                    self.emit(Ev::Undone(Err("Wait for the turn to finish (or press Esc) before /undo.".into())));
+                } else if let Some(cp) = self.checkpoints.last() {
+                    let uuid = cp.uuid.clone();
+                    self.undoing = Some(Vec::new());
                     self.seq += 1;
-                    let request = json!({ "subtype": "rewind_files", "user_message_id": uuid });
-                    let _ = proc.write(&json!({ "type": "control_request", "request_id": format!("undo{}", self.seq), "request": request }));
+                    // Files first (rewinding the conversation forgets the message's file snapshot).
+                    let (id, request) = if files && cp.edited {
+                        ("undofiles", json!({ "subtype": "rewind_files", "user_message_id": uuid }))
+                    } else {
+                        ("undoconv", rewind_conversation(&uuid))
+                    };
+                    let _ = proc.write(&json!({ "type": "control_request", "request_id": format!("{id}{}", self.seq), "request": request }));
                 } else {
-                    self.emit(Ev::Notice("Nothing to undo.".into()));
+                    self.emit(Ev::Undone(Err("Nothing to undo.".into())));
                 }
             }
             Cmd::StopTask(id) => self.control(proc, json!({ "subtype": "stop_task", "task_id": id })),
@@ -373,7 +430,11 @@ impl Bridge {
                             if name == "TaskUpdate" && self.plan.update(&input) {
                                 self.emit(Ev::Todos(self.plan.todos()));
                             }
-                            self.edited |= EDIT_TOOLS.contains(&name.as_str());
+                            if EDIT_TOOLS.contains(&name.as_str()) {
+                                if let Some(cp) = self.checkpoints.last_mut() {
+                                    cp.edited = true;
+                                }
+                            }
                             self.emit(Ev::ToolStart { id: tool_id.clone(), name: display_name(&name), title: title(&name, &input), input: input.clone() });
                             self.calls.insert(tool_id, Call { name, input });
                         }
@@ -429,18 +490,16 @@ impl Bridge {
                     self.emit(Ev::Error(text.to_string()));
                 }
                 self.busy = false;
-                if !self.edited && !self.checkpoints.is_empty() {
-                    self.checkpoints.pop();
-                }
-                self.edited = true; // a later result without a new message (e.g. /compact) keeps the stack
                 self.blocks.clear();
                 self.finalized.clear();
                 self.emit(Ev::TurnDone);
             }
             "control_response" => {
                 let r = &v["response"];
-                if r["request_id"].as_str().is_some_and(|id| id.starts_with("undo")) {
-                    self.on_undo(r);
+                match r["request_id"].as_str() {
+                    Some(id) if id.starts_with("undofiles") => self.on_rewind_files(r),
+                    Some(id) if id.starts_with("undoconv") => self.on_rewind_conversation(r),
+                    _ => {}
                 }
             }
             "control_request" => {
@@ -461,6 +520,7 @@ impl Bridge {
                         title: title(name, &input),
                         detail,
                         diff: edit_diff(name, &input),
+                        questions: if name == "AskUserQuestion" { questions(&input) } else { Vec::new() },
                     }));
                 }
             }
@@ -468,11 +528,14 @@ impl Bridge {
         }
     }
 
-    fn on_undo(&mut self, r: &Value) {
+    /// Claude Code put back the turn's files; now drop the turn from the conversation.
+    fn on_rewind_files(&mut self, r: &Value) {
         let res = &r["response"];
         let error = r["error"].as_str().or_else(|| res["error"].as_str());
         if r["subtype"] != "success" || res["canRewind"] == false || error.is_some() {
-            self.emit(Ev::Notice(format!("Couldn't undo: {}", error.unwrap_or("Claude Code has no checkpoint for that turn"))));
+            self.undoing = None;
+            let why = error.unwrap_or("Claude Code has no file checkpoint for that turn");
+            self.emit(Ev::Undone(Err(format!("Couldn't revert the files: {why}"))));
             return;
         }
         let mut names: Vec<String> = res["filesChanged"]
@@ -483,9 +546,23 @@ impl Bridge {
             .map(crate::harness::tools::short_path)
             .collect();
         names.sort();
-        let list = if names.is_empty() { "the last turn's file changes".to_string() } else { names.join(", ") };
-        self.note = Some(format!("(The user reverted your file changes from the last turn: {list}. Re-read files before editing them.)"));
-        self.emit(Ev::Notice(format!("Reverted {list}")));
+        self.undoing = Some(names);
+        let Some(cp) = self.checkpoints.last() else { return };
+        self.seq += 1;
+        self.outbox.push(json!({ "type": "control_request", "request_id": format!("undoconv{}", self.seq), "request": rewind_conversation(&cp.uuid) }));
+    }
+
+    fn on_rewind_conversation(&mut self, r: &Value) {
+        let files = self.undoing.take().unwrap_or_default();
+        let res = &r["response"];
+        if r["subtype"] == "success" && res["rewound"] == true {
+            self.checkpoints.pop();
+            self.emit(Ev::Undone(Ok(files)));
+            return;
+        }
+        let why = r["error"].as_str().or_else(|| res["error"].as_str()).unwrap_or("Claude Code refused");
+        let reverted = if files.is_empty() { String::new() } else { format!(" (its files were reverted: {})", files.join(", ")) };
+        self.emit(Ev::Undone(Err(format!("Couldn't drop the turn from the conversation: {why}{reverted}"))));
     }
 
     fn on_stream(&mut self, e: &Value) {
@@ -641,6 +718,7 @@ pub fn title(name: &str, input: &Value) -> String {
         "Task" | "Agent" => s("description"),
         "Skill" => format!("{} {}", s("skill"), s("args")).trim_end().to_string(),
         "TodoWrite" => "update todos".into(),
+        "AskUserQuestion" => input["questions"][0]["question"].as_str().unwrap_or("").to_string(),
         "TaskCreate" => s("subject"),
         "TaskUpdate" => {
             let id = input["taskId"].as_str().map(str::to_string).or_else(|| input["taskId"].as_u64().map(|n| n.to_string())).unwrap_or_default();
@@ -700,8 +778,8 @@ mod tests {
             busy: true,
             seq: 0,
             checkpoints: Vec::new(),
-            edited: false,
-            note: None,
+            undoing: None,
+            outbox: Vec::new(),
             plan: Plan::default(),
         };
         (b, rx)
@@ -737,6 +815,24 @@ mod tests {
     }
 
     #[test]
+    fn asks_the_users_questions_and_hands_back_their_answers() {
+        let (mut b, rx) = bridge();
+        let input = json!({ "questions": [
+            { "header": "Lib", "question": "Which library?", "multiSelect": false, "options": [{ "label": "serde", "description": "derive" }, { "label": "nom" }] },
+            { "header": "Targets", "question": "Which targets?", "multiSelect": true, "options": [{ "label": "mac" }, { "label": "linux" }] },
+        ]});
+        b.on_line(&json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": input } }));
+        let a = rx.try_iter().find_map(|e| if let Ev::Approval(a) = e { Some(a) } else { None }).unwrap();
+        assert_eq!(a.title, "Which library?");
+        assert_eq!(a.questions.len(), 2);
+        assert_eq!(a.questions[0].options[0], ("serde".to_string(), "derive".to_string()));
+        assert!(!a.questions[0].multi && a.questions[1].multi);
+        let out = answered(input, vec!["nom".into(), "mac, linux".into()]);
+        assert_eq!(out["answers"], json!({ "Which library?": "nom", "Which targets?": "mac, linux" }));
+        assert!(out["questions"].is_array());
+    }
+
+    #[test]
     fn maps_a_turn_with_a_tool_call() {
         let (mut b, rx) = bridge();
         let lines = [
@@ -766,19 +862,29 @@ mod tests {
     }
 
     #[test]
-    fn undo_keeps_only_turns_that_edited() {
+    fn undo_rewinds_files_then_the_conversation() {
         let (mut b, rx) = bridge();
         let result = r#"{"type":"result","is_error":false,"usage":{}}"#;
-        b.checkpoints.push("u1".into());
+        b.checkpoints.push(Checkpoint { uuid: "u1".into(), edited: false });
         b.on_line(&serde_json::from_str(r#"{"type":"assistant","message":{"id":"m","content":[{"type":"tool_use","id":"t","name":"Write","input":{"file_path":"/x/a","content":""}}]}}"#).unwrap());
         b.on_line(&serde_json::from_str(result).unwrap());
-        b.checkpoints.push("u2".into());
-        b.edited = false;
+        b.checkpoints.push(Checkpoint { uuid: "u2".into(), edited: false });
         b.on_line(&serde_json::from_str(result).unwrap());
-        assert_eq!(b.checkpoints, ["u1"]);
-        b.on_line(&serde_json::from_str(r#"{"type":"control_response","response":{"subtype":"success","request_id":"undo1","response":{"canRewind":true,"filesChanged":["/x/a"]}}}"#).unwrap());
-        assert!(rx.try_iter().any(|e| matches!(e, Ev::Notice(n) if n == "Reverted /x/a")));
-        assert!(b.note.as_deref().is_some_and(|n| n.contains("/x/a")));
+        // Every user turn stays undoable; only edits mark it.
+        assert_eq!(b.checkpoints.iter().map(|c| (c.uuid.as_str(), c.edited)).collect::<Vec<_>>(), [("u1", true), ("u2", false)]);
+        // The last turn edited nothing: straight to the conversation.
+        b.undoing = Some(Vec::new());
+        b.on_line(&json!({"type":"control_response","response":{"subtype":"success","request_id":"undoconv1","response":{"rewound":true}}}));
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Undone(Ok(f)) if f.is_empty())));
+        assert_eq!(b.checkpoints.len(), 1);
+        // The one before edited: its files are rewound, then the conversation.
+        b.undoing = Some(Vec::new());
+        b.on_line(&json!({"type":"control_response","response":{"subtype":"success","request_id":"undofiles2","response":{"canRewind":true,"filesChanged":["/x/a"]}}}));
+        let out = b.outbox.pop().unwrap();
+        assert_eq!((out["request"]["subtype"].as_str(), out["request"]["target_message_uuid"].as_str()), (Some("rewind_conversation"), Some("u1")));
+        b.on_line(&json!({"type":"control_response","response":{"subtype":"success","request_id":"undoconv3","response":{"rewound":false,"error":"turn running","reason":"turn_running"}}}));
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Undone(Err(m)) if m.contains("turn running") && m.contains("/x/a"))));
+        assert_eq!(b.checkpoints.len(), 1);
         let id = new_uuid();
         assert_eq!((id.len(), &id[14..15]), (36, "4"));
     }
