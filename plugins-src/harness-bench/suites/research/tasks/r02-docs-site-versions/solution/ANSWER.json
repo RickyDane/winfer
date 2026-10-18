@@ -1,0 +1,10 @@
+{
+  "latest_stable_release": "3.4.0",
+  "default_timeout_seconds": 15,
+  "streaming_method": "Client.open_stream",
+  "status_exception": "lumen.StatusError",
+  "disable_tls_verification_param": "tls_verify",
+  "default_max_attempts": 3,
+  "min_python": "3.10",
+  "sources": ["/changelog.html", "/v3/timeouts.html", "/v3/streaming.html", "/v3/errors.html", "/v3/client.html", "/v3/retries.html", "/v3/install.html"]
+}

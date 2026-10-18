@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-notification", () => ({ isPermissionGranted: vi.fn(), sendNotification: vi.fn() }));
+vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
+vi.stubGlobal("document", { hasFocus: () => true });
 
-const { duration, leftNow, runsOutAt, tightest } = await import("./usage");
+vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+const { duration, leftNow, refreshClaude, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
 
 const HOUR = 3600_000;
 const now = 1_800_000_000_000;
@@ -35,5 +40,74 @@ describe("usage", () => {
     expect(duration(108 * 60_000)).toBe("1h 48m");
     expect(duration(3 * 86400_000 + 4 * HOUR)).toBe("3d 4h");
     expect(duration(20_000)).toBe("1m");
+  });
+});
+
+describe("Claude usage refresh", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    useUsage.setState({ snapshots: {}, samples: {}, refreshing: {}, errors: {} });
+  });
+
+  it("replaces a stale reading with the exhausted live session", async () => {
+    useUsage.setState({ snapshots: { claude: { provider: "claude", at: 1, windows: [{ ...session, usedPercent: 1 }] } } });
+    const live = { provider: "claude", at: Date.now(), windows: [{ ...session, usedPercent: 100 }] };
+    vi.mocked(invoke).mockResolvedValue(live);
+    await refreshClaude();
+    expect(invoke).toHaveBeenCalledWith("usage_claude");
+    expect(useUsage.getState().snapshots.claude).toEqual(live);
+    expect(leftNow(useUsage.getState().snapshots.claude.windows[0], now)).toBe(0);
+    expect(useUsage.getState().refreshing.claude).toBe(false);
+  });
+
+  it("keeps the reading and timestamp when refresh fails, then clears the error on retry", async () => {
+    const saved = { provider: "claude", at: 1, windows: [session] };
+    useUsage.setState({ snapshots: { claude: saved } });
+    vi.mocked(invoke).mockRejectedValueOnce("Sign-in expired");
+    await refreshClaude();
+    expect(useUsage.getState().snapshots.claude).toEqual(saved);
+    expect(useUsage.getState().errors.claude).toBe("Sign-in expired");
+    expect(useUsage.getState().refreshing.claude).toBe(false);
+    vi.mocked(invoke).mockResolvedValue({ ...saved, at: 2 });
+    await refreshClaude();
+    expect(useUsage.getState().errors.claude).toBeUndefined();
+  });
+
+  it("shares concurrent manual and automatic requests", async () => {
+    let resolve!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    const first = refreshClaude();
+    const second = refreshClaude();
+    expect(first).toBe(second);
+    expect(useUsage.getState().refreshing.claude).toBe(true);
+    await Promise.resolve();
+    resolve({ provider: "claude", at: 2, windows: [session] });
+    await first;
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(useUsage.getState().refreshing.claude).toBe(false);
+  });
+
+  it("polls Claude at startup and after five minutes even when status reports arrive", async () => {
+    const timers = { setTimeout: vi.fn(), setInterval: vi.fn(), addEventListener: vi.fn() };
+    vi.stubGlobal("window", timers);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const saved = { provider: "claude", at: now, windows: [session] };
+    useUsage.setState({ snapshots: { claude: saved } });
+    vi.mocked(invoke).mockImplementation(async (command) => command === "usage_claude" ? saved : null);
+    startUsageTracking();
+    await refreshClaude(); // Joins the startup request.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "usage_claude")).toHaveLength(1);
+    const report = vi.mocked(listen).mock.calls.find(([event]) => event === "usage://report")![1];
+    report({ payload: { provider: "claude", paneId: "p", report: { windows: [{ ...session, usedPercent: 1 }] } } } as never);
+    expect(useUsage.getState().snapshots.claude).toEqual(saved); // Cached status line cannot overwrite live limits.
+    const poll = timers.setInterval.mock.calls.find(([, ms]) => ms === 60_000)![0];
+    poll();
+    await Promise.resolve();
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "usage_claude")).toHaveLength(1);
+    vi.mocked(Date.now).mockReturnValue(now + 5 * 60_000);
+    poll();
+    await refreshClaude();
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "usage_claude")).toHaveLength(2);
+    vi.mocked(Date.now).mockRestore();
   });
 });

@@ -1,0 +1,1 @@
+`python3 -m unittest discover -s tests` fails: some amounts come out one cent off. Find the bug in src/ledger/ and fix it properly so every test passes. The tests are correct and are the spec: don't modify, skip, delete or loosen any test, and don't add test files.

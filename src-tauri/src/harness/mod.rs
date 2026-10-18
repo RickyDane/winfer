@@ -212,7 +212,7 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
         },
         tx,
     );
-    handle.send(Cmd::Send(UserMsg { text: prompt, images: Vec::new() }));
+    handle.send(Cmd::Send(UserMsg { text: prompt, images: Vec::new(), skill: None }));
     let mut out = std::io::stdout();
     let mut code = 0;
     let mut wrote = false;
@@ -301,6 +301,7 @@ fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::Approval(a) => json!({ "type": "approval", "id": a.id, "tool": a.tool, "title": a.title }),
         Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status }),
         Ev::Todos(t) => json!({ "type": "todos", "todos": t }),
+        Ev::Skills(s) => json!({ "type": "skills", "skills": s.iter().map(|k| &k.name).collect::<Vec<_>>() }),
         Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost }),
         Ev::Notice(n) => json!({ "type": "notice", "text": n }),
         Ev::Error(e) => json!({ "type": "error", "text": e }),

@@ -1,0 +1,4 @@
+// TODO #3: initials(name) — "ada lovelace" -> "A.L."; handle hyphenated names?
+export function initials(name) {
+  throw new Error("initials: not implemented");
+}

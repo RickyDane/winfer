@@ -5,7 +5,7 @@ let output = "";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args: unknown) => invoke(cmd, args) }));
 vi.mock("@/features/terminal/xtermRegistry", () => ({ readTerminal: vi.fn(() => output), outputAge: vi.fn(() => 0) }));
 
-const { estimate, markFinished, parseEstimate, setTask, useProgress } = await import("./progress");
+const { cleanTitle, estimate, markFinished, nameSession, parseEstimate, setTask, taskHeadline, useProgress } = await import("./progress");
 const { useWorkspaces } = await import("@/stores/workspaces");
 const { useChatGpt } = await import("@/features/llm/chatgpt");
 // The LLM runs on the ChatGPT sign-in.
@@ -19,6 +19,12 @@ describe("session progress", () => {
     useWorkspaces.setState({ voiceConfig: { writer: "chatgpt" } });
     invoke.mockReset();
     output = "";
+  });
+
+  it("saves the task and title so session titles survive restarts", () => {
+    useWorkspaces.setState({ paneTasks: {} });
+    setTask("p1", "Build a Flappy Bird clone");
+    expect(useWorkspaces.getState().paneTasks.p1).toEqual({ task: "Build a Flappy Bird clone", title: null });
   });
 
   it("parses estimates with prose around the JSON and clamps them", () => {
@@ -58,7 +64,25 @@ describe("session progress", () => {
     setTask("p1", "y");
     expect(useProgress.getState().byPane.p1.percent).toBe(80);
     setTask("p1", "Now add a high score table");
-    expect(useProgress.getState().byPane.p1).toMatchObject({ task: "Now add a high score table", percent: 0, title: null });
+    expect(useProgress.getState().byPane.p1).toMatchObject({ task: "Now add a high score table", percent: 0, title: "Old" });
+  });
+
+  it("names the session with the LLM, keeping the current title as context", async () => {
+    useProgress.setState({ byPane: { p1: { task: "x", title: "Flappy Bird clone", percent: 0, step: null, updatedAt: null, estimating: false, error: null } } });
+    invoke.mockResolvedValueOnce('Title: "Add high score table."');
+    await nameSession("p1", "Now add a high score table to the game");
+    expect(useProgress.getState().byPane.p1.title).toBe("Add high score table");
+    expect((invoke.mock.calls[0][1] as { req: { user: string } }).req.user).toContain("Current title: Flappy Bird clone");
+  });
+
+  it("cleans title answers and rejects prose", () => {
+    expect(cleanTitle("**Fix login redirect**\n")).toBe("Fix login redirect");
+    expect(cleanTitle("Sure, here is a title that describes what the agent is doing in this session right now")).toBeNull();
+  });
+
+  it("falls back to a trimmed headline of the task", () => {
+    expect(taskHeadline("I noticed that the session titles are lost when restarting. Please fix that")).toBe("The session titles are lost when restarting");
+    expect(taskHeadline("Also: please add dark mode to the settings page and all the dialogs in the app")).toBe("Add dark mode to the settings page and…");
   });
 
   it("doesn't estimate an agent that has no task yet (just started)", async () => {

@@ -1,0 +1,7 @@
+{
+  "entrypoint": "courier.app.cli:run",
+  "storage_backend": "ShardedSqliteStore",
+  "max_attempts": 5,
+  "handlers": ["invoice.paid", "order.created", "user.registered"],
+  "middleware_order": ["TracingMiddleware", "DedupeMiddleware", "MetricsMiddleware", "AuthMiddleware"]
+}

@@ -1,0 +1,7 @@
+pear=4, fig=5, kiwi=2, apple=7, plum=1
+200 0
+[6, 6, 6]
+a#1 b#2 c#1 d#3
+2.0 nan
+-4 True True True
+{1: ['pear', 'apple', 'plum'], 2: ['fig', 'kiwi']}

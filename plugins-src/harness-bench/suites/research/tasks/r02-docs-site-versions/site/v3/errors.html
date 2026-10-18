@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Errors (lumen 3.x) - lumen docs</title></head>
+<body>
+<header><a href="/index.html">lumen docs</a> | <a href="/search.html">Search</a> | <a href="/v3/index.html">v3 (current)</a> | <a href="/v2/index.html">v2 (legacy)</a> | <a href="/changelog.html">Changelog</a></header>
+<nav><ul><li><a href="/v3/install.html">Install</a></li><li><a href="/v3/quickstart.html">Quickstart</a></li><li><a href="/v3/client.html">Client</a></li><li><a href="/v3/requests.html">Requests</a></li><li><a href="/v3/streaming.html">Streaming</a></li><li><a href="/v3/retries.html">Retries</a></li><li><a href="/v3/errors.html">Errors</a></li><li><a href="/v3/auth.html">Auth</a></li><li><a href="/v3/timeouts.html">Timeouts</a></li><li><a href="/v3/proxies.html">Proxies</a></li><li><a href="/v3/cookies.html">Cookies</a></li><li><a href="/v3/testing.html">Testing</a></li></ul></nav>
+<main>
+<h1>Errors (lumen 3.x)</h1>
+<p class="banner">You are reading the docs for <b>lumen 3.x</b> (current).</p><p>Responses with status 4xx or 5xx raise <code>lumen.StatusError</code> when <code>raise_for_status=True</code>. Transport failures raise <code>lumen.TransportError</code>. <code>lumen.HTTPError</code> still exists as a deprecated alias of <code>StatusError</code>.</p><p>Connection pooling is enabled by default and shared per client.</p><p>All public functions are thread-safe unless documented otherwise.</p><p>Responses are read lazily; call <code>.read()</code> to load the whole body.</p><p>Responses are read lazily; call <code>.read()</code> to load the whole body.</p><p>Connection pooling is enabled by default and shared per client.</p>
+</main>
+</body></html>

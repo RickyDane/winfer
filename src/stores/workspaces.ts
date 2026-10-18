@@ -129,6 +129,8 @@ interface WorkspaceState {
   searchPaneId: string | null;
   /** Last session id per agent and folder (`provider:path`), so a reopened worktree resumes it (persisted). */
   recentSessions: Record<string, string>;
+  /** Each pane's task and its short title (see progress.ts), kept so session titles survive restarts. */
+  paneTasks: Record<string, PaneTask>;
   /** Voice model choices, persisted and pushed to the backend on launch. */
   voiceConfig: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string };
   hydrate: () => Promise<void>;
@@ -240,6 +242,11 @@ export function overviewOrder(workspaces: Workspace[]): string[] {
 
 export type Theme = string;
 
+export interface PaneTask {
+  task: string | null;
+  title: string | null;
+}
+
 export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   hydrated: false,
   providers: [],
@@ -278,6 +285,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   pageTabIconsOnly: false,
   searchPaneId: null,
   recentSessions: {},
+  paneTasks: {},
   voiceConfig: {},
 
   hydrate: async () => {
@@ -334,6 +342,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       showPaneCost: ui.showPaneCost ?? false,
       pageTabIconsOnly: ui.pageTabIconsOnly ?? false,
       recentSessions: ui.recentSessions ?? {},
+      paneTasks: ui.paneTasks ?? {},
     });
   },
 
@@ -585,6 +594,7 @@ interface Snapshot {
     showPaneCost?: boolean;
     pageTabIconsOnly?: boolean;
     recentSessions?: Record<string, string>;
+    paneTasks?: Record<string, PaneTask>;
   } | null;
 }
 
@@ -597,13 +607,19 @@ async function loadSnapshot(): Promise<Snapshot> {
   }
 }
 
+/** Saved tasks of the panes still open (closed panes' entries are dropped). */
+function openPaneTasks(s: WorkspaceState): Record<string, PaneTask> {
+  const open = new Set(s.workspaces.flatMap((w) => w.panes.map((p) => p.id)));
+  return Object.fromEntries(Object.entries(s.paneTasks).filter(([id]) => open.has(id)));
+}
+
 function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
   };
 }
 

@@ -15,7 +15,7 @@ use super::selection::{self, Clicks, Selection};
 use super::transcript::{Block, Item, NoticeKind, Status};
 use crate::harness::backend::{self, Handle, Kind, Opts};
 use crate::harness::config::{self, Config};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
 use crate::harness::session::{self, Entry, Saved};
 use crate::harness::tools;
 
@@ -96,6 +96,9 @@ pub struct Task {
     pub ended: Option<Instant>,
     pub tools: usize,
     pub last: String,
+    pub output_file: Option<PathBuf>,
+    pub exit_code: Option<i32>,
+    polled: Option<Instant>,
 }
 
 /// Tool cards that are subagents: Claude Code's Task/Agent tool, Codex's subagents and
@@ -141,6 +144,8 @@ pub struct App {
     pub toast: Option<(String, Instant, NoticeKind)>,
     pub models: Vec<ModelInfo>,
     pub files: Vec<String>,
+    /// Skills the backend can run, invoked as `/name args`.
+    pub skills: Vec<Skill>,
     pub scroll: usize,
     /// Text marked with the mouse in the transcript, and where the transcript was last drawn.
     pub selection: Option<Selection>,
@@ -158,6 +163,8 @@ pub struct App {
     shell_context: Vec<String>,
     shell_seq: u64,
     hooked: bool,
+    /// Whether winfer was last told this pane is working (a turn or background task runs).
+    reported_working: bool,
 }
 
 impl App {
@@ -221,6 +228,7 @@ impl App {
             toast: None,
             models: Vec::new(),
             files: Vec::new(),
+            skills: Vec::new(),
             scroll: 0,
             selection: None,
             view: selection::View::default(),
@@ -235,6 +243,7 @@ impl App {
             shell_context: Vec::new(),
             shell_seq: 0,
             hooked: false,
+            reported_working: false,
         };
         app.saved.model = app.spec();
         app
@@ -259,8 +268,14 @@ impl App {
     }
 
     fn start_backend(&mut self, resume: Option<String>) {
+        self.skills.clear();
         if let Some(h) = self.handle.take() {
             h.send(Cmd::Shutdown);
+            for task in self.tasks.iter_mut().filter(|t| !t.agent && t.status == Status::Running) {
+                task.status = Status::Failed;
+                task.ended = Some(Instant::now());
+            }
+            self.sync_shell_cards();
         }
         self.generation += 1;
         let generation = self.generation;
@@ -291,6 +306,7 @@ impl App {
         self.alive = true;
         self.busy = false;
         self.approvals.clear();
+        self.report_status();
     }
 
     fn send(&self, cmd: Cmd) {
@@ -310,7 +326,7 @@ impl App {
 
     /// Whether anything on screen is moving (the loop ticks fast only then).
     pub fn animating(&self) -> bool {
-        self.busy
+        self.working()
             || self.items.is_empty()
             || self.overlay.moving()
             || self.picker.is_some()
@@ -318,7 +334,6 @@ impl App {
             || !self.approvals.is_empty()
             || self.toast.as_ref().is_some_and(|t| t.1.elapsed() < Duration::from_millis(4000))
             || self.items.iter().rev().take(8).any(Item::animated)
-            || self.running_subagents() > 0
     }
 
     // ---- agent events ----
@@ -342,6 +357,40 @@ impl App {
         if generation != self.generation {
             return;
         }
+        self.apply_agent(ev);
+        self.report_status();
+    }
+
+    /// Whether the agent is doing anything: a turn runs, or a subagent or shell it started in
+    /// the background still does (Claude Code ends the turn before those finish).
+    pub fn working(&self) -> bool {
+        self.busy || self.background_running()
+    }
+
+    pub fn background_running(&self) -> bool {
+        self.running_subagents() > 0 || self.running_shells() > 0
+    }
+
+    /// Tells winfer when the pane starts or stops working, so it isn't "done" while background
+    /// tasks still run.
+    fn report_status(&mut self) {
+        let working = self.working();
+        if working == self.reported_working {
+            return;
+        }
+        self.reported_working = working;
+        if working {
+            hook("turn_start", json!({ "session_id": self.saved.id }));
+        } else {
+            let reply = self.items.iter().rev().find_map(|i| match &i.block {
+                Block::Assistant { text, .. } => Some(text.clone()),
+                _ => None,
+            });
+            hook("turn_done", json!({ "session_id": self.saved.id, "last_assistant_message": reply.unwrap_or_default() }));
+        }
+    }
+
+    fn apply_agent(&mut self, ev: Ev) {
         match ev {
             Ev::Session(s) => {
                 self.saved.backend_session = Some(s);
@@ -388,6 +437,11 @@ impl App {
             },
             Ev::ToolStart { id, name, title, .. } => {
                 self.end_reasoning();
+                if is_subagent(&name) {
+                    for task in self.tasks.iter_mut().filter(|t| t.tool_id.as_deref() == Some(id.as_str())) {
+                        task.agent = true;
+                    }
+                }
                 if name == "Todos" || name == "TodoWrite" {
                     return;
                 }
@@ -409,6 +463,7 @@ impl App {
                         ended: None,
                     })),
                 }
+                self.sync_shell_cards();
             }
             Ev::ToolOutput { id, chunk } => {
                 if let Some(item) = self.find(|b| matches!(b, Block::Tool { id: i, .. } if *i == id)) {
@@ -432,6 +487,7 @@ impl App {
                     }
                     item.touch();
                 }
+                self.sync_shell_cards();
             }
             Ev::Approval(a) => {
                 if self.approvals.is_empty() {
@@ -443,6 +499,7 @@ impl App {
                 self.scroll = 0;
             }
             Ev::Task(t) => self.on_task(t),
+            Ev::Skills(s) => self.skills = s,
             Ev::Todos(t) => {
                 let done = !t.is_empty() && t.iter().all(|t| t.status == "completed");
                 self.plan_done = if done { self.plan_done.or(Some(Instant::now())) } else { None };
@@ -461,7 +518,6 @@ impl App {
                     self.busy = true;
                     self.turn_started = Instant::now();
                     self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
-                    hook("turn_start", json!({ "session_id": self.saved.id }));
                 }
             }
             Ev::TurnDone => self.turn_done(),
@@ -469,6 +525,13 @@ impl App {
                 self.alive = false;
                 self.busy = false;
                 self.approvals.clear();
+                for task in &mut self.tasks {
+                    if task.status == Status::Running {
+                        task.status = Status::Failed;
+                        task.ended = Some(Instant::now());
+                    }
+                }
+                self.sync_shell_cards();
                 self.finish_running();
                 self.notice(format!("{reason}\nUse /model to pick another backend, or /new to retry."), NoticeKind::Error);
             }
@@ -477,9 +540,10 @@ impl App {
 
     fn finish_running(&mut self) {
         self.end_reasoning();
+        let background: Vec<_> = self.tasks.iter().filter(|t| t.status == Status::Running).filter_map(|t| t.tool_id.as_deref()).collect();
         for item in self.items.iter_mut().rev().take(50) {
-            if let Block::Tool { status, ended, .. } = &mut item.block {
-                if *status == Status::Running {
+            if let Block::Tool { id, status, ended, .. } = &mut item.block {
+                if *status == Status::Running && !background.contains(&id.as_str()) {
                     *status = Status::Failed;
                     *ended = Some(Instant::now());
                     item.touch();
@@ -494,13 +558,6 @@ impl App {
         self.approvals.clear();
         self.finish_running();
         self.save();
-        let reply = self.items.iter().rev().find_map(|i| match &i.block {
-            Block::Assistant { text, .. } => Some(text.clone()),
-            _ => None,
-        });
-        if was_busy {
-            hook("turn_done", json!({ "session_id": self.saved.id, "last_assistant_message": reply.unwrap_or_default() }));
-        }
         if !self.queue.is_empty() {
             let msg = self.queue.remove(0);
             self.dispatch(msg);
@@ -582,7 +639,8 @@ impl App {
         self.config.push_history(shown.trim());
         let entry = shown.trim().to_string();
         Config::update(|c| c.push_history(&entry));
-        if trimmed.starts_with('/') && !trimmed.starts_with("//") && !trimmed.contains('\n') {
+        let skill = self.skill_call(trimmed);
+        if skill.is_none() && trimmed.starts_with('/') && !trimmed.starts_with("//") && !trimmed.contains('\n') {
             self.command(trimmed);
             return;
         }
@@ -590,6 +648,10 @@ impl App {
             self.shell(cmd.trim().to_string());
             return;
         }
+        let text = match &skill {
+            Some((_, args)) => args.clone(),
+            None => text,
+        };
         let mut full = text.clone();
         let attached = self.mentions(&text, &mut images);
         if !attached.is_empty() {
@@ -603,12 +665,23 @@ impl App {
             self.saved.title = shown.lines().next().unwrap_or("").chars().take(80).collect();
         }
         self.scroll = 0;
-        let msg = UserMsg { text: full, images };
+        let msg = UserMsg { text: full, images, skill: skill.map(|(name, _)| name) };
         if self.busy {
             self.queue.push(msg);
         } else {
             self.dispatch(msg);
         }
+    }
+
+    /// `/name args` → (name, args) when `name` is one of the backend's skills and not a built-in
+    /// command (those win).
+    fn skill_call(&self, line: &str) -> Option<(String, String)> {
+        let rest = line.strip_prefix('/')?;
+        let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if COMMANDS.iter().any(|(c, _)| c[1..] == *name) || !self.skills.iter().any(|s| s.name == name) {
+            return None;
+        }
+        Some((name.to_string(), args.trim().to_string()))
     }
 
     fn dispatch(&mut self, msg: UserMsg) {
@@ -973,6 +1046,9 @@ impl App {
                     ended: None,
                     tools: 0,
                     last: String::new(),
+                    output_file: None,
+                    exit_code: None,
+                    polled: None,
                 });
                 self.tasks.len() - 1
             }
@@ -985,6 +1061,13 @@ impl App {
             task.title = title;
         }
         task.agent |= t.agent.is_some();
+        task.agent |= task.tool_id.as_deref().is_some_and(|id| self.items.iter().any(|i| matches!(&i.block, Block::Tool { id: card, name, .. } if card == id && is_subagent(name))));
+        if let Some(path) = t.output_file {
+            task.output_file = Some(path.into());
+        }
+        if t.exit_code.is_some() {
+            task.exit_code = t.exit_code;
+        }
         if let Some(n) = t.tools {
             task.tools = n as usize;
         }
@@ -992,7 +1075,7 @@ impl App {
             task.last = l;
         }
         match t.status.as_deref() {
-            Some("running" | "pending") => {
+            Some("running" | "pending") if task.ended.is_none() => {
                 task.status = Status::Running;
                 task.ended = None;
             }
@@ -1000,11 +1083,71 @@ impl App {
                 task.status = Status::Ok;
                 task.ended.get_or_insert_with(Instant::now);
             }
+            Some("running" | "pending") => {}
             Some(_) => {
                 task.status = Status::Failed;
                 task.ended.get_or_insert_with(Instant::now);
             }
             None => {}
+        }
+        self.sync_shell_cards();
+        self.poll_shell_output();
+    }
+
+    pub fn running_shells(&self) -> usize {
+        self.tasks.iter().filter(|t| !t.agent && t.status == Status::Running).count()
+    }
+
+    fn sync_shell_cards(&mut self) {
+        for task in self.tasks.iter().filter(|t| !t.agent) {
+            if let Some(item) = self.items.iter_mut().find(|i| matches!(&i.block, Block::Tool { id, name, .. } if task.tool_id.as_deref() == Some(id) && matches!(name.as_str(), "Bash" | "bash" | "shell"))) {
+                if let Block::Tool { status, ended, title, .. } = &mut item.block {
+                    if !item.background || *status != task.status || *ended != task.ended || item.exit_code != task.exit_code {
+                        *status = task.status;
+                        *ended = task.ended;
+                        if !task.title.is_empty() {
+                            *title = task.title.clone();
+                        }
+                        item.background = true;
+                        item.exit_code = task.exit_code;
+                        item.touch();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Read a bounded tail at most once a second, including one final read on completion.
+    pub fn poll_shell_output(&mut self) {
+        use std::io::{Read, Seek, SeekFrom};
+        for task in self.tasks.iter_mut().filter(|t| !t.agent && t.output_file.is_some()) {
+            if task.polled.is_some_and(|at| if task.status == Status::Running { at.elapsed() < Duration::from_secs(1) } else { task.ended.is_none_or(|end| at >= end) }) {
+                continue;
+            }
+            task.polled = Some(Instant::now());
+            let Some(item) = self.items.iter_mut().find(|i| matches!(&i.block, Block::Tool { id, .. } if task.tool_id.as_deref() == Some(id))) else { continue };
+            let read = || -> std::io::Result<String> {
+                let path = task.output_file.as_ref().unwrap();
+                if !std::fs::metadata(path)?.is_file() {
+                    return Err(std::io::Error::other("not a regular file"));
+                }
+                let mut file = std::fs::File::open(path)?;
+                let len = file.metadata()?.len();
+                let offset = len.saturating_sub(16_384);
+                file.seek(SeekFrom::Start(offset))?;
+                let mut bytes = Vec::new();
+                file.take(16_384).read_to_end(&mut bytes)?;
+                let text = String::from_utf8_lossy(&bytes);
+                Ok(if offset > 0 { text.split_once('\n').map_or(text.as_ref(), |(_, tail)| tail) } else { &text }.to_string())
+            };
+            if let Ok(text) = read() {
+                if let Block::Tool { output, .. } = &mut item.block {
+                    if *output != text {
+                        *output = text;
+                        item.touch();
+                    }
+                }
+            }
         }
     }
 
@@ -1604,6 +1747,7 @@ impl App {
         self.approvals.clear();
         self.notice("Interrupted", NoticeKind::Error);
         hook("interrupted", json!({ "session_id": self.saved.id }));
+        self.reported_working = false;
     }
 
     fn update_completion(&mut self) {
@@ -1613,6 +1757,11 @@ impl App {
             let mut items: Vec<(i64, PickItem)> = COMMANDS
                 .iter()
                 .filter_map(|(c, d)| super::picker::score(q, &c[1..]).map(|s| (s, PickItem::new(*c, *d, *c))))
+                .chain(self.skills.iter().filter_map(|sk| {
+                    let c = format!("/{}", sk.name);
+                    let d: String = sk.description.lines().next().unwrap_or("").chars().take(60).collect();
+                    super::picker::score(q, &sk.name).map(|s| (s - 1, PickItem::new(c.clone(), format!("skill · {d}"), c)))
+                }))
                 .collect();
             items.sort_by(|a, b| b.0.cmp(&a.0));
             let items: Vec<PickItem> = items.into_iter().map(|(_, i)| i).take(8).collect();
@@ -1912,6 +2061,59 @@ mod tests {
     }
 
     #[test]
+    fn background_shell_output_is_bounded_and_missing_files_are_safe() {
+        let mut a = app();
+        let g = a.generation;
+        let path = std::env::temp_dir().join(format!("winfer-bg-{}.output", session::new_id()));
+        a.on_agent(g, Ev::ToolStart { id: "bash1".into(), name: "Bash".into(), title: "watch".into(), input: json!({}) });
+        a.on_agent(g, Ev::Task(TaskEv {
+            id: "bg1".into(), tool_id: Some("bash1".into()), status: Some("running".into()),
+            output_file: Some(path.to_string_lossy().into_owned()), ..Default::default()
+        }));
+        assert_eq!(a.running_shells(), 1);
+        std::fs::write(&path, format!("{}\nlatest output\n", "x".repeat(40_000))).unwrap();
+        a.tasks[0].polled = None;
+        a.poll_shell_output();
+        assert!(matches!(&a.items[0].block, Block::Tool { output, .. } if output == "latest output\n"));
+        a.on_agent(g, Ev::Task(TaskEv { id: "bg1".into(), status: Some("completed".into()), exit_code: Some(0), ..Default::default() }));
+        let s = screen(&mut a, 80, 20);
+        assert!(s.contains("exit 0") && !s.contains("⇢ 1 bg"), "{s}");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn background_shell_cards_survive_turn_end_and_show_output_and_exit() {
+        let mut a = app();
+        let g = a.generation;
+        let path = std::env::temp_dir().join(format!("winfer-bg-{}.output", session::new_id()));
+        std::fs::write(&path, "Watching CI\n").unwrap();
+        a.items.push(Item::new(Block::User { text: "watch CI".into() }));
+        a.on_agent(g, Ev::ToolStart { id: "bash1".into(), name: "Bash".into(), title: "gh run watch 123".into(), input: json!({}) });
+        let task = |status: &str, exit_code| Ev::Task(TaskEv {
+            id: "bg1".into(), tool_id: Some("bash1".into()), status: Some(status.into()),
+            output_file: Some(path.to_string_lossy().into_owned()), exit_code, ..Default::default()
+        });
+        a.on_agent(g, task("running", None));
+        a.on_agent(g, Ev::ToolEnd { id: "bash1".into(), ok: true, output: "background receipt".into(), diff: None });
+        a.finish_running();
+        assert_eq!(a.running_shells(), 1);
+        assert_eq!(a.running_subagents(), 0);
+        a.tasks[0].polled = None;
+        let s = screen(&mut a, 100, 25);
+        assert!(s.contains("⇢ bg") && s.contains("⇢ 1 bg") && s.contains("Watching CI"), "{s}");
+        assert!(matches!(&a.items[1].block, Block::Tool { status: Status::Running, ended: None, .. }));
+        std::fs::write(&path, "CI failed\n").unwrap();
+        a.on_agent(g, task("failed", Some(1)));
+        // A late launch receipt must not revive a finished task.
+        a.on_agent(g, task("running", None));
+        let s = screen(&mut a, 100, 25);
+        assert_eq!(a.running_shells(), 0);
+        assert!(!s.contains("⇢ 1 bg") && s.contains("exit 1") && s.contains("CI failed"), "{s}");
+        assert!(matches!(&a.items[1].block, Block::Tool { status: Status::Failed, ended: Some(_), .. }));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn background_subagents_stay_running_until_their_task_ends() {
         let mut a = app();
         let g = a.generation;
@@ -1926,10 +2128,17 @@ mod tests {
         assert_eq!(a.running_subagents(), 1);
         let s = screen(&mut a, 120, 30);
         assert!(s.contains("1 agent · Map the repo · 4 tools · Grep"), "{s}");
+        // The turn ends but the agent keeps going: still working, the rule says why.
+        a.on_agent(g, Ev::TurnStart);
+        a.on_agent(g, Ev::TurnDone);
+        assert!(!a.busy && a.working() && a.animating() && a.reported_working);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("1 background agent running…"), "{s}");
         a.on_agent(g, task(Some("completed"), None));
         assert_eq!(a.running_subagents(), 0);
+        assert!(!a.working() && !a.reported_working);
         let s = screen(&mut a, 120, 30);
-        assert!(!s.contains("1 agent"), "{s}");
+        assert!(!s.contains("1 agent") && !s.contains("background agent"), "{s}");
     }
 
     #[test]

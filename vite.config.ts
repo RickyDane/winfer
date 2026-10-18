@@ -11,7 +11,7 @@ export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
   test: {
     // Harness Bench task fixtures hold deliberately broken repos for agents to fix; not our tests.
-    exclude: ["**/node_modules/**", "**/dist/**", "plugins/harness-bench/bench/tasks/**"],
+    exclude: ["**/node_modules/**", "**/dist/**", "plugins-src/harness-bench/**"],
   },
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "src") },
@@ -35,7 +35,8 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // and the bench's task fixtures (some are HTML sites, which would reload the page)
+      ignored: ["**/src-tauri/**", "**/plugins-src/**"],
     },
   },
 }));

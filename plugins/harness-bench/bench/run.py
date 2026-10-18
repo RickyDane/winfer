@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Runs coding-agent harnesses on the tasks in tasks/ and compares success, time and tokens.
+"""Runs coding-agent harnesses on the tasks in suites/*/tasks/ and compares success, time and tokens.
 
-Each run gets a fresh copy of the task's project (a git repo, so changes are visible), the
-harness works headless with permissions off, then the task's hidden check decides pass/fail.
+Tasks are grouped in suites (coding, understanding, research, discipline). Each run gets a
+fresh copy of the task's project (a git repo, so changes are visible), the harness works
+headless with permissions off, then the task's hidden check decides pass/fail.
 
     python3 bench/run.py                                  # winfer-chatgpt vs codex, all tasks
+    python3 bench/run.py -s understanding,research        # only these suites
     python3 bench/run.py -H winfer-chatgpt,codex,pi -t 01,05 -n 3
     python3 bench/run.py -H oracle                        # checks the checks (reference solutions)
     python3 bench/run.py -H codex -m codex=gpt-6-luna      # another model for one harness
     python3 bench/run.py --list                           # harnesses and tasks as JSON (for the UI)
+    python3 bench/run.py --pack                           # rebuild suites.tar.gz after editing tasks
 """
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -19,14 +23,70 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-TASKS = HERE / "tasks"
+# The tasks ship as one archive (the plugin store installs at most 500 files per plugin), built
+# with --pack from the sources in a winfer checkout's plugins-src/harness-bench/suites.
+ARCHIVE = HERE / "suites.tar.gz"
+SOURCES = HERE.parents[2] / "plugins-src" / "harness-bench" / "suites"
+SUITE_ORDER = ["coding", "understanding", "research", "discipline"]
+
+
+def pack(src: Path, archive: Path) -> None:
+    """Writes `src` to `archive` reproducibly: same files, same bytes."""
+    with archive.open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, filename="") as gz:
+        with tarfile.open(fileobj=gz, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+            for p in sorted(src.rglob("*")):
+                if not p.is_file() or "__pycache__" in p.parts or p.name == ".DS_Store":
+                    continue
+                info = tarfile.TarInfo(p.relative_to(src).as_posix())
+                info.size = p.stat().st_size
+                info.mode = 0o755 if os.access(p, os.X_OK) else 0o644
+                with p.open("rb") as f:
+                    tar.addfile(info, f)
+
+
+def unpack(archive: Path, dest: Path) -> Path:
+    """Extracts `archive` to `dest` unless it already holds this archive's files."""
+    digest = hashlib.sha1(archive.read_bytes()).hexdigest()
+    stamp = dest.parent / f".{dest.name}.sha1"
+    if dest.is_dir() and stamp.exists() and stamp.read_text() == digest:
+        return dest
+    tmp = Path(tempfile.mkdtemp(prefix=".suites-", dir=dest.parent))
+    with tarfile.open(archive) as tar:
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(tmp, filter="data")
+        else:  # Python before 3.12 / 3.9.17: our own archive, but still refuse paths leaving tmp
+            for m in tar.getmembers():
+                if m.name.startswith("/") or ".." in Path(m.name).parts or not (m.isfile() or m.isdir()):
+                    sys.exit(f"{archive}: unexpected entry {m.name}")
+            tar.extractall(tmp)
+    shutil.rmtree(dest, ignore_errors=True)
+    tmp.rename(dest)
+    stamp.write_text(digest)
+    return dest
+
+
+def find_suites() -> Path:
+    if os.environ.get("BENCH_SUITES"):
+        return Path(os.environ["BENCH_SUITES"])
+    if SOURCES.is_dir():
+        return SOURCES
+    if ARCHIVE.exists():
+        return unpack(ARCHIVE, HERE / "suites")
+    return HERE / "suites"
+
+
+SUITES = find_suites()
+CATALOG = json.loads((HERE / "harnesses.json").read_text())
+PRICES = CATALOG.get("_prices", {})
 
 
 def winfer_bin() -> str:
@@ -52,6 +112,34 @@ def fingerprint(root: Path) -> str:
     return h.hexdigest()
 
 
+def suite_names(root: Path = SUITES):
+    """Suite folder names under `root`, known suites first in their usual order."""
+    found = [p.name for p in root.iterdir() if (p / "tasks").is_dir()] if root.is_dir() else []
+    rank = lambda s: (SUITE_ORDER.index(s) if s in SUITE_ORDER else len(SUITE_ORDER), s)
+    return sorted(found, key=rank)
+
+
+def suite_info(name: str, root: Path = SUITES) -> dict:
+    f = root / name / "suite.json"
+    info = json.loads(f.read_text()) if f.exists() else {}
+    return {"id": name, "label": info.get("label", name.capitalize()), "description": info.get("description", "")}
+
+
+def all_tasks(root: Path = SUITES, suites=None):
+    """Task folders (those with a task.md) under `root`, grouped by suite then sorted by name."""
+    out = []
+    for s in suite_names(root):
+        if suites and s not in suites:
+            continue
+        out += sorted(t for t in (root / s / "tasks").iterdir() if (t / "task.md").is_file())
+    return out
+
+
+def suite_of(task: Path) -> str:
+    """suites/<suite>/tasks/<task> → <suite>."""
+    return task.parent.parent.name
+
+
 def prepare(task: Path, work: Path) -> None:
     if (task / "repo").exists():
         shutil.copytree(task / "repo", work, dirs_exist_ok=True)
@@ -60,7 +148,7 @@ def prepare(task: Path, work: Path) -> None:
     git = lambda *a: subprocess.run(["git", *a], cwd=work, check=True, capture_output=True)
     git("init", "-q")
     git("add", "-A")
-    git("-c", "user.name=bench", "-c", "user.email=bench@local", "commit", "-qm", "start")
+    git("-c", "user.name=bench", "-c", "user.email=bench@local", "commit", "-q", "--allow-empty", "-m", "start")
 
 
 # ---- output parsers: (input tokens, cached input tokens, output tokens, tool calls, cost) ----
@@ -150,10 +238,39 @@ def parse_opencode(out):
 PARSERS = {"winfer": parse_winfer, "claude": parse_claude, "codex": parse_codex, "pi": parse_pi, "opencode": parse_opencode, "none": lambda out: (0, 0, 0, 0, None)}
 
 
+def estimate_cost(model, tokens_in, cached, tokens_out):
+    """Standard API token estimate; aggregate usage cannot recover per-request surcharges."""
+    price = PRICES.get(model) or PRICES.get(model.rsplit("/", 1)[-1])
+    if price is None or not (tokens_in > 0 or tokens_out > 0):
+        return None
+    cached = min(tokens_in, max(0, cached))
+    return ((tokens_in - cached) * price["input"] + cached * price["cached"] + tokens_out * price["output"]) / 1_000_000
+
+
+def serve_site(task: Path):
+    """Serves the task's `site/` folder (a fake docs site for research tasks) on a free local
+    port for the length of one run. Returns (server or None, base URL or "")."""
+    root = task / "site"
+    if not root.is_dir():
+        return None, ""
+
+    class Quiet(SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=str(root), **kw)
+
+        def log_message(self, *a):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
 def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
     work = Path(tempfile.mkdtemp(prefix=f"bench-{task.name}-{name}-"))
     prepare(task, work)
-    prompt = (task / "task.md").read_text().strip()
+    server, site = serve_site(task)
+    prompt = (task / "task.md").read_text().strip().replace("{site}", site)
     started = time.time()
     out, err, code, timed_out = "", "", 0, False
     if spec["parser"] == "oracle":
@@ -175,12 +292,20 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
         except subprocess.TimeoutExpired as e:
             out, timed_out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""), True
     seconds = time.time() - started
+    if server:
+        server.shutdown()
+        server.server_close()
     env = {**os.environ, "VERIFY_DIR": str(task / "verify")}
     check = subprocess.run(["sh", str(task / "verify/check.sh")], cwd=work, capture_output=True, text=True, env=env)
     i, c, o, tools, cost = PARSERS.get(spec["parser"], PARSERS["none"])(out)
+    cost_estimated = False
+    if cost is None:
+        cost = estimate_cost(model or spec.get("model", ""), i, c, o)
+        cost_estimated = cost is not None
     error = None if timed_out else harness_error(spec, out, err, code, i, tools)
     result = {
         "task": task.name,
+        "suite": suite_of(task),
         "harness": name,
         "model": model or spec.get("model", ""),
         "pass": check.returncode == 0 and not timed_out and not error,
@@ -193,6 +318,7 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
         "output": o,
         "tools": tools,
         "cost": cost,
+        "cost_estimated": cost_estimated,
         "timed_out": timed_out,
         "why": (check.stdout + check.stderr).strip()[-400:] if check.returncode else "",
         "dir": str(work) if keep else None,
@@ -230,7 +356,8 @@ def fmt_tokens(n):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-H", "--harnesses", default="winfer-chatgpt,codex")
-    p.add_argument("-t", "--tasks", default="all", help="comma-separated task prefixes, e.g. 01,03")
+    p.add_argument("-s", "--suites", default="all", help="comma-separated suites, e.g. coding,research")
+    p.add_argument("-t", "--tasks", default="all", help="comma-separated task prefixes, e.g. 01,03,u02")
     p.add_argument("-n", "--runs", type=int, default=1)
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--keep", action="store_true", help="keep work directories for inspection")
@@ -239,6 +366,7 @@ def main():
     p.add_argument("--log", help="write per-run results to this JSONL file")
     p.add_argument("--status", help="keep a JSON progress file up to date (for the UI)")
     p.add_argument("--list", action="store_true", help="print harnesses and tasks as JSON and exit")
+    p.add_argument("--pack", action="store_true", help=f"rebuild {ARCHIVE.name} from {SOURCES} and exit")
     p.add_argument("--retries", type=int, default=1, help="retry a run whose harness errored (rate limit, crash) this many times")
     p.add_argument("--retry-wait", type=int, default=30, help="seconds to wait before retrying an errored run")
     p.add_argument(
@@ -250,9 +378,15 @@ def main():
     )
     args = p.parse_args()
 
-    harnesses = {k: v for k, v in json.loads((HERE / "harnesses.json").read_text()).items() if not k.startswith("_")}
+    harnesses = {k: v for k, v in CATALOG.items() if not k.startswith("_")}
     if args.list:
         print(json.dumps(listing(harnesses)))
+        return
+    if args.pack:
+        if not SOURCES.is_dir():
+            sys.exit(f"no task sources at {SOURCES}; --pack runs in a winfer checkout")
+        pack(SOURCES, ARCHIVE)
+        print(f"{ARCHIVE}: {len(all_tasks(SOURCES))} tasks, {ARCHIVE.stat().st_size // 1024} KB")
         return
     models = dict(m.split("=", 1) for m in args.model if "=" in m)
     names = [h.strip() for h in args.harnesses.split(",")]
@@ -261,10 +395,16 @@ def main():
             sys.exit(f"unknown harness {n}; see harnesses.json")
     # Harnesses get copies made from a snapshot taken now, so one that writes outside its work
     # folder (into the task sources) can't hand later runs a changed or pre-solved project.
+    suites = None
+    if args.suites != "all":
+        suites = [s.strip() for s in args.suites.split(",") if s.strip()]
+        for s in suites:
+            if s not in suite_names():
+                sys.exit(f"unknown suite {s}; have {', '.join(suite_names())}")
     snapshot = Path(tempfile.mkdtemp(prefix="bench-tasks-"))
-    shutil.copytree(TASKS, snapshot / "tasks", ignore=shutil.ignore_patterns("__pycache__"))
-    original = fingerprint(TASKS)
-    tasks = sorted(t for t in (snapshot / "tasks").iterdir() if t.is_dir())
+    shutil.copytree(SUITES, snapshot / "suites", ignore=shutil.ignore_patterns("__pycache__"))
+    original = fingerprint(SUITES)
+    tasks = all_tasks(snapshot / "suites", suites)
     if args.tasks != "all":
         wanted = args.tasks.split(",")
         tasks = [t for t in tasks if any(t.name.startswith(w) for w in wanted)]
@@ -291,11 +431,11 @@ def main():
             r = run_one(name, harnesses[name], task, args.timeout, args.keep, models.get(name, ""))
             r["attempts"] = attempt + 1
             with lock:
-                if fingerprint(TASKS) != original:
+                if fingerprint(SUITES) != original:
                     # It worked on the bench's own task files instead of its copy: undo that and
                     # don't count the run.
-                    shutil.rmtree(TASKS)
-                    shutil.copytree(snapshot / "tasks", TASKS)
+                    shutil.rmtree(SUITES)
+                    shutil.copytree(snapshot / "suites", SUITES)
                     r["pass"] = False
                     r["error"] = f"{name} changed the bench's task files instead of its work folder (restored; run not counted)"
                     print(f"  ERROR {r['error']}", flush=True)
@@ -342,6 +482,16 @@ def main():
         uncached = statistics.median(r["input"] - r["cached"] for r in rs)
         passed = sum(r["pass"] for r in rs)
         print(f"| {name} | {passed}/{len(rs)} | {med('seconds'):.0f}s | {fmt_tokens(med('input'))} | {fmt_tokens(uncached)} | {fmt_tokens(med('output'))} | {med('tools'):.0f} |")
+    ran = [s for s in suite_names(snapshot / "suites") if any(r["suite"] == s for r in results)]
+    if len(ran) > 1:
+        print("\n| harness | " + " | ".join(ran) + " |")
+        print("|---|" + "---|" * len(ran))
+        for name in names:
+            cells = []
+            for s in ran:
+                rs = [r for r in results if r["harness"] == name and r["suite"] == s]
+                cells.append(f"{sum(r['pass'] for r in rs)}/{len(rs)}" if rs else "—")
+            print(f"| {name} | " + " | ".join(cells) + " |")
     print(f"\nPer-run results: {log}")
     shutil.rmtree(snapshot, ignore_errors=True)
     progress(running=[], finished=time.time())
@@ -361,10 +511,13 @@ def listing(harnesses):
         return shutil.which(argv[0]) is not None
 
     tasks = []
-    for t in sorted(p for p in TASKS.iterdir() if p.is_dir()):
+    for t in all_tasks():
         prompt = (t / "task.md").read_text().strip()
-        tasks.append({"id": t.name, "prompt": prompt, "hash": hashlib.sha1(prompt.encode()).hexdigest()[:8]})
+        tasks.append({"id": t.name, "suite": suite_of(t), "prompt": prompt, "hash": hashlib.sha1(prompt.encode()).hexdigest()[:8]})
     return {
+        "suites": [suite_info(s) for s in suite_names()],
+        "prices": PRICES,
+        "pricing": CATALOG.get("_pricing", {}),
         "harnesses": [
             {"id": k, "label": v.get("label", k), "model": v.get("model", ""), "models": v.get("models", []), "installed": installed(v)}
             for k, v in harnesses.items()

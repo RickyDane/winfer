@@ -1,0 +1,10 @@
+{
+  "introduced_by_pr": 380,
+  "first_affected_release": "2.6.0",
+  "final_fix_pr": 431,
+  "first_fixed_release": "2.8.0",
+  "backport_pr": 437,
+  "backport_release": "2.7.5",
+  "workaround": {"setting": "upload.part_size_mb", "value": 256},
+  "sources": ["export/issues/412.json", "export/pulls/380.json", "export/pulls/419.json", "export/pulls/423.json", "export/pulls/431.json", "export/pulls/437.json", "export/releases.json"]
+}

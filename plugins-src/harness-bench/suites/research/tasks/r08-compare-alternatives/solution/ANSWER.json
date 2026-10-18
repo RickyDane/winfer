@@ -1,0 +1,4 @@
+{
+  "choice": "burrow",
+  "failures": {"stashdb": "C1", "kvelt": "C2"}
+}

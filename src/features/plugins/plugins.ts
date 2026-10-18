@@ -211,7 +211,34 @@ export interface PluginApi {
   revealFile(path: string): Promise<void>;
   /** The agent's final reply from its last finished turn, when its hooks report it; else null. */
   lastReply(paneId: string): string | null;
+  /**
+   * Plan usage limits (Claude, Codex), read live first: one snapshot per plan winfer has numbers
+   * for, or just `provider`'s. Windows whose reset time has passed read as 0% used.
+   */
+  usage(provider?: string): Promise<PluginUsage[]>;
   toast(text: string, kind?: "info" | "success" | "error"): void;
+}
+
+/** A plan's usage limits as plugins see them. */
+export interface PluginUsage {
+  provider: string;
+  /** When it was measured (unix ms). */
+  at: number;
+  windows: { kind: string; label: string; usedPercent: number; resetsAt: number | null }[];
+}
+
+/** Live-refreshes the plans asked for (all tracked ones by default) and returns their limits. */
+async function pluginUsage(provider?: string): Promise<PluginUsage[]> {
+  // Loaded on use: the usage modules import the Command Bus, which imports this one.
+  const [{ refreshLimits }, { usedNow, useUsage }] = await Promise.all([import("@/features/usage/agentUsage"), import("@/features/usage/usage")]);
+  const plans = provider ? [provider] : ["claude", "codex"];
+  await Promise.all(plans.map((p) => refreshLimits(p).catch(() => {})));
+  const now = Date.now();
+  const { snapshots } = useUsage.getState();
+  return plans
+    .map((p) => snapshots[p])
+    .filter((s): s is NonNullable<typeof s> => !!s?.windows.length)
+    .map((s) => ({ provider: s.provider, at: s.at, windows: s.windows.map((w) => ({ kind: w.kind, label: w.label, usedPercent: usedNow(w, now), resetsAt: w.resetsAt })) }));
 }
 
 interface PluginModule {
@@ -524,6 +551,7 @@ function makeApi(id: string, dir: string, runtime: Runtime): PluginApi {
       return screen === null ? null : describeRequest(screen);
     },
     lastReply: (paneId) => lastReply(paneId),
+    usage: (provider) => pluginUsage(provider),
     toast: (text, kind = "info") => void toast(text, kind),
   };
 }

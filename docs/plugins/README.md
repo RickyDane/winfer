@@ -44,9 +44,10 @@ re-registers its palette and voice tool whenever the prompts change; `pnpm dev` 
 both on a fake shop database. Their pure functions (introspection SQL, model, layout, exporters,
 connection strings) are tested in `scripts/db-explorer.test.mjs` and
 `scripts/prompt-library.test.mjs`.
-[`plugins/harness-bench`](../../plugins/harness-bench) (Bench) ships a benchmark suite (`bench/`:
-tasks, hidden checks, a Python runner) and runs it detached through `vault.exec` with `api.dir` and
-`api.appExe()`, polling a status file with `readFile` for live progress; `pnpm dev` with `?bench`
+[`plugins/harness-bench`](../../plugins/harness-bench) (winfer bench) ships a benchmark (`bench/`: tasks in
+four suites, hidden checks, a Python runner; the task sources are in `plugins-src/harness-bench` and ship
+packed as `bench/suites.tar.gz` because the store installs at most 500 files per plugin) and runs it detached through `vault.exec` with `api.dir` and
+`api.appExe()`, polling a status file with `readFile` for live progress and `usage()` for the plan limits at the start and end of a run (and when they ran out); `pnpm dev` with `?bench`
 opens it on a fake runner.
 
 ## plugin.json
@@ -114,6 +115,7 @@ export function deactivate() {}  // optional
 | `writeFile(path, data)` | Writes a string, `Uint8Array`, `ArrayBuffer` or `Blob` to a file (absolute or `~/…`), creating its folder; resolves to the absolute path. |
 | `revealFile(path)` | Shows a file in Finder / Explorer. |
 | `paneRequest(paneId)` | What an agent in `needs-input` asks: `{ kind: "approval" \| "question", text }`, or null. |
+| `usage(provider?)` | Plan usage limits, read live first: `[{ provider, at, windows: [{ kind, label, usedPercent, resetsAt }] }]` for `"claude"` and `"codex"` (or just `provider`); plans without numbers are left out. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
 | `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
 | `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, camera, database, file, gauge, globe, key, lock, network, puzzle, shield, star, terminal, video. |

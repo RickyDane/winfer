@@ -1,0 +1,12 @@
+{
+  "name": "storefront",
+  "version": "2.8.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "APP_MODE=development node scripts/build.mjs --watch",
+    "build": "NODE_ENV=production APP_MODE=prod FLAG_SEARCH_V2=1 THEME=contrast node scripts/build.mjs",
+    "build:staging": "APP_MODE=staging node scripts/build.mjs"
+  },
+  "devDependencies": { "esbuild": "^0.21.0", "typescript": "^5.4.0" }
+}

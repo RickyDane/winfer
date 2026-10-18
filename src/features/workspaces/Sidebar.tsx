@@ -2,7 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import logoUrl from "@/assets/logo.svg";
 import { Activity, ChevronRight, GitBranch, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
-import { useProgress } from "@/features/progress/progress";
+import { progressTitle, useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
@@ -23,7 +23,7 @@ import { UsageButton } from "@/features/usage/UsageMeter";
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
 function PaneName({ pane, className }: { pane: Pane; className?: string }) {
   const providers = useWorkspaces((s) => s.providers);
-  const task = useProgress((s) => s.byPane[pane.id]?.title ?? s.byPane[pane.id]?.task);
+  const task = useProgress((s) => progressTitle(s.byPane[pane.id]));
   const label = paneLabel(pane, providers, task);
   const name = providerName(providers, pane.provider);
   return (

@@ -1,6 +1,6 @@
 /**
  * How much of their plan's usage limits the agents have left (see src-tauri/src/usage.rs):
- * Claude Code reports through its status line, Codex is asked live from ChatGPT (session logs
+ * Claude Code is asked live (status line as fallback), Codex is asked live from ChatGPT (session logs
  * as fallback), OpenCode reports today's tokens and cost. Kept across restarts, with samples for a run-out projection.
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -67,6 +67,8 @@ export interface PaneSpend {
 }
 
 interface UsageState {
+  refreshing: Record<string, boolean>;
+  errors: Record<string, string | undefined>;
   snapshots: Record<string, Snapshot>;
   opencode: Spend | null;
   /** Measurements per window ("codex:session:<resetsAt>") for the projection: [at, used%]. */
@@ -81,7 +83,7 @@ interface UsageState {
 
 const STORAGE = "winfer.usage";
 
-function load(): Omit<UsageState, "opencode" | "paneSpend"> {
+function load(): Omit<UsageState, "opencode" | "paneSpend" | "refreshing" | "errors"> {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE) ?? "{}");
     return { snapshots: saved.snapshots ?? {}, samples: saved.samples ?? {}, context: saved.context ?? {}, codexSessions: saved.codexSessions ?? {} };
@@ -90,7 +92,7 @@ function load(): Omit<UsageState, "opencode" | "paneSpend"> {
   }
 }
 
-export const useUsage = create<UsageState>(() => ({ ...load(), opencode: null, paneSpend: {} }));
+export const useUsage = create<UsageState>(() => ({ ...load(), opencode: null, paneSpend: {}, refreshing: {}, errors: {} }));
 
 useUsage.subscribe((s) =>
   localStorage.setItem(STORAGE, JSON.stringify({ snapshots: s.snapshots, samples: s.samples, context: s.context, codexSessions: s.codexSessions })),
@@ -205,11 +207,55 @@ function record(snapshot: Snapshot) {
 /** The first read after launch replaces whatever was kept: Codex is the source of truth. */
 let codexRead = false;
 
-export async function refreshCodex() {
-  const snapshot = await invoke<Snapshot | null>("usage_codex").catch(() => null);
-  const current = useUsage.getState().snapshots.codex;
-  if (snapshot && (!codexRead || !current || snapshot.at >= current.at)) record(snapshot);
-  if (snapshot) codexRead = true;
+const pending = new Map<string, Promise<void>>();
+let claudeLiveAt = 0;
+
+/** Share overlapping automatic/manual requests, and keep failures separate from cached readings. */
+function refresh(provider: string, read: () => Promise<void>): Promise<void> {
+  const active = pending.get(provider);
+  if (active) return active;
+  useUsage.setState((s) => ({ refreshing: { ...s.refreshing, [provider]: true } }));
+  const request = Promise.resolve().then(read).then(() => {
+    useUsage.setState((s) => ({ errors: { ...s.errors, [provider]: undefined } }));
+  }).catch((error: unknown) => {
+    useUsage.setState((s) => ({ errors: { ...s.errors, [provider]: String(error) } }));
+  }).finally(() => {
+    pending.delete(provider);
+    useUsage.setState((s) => ({ refreshing: { ...s.refreshing, [provider]: false } }));
+  });
+  pending.set(provider, request);
+  return request;
+}
+
+export function refreshCodex() {
+  return refresh("codex", async () => {
+    const snapshot = await invoke<Snapshot | null>("usage_codex");
+    if (!snapshot) throw new Error("Couldn't refresh Codex limits. Check your Codex sign-in.");
+    const current = useUsage.getState().snapshots.codex;
+    if (!codexRead || !current || snapshot.at >= current.at) record(snapshot);
+    codexRead = true;
+  });
+}
+
+export function refreshClaude() {
+  return refresh("claude", async () => {
+    const snapshot = await invoke<Snapshot>("usage_claude");
+    if (!snapshot?.windows.length) throw new Error("Claude returned no plan limits.");
+    const current = useUsage.getState().snapshots.claude;
+    if (!current || snapshot.at >= current.at) record(snapshot);
+    claudeLiveAt = snapshot.at;
+  });
+}
+
+export async function refreshUsage() {
+  const { providers } = useWorkspaces.getState();
+  const known = useUsage.getState().snapshots;
+  const installed = (id: string) => !!known[id] || providers.some((p) => p.id === id && p.installed);
+  await Promise.all([
+    installed("codex") ? refreshCodex() : undefined,
+    installed("claude") ? refreshClaude() : undefined,
+    installed("opencode") ? refreshOpencode() : undefined,
+  ]);
 }
 
 function setContext(paneId: string, context: Context) {
@@ -244,9 +290,12 @@ export function tokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
-export async function refreshOpencode() {
-  const spend = await invoke<Spend | null>("usage_opencode").catch(() => null);
-  useUsage.setState({ opencode: spend });
+export function refreshOpencode() {
+  return refresh("opencode", async () => {
+    const spend = await invoke<Spend | null>("usage_opencode");
+    if (!spend) throw new Error("Couldn't refresh OpenCode usage.");
+    useUsage.setState({ opencode: spend });
+  });
 }
 
 let started = false;
@@ -255,7 +304,10 @@ export function startUsageTracking() {
   if (started) return;
   started = true;
   void listen<{ provider: string; paneId: string; report: { windows?: UsageWindow[]; context?: Context | null; spend?: PaneSpend | null } }>("usage://report", ({ payload }) => {
-    if (payload.report.windows?.length) record({ provider: payload.provider, windows: payload.report.windows, at: Date.now() });
+    // Status-line limits may be cached by Claude Code. Prefer a recent account-wide read.
+    if (payload.report.windows?.length && !(payload.provider === "claude" && Date.now() - claudeLiveAt < 5 * 60_000)) {
+      record({ provider: payload.provider, windows: payload.report.windows, at: Date.now() });
+    }
     if (payload.report.context) setContext(payload.paneId, payload.report.context);
     const spend = payload.report.spend;
     if (spend) useUsage.setState((s) => ({ paneSpend: { ...s.paneSpend, [payload.paneId]: spend } }));
@@ -280,8 +332,16 @@ export function startUsageTracking() {
   const installed = (id: string) => useWorkspaces.getState().providers.some((p) => p.id === id && p.installed);
   // Just a look at a few log files (nothing if Codex was never used), so no need to wait for
   // the provider list.
-  const poll = () => void refreshCodex();
+  let claudePolledAt = 0;
+  const poll = () => {
+    void refreshCodex();
+    if ((installed("claude") || useUsage.getState().snapshots.claude) && Date.now() - Math.max(claudePolledAt, claudeLiveAt) >= 5 * 60_000) {
+      claudePolledAt = Date.now();
+      void refreshClaude();
+    }
+  };
   poll();
+  window.setTimeout(poll, 3000);
   window.setInterval(poll, 60_000);
   window.addEventListener("focus", poll);
   const pollOpencode = () => installed("opencode") && void refreshOpencode();

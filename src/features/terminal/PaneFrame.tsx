@@ -12,7 +12,7 @@ import { beginDrag, useDrag } from "@/features/layout/drag";
 import { TerminalHost } from "./TerminalHost";
 import { useStarting } from "./xtermRegistry";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { useProgress } from "@/features/progress/progress";
+import { progressTitle, useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { ContextMeter } from "@/features/usage/UsageMeter";
 import { PaneCost } from "@/features/usage/TaskCostChip";
@@ -53,7 +53,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const showProgress = pane.provider !== "shell" && progress?.percent != null;
   const starting = useStarting((s) => s[pane.id]);
   const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
-  const label = useWorkspaces((s) => paneLabel(pane, s.providers, progress?.title ?? progress?.task));
+  const label = useWorkspaces((s) => paneLabel(pane, s.providers, progressTitle(progress)));
   const [renaming, setRenaming] = useState(false);
   const [isNew] = useState(() => !seen.has(pane.id));
   seen.add(pane.id);

@@ -1,0 +1,157 @@
+"""Regression checks for cost fallback; no model calls or credentials required."""
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import run as bench
+
+
+class CostTests(unittest.TestCase):
+    def test_cached_and_prefixed_model(self):
+        self.assertAlmostEqual(bench.estimate_cost("openai/gpt-6.1-sol", 1_000_000, 500_000, 100_000), 2.05)
+
+    def test_unknown_model_or_missing_usage(self):
+        self.assertIsNone(bench.estimate_cost("unknown", 100, 0, 10))
+        self.assertIsNone(bench.estimate_cost("sonnet", 100, 0, 10))
+        self.assertIsNone(bench.estimate_cost("gpt-6.1-sol", 0, 0, 0))
+
+    def run_with_output(self, parser, output, model="gpt-6.1-sol"):
+        with tempfile.TemporaryDirectory() as folder:
+            task = Path(folder)
+            (task / "task.md").write_text("Synthetic pricing check")
+            spec = {"parser": parser, "argv": ["synthetic"], "model": "unknown"}
+            responses = [subprocess.CompletedProcess([], 0, output, ""), subprocess.CompletedProcess([], 0, "", "")]
+            with patch.object(bench, "prepare"), patch.object(bench.subprocess, "run", side_effect=responses):
+                return bench.run_one("synthetic", spec, task, 10, False, model)
+
+    def test_codex_fallback_uses_selected_model(self):
+        output = json.dumps({"type": "turn.completed", "usage": {
+            "input_tokens": 1_000_000, "cached_input_tokens": 500_000, "output_tokens": 100_000,
+        }})
+        result = self.run_with_output("codex", output, "openai/gpt-6.1-sol")
+        self.assertAlmostEqual(result["cost"], 2.05)
+        self.assertTrue(result["cost_estimated"])
+        self.assertTrue(result["pass"])
+
+    def test_reported_cost_including_zero_is_preserved(self):
+        for cost in (0, 0.123):
+            with self.subTest(cost=cost):
+                output = json.dumps({"type": "usage", "input": 1_000_000, "cached": 500_000, "output": 100_000, "cost": cost})
+                result = self.run_with_output("winfer", output)
+                self.assertEqual(result["cost"], cost)
+                self.assertFalse(result["cost_estimated"])
+
+    def test_unpriced_runs_do_not_claim_an_estimate(self):
+        for output, model in (("", "gpt-6.1-sol"), (json.dumps({"type": "usage", "input": 100}), "unknown")):
+            with self.subTest(model=model):
+                result = self.run_with_output("winfer", output, model)
+                self.assertIsNone(result["cost"])
+                self.assertFalse(result["cost_estimated"])
+
+
+class SuiteTests(unittest.TestCase):
+    def make(self, root, suite, *tasks, info=None):
+        for t in tasks:
+            (root / suite / "tasks" / t).mkdir(parents=True)
+            (root / suite / "tasks" / t / "task.md").write_text(t)
+        if info:
+            (root / suite / "suite.json").write_text(json.dumps(info))
+
+    def test_known_suites_first_then_alphabetical(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for s in ("zeta", "discipline", "coding", "alpha"):
+                self.make(root, s, "01-x")
+            (root / "not-a-suite").mkdir()
+            self.assertEqual(bench.suite_names(root), ["coding", "discipline", "alpha", "zeta"])
+
+    def test_all_tasks_filters_and_suite_of(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.make(root, "coding", "02-b", "01-a")
+            self.make(root, "research", "r01-c")
+            (root / "research" / "tasks" / "r02-half-written").mkdir()
+            self.assertEqual([t.name for t in bench.all_tasks(root)], ["01-a", "02-b", "r01-c"])
+            only = bench.all_tasks(root, ["research"])
+            self.assertEqual([t.name for t in only], ["r01-c"])
+            self.assertEqual(bench.suite_of(only[0]), "research")
+
+    def test_suite_info_defaults(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.make(root, "research", "r01", info={"label": "Research", "description": "d"})
+            self.make(root, "misc", "m01")
+            self.assertEqual(bench.suite_info("research", root), {"id": "research", "label": "Research", "description": "d"})
+            self.assertEqual(bench.suite_info("misc", root)["label"], "Misc")
+
+    def test_repo_suites_have_unique_task_ids(self):
+        ids = [t.name for t in bench.all_tasks()]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn("coding", bench.suite_names())
+
+    def test_site_is_served_only_during_a_run(self):
+        import urllib.request
+        with tempfile.TemporaryDirectory() as folder:
+            task = Path(folder)
+            self.assertEqual(bench.serve_site(task), (None, ""))
+            (task / "site").mkdir()
+            (task / "site" / "index.html").write_text("hello docs")
+            server, url = bench.serve_site(task)
+            try:
+                self.assertTrue(url.startswith("http://127.0.0.1:"))
+                self.assertEqual(urllib.request.urlopen(url + "/index.html", timeout=5).read(), b"hello docs")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+
+class ArchiveTests(unittest.TestCase):
+    def test_pack_is_reproducible_and_unpacks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            src = root / "src"
+            SuiteTests.make(None, src, "coding", "01-a")
+            (src / "coding" / "tasks" / "01-a" / "verify").mkdir()
+            check = src / "coding" / "tasks" / "01-a" / "verify" / "check.sh"
+            check.write_text("exit 0")
+            check.chmod(0o755)
+            (src / "coding" / "tasks" / "01-a" / "__pycache__").mkdir()
+            (src / "coding" / "tasks" / "01-a" / "__pycache__" / "x.pyc").write_bytes(b"junk")
+            bench.pack(src, root / "a.tar.gz")
+            bench.pack(src, root / "b.tar.gz")
+            self.assertEqual((root / "a.tar.gz").read_bytes(), (root / "b.tar.gz").read_bytes())
+            out = bench.unpack(root / "a.tar.gz", root / "suites")
+            self.assertEqual([t.name for t in bench.all_tasks(out)], ["01-a"])
+            self.assertTrue(os.access(out / "coding" / "tasks" / "01-a" / "verify" / "check.sh", os.X_OK))
+            self.assertFalse((out / "coding" / "tasks" / "01-a" / "__pycache__").exists())
+            # Unchanged archive: left alone (a stray file survives); a new one replaces the folder.
+            (out / "stray").write_text("x")
+            bench.unpack(root / "a.tar.gz", root / "suites")
+            self.assertTrue((out / "stray").exists())
+            SuiteTests.make(None, src, "research", "r01")
+            bench.pack(src, root / "a.tar.gz")
+            bench.unpack(root / "a.tar.gz", root / "suites")
+            self.assertFalse((out / "stray").exists())
+            self.assertEqual(bench.suite_names(out), ["coding", "research"])
+
+    @unittest.skipUnless(bench.SOURCES.is_dir(), "needs a winfer checkout")
+    def test_shipped_archive_matches_sources(self):
+        import tarfile
+        with tarfile.open(bench.ARCHIVE) as tar:
+            shipped = {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
+        sources = {
+            p.relative_to(bench.SOURCES).as_posix(): p.read_bytes()
+            for p in bench.SOURCES.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts and p.name != ".DS_Store"
+        }
+        self.assertEqual(sorted(shipped), sorted(sources), "run `python3 run.py --pack`")
+        self.assertEqual(shipped, sources, "run `python3 run.py --pack`")
+
+
+if __name__ == "__main__":
+    unittest.main()

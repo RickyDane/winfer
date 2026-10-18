@@ -1,0 +1,5 @@
+{
+  "production": { "maxUploadMB": 20, "betaBanner": true },
+  "prod": { "searchV2": false, "theme": "dark" },
+  "staging": { "betaBanner": true }
+}

@@ -3,6 +3,8 @@
 //! - Claude Code hands its status line command the account's rate limits (5-hour and weekly
 //!   windows). winfer registers `winfer statusline` as the status line: it reports them to the
 //!   app and then runs the user's own status line, so that keeps working.
+//!   The app also polls Claude's account usage endpoint with Claude Code's existing sign-in,
+//!   so limits stay current when Claude is used outside winfer or status reports stop.
 //! - Codex: asked live from ChatGPT's usage endpoint with Codex's own sign-in
 //!   (`~/.codex/auth.json`), the numbers `/status` shows. Falls back to the rate limits Codex
 //!   records after every turn in its session logs (`~/.codex/sessions`), which go stale when
@@ -101,6 +103,59 @@ pub fn claude_windows(input: &Value) -> Vec<Window> {
 /// `resets_at` comes as unix seconds or as an ISO date.
 fn seconds_or_date(v: &Value) -> Option<i64> {
     v.as_f64().map(|s| (s * 1000.0) as i64).or_else(|| v.as_str().and_then(parse_rfc3339))
+}
+
+/// Read Claude Code's existing sign-in without rotating or persisting its tokens.
+fn claude_token(auth: &Value, now: i64) -> Option<String> {
+    let oauth = &auth["claudeAiOauth"];
+    if oauth["expiresAt"].as_i64().is_some_and(|at| at <= now) {
+        return None;
+    }
+    oauth["accessToken"].as_str().filter(|s| !s.is_empty()).map(String::from)
+}
+
+fn claude_credentials() -> Option<Value> {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".claude")))?;
+    // macOS Claude Code keeps its sign-in in Keychain; other platforms use this file.
+    #[cfg(target_os = "macos")]
+    {
+        use sha2::{Digest, Sha256};
+        let suffix = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(|_| format!("-{}", &hex::encode(Sha256::digest(config.to_string_lossy().as_bytes()))[..8]))
+            .unwrap_or_default();
+        let service = format!("Claude Code{suffix}-credentials");
+        let out = Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", &service, "-w"])
+            .stdin(Stdio::null()).stderr(Stdio::null()).output().ok();
+        if let Some(out) = out.filter(|o| o.status.success()) {
+            if let Ok(auth) = serde_json::from_slice(&out.stdout) {
+                return Some(auth);
+            }
+        }
+    }
+    serde_json::from_str(&std::fs::read_to_string(config.join(".credentials.json")).ok()?).ok()
+}
+
+fn claude_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
+    let windows = claude_windows(&json!({ "rate_limits": body }));
+    (!windows.is_empty()).then(|| Snapshot { provider: "claude".into(), windows, at })
+}
+
+/// Account-wide limits, including use outside winfer. Errors keep the previous reading visible.
+#[tauri::command]
+pub async fn usage_claude() -> Result<Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let token = claude_credentials().and_then(|a| claude_token(&a, now_ms()))
+            .ok_or("Claude sign-in unavailable or expired. Sign in through Claude Code, then refresh.")?;
+        let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
+        let mut response = agent.get("https://api.anthropic.com/api/oauth/usage")
+            .header("Authorization", &format!("Bearer {token}"))
+            .header("anthropic-beta", "oauth-2025-04-20")
+            .header("User-Agent", "claude-cli")
+            .call().map_err(|_| "Couldn't refresh Claude limits. Check your connection and Claude Code sign-in.")?;
+        let body: Value = response.body_mut().read_json().map_err(|_| "Claude returned an invalid usage response.")?;
+        claude_usage_snapshot(&body, now_ms()).ok_or_else(|| "Claude returned no plan limits.".to_string())
+    }).await.map_err(|_| "Claude usage refresh failed.".to_string())?
 }
 
 /// Entry point for `winfer statusline`, Claude Code's status line command inside winfer:
@@ -638,6 +693,40 @@ mod tests {
         assert_eq!(w[0].resets_at, Some(1791936000000));
         assert_eq!(w[1].used_percent, 69.5);
         assert!(claude_windows(&json!({ "rate_limits": null })).is_empty());
+    }
+
+    #[test]
+    fn reads_live_claude_limits_including_exhausted_session() {
+        let body = json!({
+            "five_hour": { "utilization": 100.0, "resets_at": "2026-10-14T02:00:29+02:00" },
+            "seven_day": { "utilization": 17.0, "resets_at": "2026-10-20T00:00:00Z" },
+            "seven_day_opus": null,
+            "seven_day_sonnet": { "utilization": 0, "resets_at": null }
+        });
+        let s = claude_usage_snapshot(&body, 123).unwrap();
+        assert_eq!((s.provider.as_str(), s.at), ("claude", 123));
+        assert_eq!(s.windows.len(), 3);
+        assert_eq!((s.windows[0].used_percent, s.windows[0].resets_at), (100.0, Some(1791936029000)));
+        assert_eq!(s.windows[1].used_percent, 17.0);
+        assert_eq!(s.windows[2].used_percent, 0.0);
+        assert!(claude_usage_snapshot(&json!({}), 0).is_none());
+    }
+
+    #[test]
+    fn reads_only_unexpired_claude_oauth_tokens() {
+        let auth = json!({ "claudeAiOauth": { "accessToken": "test-token", "expiresAt": 100 } });
+        assert_eq!(claude_token(&auth, 99).as_deref(), Some("test-token"));
+        assert!(claude_token(&auth, 100).is_none());
+        assert!(claude_token(&json!({ "apiKey": "test-key" }), 0).is_none());
+        assert!(claude_token(&json!({ "claudeAiOauth": { "accessToken": "" } }), 0).is_none());
+    }
+
+    /// Read-only integration check; never prints credentials.
+    #[test]
+    #[ignore]
+    fn claude_live_on_this_machine() {
+        let result = tauri::async_runtime::block_on(usage_claude());
+        assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 
     #[test]

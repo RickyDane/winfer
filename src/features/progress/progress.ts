@@ -36,6 +36,25 @@ const get = (paneId: string): Progress => useProgress.getState().byPane[paneId] 
 
 function patch(paneId: string, p: Partial<Progress>) {
   useProgress.setState((s) => ({ byPane: { ...s.byPane, [paneId]: { ...(s.byPane[paneId] ?? EMPTY), ...p } } }));
+  if ("task" in p || "title" in p) saveTask(paneId);
+}
+
+/** Keeps the pane's task and title in the workspace store, which saves them across restarts. */
+function saveTask(paneId: string) {
+  const { task, title } = get(paneId);
+  const saved = useWorkspaces.getState().paneTasks[paneId];
+  if (saved?.task === task && saved?.title === title) return;
+  useWorkspaces.setState((s) => ({ paneTasks: { ...s.paneTasks, [paneId]: { task, title } } }));
+}
+
+/** Brings back the tasks and titles saved before the last restart (panes that have none yet). */
+function restoreTasks() {
+  const saved = useWorkspaces.getState().paneTasks;
+  useProgress.setState((s) => {
+    const byPane = { ...s.byPane };
+    for (const [id, { task, title }] of Object.entries(saved)) if (!byPane[id]) byPane[id] = { ...EMPTY, task, title };
+    return { byPane };
+  });
 }
 
 export function forgetProgress(paneId: string) {
@@ -43,6 +62,8 @@ export function forgetProgress(paneId: string) {
     const { [paneId]: _, ...rest } = s.byPane;
     return { byPane: rest };
   });
+  const { [paneId]: saved, ...rest } = useWorkspaces.getState().paneTasks;
+  if (saved) useWorkspaces.setState({ paneTasks: rest });
 }
 
 /**
@@ -52,9 +73,70 @@ export function forgetProgress(paneId: string) {
 export function setTask(paneId: string, text: string) {
   const task = text.trim();
   if (task.length < 12) return;
-  patch(paneId, { task, title: null, percent: 0, step: null, updatedAt: null, error: null });
+  // The title stays until the new one arrives: a follow-up usually continues the same work.
+  patch(paneId, { task, percent: 0, step: null, updatedAt: null, error: null });
   lastEstimate.delete(paneId);
+  void nameSession(paneId, task);
 }
+
+const NAMING = [
+  "You name a coding agent's session for a list of sessions, like a short issue title.",
+  "Given the session's current title (if any) and the user's newest message to the agent, reply with a title of 2 to 6 words summarizing the goal of the work,",
+  'e.g. "Fix login redirect loop", "Persist session titles", "Dark mode for settings".',
+  "Describe the work, don't quote or paraphrase the message: no filler (please, I noticed, can you), no trailing punctuation, no quotes.",
+  "If the message continues or refines the current work (a follow-up, a correction, an answer, a small addition), reply with the current title unchanged.",
+  "Reply with the title only.",
+].join(" ");
+
+/** Newest naming request per pane, so a slow answer doesn't overwrite a newer one. */
+const naming = new Map<string, number>();
+let namingSeq = 0;
+
+/** Asks the LLM for a short title for the session's work (keeps the old one for follow-ups). */
+export async function nameSession(paneId: string, message: string) {
+  if (!llmEnabled()) return;
+  const seq = ++namingSeq;
+  naming.set(paneId, seq);
+  const current = get(paneId).title;
+  const user = [current ? `Current title: ${current}` : "Current title: (none, this is the first message)", `Newest message:\n${message.slice(0, 2000)}`].join("\n\n");
+  try {
+    const answer = await llmCompose(`${NAMING} Write it in ${replyLanguage(message)}.`, user);
+    const title = cleanTitle(answer);
+    if (naming.get(paneId) !== seq || !title || wrongScript(title, message)) return;
+    if (useProgress.getState().byPane[paneId]) patch(paneId, { title });
+  } catch {
+    // No title then: the task's headline stands in.
+  } finally {
+    if (naming.get(paneId) === seq) naming.delete(paneId);
+  }
+}
+
+/** A model's title answer, without quotes, a "Title:" label or trailing punctuation. */
+export function cleanTitle(answer: string): string | null {
+  const line = answer.trim().split("\n")[0] ?? "";
+  const title = line
+    .replace(/^(title|titel)\s*:\s*/i, "")
+    .replace(/^["'“”‘’`*]+|["'“”‘’`*]+$/g, "")
+    .replace(/[.!?:;,]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return title && title.split(" ").length <= 10 ? title.slice(0, 60) : null;
+}
+
+const FILLER = /^(?:(?:hey|hi|ok(?:ay)?|so|also|and|now|then|next|alright|great|thanks?|thank you|please|pls|bitte|kannst du|can you|could you|would you|will you|i want you to|i'd like you to|i need you to|i noticed(?: that)?|i see(?: that)?|it seems(?: that)?|let's|lets)\b[\s,:;!.-]*)+/i;
+
+/** Without an LLM title: the task's first sentence, trimmed of filler and cut to a few words. */
+export function taskHeadline(task: string): string {
+  const first = task.trim().split(/\n|(?<=[.!?])\s/)[0].trim();
+  const stripped = first.replace(FILLER, "").replace(/[.!?:;,]+$/, "").trim() || first;
+  const words = stripped.split(/\s+/);
+  const short = words.length > 8 ? `${words.slice(0, 8).join(" ")}…` : stripped;
+  return short.charAt(0).toUpperCase() + short.slice(1);
+}
+
+/** What to call the session's work: the LLM's title, else the task's headline. */
+export const progressTitle = (p: Pick<Progress, "title" | "task"> | undefined): string | null =>
+  p?.title ?? (p?.task ? taskHeadline(p.task) : null);
 
 /** Called when an agent finishes: done means done, no need to ask the LLM. */
 export function markFinished(paneId: string) {
@@ -142,7 +224,8 @@ export async function estimate(pane: Pane) {
     // isn't finished. A stopped one may be (agents without completion hooks only stop).
     const cap = status(pane.id) === "working" ? 99 : 100;
     const percent = Math.min(cap, Math.max(current.percent ?? 0, result.percent));
-    patch(pane.id, { percent, step: result.step ?? current.step, title: result.title ?? current.title, updatedAt: Date.now(), estimating: false, error: null });
+    // The naming call owns the title; the estimate's only fills in when there's none yet.
+    patch(pane.id, { percent, step: result.step ?? current.step, title: current.title ?? result.title, updatedAt: Date.now(), estimating: false, error: null });
   } catch (err) {
     patch(pane.id, { estimating: false, error: String(err) });
   }
@@ -155,6 +238,14 @@ let started = false;
 export function startProgressTracking() {
   if (started) return;
   started = true;
+  if (useWorkspaces.getState().hydrated) restoreTasks();
+  else {
+    const stop = useWorkspaces.subscribe((s) => {
+      if (!s.hydrated) return;
+      stop();
+      restoreTasks();
+    });
+  }
   window.setInterval(() => {
     const s = useWorkspaces.getState();
     if (s.progressConfig.enabled === false) return;

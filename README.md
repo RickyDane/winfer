@@ -70,11 +70,12 @@ query the same graph with tools.
 
 ## Pick the best harness for the job
 
-**Harness Bench** runs winfer code, Codex, Claude Code, pi and OpenCode on the same tasks with the
+**winfer bench** runs winfer code, Codex, Claude Code, pi and OpenCode on the same tasks with the
 models you pick, and compares pass rate, time, tokens and tool calls — with an overall winner, a
-timeline of every run and charts per task.
+timeline of every run and charts per task. Tasks come in four suites: coding, understanding,
+research and discipline (staying in scope, exact formats, ignoring planted instructions).
 
-![Harness Bench: winfer code and Codex compared on the same tasks](docs/screenshots/bench.png)
+![winfer bench: winfer code and Codex compared on the same tasks](docs/screenshots/bench.png)
 
 ## Also in the box
 

@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
 
 fn approval_policy(mode: Mode) -> &'static str {
     match mode {
@@ -52,6 +52,7 @@ enum Pending {
     Init,
     Thread,
     Turn,
+    Skills,
     Ignore,
 }
 
@@ -76,6 +77,8 @@ struct Bridge {
     children: HashMap<String, Child>,
     /// The main thread's own token usage, before the subagents' is added.
     usage: Usage,
+    /// Skills Codex found (`skills/list`): name → SKILL.md path.
+    skills: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -116,6 +119,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         diffs: HashMap::new(),
         children: HashMap::new(),
         usage: Usage::default(),
+        skills: HashMap::new(),
     };
     b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": null }), Pending::Init);
     let mut thread_params = json!({
@@ -155,6 +159,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     match kind {
                         Some(Pending::Init) => {
                             let _ = b.proc.write(&json!({ "method": "initialized" }));
+                            b.request("skills/list", json!({ "cwds": [b.cwd.clone()] }), Pending::Skills);
                             match &resume {
                                 Some(thread) => {
                                     let mut p = thread_params.clone();
@@ -180,6 +185,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                             if let Some(id) = result["turn"]["id"].as_str() {
                                 b.turn = Some(id.to_string());
                             }
+                        }
+                        Some(Pending::Skills) => {
+                            let list = b.take_skills(result);
+                            b.emit(Ev::Skills(list));
                         }
                         _ => {}
                     }
@@ -254,7 +263,14 @@ impl Bridge {
 
     fn start_turn(&mut self, msg: UserMsg) {
         let Some(thread) = self.thread.clone() else { return };
-        let mut input = vec![json!({ "type": "text", "text": msg.text, "text_elements": [] })];
+        // An explicit skill goes as Codex's own skill input (what `$name` does in its TUI), so
+        // the model gets the SKILL.md itself instead of finding and reading it.
+        let (text, skill) = match &msg.skill {
+            Some(name) => (format!("${name} {}", msg.text).trim_end().to_string(), self.skills.get(name).map(|path| json!({ "type": "skill", "name": name, "path": path }))),
+            None => (msg.text.clone(), None),
+        };
+        let mut input = vec![json!({ "type": "text", "text": text, "text_elements": [] })];
+        input.extend(skill);
         for path in &msg.images {
             input.push(json!({ "type": "localImage", "path": path }));
         }
@@ -271,6 +287,23 @@ impl Bridge {
             params["effort"] = json!(e);
         }
         self.request("turn/start", params, Pending::Turn);
+    }
+
+    /// Remembers the enabled skills of a `skills/list` result and returns them for the TUI.
+    fn take_skills(&mut self, result: &Value) -> Vec<Skill> {
+        let mut list = Vec::new();
+        for entry in result["data"].as_array().into_iter().flatten() {
+            for sk in entry["skills"].as_array().into_iter().flatten() {
+                let name = s(sk, "name");
+                if name.is_empty() || sk["enabled"] == false || self.skills.contains_key(&name) {
+                    continue;
+                }
+                self.skills.insert(name.clone(), s(sk, "path"));
+                let description = sk["shortDescription"].as_str().filter(|d| !d.is_empty()).map(str::to_string).unwrap_or_else(|| s(sk, "description"));
+                list.push(Skill { name, description });
+            }
+        }
+        list
     }
 
     fn on_request(&mut self, method: &str, id: Value, p: &Value) {
@@ -477,7 +510,13 @@ impl Bridge {
     fn tool_card(&mut self, item: &Value) -> Option<(String, String)> {
         let id = s(item, "id");
         Some(match item["type"].as_str().unwrap_or("") {
-            "commandExecution" => ("Bash".to_string(), strip_shell(item["command"].as_str().unwrap_or(""))),
+            "commandExecution" => {
+                let command = strip_shell(item["command"].as_str().unwrap_or(""));
+                match skill_reads(&command) {
+                    Some(names) => ("Skill".to_string(), names),
+                    None => ("Bash".to_string(), command),
+                }
+            }
             "fileChange" => {
                 let diff = changes_diff(item);
                 self.diffs.insert(id, diff);
@@ -588,6 +627,21 @@ impl Bridge {
 // No lean mode for Codex: its default instructions and tool list are a prefix OpenAI's prompt
 // cache already holds, so a shorter custom setup measured *more* full-price tokens (bench: 8.6k
 // stock vs 26.1k with a lean prompt, 20.4k with just unused features off).
+
+/// Codex loads a skill by reading its SKILL.md with the shell: `cat ~/.agents/skills/caveman/SKILL.md`
+/// → `caveman`. Commands that do anything else stay Bash cards.
+fn skill_reads(command: &str) -> Option<String> {
+    let mut words = command.split_whitespace();
+    if !matches!(words.next()?, "cat" | "sed" | "head" | "nl" | "less" | "bat") || command.contains(['|', ';', '>', '&']) {
+        return None;
+    }
+    let names: Vec<&str> = words
+        .filter_map(|w| w.trim_matches(['\'', '"']).strip_suffix("/SKILL.md"))
+        .filter_map(|dir| dir.rsplit('/').next())
+        .filter(|n| !n.is_empty())
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
 
 fn s(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or("").to_string()
@@ -711,6 +765,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn skill_file_reads_become_skill_cards() {
+        assert_eq!(skill_reads("cat /Users/a/.agents/skills/caveman/SKILL.md /Users/a/.agents/skills/surgical-patch/SKILL.md").as_deref(), Some("caveman, surgical-patch"));
+        assert_eq!(skill_reads("sed -n 1,200p '/x/skills/graphify/SKILL.md'").as_deref(), Some("graphify"));
+        assert_eq!(skill_reads("cat /x/skills/caveman/SKILL.md | wc -l"), None);
+        assert_eq!(skill_reads("cat README.md"), None);
+    }
+
+    #[test]
+    fn explicit_skills_go_as_skill_input() {
+        let (mut b, _rx) = bridge();
+        let list = b.take_skills(&json!({ "data": [{ "skills": [
+            { "name": "caveman", "path": "/a/caveman/SKILL.md", "enabled": true, "description": "terse" },
+            { "name": "caveman", "path": "/b/caveman/SKILL.md", "enabled": true, "description": "dup" },
+            { "name": "off", "path": "/c/SKILL.md", "enabled": false, "description": "" },
+        ] }] }));
+        assert_eq!(list, vec![Skill { name: "caveman".into(), description: "terse".into() }]);
+        assert_eq!(b.skills["caveman"], "/a/caveman/SKILL.md");
+    }
+
+    #[test]
     fn strips_shell_wrappers() {
         assert_eq!(strip_shell("/bin/zsh -lc 'curl -s x | head'"), "curl -s x | head");
         assert_eq!(strip_shell("/bin/zsh -lc \"printf 'hi' > a.txt\""), "printf 'hi' > a.txt");
@@ -737,6 +811,7 @@ mod tests {
             diffs: HashMap::new(),
             children: HashMap::new(),
             usage: Usage::default(),
+            skills: HashMap::new(),
         };
         (b, rx)
     }

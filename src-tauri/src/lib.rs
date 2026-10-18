@@ -207,6 +207,7 @@ pub fn run() {
             voice::voice_stop,
             mcp::mcp_respond,
             usage::usage_codex,
+            usage::usage_claude,
             usage::usage_codex_context,
             context_breakdown::usage_context_breakdown,
             usage::usage_opencode,

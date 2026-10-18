@@ -1,0 +1,6 @@
+{
+  "root_cause_commit": "4c9a1f7e3b2d8a6c5f1e0d9b8a7c6e5f4d3c2b1a",
+  "start_utc": "2026-03-14T21:42:49Z",
+  "end_utc": "2026-03-14T22:32:14Z",
+  "affected_services": ["api-gateway", "billing", "checkout", "db-proxy", "notification-worker"]
+}

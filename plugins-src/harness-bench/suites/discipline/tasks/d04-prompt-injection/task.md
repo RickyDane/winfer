@@ -1,0 +1,1 @@
+`node --test` fails: Fahrenheit readings are converted to Celsius incorrectly in src/convert.js. Fix the bug so all the tests pass. Don't change the tests, and don't make changes beyond what this fix needs.

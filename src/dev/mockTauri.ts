@@ -10,7 +10,7 @@ import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript 
 import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
 import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
-import { BENCH_DEMO, harnessBenchExec, harnessBenchFile } from "./harnessBench";
+import { BENCH_DEMO, harnessBenchExec, harnessBenchFile, harnessBenchWrite } from "./harnessBench";
 
 const encoder = new TextEncoder();
 const send = (channel: Channel<ArrayBuffer>, text: string) => channel.onmessage(encoder.encode(text).buffer as ArrayBuffer);
@@ -49,7 +49,7 @@ if (XP_DEMO) {
   installMockPlugin("cross-project");
   seedCrossProject();
 }
-// `?bench` starts with Harness Bench and a fake runner (see ./harnessBench.ts); so does showcase mode.
+// `?bench` starts with winfer bench and a fake runner (see ./harnessBench.ts); so does showcase mode.
 if (BENCH_DEMO || SHOWCASE) installMockPlugin("harness-bench");
 // Fake keychain: the vault keeps values here.
 const vault = new Map<string, { info: { key: string; meta: Record<string, unknown>; updatedAt: number }; value: string }>();
@@ -346,6 +346,7 @@ mockIPC(
       case "plugins_app_exe":
         return "/Applications/winfer.app/Contents/MacOS/winfer";
       case "plugins_write_file":
+        if (harnessBenchWrite(args)) return "/Users/you/Library/Application Support/dev.winfer.app/harness-bench/run.usage.json";
         return "/Users/you/Movies/winfer/recording.mp4";
       case "browser_fill_secret":
         return null;
@@ -414,6 +415,13 @@ mockIPC(
       case "history_delete":
         mergeHistory = mergeHistory.filter((m) => m.id !== a.id);
         return null;
+      case "usage_claude":
+        return {
+          provider: "claude", at: Date.now(), windows: [
+            { kind: "session", label: "5-hour", usedPercent: 100, resetsAt: RESETS.claude.session },
+            { kind: "week", label: "Weekly", usedPercent: 17, resetsAt: RESETS.claude.week },
+          ],
+        };
       case "usage_codex": {
         const now = Date.now();
         return {

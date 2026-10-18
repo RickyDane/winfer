@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { PRESETS, parseJsonl, runningJobs, scoreRows, summarize } from "../plugins/harness-bench/index.js";
 
@@ -58,5 +61,40 @@ describe("harness bench", () => {
     expect(sol).toMatchObject({ runs: 2, passed: 1, seconds: 20, input: 70_000, uncached: 10_000, cost: null });
     expect(rows.find((r) => r.model === "gpt-6-luna").runs).toBe(1);
     expect(rows.find((r) => r.harness === "winfer-chatgpt").cost).toBe(0.5);
+  });
+});
+
+const files = (dir) =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.name === "__pycache__" || e.name === ".DS_Store" ? [] : e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)],
+  );
+
+/** name → contents of a ustar archive's regular files. */
+function untar(buf) {
+  const out = {};
+  const text = (o, n) => buf.toString("latin1", o, o + n).replace(/\0.*$/s, "");
+  for (let o = 0; o + 512 <= buf.length && buf[o]; ) {
+    const name = [text(o + 345, 155), text(o, 100)].filter(Boolean).join("/");
+    const size = parseInt(text(o + 124, 12).trim() || "0", 8);
+    if ("0\0".includes(String.fromCharCode(buf[o + 156]))) out[name] = buf.subarray(o + 512, o + 512 + size).toString("latin1");
+    o += 512 + Math.ceil(size / 512) * 512;
+  }
+  return out;
+}
+
+describe("harness bench packaging", () => {
+  it("ships suites.tar.gz in sync with plugins-src (run `python3 run.py --pack`)", () => {
+    const src = "plugins-src/harness-bench/suites";
+    const shipped = untar(gunzipSync(readFileSync("plugins/harness-bench/bench/suites.tar.gz")));
+    const sources = Object.fromEntries(files(src).map((f) => [relative(src, f).split("\\").join("/"), readFileSync(f).toString("latin1")]));
+    expect(Object.keys(shipped).sort()).toEqual(Object.keys(sources).sort());
+    for (const [name, body] of Object.entries(sources)) expect(shipped[name] === body, name).toBe(true);
+  });
+
+  it("keeps every store plugin within the installer's 500-file limit", () => {
+    for (const id of readdirSync("plugins").filter((d) => statSync(join("plugins", d)).isDirectory())) {
+      const shipped = files(join("plugins", id)).filter((f) => !/\/bench\/(results|suites)\//.test(f.split("\\").join("/")));
+      expect(shipped.length, id).toBeLessThanOrEqual(500);
+    }
   });
 });

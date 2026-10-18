@@ -1,0 +1,8 @@
+{
+  "name": "stock-sync",
+  "version": "1.3.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/main.js",
+  "scripts": { "sync": "node src/main.js" }
+}

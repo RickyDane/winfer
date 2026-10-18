@@ -35,6 +35,8 @@ pub enum Block {
 
 pub struct Item {
     pub block: Block,
+    pub background: bool,
+    pub exit_code: Option<i32>,
     /// When it appeared, for the fade-in.
     pub born: Instant,
     /// Changes whenever the item does (see `touch`); the view caches by it.
@@ -53,7 +55,7 @@ const SETTLE: Duration = Duration::from_millis(700);
 
 impl Item {
     pub fn new(block: Block) -> Self {
-        Item { block, born: Instant::now(), version: next_version(), cache: None }
+        Item { block, background: false, exit_code: None, born: Instant::now(), version: next_version(), cache: None }
     }
 
     pub fn touch(&mut self) {
@@ -80,7 +82,7 @@ impl Item {
                 }
             }
         }
-        let mut lines = render(&self.block, width, expanded, now, epoch);
+        let mut lines = render(&self.block, width, expanded, now, epoch, self.background, self.exit_code);
         let age = now.saturating_duration_since(self.born);
         if age < FADE_IN {
             anim::fade(&mut lines, age.as_secs_f32() / FADE_IN.as_secs_f32());
@@ -92,7 +94,7 @@ impl Item {
     }
 }
 
-fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Instant) -> Vec<Line<'static>> {
+fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Instant, background: bool, exit_code: Option<i32>) -> Vec<Line<'static>> {
     let t = now.duration_since(epoch);
     match block {
         Block::User { text } => {
@@ -165,6 +167,9 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let (label, kind) = tool_kind(name);
             let mut head = vec![Span::styled(format!("{dot} "), theme::bold(color))];
             head.extend(chip(&label, kind));
+            if background {
+                head.push(Span::styled(" ⇢ bg", theme::fg(theme::PINK())));
+            }
             // Right-aligned readout: diff stat, failure, duration.
             let mut right: Vec<Span<'static>> = Vec::new();
             if let Some(d) = diff.as_deref().filter(|d| !d.trim().is_empty()) {
@@ -172,7 +177,9 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
                 right.push(Span::styled(format!("+{add}"), theme::fg(theme::GREEN())));
                 right.push(Span::styled(format!(" −{del}"), theme::fg(theme::RED())));
             }
-            if *status == Status::Failed {
+            if let Some(code) = exit_code {
+                right.push(Span::styled(format!("exit {code}"), if code == 0 { theme::dim() } else { theme::fg(theme::RED()) }));
+            } else if *status == Status::Failed {
                 right.push(Span::styled("failed", theme::fg(theme::RED())));
             }
             if *status == Status::Running && took > Duration::from_secs(1) || *status != Status::Running && took >= Duration::from_millis(1000) {
@@ -431,14 +438,14 @@ mod tests {
         let tool = |name: &str, output: &str, diff: Option<String>| Block::Tool { id: "1".into(), name: name.into(), title: "t".into(), output: output.into(), diff, status: Status::Ok, started: now, ended: Some(now) };
         // Header plus two preview lines; markdown scaffolding is skipped; the rest is counted.
         let out = "### Result\n\n```js\nawait page.goto('x');\n```\nline a\nline b\nline c";
-        let lines = plain(&render(&tool("winfer-browser · browser_navigate", out, None), 80, false, now, now));
+        let lines = plain(&render(&tool("winfer-browser · browser_navigate", out, None), 80, false, now, now, false, None));
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[0].contains(" navigate ") && lines[1].contains("await page.goto") && lines[2].contains("line a") && lines[2].ends_with("+2 lines"), "{lines:?}");
         // Expanded shows everything.
-        assert!(render(&tool("Bash", out, None), 80, true, now, now).len() > 5);
+        assert!(render(&tool("Bash", out, None), 80, true, now, now, false, None).len() > 5);
         // Diffs: only changed lines, two at most.
         let d = crate::harness::diff::unified("a.txt", "a\nb\nc\nd\n", "a\nB\nc\nD\n");
-        let lines = plain(&render(&tool("Edit", "", Some(d)), 80, false, now, now));
+        let lines = plain(&render(&tool("Edit", "", Some(d)), 80, false, now, now, false, None));
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[1].contains("- b") && lines[2].contains("+ B") && lines[2].ends_with("+2 lines"), "{lines:?}");
     }

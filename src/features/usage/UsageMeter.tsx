@@ -1,11 +1,11 @@
-import { ChevronRight, Gauge } from "lucide-react";
+import { ChevronRight, Gauge, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
-import { contextBreakdown, contextColor, duration, leftNow, levelColor, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type UsageWindow } from "./usage";
+import { contextBreakdown, contextColor, duration, leftNow, levelColor, refreshUsage, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type UsageWindow } from "./usage";
 import { UsageSummary } from "./UsageHistory";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
@@ -185,21 +185,29 @@ function useLimited() {
 const CARD = "w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl";
 
 /** Every agent's limits as bars or lines, plus OpenCode's spend today. */
-export function Limits({ chart = "bars" }: { chart?: ChartKind }) {
+export function Limits({ chart = "bars", refresh = true }: { chart?: ChartKind; refresh?: boolean }) {
   const snapshots = useUsage((s) => s.snapshots);
   const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
+  const errors = useUsage((s) => s.errors);
   const { limited, showOpencode } = useLimited();
   const claudeInstalled = providers.some((p) => p.id === "claude" && p.installed);
   const Window = chart === "line" ? WindowLine : WindowBar;
   return (
     <div className="space-y-4">
+      {refresh && <div className="flex justify-end"><RefreshUsageButton /></div>}
+      {Object.entries(errors).map(([provider, error]) => error && (
+        <p key={provider} role="status" className="text-[11px] text-warning">
+          {providerName(providers, provider)}: {error}{(snapshots[provider] || (provider === "opencode" && opencode)) && " Previous reading kept."}
+        </p>
+      ))}
       {limited.map((s) => (
         <section key={s.provider} className="space-y-2">
           <header className="flex items-center gap-2 text-[13px]">
             <ProviderIcon provider={s.provider} />
             <span className="flex-1 font-medium text-fg">{providerName(providers, s.provider)}</span>
-            <span className="text-[10px] text-fg-subtle" title={new Date(s.at).toLocaleString()}>
+            <span className={cn("text-[10px]", Date.now() - s.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(s.at).toLocaleString()}>
+              {Date.now() - s.at > 10 * 60_000 && "Stale · "}
               {Date.now() - s.at < 120_000 ? "just now" : `${duration(Date.now() - s.at)} ago`}
             </span>
           </header>
@@ -217,11 +225,22 @@ export function Limits({ chart = "bars" }: { chart?: ChartKind }) {
           </span>
         </section>
       )}
-      {limited.length === 0 && !showOpencode && <p className="text-[11px] text-fg-subtle">No usage reported yet. Limits show up once an agent has answered a message.</p>}
+      {limited.length === 0 && !showOpencode && <p className="text-[11px] text-fg-subtle">No usage reported yet. Refresh to check your signed-in accounts.</p>}
       {!claudeInstalled || snapshots.claude ? null : (
-        <p className="text-[11px] text-fg-subtle">Claude Code reports its limits once a session in winfer has answered a message.</p>
+        <p className="text-[11px] text-fg-subtle">Sign in through Claude Code, then refresh to read your plan limits.</p>
       )}
     </div>
+  );
+}
+
+function RefreshUsageButton() {
+  const busy = useUsage((s) => Object.values(s.refreshing).some(Boolean));
+  return (
+    <button type="button" onClick={() => void refreshUsage()} disabled={busy} aria-label="Refresh usage limits" aria-busy={busy}
+      className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-50">
+      <RefreshCw size={12} className={busy ? "animate-spin" : undefined} />
+      {busy ? "Refreshing…" : "Refresh"}
+    </button>
   );
 }
 
@@ -231,8 +250,11 @@ const Heading = ({ children }: { children: React.ReactNode }) => <div className=
 export function UsageDetails({ className }: { className?: string }) {
   return (
     <div className={cn(CARD, className)}>
-      <Heading>Usage limits</Heading>
-      <Limits />
+      <div className="flex items-center justify-between gap-3">
+        <Heading>Usage limits</Heading>
+        <RefreshUsageButton />
+      </div>
+      <Limits refresh={false} />
     </div>
   );
 }

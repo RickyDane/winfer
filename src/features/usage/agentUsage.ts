@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { pasteText, sendText } from "@/features/terminal/xtermRegistry";
 import { logActivity } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { duration, leftNow, refreshCodex, runsOutAt, tightest, useUsage, usedNow, type UsageWindow } from "./usage";
+import { duration, leftNow, refreshClaude, refreshCodex, runsOutAt, tightest, useUsage, usedNow, type UsageWindow } from "./usage";
 
 /** OpenCode's model providers whose account sign-in shares the limits of a plan winfer tracks. */
 const PLAN_OF: Record<string, string> = { openai: "codex", anthropic: "claude" };
@@ -25,9 +25,10 @@ export async function limitsOf(pane: Pane): Promise<{ provider: string; note: st
   return { provider: plan, note: `OpenCode is using ${model.provider}/${model.model} through your ${plan === "codex" ? "ChatGPT" : "Claude"} sign-in, so ${name}'s plan limits apply.` };
 }
 
-/** Fresh numbers where they can be asked for (Codex's are live; Claude's come with each reply). */
+/** Refresh account-wide plan limits before answering an agent's usage request. */
 export async function refreshLimits(provider: string) {
   if (provider === "codex") await refreshCodex();
+  if (provider === "claude") await refreshClaude();
 }
 
 const round = (n: number) => Math.round(n * 10) / 10;

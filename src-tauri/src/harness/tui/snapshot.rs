@@ -66,6 +66,29 @@ fn conversation(a: &mut App) {
     a.items = items.into_iter().map(Item::new).collect();
 }
 
+fn background_shells(a: &mut App) {
+    use crate::harness::event::TaskEv;
+    a.items.push(Item::new(Block::User { text: "Watch CI and check the build in the background.".into() }));
+    for (id, command, output, status, seconds, code) in [
+        ("build", "cargo build --release", "Finished release profile in 28.04s\nBuild ready.", "completed", 28, Some(0)),
+        ("tests", "pnpm test", "FAIL src/auth.test.ts\nExpected status 200, received 401", "failed", 12, Some(1)),
+        ("watch", "gh run watch 39063165808", "Windows tests · running\nWaiting for test-harness (windows-latest)…", "running", 134, None),
+    ] {
+        a.items.push(Item::new(Block::Tool {
+            id: id.into(), name: "Bash".into(), title: command.into(), output: output.into(), diff: None,
+            status: Status::Ok, started: ago(seconds), ended: Some(ago(0)),
+        }));
+        a.on_agent_task(TaskEv {
+            id: format!("bg-{id}"), tool_id: Some(id.into()), title: Some(command.into()),
+            status: Some(status.into()), exit_code: code, ..Default::default()
+        });
+    }
+    a.items.push(Item::new(Block::Assistant {
+        id: "reply".into(), text: "Build passed. One auth test failed. Windows CI is still running in the background.".into(),
+    }));
+    a.composer.set("");
+}
+
 fn busy(a: &mut App) {
     conversation(a);
     a.items.truncate(3);
@@ -80,7 +103,7 @@ fn busy(a: &mut App) {
         Todo { content: "Build and run the test suite".into(), status: "in_progress".into() },
         Todo { content: "Add TB cases to format.test.ts".into(), status: "pending".into() },
     ];
-    a.queue = vec![UserMsg { text: "also update the changelog".into(), images: vec![] }];
+    a.queue = vec![UserMsg { text: "also update the changelog".into(), images: vec![], skill: None }];
     // Two subagents: one backgrounded (its call already returned), one still in its call.
     for (id, title) in [("t8", "Audit date formatting"), ("t9", "Find other byte formatters")] {
         a.items.insert(2, Item::new(Block::Tool { id: id.into(), name: "Agent".into(), title: title.into(), output: String::new(), diff: None, status: Status::Running, started: ago(41), ended: None }));
@@ -223,6 +246,7 @@ fn term_colors() -> (String, String) {
 fn render(name: &str, setup: fn(&mut App), frames: usize, step_ms: u64) -> String {
     let mut a = app();
     setup(&mut a);
+    let height = if name == "background shells" { 24 } else { H };
     let base = Instant::now();
     let mut out = format!("<section><h2>{name}</h2><canvas data-ms={step_ms} data-cols={} style=\"background:{}\"></canvas><script>F.push([", SNAP_W.with(|w| w.get()), term_colors().0);
     for i in 0..frames {
@@ -232,7 +256,7 @@ fn render(name: &str, setup: fn(&mut App), frames: usize, step_ms: u64) -> Strin
         for item in &mut a.items {
             item.born = base - shift;
         }
-        let mut term = Terminal::new(TestBackend::new(SNAP_W.with(|w| w.get()), H)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(SNAP_W.with(|w| w.get()), height)).unwrap();
         term.draw(|f| view::draw(f, &mut a)).unwrap();
         let cursor = term.get_cursor_position().ok().filter(|_| a.picker.is_none() && a.approvals.is_empty()).map(|p| (p.x, p.y));
         out.push_str(&frame_json(term.backend().buffer(), cursor));
@@ -263,7 +287,8 @@ fn intro() -> String {
 fn snapshots() {
     let dir = std::env::var("WF_SNAP_DIR").unwrap_or_else(|_| "/tmp/wf-tui".into());
     std::fs::create_dir_all(&dir).unwrap();
-    let scenes: [(&str, fn(&mut App), usize); 9] = [
+    let scenes: [(&str, fn(&mut App), usize); 10] = [
+        ("background shells", background_shells, 60),
         ("welcome", |_| {}, 60),
         ("conversation", conversation, 1),
         ("working", busy, 60),

@@ -1,0 +1,9 @@
+{
+  "copyleft": [
+    {"name": "qs-tiny", "version": "6.0.2", "license": "MPL-2.0", "via": ["express-lite"]},
+    {"name": "color-space", "version": "2.0.0", "license": "LGPL-3.0", "via": ["chartkit"]},
+    {"name": "pdf-mini", "version": "0.4.0", "license": "(MIT AND GPL-2.0-or-later)", "via": ["chartkit"]},
+    {"name": "xml-sax-lite", "version": "0.7.3", "license": "AGPL-3.0", "via": ["auth-guard", "md-render"]},
+    {"name": "tiny-glob", "version": "0.9.1", "license": "GPL-2.0-only", "via": ["csv-stream"]}
+  ]
+}

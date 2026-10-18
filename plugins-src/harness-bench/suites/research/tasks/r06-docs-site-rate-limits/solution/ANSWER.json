@@ -1,0 +1,11 @@
+{
+  "limits": {
+    "GET /v2/search": 1800,
+    "POST /v2/exports": 15,
+    "GET /v2/projects/{id}/members": 540,
+    "POST /v2/reports": 60,
+    "PATCH /v2/webhooks/{id}": 1800
+  },
+  "total": 4215,
+  "sources": ["/rate-limits.html", "/plans.html", "/addons.html", "/changelog.html", "/reference/endpoints/get-v2-search.html", "/reference/endpoints/post-v2-exports.html", "/reference/endpoints/get-v2-projects-id-members.html", "/reference/endpoints/post-v2-reports.html", "/reference/endpoints/patch-v2-webhooks-id.html", "/reference/endpoints/get-v2-webhooks-id.html"]
+}

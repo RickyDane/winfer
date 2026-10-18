@@ -1,0 +1,1 @@
+{"handler_class": "ResilientPing", "first_handle": "AuditMixin", "base_calls": 2, "result": ["trace", "rping:OK1", "json", "audit"]}

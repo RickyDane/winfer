@@ -1,0 +1,10 @@
+{
+  "original_name": "cache.max_age",
+  "introduced_in": "1.4.0",
+  "renamed_in": "2.3.0",
+  "alias_removed_in": "3.0.0",
+  "current_name": "cache.ttl",
+  "current_default_seconds": 43200,
+  "latest_release": "4.2.1",
+  "sources": ["CHANGELOG.md"]
+}

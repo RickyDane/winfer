@@ -26,6 +26,8 @@ pub enum Ev {
     /// running in the background after their tool call returns).
     Task(TaskEv),
     Todos(Vec<Todo>),
+    /// Skills the user can invoke with `/name` (the backend's own discovery).
+    Skills(Vec<Skill>),
     Usage(Usage),
     Notice(String),
     Error(String),
@@ -48,6 +50,9 @@ pub struct TaskEv {
     pub last: Option<String>,
     /// "running", or how it ended: "completed", "failed", "stopped", "killed".
     pub status: Option<String>,
+    /// File receiving a background shell's output.
+    pub output_file: Option<String>,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,11 +98,19 @@ pub struct ModelInfo {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skill {
+    pub name: String,
+    pub description: String,
+}
+
 /// One user turn: text plus attached image files.
 #[derive(Debug, Clone, Default)]
 pub struct UserMsg {
     pub text: String,
     pub images: Vec<std::path::PathBuf>,
+    /// A skill the user invoked explicitly (`/name args`); `text` holds the args.
+    pub skill: Option<String>,
 }
 
 #[derive(Debug)]

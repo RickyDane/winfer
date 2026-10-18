@@ -8,7 +8,7 @@ import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { relativeTime } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { estimate, useProgress, type Progress } from "./progress";
+import { estimate, progressTitle, useProgress, type Progress } from "./progress";
 
 /** Thin progress bar; empty track while there's no estimate yet. */
 export function ProgressBar({ progress, status, className }: { progress: Progress | undefined; status: Pane["status"]; className?: string }) {
@@ -91,7 +91,7 @@ export function SessionsOverview() {
               <h2 className="px-1 text-xs font-medium tracking-wide text-fg-subtle uppercase">{workspace.name}</h2>
               {panes.map((pane) => {
                 const progress = byPane[pane.id];
-                const task = progress?.title ?? progress?.task ?? pane.prompt;
+                const task = progressTitle(progress) ?? pane.prompt;
                 return (
                   <button key={pane.id} onClick={() => focus(pane)} className="block w-full space-y-1.5 rounded-lg px-3 py-2 text-left hover:bg-hover">
                     <div className="flex items-center gap-2 text-xs">

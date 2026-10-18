@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Client (lumen 3.x) - lumen docs</title></head>
+<body>
+<header><a href="/index.html">lumen docs</a> | <a href="/search.html">Search</a> | <a href="/v3/index.html">v3 (current)</a> | <a href="/v2/index.html">v2 (legacy)</a> | <a href="/changelog.html">Changelog</a></header>
+<nav><ul><li><a href="/v3/install.html">Install</a></li><li><a href="/v3/quickstart.html">Quickstart</a></li><li><a href="/v3/client.html">Client</a></li><li><a href="/v3/requests.html">Requests</a></li><li><a href="/v3/streaming.html">Streaming</a></li><li><a href="/v3/retries.html">Retries</a></li><li><a href="/v3/errors.html">Errors</a></li><li><a href="/v3/auth.html">Auth</a></li><li><a href="/v3/timeouts.html">Timeouts</a></li><li><a href="/v3/proxies.html">Proxies</a></li><li><a href="/v3/cookies.html">Cookies</a></li><li><a href="/v3/testing.html">Testing</a></li></ul></nav>
+<main>
+<h1>Client (lumen 3.x)</h1>
+<p class="banner">You are reading the docs for <b>lumen 3.x</b> (current).</p><p><code>lumen.Client(base_url=None, timeout=Timeout.default(), tls_verify=True, retry=RetryPolicy(), headers=None)</code></p><ul><li><code>timeout</code>: a <a href="/v3/timeouts.html">Timeout</a> or a number of seconds.</li><li><code>tls_verify</code>: set to <code>False</code> to disable TLS certificate verification (the 2.x name <code>verify</code> was removed).</li><li><code>retry</code>: a <a href="/v3/retries.html">RetryPolicy</a>.</li></ul><p>Use a context manager so connections are released promptly.</p><p>Cookies set by the server are stored in the client's cookie jar.</p>
+</main>
+</body></html>

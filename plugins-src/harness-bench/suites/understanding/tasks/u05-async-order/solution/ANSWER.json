@@ -1,0 +1,1 @@
+["run:start", "cache:begin", "cache:load", "main:end", "scheduled", "cache:end", "micro:1", "run:after-await", "cache:micro", "micro:2", "run:warm", "publish:sent", "cache:ready", "run:raced:ready", "cache:tick", "timer:a", "timer:b", "race:timer", "later:2"]

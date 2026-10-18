@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{In, LineProcess, Opts};
 use crate::harness::claude_skills::{self, LeanSkills};
 use crate::harness::diff;
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
 
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("claude").is_none() {
@@ -284,7 +284,7 @@ impl Bridge {
             Cmd::Compact => {
                 self.busy = true;
                 self.emit(Ev::TurnStart);
-                let _ = proc.write(&user_message(&UserMsg { text: "/compact".into(), images: Vec::new() }));
+                let _ = proc.write(&user_message(&UserMsg { text: "/compact".into(), images: Vec::new(), skill: None }));
             }
             Cmd::SetCompaction { .. } => {}
             Cmd::Undo => {
@@ -318,6 +318,12 @@ impl Bridge {
             }
             return;
         }
+        // Claude Code starts a turn on its own when a background task finishes (it reads the
+        // task's notification and replies); show it as working like any other turn.
+        if !self.busy && matches!(v["type"].as_str(), Some("assistant" | "stream_event")) {
+            self.busy = true;
+            self.emit(Ev::TurnStart);
+        }
         match v["type"].as_str().unwrap_or("") {
             "system" => match v["subtype"].as_str() {
                 Some("init") => {
@@ -326,6 +332,9 @@ impl Bridge {
                     }
                     if let Some(m) = v["model"].as_str() {
                         self.emit(Ev::Model(m.to_string()));
+                    }
+                    if let Some(skills) = init_skills(v) {
+                        self.emit(Ev::Skills(skills));
                     }
                 }
                 Some("compact_boundary") => self.emit(Ev::Notice("Context compacted.".into())),
@@ -373,6 +382,9 @@ impl Bridge {
                 }
             }
             "user" => {
+                if let Some(t) = shell_notification(&content_text(&v["message"]["content"])) {
+                    self.emit(Ev::Task(t));
+                }
                 for block in v["message"]["content"].as_array().into_iter().flatten() {
                     if block["type"] != "tool_result" {
                         continue;
@@ -381,6 +393,11 @@ impl Bridge {
                     let ok = !block["is_error"].as_bool().unwrap_or(false);
                     let output = content_text(&block["content"]);
                     let call = self.calls.remove(&id);
+                    if let Some(c) = call.as_ref().filter(|c| ok && c.name == "Bash") {
+                        if let Some(t) = shell_receipt(&id, &c.input, &output) {
+                            self.emit(Ev::Task(t));
+                        }
+                    }
                     if let Some(c) = call.as_ref().filter(|c| ok && c.name == "TaskCreate") {
                         if self.plan.created(&c.input, &output) {
                             self.emit(Ev::Todos(self.plan.todos()));
@@ -502,7 +519,11 @@ impl Bridge {
 fn task_event(v: &Value) -> Option<TaskEv> {
     let id = v["task_id"].as_str().filter(|s| !s.is_empty())?.to_string();
     let s = |k: &Value| k.as_str().filter(|s| !s.is_empty()).map(str::to_string);
-    let mut t = TaskEv { id, tool_id: s(&v["tool_use_id"]), title: s(&v["description"]), agent: s(&v["subagent_type"]), ..Default::default() };
+    let mut t = TaskEv {
+        id, tool_id: s(&v["tool_use_id"]), title: s(&v["description"]), agent: s(&v["subagent_type"]),
+        output_file: s(&v["output_file"]), exit_code: v["exit_code"].as_i64().and_then(|n| i32::try_from(n).ok()),
+        ..Default::default()
+    };
     match v["subtype"].as_str() {
         Some("task_started") => t.status = Some("running".into()),
         Some("task_progress") => {
@@ -522,8 +543,57 @@ fn task_event(v: &Value) -> Option<TaskEv> {
     Some(t)
 }
 
+/// Older Claude Code releases only announce background shells in their Bash receipt.
+fn shell_receipt(tool_id: &str, input: &Value, output: &str) -> Option<TaskEv> {
+    let rest = output.strip_prefix("Command running in background with ID: ")?;
+    let id = rest.split_once('.').map(|(id, _)| id)?.trim();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return None;
+    }
+    let output_file = output.split_once("Output is being written to: ").map(|(_, path)| {
+        path.split_once(". You ").map_or(path.trim_end_matches('.').trim(), |(path, _)| path).to_string()
+    });
+    Some(TaskEv {
+        id: id.into(), tool_id: Some(tool_id.into()), title: Some(title("Bash", input)),
+        status: Some("running".into()), output_file, ..Default::default()
+    })
+}
+
+fn shell_notification(text: &str) -> Option<TaskEv> {
+    let text = text.strip_prefix("<task-notification>")?.split_once("</task-notification>")?.0;
+    let tag = |name: &str| text.split_once(&format!("<{name}>"))?.1.split_once(&format!("</{name}>"))
+        .map(|(value, _)| value.trim().to_string()).filter(|s| !s.is_empty());
+    let summary = tag("summary").unwrap_or_default();
+    let exit_code = summary.rsplit_once("(exit code ").and_then(|(_, code)| code.trim_end_matches(')').parse().ok());
+    Some(TaskEv {
+        id: tag("task-id")?, tool_id: tag("tool-use-id"), status: tag("status"),
+        output_file: tag("output-file"), exit_code, ..Default::default()
+    })
+}
+
+/// The skills a session loaded (`skills` in its init message), with descriptions from disk.
+fn init_skills(v: &Value) -> Option<Vec<Skill>> {
+    let names = v["skills"].as_array()?;
+    let known = crate::harness::claude_skills::available();
+    Some(
+        names
+            .iter()
+            .filter_map(|n| n.as_str())
+            .map(|name| Skill {
+                name: name.to_string(),
+                description: known.iter().find(|k| k.id == name || k.name == name).map(|k| k.description.clone()).unwrap_or_default(),
+            })
+            .collect(),
+    )
+}
+
 fn user_message(msg: &UserMsg) -> Value {
-    let mut content = vec![json!({ "type": "text", "text": msg.text })];
+    // Claude Code runs `/name args` typed into a turn as that skill.
+    let text = match &msg.skill {
+        Some(skill) => format!("/{skill} {}", msg.text).trim_end().to_string(),
+        None => msg.text.clone(),
+    };
+    let mut content = vec![json!({ "type": "text", "text": text })];
     for path in &msg.images {
         if let Some((media, data)) = crate::harness::tools::image_base64(path) {
             content.push(json!({ "type": "image", "source": { "type": "base64", "media_type": media, "data": data } }));
@@ -569,6 +639,7 @@ pub fn title(name: &str, input: &Value) -> String {
         "WebFetch" => s("url"),
         "WebSearch" => s("query"),
         "Task" | "Agent" => s("description"),
+        "Skill" => format!("{} {}", s("skill"), s("args")).trim_end().to_string(),
         "TodoWrite" => "update todos".into(),
         "TaskCreate" => s("subject"),
         "TaskUpdate" => {
@@ -607,6 +678,13 @@ fn edit_diff(name: &str, input: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn skill_cards_show_the_skill_name() {
+        use serde_json::json;
+        assert_eq!(super::title("Skill", &json!({ "args": "ultra", "skill": "caveman" })), "caveman ultra");
+        assert_eq!(super::title("Skill", &json!({ "skill": "graphify" })), "graphify");
+    }
+
     use super::*;
     use std::sync::mpsc::channel;
 
@@ -703,6 +781,25 @@ mod tests {
         assert!(b.note.as_deref().is_some_and(|n| n.contains("/x/a")));
         let id = new_uuid();
         assert_eq!((id.len(), &id[14..15]), (36, "4"));
+    }
+
+    #[test]
+    fn background_bash_receipt_and_notification_emit_task_updates() {
+        let (mut b, rx) = bridge();
+        b.on_line(&json!({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh run watch 123","run_in_background":true}}]}}));
+        b.on_line(&json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Command running in background with ID: b123. Output is being written to: /tmp/a.b/tasks/b123.output. You will be notified when it completes."}]}}));
+        b.on_line(&json!({"type":"user","message":{"content":"<task-notification>\n<task-id>b123</task-id>\n<tool-use-id>t1</tool-use-id>\n<output-file>/tmp/a.b/tasks/b123.output</output-file>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>"}}));
+        let events: Vec<_> = rx.try_iter().collect();
+        let tasks: Vec<_> = events.iter().filter_map(|e| if let Ev::Task(t) = e { Some(t) } else { None }).collect();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].id, "b123");
+        assert_eq!(tasks[0].tool_id.as_deref(), Some("t1"));
+        assert_eq!(tasks[0].output_file.as_deref(), Some("/tmp/a.b/tasks/b123.output"));
+        assert_eq!(tasks[0].status.as_deref(), Some("running"));
+        assert_eq!(tasks[1].status.as_deref(), Some("completed"));
+        assert_eq!(tasks[1].exit_code, Some(0));
+        assert!(shell_receipt("t", &json!({}), "ordinary output").is_none());
+        assert!(shell_notification("ordinary message").is_none());
     }
 
     #[test]

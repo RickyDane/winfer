@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::app::App;
 use super::picker::PickKind;
-use super::transcript::{Block, NoticeKind, diff_lines, truncate};
+use super::transcript::{Block, NoticeKind, Status, diff_lines, truncate};
 use super::{anim, theme};
 use crate::harness::event::Mode;
 
@@ -25,6 +25,7 @@ const LOGO: [&str; 2] = ["█ █ █ █ █▀▄ █▀▀ █▀▀ █▀�
 const MARGIN: u16 = 2;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    app.poll_shell_output();
     let area = f.area();
     let now = Instant::now();
     let t = now.duration_since(app.epoch);
@@ -469,21 +470,38 @@ fn pad_str() -> String {
 
 /// The rule above the prompt while the agent works, with the status set into it:
 /// "── ✹ Warping…  1m 14s · ↓ 25.6k ─────────────── esc to stop ──". A comet runs along it.
+/// Between turns, while subagents or shells still run in the background, it reads
+/// "── ✹ 2 background agents running…  3m 02s ──── ctrl+g agents ──".
 fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
     let mut left = vec![Span::styled(format!("{} ", anim::star_spin(t)), theme::bold(theme::nebula(t.as_secs_f32() * 0.3)))];
-    left.extend(anim::nebula_shimmer(&format!("{}…", app.verb), t, theme::FG()));
-    let mut info = format!("  {}", anim::elapsed(app.turn_started.elapsed()));
-    if app.usage.output > 0 {
-        info.push_str(&format!(" · ↓ {}", anim::tokens(app.usage.output)));
-    }
-    left.push(Span::styled(info, theme::muted()));
-    let right = theme::key_hint("esc", "to stop").to_vec();
+    let right = if app.busy {
+        left.extend(anim::nebula_shimmer(&format!("{}…", app.verb), t, theme::FG()));
+        let mut info = format!("  {}", anim::elapsed(app.turn_started.elapsed()));
+        if app.usage.output > 0 {
+            info.push_str(&format!(" · ↓ {}", anim::tokens(app.usage.output)));
+        }
+        left.push(Span::styled(info, theme::muted()));
+        theme::key_hint("esc", "to stop").to_vec()
+    } else {
+        let (agents, shells) = (app.running_subagents(), app.running_shells());
+        let plural = |n: usize, what: &str| format!("{n} background {what}{}", if n == 1 { "" } else { "s" });
+        let label = match (agents, shells) {
+            (0, s) => plural(s, "shell"),
+            (a, 0) => plural(a, "agent"),
+            (a, s) => format!("{} · {}", plural(a, "agent"), plural(s, "shell")),
+        };
+        left.extend(anim::nebula_shimmer(&format!("{label} running…"), t, theme::FG()));
+        if let Some(since) = app.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.started).min() {
+            left.push(Span::styled(format!("  {}", anim::elapsed(since.elapsed())), theme::muted()));
+        }
+        if agents > 0 { theme::key_hint("ctrl+g", "agents").to_vec() } else { Vec::new() }
+    };
     let w = |s: &[Span]| s.iter().map(|s| s.content.width()).sum::<usize>();
     let rule = anim::comet(width, t, true);
     let lead = MARGIN as usize;
     let (lw, rw) = (w(&left), w(&right));
     // Room for "──␠left␠" … "␠right␠──"; drop the right part, then the label, when narrow.
-    let show_right = lead + lw + 2 + rw + 2 + lead + 4 <= width;
+    let show_right = rw > 0 && lead + lw + 2 + rw + 2 + lead + 4 <= width;
     if lead + lw + 2 + lead > width {
         return Line::from(rule);
     }
@@ -510,7 +528,7 @@ fn composer_lines(app: &App, width: usize, t: Duration) -> (Vec<Line<'static>>, 
     let max_rows = 10;
     let first = cr.saturating_sub(max_rows - 1);
     let shown: Vec<&String> = rows.iter().skip(first).take(max_rows).collect();
-    let mut out = vec![if app.busy { working_rule(app, width, t) } else { Line::from(anim::comet(width, t, false)) }];
+    let mut out = vec![if app.working() { working_rule(app, width, t) } else { Line::from(anim::comet(width, t, false)) }];
     let prompt = if app.busy { theme::fg(theme::DIM()) } else { theme::bold(theme::nebula(0.45)) };
     let lead = |i: usize| if i == 0 && first == 0 { Span::styled(format!("{}❯ ", pad_str()), prompt) } else { Span::raw(" ".repeat(indent)) };
     if app.composer.is_empty() {
@@ -638,6 +656,10 @@ fn status(app: &App, width: usize) -> Line<'static> {
         None => left.push(Span::styled(mode, theme::dim())),
     }
     let mut right = Vec::new();
+    let shells = app.running_shells();
+    if shells > 0 {
+        right.push(Span::styled(format!("⇢ {shells} bg  "), theme::fg(theme::PINK())));
+    }
     let pct = app.ctx_shown.value();
     if app.usage.window > 0 && pct > 0.0 {
         let color = if pct > 0.85 { theme::RED() } else if pct > 0.6 { theme::YELLOW() } else { theme::MUTED() };
