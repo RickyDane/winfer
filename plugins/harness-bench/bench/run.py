@@ -132,23 +132,39 @@ def winfer_bin() -> str:
     sys.exit("winfer binary not found; build it or set WINFER_BIN")
 
 
-@lru_cache(maxsize=None)
-def posix_sh() -> str:
-    """sh for the tasks' check and solution scripts. Windows has none of its own: use Git for
-    Windows' (git is needed for the work folders anyway)."""
-    found = shutil.which("sh")
-    if found or not WINDOWS:
-        return found or "sh"
+def git_roots() -> list:
+    """Where Git for Windows may be installed."""
     roots = []
     git = shutil.which("git")
     if git:
         roots += list(Path(git).resolve().parents)[:3]  # Git\cmd\git.exe, Git\mingw64\bin\git.exe
     roots += [Path(os.environ[v]) / "Git" for v in ("ProgramFiles", "ProgramW6432", "LOCALAPPDATA") if os.environ.get(v)]
     roots += [Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git"] if os.environ.get("LOCALAPPDATA") else []
-    for r in roots:
+    return roots
+
+
+@lru_cache(maxsize=None)
+def posix_sh() -> str:
+    """sh for the tasks' check and solution scripts. Windows has none of its own: use Git for
+    Windows' (git is needed for the work folders anyway). Its bin\\sh.exe comes first, before an
+    `sh` on PATH: that one is often Git's bare usr\\bin\\sh.exe, which doesn't put the Unix tools
+    ahead of System32 the way bin\\sh.exe does."""
+    if not WINDOWS:
+        return shutil.which("sh") or "sh"
+    for r in git_roots():
         if (r / "bin" / "sh.exe").exists():
             return str(r / "bin" / "sh.exe")
-    return "sh"
+    return shutil.which("sh") or "sh"
+
+
+@lru_cache(maxsize=None)
+def unix_tool_dirs() -> list:
+    """The folders with the Unix tools next to posix_sh() (Git\\usr\\bin), on Windows. The check
+    scripts use `timeout`, `find` and `sort`, which System32 also has under the same names
+    (timeout.exe rejects GNU arguments and exits 1), so these must come first on PATH."""
+    sh = Path(posix_sh())
+    dirs = [sh.parent, sh.parent.parent / "usr" / "bin"]  # usr\bin\sh.exe, or Git\bin\sh.exe
+    return [str(d) for d in dirs if (d / "timeout.exe").exists() or (d / "sort.exe").exists()]
 
 
 @lru_cache(maxsize=None)
@@ -164,7 +180,7 @@ def python_shims() -> str:
 def script_env(**extra) -> dict:
     env = {**os.environ, **extra}
     if WINDOWS:
-        env["PATH"] = python_shims() + os.pathsep + env.get("PATH", "")
+        env["PATH"] = os.pathsep.join([python_shims(), *unix_tool_dirs(), env.get("PATH", "")])
     return env
 
 

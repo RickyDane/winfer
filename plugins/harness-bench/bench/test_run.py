@@ -243,6 +243,28 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(bench.node_shim_script(pnpm), os.path.join("..", "cli", "bin", "run.js"))
         self.assertIsNone(bench.node_shim_script("@echo off"))
 
+    def test_windows_unix_tools_come_before_system32(self):
+        # Git's bare usr\bin\sh.exe is on PATH; Git's bin\sh.exe wins, and Git\usr\bin (GNU
+        # timeout, find, sort) goes ahead of System32 for the check scripts.
+        with tempfile.TemporaryDirectory() as folder:
+            git = Path(folder) / "Git"
+            for f in ("cmd/git.exe", "bin/sh.exe", "usr/bin/sh.exe", "usr/bin/timeout.exe"):
+                (git / f).parent.mkdir(parents=True, exist_ok=True)
+                (git / f).touch()
+            which = {"git": str(git / "cmd" / "git.exe"), "sh": str(git / "usr" / "bin" / "sh.exe")}
+            bench.posix_sh.cache_clear()
+            bench.unix_tool_dirs.cache_clear()
+            try:
+                with patch.object(bench, "WINDOWS", True), patch.object(bench.shutil, "which", side_effect=which.get), \
+                        patch.dict(os.environ, {"PATH": "SYSTEM32"}, clear=True), \
+                        patch.object(bench, "python_shims", return_value="SHIMS"):
+                    self.assertEqual(Path(bench.posix_sh()), (git / "bin" / "sh.exe").resolve())
+                    path = bench.script_env()["PATH"].split(os.pathsep)
+                self.assertEqual(path, ["SHIMS", str((git / "usr" / "bin").resolve()), "SYSTEM32"])
+            finally:
+                bench.posix_sh.cache_clear()
+                bench.unix_tool_dirs.cache_clear()
+
     def test_launcher_leaves_posix_argv_alone(self):
         if not bench.WINDOWS:
             self.assertEqual(bench.launcher(["codex", "exec", "a\nb"]), ["codex", "exec", "a\nb"])

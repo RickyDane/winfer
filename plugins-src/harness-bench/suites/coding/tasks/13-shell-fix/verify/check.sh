@@ -54,10 +54,13 @@ for args in "" "$SRC" "-k" "-k 0 SRC DEST" "-k x SRC DEST" "-k -1 SRC DEST" "NOP
 done
 [ ! -e "$T/u" ] || fail "DEST created on usage error"
 
-# Archiving failure: exit 1, old backups untouched.
-if [ "$(id -u)" != 0 ]; then
-  before=$(cd "$DEST" && ls -l | tr -s ' ' | cut -d' ' -f5,9- ; cksum backup.1.tar backup.3.tar)
-  printf secret > "$SRC/locked.txt"; chmod 000 "$SRC/locked.txt"
+# Archiving failure: exit 1, old backups untouched. Only where chmod 000 makes a file
+# unreadable: not as root, nor on Windows (Git's sh maps chmod to the read-only attribute).
+before=$(cd "$DEST" && ls -l | tr -s ' ' | cut -d' ' -f5,9- ; cksum backup.1.tar backup.3.tar)
+printf secret > "$SRC/locked.txt"; chmod 000 "$SRC/locked.txt"
+if cat "$SRC/locked.txt" >/dev/null 2>&1; then
+  chmod 644 "$SRC/locked.txt"
+else
   run -k 3 "$SRC" "$DEST"; code=$?
   chmod 644 "$SRC/locked.txt"
   [ $code -eq 1 ] || fail "archiving an unreadable file exited $code, want 1"
