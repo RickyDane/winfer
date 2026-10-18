@@ -139,6 +139,7 @@ pub fn run() {
             files::files_resolve,
             files::files_read_text,
             files::files_modified,
+            files::files_write_text,
             files::files_read_bytes,
             plugins::plugins_write_file,
             plugins::plugins_catalog,

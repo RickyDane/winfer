@@ -16,7 +16,10 @@ import { BENCH_DEMO, harnessBenchExec, harnessBenchFile, harnessBenchWrite } fro
 const REPO = "/Users/you/winfer";
 const repoDocs = import.meta.glob<string>(["../../*.md", "../../docs/**/*.md"], { eager: true, query: "?raw", import: "default" });
 const repoImages = import.meta.glob<string>("../../docs/screenshots/*.png", { eager: true, query: "?url", import: "default" });
-const repoFile = (rel: string) => repoDocs[`../../${rel}`] ?? null;
+/** Files saved from the viewer (edits, comments), kept in memory with their change time. */
+const savedDocs = new Map<string, { text: string; modified: number }>();
+const repoFile = (rel: string) => savedDocs.get(rel)?.text ?? repoDocs[`../../${rel}`] ?? null;
+const repoModified = (rel: string) => savedDocs.get(rel)?.modified ?? 1;
 function mockResolve(cwd: string, path: string) {
   const full = path.startsWith("/") ? path : `${cwd.replace(/^~/, "/Users/you").replace(/\/$/, "")}/${path}`;
   const parts: string[] = [];
@@ -380,10 +383,19 @@ mockIPC(
       case "files_read_text": {
         const text = String(a.path).startsWith(`${REPO}/`) ? repoFile(String(a.path).slice(REPO.length + 1)) : null;
         if (text === null) throw new Error(`can't open ${a.path}: No such file or directory`);
-        return { path: a.path, text, modified: 1 };
+        return { path: a.path, text, modified: repoModified(String(a.path).slice(REPO.length + 1)) };
       }
       case "files_modified":
-        return mockResolve("/", a.path) ? 1 : null;
+        return mockResolve("/", a.path) ? repoModified(String(a.path).slice(REPO.length + 1)) : null;
+      case "files_write_text": {
+        const rel = String(a.path).slice(REPO.length + 1);
+        if (!mockResolve("/", a.path)) throw new Error(`${a.path} isn't a file`);
+        // Tauri rejects with the bare message.
+        if (a.expected != null && a.expected !== repoModified(rel)) throw "changed";
+        const modified = Date.now();
+        savedDocs.set(rel, { text: a.text, modified });
+        return modified;
+      }
       case "files_read_bytes": {
         const url = repoImages[`../../${String(a.path).slice(REPO.length + 1)}`];
         if (!url) throw new Error(`can't open ${a.path}`);

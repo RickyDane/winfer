@@ -86,6 +86,30 @@ pub fn files_modified(path: String) -> Option<u64> {
     modified(Path::new(&path))
 }
 
+/// Saves `text` to a file the viewer shows (the user's edits and comments) and returns when it
+/// changed. With `expected` set, refuses when the file changed since then (an agent edited it).
+#[tauri::command]
+pub async fn files_write_text(path: String, text: String, expected: Option<u64>) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve("", &path);
+        if !path.is_absolute() {
+            return Err(format!("{} isn't an absolute path", path.display()));
+        }
+        if !path.is_file() {
+            return Err(format!("{} isn't a file", path.display()));
+        }
+        if let Some(expected) = expected {
+            if modified(&path) != Some(expected) {
+                return Err("changed".into());
+            }
+        }
+        std::fs::write(&path, text).map_err(|e| format!("can't save {}: {e}", path.display()))?;
+        Ok(modified(&path).unwrap_or(0))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A file's bytes, for images a document embeds.
 #[tauri::command]
 pub async fn files_read_bytes(path: String) -> Result<tauri::ipc::Response, String> {

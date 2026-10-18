@@ -70,7 +70,7 @@ fn tools() -> Value {
         },
         {
             "name": "open_file",
-            "description": "Show a file in the user's winfer file viewer (a side panel tab next to the browser): markdown is rendered, images shown, other text files with line numbers. Use it to present a plan, report or doc you wrote. The view follows later edits to the file.",
+            "description": "Show a file in the user's winfer file viewer (a side panel tab next to the browser): markdown is rendered, images shown, other text files with line numbers. Use it to present a plan, report or doc you wrote. The view follows later edits to the file. The user can edit a markdown file there and leave comments in it as HTML comments like `<!-- @user: ... -->` after the part they are about: read the file again to see them, address them, and remove a comment once it's handled (or reply with `<!-- @agent: ... -->`).",
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string", "description": "Absolute, or relative to your working directory" },
                 "line": { "type": "number", "description": "Line to scroll to" }

@@ -268,6 +268,13 @@ body.resizing * {
   .md-body code { font-family: var(--font-mono); font-size: 0.86em; padding: 0.15em 0.4em; border-radius: 4px; background: var(--color-active); }
   .md-body pre { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; padding: 12px 14px; border-radius: 8px; background: var(--color-panel-raised); border: 1px solid var(--color-border); overflow-x: auto; }
   .md-body pre code { padding: 0; background: none; font-size: inherit; }
+  /* Review comments kept in the document as <!-- @user: … --> */
+  .md-body .md-comment { display: block; margin: 0 0 14px; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; border: 1px solid var(--color-border); border-left-width: 3px; background: var(--color-panel-raised); }
+  .md-body .md-comment-user { border-left-color: var(--color-accent); }
+  .md-body .md-comment-agent { border-left-color: var(--color-warning); }
+  .md-body li .md-comment, .md-body p .md-comment { margin: 4px 0; }
+  .md-body .md-comment-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-fg-muted); }
+  .md-body .md-commenting { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 2px; }
   .md-body table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
   .md-body :where(th, td) { padding: 6px 12px; border: 1px solid var(--color-border-strong); }
   .md-body th { font-weight: 600; background: var(--color-panel-raised); }
