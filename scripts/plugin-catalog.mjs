@@ -18,7 +18,7 @@ const CATALOG = join(PLUGINS, "catalog.json");
 
 function files(dir) {
   return readdirSync(dir)
-    .filter((name) => !name.startsWith("."))
+    .filter((name) => !name.startsWith(".") && name !== "__pycache__") // Python's bytecode cache isn't shipped
     .sort()
     .flatMap((name) => {
       const path = join(dir, name);

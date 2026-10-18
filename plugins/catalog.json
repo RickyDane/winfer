@@ -85,7 +85,7 @@
     {
       "id": "harness-bench",
       "name": "winfer bench",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "description": "Benchmark coding-agent harnesses (winfer code, Codex, Claude Code, pi, OpenCode) on the same tasks in four suites (coding, understanding, research, discipline): pass rate, time, tokens and tool calls, with the models you pick.",
       "author": "winfer",
       "tags": [
@@ -97,15 +97,15 @@
       "files": [
         {
           "path": "bench/README.md",
-          "sha256": "7ee8355c9ce4df8b135f8086778817be858b77f0b59b424e65cbf0dbf95afa4e"
+          "sha256": "3aeaaab2578376e1b233a7b7948d71418a720f6f3f0e6052acf3ce9a50123d9e"
         },
         {
           "path": "bench/harnesses.json",
-          "sha256": "9b8e77f077f9d9243701ea6f86b75a0765c719a2d497ddbe011865d8500df525"
+          "sha256": "33058f1f20218899e46867191bf60e0ad2e9b99225a4b17cb369c13d3a25307d"
         },
         {
           "path": "bench/run.py",
-          "sha256": "914e7d1745030a8ad51b8ef9d4700df57c5a77a8880313922ea713dc51f01fbb"
+          "sha256": "d2fd3d47b1700a2e5050040a43f0aa9c51bb254452c2a32bb229bcaf930df453"
         },
         {
           "path": "bench/suites.tar.gz",
@@ -113,19 +113,19 @@
         },
         {
           "path": "bench/test_run.py",
-          "sha256": "e4d86c4c6783331a567ad5c1c0bbf0a336cf2ae89589e9afff43a125984b6f81"
+          "sha256": "1c260b0a756f86c6d77349414f95059d8df6a014d6699b81d9cf5303684cf085"
         },
         {
           "path": "index.js",
-          "sha256": "cd43f6caa206d9479f34cc79970871428956bd22297bc572774d101f39fc4ea5"
+          "sha256": "4c7f3e83ded5d33395c9580de093e83c266e456bdd514e659e198e74cb423389"
         },
         {
           "path": "index.test.js",
-          "sha256": "54b0d90e4095aeef78a4c18936ddeb2060b46947cdefaecb06aa4388e81275a2"
+          "sha256": "c237cad0309ec189e73dceb5774d7e15f2b952bf1efb0f7fd824fd756faa0a91"
         },
         {
           "path": "plugin.json",
-          "sha256": "6cd25bc5bc204f34ca4d4e7b80f74f32a7e4e307e9d1dbd6cb11cb59942a4025"
+          "sha256": "f87c079b086f5f9ef8a31c082500f97bfd6f1cbe1d326f4a5db42ac222049765"
         }
       ]
     },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import catalog from "./bench/harnesses.json";
-import { clock, scoreRows, PRESETS, isLimitError, planOf, quoteArg, runLabel, trackUsage, usageRows, runOverview, suiteMatrix, suiteOf, suitesIn, summarize, taskName, withEstimatedCost } from "./index.js";
+import { variantOf, clock, TRADEOFFS, tradeoffMode, scoreRows, PRESETS, isLimitError, planOf, quoteArg, runLabel, trackUsage, usageRows, runOverview, suiteMatrix, suiteOf, suitesIn, summarize, taskName, withEstimatedCost } from "./index.js";
 
 const run = (patch = {}) => ({
   harness: "codex", model: "gpt-6.1-sol", task: "01-bugfix", pass: true,
@@ -181,5 +181,47 @@ describe("output tokens", () => {
     const none = summarize([run({ input: 0, cached: 0, output: 0 })])[0];
     expect(none.hasTokens).toBe(false);
     expect(scoreRows([none], { output: 1 })[0].parts.output).toBe(0);
+  });
+});
+
+describe("reasoning effort", () => {
+  it("labels runs with their effort and keeps efforts apart", () => {
+    expect(variantOf(run())).toBe("gpt-6.1-sol");
+    expect(variantOf(run({ effort: "high" }))).toBe("gpt-6.1-sol · high");
+    expect(variantOf({ effort: "high" })).toBe("high");
+    const rows = summarize([run({ effort: "high", output: 9000 }), run({ effort: "low", output: 1000 }), run()]);
+    expect(rows.map((r) => r.model)).toEqual(["gpt-6.1-sol · high", "gpt-6.1-sol · low", "gpt-6.1-sol"]);
+    expect(rows[0].output).toBe(9000);
+  });
+
+  it("still prices runs by their model", () => {
+    expect(summarize([run({ effort: "xhigh" })], catalog._prices)[0].cost).toBeCloseTo(2.05);
+  });
+
+  it("splits the suite matrix and overview by effort", () => {
+    const results = [run({ effort: "high" }), run({ effort: "low" })];
+    expect(suiteMatrix(results).rows.map((r) => r.model)).toEqual(["gpt-6.1-sol · high", "gpt-6.1-sol · low"]);
+    expect(runOverview(results).models).toEqual(["gpt-6.1-sol · high", "gpt-6.1-sol · low"]);
+  });
+});
+
+describe("trade-off charts", () => {
+  it("summarizes the median cost of one run and the pass rate", () => {
+    const [row] = summarize([run({ cost: 1 }), run({ cost: 3, pass: false }), run({ cost: 0.5 }), run({ error: "rate limit" })]);
+    expect(row.runCost).toBe(1);
+    expect(row.passRate).toBeCloseTo(2 / 3);
+    expect(summarize([run()])[0].runCost).toBeNull();
+    expect(summarize([run({ error: "x" })])[0].passRate).toBe(0);
+  });
+
+  it("keeps the picked mode when it has data, else falls back to one that does", () => {
+    const rows = summarize([run()]);
+    expect(TRADEOFFS.map((m) => m.id)).toEqual(["input", "output", "tools", "cost", "pass"]);
+    expect(tradeoffMode(rows, "output").id).toBe("output");
+    expect(tradeoffMode(rows, "cost").id).toBe("input"); // no costs
+    expect(tradeoffMode(rows, "nope").id).toBe("input");
+    const noTokens = summarize([run({ input: 0, cached: 0, output: 0 })]);
+    expect(tradeoffMode(noTokens, "input").id).toBe("tools");
+    expect(tradeoffMode(summarize([run({ cost: 0.2 })]), "cost").id).toBe("cost");
   });
 });

@@ -56,6 +56,60 @@ class CostTests(unittest.TestCase):
                 self.assertFalse(result["cost_estimated"])
 
 
+class EffortTests(unittest.TestCase):
+    def test_argv_goes_before_the_prompt(self):
+        spec = bench.CATALOG["claude"]
+        argv = bench.harness_argv(spec, "sonnet", "high", "do it")
+        self.assertEqual(argv[-3:], ["--effort", "high", "do it"])
+        self.assertIn("sonnet", argv)
+
+    def test_model_template(self):
+        argv = bench.harness_argv(bench.CATALOG["opencode"], "openai/gpt-6.1-sol", "xhigh", "do it")
+        self.assertIn("openai/gpt-6.1-sol#xhigh", argv)
+
+    def test_no_effort_leaves_argv_alone(self):
+        for name in ("claude", "codex", "opencode"):
+            spec = bench.CATALOG[name]
+            expected = [a.replace("{prompt}", "p").replace("{model}", "m") for a in spec["argv"]]
+            self.assertEqual(bench.harness_argv(spec, "m", "", "p"), expected)
+
+    def test_every_effort_spec_has_levels_and_a_placeholder(self):
+        for name, spec in bench.CATALOG.items():
+            how = spec.get("effort") if isinstance(spec, dict) else None
+            if how:
+                with self.subTest(name=name):
+                    self.assertTrue(how["levels"])
+                    self.assertIn("{effort}", json.dumps(how.get("argv") or how.get("model")))
+
+    def test_result_records_effort(self):
+        with tempfile.TemporaryDirectory() as folder:
+            task = Path(folder)
+            (task / "task.md").write_text("Synthetic effort check")
+            spec = {"parser": "none", "argv": ["synthetic", "{prompt}"], "effort": {"argv": ["--effort", "{effort}"], "levels": ["high"]}}
+            responses = [subprocess.CompletedProcess([], 0, "", ""), subprocess.CompletedProcess([], 0, "", "")]
+            with patch.object(bench, "prepare"), patch.object(bench.subprocess, "run", side_effect=responses) as run:
+                result = bench.run_one("synthetic", spec, task, 10, False, "m", "high")
+            self.assertEqual(run.call_args_list[0].args[0][-3:-1], ["--effort", "high"])
+            self.assertEqual(result["effort"], "high")
+
+
+class InstalledTests(unittest.TestCase):
+    def test_missing_cli_or_required_cli_counts_as_not_installed(self):
+        have = {"winfer", "codex"}
+        specs = {
+            "winfer-claude": {"argv": ["{winfer}"], "requires": ["claude"]},
+            "winfer-codex": {"argv": ["{winfer}"], "requires": ["codex"]},
+            "claude": {"argv": ["claude"]},
+            "codex": {"argv": ["codex"]},
+            "oracle": {"argv": []},
+        }
+        with patch.object(bench.shutil, "which", side_effect=lambda c: f"/bin/{c}" if c in have else None), \
+             patch.object(bench, "winfer_bin", return_value="/bin/winfer"), patch.object(bench, "all_tasks", return_value=[]), \
+             patch.object(bench, "suite_names", return_value=[]):
+            got = {h["id"]: h["installed"] for h in bench.listing(specs)["harnesses"]}
+        self.assertEqual(got, {"winfer-claude": False, "winfer-codex": True, "claude": False, "codex": True, "oracle": True})
+
+
 class SuiteTests(unittest.TestCase):
     def make(self, root, suite, *tasks, info=None):
         for t in tasks:

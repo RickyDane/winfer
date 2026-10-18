@@ -10,6 +10,7 @@ headless with permissions off, then the task's hidden check decides pass/fail.
     python3 bench/run.py -H winfer-chatgpt,codex,pi -t 01,05 -n 3
     python3 bench/run.py -H oracle                        # checks the checks (reference solutions)
     python3 bench/run.py -H codex -m codex=gpt-6-luna      # another model for one harness
+    python3 bench/run.py -H codex,claude -e codex=high -e claude=high   # a reasoning effort
     python3 bench/run.py --list                           # harnesses and tasks as JSON (for the UI)
     python3 bench/run.py --pack                           # rebuild suites.tar.gz after editing tasks
 
@@ -378,7 +379,23 @@ def serve_site(task: Path):
     return server, f"http://127.0.0.1:{server.server_address[1]}"
 
 
-def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
+def harness_argv(spec, model: str, effort: str, prompt: str):
+    """The harness command line: placeholders filled in, plus the effort when one is picked.
+    Effort goes in before {prompt} (some CLIs stop reading options at the prompt), or into the
+    model name when the spec has a model template (e.g. OpenCode's provider/model#variant)."""
+    how = spec.get("effort") or {}
+    argv = list(spec["argv"])
+    model_arg = model
+    if effort:
+        if how.get("model"):
+            model_arg = how["model"].replace("{model}", model).replace("{effort}", effort)
+        elif how.get("argv"):
+            at = argv.index("{prompt}") if "{prompt}" in argv else len(argv)
+            argv[at:at] = [a.replace("{effort}", effort) for a in how["argv"]]
+    return [a.replace("{prompt}", prompt).replace("{model}", model_arg) for a in argv]
+
+
+def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", effort: str = ""):
     work = Path(tempfile.mkdtemp(prefix=f"bench-{task.name}-{name}-"))
     prepare(task, work)
     server, site = serve_site(task)
@@ -392,7 +409,7 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
             subprocess.run([posix_sh(), str(task / "solution.sh")], cwd=work, check=True, env=script_env())
     else:
         model = model or spec.get("model", "")
-        argv = [a.replace("{prompt}", prompt).replace("{model}", model) for a in spec["argv"]]
+        argv = harness_argv(spec, model, effort, prompt)
         argv = launcher([winfer_bin() if a == "{winfer}" else a for a in argv])
         try:
             # Some CLIs take their project folder from $PWD rather than the real working directory.
@@ -420,6 +437,7 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
         "suite": suite_of(task),
         "harness": name,
         "model": model or spec.get("model", ""),
+        "effort": effort,
         "pass": check.returncode == 0 and not timed_out and not error,
         # The harness itself failed (crashed, rate-limited, not logged in) without doing the task.
         "error": error,
@@ -475,6 +493,7 @@ def main():
     p.add_argument("--keep", action="store_true", help="keep work directories for inspection")
     p.add_argument("--out", default=str(HERE / "results"))
     p.add_argument("-m", "--model", action="append", default=[], help="harness=model, e.g. codex=gpt-6-luna")
+    p.add_argument("-e", "--effort", action="append", default=[], help="harness=level, a reasoning/thinking effort, e.g. codex=high (levels in harnesses.json)")
     p.add_argument("--log", help="write per-run results to this JSONL file")
     p.add_argument("--status", help="keep a JSON progress file up to date (for the UI)")
     p.add_argument("--list", nargs="?", const="-", metavar="FILE", help="print (or write to FILE) harnesses and tasks as JSON and exit")
@@ -534,6 +553,10 @@ def main():
     for n in names:
         if n not in harnesses:
             sys.exit(f"unknown harness {n}; see harnesses.json")
+    efforts = {k: v for k, v in (e.split("=", 1) for e in args.effort if "=" in e) if v and v != "default"}
+    for n in efforts:
+        if n in names and not harnesses.get(n, {}).get("effort"):
+            sys.exit(f"{n} has no effort setting; see harnesses.json")
     if args.detach:
         if args.status:
             Path(args.status).unlink(missing_ok=True)
@@ -575,7 +598,7 @@ def main():
             progress(running=list(running.values()))
             print(f"▸ {task.name} · {name} · run {k + 1}/{args.runs}", flush=True)
         for attempt in range(args.retries + 1):
-            r = run_one(name, harnesses[name], task, args.timeout, args.keep, models.get(name, ""))
+            r = run_one(name, harnesses[name], task, args.timeout, args.keep, models.get(name, ""), efforts.get(name, ""))
             r["attempts"] = attempt + 1
             with lock:
                 if fingerprint(SUITES) != original:
@@ -628,7 +651,7 @@ def main():
         med = lambda k: statistics.median(r[k] for r in rs)
         uncached = statistics.median(r["input"] - r["cached"] for r in rs)
         passed = sum(r["pass"] for r in rs)
-        print(f"| {name} | {passed}/{len(rs)} | {med('seconds'):.0f}s | {fmt_tokens(med('input'))} | {fmt_tokens(uncached)} | {fmt_tokens(med('output'))} | {med('tools'):.0f} |")
+        print(f"| {name}{' · ' + efforts[name] if name in efforts else ''} | {passed}/{len(rs)} | {med('seconds'):.0f}s | {fmt_tokens(med('input'))} | {fmt_tokens(uncached)} | {fmt_tokens(med('output'))} | {med('tools'):.0f} |")
     ran = [s for s in suite_names(snapshot / "suites") if any(r["suite"] == s for r in results)]
     if len(ran) > 1:
         print("\n| harness | " + " | ".join(ran) + " |")
@@ -740,6 +763,9 @@ def listing(harnesses):
         argv = spec.get("argv") or []
         if not argv:
             return True
+        # winfer code · Claude / Codex drive the claude and codex CLIs, so those must be there too.
+        if any(shutil.which(c) is None for c in spec.get("requires", [])):
+            return False
         if argv[0] == "{winfer}":
             try:
                 return bool(winfer_bin())
@@ -756,7 +782,7 @@ def listing(harnesses):
         "prices": PRICES,
         "pricing": CATALOG.get("_pricing", {}),
         "harnesses": [
-            {"id": k, "label": v.get("label", k), "model": v.get("model", ""), "models": v.get("models", []), "installed": installed(v)}
+            {"id": k, "label": v.get("label", k), "model": v.get("model", ""), "models": v.get("models", []), "efforts": (v.get("effort") or {}).get("levels", []), "installed": installed(v)}
             for k, v in harnesses.items()
         ],
         "tasks": tasks,

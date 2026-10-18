@@ -1,5 +1,5 @@
 {
-  "_comment": "argv: {prompt}, {model} and {winfer} are replaced. model: default; models: suggestions shown in the UI. parser reads the JSON output: winfer, claude, codex, pi or none. Compare harnesses on the same model.",
+  "_comment": "argv: {prompt}, {model} and {winfer} are replaced. model: default; models: suggestions shown in the UI. parser reads the JSON output: winfer, claude, codex, pi or none. effort (optional): how to pass a reasoning/thinking effort, either argv (inserted before {prompt}, with {effort} replaced) or model (a template for {model}, e.g. {model}#{effort}), and levels: the choices shown in the UI. requires (optional): other CLIs the harness runs (winfer code drives the claude and codex CLIs); without them it counts as not installed and the app hides it. Compare harnesses on the same model.",
   "_pricing": {
     "checked": "2026-10-17",
     "units": "USD per 1M tokens, standard short-context API rates",
@@ -40,6 +40,19 @@
       "gpt-6-sol",
       "gpt-6-luna"
     ],
+    "effort": {
+      "argv": [
+        "--effort",
+        "{effort}"
+      ],
+      "levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
     "parser": "winfer"
   },
   "winfer-claude": {
@@ -62,7 +75,21 @@
       "sonnet",
       "haiku"
     ],
-    "parser": "winfer"
+    "effort": {
+      "argv": [
+        "--effort",
+        "{effort}"
+      ],
+      "levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "parser": "winfer",
+    "requires": ["claude"]
   },
   "winfer-codex": {
     "label": "winfer code \u00b7 Codex",
@@ -85,7 +112,21 @@
       "gpt-6-sol",
       "gpt-6-luna"
     ],
-    "parser": "winfer"
+    "effort": {
+      "argv": [
+        "--effort",
+        "{effort}"
+      ],
+      "levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "parser": "winfer",
+    "requires": ["codex"]
   },
   "codex": {
     "label": "Codex",
@@ -106,6 +147,19 @@
       "gpt-6-sol",
       "gpt-6-luna"
     ],
+    "effort": {
+      "argv": [
+        "-c",
+        "model_reasoning_effort={effort}"
+      ],
+      "levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
     "parser": "codex"
   },
   "claude": {
@@ -128,6 +182,19 @@
       "sonnet",
       "haiku"
     ],
+    "effort": {
+      "argv": [
+        "--effort",
+        "{effort}"
+      ],
+      "levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
     "parser": "claude"
   },
   "pi": {
@@ -147,6 +214,21 @@
       "openai/gpt-6-luna",
       "anthropic/claude-sonnet-5-5"
     ],
+    "effort": {
+      "argv": [
+        "--thinking",
+        "{effort}"
+      ],
+      "levels": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
     "parser": "pi"
   },
   "opencode": {
@@ -166,6 +248,16 @@
       "openai/gpt-6.1-sol",
       "openai/gpt-6.1-sol-fast"
     ],
+    "effort": {
+      "model": "{model}#{effort}",
+      "levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
     "parser": "opencode"
   },
   "oracle": {

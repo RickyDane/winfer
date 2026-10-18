@@ -61,11 +61,14 @@ function costNote(estimated, partial) {
   return note + (partial ? " Some runs have no known cost; only available costs are summed." : "");
 }
 
-/** Per-run results → summary per harness+model. */
+/** What a run ran on: the model, plus the reasoning effort when one was picked ("sonnet · high"). */
+export const variantOf = (r) => [r.model ?? "", r.effort ?? ""].filter(Boolean).join(" · ");
+
+/** Per-run results → summary per harness+model+effort. */
 export function summarize(results, prices = {}) {
   const groups = new Map();
   for (const r of results) {
-    const key = `${r.harness}|${r.model ?? ""}`;
+    const key = `${r.harness}|${variantOf(r)}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }
@@ -89,10 +92,33 @@ export function summarize(results, prices = {}) {
       output: median(rs.map((r) => r.output)),
       tools: median(rs.map((r) => r.tools)),
       cost: rs.some((r) => r.cost != null) ? rs.reduce((a, r) => a + (r.cost || 0), 0) : null,
+      // Median cost of one run, over the runs with a known cost.
+      runCost: rs.some((r) => r.cost != null) ? median(rs.filter((r) => r.cost != null).map((r) => r.cost)) : null,
+      passRate: rs.length ? rs.filter((r) => r.pass).length / rs.length : 0,
       costEstimated: rs.some((r) => r.cost != null && r.cost_estimated),
       costPartial: rs.some((r) => r.cost == null),
     };
   });
+}
+
+const usd = (v) => `$${v >= 1 ? v.toFixed(2) : Number(v.toFixed(4))}`; // $0, $0.02, $0.0312, $1.50
+const pctOf = (v) => `${Math.round(v * 100)}%`;
+
+/** The trade-off chart's modes: one dot per harness, `x` against `y` (medians), aiming for the
+ * `corner` named in `hint`. `has` says whether a summary row can be plotted in that mode. */
+export const TRADEOFFS = [
+  { id: "input", icon: '<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/>', tab: "Input tokens", title: "Speed vs. input tokens", sub: "Bottom-left is best: fast and lean. Counts input paid at full price; prompt-cache hits are left out.", x: { key: "uncached", fmt: tokens, label: "uncached input tokens (median) →" }, y: { key: "seconds", fmt: secs, label: "↑ time (median)" }, hint: "↙ faster and leaner", has: (r) => r.hasTokens },
+  { id: "output", icon: '<path d="m18 9-6-6-6 6"/><path d="M12 3v14"/><path d="M5 21h14"/>', tab: "Output tokens", title: "Speed vs. output tokens", sub: "Bottom-left is best: fast and terse. Output includes reasoning and is billed at the output rate.", x: { key: "output", fmt: tokens, label: "output tokens (median) →" }, y: { key: "seconds", fmt: secs, label: "↑ time (median)" }, hint: "↙ faster and terser", has: (r) => r.hasTokens },
+  { id: "tools", icon: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>', tab: "Tool calls", title: "Speed vs. tool calls", sub: "Bottom-left is best: fast, in few steps. Each tool call is one read, edit or command.", x: { key: "tools", fmt: (v) => String(Math.round(v)), label: "tool calls (median) →" }, y: { key: "seconds", fmt: secs, label: "↑ time (median)" }, hint: "↙ faster, fewer steps", has: () => true },
+  { id: "cost", icon: '<circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/>', tab: "Cost", title: "Speed vs. cost", sub: "Bottom-left is best: fast and cheap. Median cost of one run at API list prices.", x: { key: "runCost", fmt: usd, label: "cost per run (median) →" }, y: { key: "seconds", fmt: secs, label: "↑ time (median)" }, hint: "↙ faster and cheaper", has: (r) => r.runCost != null },
+  { id: "pass", icon: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>', tab: "Pass rate", title: "Pass rate vs. speed", sub: "Top-left is best: passes the most tasks in the least time.", x: { key: "seconds", fmt: secs, label: "time (median) →" }, y: { key: "passRate", fmt: pctOf, label: "↑ pass rate", max: 1 }, hint: "↖ faster and more reliable", top: true, has: () => true },
+];
+
+/** The trade-off mode to show: the picked one if it has data, else the first that does. */
+export function tradeoffMode(rows, picked) {
+  const usable = (m) => rows.some((r) => r.runs > 0 && m.has(r));
+  const want = TRADEOFFS.find((m) => m.id === picked);
+  return want && usable(want) ? want : (TRADEOFFS.find(usable) ?? TRADEOFFS[0]);
 }
 
 /** What the runner is doing now: a list (parallel runs) or, from older runners, one object. */
@@ -151,8 +177,8 @@ export function suiteMatrix(results, catalog) {
   const suites = suitesIn(results, catalog);
   const rows = new Map();
   for (const r of results) {
-    const key = `${r.harness}|${r.model ?? ""}`;
-    if (!rows.has(key)) rows.set(key, { key, harness: r.harness, model: r.model ?? "", cells: {} });
+    const key = `${r.harness}|${variantOf(r)}`;
+    if (!rows.has(key)) rows.set(key, { key, harness: r.harness, model: variantOf(r), cells: {} });
     if (r.error) continue;
     const s = suiteOf(r, catalog?.tasks);
     const cell = (rows.get(key).cells[s] ??= { passed: 0, runs: 0 });
@@ -172,7 +198,7 @@ export function runOverview(results, prices = {}, tasks = []) {
     passed: counted.filter((r) => r.pass).length,
     errors: results.length - counted.length,
     harnesses: [...new Set(results.map((r) => r.harness))],
-    models: [...new Set(results.map((r) => r.model).filter(Boolean))],
+    models: [...new Set(results.map(variantOf).filter(Boolean))],
     tasks: new Set(results.map((r) => r.task)).size,
     suites: [...new Set(results.map((r) => suiteOf(r, tasks)))],
     wall: timed.length ? Math.max(...timed.map((r) => r.started + r.seconds)) - Math.min(...timed.map((r) => r.started)) : 0,
@@ -332,8 +358,9 @@ const STYLE = `
 .hb-title p { margin: 2px 0 0; font-size: 12px; color: var(--color-fg-muted); }
 .hb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hb-body { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
-@media (max-width: 980px) { .hb-body { grid-template-columns: 1fr; } }
 .hb-aside { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 0; }
+/* One column: the setup scrolls away instead of sticking over the results. */
+@media (max-width: 980px) { .hb-body { grid-template-columns: 1fr; } .hb-aside { position: static; } }
 .hb-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .hb-panel { border: 1px solid var(--color-border); border-radius: 10px; background: var(--hb-surface); padding: 14px 16px; }
 .hb-panel h2 { margin: 0 0 2px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
@@ -347,6 +374,7 @@ const STYLE = `
 .hb-hname { font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hb-hmodel { grid-column: 2 / 4; display: flex; gap: 6px; align-items: center; }
 .hb-hmodel input { width: 100%; height: 26px; font-size: 11.5px; }
+.hb-hmodel select { flex: none; width: auto; max-width: 45%; height: 26px; font-size: 11.5px; padding-top: 0; padding-bottom: 0; }
 .hb-chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 400px; overflow-y: auto; }
 .hb-tasks-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .hb-tasks-all { display: flex; gap: 2px; margin-bottom: 8px; }
@@ -444,6 +472,13 @@ const STYLE = `
 .hb-tabs button { border: 0; background: transparent; color: var(--color-fg-muted); font: inherit; font-size: 12.5px; padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 6px; }
 .hb-tabs button:hover { color: var(--color-fg); }
 .hb-tabs button[aria-selected="true"] { color: var(--color-fg); border-bottom-color: var(--color-accent); font-weight: 600; }
+/* Segmented tab bar, as in Settings → Usage. */
+.hb-ptabs { display: flex; width: max-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; align-items: center; gap: 2px; padding: 2px; margin: 10px 0 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-panel); }
+.hb-ptabs button { display: flex; align-items: center; gap: 6px; flex: none; border: 0; background: transparent; color: var(--color-fg-muted); font: inherit; font-size: 12px; line-height: 16px; padding: 4px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: color .15s, background-color .15s; }
+.hb-ptabs button svg { flex: none; }
+.hb-ptabs button:hover:not(:disabled) { background: var(--color-hover); color: var(--color-fg); }
+.hb-ptabs button[aria-selected="true"] { background: var(--color-active); color: var(--color-fg); font-weight: 500; }
+.hb-ptabs button:disabled { opacity: .4; cursor: default; }
 .hb-count { font-size: 10.5px; font-weight: 500; padding: 1px 6px; border-radius: 999px; background: var(--color-active); color: var(--color-fg-muted); }
 .hb-runs-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .hb-runs-bar .hb-sub { margin: 0; flex: 1; }
@@ -578,7 +613,9 @@ export async function activate(api) {
     state.prefs = { ...state.prefs, ...patch };
     savePrefs(state.prefs);
   };
-  const harnessPref = (h) => ({ on: ["winfer-chatgpt", "codex"].includes(h.id), model: h.model, ...(prefs().harnesses?.[h.id] ?? {}) });
+  const harnessPref = (h) => ({ on: ["winfer-chatgpt", "codex"].includes(h.id), model: h.model, effort: "", ...(prefs().harnesses?.[h.id] ?? {}) });
+  // The picked effort, if this harness (still) offers it.
+  const effortOf = (h) => (h.efforts ?? []).includes(harnessPref(h).effort) ? harnessPref(h).effort : "";
   const taskOn = (t) => prefs().tasks?.[t.id] ?? true;
   const harnesses = () => (state.catalog?.harnesses ?? []).filter((h) => !CHECKS.includes(h.id));
   const labelOf = (id) => state.catalog?.harnesses.find((h) => h.id === id)?.label ?? id;
@@ -697,11 +734,12 @@ export async function activate(api) {
     const exe = api.appExe ? await api.appExe().catch(() => "") : "";
     const model = (h) => harnessPref(h).model || h.model;
     const models = hs.filter((h) => h.model).flatMap((h) => ["-m", `${h.id}=${model(h)}`]);
+    const efforts = selfTest ? [] : hs.filter((h) => effortOf(h)).flatMap((h) => ["-e", `${h.id}=${effortOf(h)}`]);
     // run.py --detach starts the runner in the background with its own output (a background job
     // holding vault.exec's output pipe would keep the call waiting for the whole run) and prints its pid.
     const args = [
       "-H", hs.map((h) => h.id).join(","), "-t", ts.map((t) => t.id).join(","), "-n", String(runs), "--timeout", String(timeout), "-p", parallel,
-      ...models, ...(prefs().keep && !selfTest ? ["--keep"] : []), ...(exe ? ["--winfer-bin", exe] : []),
+      ...models, ...efforts, ...(prefs().keep && !selfTest ? ["--keep"] : []), ...(exe ? ["--winfer-bin", exe] : []),
       "--log", log, "--status", status, "--detach", log.replace(/\.jsonl$/, ".out"),
     ];
     state.starting = true;
@@ -712,7 +750,7 @@ export async function activate(api) {
     try {
       const pid = Number((await runPy(args, 30)).trim().split("\n").pop());
       if (!pid) throw new Error("the runner didn't start");
-      state.running = { pid, log, usage, started: Date.now() / 1000, plan: { cols: hs.map((h) => `${h.id}|${h.model ? model(h) : ""}`), tasks: ts.map((t) => t.id) } };
+      state.running = { pid, log, usage, started: Date.now() / 1000, plan: { cols: hs.map((h) => `${h.id}|${variantOf({ model: h.model ? model(h) : "", effort: selfTest ? "" : effortOf(h) })}`), tasks: ts.map((t) => t.id) } };
       state.progress = { total: hs.length * ts.length * runs, done: 0 };
       state.results = [];
       state.usage = usage;
@@ -818,33 +856,36 @@ export async function activate(api) {
     return svg;
   }
 
-  /** Speed vs tokens: one dot per harness, both axes from zero, "better" is bottom-left. */
-  function scatter(rows, W) {
+  /** A trade-off scatter (see TRADEOFFS): one dot per harness, both axes from zero. */
+  function scatter(rows, W, mode) {
     const left = 46;
     const right = 18;
     const top = 12;
     const bottom = 34;
     const H = 260;
-    const xs = niceScale(Math.max(...rows.map((r) => r.uncached)));
-    const ys = niceScale(Math.max(...rows.map((r) => r.seconds)));
+    const vx = (r) => r[mode.x.key];
+    const vy = (r) => r[mode.y.key];
+    const xs = niceScale(Math.max(...rows.map(vx)));
+    const ys = mode.y.max ? { max: mode.y.max, step: mode.y.max / 4 } : niceScale(Math.max(...rows.map(vy)));
     const x = (v) => left + ((W - left - right) * v) / xs.max;
     const y = (v) => H - bottom - ((H - top - bottom) * v) / ys.max;
-    let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(mode.title)}">`;
     for (let v = 0; v <= ys.max + 1e-9; v += ys.step) {
-      svg += `<line class="grid" x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}"/><text x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${esc(secs(v))}</text>`;
+      svg += `<line class="grid" x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}"/><text x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${esc(mode.y.fmt(v))}</text>`;
     }
     for (let v = 0; v <= xs.max + 1e-9; v += xs.step) {
-      svg += `<text x="${x(v)}" y="${H - bottom + 16}" text-anchor="middle">${esc(tokens(v))}</text>`;
+      svg += `<text x="${x(v)}" y="${H - bottom + 16}" text-anchor="middle">${esc(mode.x.fmt(v))}</text>`;
     }
     svg += `<line class="axis" x1="${left}" x2="${W - right}" y1="${y(0)}" y2="${y(0)}"/><line class="axis" x1="${left}" x2="${left}" y1="${top}" y2="${y(0)}"/>`;
-    svg += `<text x="${W - right}" y="${H - 2}" text-anchor="end">uncached input tokens (median) →</text>`;
-    svg += `<text x="${left + 6}" y="${top + 4}" >↑ time (median)</text>`;
-    svg += `<text x="${left + 8}" y="${y(0) - 8}" opacity=".7">↙ faster and leaner</text>`;
+    svg += `<text x="${W - right}" y="${H - 2}" text-anchor="end">${esc(mode.x.label)}</text>`;
+    svg += `<text x="${left + 6}" y="${top + 4}" >${esc(mode.y.label)}</text>`;
+    // The goal corner: bottom-left, or top-left when higher is better (below the axis title).
+    svg += `<text x="${left + 8}" y="${mode.top ? top + 20 : y(0) - 8}" opacity=".7">${esc(mode.hint)}</text>`;
     // Direct labels, nudged apart vertically when they'd collide.
     const placed = [];
     rows.forEach((r) => {
-      const cx = x(r.uncached);
-      const cy = y(r.seconds);
+      const cx = x(vx(r));
+      const cy = y(vy(r));
       let ly = cy + 4;
       while (placed.some((p) => Math.abs(p.y - ly) < 13 && Math.abs(p.x - cx) < 140)) ly += 13;
       placed.push({ x: cx, y: ly });
@@ -855,6 +896,26 @@ export async function activate(api) {
       svg += `<circle class="hit" cx="${cx}" cy="${cy}" r="14" data-tip="${esc(r.tip)}"/>`;
     });
     return svg + `</svg>`;
+  }
+
+  /** The trade-off panel: a tab per mode, the picked mode's scatter below. */
+  function tradeoffs(named, W) {
+    const mode = tradeoffMode(named, prefs().tradeoff);
+    const plotted = named.filter((r) => r.runs > 0 && mode.has(r));
+    const left = named.filter((r) => r.runs > 0 && !mode.has(r));
+    const what = mode.id === "cost" ? "No cost" : "No token counts";
+    const missing = left.length
+      ? `<p class="hb-sub" style="margin:8px 0 0">${what} from ${esc(left.map((r) => labelOf(r.harness)).join(", "))}, so ${left.length === 1 ? "it's" : "they're"} not shown.</p>`
+      : "";
+    const tab = (m) => {
+      const ok = named.some((r) => r.runs > 0 && m.has(r));
+      const icon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${m.icon}</svg>`;
+      return `<button role="tab" data-tradeoff="${m.id}" aria-selected="${m === mode}" ${ok ? "" : `disabled title="${m.id === "cost" ? "No costs" : "No token counts"} in these results"`}>${icon}${esc(m.tab)}</button>`;
+    };
+    return `<div class="hb-panel hb-wide"><h2>${esc(mode.title)}</h2>
+      <div class="hb-ptabs" role="tablist" aria-label="Compare">${TRADEOFFS.map(tab).join("")}</div>
+      <p class="hb-sub">${esc(mode.sub)} Uses medians over every run.</p>
+      ${plotted.length ? `${legend(plotted)}${scatter(plotted, W, mode)}` : ""}${missing}</div>`;
   }
 
   /** Swimlanes over wall-clock time: each run is a bar from its start to its end. */
@@ -986,10 +1047,20 @@ export async function activate(api) {
     </div>`;
   }
 
+  /** Reasoning/thinking effort picker; "default" leaves it to the harness and model. */
+  function effortSelect(h) {
+    if (!h.efforts?.length) return "";
+    const cur = effortOf(h);
+    return `<select class="wf-input" data-effort="${esc(h.id)}" aria-label="${esc(h.label)} reasoning effort" title="Reasoning / thinking effort" ${h.installed ? "" : "disabled"}>
+      ${["", ...h.efforts].map((e) => `<option value="${esc(e)}" ${e === cur ? "selected" : ""}>${e ? esc(e) : "default effort"}</option>`).join("")}</select>`;
+  }
+
   function setup() {
     const c = state.catalog;
     const p = prefs();
+    // Harnesses whose CLI isn't installed aren't offered (`run.py --list` checks).
     const hs = harnesses()
+      .filter((h) => h.installed)
       .map((h) => {
         const hp = harnessPref(h);
         const on = hp.on && h.installed;
@@ -1001,8 +1072,10 @@ export async function activate(api) {
           ${
             h.model || h.models.length
               ? `<div class="hb-hmodel"><input class="wf-input wf-mono" list="hb-models-${esc(h.id)}" data-model="${esc(h.id)}" value="${esc(hp.model)}" placeholder="${esc(h.model)}" aria-label="${esc(h.label)} model" ${h.installed ? "" : "disabled"} />
-                 <datalist id="hb-models-${esc(h.id)}">${options.map((m) => `<option value="${esc(m)}"></option>`).join("")}</datalist></div>`
-              : ""
+                 <datalist id="hb-models-${esc(h.id)}">${options.map((m) => `<option value="${esc(m)}"></option>`).join("")}</datalist>${effortSelect(h)}</div>`
+              : h.efforts?.length
+                ? `<div class="hb-hmodel">${effortSelect(h)}</div>`
+                : ""
           }
         </div>`;
       })
@@ -1220,7 +1293,7 @@ export async function activate(api) {
               ${byOutput.length ? barChart(byOutput, { width: half, fmt: tokens, parts: [{ value: (r) => r.output }] }) : ""}${missing}</div>
             <div class="hb-panel hb-wide"><h2>Time per task</h2><p class="hb-sub">Median wall time of one run, start to finish.</p>
               ${barChart(byTime, { width: full, fmt: secs, parts: [{ value: (r) => r.seconds }] })}</div>
-            <div class="hb-panel hb-wide"><h2>Speed vs. tokens</h2><p class="hb-sub">Bottom-left is best: fast and lean. Uses medians over every run.</p>${byTokens.length ? `${legend(withTokens)}${scatter(withTokens, full)}` : ""}${missing}</div>`
+            ${tradeoffs(named, full)}`
           : ""
       }
     </div>`;
@@ -1229,7 +1302,7 @@ export async function activate(api) {
   function grid() {
     const plan = state.running?.plan;
     if (!shown().length && !plan) return "";
-    const cols = [...new Set([...(plan?.cols ?? []), ...shown().map((r) => `${r.harness}|${r.model ?? ""}`)])];
+    const cols = [...new Set([...(plan?.cols ?? []), ...shown().map((r) => `${r.harness}|${variantOf(r)}`)])];
     const suiteOfTask = (task) => suiteOf({ task, suite: shown().find((r) => r.task === task)?.suite }, state.catalog?.tasks);
     const planned = (plan?.tasks ?? []).filter((t) => state.suite === "all" || suiteOfTask(t) === state.suite);
     const tasks = [...new Set([...planned, ...shown().map((r) => r.task)])].sort();
@@ -1237,7 +1310,7 @@ export async function activate(api) {
     const groups = suitesIn(tasks.map((task) => ({ task, suite: suiteOfTask(task) })), state.catalog).map((s) => [s, tasks.filter((t) => suiteOfTask(t) === s)]);
     const busy = new Set(state.running ? runningJobs(state.progress).map((j) => `${j.task}|${j.harness}`) : []);
     const cell = (task, col) => {
-      const rs = shown().filter((r) => r.task === task && `${r.harness}|${r.model ?? ""}` === col);
+      const rs = shown().filter((r) => r.task === task && `${r.harness}|${variantOf(r)}` === col);
       if (!rs.length) {
         if (busy.has(`${task}|${col.split("|")[0]}`)) return `<td><div class="hb-cell busy hb-pulse"><div class="st">● running</div><div class="m">&nbsp;</div></div></td>`;
         return `<td><div class="hb-cell queued"><div class="st" style="color:var(--color-fg-subtle)">${state.running ? "queued" : "—"}</div><div class="m">&nbsp;</div></div></td>`;
@@ -1260,7 +1333,7 @@ export async function activate(api) {
     };
     return `<div class="hb-panel"><h2>Per task</h2><p class="hb-sub">Pass or fail with median time, uncached input tokens and output tokens. Hover a failed cell for the reason.</p>
       <div style="overflow-x:auto"><table class="hb-grid-table">
-        <tr><th></th>${cols.map((c) => `<th><span class="hb-dot" style="display:inline-block;margin-right:6px;background:${colorOf(c.split("|")[0])}"></span>${esc(labelOf(c.split("|")[0]))}</th>`).join("")}</tr>
+        <tr><th></th>${cols.map((c) => `<th><span class="hb-dot" style="display:inline-block;margin-right:6px;background:${colorOf(c.split("|")[0])}"></span>${esc(labelOf(c.split("|")[0]))}${c.split("|")[1] ? `<div class="wf-subtle wf-mono" style="font-weight:400;font-size:10.5px">${esc(c.split("|")[1])}</div>` : ""}</th>`).join("")}</tr>
         ${groups
           .map(
             ([s, ts]) =>
@@ -1414,6 +1487,10 @@ export async function activate(api) {
       if (bd.action === "selftest") return void start(true);
       if (bd.action === "stop") return void stop();
       if (bd.action === "reveal" && state.viewing) return void api.revealFile(state.viewing);
+      if (bd.tradeoff) {
+        setPrefs({ tradeoff: bd.tradeoff });
+        return render();
+      }
       if (bd.tab) {
         state.tab = bd.tab;
         if (bd.tab === "runs") loadOverviews();
@@ -1486,6 +1563,10 @@ export async function activate(api) {
       if (d.harness) {
         const hs = { ...(prefs().harnesses ?? {}) };
         hs[d.harness] = { ...(hs[d.harness] ?? {}), on: t.checked };
+        setPrefs({ harnesses: hs });
+      } else if (d.effort !== undefined) {
+        const hs = { ...(prefs().harnesses ?? {}) };
+        hs[d.effort] = { ...(hs[d.effort] ?? {}), effort: t.value };
         setPrefs({ harnesses: hs });
       } else if (d.model) {
         const hs = { ...(prefs().harnesses ?? {}) };

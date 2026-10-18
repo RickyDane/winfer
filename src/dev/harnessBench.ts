@@ -9,13 +9,13 @@ import catalog from "../../plugins/harness-bench/bench/harnesses.json";
 export const BENCH_DEMO = new URLSearchParams(location.search).has("bench");
 
 const harnesses = [
-  { id: "winfer-chatgpt", label: "winfer code · ChatGPT", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"], installed: true },
-  { id: "winfer-claude", label: "winfer code · Claude", model: "sonnet", models: ["fable", "opus", "sonnet", "haiku"], installed: true },
-  { id: "winfer-codex", label: "winfer code · Codex", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-luna"], installed: true },
-  { id: "codex", label: "Codex", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-luna"], installed: true },
-  { id: "claude", label: "Claude Code", model: "sonnet", models: ["fable", "opus", "sonnet", "haiku"], installed: true },
-  { id: "pi", label: "pi", model: "openai/gpt-6.1-sol", models: ["openai/gpt-6.1-sol"], installed: true },
-  { id: "opencode", label: "OpenCode", model: "openai/gpt-6.1-sol", models: [], installed: false },
+  { id: "winfer-chatgpt", label: "winfer code · ChatGPT", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"], efforts: ["minimal", "low", "medium", "high", "xhigh"], installed: true },
+  { id: "winfer-claude", label: "winfer code · Claude", model: "sonnet", models: ["fable", "opus", "sonnet", "haiku"], efforts: ["low", "medium", "high", "xhigh", "max"], installed: true },
+  { id: "winfer-codex", label: "winfer code · Codex", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-luna"], efforts: ["minimal", "low", "medium", "high", "xhigh"], installed: true },
+  { id: "codex", label: "Codex", model: "gpt-6.1-sol", models: ["gpt-6.1-sol", "gpt-6-luna"], efforts: ["minimal", "low", "medium", "high", "xhigh"], installed: true },
+  { id: "claude", label: "Claude Code", model: "sonnet", models: ["fable", "opus", "sonnet", "haiku"], efforts: ["low", "medium", "high", "xhigh", "max"], installed: true },
+  { id: "pi", label: "pi", model: "openai/gpt-6.1-sol", models: ["openai/gpt-6.1-sol"], efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"], installed: true },
+  { id: "opencode", label: "OpenCode", model: "openai/gpt-6.1-sol", models: [], efforts: ["minimal", "low", "medium", "high", "xhigh"], installed: false },
 ];
 // Generated from `run.py --list` (prompts cut to 80 characters).
 const suites = [
@@ -112,7 +112,7 @@ const history: Record<string, object[]> = {
   "20261015-171500-selftest.jsonl": demoTasks.flatMap((x, i) => [result(x.id, "oracle", "", true, 2 + i, 0, 0, 0, 0, t0 - 86400 * 2), result(x.id, "noop", "", false, 1, 0, 0, 0, 0, t0 - 86400 * 2)]),
 };
 
-let fake: { started: number; log: string; plan: { task: string; harness: string; model: string }[] } | null = null;
+let fake: { started: number; log: string; plan: { task: string; harness: string; model: string; effort: string }[] } | null = null;
 const STEP_MS = 2500;
 
 /** Lanes run in parallel, one per harness; each lane works through its tasks in turn. */
@@ -131,7 +131,7 @@ function fakeProgress() {
       const winfer = lane.startsWith("winfer");
       const uncached = 9000 + ((i * 3700 + li * 2100) % 9000);
       const input = winfer ? uncached : uncached * 6;
-      rows.push(result(p.task, p.harness, p.model, (i + li) % 5 !== 3, step / 1000, input, input - uncached, 600 + i * 90, 4 + (i % 5), started));
+      rows.push({ ...result(p.task, p.harness, p.model, (i + li) % 5 !== 3, step / 1000, input, input - uncached, 600 + i * 90, 4 + (i % 5), started), effort: p.effort });
     });
     if (done < jobs.length) running.push({ ...jobs[done], run: 1, since: (fake!.started + done * step) / 1000 });
   });
@@ -141,23 +141,29 @@ function fakeProgress() {
 
 export function harnessBenchExec(command: string) {
   const ok = (output: string) => ({ code: 0, timedOut: false, output });
-  if (command.includes("run.py --list")) return ok("");
-  if (command.includes("ls -1t")) return ok(Object.keys(history).sort().reverse().join("\n"));
-  if (command.includes("nohup python3 run.py")) {
-    const h = /-H '([^']+)'/.exec(command)?.[1].split(",") ?? [];
-    const t = /-t '([^']+)'/.exec(command)?.[1].split(",") ?? [];
-    const models = Object.fromEntries([...command.matchAll(/-m '([^=]+)=([^']*)'/g)].map((m) => [m[1], m[2]]));
-    const log = /--log '([^']+)'/.exec(command)?.[1].split("/").pop() ?? "run.jsonl";
-    const plan = tasks.filter((x) => t.includes(x.id)).flatMap((x) => h.map((harness) => ({ task: x.id, harness, model: models[harness] ?? "" })));
+  // The plugin probes for Python, then runs everything as `python3 run.py 'arg' 'arg' ...`.
+  if (command.includes("import sys")) return ok("3");
+  const args = [...command.matchAll(/'((?:[^']|'\\'')*)'/g)].map((m) => m[1].replace(/'\\''/g, "'"));
+  const opt = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+  const all = (name: string) => args.flatMap((a, i) => (a === name ? [args[i + 1]] : []));
+  if (args[0] === "--list") return ok("");
+  if (args[0] === "--history") return ok(Object.keys(history).sort().reverse().join("\n"));
+  if (args.includes("--detach")) {
+    const h = opt("-H")?.split(",") ?? [];
+    const t = opt("-t")?.split(",") ?? [];
+    const models = Object.fromEntries(all("-m").map((m) => m.split("=", 2)));
+    const efforts = Object.fromEntries(all("-e").map((m) => m.split("=", 2)));
+    const log = opt("--log")?.split("/").pop() ?? "run.jsonl";
+    const plan = tasks.filter((x) => t.includes(x.id)).flatMap((x) => h.map((harness) => ({ task: x.id, harness, model: models[harness] ?? "", effort: efforts[harness] ?? "" })));
     fake = { started: Date.now(), log, plan };
     return ok("4242");
   }
-  if (command.startsWith("rm -f -- ")) {
-    for (const name of command.matchAll(/'[^']*\/([^/']+\.jsonl)'/g)) delete history[name[1]];
+  if (args[0] === "--delete") {
+    for (const path of args.slice(1)) delete history[path.split("/").pop() ?? ""];
     return ok("");
   }
-  if (command.includes("kill -0")) return ok(fake && fakeProgress()?.running.length ? "yes" : "no");
-  if (command.includes("kill -TERM")) {
+  if (args[0] === "--alive" || args[0] === "--find") return ok(fake && fakeProgress()?.running.length ? (args[0] === "--find" ? "4242" : "yes") : args[0] === "--find" ? "" : "no");
+  if (args[0] === "--stop") {
     fake = null;
     return ok("");
   }

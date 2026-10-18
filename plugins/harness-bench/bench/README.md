@@ -7,9 +7,14 @@ python3 plugins/harness-bench/bench/run.py                                   # w
 python3 plugins/harness-bench/bench/run.py -s understanding,research          # only these suites
 python3 plugins/harness-bench/bench/run.py -H winfer-chatgpt,codex,pi -n 3   # 3 runs each (medians in the summary)
 python3 plugins/harness-bench/bench/run.py -H winfer-claude,claude -t 03,04  # same model through both harnesses
+python3 plugins/harness-bench/bench/run.py -H codex,claude -e codex=high -e claude=high  # a reasoning effort per harness
 python3 plugins/harness-bench/bench/run.py -H oracle                         # reference solutions: every check should pass
 python3 plugins/harness-bench/bench/run.py -H noop                           # untouched projects: every check should fail
 ```
+
+`-e harness=level` sets a reasoning/thinking effort (`default` or none leaves it to the harness): `--effort` for winfer code and Claude Code, `-c model_reasoning_effort=` for Codex, `--thinking` for pi, the `model#variant` suffix for OpenCode. Each harness's `effort` entry in `harnesses.json` says how it's passed and which `levels` the app offers. Results record it as `effort`, and the app compares each harness+model+effort separately ("gpt-6.1-sol · high").
+
+The app lists only installed harnesses: their CLI must be on PATH. winfer code · Claude and winfer code · Codex also need the `claude` and `codex` CLIs (`requires` in `harnesses.json`). `--list` reports this as `installed`.
 
 `-p harness` (default) runs all harnesses at the same time, each working through its tasks in turn; `-p all` starts every run at once; `-p none` runs one at a time. Parallel runs share your machine and network, so times are a little slower than alone. `--keep` keeps the work directories (with the harness output in `.bench-output.jsonl`). Results append to `results/<time>.jsonl` next to run.py (the app plugin keeps them in the app data folder). The winfer binary comes from `$WINFER_BIN`, else `src-tauri/target/{release,debug}/winfer`, else `/Applications/winfer.app` (on Windows, `winfer.exe` in the build folders or the install folder under `%LOCALAPPDATA%` / `%ProgramFiles%`).
 
