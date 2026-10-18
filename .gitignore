@@ -39,3 +39,10 @@ m-video/
 
 # Harness Bench fixtures ship .env.local files on purpose
 !plugins-src/**/*.local
+
+# Local agent/tool config
+.claude/
+.codex/
+.cursor/
+.opencode/
+.specsmd/
