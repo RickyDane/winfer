@@ -131,15 +131,39 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual([t.name for t in bench.all_tasks(out)], ["01-a"])
             self.assertTrue(os.access(out / "coding" / "tasks" / "01-a" / "verify" / "check.sh", os.X_OK))
             self.assertFalse((out / "coding" / "tasks" / "01-a" / "__pycache__").exists())
-            # Unchanged archive: left alone (a stray file survives); a new one replaces the folder.
+            # Unchanged archive: left alone (a stray file survives); a new one gets a new folder
+            # and the old one (and the unhashed folder of older versions) goes.
             (out / "stray").write_text("x")
-            bench.unpack(root / "a.tar.gz", root / "suites")
+            (root / "suites").mkdir()
+            self.assertEqual(bench.unpack(root / "a.tar.gz", root / "suites"), out)
             self.assertTrue((out / "stray").exists())
+            self.assertFalse((root / "suites").exists())
             SuiteTests.make(None, src, "research", "r01")
             bench.pack(src, root / "a.tar.gz")
-            bench.unpack(root / "a.tar.gz", root / "suites")
-            self.assertFalse((out / "stray").exists())
+            new = bench.unpack(root / "a.tar.gz", root / "suites")
+            self.assertNotEqual(new, out)
+            self.assertFalse(out.exists())
+            out = new
             self.assertEqual(bench.suite_names(out), ["coding", "research"])
+
+    def test_concurrent_unpacks_all_see_every_task(self):
+        """The plugin starts several run.py processes at once; none may see a half-replaced folder."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            src = root / "src"
+            SuiteTests.make(None, src, "coding", *[f"{i:02}-t" for i in range(30)])
+            bench.pack(src, root / "a.tar.gz")
+            code = (
+                "import sys; sys.path.insert(0, sys.argv[1]); import run; from pathlib import Path; "
+                "out = run.unpack(Path(sys.argv[2]), Path(sys.argv[3])); "
+                "print(len([t for t in run.all_tasks(out) if (t / 'task.md').read_text()]))"
+            )
+            procs = [
+                subprocess.Popen([sys.executable, "-c", code, str(bench.HERE), str(root / "a.tar.gz"), str(root / "suites")], stdout=subprocess.PIPE, text=True)
+                for _ in range(6)
+            ]
+            self.assertEqual([p.communicate()[0].strip() for p in procs], ["30"] * 6)
+            self.assertEqual([p.name for p in root.iterdir() if p.name.startswith(("suites", ".suites"))], [bench.unpack(root / "a.tar.gz", root / "suites").name])
 
     @unittest.skipUnless(bench.SOURCES.is_dir(), "needs a winfer checkout")
     def test_shipped_archive_matches_sources(self):

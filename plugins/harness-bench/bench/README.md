@@ -17,7 +17,7 @@ python3 plugins/harness-bench/bench/run.py -H noop                           # u
 
 ## Suites
 
-Tasks live in `suites/<suite>/tasks/<id>/`. In a winfer checkout that's [`plugins-src/harness-bench/suites`](../../../plugins-src/harness-bench/suites), and the plugin ships them packed as `suites.tar.gz` (the store installs at most 500 files per plugin), which run.py unpacks next to itself on first use. After editing a task, run `python3 run.py --pack`; `pnpm test` fails while the archive is out of date. `suite.json` gives each suite its label and description. `-s` picks suites, `-t` picks tasks by id prefix (`-t 01,u03,r`). Every result row records its `suite`; runs saved before suites are mapped by task id (the four question tasks moved from coding to understanding).
+Tasks live in `suites/<suite>/tasks/<id>/`. In a winfer checkout that's [`plugins-src/harness-bench/suites`](../../../plugins-src/harness-bench/suites), and the plugin ships them packed as `suites.tar.gz` (the store installs at most 500 files per plugin), which run.py unpacks next to itself (`suites-<hash>`) on first use. After editing a task, run `python3 run.py --pack`; `pnpm test` fails while the archive is out of date. `suite.json` gives each suite its label and description. `-s` picks suites, `-t` picks tasks by id prefix (`-t 01,u03,r`). Every result row records its `suite`; runs saved before suites are mapped by task id (the four question tasks moved from coding to understanding).
 
 | suite | what it tests | how it's checked |
 |---|---|---|

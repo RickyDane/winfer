@@ -1,5 +1,6 @@
 results/
 # Unpacked from suites.tar.gz; the sources are in plugins-src/harness-bench/suites.
 suites/
+suites-*/
 .suites.sha1
 .suites-*/

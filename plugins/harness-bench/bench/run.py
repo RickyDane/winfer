@@ -66,24 +66,35 @@ def pack(src: Path, archive: Path) -> None:
 
 
 def unpack(archive: Path, dest: Path) -> Path:
-    """Extracts `archive` to `dest` unless it already holds this archive's files."""
-    digest = hashlib.sha1(archive.read_bytes()).hexdigest()
-    stamp = dest.parent / f".{dest.name}.sha1"
-    if dest.is_dir() and stamp.exists() and stamp.read_text(encoding="utf-8") == digest:
-        return dest
-    tmp = Path(tempfile.mkdtemp(prefix=".suites-", dir=dest.parent))
-    with tarfile.open(archive) as tar:
-        if hasattr(tarfile, "data_filter"):
-            tar.extractall(tmp, filter="data")
-        else:  # Python before 3.12 / 3.9.17: our own archive, but still refuse paths leaving tmp
-            for m in tar.getmembers():
-                if m.name.startswith("/") or ".." in Path(m.name).parts or not (m.isfile() or m.isdir()):
-                    sys.exit(f"{archive}: unexpected entry {m.name}")
-            tar.extractall(tmp)
-    shutil.rmtree(dest, ignore_errors=True)
-    tmp.rename(dest)
-    stamp.write_text(digest, encoding="utf-8")
-    return dest
+    """Extracts `archive` next to `dest`, into a folder named after the archive's hash
+    (`suites-<hash>`), unless it's there already; returns that folder. Safe when several
+    run.py processes start at once (the plugin runs a few together): each extracts to its own
+    temporary folder and renames it into place, and a folder in use is never replaced."""
+    digest = hashlib.sha1(archive.read_bytes()).hexdigest()[:12]
+    final = dest.parent / f"{dest.name}-{digest}"
+    if not final.is_dir():
+        tmp = Path(tempfile.mkdtemp(prefix=f".{dest.name}-", dir=dest.parent))
+        with tarfile.open(archive) as tar:
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(tmp, filter="data")
+            else:  # Python before 3.12 / 3.9.17: our own archive, but still refuse paths leaving tmp
+                for m in tar.getmembers():
+                    if m.name.startswith("/") or ".." in Path(m.name).parts or not (m.isfile() or m.isdir()):
+                        sys.exit(f"{archive}: unexpected entry {m.name}")
+                tar.extractall(tmp)
+        try:
+            tmp.rename(final)
+        except OSError:  # another process got there first
+            shutil.rmtree(tmp, ignore_errors=True)
+            if not final.is_dir():
+                raise
+    # Earlier archives' folders (and the unhashed one older versions used), when nothing holds them.
+    for old in dest.parent.glob(f"{dest.name}*"):
+        if old.is_dir() and old != final and (old == dest or old.name.startswith(f"{dest.name}-")):
+            shutil.rmtree(old, ignore_errors=True)
+    for stamp in dest.parent.glob(f".{dest.name}.sha1"):
+        stamp.unlink(missing_ok=True)
+    return final
 
 
 def find_suites() -> Path:
@@ -96,7 +107,10 @@ def find_suites() -> Path:
     return HERE / "suites"
 
 
-SUITES = find_suites()
+@lru_cache(maxsize=None)
+def suites_root() -> Path:
+    """The task suites, found (and unpacked) on first use: the control commands don't need them."""
+    return find_suites()
 CATALOG = json.loads((HERE / "harnesses.json").read_text(encoding="utf-8"))
 PRICES = CATALOG.get("_prices", {})
 
@@ -207,21 +221,24 @@ def fingerprint(root: Path) -> str:
     return h.hexdigest()
 
 
-def suite_names(root: Path = SUITES):
+def suite_names(root: Path = None):
     """Suite folder names under `root`, known suites first in their usual order."""
+    root = root or suites_root()
     found = [p.name for p in root.iterdir() if (p / "tasks").is_dir()] if root.is_dir() else []
     rank = lambda s: (SUITE_ORDER.index(s) if s in SUITE_ORDER else len(SUITE_ORDER), s)
     return sorted(found, key=rank)
 
 
-def suite_info(name: str, root: Path = SUITES) -> dict:
+def suite_info(name: str, root: Path = None) -> dict:
+    root = root or suites_root()
     f = root / name / "suite.json"
     info = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     return {"id": name, "label": info.get("label", name.capitalize()), "description": info.get("description", "")}
 
 
-def all_tasks(root: Path = SUITES, suites=None):
+def all_tasks(root: Path = None, suites=None):
     """Task folders (those with a task.md) under `root`, grouped by suite then sorted by name."""
+    root = root or suites_root()
     out = []
     for s in suite_names(root):
         if suites and s not in suites:
@@ -530,6 +547,7 @@ def main():
         for s in suites:
             if s not in suite_names():
                 sys.exit(f"unknown suite {s}; have {', '.join(suite_names())}")
+    SUITES = suites_root()
     snapshot = Path(tempfile.mkdtemp(prefix="bench-tasks-"))
     shutil.copytree(SUITES, snapshot / "suites", ignore=shutil.ignore_patterns("__pycache__"))
     original = fingerprint(SUITES)
