@@ -178,8 +178,26 @@ pub fn user_shell() -> String {
     }
     #[cfg(windows)]
     {
-        "powershell.exe".into()
+        // PowerShell 7 (pwsh) when installed, else the Windows PowerShell every Windows has.
+        static PWSH: OnceLock<String> = OnceLock::new();
+        PWSH.get_or_init(|| {
+            find_command("pwsh").map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "powershell.exe".into())
+        })
+        .clone()
     }
+}
+
+/// The user's shell as a short name for the UI: `pwsh`/`powershell` on Windows, else
+/// `zsh`/`bash`/`fish`/… from `$SHELL`.
+pub fn shell_label() -> String {
+    shell_name(&user_shell())
+}
+
+/// `C:\…\pwsh.exe` → `pwsh`, `/bin/zsh` → `zsh`.
+pub fn shell_name(path: &str) -> String {
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path).to_ascii_lowercase();
+    let file = file.strip_suffix(".exe").unwrap_or(&file);
+    if file.is_empty() { "shell".into() } else { file.to_string() }
 }
 
 #[cfg(unix)]
@@ -315,7 +333,15 @@ fn merge_paths(primary: &str, extra: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::node_shim_script;
+    use super::{node_shim_script, shell_name};
+
+    #[test]
+    fn shell_names() {
+        assert_eq!(shell_name(r"C:\Program Files\PowerShell\7\pwsh.exe"), "pwsh");
+        assert_eq!(shell_name("powershell.exe"), "powershell");
+        assert_eq!(shell_name("/bin/zsh"), "zsh");
+        assert_eq!(shell_name("PowerShell.EXE"), "powershell");
+    }
 
     #[test]
     fn reads_the_script_from_npm_and_pnpm_shims() {

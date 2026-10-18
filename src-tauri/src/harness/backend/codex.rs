@@ -371,10 +371,11 @@ impl Bridge {
         let key = format!("codex-{id}");
         let approval = match method {
             "item/commandExecution/requestApproval" | "execCommandApproval" => {
-                let command = p["command"].as_str().map(strip_shell).unwrap_or_default();
+                let raw = p["command"].as_str().unwrap_or("");
+                let command = strip_shell(raw);
                 Some(Approval {
                     id: key.clone(),
-                    tool: "Bash".into(),
+                    tool: shell_tool(raw).into(),
                     title: command,
                     detail: p["reason"].as_str().unwrap_or("").to_string(),
                     diff: None,
@@ -576,10 +577,11 @@ impl Bridge {
         let id = s(item, "id");
         Some(match item["type"].as_str().unwrap_or("") {
             "commandExecution" => {
-                let command = strip_shell(item["command"].as_str().unwrap_or(""));
+                let raw = item["command"].as_str().unwrap_or("");
+                let command = strip_shell(raw);
                 match skill_reads(&command) {
                     Some(names) => ("Skill".to_string(), names),
-                    None => ("Bash".to_string(), command),
+                    None => (shell_tool(raw).to_string(), command),
                 }
             }
             "fileChange" => {
@@ -758,6 +760,12 @@ fn strip_shell(command: &str) -> String {
     strip_powershell(command).map(unquote).unwrap_or_else(|| command.to_string())
 }
 
+/// The card name for a command Codex ran: `PowerShell` when it went through pwsh/powershell
+/// (Codex on Windows), else `Bash`.
+fn shell_tool(command: &str) -> &'static str {
+    if strip_powershell(command).is_some() { "PowerShell" } else { "Bash" }
+}
+
 /// On Windows Codex runs commands as `"C:\…\pwsh.exe" -Command "…"` (or powershell.exe, maybe
 /// with -NoProfile/-NoLogo first): the part after `-Command`.
 fn strip_powershell(command: &str) -> Option<&str> {
@@ -924,6 +932,8 @@ mod tests {
         assert_eq!(skill_reads(&strip_shell(escaped)).as_deref(), Some("caveman"));
         assert_eq!(strip_shell(r#"powershell.exe -NoProfile -Command "git status""#), "git status");
         assert_eq!(strip_shell("pwsh.exe -File x.ps1"), "pwsh.exe -File x.ps1");
+        assert_eq!(shell_tool(pwsh), "PowerShell");
+        assert_eq!(shell_tool("/bin/zsh -lc 'ls'"), "Bash");
     }
 
     #[test]

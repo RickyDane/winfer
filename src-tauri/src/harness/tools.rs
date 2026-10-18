@@ -71,7 +71,7 @@ pub fn definitions() -> Vec<Value> {
         f("read", "Read file (numbered lines) or list dir.", json!({ "path": s, "offset": n, "limit": n }), &["path"]),
         f("write", "Create/overwrite file.", json!({ "path": s, "content": s }), &["path", "content"]),
         f("edit", "Replace exact unique text in file (all: every match).", json!({ "path": s, "old": s, "new": s, "all": b }), &["path", "old", "new"]),
-        f("bash", "Run shell command (timeout ms, default 120000).", json!({ "cmd": s, "timeout": n }), &["cmd"]),
+        f("bash", shell_description(), json!({ "cmd": s, "timeout": n }), &["cmd"]),
         f("grep", "Regex search file contents (i: ignore case).", json!({ "pattern": s, "path": s, "glob": s, "i": b }), &["pattern"]),
         f("glob", "Find files by glob, newest first.", json!({ "pattern": s, "path": s }), &["pattern"]),
         f("fetch", "Fetch URL as text.", json!({ "url": s }), &["url"]),
@@ -291,13 +291,45 @@ pub fn clip(text: &str, max: usize) -> String {
     format!("{}\n… [{} bytes omitted] …\n{}", &text[..head], tail - head, &text[tail..])
 }
 
-fn shell() -> (String, &'static str) {
-    if cfg!(windows) {
-        return ("cmd".into(), "/C");
-    }
+/// The program and arguments that run a command line: PowerShell on Windows (pwsh when
+/// installed), else the user's bash/zsh, else /bin/sh.
+fn shell() -> (String, Vec<&'static str>) {
     let sh = crate::env::user_shell();
-    let name = Path::new(&sh).file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if matches!(name, "bash" | "zsh") { (sh, "-c") } else { ("/bin/sh".into(), "-c") }
+    let name = crate::env::shell_name(&sh);
+    if cfg!(windows) {
+        return (sh, vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]);
+    }
+    if matches!(name.as_str(), "bash" | "zsh") { (sh, vec!["-c"]) } else { ("/bin/sh".into(), vec!["-c"]) }
+}
+
+/// The shell the `bash` tool and `!` commands run, as a tool card name: `PowerShell` on
+/// Windows, else `Bash`/`Zsh`/`Sh` (what `shell()` picks).
+pub fn shell_display() -> &'static str {
+    if cfg!(windows) {
+        return "PowerShell";
+    }
+    match crate::env::shell_name(&shell().0).as_str() {
+        "bash" => "Bash",
+        "zsh" => "Zsh",
+        _ => "Sh",
+    }
+}
+
+/// The `bash` tool's description, naming the shell commands run in.
+fn shell_description() -> &'static str {
+    if cfg!(windows) {
+        "Run PowerShell command (PowerShell syntax, not bash; timeout ms, default 120000)."
+    } else {
+        "Run shell command (timeout ms, default 120000)."
+    }
+}
+
+/// PowerShell: UTF-8 output, no progress bars, and the exit code of the last native command
+/// (or 1 when a cmdlet failed) instead of always 0/1.
+fn powershell_script(command: &str) -> String {
+    format!(
+        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; $global:LASTEXITCODE=0\n{command}\nif (-not $?) {{ if ($LASTEXITCODE) {{ exit $LASTEXITCODE }} else {{ exit 1 }} }} else {{ exit $LASTEXITCODE }}"
+    )
 }
 
 fn bash(args: &Value, ctx: &mut Ctx) -> Outcome {
@@ -308,9 +340,10 @@ fn bash(args: &Value, ctx: &mut Ctx) -> Outcome {
 
 /// Runs `command` through the user's shell, streaming output; stops on timeout or `stop`.
 pub fn run_shell(command: &str, cwd: &Path, timeout: Duration, stop: &AtomicBool, output: &dyn Fn(&str)) -> Outcome {
-    let (sh, flag) = shell();
+    let (sh, flags) = shell();
     let mut cmd = Command::new(sh);
-    cmd.arg(flag).arg(command).current_dir(cwd);
+    cmd.args(flags).current_dir(cwd);
+    if cfg!(windows) { cmd.arg(powershell_script(command)) } else { cmd.arg(command) };
     cmd.env("PATH", crate::env::path_var()).env("TERM", "dumb").env("NO_COLOR", "1").env("GIT_PAGER", "cat").env("PAGER", "cat");
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
@@ -386,6 +419,13 @@ fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    // PowerShell's children (node, cargo…) outlive it otherwise.
+    #[cfg(windows)]
+    {
+        let mut kill = Command::new("taskkill");
+        kill.args(["/T", "/F", "/PID", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+        let _ = crate::env::no_window(&mut kill).status();
     }
     let _ = child.kill();
 }

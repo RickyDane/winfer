@@ -294,7 +294,7 @@ pub enum ToolKind {
 }
 
 /// A tool's chip: a small glyph in its kind's color, then its name in grey:
-/// "◇ read", "✎ edit", "❯ bash", "◈ navigate" (MCP), "✦ agent", "✧ skill".
+/// "◇ read", "✎ edit", "❯ bash" (or "❯ powershell" on Windows), "◈ navigate" (MCP), "✦ agent", "✧ skill".
 fn chip(label: &str, kind: ToolKind) -> Vec<Span<'static>> {
     let (icon, color) = match kind {
         ToolKind::Read => ("◇", theme::BLUE()),
@@ -325,11 +325,15 @@ pub fn tool_kind(name: &str) -> (String, ToolKind) {
     let kind = match name {
         "Read" | "Grep" | "Glob" | "LS" | "WebFetch" | "WebSearch" | "read_file" | "list_dir" | "search" | "grep" | "glob" => ToolKind::Read,
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch" | "edit_file" | "write_file" | "edit" | "write" => ToolKind::Edit,
-        "Bash" | "shell" | "exec" | "exec_command" | "bash" => ToolKind::Shell,
+        "Bash" | "shell" | "exec" | "exec_command" | "bash" | "PowerShell" | "Zsh" | "Sh" => ToolKind::Shell,
         "Agent" | "Task" => ToolKind::Agent,
         "Skill" => ToolKind::Skill,
         _ => ToolKind::Other,
     };
+    // Generic shell tools run whatever the platform's shell is: PowerShell on Windows.
+    if cfg!(windows) && matches!(name, "shell" | "exec" | "exec_command") {
+        return ("powershell".into(), kind);
+    }
     (truncate(&name.to_lowercase(), 16), kind)
 }
 
@@ -456,6 +460,8 @@ mod tests {
     fn chips_are_an_icon_and_a_name() {
         let text = |kind| chip("bash", kind).iter().map(|s| s.content.to_string()).collect::<String>();
         assert_eq!(text(ToolKind::Shell), " ❯ bash ");
+        assert!(matches!(tool_kind("PowerShell"), (l, ToolKind::Shell) if l == "powershell"));
+        assert!(matches!(tool_kind("Zsh"), (l, ToolKind::Shell) if l == "zsh"));
         assert_eq!(text(ToolKind::Read), " ◇ bash ");
     }
 }

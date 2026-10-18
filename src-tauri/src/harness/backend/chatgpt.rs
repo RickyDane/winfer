@@ -318,8 +318,9 @@ fn instructions(opts: &Opts) -> String {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     let mut s = format!(
-        "{SYSTEM}\n\ncwd {cwd} · {} · {}{}",
+        "{SYSTEM}\n\ncwd {cwd} · {} · shell {} · {}{}",
         std::env::consts::OS,
+        crate::env::shell_label(),
         today(),
         branch.map(|b| format!(" · git {b}")).unwrap_or_default(),
     );
@@ -876,7 +877,7 @@ fn display_name(name: &str) -> &str {
         "read" | "ls" => "Read",
         "write" => "Write",
         "edit" => "Edit",
-        "bash" => "Bash",
+        "bash" => tools::shell_display(),
         "grep" => "Grep",
         "glob" => "Glob",
         "fetch" | "web_fetch" => "Fetch",

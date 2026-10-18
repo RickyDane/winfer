@@ -783,7 +783,7 @@ impl App {
         let id = format!("shell-{}", self.shell_seq);
         self.items.push(Item::new(Block::Tool {
             id: id.clone(),
-            name: "Shell".into(),
+            name: tools::shell_display().into(),
             title: command.clone(),
             output: String::new(),
             diff: None,
@@ -1145,7 +1145,7 @@ impl App {
 
     fn sync_shell_cards(&mut self) {
         for task in self.tasks.iter().filter(|t| !t.agent) {
-            if let Some(item) = self.items.iter_mut().find(|i| matches!(&i.block, Block::Tool { id, name, .. } if task.tool_id.as_deref() == Some(id) && matches!(name.as_str(), "Bash" | "bash" | "shell"))) {
+            if let Some(item) = self.items.iter_mut().find(|i| matches!(&i.block, Block::Tool { id, name, .. } if task.tool_id.as_deref() == Some(id) && matches!(super::transcript::tool_kind(name).1, super::transcript::ToolKind::Shell))) {
                 if let Block::Tool { status, ended, title, .. } = &mut item.block {
                     if !item.background || *status != task.status || *ended != task.ended || item.exit_code != task.exit_code {
                         *status = task.status;
