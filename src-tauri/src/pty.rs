@@ -197,6 +197,26 @@ fn plain_args(provider_id: &str) -> Vec<String> {
     }
 }
 
+/// `winfer code` runs this GUI-subsystem binary, which Windows doesn't attach to the pane's
+/// pseudoconsole (its TUI aborted with exit code 0xC0000409). cmd.exe, a console program, holds
+/// the console and waits for it (`start /b /wait`, which also passes on its exit code); winfer
+/// code attaches to cmd.exe's console (`harness::attach_console`). The arguments after `code`
+/// travel as JSON in the returned environment value, out of cmd.exe's reach.
+#[cfg(windows)]
+fn console_host(cmd: &CommandBuilder) -> (CommandBuilder, String) {
+    let argv = cmd.get_argv();
+    let args: Vec<String> = argv.iter().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
+    let shell = login_env()
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("ComSpec"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "cmd.exe".into());
+    let mut host = CommandBuilder::new(shell);
+    host.args(["/d", "/c", "start", "", "/b", "/wait"]);
+    host.args(&argv[..2.min(argv.len())]);
+    (host, serde_json::to_string(&args).unwrap_or_default())
+}
+
 /// The command for a pane, and whether its start prompt has to be typed in rather than passed
 /// as an argument.
 fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBuilder, bool), String> {
@@ -266,6 +286,12 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 req.session.as_deref(),
                 req.prompt.as_deref().filter(|_| !launcher.batch),
             ));
+            #[cfg(windows)]
+            if provider.id == "winfer" {
+                let (host, args) = console_host(&cmd);
+                agent_env.push((crate::harness::CODE_ARGS_ENV.to_string(), args));
+                cmd = host;
+            }
             cmd
         }
         None => {

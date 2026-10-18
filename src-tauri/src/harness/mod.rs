@@ -17,6 +17,64 @@ use std::sync::mpsc::channel;
 
 use event::{Cmd, Decision, Ev, Mode, UserMsg};
 
+/// `winfer code`'s arguments as a JSON array, when a pane starts it through cmd.exe (see
+/// `pty::console_host`), so cmd.exe can't mangle them.
+#[cfg(windows)]
+pub const CODE_ARGS_ENV: &str = "WINFER_CODE_ARGS";
+
+/// winfer.exe is a GUI-subsystem program, so Windows gives it no console, even in a terminal
+/// pane: the TUI then can't open the console and aborts (exit code 0xC0000409). Attaches to the
+/// console of the program that started it (cmd.exe in a pane, or the user's shell) and points
+/// missing standard handles at it. Returns the arguments, taken from [`CODE_ARGS_ENV`] if set.
+#[cfg(windows)]
+pub fn attach_console(args: Vec<String>) -> Vec<String> {
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        SetStdHandle,
+    };
+
+    // SAFETY: plain Win32 calls with valid, NUL-terminated names; runs before any other thread.
+    unsafe {
+        // Fails harmlessly if there's already a console (a debug build) or no parent console.
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        let open = |name: &str| {
+            let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        // Keep handles the parent passed (pipes for `--print`); fill in only missing ones.
+        for (std, name) in [(STD_INPUT_HANDLE, "CONIN$"), (STD_OUTPUT_HANDLE, "CONOUT$"), (STD_ERROR_HANDLE, "CONOUT$")] {
+            let current = GetStdHandle(std);
+            if current.is_null() || current == INVALID_HANDLE_VALUE {
+                let handle = open(name);
+                if handle != INVALID_HANDLE_VALUE {
+                    SetStdHandle(std, handle);
+                }
+            }
+        }
+    }
+
+    let Some(passed) = std::env::var(CODE_ARGS_ENV)
+        .ok()
+        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+    else {
+        return args;
+    };
+    // Not for tools and agents started from here.
+    // SAFETY: still single-threaded.
+    unsafe { std::env::remove_var(CODE_ARGS_ENV) };
+    if args.is_empty() { passed } else { args }
+}
+
 /// Settings shown in the app (Settings → winfer code); history stays out.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

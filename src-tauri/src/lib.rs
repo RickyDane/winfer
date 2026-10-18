@@ -38,6 +38,9 @@ pub fn run_statusline() {
 
 /// `winfer code [args]`: winfer's own coding agent TUI (see harness/).
 pub fn run_code(args: &[String]) {
+    #[cfg(windows)]
+    let args = &harness::attach_console(args.to_vec());
+    log_panics();
     harness::run(args);
 }
 
