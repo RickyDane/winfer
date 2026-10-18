@@ -3,6 +3,8 @@
 import json
 import os
 import subprocess
+import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -151,6 +153,62 @@ class ArchiveTests(unittest.TestCase):
         }
         self.assertEqual(sorted(shipped), sorted(sources), "run `python3 run.py --pack`")
         self.assertEqual(shipped, sources, "run `python3 run.py --pack`")
+
+
+class ControlTests(unittest.TestCase):
+    """The commands the plugin runs instead of POSIX shell lines (so Windows works too)."""
+
+    def test_npm_shims(self):
+        npm = '@ECHO off\r\nSETLOCAL\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n'
+        self.assertEqual(bench.node_shim_script(npm), os.path.join("node_modules", "@openai", "codex", "bin", "codex.js"))
+        pnpm = '@"%~dp0\\node.exe" "%~dp0\\..\\cli\\bin\\run.js" %*'
+        self.assertEqual(bench.node_shim_script(pnpm), os.path.join("..", "cli", "bin", "run.js"))
+        self.assertIsNone(bench.node_shim_script("@echo off"))
+
+    def test_launcher_leaves_posix_argv_alone(self):
+        if not bench.WINDOWS:
+            self.assertEqual(bench.launcher(["codex", "exec", "a\nb"]), ["codex", "exec", "a\nb"])
+
+    def test_without_option(self):
+        argv = ["-H", "x", "--detach", "o.out", "--log", "l", "--detach=p"]
+        self.assertEqual(bench.without_option(argv, "--detach"), ["-H", "x", "--log", "l"])
+
+    def test_history_and_delete(self):
+        with tempfile.TemporaryDirectory() as folder:
+            d = Path(folder) / "data"
+            self.assertEqual(bench.history(d), [])
+            for i, name in enumerate(["old.jsonl", "new.jsonl", "old.out", "keep.txt"]):
+                (d / name).write_text("")
+                os.utime(d / name, (1000 + i, 1000 + i))
+            self.assertEqual(bench.history(d), ["new.jsonl", "old.jsonl"])
+            bench.delete([str(d / "old.jsonl"), str(d / "old.out"), str(d / "keep.txt"), str(d / "gone.usage.json")])
+            self.assertEqual(sorted(p.name for p in d.iterdir()), ["keep.txt", "new.jsonl"])
+
+    def test_list_writes_a_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "sub" / "catalog.json"
+            subprocess.run([sys.executable, str(bench.HERE / "run.py"), "--list", str(out)], check=True)
+            catalog = json.loads(out.read_text(encoding="utf-8"))
+            self.assertTrue(catalog["tasks"] and catalog["harnesses"])
+
+    def test_detach_alive_stop(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "run.out"
+            script = Path(folder) / "sleeper.py"
+            script.write_text("import time\nprint('up', flush=True)\ntime.sleep(60)\n")
+            with patch.object(bench, "__file__", str(script)):
+                pid = bench.detach([], out)
+            self.assertTrue(bench.alive(pid))
+            bench.stop(pid)
+            for _ in range(50):
+                if not bench.alive(pid):
+                    break
+                try:  # reap it: a zombie child still answers kill -0
+                    os.waitpid(pid, os.WNOHANG)
+                except (ChildProcessError, AttributeError):
+                    pass
+                time.sleep(0.1)
+            self.assertFalse(bench.alive(pid))
 
 
 if __name__ == "__main__":

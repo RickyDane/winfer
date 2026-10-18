@@ -11,7 +11,9 @@ python3 plugins/harness-bench/bench/run.py -H oracle                         # r
 python3 plugins/harness-bench/bench/run.py -H noop                           # untouched projects: every check should fail
 ```
 
-`-p harness` (default) runs all harnesses at the same time, each working through its tasks in turn; `-p all` starts every run at once; `-p none` runs one at a time. Parallel runs share your machine and network, so times are a little slower than alone. `--keep` keeps the work directories (with the harness output in `.bench-output.jsonl`). Results append to `results/<time>.jsonl` next to run.py (the app plugin keeps them in the app data folder). The winfer binary comes from `$WINFER_BIN`, else `src-tauri/target/{release,debug}/winfer`, else `/Applications/winfer.app`.
+`-p harness` (default) runs all harnesses at the same time, each working through its tasks in turn; `-p all` starts every run at once; `-p none` runs one at a time. Parallel runs share your machine and network, so times are a little slower than alone. `--keep` keeps the work directories (with the harness output in `.bench-output.jsonl`). Results append to `results/<time>.jsonl` next to run.py (the app plugin keeps them in the app data folder). The winfer binary comes from `$WINFER_BIN`, else `src-tauri/target/{release,debug}/winfer`, else `/Applications/winfer.app` (on Windows, `winfer.exe` in the build folders or the install folder under `%LOCALAPPDATA%` / `%ProgramFiles%`).
+
+**Windows:** needs Python 3 (the `py` launcher or `python` on PATH) and Git for Windows: the check scripts run in Git's `sh`, with `python3` pointed at the Python running the bench. npm `.cmd` shims (codex, claude…) are run through Node directly so prompts reach them intact. The plugin drives everything through run.py (`--list FILE`, `--history`, `--delete`, `--detach`, `--alive`, `--stop`), never a POSIX shell, so it works the same under cmd.exe.
 
 ## Suites
 

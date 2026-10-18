@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import catalog from "./bench/harnesses.json";
-import { clock, isLimitError, planOf, runLabel, trackUsage, usageRows, runOverview, suiteMatrix, suiteOf, suitesIn, summarize, taskName, withEstimatedCost } from "./index.js";
+import { clock, isLimitError, planOf, quoteArg, runLabel, trackUsage, usageRows, runOverview, suiteMatrix, suiteOf, suitesIn, summarize, taskName, withEstimatedCost } from "./index.js";
 
 const run = (patch = {}) => ({
   harness: "codex", model: "gpt-6.1-sol", task: "01-bugfix", pass: true,
@@ -151,5 +151,17 @@ describe("plan usage over a run", () => {
     const now = new Date(2026, 9, 17, 18, 0).getTime();
     expect(clock(new Date(2026, 9, 17, 9, 5).getTime(), now)).toBe("09:05");
     expect(clock(new Date(2026, 9, 16, 23, 59).getTime(), now)).toBe("16.10. 23:59");
+  });
+});
+
+describe("shell quoting for run.py arguments", () => {
+  it("single-quotes for sh, escaping quotes", () => {
+    expect(quoteArg("/a b/it's.jsonl", false)).toBe(`'/a b/it'\\''s.jsonl'`);
+  });
+
+  it("double-quotes for cmd.exe, dropping quotes and keeping a trailing backslash literal", () => {
+    expect(quoteArg("C:\\Users\\me\\harness bench", true)).toBe(`"C:\\Users\\me\\harness bench"`);
+    expect(quoteArg('C:\\dir\\', true)).toBe(`"C:\\dir\\\\"`);
+    expect(quoteArg('codex="x"', true)).toBe(`"codex=x"`);
   });
 });

@@ -7,7 +7,12 @@ const USAGE_MS = 60_000; // how often a run reads the plan limits
 const CHECKS = ["oracle", "noop"]; // self-tests of the checks, not harnesses
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`; // POSIX shell quoting
+const isWindows = () => /win/i.test(navigator.platform);
+/** Quotes one argument for the shell vault.exec uses: cmd.exe on Windows (where the program
+ * splits its own command line: `"` can't appear in paths, and a trailing `\` is doubled so it
+ * doesn't escape the closing quote), sh elsewhere. */
+export const quoteArg = (s, windows = isWindows()) =>
+  windows ? `"${String(s).replace(/"/g, "").replace(/(\\+)$/, "$1$1")}"` : `'${String(s).replace(/'/g, `'\\''`)}'`;
 const tokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n || 0)));
 const secs = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s` : `${Math.round(s)}s`);
 /** Unix ms → "14:05", with the date ("17.10. 14:05") when it isn't today. */
@@ -473,9 +478,10 @@ const ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke
  * data folder from Rust's `dirs::data_dir`). */
 async function pluginDir(api) {
   if (api.dir) return api.dir;
-  const r = await api.vault.exec({ command: 'printf %s "$HOME"', cwd: "", keys: [], timeoutSec: 10 });
+  const windows = isWindows();
+  const r = await api.vault.exec({ command: windows ? "echo %APPDATA%" : 'printf %s "$HOME"', cwd: "", keys: [], timeoutSec: 10 });
   const home = r.output.trim();
-  const base = /mac/i.test(navigator.platform) ? `${home}/Library/Application Support` : `${home}/.local/share`;
+  const base = windows ? home : /mac/i.test(navigator.platform) ? `${home}/Library/Application Support` : `${home}/.local/share`;
   return `${base}/dev.winfer.app/plugins/${api.id}`;
 }
 
@@ -485,7 +491,6 @@ export async function activate(api) {
   // Results live outside the plugin folder so updates don't delete them.
   const data = `${dir.replace(/[\\/]plugins[\\/][^\\/]+[\\/]?$/, "")}/harness-bench`;
   const status = `${data}/status.json`;
-  const windows = /win/i.test(navigator.platform);
 
   let state = {
     catalog: null, // { harnesses, tasks }
@@ -516,6 +521,26 @@ export async function activate(api) {
     const r = await api.vault.exec({ command, cwd: bench, keys: [], timeoutSec });
     if (r.code !== 0) throw new Error(r.output.trim() || `exit ${r.code}`);
     return r.output;
+  };
+
+  // Python 3, found once: Windows has the `py` launcher or `python` (`python3` there is often
+  // the Microsoft Store placeholder); everything else has python3.
+  let python = null;
+  const findPython = async () => {
+    const candidates = isWindows() ? ["py -3", "python", "python3"] : ["python3", "python"];
+    for (const c of candidates) {
+      const ok = await sh(`${c} -c "import sys; print(sys.version_info[0])"`, 20).then((o) => o.trim().endsWith("3")).catch(() => false);
+      if (ok) return c;
+    }
+    throw new Error(isWindows() ? "Python 3 not found (install it from python.org with the py launcher)" : "python3 not found");
+  };
+  /** Runs run.py with `args`: every bench operation goes through it, so no POSIX shell is needed. */
+  const runPy = async (args, timeoutSec) => {
+    python ??= findPython().catch((e) => {
+      python = null;
+      throw e;
+    });
+    return sh(`${await python} run.py ${args.map((a) => quoteArg(a)).join(" ")}`, timeoutSec);
   };
 
   const usageFile = (log) => log.replace(/\.jsonl$/, ".usage.json");
@@ -574,18 +599,18 @@ export async function activate(api) {
       // Through a file: exec output keeps only its last 20,000 characters, and the task
       // prompts alone are more than that.
       const file = `${data}/catalog.json`;
-      await sh(`mkdir -p ${q(data)} && python3 run.py --list > ${q(file)}`);
+      await runPy(["--list", file]);
       state.catalog = JSON.parse(await api.readFile(file));
       state.error = null;
     } catch (e) {
-      state.error = `Couldn't read the bench: ${e.message}. It needs python3.`;
+      state.error = `Couldn't read the bench: ${e.message}. It needs Python 3 and git.`;
     }
     render();
   }
 
   async function loadHistory() {
     try {
-      const out = await sh(`mkdir -p ${q(data)} && ls -1t ${q(data)} | grep '\\.jsonl$' || true`);
+      const out = await runPy(["--history", data]);
       state.history = out.split("\n").map((l) => l.trim()).filter(Boolean);
     } catch {
       state.history = [];
@@ -626,7 +651,7 @@ export async function activate(api) {
     if (!(await ask)) return;
     const paths = files.flatMap((f) => [`${data}/${f}`, `${data}/${f.replace(/\.jsonl$/, ".out")}`, usageFile(`${data}/${f}`)]);
     try {
-      await sh(`rm -f -- ${paths.map(q).join(" ")}`);
+      await runPy(["--delete", ...paths]);
     } catch (e) {
       return void api.toast(`Couldn't delete: ${e.message}`, "error");
     }
@@ -670,20 +695,21 @@ export async function activate(api) {
     // Without `api.appExe` (winfer before 0.1.73) the runner finds winfer itself.
     const exe = api.appExe ? await api.appExe().catch(() => "") : "";
     const model = (h) => harnessPref(h).model || h.model;
-    const models = hs.filter((h) => h.model).map((h) => `-m ${q(`${h.id}=${model(h)}`)}`).join(" ");
-    // Only the runner goes to the background, with its own output: a background job holding
-    // vault.exec's output pipe would keep the call (and the button) waiting for the whole run.
-    const cmd =
-      `mkdir -p ${q(data)} && rm -f ${q(status)} && { ${exe ? `WINFER_BIN=${q(exe)} ` : ""}nohup python3 run.py ` +
-      `-H ${q(hs.map((h) => h.id).join(","))} -t ${q(ts.map((t) => t.id).join(","))} -n ${runs} --timeout ${timeout} -p ${q(parallel)} ${models} ` +
-      `${prefs().keep && !selfTest ? "--keep " : ""}--log ${q(log)} --status ${q(status)} > ${q(log.replace(/\.jsonl$/, ".out"))} 2>&1 < /dev/null & } ; echo $!`;
+    const models = hs.filter((h) => h.model).flatMap((h) => ["-m", `${h.id}=${model(h)}`]);
+    // run.py --detach starts the runner in the background with its own output (a background job
+    // holding vault.exec's output pipe would keep the call waiting for the whole run) and prints its pid.
+    const args = [
+      "-H", hs.map((h) => h.id).join(","), "-t", ts.map((t) => t.id).join(","), "-n", String(runs), "--timeout", String(timeout), "-p", parallel,
+      ...models, ...(prefs().keep && !selfTest ? ["--keep"] : []), ...(exe ? ["--winfer-bin", exe] : []),
+      "--log", log, "--status", status, "--detach", log.replace(/\.jsonl$/, ".out"),
+    ];
     state.starting = true;
     render();
     // The limits before the first run starts, for the harnesses' plans.
     const providers = [...new Set(hs.map((h) => planOf(h.id)).filter(Boolean))];
     const usage = providers.length ? { ...trackUsage(null, await readUsage(providers)), providers, startedAt: Date.now() } : null;
     try {
-      const pid = Number((await sh(cmd, 20)).trim().split("\n").pop());
+      const pid = Number((await runPy(args, 30)).trim().split("\n").pop());
       if (!pid) throw new Error("the runner didn't start");
       state.running = { pid, log, usage, started: Date.now() / 1000, plan: { cols: hs.map((h) => `${h.id}|${h.model ? model(h) : ""}`), tasks: ts.map((t) => t.id) } };
       state.progress = { total: hs.length * ts.length * runs, done: 0 };
@@ -708,7 +734,7 @@ export async function activate(api) {
     const run = state.running;
     if (!run) return;
     // The runner and the agents it started share a process group.
-    await sh(`pg=$(ps -o pgid= -p ${run.pid} | tr -d ' '); [ -n "$pg" ] && kill -TERM -"$pg" 2>/dev/null; kill ${run.pid} 2>/dev/null; true`).catch(() => {});
+    await runPy(["--stop", String(run.pid)]).catch(() => {});
     await sampleUsage(true);
     state.running = null;
     state.progress = null;
@@ -728,7 +754,7 @@ export async function activate(api) {
     const finished = state.progress?.finished || state.progress?.done >= state.progress?.total;
     let alive = true;
     if (!finished) {
-      alive = await sh(`kill -0 ${state.running.pid} 2>/dev/null && echo yes || echo no`).then((o) => o.includes("yes")).catch(() => true);
+      alive = await runPy(["--alive", String(state.running.pid)]).then((o) => o.includes("yes")).catch(() => true);
     }
     if (finished || !alive) {
       await sampleUsage(true);
@@ -894,7 +920,7 @@ export async function activate(api) {
             ? `<button class="wf-button wf-danger" data-action="stop">Stop</button>`
             : state.tab === "runs"
               ? `<button class="wf-button wf-primary" data-action="configure" title="Pick the harnesses, models and tasks to bench">New run…</button>`
-              : `<button class="wf-button wf-primary" data-action="start" ${windows || state.starting ? "disabled" : ""} ${windows ? "title='macOS and Linux only for now'" : ""}>${state.starting ? "Starting…" : "Run bench"}</button>`
+              : `<button class="wf-button wf-primary" data-action="start" ${state.starting ? "disabled" : ""}>${state.starting ? "Starting…" : "Run bench"}</button>`
         }
       </div>
     </div>`;
@@ -1551,7 +1577,9 @@ export async function activate(api) {
           const jobs = runningJobs(s);
           if (jobs.length && !s.finished && Date.now() / 1000 - Math.min(...jobs.map((j) => j.since)) < 3600) {
             const name = s.log.split(/[\\/]/).pop();
-            return sh(`pgrep -f ${q(`run\\.py.*${name}`)} | head -1 || true`).then((pid) => {
+            // Status files hold the runner's pid; older ones are found by their log name.
+            const found = s.pid ? runPy(["--alive", String(s.pid)]).then((o) => (o.includes("yes") ? String(s.pid) : "")) : runPy(["--find", name]);
+            return found.then((pid) => {
               if (pid.trim()) {
                 return api
                   .readFile(usageFile(s.log))

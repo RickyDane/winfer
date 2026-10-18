@@ -12,6 +12,10 @@ headless with permissions off, then the task's hidden check decides pass/fail.
     python3 bench/run.py -H codex -m codex=gpt-6-luna      # another model for one harness
     python3 bench/run.py --list                           # harnesses and tasks as JSON (for the UI)
     python3 bench/run.py --pack                           # rebuild suites.tar.gz after editing tasks
+
+The plugin drives everything through this script (so it works the same under cmd.exe on Windows):
+    --list FILE, --history DIR, --delete PATH..., --detach OUT (start a run in the background and
+    print its pid), --alive PID, --stop PID, --find LOG_NAME.
 """
 
 import argparse
@@ -20,6 +24,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -29,7 +34,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from functools import lru_cache
 from pathlib import Path
+
+WINDOWS = os.name == "nt"
+# Output goes to a file the UI shows; Windows' default code page can't encode ▸ and friends.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 HERE = Path(__file__).resolve().parent
 # The tasks ship as one archive (the plugin store installs at most 500 files per plugin), built
@@ -57,7 +69,7 @@ def unpack(archive: Path, dest: Path) -> Path:
     """Extracts `archive` to `dest` unless it already holds this archive's files."""
     digest = hashlib.sha1(archive.read_bytes()).hexdigest()
     stamp = dest.parent / f".{dest.name}.sha1"
-    if dest.is_dir() and stamp.exists() and stamp.read_text() == digest:
+    if dest.is_dir() and stamp.exists() and stamp.read_text(encoding="utf-8") == digest:
         return dest
     tmp = Path(tempfile.mkdtemp(prefix=".suites-", dir=dest.parent))
     with tarfile.open(archive) as tar:
@@ -70,7 +82,7 @@ def unpack(archive: Path, dest: Path) -> Path:
             tar.extractall(tmp)
     shutil.rmtree(dest, ignore_errors=True)
     tmp.rename(dest)
-    stamp.write_text(digest)
+    stamp.write_text(digest, encoding="utf-8")
     return dest
 
 
@@ -85,21 +97,104 @@ def find_suites() -> Path:
 
 
 SUITES = find_suites()
-CATALOG = json.loads((HERE / "harnesses.json").read_text())
+CATALOG = json.loads((HERE / "harnesses.json").read_text(encoding="utf-8"))
 PRICES = CATALOG.get("_prices", {})
 
 
 def winfer_bin() -> str:
+    exe = ".exe" if WINDOWS else ""
     for c in [
         os.environ.get("WINFER_BIN"),
         # Run from a winfer checkout (plugins/harness-bench/bench).
-        str(HERE.parents[2] / "src-tauri/target/release/winfer"),
-        str(HERE.parents[2] / "src-tauri/target/debug/winfer"),
+        str(HERE.parents[2] / f"src-tauri/target/release/winfer{exe}"),
+        str(HERE.parents[2] / f"src-tauri/target/debug/winfer{exe}"),
         "/Applications/winfer.app/Contents/MacOS/winfer",
+        # The Windows installer's per-user and per-machine folders.
+        *(str(Path(os.environ[v]) / "winfer" / "winfer.exe") for v in ("LOCALAPPDATA", "ProgramFiles") if WINDOWS and os.environ.get(v)),
     ]:
         if c and Path(c).exists():
             return str(Path(c).resolve())
     sys.exit("winfer binary not found; build it or set WINFER_BIN")
+
+
+@lru_cache(maxsize=None)
+def posix_sh() -> str:
+    """sh for the tasks' check and solution scripts. Windows has none of its own: use Git for
+    Windows' (git is needed for the work folders anyway)."""
+    found = shutil.which("sh")
+    if found or not WINDOWS:
+        return found or "sh"
+    roots = []
+    git = shutil.which("git")
+    if git:
+        roots += list(Path(git).resolve().parents)[:3]  # Git\cmd\git.exe, Git\mingw64\bin\git.exe
+    roots += [Path(os.environ[v]) / "Git" for v in ("ProgramFiles", "ProgramW6432", "LOCALAPPDATA") if os.environ.get(v)]
+    roots += [Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git"] if os.environ.get("LOCALAPPDATA") else []
+    for r in roots:
+        if (r / "bin" / "sh.exe").exists():
+            return str(r / "bin" / "sh.exe")
+    return "sh"
+
+
+@lru_cache(maxsize=None)
+def python_shims() -> str:
+    """A folder with `python3` and `python` scripts that run this Python, for the check scripts
+    on Windows, where `python3` is often missing or the Microsoft Store placeholder."""
+    d = Path(tempfile.mkdtemp(prefix="bench-python-"))
+    for name in ("python3", "python"):
+        (d / name).write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n', encoding="utf-8", newline="\n")
+    return str(d)
+
+
+def script_env(**extra) -> dict:
+    env = {**os.environ, **extra}
+    if WINDOWS:
+        env["PATH"] = python_shims() + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def node_shim_script(text: str):
+    """The script an npm/pnpm `.cmd` shim runs (`"%dp0%\\node_modules\\...\\cli.js" %*`), relative
+    to the shim, or None."""
+    line = next((l for l in reversed(text.splitlines()) if "%*" in l), None)
+    if line is None:
+        return None
+    rels = []
+    for part in line.split('"'):
+        for prefix in ("%dp0%\\", "%~dp0\\", "%~dp0"):
+            if part.startswith(prefix):
+                rel = part[len(prefix):]
+                if rel and rel.lower() != "node.exe":
+                    rels.append(rel)
+                break
+    return rels[-1].replace("\\", os.sep) if rels else None
+
+
+def launcher(argv):
+    """How to start a harness CLI. On Windows npm installs CLIs as `.cmd` shims, which
+    subprocess can't find by name and which would pass the multi-line prompt through cmd.exe:
+    run the shim's script with Node (or its native program) directly."""
+    if not WINDOWS or not argv:
+        return argv
+    path = shutil.which(argv[0])
+    if not path:
+        return argv
+    shim = Path(path)
+    if shim.suffix.lower() in (".cmd", ".bat"):
+        rel = node_shim_script(shim.read_text(encoding="utf-8", errors="replace"))
+        target = shim.parent / rel if rel else None
+        if target and target.is_file():
+            ext = target.suffix.lower()
+            if ext in (".exe", ".com"):
+                return [str(target), *argv[1:]]
+            with target.open("rb") as f:
+                first = f.readline(128)
+            if ext in (".js", ".cjs", ".mjs") or (first.startswith(b"#!") and b"node" in first):
+                node = shim.parent / "node.exe"
+                node = str(node) if node.exists() else shutil.which("node")
+                if node:
+                    return [node, str(target), *argv[1:]]
+    return [path, *argv[1:]]
 
 
 def fingerprint(root: Path) -> str:
@@ -121,7 +216,7 @@ def suite_names(root: Path = SUITES):
 
 def suite_info(name: str, root: Path = SUITES) -> dict:
     f = root / name / "suite.json"
-    info = json.loads(f.read_text()) if f.exists() else {}
+    info = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     return {"id": name, "label": info.get("label", name.capitalize()), "description": info.get("description", "")}
 
 
@@ -270,22 +365,22 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
     work = Path(tempfile.mkdtemp(prefix=f"bench-{task.name}-{name}-"))
     prepare(task, work)
     server, site = serve_site(task)
-    prompt = (task / "task.md").read_text().strip().replace("{site}", site)
+    prompt = (task / "task.md").read_text(encoding="utf-8").strip().replace("{site}", site)
     started = time.time()
     out, err, code, timed_out = "", "", 0, False
     if spec["parser"] == "oracle":
         if (task / "solution").exists():
             shutil.copytree(task / "solution", work, dirs_exist_ok=True)
         if (task / "solution.sh").exists():
-            subprocess.run(["sh", str(task / "solution.sh")], cwd=work, check=True)
+            subprocess.run([posix_sh(), str(task / "solution.sh")], cwd=work, check=True, env=script_env())
     else:
         model = model or spec.get("model", "")
         argv = [a.replace("{prompt}", prompt).replace("{model}", model) for a in spec["argv"]]
-        argv = [winfer_bin() if a == "{winfer}" else a for a in argv]
+        argv = launcher([winfer_bin() if a == "{winfer}" else a for a in argv])
         try:
             # Some CLIs take their project folder from $PWD rather than the real working directory.
             env = {**os.environ, "PWD": str(work)}
-            r = subprocess.run(argv, cwd=work, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+            r = subprocess.run(argv, cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
             out, err, code = r.stdout, r.stderr, r.returncode
         except FileNotFoundError as e:
             out, code = json.dumps({"type": "error", "text": f"harness not installed: {e.filename}"}), 127
@@ -295,8 +390,8 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
     if server:
         server.shutdown()
         server.server_close()
-    env = {**os.environ, "VERIFY_DIR": str(task / "verify")}
-    check = subprocess.run(["sh", str(task / "verify/check.sh")], cwd=work, capture_output=True, text=True, env=env)
+    env = script_env(VERIFY_DIR=str(task / "verify"))
+    check = subprocess.run([posix_sh(), str(task / "verify/check.sh")], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     i, c, o, tools, cost = PARSERS.get(spec["parser"], PARSERS["none"])(out)
     cost_estimated = False
     if cost is None:
@@ -323,7 +418,7 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = ""):
         "why": (check.stdout + check.stderr).strip()[-400:] if check.returncode else "",
         "dir": str(work) if keep else None,
     }
-    (work / ".bench-output.jsonl").write_text(out)
+    (work / ".bench-output.jsonl").write_text(out, encoding="utf-8")
     if not keep:
         shutil.rmtree(work, ignore_errors=True)
     return result
@@ -365,7 +460,14 @@ def main():
     p.add_argument("-m", "--model", action="append", default=[], help="harness=model, e.g. codex=gpt-6-luna")
     p.add_argument("--log", help="write per-run results to this JSONL file")
     p.add_argument("--status", help="keep a JSON progress file up to date (for the UI)")
-    p.add_argument("--list", action="store_true", help="print harnesses and tasks as JSON and exit")
+    p.add_argument("--list", nargs="?", const="-", metavar="FILE", help="print (or write to FILE) harnesses and tasks as JSON and exit")
+    p.add_argument("--history", metavar="DIR", help="print the saved runs (*.jsonl) in DIR, newest first, and exit")
+    p.add_argument("--delete", nargs="+", metavar="PATH", help="delete saved run files (.jsonl, .out, .usage.json) and exit")
+    p.add_argument("--detach", metavar="OUT", help="start this run in the background with its output in OUT; print its pid")
+    p.add_argument("--alive", type=int, metavar="PID", help="print yes if the process is running, else no")
+    p.add_argument("--stop", type=int, metavar="PID", help="stop a background run and the agents it started")
+    p.add_argument("--find", metavar="LOG_NAME", help="print the pid of a background run writing LOG_NAME (POSIX only)")
+    p.add_argument("--winfer-bin", help="the winfer program (same as $WINFER_BIN)")
     p.add_argument("--pack", action="store_true", help=f"rebuild {ARCHIVE.name} from {SOURCES} and exit")
     p.add_argument("--retries", type=int, default=1, help="retry a run whose harness errored (rate limit, crash) this many times")
     p.add_argument("--retry-wait", type=int, default=30, help="seconds to wait before retrying an errored run")
@@ -379,8 +481,30 @@ def main():
     args = p.parse_args()
 
     harnesses = {k: v for k, v in CATALOG.items() if not k.startswith("_")}
+    if args.winfer_bin:
+        os.environ["WINFER_BIN"] = args.winfer_bin
+    if args.history:
+        print("\n".join(history(Path(args.history))))
+        return
+    if args.delete:
+        delete(args.delete)
+        return
+    if args.alive is not None:
+        print("yes" if alive(args.alive) else "no")
+        return
+    if args.stop is not None:
+        stop(args.stop)
+        return
+    if args.find:
+        print(find_runner(args.find) or "")
+        return
     if args.list:
-        print(json.dumps(listing(harnesses)))
+        text = json.dumps(listing(harnesses))
+        if args.list == "-":
+            print(text)
+        else:
+            Path(args.list).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.list).write_text(text, encoding="utf-8")
         return
     if args.pack:
         if not SOURCES.is_dir():
@@ -393,6 +517,11 @@ def main():
     for n in names:
         if n not in harnesses:
             sys.exit(f"unknown harness {n}; see harnesses.json")
+    if args.detach:
+        if args.status:
+            Path(args.status).unlink(missing_ok=True)
+        print(detach(without_option(sys.argv[1:], "--detach"), Path(args.detach)))
+        return
     # Harnesses get copies made from a snapshot taken now, so one that writes outside its work
     # folder (into the task sources) can't hand later runs a changed or pre-solved project.
     suites = None
@@ -419,7 +548,7 @@ def main():
 
     def progress(**kw):
         if args.status:
-            Path(args.status).write_text(json.dumps({"total": total, "done": len(results), "log": str(log), **kw}))
+            Path(args.status).write_text(json.dumps({"total": total, "done": len(results), "log": str(log), "pid": os.getpid(), **kw}), encoding="utf-8")
 
     def job(task, name, k):
         key = (task.name, name, k)
@@ -449,7 +578,7 @@ def main():
         with lock:
             running.pop(key, None)
             results.append(r)
-            with log.open("a") as f:
+            with log.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(r) + "\n")
             progress(running=list(running.values()))
             status = "PASS" if r["pass"] else "ERROR" if r.get("error") else "FAIL"
@@ -497,6 +626,96 @@ def main():
     progress(running=[], finished=time.time())
 
 
+# ---- control commands for the plugin (no POSIX shell needed) ----
+
+def history(folder: Path):
+    """Saved runs in `folder`, newest first."""
+    folder.mkdir(parents=True, exist_ok=True)
+    return [p.name for p in sorted(folder.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)]
+
+
+def delete(paths):
+    """Deletes saved run files; anything else is left alone."""
+    for p in map(Path, paths):
+        if p.name.endswith((".jsonl", ".out", ".usage.json")):
+            p.unlink(missing_ok=True)
+
+
+def without_option(argv, name):
+    """`argv` without `name VALUE` / `name=VALUE`."""
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+        elif a == name:
+            skip = True
+        elif not a.startswith(name + "="):
+            out.append(a)
+    return out
+
+
+def detach(argv, out: Path) -> int:
+    """Starts run.py with `argv` in the background, in its own process group (so stop() can end
+    the agents too), with its output in `out`; returns its pid. Nothing of the caller's is
+    inherited, so the caller's output pipe closes when it returns."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if WINDOWS else {"start_new_session": True}
+    with out.open("wb") as f:
+        p = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), *argv],
+            cwd=HERE, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, **kw,
+        )
+    return p.pid
+
+
+def alive(pid: int) -> bool:
+    if WINDOWS:
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop(pid: int) -> None:
+    """Stops a background run and the agents it started."""
+    if WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+        return
+    try:
+        group = os.getpgid(pid)
+        if group != os.getpgid(0):  # never our own group (the app's, for an old-style run)
+            os.killpg(group, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def find_runner(log_name: str):
+    """The pid of a run writing `log_name`, for status files from before they held the pid."""
+    if WINDOWS or not shutil.which("pgrep"):
+        return None
+    pattern = "run\\.py.*" + log_name.replace(".", "\\.")
+    r = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+    pids = [int(x) for x in r.stdout.split() if x.isdigit() and int(x) != os.getpid()]
+    return pids[0] if pids else None
+
+
 def listing(harnesses):
     """Harnesses (with whether their CLI is installed) and tasks, for the UI."""
     def installed(spec):
@@ -512,7 +731,7 @@ def listing(harnesses):
 
     tasks = []
     for t in all_tasks():
-        prompt = (t / "task.md").read_text().strip()
+        prompt = (t / "task.md").read_text(encoding="utf-8").strip()
         tasks.append({"id": t.name, "suite": suite_of(t), "prompt": prompt, "hash": hashlib.sha1(prompt.encode()).hexdigest()[:8]})
     return {
         "suites": [suite_info(s) for s in suite_names()],
