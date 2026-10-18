@@ -1,5 +1,6 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertTriangle, Check, CornerDownLeft, FlaskConical, GitBranch, GitMerge, Inbox, ListOrdered, ListPlus, Loader2, RotateCcw, Trash2, Trophy, X } from "lucide-react";
+import { AlertTriangle, Check, CornerDownLeft, FlaskConical, GitBranch, GitMerge, Inbox, ListOrdered, ListPlus, RotateCcw, Trash2, Trophy, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
@@ -26,7 +27,7 @@ function Summary({ review }: { review: Review }) {
     return (
       <div className="space-y-1.5">
         <p className="flex items-center gap-1.5 text-xs text-fg-subtle">
-          <Loader2 size={12} className="animate-spin" /> Summarizing…
+          <Spinner size={12} /> Summarizing…
         </p>
         <span className="block h-2.5 w-11/12 animate-pulse rounded bg-hover" />
         <span className="block h-2.5 w-2/3 animate-pulse rounded bg-hover" />
@@ -47,7 +48,7 @@ function Tests({ review }: { review: Review }) {
   if (tests.state === "loading")
     return (
       <span className="flex items-center gap-1.5 text-xs text-fg-muted">
-        <Loader2 size={12} className="animate-spin" /> Running {testCommand}…
+        <Spinner size={12} /> Running {testCommand}…
       </span>
     );
   if (tests.state === "error") return <span className="text-xs text-danger">Tests couldn't run: {tests.error}</span>;
@@ -88,7 +89,7 @@ function Screenshot({ review }: { review: Review }) {
         <img src={shot.value} alt={`Screenshot of ${shot.url}`} className="h-full w-full object-cover object-top" />
       ) : shot.state === "loading" ? (
         <span className="flex h-full items-center justify-center text-fg-subtle">
-          <Loader2 size={14} className="animate-spin" />
+          <Spinner size={14} />
         </span>
       ) : (
         <span className="flex h-full items-center justify-center p-2 text-center text-[11px] text-fg-subtle">{shot.error.slice(0, 90)}</span>
@@ -159,7 +160,7 @@ function QueueStatus({ item, position }: { item: QueueItem; position: number | n
   const stopped = item.state === "conflict" || item.state === "failed";
   return (
     <div className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-xs", stopped ? "bg-danger/10 text-danger" : "bg-hover text-fg-muted")}>
-      {busy ? <Loader2 size={12} className="shrink-0 animate-spin" /> : stopped ? <AlertTriangle size={12} className="shrink-0" /> : <ListOrdered size={12} className="shrink-0" />}
+      {busy ? <Spinner size={12} className="shrink-0" /> : stopped ? <AlertTriangle size={12} className="shrink-0" /> : <ListOrdered size={12} className="shrink-0" />}
       <span className="min-w-0 flex-1 truncate" title={item.detail ?? undefined}>
         {item.state === "queued" ? `Queued to merge${position ? ` · #${position}` : ""}` : (item.detail ?? STATE_LABEL[item.state])}
         {item.state === "conflict" && item.files.length > 0 && <span className="font-mono"> · {fileList(item.files)}</span>}
@@ -494,7 +495,7 @@ export function ReviewInbox() {
               title="Queue every open branch, oldest first: each brings in the base's new commits, runs the tests and merges; one that conflicts or fails stops without holding up the rest"
               className={cn(button, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}
             >
-              {queueRunning ? <Loader2 size={12} className="animate-spin" /> : <ListOrdered size={12} />} Merge all ({mergeable.length})
+              {queueRunning ? <Spinner size={12} /> : <ListOrdered size={12} />} Merge all ({mergeable.length})
             </button>
           )}
           <button onClick={() => setOverlay(null)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">

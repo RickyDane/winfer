@@ -1,4 +1,5 @@
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/stores/activity";
@@ -282,14 +283,14 @@ export function UsageHistory({ children }: { children?: React.ReactNode }) {
         </div>
         <div className="flex-1" />
         <button onClick={load} disabled={loading} title="Read new usage" className="rounded p-1.5 text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-50">
-          {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+          {loading ? <Spinner size={13} /> : <RefreshCw size={13} />}
         </button>
       </div>
 
       {error && <p className="text-xs text-danger">{error}</p>}
       {!rows && !error && (
         <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
-          <Loader2 size={12} className="animate-spin" /> Reading usage from the agents' logs…
+          <Spinner size={12} /> Reading usage from the agents' logs…
         </div>
       )}
 
@@ -405,7 +406,7 @@ export function UsageSummary() {
   if (!rows) {
     return (
       <div className="flex items-center gap-1.5 text-[11px] text-fg-subtle">
-        <Loader2 size={11} className="animate-spin" /> Reading usage…
+        <Spinner size={11} /> Reading usage…
       </div>
     );
   }

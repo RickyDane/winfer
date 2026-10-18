@@ -1,9 +1,10 @@
-import { CheckCircle2, Info, Loader2, X, XCircle } from "lucide-react";
+import { CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/cn";
 import { dismissToast, useToasts, type ToastKind } from "@/stores/toasts";
 
 const ICON: Record<ToastKind, React.ReactNode> = {
-  loading: <Loader2 size={14} className="animate-spin text-accent" />,
+  loading: <Spinner size={14} className="text-accent" />,
   success: <CheckCircle2 size={14} className="text-success" />,
   error: <XCircle size={14} className="text-danger" />,
   info: <Info size={14} className="text-fg-muted" />,

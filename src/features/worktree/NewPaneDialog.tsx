@@ -1,4 +1,5 @@
-import { FolderOpen, GitBranch, Loader2, Plus, Search, Sparkles, X } from "lucide-react";
+import { FolderOpen, GitBranch, Plus, Search, Sparkles, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { formatChord, IS_MAC } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
@@ -141,7 +142,7 @@ export function NewPaneDialog() {
               placeholder="New branch name, or find a branch…"
               className="h-8 flex-1 bg-transparent font-mono text-[12px] text-fg outline-none placeholder:font-sans placeholder:text-fg-subtle"
             />
-            {busy && <Loader2 size={12} className="animate-spin text-fg-subtle" />}
+            {busy && <Spinner size={12} className="text-fg-subtle" />}
           </div>
         </div>
 
@@ -177,7 +178,7 @@ export function NewPaneDialog() {
           ))}
           {branches === null && (
             <p className="flex items-center justify-center gap-2 py-4 text-xs text-fg-subtle">
-              <Loader2 size={12} className="animate-spin" /> Reading branches…
+              <Spinner size={12} /> Reading branches…
             </p>
           )}
         </div>

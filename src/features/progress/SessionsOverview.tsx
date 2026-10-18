@@ -1,4 +1,5 @@
-import { Activity, Loader2, RefreshCw, X } from "lucide-react";
+import { Activity, RefreshCw, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { llmEnabled } from "@/features/llm/llm";
 import { useEffect, useState } from "react";
 import { execute } from "@/commands/bus";
@@ -101,7 +102,7 @@ export function SessionsOverview() {
                       <span className="min-w-0 flex-1 truncate text-fg-muted" title={progress?.task ?? undefined}>
                         {task ?? "Task unknown"}
                       </span>
-                      {progress?.estimating && <Loader2 size={11} className="animate-spin text-fg-subtle" />}
+                      {progress?.estimating && <Spinner size={11} className="text-fg-subtle" />}
                       <span className="w-10 text-right font-mono text-[12px] text-fg">{progress?.percent != null ? `${progress.percent}%` : "—"}</span>
                     </div>
                     <ProgressBar progress={progress} status={pane.status} />

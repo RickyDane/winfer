@@ -1,4 +1,5 @@
-import { ChevronRight, Loader2, Plus, Star } from "lucide-react";
+import { ChevronRight, Plus, Star } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -92,7 +93,7 @@ export function NewPaneMenu() {
                   ))}
                   {!models[p.id] && (
                     <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-fg-subtle">
-                      <Loader2 size={11} className="animate-spin" /> Loading models…
+                      <Spinner size={11} /> Loading models…
                     </div>
                   )}
                 </div>

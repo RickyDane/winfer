@@ -1,4 +1,5 @@
-import { Check, CircleAlert, Loader2, Mic, Type } from "lucide-react";
+import { Check, CircleAlert, Mic, Type } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect } from "react";
 import { formatChord } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
@@ -53,7 +54,7 @@ export function VoiceHUD() {
           )}
           {(phase === "transcribing" || phase === "deciding") && (
             <>
-              <Loader2 size={15} className="animate-spin text-accent" />
+              <Spinner size={15} className="text-accent" />
               <span className="truncate text-fg">{transcript ? `“${transcript}”` : "Transcribing…"}</span>
               {message && <span className="ml-auto shrink-0 text-xs text-fg-subtle">{message}</span>}
             </>

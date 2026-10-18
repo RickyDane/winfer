@@ -2,7 +2,8 @@ import { SideTerminal } from "@/features/terminal/SideTerminal";
 import { DevicePanel } from "@/features/android/DevicePanel";
 import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
-import { ArrowLeft, ArrowRight, Crosshair, Download, Globe, Loader2, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Crosshair, Download, Globe, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { DEFAULT_BROWSER_WIDTH, useWorkspaces } from "@/stores/workspaces";
@@ -265,7 +266,7 @@ export function BrowserPanel() {
           )}
           {availability === "installing" && (
             <span className="flex items-center gap-2">
-              <Loader2 size={14} className="animate-spin" /> Downloading browser…
+              <Spinner size={14} /> Downloading browser…
             </span>
           )}
           {availability === "error" && (
@@ -281,7 +282,7 @@ export function BrowserPanel() {
           )}
           {(availability === "unknown" || (availability === "ready" && !active)) && (
             <span className="flex items-center gap-2">
-              <Loader2 size={14} className="animate-spin" /> Starting browser…
+              <Spinner size={14} /> Starting browser…
             </span>
           )}
         </div>

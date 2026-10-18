@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Loader2, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useState } from "react";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
@@ -160,12 +161,12 @@ function UpdateFooter() {
       </div>
       {available ? (
         <button onClick={() => void installUpdate()} disabled={installing} className={cn(small, "bg-accent font-medium text-on-accent hover:opacity-90")}>
-          {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+          {installing ? <Spinner size={12} /> : <Download size={12} />}
           Install and restart
         </button>
       ) : (
         <button onClick={() => void checkForUpdates()} disabled={checking} className={cn(small, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}>
-          {checking && <Loader2 size={12} className="animate-spin" />}
+          {checking && <Spinner size={12} />}
           Check for updates
         </button>
       )}
@@ -364,7 +365,7 @@ function VersionSettings() {
                       : undefined
             }
           >
-            {busy && <Loader2 size={13} className="animate-spin text-fg-subtle" />}
+            {busy && <Spinner size={13} className="text-fg-subtle" />}
             {v?.updatable && (v.outdated || !v.latest) && (
               <button
                 disabled={busy}
@@ -380,7 +381,7 @@ function VersionSettings() {
       })}
       <Row label="Check for agent updates" hint="winfer also checks every few hours and tells you when one is out.">
         <button onClick={() => void checkProviderUpdates()} disabled={checking} className={buttonClass}>
-          {checking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          {checking ? <Spinner size={12} /> : <RefreshCw size={12} />}
           Check now
         </button>
       </Row>
@@ -545,7 +546,7 @@ function Microphone({ selected }: { selected: string | null }) {
         ))}
       </Select>
       <button disabled={testing} onClick={() => void test()} className={cn(buttonClass, "w-24 justify-center")}>
-        {testing && <Loader2 size={12} className="animate-spin" />}
+        {testing && <Spinner size={12} />}
         {testing ? "Listening…" : "Test"}
       </button>
     </Row>
@@ -567,7 +568,7 @@ function VoiceSettings() {
   if (!status)
     return (
       <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
-        <Loader2 size={12} className="animate-spin" /> Loading…
+        <Spinner size={12} /> Loading…
       </div>
     );
 
@@ -652,7 +653,7 @@ function VoiceSettings() {
                   }}
                   className={buttonClass}
                 >
-                  {busy === m.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                  {busy === m.id ? <Spinner size={12} /> : <Download size={12} />}
                   {busy === m.id ? "Downloading…" : "Download"}
                 </button>
               )}
@@ -729,7 +730,7 @@ function AiSettings() {
             hint={chatgpt.email}
           >
             <button disabled={busy !== null} onClick={() => void act("test", testConnection)} className={buttonClass}>
-              {busy === "test" && <Loader2 size={12} className="animate-spin" />}
+              {busy === "test" && <Spinner size={12} />}
               {busy === "test" ? "Testing…" : "Test connection"}
             </button>
             <button
@@ -752,7 +753,7 @@ function AiSettings() {
               onClick={() => void act("signin", async () => (await signInWithChatGpt(), "Signed in"))}
               className="flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-60"
             >
-              {busy === "signin" && <Loader2 size={12} className="animate-spin" />}
+              {busy === "signin" && <Spinner size={12} />}
               Continue with ChatGPT
             </button>
           </Row>
@@ -886,7 +887,7 @@ function HarnessSettings() {
     return (
       <Card title="winfer code">
         <Row label="Loading…">
-          <Loader2 size={13} className="animate-spin text-fg-subtle" />
+          <Spinner size={13} className="text-fg-subtle" />
         </Row>
       </Card>
     );
@@ -941,7 +942,7 @@ function HarnessSettings() {
         }
       >
         <Row label="Model" hint="Automatic uses your ChatGPT account when signed in (Settings → AI), else Claude Code or Codex.">
-          {models === null && <Loader2 size={13} className="animate-spin text-fg-subtle" />}
+          {models === null && <Spinner size={13} className="text-fg-subtle" />}
           <Select value={settings.model} onChange={(e) => void save({ model: e.target.value })} className="w-64">
             <option value="">Automatic</option>
             {settings.model && !known && <option value={settings.model}>{settings.model}</option>}
@@ -1030,7 +1031,7 @@ function HarnessSettings() {
             hint="Comes from ~/.claude/skills and your enabled Claude Code plugins. Applies to sessions started after the change."
           >
             {claudeSkills === null ? (
-              <Loader2 size={13} className="animate-spin text-fg-subtle" />
+              <Spinner size={13} className="text-fg-subtle" />
             ) : claudeSkills.length === 0 ? (
               <span className="text-xs text-fg-subtle">No skills found.</span>
             ) : (
@@ -1231,7 +1232,7 @@ const UpdateBanner = ({ text, label, busy, disabled, onClick }: { text: string; 
     <ArrowUpCircle size={15} className="shrink-0 text-accent" />
     <p className="flex-1 text-xs text-fg">{text}</p>
     <button disabled={disabled} onClick={onClick} className={primaryButtonClass}>
-      {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+      {busy ? <Spinner size={12} /> : <Download size={12} />}
       {label}
     </button>
   </div>
@@ -1461,7 +1462,7 @@ function PluginSettings() {
                             onClick={() => void install(e, false)}
                             className={primaryButtonClass}
                           >
-                            {busy === e.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                            {busy === e.id ? <Spinner size={12} /> : <Download size={12} />}
                             Install
                           </button>
                         </div>
@@ -1530,7 +1531,7 @@ function PluginSettings() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-start gap-1.5">
-                        {busy === p.id && <Loader2 size={13} className="mt-1.5 animate-spin text-fg-subtle" />}
+                        {busy === p.id && <Spinner size={13} className="mt-1.5 text-fg-subtle" />}
                         {latest && (
                           <button disabled={!!busy} onClick={() => void install(latest, true)} className={buttonClass}>
                             <Download size={12} />
@@ -1874,7 +1875,7 @@ function SkillSettings() {
                           title={selected.length ? `Install for ${names(selected)}` : "Pick an agent under “Install for”"}
                           className={primaryButtonClass}
                         >
-                          {busy === skill.name ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                          {busy === skill.name ? <Spinner size={12} /> : <Download size={12} />}
                           {outdated ? "Update" : have && sameSkill ? "Install for more" : "Install"}
                         </button>
                       )}
@@ -1963,7 +1964,7 @@ function SkillSettings() {
                       )}
                     </div>
                     <div className="flex shrink-0 items-start gap-1">
-                      {busy === skill.name && <Loader2 size={13} className="mt-1.5 animate-spin text-fg-subtle" />}
+                      {busy === skill.name && <Spinner size={13} className="mt-1.5 text-fg-subtle" />}
                       <button onClick={() => void revealItemInDir(skill.copies[0].dir + "/SKILL.md").catch(() => {})} aria-label={`Show ${skill.name} in Finder`} title="Show the folder" className={iconButtonClass}>
                         <FolderOpen size={13} />
                       </button>

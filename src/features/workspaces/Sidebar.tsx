@@ -7,6 +7,7 @@ import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
+import { Spinner } from "@/components/Spinner";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
@@ -132,7 +133,7 @@ function SessionsEntry() {
       <span className="flex-1">Sessions</span>
       {working.length > 0 && (
         <span className="flex items-center gap-1.5 font-mono text-[11px] text-fg-subtle">
-          <span className="size-1.5 animate-pulse rounded-full bg-success" />
+          <Spinner size={10} className="text-success" />
           {working.length}
           {average !== null && <span className="text-fg-subtle/70">· {average}%</span>}
         </span>

@@ -1,4 +1,5 @@
-import { Check, Cpu, Loader2 } from "lucide-react";
+import { Check, Cpu } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
@@ -62,7 +63,7 @@ export function ModelPicker() {
             <div className="overflow-y-auto p-1.5">
               {loading && (
                 <div className="flex items-center gap-2 px-3 py-2 text-xs text-fg-subtle">
-                  <Loader2 size={12} className="animate-spin" /> Asking {provider.name} for its models…
+                  <Spinner size={12} /> Asking {provider.name} for its models…
                 </div>
               )}
               <ModelRow label="CLI default" id={null} active={!pane.model} onPick={choose} />

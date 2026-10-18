@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, Circle, Loader2, Power, RefreshCw, Smartphone, Square } from "lucide-react";
+import { ChevronLeft, Circle, Power, RefreshCw, Smartphone, Square } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { PanelActions } from "@/features/plugins/PanelActions";
@@ -217,7 +218,7 @@ function Mirror({ device }: { device: Device }) {
               </>
             ) : (
               <>
-                <Loader2 size={16} className="animate-spin" />
+                <Spinner size={16} />
                 Connecting to {device.model}… (the picture appears when the screen changes)
               </>
             )}
@@ -278,7 +279,7 @@ export function DevicePanel() {
   if (!status) {
     return (
       <div className="flex flex-1 items-center justify-center text-xs text-fg-subtle">
-        <Loader2 size={14} className="animate-spin" />
+        <Spinner size={14} />
       </div>
     );
   }
@@ -339,7 +340,7 @@ export function DevicePanel() {
                       }}
                       className="flex w-full items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-left text-fg hover:bg-hover disabled:opacity-50"
                     >
-                      {starting === avd ? <Loader2 size={12} className="animate-spin" /> : <Smartphone size={12} />}
+                      {starting === avd ? <Spinner size={12} /> : <Smartphone size={12} />}
                       <span className="flex-1 truncate">{avd.replace(/_/g, " ")}</span>
                       <span className="text-[10px] text-fg-subtle">{starting === avd ? "booting…" : "Start"}</span>
                     </button>

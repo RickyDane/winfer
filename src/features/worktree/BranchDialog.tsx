@@ -1,4 +1,5 @@
-import { CloudDownload, FolderPlus, GitBranch, Loader2, Play, Search, X } from "lucide-react";
+import { CloudDownload, FolderPlus, GitBranch, Play, Search, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { relativeTime, logActivity } from "@/stores/activity";
@@ -108,14 +109,14 @@ export function BranchDialog() {
             title="Get the latest branches from the remotes (git fetch --all --prune)"
             className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-50"
           >
-            {busy === "fetch" ? <Loader2 size={12} className="animate-spin" /> : <CloudDownload size={12} />} Fetch
+            {busy === "fetch" ? <Spinner size={12} /> : <CloudDownload size={12} />} Fetch
           </button>
         </div>
 
         <div className="min-h-32 flex-1 overflow-y-auto p-2">
           {branches === null ? (
             <p className="flex items-center justify-center gap-2 py-8 text-xs text-fg-subtle">
-              <Loader2 size={12} className="animate-spin" /> Reading branches…
+              <Spinner size={12} /> Reading branches…
             </p>
           ) : shown.length === 0 ? (
             <p className="py-8 text-center text-xs text-fg-subtle">{branches.length === 0 ? "No branches (is this a git repository?)" : "No branch matches."}</p>
@@ -177,14 +178,14 @@ export function BranchDialog() {
               className="flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-fg hover:bg-hover disabled:opacity-40"
               title="Create the worktree and make it a workspace of its own"
             >
-              {busy === "workspace" ? <Loader2 size={12} className="animate-spin" /> : <FolderPlus size={12} />} New workspace from it
+              {busy === "workspace" ? <Spinner size={12} /> : <FolderPlus size={12} />} New workspace from it
             </button>
             <button
               onClick={() => void create("agent")}
               disabled={!selected || !!blocked || busy !== null || newBranch === ""}
               className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-40"
             >
-              {busy === "agent" ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Open {agent} in a worktree
+              {busy === "agent" ? <Spinner size={12} /> : <Play size={12} />} Open {agent} in a worktree
             </button>
           </div>
         </footer>

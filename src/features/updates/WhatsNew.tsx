@@ -1,4 +1,5 @@
-import { Download, Loader2, Sparkles, X } from "lucide-react";
+import { Download, Sparkles, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { splitArea } from "./releaseNotes";
 import { closeReleaseNotes, installUpdate, useUpdates } from "./updater";
 
@@ -73,7 +74,7 @@ export function WhatsNew() {
                 disabled={installing}
                 className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:opacity-90 disabled:opacity-50"
               >
-                {installing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                {installing ? <Spinner size={12} /> : <Download size={12} />}
                 Install and restart
               </button>
             </>

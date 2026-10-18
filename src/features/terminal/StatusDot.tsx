@@ -1,3 +1,4 @@
+import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/cn";
 import type { AgentStatus } from "@/stores/workspaces";
 
@@ -10,6 +11,14 @@ const COLORS: Record<AgentStatus, string> = {
 };
 
 export function StatusDot({ status, className }: { status: AgentStatus; className?: string }) {
+  // A working agent is a running background task: it gets the spinning dots, not a pulse.
+  if (status === "working") {
+    return (
+      <span title={status} className={cn("-mx-0.5 inline-flex shrink-0", className)}>
+        <Spinner size={10} className="text-success" />
+      </span>
+    );
+  }
   return (
     <span
       title={status}
@@ -17,7 +26,6 @@ export function StatusDot({ status, className }: { status: AgentStatus; classNam
         "inline-block size-1.5 shrink-0 rounded-full",
         COLORS[status],
         "transition-colors duration-300",
-        status === "working" && "animate-pulse",
         status === "needs-input" && "anim-ring text-warning",
         className,
       )}

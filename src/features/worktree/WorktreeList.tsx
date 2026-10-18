@@ -1,5 +1,6 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { FolderGit2, GitBranch, Loader2, Play, Plus, Trash2 } from "lucide-react";
+import { FolderGit2, GitBranch, Play, Plus, Trash2 } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 import { logActivity, relativeTime } from "@/stores/activity";
@@ -126,7 +127,7 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
       <div className="flex items-center pt-1 pb-0.5 pr-1">
         <span className="flex flex-1 items-center gap-1.5 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">
           Branches
-          {loading && <Loader2 size={10} className="animate-spin" aria-label="Loading worktrees" />}
+          {loading && <Spinner size={10} aria-label="Loading worktrees" />}
         </span>
         <button onClick={() => openBranchDialog(workspace)} title="New worktree from a branch…" className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
           <Plus size={12} />
@@ -165,7 +166,7 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
             </button>
           )}
           {removing.has(wt.info.path) ? (
-            <Loader2 size={11} className="mr-0.5 animate-spin text-fg-subtle" />
+            <Spinner size={11} className="mr-0.5 text-fg-subtle" />
           ) : !wt.isMain && (
             <button
               onClick={() => void remove(wt)}

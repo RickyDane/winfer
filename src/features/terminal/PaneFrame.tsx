@@ -1,4 +1,5 @@
-import { ExternalLink, GitBranch, Loader2, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
@@ -165,7 +166,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
       {starting && (
         <div className="anim-fade pointer-events-none absolute inset-x-0 top-8 bottom-0 flex items-center justify-center">
           <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
-            <Loader2 size={13} className="animate-spin text-accent" />
+            <Spinner size={13} className="text-accent" />
             {starting === "worktree" ? "Creating worktree…" : `Starting ${name}…`}
           </span>
         </div>

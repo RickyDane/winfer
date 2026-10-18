@@ -1,4 +1,5 @@
-import { GitBranch, GitMerge, Loader2, RefreshCw, Trash2, X } from "lucide-react";
+import { GitBranch, GitMerge, RefreshCw, Trash2, X } from "lucide-react";
+import { Spinner } from "@/components/Spinner";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
@@ -80,7 +81,7 @@ export function DiffView() {
           {error && <div className="p-4 text-danger">{error}</div>}
           {!data && !error && (
             <div className="flex items-center gap-2 p-4 text-fg-subtle">
-              <Loader2 size={13} className="animate-spin" /> Loading changes…
+              <Spinner size={13} /> Loading changes…
             </div>
           )}
           {data && files.length === 0 && data.untracked.length === 0 && <div className="p-4 text-fg-subtle">No changes yet.</div>}
