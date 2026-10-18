@@ -53,6 +53,9 @@ enum Pending {
     Thread,
     Turn,
     Skills,
+    /// Stopping these background shells: one terminal (`thread/backgroundTerminals/terminate`),
+    /// else all of the thread's (`clean`).
+    StopShells { ids: Vec<String>, all: bool },
     Ignore,
 }
 
@@ -92,6 +95,8 @@ struct Bridge {
     /// Commands that outlived their turn (Codex keeps them running as background terminals),
     /// shown as background shells until they exit.
     background: HashSet<String>,
+    /// Running commands' PTY process ids (item id → process id), to stop background shells.
+    processes: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -139,8 +144,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         note: None,
         commands: HashMap::new(),
         background: HashSet::new(),
+        processes: HashMap::new(),
     };
-    b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": null }), Pending::Init);
+    b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": { "experimentalApi": true } }), Pending::Init);
     let mut thread_params = json!({
         "cwd": cwd,
         "approvalPolicy": approval_policy(opts.mode),
@@ -171,6 +177,11 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         if matches!(kind, Some(Pending::Turn)) {
                             b.emit(Ev::Error(format!("Codex: {message}")));
                             b.emit(Ev::TurnDone);
+                        } else if let Some(Pending::StopShells { ids, all: false }) = kind {
+                            // Its process id didn't work: clean the thread's terminals instead.
+                            b.clean_shells(ids);
+                        } else if matches!(kind, Some(Pending::StopShells { .. })) {
+                            b.emit(Ev::Notice(format!("Couldn't stop the background shells: {message}")));
                         } else if matches!(kind, Some(Pending::Thread)) && resume.is_some() {
                             b.emit(Ev::Notice(format!("Couldn't resume that Codex thread ({message}); starting a new one.")));
                             b.request("thread/start", thread_params.clone(), Pending::Thread);
@@ -215,6 +226,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                             let list = b.take_skills(result);
                             b.emit(Ev::Skills(list));
                         }
+                        Some(Pending::StopShells { ids, .. }) => b.shells_stopped(&ids),
                         _ => {}
                     }
                 } else if let Some(method) = v["method"].as_str() {
@@ -263,6 +275,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
                 Cmd::SetCompaction { .. } => {}
                 Cmd::Undo => b.undo(),
+                Cmd::StopTask(id) if b.background.contains(&id) => b.stop_shell(id),
                 Cmd::StopTask(thread) => {
                     match b.children.get(&thread).and_then(|c| c.turn.clone()) {
                         Some(turn) => b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore),
@@ -284,6 +297,35 @@ impl Bridge {
         self.next += 1;
         self.pending.insert(self.next, kind);
         let _ = self.proc.write(&json!({ "id": self.next, "method": method, "params": params }));
+    }
+
+    /// Kills a command that outlived its turn: its own terminal when Codex told us its process,
+    /// else every background terminal of the thread.
+    fn stop_shell(&mut self, id: String) {
+        let Some(thread) = self.thread.clone() else { return };
+        match self.processes.get(&id).cloned() {
+            Some(pid) => self.request("thread/backgroundTerminals/terminate", json!({ "threadId": thread, "processId": pid }), Pending::StopShells { ids: vec![id], all: false }),
+            None => self.clean_shells(vec![id]),
+        }
+    }
+
+    /// Kills every background terminal of the thread; `ids` (and every other background shell)
+    /// end as stopped.
+    fn clean_shells(&mut self, mut ids: Vec<String>) {
+        let Some(thread) = self.thread.clone() else { return };
+        ids.extend(self.background.iter().filter(|b| !ids.contains(b)).cloned().collect::<Vec<_>>());
+        self.request("thread/backgroundTerminals/clean", json!({ "threadId": thread }), Pending::StopShells { ids, all: true });
+    }
+
+    /// Codex killed these background shells; their tasks end as stopped (their command items may
+    /// never complete once the process is gone).
+    fn shells_stopped(&mut self, ids: &[String]) {
+        for id in ids {
+            self.processes.remove(id);
+            if self.background.remove(id) {
+                self.task(TaskEv { id: id.clone(), status: Some("stopped".into()), ..Default::default() });
+            }
+        }
     }
 
     fn start_turn(&mut self, mut msg: UserMsg) {
@@ -631,6 +673,9 @@ impl Bridge {
         let Some((name, title)) = self.tool_card(item) else { return };
         if item["type"] == "commandExecution" {
             self.commands.insert(s(item, "id"), title.clone());
+            if let Some(pid) = item["processId"].as_str() {
+                self.processes.insert(s(item, "id"), pid.to_string());
+            }
         }
         self.emit(Ev::ToolStart { id: s(item, "id"), name, title, input: item.clone() });
     }
@@ -679,6 +724,7 @@ impl Bridge {
             "commandExecution" => {
                 let ok = item["exitCode"].as_i64() == Some(0) || item["status"] == "completed" && item["exitCode"].is_null();
                 self.commands.remove(&id);
+                self.processes.remove(&id);
                 if self.background.remove(&id) {
                     let exit_code = item["exitCode"].as_i64().and_then(|n| i32::try_from(n).ok());
                     let status = if ok { "completed" } else { "failed" };
@@ -1048,6 +1094,33 @@ mod tests {
     }
 
     #[test]
+    fn stopping_background_shells_terminates_their_terminal() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        let cmd = |id: &str, pid: Value| json!({ "type": "commandExecution", "id": id, "command": "/bin/zsh -lc 'npm run dev'", "status": "inProgress", "processId": pid });
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": cmd("c1", json!("p1")) }));
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": cmd("c2", Value::Null) }));
+        n(&mut b, "turn/completed", json!({ "threadId": "main", "turn": { "id": "t0", "status": "completed" } }));
+        let _ = rx.try_iter().count();
+        // A known process is terminated on its own…
+        b.stop_shell("c1".into());
+        assert!(matches!(b.pending.get(&b.next), Some(Pending::StopShells { ids, all: false }) if ids == &["c1"]));
+        b.shells_stopped(&["c1".into()]);
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&evs[..], [Ev::Task(t)] if t.id == "c1" && t.status.as_deref() == Some("stopped")), "{evs:?}");
+        // …else the thread's background terminals are cleaned.
+        b.stop_shell("c2".into());
+        assert!(matches!(b.pending.get(&b.next), Some(Pending::StopShells { ids, all: true }) if ids == &["c2"]));
+        b.shells_stopped(&["c2".into()]);
+        assert_eq!(rx.try_iter().filter(|e| matches!(e, Ev::Task(t) if t.status.as_deref() == Some("stopped"))).count(), 1);
+        assert!(b.background.is_empty() && b.processes.is_empty());
+        // A late completion of a stopped command doesn't reopen its task.
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "commandExecution", "id": "c2", "status": "failed", "exitCode": 143 } }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(!evs.iter().any(|e| matches!(e, Ev::Task(_))), "{evs:?}");
+    }
+
+    #[test]
     fn fast_models_use_the_fast_tier() {
         assert_eq!(split_fast("gpt-6.1-sol-fast"), ("gpt-6.1-sol", true));
         assert_eq!(split_fast("gpt-6.1-sol"), ("gpt-6.1-sol", false));
@@ -1086,6 +1159,7 @@ mod tests {
             note: None,
             commands: HashMap::new(),
             background: HashSet::new(),
+            processes: HashMap::new(),
         };
         (b, rx)
     }

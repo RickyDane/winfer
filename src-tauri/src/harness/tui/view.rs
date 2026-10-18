@@ -494,7 +494,12 @@ fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
         if let Some(since) = app.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.started).min() {
             left.push(Span::styled(format!("  {}", anim::elapsed(since.elapsed())), theme::muted()));
         }
-        if agents > 0 { theme::key_hint("ctrl+g", "agents").to_vec() } else { Vec::new() }
+        let mut keys = theme::key_hint("esc", "to stop").to_vec();
+        if agents > 0 {
+            keys.push(Span::raw(" "));
+            keys.extend(theme::key_hint("ctrl+g", "agents"));
+        }
+        keys
     };
     let w = |s: &[Span]| s.iter().map(|s| s.content.width()).sum::<usize>();
     let rule = anim::comet(width, t, true);

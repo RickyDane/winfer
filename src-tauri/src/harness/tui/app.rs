@@ -1622,7 +1622,7 @@ impl App {
             } else if !self.composer.is_empty() {
                 self.composer.clear();
                 self.completion = None;
-            } else if self.busy {
+            } else if self.working() {
                 self.interrupt();
             } else if self.quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
                 self.quit = true;
@@ -1735,7 +1735,7 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                if self.busy {
+                if self.working() {
                     self.interrupt();
                 } else if !self.composer.is_empty() {
                     self.composer.clear();
@@ -1796,11 +1796,23 @@ impl App {
         self.toast(if self.expanded { "Showing details" } else { "Hiding details" }, NoticeKind::Info);
     }
 
+    /// Stops all work: the running turn and every background subagent and shell.
     fn interrupt(&mut self) {
-        self.send(Cmd::Interrupt);
+        if self.busy {
+            self.send(Cmd::Interrupt);
+        }
+        let running: Vec<String> = self.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.id.clone()).collect();
+        for id in &running {
+            self.send(Cmd::StopTask(id.clone()));
+        }
         self.queue.clear();
         self.approvals.clear();
-        self.notice("Interrupted", NoticeKind::Error);
+        let what = match (self.busy, running.len()) {
+            (_, 0) => "Interrupted".to_string(),
+            (true, n) => format!("Interrupted · stopping {n} background task{}", if n == 1 { "" } else { "s" }),
+            (false, n) => format!("Stopping {n} background task{}", if n == 1 { "" } else { "s" }),
+        };
+        self.notice(what, NoticeKind::Error);
         hook("interrupted", json!({ "session_id": self.saved.id }));
         self.reported_working = false;
     }
@@ -2225,6 +2237,31 @@ mod tests {
         assert!(!a.working() && !a.reported_working);
         let s = screen(&mut a, 120, 30);
         assert!(!s.contains("1 agent") && !s.contains("background agent"), "{s}");
+    }
+
+    #[test]
+    fn esc_stops_background_tasks_after_the_turn_ends() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.on_agent(g, Ev::TurnStart);
+        a.on_agent(g, Ev::Task(TaskEv { id: "k1".into(), agent: Some("Explore".into()), status: Some("running".into()), ..Default::default() }));
+        a.on_agent(g, Ev::Task(TaskEv { id: "b1".into(), title: Some("npm run dev".into()), status: Some("running".into()), ..Default::default() }));
+        a.on_agent(g, Ev::TurnDone);
+        assert!(!a.busy && a.working());
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("esc to stop"), "{s}");
+        key(&mut a, KeyCode::Esc);
+        assert!(a.items.iter().any(|i| matches!(&i.block, Block::Notice { text, .. } if text == "Stopping 2 background tasks")));
+        assert!(!a.reported_working);
+        // The backend reports them stopped: nothing runs any more.
+        a.on_agent(g, Ev::Task(TaskEv { id: "k1".into(), status: Some("stopped".into()), ..Default::default() }));
+        a.on_agent(g, Ev::Task(TaskEv { id: "b1".into(), status: Some("killed".into()), ..Default::default() }));
+        assert!(!a.working());
+        // With nothing running, esc only clears the prompt.
+        let n = a.items.len();
+        key(&mut a, KeyCode::Esc);
+        assert_eq!(a.items.len(), n);
     }
 
     #[test]
