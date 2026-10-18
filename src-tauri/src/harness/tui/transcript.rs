@@ -41,6 +41,8 @@ pub struct Item {
     pub born: Instant,
     /// Changes whenever the item does (see `touch`); the view caches by it.
     pub version: u64,
+    /// A tool card clicked open: shows everything, like ctrl+o does for all of them.
+    pub open: bool,
     cache: Option<(usize, bool, Vec<Line<'static>>)>,
 }
 
@@ -55,7 +57,7 @@ const SETTLE: Duration = Duration::from_millis(700);
 
 impl Item {
     pub fn new(block: Block) -> Self {
-        Item { block, background: false, exit_code: None, born: Instant::now(), version: next_version(), cache: None }
+        Item { block, background: false, exit_code: None, born: Instant::now(), version: next_version(), open: false, cache: None }
     }
 
     pub fn touch(&mut self) {
@@ -75,6 +77,7 @@ impl Item {
     }
 
     pub fn lines(&mut self, width: usize, expanded: bool, now: Instant, epoch: Instant) -> Vec<Line<'static>> {
+        let expanded = expanded || self.open;
         if !self.animated() {
             if let Some((w, e, lines)) = &self.cache {
                 if *w == width && *e == expanded {
@@ -156,6 +159,7 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
         }
         Block::Tool { name, title, output, diff, status, started, ended, .. } => {
             let mut out = Vec::new();
+            let (body, collapsible) = tool_body(output, diff.as_deref(), *status, width, expanded);
             let took = ended.unwrap_or(now).duration_since(*started);
             // A finished dot flashes bright and settles into its color.
             let settle = ended.map(|e| (now.saturating_duration_since(e).as_secs_f32() / SETTLE.as_secs_f32()).min(1.0)).unwrap_or(1.0);
@@ -188,6 +192,10 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
                 }
                 right.push(Span::styled(anim::elapsed(took), theme::dim()));
             }
+            // Clickable like the plan: ▸ collapsed, ▾ open, when the card has more to show.
+            if collapsible {
+                right.push(Span::styled(if expanded { " ▾" } else { " ▸" }, theme::fg(theme::VIOLET())));
+            }
             let rw: usize = right.iter().map(|s| s.content.width()).sum();
             let lw: usize = head.iter().map(|s| s.content.width()).sum();
             if !title.is_empty() {
@@ -201,48 +209,7 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
                 head.extend(right);
             }
             out.push(Line::from(head));
-            // The rail runs down the output and curls right under its last line, but only once the
-            // output is really over: still running or cut short, it stays straight.
-            let rail = |last: bool| vec![Span::styled(if last { "╰─ " } else { "│  " }, theme::fg(theme::FAINT()))];
-            if let Some(d) = diff.as_deref().filter(|d| !d.trim().is_empty()) {
-                let lines = diff_lines(d, width.saturating_sub(3));
-                // Collapsed: just the first changed lines; ctrl+o shows the whole diff.
-                let lines: Vec<Line> = if expanded { lines } else { lines.into_iter().filter(is_change).collect() };
-                let total = lines.len();
-                let max = if expanded { usize::MAX } else { PREVIEW };
-                let shown = total.min(max);
-                for (i, l) in lines.into_iter().take(max).enumerate() {
-                    let mut spans = rail(i + 1 == shown && total == shown && *status != Status::Running);
-                    spans.extend(l.spans);
-                    out.push(with_more(spans, if i + 1 == shown { total - shown } else { 0 }, width));
-                }
-                return out;
-            }
-            let text = output.trim_end();
-            if text.is_empty() {
-                return out;
-            }
-            let style = if *status == Status::Failed { theme::fg(theme::mix(theme::RED(), theme::DIM(), 0.3)) } else { theme::dim() };
-            // Markdown scaffolding (fences, headings, blank lines) says nothing in a preview.
-            let raw: Vec<String> = text
-                .lines()
-                .map(|l| crate::harness::tools::strip_ansi(l).replace('\t', "  "))
-                .filter(|l| expanded || !(l.trim().is_empty() || l.trim_start().starts_with("```") || l.trim_start().starts_with('#')))
-                .collect();
-            let max = if expanded { usize::MAX } else { PREVIEW };
-            // While running, show the tail (live output); when done, the head.
-            let (shown, hidden): (Vec<String>, usize) = if *status == Status::Running {
-                let skip = raw.len().saturating_sub(max);
-                (raw[skip..].to_vec(), skip)
-            } else {
-                let hidden = raw.len().saturating_sub(max);
-                (raw.into_iter().take(max).collect(), hidden)
-            };
-            let n = shown.len();
-            for (i, line) in shown.into_iter().enumerate() {
-                let line = truncate(&line, width.saturating_sub(14).max(10));
-                out.push(with_more([rail(i + 1 == n && hidden == 0 && *status != Status::Running), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
-            }
+            out.extend(body);
             out
         }
         Block::Notice { text, kind } => {
@@ -262,13 +229,71 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
     }
 }
 
-/// Output lines a collapsed tool card shows (ctrl+o shows all).
+/// Output lines a collapsed tool card shows (clicking its header or ctrl+o shows all).
 const PREVIEW: usize = 2;
+
+/// A tool card's lines under its header (a diff, else its output), and whether collapsing
+/// hides any of it (so the header gets a ▸/▾ to click).
+fn tool_body(output: &str, diff: Option<&str>, status: Status, width: usize, expanded: bool) -> (Vec<Line<'static>>, bool) {
+    let mut out = Vec::new();
+    // The rail runs down the output and curls right under its last line, but only once the
+    // output is really over: still running or cut short, it stays straight.
+    let rail = |last: bool| vec![Span::styled(if last { "╰─ " } else { "│  " }, theme::fg(theme::FAINT()))];
+    if let Some(d) = diff.filter(|d| !d.trim().is_empty()) {
+        let all = diff_lines(d, width.saturating_sub(3));
+        let changes = all.iter().filter(|l| is_change(l)).count();
+        let collapsible = all.len() > changes.min(PREVIEW);
+        // Collapsed: just the first changed lines.
+        let lines: Vec<Line> = if expanded { all } else { all.into_iter().filter(is_change).collect() };
+        let total = lines.len();
+        let max = if expanded { usize::MAX } else { PREVIEW };
+        let shown = total.min(max);
+        for (i, l) in lines.into_iter().take(max).enumerate() {
+            let mut spans = rail(i + 1 == shown && total == shown && status != Status::Running);
+            spans.extend(l.spans);
+            out.push(with_more(spans, if i + 1 == shown { total - shown } else { 0 }, width));
+        }
+        return (out, collapsible);
+    }
+    let text = output.trim_end();
+    if text.is_empty() {
+        return (out, false);
+    }
+    let style = if status == Status::Failed { theme::fg(theme::mix(theme::RED(), theme::DIM(), 0.3)) } else { theme::dim() };
+    // Markdown scaffolding (fences, headings, blank lines) says nothing in a preview.
+    let scaffolding = |l: &str| l.trim().is_empty() || l.trim_start().starts_with("```") || l.trim_start().starts_with('#');
+    let collapsible = text.lines().count() > text.lines().filter(|l| !scaffolding(l)).count().min(PREVIEW);
+    let raw: Vec<String> = text
+        .lines()
+        .map(|l| crate::harness::tools::strip_ansi(l).replace('\t', "  "))
+        .filter(|l| expanded || !scaffolding(l))
+        .collect();
+    let max = if expanded { usize::MAX } else { PREVIEW };
+    // While running, show the tail (live output); when done, the head.
+    let (shown, hidden): (Vec<String>, usize) = if status == Status::Running {
+        let skip = raw.len().saturating_sub(max);
+        (raw[skip..].to_vec(), skip)
+    } else {
+        let hidden = raw.len().saturating_sub(max);
+        (raw.into_iter().take(max).collect(), hidden)
+    };
+    let n = shown.len();
+    for (i, line) in shown.into_iter().enumerate() {
+        let line = truncate(&line, width.saturating_sub(14).max(10));
+        out.push(with_more([rail(i + 1 == n && hidden == 0 && status != Status::Running), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
+    }
+    (out, collapsible)
+}
 
 /// A preview row, with "+N lines" right-aligned when the card hides more.
 fn with_more(mut spans: Vec<Span<'static>>, hidden: usize, width: usize) -> Line<'static> {
     if hidden > 0 {
         let tag = format!("+{hidden} line{}", if hidden == 1 { "" } else { "s" });
+        // Diff rows pad their background to the full width; make room for the tag.
+        let over = (spans.iter().map(|s| s.content.width()).sum::<usize>() + tag.width() + 2).saturating_sub(width);
+        if let Some(pad) = spans.last_mut().filter(|s| over > 0 && !s.content.is_empty() && s.content.trim().is_empty()) {
+            pad.content = " ".repeat(pad.content.len().saturating_sub(over)).into();
+        }
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         spans.push(Span::raw(" ".repeat(width.saturating_sub(used + tag.width()).max(2))));
         spans.push(Span::styled(tag, theme::dim()));
@@ -453,7 +478,7 @@ mod tests {
         let d = crate::harness::diff::unified("a.txt", "a\nb\nc\nd\n", "a\nB\nc\nD\n");
         let lines = plain(&render(&tool("Edit", "", Some(d)), 80, false, now, now, false, None));
         assert_eq!(lines.len(), 3, "{lines:?}");
-        assert!(lines[1].contains("- b") && lines[2].contains("+ B") && lines[2].ends_with("+2 lines"), "{lines:?}");
+        assert!(lines[1].contains("- b") && lines[2].contains("+ B") && lines[2].ends_with("+2 lines") && lines[2].len() <= 80 + 8, "{lines:?}");
     }
 
     #[test]

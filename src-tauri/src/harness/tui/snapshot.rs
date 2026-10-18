@@ -287,10 +287,15 @@ fn intro() -> String {
 fn snapshots() {
     let dir = std::env::var("WF_SNAP_DIR").unwrap_or_else(|_| "/tmp/wf-tui".into());
     std::fs::create_dir_all(&dir).unwrap();
-    let scenes: [(&str, fn(&mut App), usize); 10] = [
+    let scenes: [(&str, fn(&mut App), usize); 11] = [
         ("background shells", background_shells, 60),
         ("welcome", |_| {}, 60),
         ("conversation", conversation, 1),
+        ("edit card opened (clicked)", |a| {
+            conversation(a);
+            a.items.truncate(5);
+            a.items[3].open = true;
+        }, 1),
         ("working", busy, 60),
         ("approval", approval, 24),
         ("model picker", picker, 60),

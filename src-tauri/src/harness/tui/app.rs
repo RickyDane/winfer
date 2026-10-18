@@ -1558,12 +1558,22 @@ impl App {
                 if sel.moved {
                     self.copy_selection();
                 } else {
-                    // A plain click clears the mark.
+                    // A plain click clears the mark; on a tool card's header it opens or collapses it.
+                    let line = sel.head.line;
                     self.selection = None;
+                    self.toggle_card_at(line);
                 }
             }
             _ => {}
         }
+    }
+
+    /// Opens or collapses the tool card whose header is this transcript line, like the plan.
+    fn toggle_card_at(&mut self, line: usize) {
+        let Some(idx) = self.item_rows.iter().position(|&r| r == line) else { return };
+        let Some(item) = self.items.get_mut(idx).filter(|i| matches!(i.block, Block::Tool { .. })) else { return };
+        item.open = !item.open;
+        item.touch();
     }
 
     /// Copies the marked text to the clipboard; the mark stays until the next click or key.
@@ -2022,6 +2032,29 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_tool_card_opens_and_collapses_it() {
+        let mut a = app();
+        let now = Instant::now();
+        let diff = crate::harness::diff::unified("a.txt", "a\nb\nc\nd\ne\n", "a\nB\nc\nD\nE\n");
+        a.items.push(Item::new(Block::Tool { id: "1".into(), name: "Edit".into(), title: "a.txt".into(), output: String::new(), diff: Some(diff), status: Status::Ok, started: now, ended: Some(now) }));
+        a.items[0].born = now - Duration::from_secs(5);
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains("▸") && s.contains("+ B") && !s.contains("+ E"), "{s}");
+        let click = |a: &mut App| {
+            let row = a.view.y + (a.item_rows[0] - a.view.start) as u16;
+            for kind in [MouseEventKind::Down(MouseButton::Left), MouseEventKind::Up(MouseButton::Left)] {
+                a.on_term(Event::Mouse(MouseEvent { kind, column: 10, row, modifiers: KeyModifiers::NONE }));
+            }
+        };
+        click(&mut a);
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains("▾") && s.contains("+ E") && s.contains("  c"), "{s}");
+        click(&mut a);
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains("▸") && !s.contains("+ E"), "{s}");
+    }
+
+    #[test]
     fn clicking_the_plan_opens_and_collapses_it() {
         let mut a = app();
         a.items.push(Item::new(Block::User { text: "go".into() }));
@@ -2110,6 +2143,28 @@ mod tests {
         let s = screen(&mut a, 80, 20);
         assert!(s.contains("exit 0") && !s.contains("⇢ 1 bg"), "{s}");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn codex_commands_outliving_the_turn_stay_running_until_they_exit() {
+        // Codex: the card has no result yet at turn end; output streams in after it.
+        let mut a = app();
+        let g = a.generation;
+        a.on_agent(g, Ev::TurnStart);
+        a.on_agent(g, Ev::ToolStart { id: "c1".into(), name: "PowerShell".into(), title: "watch #811".into(), input: json!({}) });
+        a.on_agent(g, Ev::Task(TaskEv { id: "c1".into(), tool_id: Some("c1".into()), title: Some("watch #811".into()), status: Some("running".into()), ..Default::default() }));
+        a.on_agent(g, Ev::TurnDone);
+        a.on_agent(g, Ev::ToolOutput { id: "c1".into(), chunk: "#811: inProgress\n".into() });
+        assert!(matches!(&a.items[0].block, Block::Tool { status: Status::Running, ended: None, .. }));
+        assert_eq!(a.running_shells(), 1);
+        let s = screen(&mut a, 100, 20);
+        assert!(s.contains("⇢ bg") && !s.contains("failed"), "{s}");
+        a.on_agent(g, Ev::Task(TaskEv { id: "c1".into(), status: Some("completed".into()), exit_code: Some(0), ..Default::default() }));
+        a.on_agent(g, Ev::ToolEnd { id: "c1".into(), ok: true, output: "#811: succeeded\n".into(), diff: None });
+        assert!(matches!(&a.items[0].block, Block::Tool { status: Status::Ok, output, .. } if output.contains("succeeded")));
+        assert_eq!(a.running_shells(), 0);
+        let s = screen(&mut a, 100, 20);
+        assert!(s.contains("exit 0") && !s.contains("⇢ 1 bg"), "{s}");
     }
 
     #[test]
