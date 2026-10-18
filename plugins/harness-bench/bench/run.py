@@ -39,6 +39,8 @@ from functools import lru_cache
 from pathlib import Path
 
 WINDOWS = os.name == "nt"
+# The hidden tests run the agent's code, which may hang (an endless loop, a server left running).
+CHECK_TIMEOUT = 300
 # Output goes to a file the UI shows; Windows' default code page can't encode ▸ and friends.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -439,6 +441,59 @@ def changed_files(work: Path) -> str:
     return "\n" + "\n".join(r.stdout.strip().splitlines()[-6:]) if r.stdout.strip() else ""
 
 
+def kill_tree(p: subprocess.Popen) -> None:
+    """Ends `p` and everything it started (its own process group / job tree)."""
+    if WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+    else:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        p.kill()
+    except OSError:
+        pass
+
+
+def run_capped(argv, timeout, cwd=None, env=None) -> subprocess.CompletedProcess:
+    """Like subprocess.run(capture_output=True, text=True, timeout=...), but safe against
+    processes the command leaves behind. An agent that starts a server in the background
+    (`python3 -m app.serve &`) hands it the output pipes, so subprocess.run would wait for
+    EOF forever, even after its timeout killed the agent. Here the command gets its own process
+    group, which is killed once the command exits or times out, and the pipes are read on
+    threads so a leftover holder can't block us. Raises TimeoutExpired with the output so far."""
+    kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
+    p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, **kw)
+    chunks = {"out": [], "err": []}
+
+    def pump(stream, key):
+        for block in iter(lambda: stream.read(65536), b""):
+            chunks[key].append(block)
+
+    readers = [threading.Thread(target=pump, args=(p.stdout, "out"), daemon=True),
+               threading.Thread(target=pump, args=(p.stderr, "err"), daemon=True)]
+    for t in readers:
+        t.start()
+    timed_out = False
+    try:
+        p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    kill_tree(p)
+    p.wait()
+    for t in readers:
+        t.join(timeout=5)
+    if not any(t.is_alive() for t in readers):
+        p.stdout.close()
+        p.stderr.close()
+    text =lambda key: b"".join(chunks[key]).decode("utf-8", errors="replace")
+    if timed_out:
+        raise subprocess.TimeoutExpired(argv, timeout, output=text("out"), stderr=text("err"))
+    return subprocess.CompletedProcess(argv, p.returncode, text("out"), text("err"))
+
+
 def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", effort: str = ""):
     work = Path(tempfile.mkdtemp(prefix=f"bench-{task.name}-{name}-", dir=temp_dir()))
     prepare(task, work)
@@ -458,18 +513,21 @@ def run_one(name, spec, task: Path, timeout: int, keep: bool, model: str = "", e
         try:
             # Some CLIs take their project folder from $PWD rather than the real working directory.
             env = {**os.environ, **temp_env(), "PWD": str(work)}
-            r = subprocess.run(argv, cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
+            r = run_capped(argv, timeout, cwd=work, env=env)
             out, err, code = r.stdout, r.stderr, r.returncode
         except FileNotFoundError as e:
             out, code = json.dumps({"type": "error", "text": f"harness not installed: {e.filename}"}), 127
         except subprocess.TimeoutExpired as e:
-            out, timed_out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""), True
+            out, timed_out = e.stdout or "", True
     seconds = time.time() - started
     if server:
         server.shutdown()
         server.server_close()
     env = script_env(VERIFY_DIR=str(task / "verify"))
-    check = subprocess.run([posix_sh(), str(task / "verify/check.sh")], cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    try:
+        check = run_capped([posix_sh(), str(task / "verify/check.sh")], CHECK_TIMEOUT, cwd=work, env=env)
+    except subprocess.TimeoutExpired as e:
+        check = subprocess.CompletedProcess(e.cmd, 124, e.stdout or "", f"check timed out after {CHECK_TIMEOUT}s")
     why = (check.stdout + check.stderr).strip()[-400:] if check.returncode else ""
     if "was modified" in why:
         why += changed_files(work)

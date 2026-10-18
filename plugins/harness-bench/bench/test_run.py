@@ -28,7 +28,7 @@ class CostTests(unittest.TestCase):
             (task / "task.md").write_text("Synthetic pricing check")
             spec = {"parser": parser, "argv": ["synthetic"], "model": "unknown"}
             responses = [subprocess.CompletedProcess([], 0, output, ""), subprocess.CompletedProcess([], 0, "", "")]
-            with patch.object(bench, "prepare"), patch.object(bench.subprocess, "run", side_effect=responses):
+            with patch.object(bench, "prepare"), patch.object(bench, "run_capped", side_effect=responses):
                 return bench.run_one("synthetic", spec, task, 10, False, model)
 
     def test_codex_fallback_uses_selected_model(self):
@@ -87,10 +87,28 @@ class EffortTests(unittest.TestCase):
             (task / "task.md").write_text("Synthetic effort check")
             spec = {"parser": "none", "argv": ["synthetic", "{prompt}"], "effort": {"argv": ["--effort", "{effort}"], "levels": ["high"]}}
             responses = [subprocess.CompletedProcess([], 0, "", ""), subprocess.CompletedProcess([], 0, "", "")]
-            with patch.object(bench, "prepare"), patch.object(bench.subprocess, "run", side_effect=responses) as run:
+            with patch.object(bench, "prepare"), patch.object(bench, "run_capped", side_effect=responses) as run:
                 result = bench.run_one("synthetic", spec, task, 10, False, "m", "high")
             self.assertEqual(run.call_args_list[0].args[0][-3:-1], ["--effort", "high"])
             self.assertEqual(result["effort"], "high")
+
+
+@unittest.skipIf(bench.WINDOWS, "POSIX shell")
+class RunCappedTests(unittest.TestCase):
+    # An agent that leaves a server running in the background (it inherits the output pipe)
+    # used to hang the run forever, past its timeout.
+    def test_leftover_background_process_does_not_block(self):
+        started = time.time()
+        r = bench.run_capped(["sh", "-c", "echo hi; sleep 60 & exit 0"], 30)
+        self.assertLess(time.time() - started, 10)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "hi"))
+
+    def test_timeout_returns_with_output(self):
+        started = time.time()
+        with self.assertRaises(subprocess.TimeoutExpired) as e:
+            bench.run_capped(["sh", "-c", "echo partial; sleep 60 & wait"], 1)
+        self.assertLess(time.time() - started, 10)
+        self.assertEqual(e.exception.stdout.strip(), "partial")
 
 
 class InstalledTests(unittest.TestCase):
