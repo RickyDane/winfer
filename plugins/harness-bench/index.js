@@ -581,7 +581,7 @@ export async function activate(api) {
   const taskOn = (t) => prefs().tasks?.[t.id] ?? true;
   const harnesses = () => (state.catalog?.harnesses ?? []).filter((h) => !CHECKS.includes(h.id));
   const labelOf = (id) => state.catalog?.harnesses.find((h) => h.id === id)?.label ?? id;
-  const suiteLabel = (id) => state.catalog?.suites?.find((s) => s.id === id)?.label ?? id.charAt(0).toUpperCase() + id.slice(1);
+  const suiteLabel = (id) => state.catalog?.suites?.find((s) => s.id === id)?.label ?? (id ? id.charAt(0).toUpperCase() + id.slice(1) : "");
   const catalogSuites = () => state.catalog?.suites ?? [{ id: "coding", label: "Coding", description: "" }];
   const taskSuite = (t) => t.suite ?? "coding";
   /** The results the results tab shows: every run, or one suite's. */
@@ -963,7 +963,7 @@ export async function activate(api) {
           <td style="width:1%"><input type="checkbox" data-select-run="${esc(f)}" aria-label="Select run ${esc(runLabel(f))}" ${state.selected.has(f) && !isLive ? "checked" : ""} ${isLive ? "disabled" : ""} /></td>
           <td class="when">${esc(runLabel(f).replace(" · self-test", ""))}${self ? `<span class="hb-badge">self-test</span>` : ""}${isLive ? `<span class="hb-badge live hb-pulse">running</span>` : ""}</td>
           <td><div class="who">${who}</div>${o?.models.length ? `<div class="wf-subtle wf-mono" style="font-size:11px;margin-top:3px">${esc(o.models.join(", "))}</div>` : ""}</td>
-          <td class="num" ${o ? `title="${esc(o.suites.map(suiteLabel).join(", "))}"` : ""}>${o ? o.tasks : ""}${o && (o.suites.length > 1 || o.suites[0] !== "coding") ? `<div class="wf-subtle" style="font-size:11px;margin-top:3px">${esc(o.suites.length > 1 ? `${o.suites.length} suites` : suiteLabel(o.suites[0]))}</div>` : ""}</td>
+          <td class="num" ${o ? `title="${esc(o.suites.map(suiteLabel).join(", "))}"` : ""}>${o ? o.tasks : ""}${o?.suites.length && (o.suites.length > 1 || o.suites[0] !== "coding") ? `<div class="wf-subtle" style="font-size:11px;margin-top:3px">${esc(o.suites.length > 1 ? `${o.suites.length} suites` : suiteLabel(o.suites[0]))}</div>` : ""}</td>
           <td class="num">${o ? `<div class="hb-pass"><span ${self ? `title="Checks that behaved as expected"` : ""}>${o.passed}/${o.runs}${self ? " ok" : ""}</span><div class="hb-meter"><div style="width:${Math.round(rate * 100)}%;background:var(--color-success)"></div></div></div>` : ""}</td>
           <td class="num">${o?.errors ? `<span style="color:var(--color-warning)" title="Harness errors, not counted">⚠ ${o.errors}</span>` : o ? `<span class="wf-subtle">0</span>` : ""}</td>
           <td class="num">${o?.wall ? secs(o.wall) : o ? "—" : ""}</td>

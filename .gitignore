@@ -46,3 +46,4 @@ m-video/
 .cursor/
 .opencode/
 .specsmd/
+__pycache__/

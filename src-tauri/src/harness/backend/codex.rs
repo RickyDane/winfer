@@ -67,6 +67,8 @@ struct Bridge {
     mode: Mode,
     model: Option<String>,
     effort: Option<String>,
+    /// Whether we put the thread on Codex's fast tier, so a later non-fast model turns it back.
+    fast: bool,
     cwd: String,
     /// Approval requests waiting on the user: our id → (JSON-RPC id, kind).
     approvals: HashMap<String, (Value, &'static str)>,
@@ -120,6 +122,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         mode: opts.mode,
         model: Some(opts.model.clone()).filter(|m| !m.is_empty()),
         effort: opts.effort.clone(),
+        fast: false,
         cwd: cwd.clone(),
         approvals: HashMap::new(),
         diffs: HashMap::new(),
@@ -137,7 +140,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         "sandbox": sandbox(opts.mode),
     });
     if let Some(m) = &b.model {
-        thread_params["model"] = json!(m);
+        let (model, fast) = split_fast(m);
+        thread_params["model"] = json!(model);
+        if fast {
+            thread_params["serviceTier"] = json!(FAST_TIER);
+            b.fast = true;
+        }
     }
     if let Some(system) = &opts.system {
         thread_params["developerInstructions"] = json!(system);
@@ -183,7 +191,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                             let id = result["thread"]["id"].as_str().unwrap_or("").to_string();
                             b.emit(Ev::Session(id.clone()));
                             if let Some(m) = result["model"].as_str() {
-                                b.emit(Ev::Model(m.to_string()));
+                                let fast = result["serviceTier"].as_str() == Some(FAST_TIER);
+                                b.emit(Ev::Model(if fast { format!("{m}{FAST_SUFFIX}") } else { m.to_string() }));
                             }
                             b.thread = Some(id);
                             for msg in std::mem::take(&mut b.queued) {
@@ -293,7 +302,14 @@ impl Bridge {
             "sandboxPolicy": sandbox_policy(self.mode, &self.cwd),
         });
         if let Some(m) = &self.model {
-            params["model"] = json!(m);
+            let (model, fast) = split_fast(m);
+            params["model"] = json!(model);
+            if fast {
+                params["serviceTier"] = json!(FAST_TIER);
+            } else if self.fast {
+                params["serviceTier"] = json!("default");
+            }
+            self.fast = fast;
         }
         if let Some(e) = &self.effort {
             params["effort"] = json!(e);
@@ -830,7 +846,20 @@ fn revert_change(cwd: &std::path::Path, c: &Value) -> Result<(), String> {
     }
 }
 
-/// Models from `model/list`, through a short-lived app server.
+/// A `-fast` model (e.g. `gpt-6.1-sol-fast`) is the model on Codex's fast service tier, which
+/// Codex itself sets apart from the model id.
+const FAST_SUFFIX: &str = "-fast";
+const FAST_TIER: &str = "priority";
+
+fn split_fast(model: &str) -> (&str, bool) {
+    match model.strip_suffix(FAST_SUFFIX) {
+        Some(base) if !base.is_empty() => (base, true),
+        _ => (model, false),
+    }
+}
+
+/// Models from `model/list`, through a short-lived app server, each followed by its fast
+/// variant when Codex offers the fast tier for it.
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("codex").is_none() {
         return Vec::new();
@@ -856,17 +885,27 @@ pub fn models() -> Vec<ModelInfo> {
                     .into_iter()
                     .flatten()
                     .filter(|m| m["hidden"].as_bool() != Some(true))
-                    .map(|m| ModelInfo {
-                        spec: format!("codex/{}", s(m, "model")),
-                        label: m["displayName"].as_str().unwrap_or(m["model"].as_str().unwrap_or("")).to_string(),
-                        detail: format!("Codex · {}", s(m, "description")),
-                    })
+                    .flat_map(model_infos)
                     .collect();
             }
             _ => {}
         }
     }
     Vec::new()
+}
+
+fn model_infos(m: &Value) -> Vec<ModelInfo> {
+    let label = m["displayName"].as_str().unwrap_or(m["model"].as_str().unwrap_or("")).to_string();
+    let mut out = vec![ModelInfo { spec: format!("codex/{}", s(m, "model")), label: label.clone(), detail: format!("Codex · {}", s(m, "description")) }];
+    let fast = m["serviceTiers"].as_array().into_iter().flatten().find(|t| t["id"].as_str() == Some(FAST_TIER));
+    if let Some(t) = fast {
+        out.push(ModelInfo {
+            spec: format!("codex/{}{FAST_SUFFIX}", s(m, "model")),
+            label: format!("{label} ({})", t["name"].as_str().unwrap_or("Fast")),
+            detail: format!("Codex · {}", s(t, "description")),
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -906,6 +945,18 @@ mod tests {
         assert_eq!(strip_shell("ls"), "ls");
     }
 
+    #[test]
+    fn fast_models_use_the_fast_tier() {
+        assert_eq!(split_fast("gpt-6.1-sol-fast"), ("gpt-6.1-sol", true));
+        assert_eq!(split_fast("gpt-6.1-sol"), ("gpt-6.1-sol", false));
+        assert_eq!(split_fast("-fast"), ("-fast", false));
+        let infos = model_infos(&json!({ "model": "gpt-6.1-sol", "displayName": "GPT-6.1 Sol", "description": "d",
+            "serviceTiers": [{ "id": "priority", "name": "Fast", "description": "2x speed" }] }));
+        assert_eq!(infos.iter().map(|i| i.spec.as_str()).collect::<Vec<_>>(), ["codex/gpt-6.1-sol", "codex/gpt-6.1-sol-fast"]);
+        assert_eq!(infos[1].label, "GPT-6.1 Sol (Fast)");
+        assert_eq!(model_infos(&json!({ "model": "m", "serviceTiers": [] })).len(), 1);
+    }
+
     fn bridge() -> (Bridge, Receiver<Ev>) {
         let (events, rx) = channel();
         let (me, _) = channel();
@@ -921,6 +972,7 @@ mod tests {
             mode: Mode::Ask,
             model: None,
             effort: None,
+            fast: false,
             cwd: String::new(),
             approvals: HashMap::new(),
             diffs: HashMap::new(),
