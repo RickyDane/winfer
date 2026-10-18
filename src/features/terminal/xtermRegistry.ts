@@ -53,6 +53,7 @@ interface Entry {
   lastOutput: number;
   decoder: TextDecoder;
   observer?: ResizeObserver;
+  webgl?: WebglAddon;
   frame?: number;
   resizeTimer?: number;
 }
@@ -314,6 +315,34 @@ function detectDevServer(entry: Entry, data: ArrayBuffer) {
   if (pane && pane.devUrl !== url) useWorkspaces.getState().updatePane(pane.id, { devUrl: url });
 }
 
+/**
+ * Live WebGL addons. Terminals with the same font share one glyph atlas, but an addon's
+ * clearTextureAtlas() only redraws its own terminal: the others keep pointing at atlas slots
+ * that now hold different glyphs and show garbage until something forces a full redraw (a
+ * resize). So the atlas is always cleared through every addon at once.
+ */
+const webglAddons = new Set<WebglAddon>();
+/** Atlas page canvases (each addon reports the shared ones, so a set dedupes them). */
+const atlasPages = new Set<HTMLCanvasElement>();
+let atlasClearQueued = false;
+
+function onAtlasPageAdded(canvas: HTMLCanvasElement) {
+  atlasPages.add(canvas);
+  if (atlasPages.size <= MAX_ATLAS_PAGES || atlasClearQueued) return;
+  atlasClearQueued = true;
+  setTimeout(clearAllTextureAtlases, 0);
+}
+
+function onAtlasPageRemoved(canvas: HTMLCanvasElement) {
+  atlasPages.delete(canvas);
+}
+
+function clearAllTextureAtlases() {
+  atlasClearQueued = false;
+  atlasPages.clear();
+  for (const webgl of webglAddons) webgl.clearTextureAtlas();
+}
+
 function scheduleFit(entry: Entry) {
   cancelAnimationFrame(entry.frame ?? 0);
   entry.frame = requestAnimationFrame(() => {
@@ -356,18 +385,18 @@ export function attachTerminal(pane: Pane, slot: HTMLElement) {
     entry.opened = true;
     try {
       const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
+      webgl.onContextLoss(() => {
+        webglAddons.delete(webgl);
+        webgl.dispose();
+      });
       // The glyph atlas grows a page whenever a program paints glyphs in colors it hasn't
       // cached yet; TUIs that animate in truecolor can add pages endlessly, and past a few,
       // xterm's WebGL renderer starts drawing garbled glyphs (and slows down). Start the atlas
-      // over before that. It's shared by panes with the same font, so this helps all of them.
-      let pages = 0;
-      webgl.onAddTextureAtlasCanvas(() => {
-        if (++pages <= MAX_ATLAS_PAGES) return;
-        pages = 0;
-        setTimeout(() => webgl.clearTextureAtlas(), 0);
-      });
-      webgl.onRemoveTextureAtlasCanvas(() => (pages = Math.max(0, pages - 1)));
+      // over before that. Every addon forwards the shared atlas's events, so count them once.
+      webgl.onAddTextureAtlasCanvas(onAtlasPageAdded);
+      webgl.onRemoveTextureAtlasCanvas(onAtlasPageRemoved);
+      webglAddons.add(webgl);
+      entry.webgl = webgl;
       entry.term.loadAddon(webgl);
     } catch {
       // Falls back to the DOM renderer.
@@ -460,6 +489,7 @@ export function closeTerminal(paneId: string): Promise<void> {
   setStarting(paneId, null);
   if (!entry) return killed;
   entry.observer?.disconnect();
+  if (entry.webgl) webglAddons.delete(entry.webgl);
   entry.term.dispose();
   entry.host.remove();
   entries.delete(paneId);
