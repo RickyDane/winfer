@@ -61,8 +61,10 @@ an agent that still has room — same worktree, with the task and its progress.
 
 ## See your codebase the way the agents do
 
-The **Knowledge** plugin turns each project into a graphify knowledge graph you explore as a live
-3D galaxy, a flat galaxy or a plain 2D map. Ask it questions, trace paths and impact, replay call
+The **Knowledge** plugin turns each project into a knowledge graph you explore as a live
+3D galaxy, a flat galaxy or a plain 2D map. Pick the engine per project:
+[graphify](https://pypi.org/project/graphifyy/) (code, docs and concepts) or
+[codegraph](https://github.com/colbymchenry/codegraph) (code only, exact calls and imports, fast to keep fresh). Ask it questions, trace paths and impact, replay call
 flows step by step — and watch which parts of the code each agent is looking at right now. Agents
 query the same graph with tools.
 

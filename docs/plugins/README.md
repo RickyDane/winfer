@@ -25,7 +25,7 @@ against its SHA-256); `node scripts/plugin-catalog.mjs` rebuilds it. Newer versi
 
 [`plugins/example-hello`](../../plugins/example-hello) uses every manifest feature;
 [`plugins/secrets`](../../plugins/secrets) is a full plugin with a page and agent tools.
-[`plugins/knowledge-base`](../../plugins/knowledge-base) runs a CLI (graphify) through `vault.exec`,
+[`plugins/knowledge-base`](../../plugins/knowledge-base) runs a CLI (graphify or codegraph, behind one backend interface) through `vault.exec`,
 reads files bigger than its 20,000-character output limit in chunks, and draws a WebGL page.
 [`plugins/cross-project`](../../plugins/cross-project) links several projects (say a mobile app, a web
 API and the NuGet package with their models) and shows the contracts, endpoints and packages they

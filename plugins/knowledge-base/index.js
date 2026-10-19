@@ -1,11 +1,13 @@
-// Knowledge Base: a graphify (https://pypi.org/project/graphifyy/) knowledge graph of each
-// workspace's project. The page shows it as a live 3D galaxy, a flat glowing galaxy or a plain 2D map (WebGL2, a force
+// Knowledge Base: a knowledge graph of each workspace's project, built by graphify
+// (https://pypi.org/project/graphifyy/) or codegraph (https://github.com/colbymchenry/codegraph),
+// chosen per project (the "engine"). The page shows it as a live 3D galaxy, a flat glowing galaxy or a plain 2D map (WebGL2, a force
 // layout in a worker) where you search, trace paths, replay call flows, see what a change would affect and watch
 // agents work; agents query the same graph through agent tools (kb_query, kb_explain, kb_path,
 // kb_affected, …).
 //
-// graphify runs through `api.vault.exec` (a shell in the project folder, with no secrets). The
-// graph lives in `<project>/graphify-out/`.
+// Both run through `api.vault.exec` (a shell in the project folder, with no secrets) behind one
+// backend interface (createGraphifyBackend, createCodegraphBackend). graphify's graph lives in
+// `<project>/graphify-out/`, codegraph's index in `<project>/.codegraph/`.
 
 const STORAGE = "winfer.plugin.knowledge-base";
 const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
@@ -22,9 +24,9 @@ const DEFINE_RELATIONS = new Set(["contains", "method"]);
 /** Flow replay: seconds per step at 1×, and the speeds offered. */
 const FLOW_STEP_SECONDS = 2;
 const FLOW_SPEEDS = [0.5, 1, 2];
-const IMPACT_RELATIONS = new Set(["calls", "references", "imports", "imports_from", "re_exports", "inherits", "extends", "implements", "uses", "mixes_in", "embeds"]);
+const IMPACT_RELATIONS = new Set(["calls", "references", "imports", "imports_from", "re_exports", "inherits", "extends", "implements", "uses", "mixes_in", "embeds", "instantiates"]);
 /** Relations that get particles flowing from source to target. */
-const FLOW_RELATIONS = new Set(["calls", "imports", "imports_from", "references", "uses", "inherits", "extends", "implements", "re_exports"]);
+const FLOW_RELATIONS = new Set(["calls", "imports", "imports_from", "references", "uses", "inherits", "extends", "implements", "re_exports", "instantiates"]);
 const CONFIDENCE = ["EXTRACTED", "INFERRED", "AMBIGUOUS"];
 const TYPE_LABELS = { code: "Code", document: "Docs", concept: "Concepts", rationale: "Rationale", paper: "Papers", image: "Images", video: "Media" };
 const IS_WIN = /Win/i.test(navigator.platform ?? "") || /Windows/i.test(navigator.userAgent);
@@ -129,7 +131,7 @@ function q(value) {
  * (a quoted path came out as `"\"C:\...\uv.exe""`). An encoded command has no quotes at all.
  */
 function powershell(script) {
-  const text = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'\n${script}`;
+  const text = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'; $env:CODEGRAPH_TELEMETRY = '0'; $env:CODEGRAPH_NO_UPDATE_CHECK = '1'\n${script}`;
   let bytes = "";
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
@@ -220,7 +222,7 @@ const providerColor = (provider) =>
  * graph.json (networkx node-link data from graphify) in a compact form: parallel arrays for
  * nodes, typed arrays for edges, and adjacency in CSR form for fast neighbor lookups.
  */
-function compactGraph(raw, names = new Map()) {
+export function compactGraph(raw, names = new Map()) {
   const rawNodes = Array.isArray(raw?.nodes) ? raw.nodes : [];
   const rawLinks = Array.isArray(raw?.links) ? raw.links : Array.isArray(raw?.edges) ? raw.edges : [];
   const n = rawNodes.length;
@@ -479,18 +481,42 @@ function findNode(g, label, file) {
  * Nodes named in graphify's CLI output (query, explain, path, affected), in order of appearance,
  * so the galaxy can light up what an agent was just told.
  */
-function nodesInOutput(g, text) {
+export function nodesInOutput(g, text) {
   const found = [];
   const seen = new Set();
   const add = (label, file) => {
-    const i = findNode(g, label.trim(), file?.trim());
+    label = label.trim();
+    let i = findNode(g, label, file?.trim());
+    // codegraph names functions without the "()" its graph labels carry.
+    if (i < 0 && !label.endsWith(")")) i = findNode(g, `${label}()`, file?.trim());
     if (i >= 0 && !seen.has(i)) {
       seen.add(i);
       found.push(i);
     }
   };
+  let file = "";
   for (const line of String(text).split("\n")) {
     let match;
+    // codegraph: "`name` (src/a.ts:12)", "name (src/a.ts:12)", "**name** (function)" + "**Location:** src/a.ts:12",
+    // and impact's file headers followed by "  function    name:12" rows.
+    if (/^\S+\.[A-Za-z0-9]{1,5}$/.test(line.trim()) && !line.startsWith(" ")) {
+      file = line.trim();
+      continue;
+    }
+    if ((match = /^\s{2,}[a-z_]+\s+([^\s:]+):\d+$/.exec(line))) {
+      add(match[1], file || undefined);
+      continue;
+    }
+    if ((match = /^\*\*(.+?)\*\* \(\w+\)$/.exec(line))) {
+      add(match[1]);
+      continue;
+    }
+    let cg = false;
+    for (const m of line.matchAll(/`?([A-Za-z_$][\w$.]*)`? \(([\w./@-]+\.[A-Za-z0-9]{1,5}):\d+\)/g)) {
+      add(m[1], m[2]);
+      cg = true;
+    }
+    if (cg) continue;
     if ((match = /^NODE (.+?) \[src=(\S*)/.exec(line))) add(match[1], match[2]);
     else if ((match = /^Node: (.+)$/.exec(line))) add(match[1]);
     else if ((match = /^\s*(?:<--|-->) (.+?) \[[^\]]+\] \[[A-Z]+\]/.exec(line))) add(match[1]);
@@ -503,7 +529,7 @@ function nodesInOutput(g, text) {
 }
 
 /** GRAPH_REPORT.md: summary lines, community names, god nodes, surprises and groups. */
-function parseReport(md) {
+export function parseReport(md) {
   const report = { title: "", date: "", summary: [], names: new Map(), cohesion: new Map(), god: [], surprising: [], groups: [], commit: null };
   if (!md) return report;
   const head = /^# Graph Report - (.+?)\s+\((.+?)\)/m.exec(md);
@@ -684,9 +710,10 @@ function deepMapPrompt(update, gf) {
  *
  * - `state`: install state, `{state: "unknown"|"checking"|"ok"|"missing"|"installing", path, version, step, installError}`
  * - `metaCommand`: one shell call printing @@NONE, or @@STAMP/@@HEAD/@@IGNORED/@@SNAPSHOTS parts
- * - `read(root)`: `{graph, report}`, node-link JSON text and markdown
+ * - `read(root)`: `{graph, report}`, node-link data (JSON text or parsed) and a GRAPH_REPORT.md-style report
  * - `build(root, {force})`: a quick build; `{output, needsForce}`, throws on failure
- * - `commands.*`: the shell command an agent tool runs, or null when the backend can't
+ * - `commands.*`: the shell command an agent tool runs, `{local: (root) => text}` for one answered
+ *   here from the loaded graph, or null/missing when the backend can't
  */
 function createGraphifyBackend({ api, exec, readText, changed }) {
   let state = { state: "unknown", path: "", version: "" };
@@ -774,6 +801,8 @@ function createGraphifyBackend({ api, exec, readText, changed }) {
     id: "graphify",
     label: "graphify",
     outDir: OUT,
+    about: "Code, docs, papers and images; an agent can add concepts and rationale",
+    quickHint: "graphify update · seconds, no AI",
     caps: { docs: true, communities: true, report: true, explain: true, path: true, save: true, snapshots: true, deepBuild: true, exports: true },
     get state() {
       return state;
@@ -826,7 +855,407 @@ function createGraphifyBackend({ api, exec, readText, changed }) {
   };
 }
 
-/** Graphs by project folder, settings, the backend's install state and what agents asked lately. */
+// codegraph (https://github.com/colbymchenry/codegraph): a code-only graph from tree-sitter in a
+// SQLite index, `<project>/.codegraph/codegraph.db`. The galaxy reads a dump of it; communities
+// are the project's folders and the report is written here from the graph.
+
+const CG_OUT = ".codegraph";
+const CG_DB = `${CG_OUT}/codegraph.db`;
+/** The page's copy of the graph, inside .codegraph/ (which keeps itself out of git). */
+const CG_DUMP = `${CG_OUT}/winfer-graph.json`;
+const CG_REPO = "https://raw.githubusercontent.com/colbymchenry/codegraph/main";
+const CG_INSTALL = IS_WIN ? `irm ${CG_REPO}/install.ps1 | iex` : `curl -fsSL ${CG_REPO}/install.sh | sh`;
+/** No anonymous usage telemetry or update checks for the runs winfer makes (set for Windows in `powershell`). */
+const CG_ENV = "CODEGRAPH_TELEMETRY=0 CODEGRAPH_NO_UPDATE_CHECK=1";
+/** Left out of the galaxy: import statements, fields and enum members would drown the rest. */
+const CG_SKIP = "('import', 'property', 'enum_member')";
+/** The graph as node-link data in one query (codegraph's schema, extraction version 27). */
+const CG_SQL = [
+  "SELECT json_object('directed', json('true'),",
+  "'built_at_commit', (SELECT value FROM project_metadata WHERE key = 'indexed_at_commit'),",
+  `'nodes', (SELECT json_group_array(json_object('id', id, 'kind', kind, 'name', name, 'source_file', file_path, 'source_location', 'L' || start_line)) FROM nodes WHERE kind NOT IN ${CG_SKIP}),`,
+  "'links', (SELECT json_group_array(json_object('source', e.source, 'target', e.target, 'relation', e.kind, 'c', CASE WHEN json_valid(e.metadata) THEN json_extract(e.metadata, '$.confidence') END, 'line', e.line))",
+  `FROM edges e JOIN nodes s ON s.id = e.source JOIN nodes t ON t.id = e.target WHERE s.kind NOT IN ${CG_SKIP} AND t.kind NOT IN ${CG_SKIP}))`,
+].join(" ");
+/** The same query with Node's built-in SQLite, where there's no sqlite3 (Windows): `node -e` it with the db and output paths. */
+const CG_DUMP_JS = `const{DatabaseSync}=require('node:sqlite');const[d,o]=process.argv.slice(1);const r=new DatabaseSync(d,{readOnly:true}).prepare(${JSON.stringify(CG_SQL)}).get();require('fs').writeFileSync(o,String(Object.values(r)[0]));`;
+const CG_DETECT_UNIX = [
+  "b=$(command -v codegraph 2>/dev/null); onpath=1",
+  'if [ -z "$b" ]; then onpath=0; for p in "$HOME/.local/bin/codegraph" "$HOME/.codegraph/current/bin/codegraph" /opt/homebrew/bin/codegraph /usr/local/bin/codegraph; do if [ -x "$p" ]; then b="$p"; break; fi; done; fi',
+  'if [ -z "$b" ] && command -v npm >/dev/null 2>&1; then p="$(npm prefix -g 2>/dev/null)/bin/codegraph"; if [ -x "$p" ]; then b="$p"; fi; fi',
+  'if [ -z "$b" ]; then echo @@MISSING; exit 0; fi',
+  'echo "@@BIN $b"',
+  'echo "@@ONPATH $onpath"',
+  `echo "@@VERSION $(${CG_ENV} "$b" --version 2>&1 | head -n 1)"`,
+  'echo "@@REAL $(readlink -f "$b" 2>/dev/null)"',
+].join("; ");
+const CG_DETECT_WIN = [
+  "$c = Get-Command codegraph -ErrorAction SilentlyContinue",
+  "$b = if ($c) { $c.Source } else { $null }",
+  'if (-not $b) { foreach ($p in @("$env:LOCALAPPDATA\\codegraph\\current\\bin\\codegraph.cmd", "$env:APPDATA\\npm\\codegraph.cmd")) { if (Test-Path $p) { $b = $p; break } } }',
+  "if (-not $b) { '@@MISSING'; exit 0 }",
+  "'@@BIN ' + $b",
+  "'@@ONPATH ' + [int][bool]$c",
+  "'@@VERSION ' + [string](& $b --version 2>&1 | Select-Object -First 1)",
+  "'@@REAL ' + $b",
+].join("\n");
+const CG_META_UNIX = [
+  `if [ ! -f ${CG_DB} ]; then echo @@NONE; exit 0; fi`,
+  `echo "@@STAMP $(date -r ${CG_DB} +%s 2>/dev/null)"`,
+  'echo "@@HEAD $(git rev-parse HEAD 2>/dev/null)"',
+  `echo "@@IGNORED $(git check-ignore -q ${CG_DB} 2>/dev/null; echo $?)"`,
+].join("; ");
+const CG_META_WIN = [
+  `if (-not (Test-Path '${CG_DB}')) { '@@NONE'; exit 0 }`,
+  `'@@STAMP ' + [DateTimeOffset]::new((Get-Item '${CG_DB}').LastWriteTimeUtc).ToUnixTimeSeconds()`,
+  "'@@HEAD ' + (git rev-parse HEAD 2>$null)",
+  `git check-ignore -q ${CG_DB} 2>$null; '@@IGNORED ' + $LASTEXITCODE`,
+].join("\n");
+/** codegraph checkpoints its write-ahead log when a run ends, so the database's own time is enough. */
+const CG_STAMP = IS_WIN
+  ? `if (Test-Path '${CG_DB}') { [DateTimeOffset]::new((Get-Item '${CG_DB}').LastWriteTimeUtc).ToUnixTimeSeconds() }`
+  : `date -r ${CG_DB} +%s 2>/dev/null`;
+const cgIfGraph = (command) =>
+  IS_WIN ? `if (Test-Path '${CG_DB}') { ${command} } else { '@@NOGRAPH' }` : `if [ -f ${CG_DB} ]; then ${command}; else echo @@NOGRAPH; fi`;
+
+/** A graph label as codegraph names the symbol: "showToast()" → "showToast". */
+const symbolOf = (label) => String(label).trim().replace(/\(\)$/, "");
+/** A label that names a file rather than a symbol ("src/app.ts", "utils.js"). */
+const looksLikeFile = (label) => !/\(\)$/.test(label) && (/[\\/]/.test(label) || /\.[A-Za-z0-9]{1,5}$/.test(label));
+/** codegraph's link confidence (0–1) as graphify's labels. */
+const confidenceOf = (c) => (c === null || c === undefined || Number(c) >= 0.8 ? "EXTRACTED" : Number(c) >= 0.5 ? "INFERRED" : "AMBIGUOUS");
+
+/**
+ * codegraph's dump as the node-link data the galaxy reads, plus a GRAPH_REPORT.md-style report:
+ * communities are folders (as deep as it takes to get a handful), core abstractions the most
+ * linked symbols, and surprising connections rare links between folders.
+ */
+export function codegraphGraph(dump, { title = "Project", version = "" } = {}) {
+  const rawNodes = Array.isArray(dump?.nodes) ? dump.nodes : [];
+  const rawLinks = Array.isArray(dump?.links) ? dump.links : [];
+  const dirs = rawNodes.map((node) => String(node.source_file ?? "").split("/").slice(0, -1));
+  const keysAt = (depth) => dirs.map((parts) => (parts.length ? parts.slice(0, depth).join("/") : "(top level)"));
+  let depth = 1;
+  let keys = keysAt(1);
+  while (depth < 4 && new Set(keys).size < 6) keys = keysAt(++depth);
+  const depths = new Int32Array(keys.length).fill(depth);
+  const countKeys = () => {
+    const sizes = new Map();
+    for (const key of keys) sizes.set(key, (sizes.get(key) ?? 0) + 1);
+    return sizes;
+  };
+  // A folder holding most of the project (a whole crate, say) splits into its subfolders.
+  const big = Math.max(200, rawNodes.length * 0.2);
+  for (let round = 0; round < 3; round++) {
+    const sizes = countKeys();
+    let split = false;
+    keys = keys.map((key, i) => {
+      if (sizes.get(key) <= big || dirs[i].length <= depths[i]) return key;
+      split = true;
+      depths[i]++;
+      return dirs[i].slice(0, depths[i]).join("/");
+    });
+    if (!split) break;
+  }
+  const sizes = countKeys();
+  const ranked = [...sizes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const MAX_COMMUNITIES = 30;
+  const commOf = new Map(ranked.map(([key], i) => [key, Math.min(i, MAX_COMMUNITIES - 1)]));
+  const names = ranked.slice(0, MAX_COMMUNITIES).map(([key], i) => (i === MAX_COMMUNITIES - 1 && ranked.length > MAX_COMMUNITIES ? "Other folders" : key));
+
+  const index = new Map();
+  const nodes = rawNodes.map((node, i) => {
+    const kind = String(node.kind ?? "");
+    const name = String(node.name ?? node.id);
+    index.set(String(node.id), i);
+    return {
+      id: String(node.id),
+      label: kind === "function" || kind === "method" ? `${name}()` : name,
+      kind,
+      file_type: "code",
+      source_file: String(node.source_file ?? ""),
+      source_location: String(node.source_location ?? ""),
+      community: commOf.get(keys[i]) ?? -1,
+    };
+  });
+  const links = [];
+  const degree = new Int32Array(nodes.length);
+  for (const link of rawLinks) {
+    const a = index.get(String(link.source));
+    const b = index.get(String(link.target));
+    if (a === undefined || b === undefined || a === b) continue;
+    degree[a]++;
+    degree[b]++;
+    links.push({ source: nodes[a].id, target: nodes[b].id, relation: String(link.relation ?? "related"), confidence: confidenceOf(link.c), source_location: link.line ? `L${link.line}` : "", _a: a, _b: b });
+  }
+
+  // Report.
+  const commCount = names.length;
+  const internal = new Float64Array(commCount);
+  const touching = new Float64Array(commCount);
+  const pairs = new Map();
+  for (const link of links) {
+    const ca = nodes[link._a].community;
+    const cb = nodes[link._b].community;
+    if (ca < 0 || cb < 0) continue;
+    if (ca === cb) {
+      internal[ca]++;
+      touching[ca]++;
+      continue;
+    }
+    touching[ca]++;
+    touching[cb]++;
+    if (link.relation === "contains") continue;
+    const key = ca < cb ? `${ca}:${cb}` : `${cb}:${ca}`;
+    const pair = pairs.get(key);
+    if (pair) pair.count++;
+    else pairs.set(key, { count: 1, link, weight: (sizes.get(ranked[ca]?.[0]) ?? 0) * (sizes.get(ranked[cb]?.[0]) ?? 0) });
+  }
+  const god = [...nodes.keys()]
+    .filter((i) => nodes[i].kind !== "file")
+    .sort((a, b) => degree[b] - degree[a])
+    .slice(0, 10);
+  const surprising = [...pairs.values()]
+    .filter((p) => p.count <= 2)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 8);
+  const kinds = new Map();
+  for (const node of nodes) kinds.set(node.kind, (kinds.get(node.kind) ?? 0) + 1);
+  const members = names.map(() => []);
+  nodes.forEach((node, i) => node.community >= 0 && members[node.community].push(i));
+  const date = new Date().toISOString().slice(0, 10);
+  const md = [
+    `# Graph Report - ${title}  (${date})`,
+    "",
+    "## Summary",
+    `- ${plural(nodes.length, "node")} · ${plural(links.length, "edge")} · ${commCount.toLocaleString()} ${commCount === 1 ? "community" : "communities"} (by folder)`,
+    `- Extraction: codegraph${version ? ` ${version}` : ""}, tree-sitter, code only, no AI`,
+    `- Kinds: ${[...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => `${n.toLocaleString()} ${k}`).join(", ")}`,
+    "",
+    ...(dump?.built_at_commit ? ["## Graph Freshness", `- Built from commit: \`${dump.built_at_commit}\``, ""] : []),
+    "## God Nodes (most connected - your core abstractions)",
+    ...god.map((i, n) => `${n + 1}. \`${nodes[i].label}\` - ${degree[i]} edges`),
+    "",
+    "## Surprising Connections (rare links between folders)",
+    ...surprising.flatMap(({ link }) => [
+      `- \`${nodes[link._a].label}\` --${link.relation}--> \`${nodes[link._b].label}\`  [${link.confidence}]`,
+      `  ${nodes[link._a].source_file} → ${nodes[link._b].source_file}`,
+    ]),
+    "",
+    "## Communities",
+    "",
+    ...names.flatMap((name, c) => [
+      `### Community ${c} - "${name}"`,
+      `Cohesion: ${(touching[c] ? internal[c] / touching[c] : 0).toFixed(2)}`,
+      `Nodes (${members[c].length}): ${members[c]
+        .sort((a, b) => degree[b] - degree[a])
+        .slice(0, 10)
+        .map((i) => nodes[i].label)
+        .join(", ")}`,
+      "",
+    ]),
+  ].join("\n");
+  for (const link of links) {
+    delete link._a;
+    delete link._b;
+  }
+  return { graph: { directed: true, built_at_commit: dump?.built_at_commit ?? null, nodes, links }, report: md };
+}
+
+/** A node of the loaded graph by what an agent calls it: its label, symbol name or file path. */
+export function nodeByName(g, name) {
+  const s = String(name).trim();
+  for (const label of [s, `${symbolOf(s)}()`, symbolOf(s)]) {
+    const i = findNode(g, label);
+    if (i >= 0) return i;
+  }
+  const file = s.replace(/^\.\//, "");
+  if (g.byFile.has(file)) return g.byFile.get(file);
+  for (const [path, i] of g.byFile) if (path.endsWith(`/${file}`)) return i;
+  const lower = symbolOf(s).toLowerCase();
+  for (let i = 0; i < g.n; i++) if (symbolOf(g.labels[i]).toLowerCase() === lower) return i;
+  return -1;
+}
+
+/** kb_path for codegraph: the shortest route between two nodes, hop by hop. */
+export function pathText(g, from, to) {
+  const a = nodeByName(g, from);
+  const b = nodeByName(g, to);
+  if (a < 0 || b < 0) return `No node named ${a < 0 ? `"${from}"` : `"${to}"`} in the graph. Use kb_query to find the exact name.`;
+  const route = shortestPath(g, a, b);
+  if (!route.length) return `${g.labels[a]} and ${g.labels[b]} aren't connected in the graph.`;
+  const where = (i) => `${g.files[i]}${g.locs[i] ? `:${g.locs[i]}` : ""}`;
+  const lines = [`Shortest path, ${plural(route.length - 1, "hop")}:`, `- ${g.labels[route[0]]} [${g.types[route[0]]}] ${where(route[0])}`];
+  for (let k = 1; k < route.length; k++) {
+    const e = edgeBetween(g, route[k - 1], route[k]);
+    const rel = e < 0 ? "related" : g.relations[g.rel[e]];
+    const conf = e < 0 ? "EXTRACTED" : CONFIDENCE[g.conf[e]];
+    lines.push(e >= 0 && g.src[e] === route[k] ? `  <--${rel} [${conf}]--` : `  --${rel} [${conf}]-->`);
+    lines.push(`- ${g.labels[route[k]]} [${g.types[route[k]]}] ${where(route[k])}`);
+  }
+  return lines.join("\n");
+}
+
+/** codegraph behind the backend interface (see createGraphifyBackend). */
+function createCodegraphBackend({ api, exec, readText, changed, graphOf, absolute: absoluteRoot }) {
+  let state = { state: "unknown", path: "", version: "" };
+  const bin = () => (state.bin ? (IS_WIN ? `& ${q(state.bin)}` : `env ${CG_ENV} ${q(state.bin)}`) : IS_WIN ? "codegraph" : `env ${CG_ENV} codegraph`);
+  /** The Node runtime codegraph ships with (next to its bin/ folder), for reading the index without sqlite3. */
+  const bundledNode = () => {
+    const real = state.real || state.bin || "";
+    const dir = real.replace(/[\\/][^\\/]+[\\/][^\\/]+$/, "");
+    return dir && dir !== real ? `${dir}${IS_WIN ? "\\node.exe" : "/node"}` : "";
+  };
+
+  async function detect() {
+    state = { ...state, state: "checking" };
+    changed();
+    try {
+      const r = await exec("", IS_WIN ? CG_DETECT_WIN : CG_DETECT_UNIX, 30);
+      const parts = splitMarked(r.output);
+      const found = (parts.BIN ?? "").trim();
+      state = found
+        ? { state: "ok", path: found, bin: found, real: (parts.REAL ?? "").trim(), onPath: parts.ONPATH?.trim() === "1", version: /(\d+\.\d+\.\d+)/.exec(parts.VERSION ?? "")?.[1] ?? "" }
+        : { state: "missing", path: "", version: "", installError: state.installError };
+    } catch (err) {
+      state = { state: "missing", path: "", version: "", error: String(err?.message ?? err) };
+    }
+    changed();
+    return state.state === "ok";
+  }
+
+  /** Installs codegraph with its official installer (a self-contained bundle, no Node needed), or upgrades it. */
+  async function install({ update = false } = {}) {
+    const step = (text) => {
+      state = { ...state, state: update ? state.state : "installing", step: text, installError: "" };
+      changed();
+    };
+    try {
+      step(update ? "Updating codegraph…" : "Installing codegraph…");
+      const r = await exec("", run(update ? `${bin()} upgrade` : CG_INSTALL), 900);
+      if (r.code !== 0) throw new Error(lastLines(r.output, 8) || `${update ? "Updating" : "Installing"} codegraph failed.`);
+      const was = state.version;
+      state = { ...state, step: "" };
+      if (!(await detect())) throw new Error("codegraph was installed but winfer can't find it. Restart winfer and try again.");
+      api.toast(update ? (was === state.version ? `codegraph ${state.version} is up to date` : `codegraph updated to ${state.version}`) : `codegraph ${state.version} installed`, "success");
+      return true;
+    } catch (err) {
+      const message = String(err?.message ?? err);
+      state = { ...state, state: update ? state.state : "missing", step: "", installError: message };
+      if (update) api.toast(`Updating codegraph failed: ${message}`, "error");
+      changed();
+      return false;
+    }
+  }
+
+  const noGraph = (root) =>
+    `This project has no codegraph index yet (no ${CG_DB} in ${root}). Ask the user to build it from winfer's Knowledge page, or run \`codegraph init -y\` in the project folder.`;
+
+  /** Writes the graph to CG_DUMP: with sqlite3 where there is one, else with Node's SQLite. */
+  function dumpCommand() {
+    const js = `eval(Buffer.from('${btoa(CG_DUMP_JS)}','base64').toString())`;
+    if (IS_WIN) {
+      return [
+        "$n = $null",
+        `foreach ($p in @(${q(bundledNode())}, (Get-Command node -ErrorAction SilentlyContinue).Source)) { if ($p -and (Test-Path $p)) { $n = $p; break } }`,
+        "if (-not $n) { 'Reading the codegraph index needs Node.js 22.5 or later'; exit 1 }",
+        `& $n -e ${q(js)} ${q(CG_DB)} ${q(CG_DUMP)}`,
+        "exit $LASTEXITCODE",
+      ].join("\n");
+    }
+    return [
+      `if command -v sqlite3 >/dev/null 2>&1; then sqlite3 -readonly ${CG_DB} ${q(CG_SQL)} > ${CG_DUMP}; exit $?; fi`,
+      'n=""',
+      `for p in ${q(bundledNode())} "$(command -v node 2>/dev/null)"; do if [ -n "$p" ] && [ -x "$p" ]; then n="$p"; break; fi; done`,
+      'if [ -z "$n" ]; then echo "Reading the codegraph index needs sqlite3 or Node.js 22.5 or later"; exit 1; fi',
+      `"$n" -e ${q(js)} ${CG_DB} ${CG_DUMP}`,
+    ].join("; ");
+  }
+
+  return {
+    id: "codegraph",
+    label: "codegraph",
+    outDir: CG_OUT,
+    about: "Code only, exact calls and imports from tree-sitter; fast to keep fresh",
+    quickHint: "codegraph sync · seconds, no AI",
+    caps: { docs: false, communities: false, report: true, explain: true, path: true, save: false, snapshots: false, deepBuild: false, exports: false },
+    get state() {
+      return state;
+    },
+    get bin() {
+      return bin();
+    },
+    detect,
+    install,
+    metaCommand: IS_WIN ? CG_META_WIN : CG_META_UNIX,
+    stampCommand: CG_STAMP,
+    ifGraph: cgIfGraph,
+    noGraph,
+    async read(root) {
+      const r = await exec(root, dumpCommand(), 300);
+      if (r.timedOut) throw new Error("Reading the codegraph index took too long");
+      if (r.code !== 0) throw new Error(lastLines(r.output, 4) || `Reading the codegraph index failed (exit code ${r.code})`);
+      let dump;
+      try {
+        dump = JSON.parse(await readText(root, CG_DUMP));
+      } catch {
+        throw new Error(`${CG_DUMP} isn't valid JSON (was the index being written?)`);
+      }
+      const name = baseName(await absoluteRoot(root));
+      return codegraphGraph(dump, { title: name || "Project", version: state.version });
+    },
+    readSnapshot: async () => "{}",
+    /** `codegraph sync` (or `init` the first time; `index`, a full rebuild, when forced). */
+    async build(root, { force = false } = {}) {
+      const verb = force ? "index" : "sync";
+      const command = IS_WIN
+        ? `if (Test-Path '${CG_DB}') { ${bin()} ${verb} . } else { ${bin()} init -y . }; exit $LASTEXITCODE`
+        : `if [ -f ${CG_DB} ]; then ${bin()} ${verb} .; else ${bin()} init -y .; fi`;
+      const r = await exec(root, command, 1800);
+      if (r.timedOut) throw Object.assign(new Error("codegraph took too long and was stopped."), { output: r.output });
+      if (r.code !== 0) throw Object.assign(new Error(lastLines(r.output) || `codegraph exited with code ${r.code}.`), { output: r.output });
+      return { output: r.output, needsForce: false };
+    },
+    deepPrompt: () => "",
+    commands: {
+      query: (question, { budget = 1500 } = {}) => `${bin()} explore ${q(question)} --max-files ${clamp(Math.round(budget / 500), 1, 8)}`,
+      explain: (node) => (looksLikeFile(node) ? `${bin()} node -f ${q(node.replace(/^\.\//, ""))} --symbols-only` : `${bin()} node ${q(symbolOf(node))}`),
+      path: (from, to) => ({ local: async (root) => pathText((await graphOf(root)).graph, from, to) }),
+      affected: (node, depth) => `${bin()} impact ${q(symbolOf(node))} --depth ${depth}`,
+    },
+    async report(root) {
+      return (await graphOf(root)).reportText;
+    },
+    /** Index size, languages and whether files changed since it was last synced. */
+    async status(root) {
+      const r = await exec(root, cgIfGraph(`${bin()} status --json`), 60);
+      if (r.output.includes("@@NOGRAPH")) return noGraph(root);
+      let s;
+      try {
+        s = JSON.parse(r.output.slice(r.output.indexOf("{")));
+      } catch {
+        return truncate(`codegraph status:\n\n${r.output.trim()}`, TOOL_OUTPUT_MAX);
+      }
+      const pending = s.pendingChanges ?? {};
+      const changes = (pending.added ?? 0) + (pending.modified ?? 0) + (pending.removed ?? 0);
+      return [
+        `Knowledge graph in ${root}/${CG_OUT} (codegraph ${s.version ?? state.version}, code only):`,
+        "",
+        `- ${plural(s.fileCount ?? 0, "file")} · ${plural(s.nodeCount ?? 0, "symbol")} · ${plural(s.edgeCount ?? 0, "edge")}`,
+        s.languages?.length ? `- Languages: ${s.languages.join(", ")}` : "",
+        s.lastIndexed ? `- Last indexed: ${s.lastIndexed}` : "",
+        changes
+          ? `- ${plural(changes, "file")} changed since (${pending.added ?? 0} added, ${pending.modified ?? 0} modified, ${pending.removed ?? 0} removed); results may miss them. winfer re-syncs after agents finish if the user turned that on.`
+          : "- Up to date with the files on disk.",
+        s.index?.reindexRecommended ? "- codegraph recommends a full re-index (Force update on the Knowledge page)." : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    },
+  };
+}
+
+/** Graphs by project folder, settings, the backends' install state and what agents asked lately. */
 function createStore(api) {
   let saved = {};
   try {
@@ -834,7 +1263,8 @@ function createStore(api) {
   } catch {
     saved = {};
   }
-  const settings = { autoUpdate: true, motion: !REDUCED_MOTION, labels: true, flow: true, views: {}, ...saved.settings };
+  // backends: the graph tool chosen per project folder ("graphify" | "codegraph"); unset is auto.
+  const settings = { autoUpdate: true, motion: !REDUCED_MOTION, labels: true, flow: true, views: {}, backends: {}, ...saved.settings };
   const kbs = new Map();
   const listeners = new Set();
   const activityListeners = new Set();
@@ -865,28 +1295,81 @@ function createStore(api) {
     const s = api.state();
     return s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.rootDir ?? s.workspaces[0]?.rootDir ?? ".";
   };
-  const backend = createGraphifyBackend({ api, exec, readText, changed });
+  const ctx = { api, exec, readText, changed, absolute, graphOf: (root) => loaded(root) };
+  const backends = { graphify: createGraphifyBackend(ctx), codegraph: createCodegraphBackend(ctx) };
 
   function kb(root) {
     let k = kbs.get(root);
     if (!k) {
-      k = { root, status: "idle", graph: null, report: null, stamp: "", loadedAt: 0, head: null, ignored: null, snapshots: [], building: null, log: "", error: "", needsForce: false, positions: null, version: 0, loading: null, snapshotIds: new Map() };
+      k = { root, status: "idle", graph: null, report: null, reportText: "", stamp: "", loadedAt: 0, head: null, ignored: null, snapshots: [], building: null, log: "", error: "", needsForce: false, positions: null, version: 0, loading: null, snapshotIds: new Map(), backendId: null, gen: 0 };
       kbs.set(root, k);
     }
     return k;
   }
 
+  /** The backend a project uses: the user's choice, else what was found in its folder, else graphify. */
+  function backendOf(root) {
+    const id = (root && settings.backends?.[root]) || (root && kbs.get(root)?.backendId) || "graphify";
+    return backends[id] ?? backends.graphify;
+  }
+
+  /** Like backendOf, but looks in the project folder for an existing graph the first time. */
+  async function resolve(root) {
+    const k = kb(root);
+    if (!settings.backends?.[root] && !k.backendId) {
+      const probe = IS_WIN
+        ? `if (Test-Path '${OUT}/graph.json') { '@@GRAPHIFY' }; if (Test-Path '${CG_DB}') { '@@CODEGRAPH' }`
+        : `[ -f ${OUT}/graph.json ] && echo @@GRAPHIFY; [ -f ${CG_DB} ] && echo @@CODEGRAPH; true`;
+      try {
+        const out = (await exec(root, probe, 30)).output;
+        k.backendId = !out.includes("@@GRAPHIFY") && out.includes("@@CODEGRAPH") ? "codegraph" : "graphify";
+      } catch {
+        k.backendId = "graphify";
+      }
+    }
+    const backend = backendOf(root);
+    if (backend.state.state === "unknown") void backend.detect();
+    return backend;
+  }
+
+  /** Switches a project to another backend and reads its graph (if it has one). */
+  function setBackend(root, id) {
+    if (!backends[id]) return;
+    const k = kb(root);
+    if (k.building) {
+      api.toast("Wait for the current build to finish first");
+      return;
+    }
+    settings.backends = { ...settings.backends, [root]: id };
+    save();
+    if (backendOf(root).state.state === "unknown") void backendOf(root).detect();
+    Object.assign(k, { backendId: id, gen: k.gen + 1, loading: null, status: "idle", graph: null, report: null, reportText: "", stamp: "", head: null, ignored: null, snapshots: [], snapshotIds: new Map(), positions: null, layout: null, error: "", needsForce: false, log: "" });
+    k.version++;
+    changed();
+    void load(root);
+  }
+
+  /** A project's graph, loaded and current, for agent tools answered here; throws without one. */
+  async function loaded(root) {
+    const k = kb(root);
+    if (k.graph) await reloadIfChanged(root);
+    else await load(root);
+    if (!k.graph) throw new Error(backendOf(root).noGraph(root));
+    return k;
+  }
+
   function apply(k, parts) {
     const report = parseReport(parts.REPORT ?? "");
-    let raw;
+    let raw = parts.GRAPH;
     try {
-      raw = JSON.parse(parts.GRAPH ?? "");
+      if (typeof raw !== "object" || raw === null) raw = JSON.parse(raw ?? "");
     } catch {
-      throw new Error(`The graph in ${backend.outDir}/ isn't valid JSON (is a build still writing it?)`);
+      throw new Error(`The graph in ${backendOf(k.root).outDir}/ isn't valid JSON (is a build still writing it?)`);
     }
     k.previousIds = k.graph ? new Set(k.graph.ids) : null;
     k.graph = compactGraph(raw, report.names);
     k.report = report;
+    k.reportText = parts.REPORT ?? "";
     k.stamp = (parts.STAMP ?? "").trim();
     k.loadedAt = Date.now();
     k.builtAt = Number(k.stamp) > 1e9 && Number(k.stamp) < 1e11 ? Number(k.stamp) * 1000 : k.loadedAt;
@@ -957,29 +1440,37 @@ function createStore(api) {
   function load(root) {
     const k = kb(root);
     if (k.loading) return k.loading;
-    k.loading = (async () => {
+    const gen = k.gen;
+    const loading = (async () => {
       if (!k.graph) k.status = "loading";
       changed();
       try {
+        const backend = await resolve(root);
         const r = await exec(root, backend.metaCommand, 60);
         if (r.timedOut) throw new Error("Reading the graph took too long");
         const parts = splitMarked(r.output);
         if ("NONE" in parts) {
+          if (gen !== k.gen) return;
           k.status = "none";
           k.graph = null;
           k.report = null;
+          k.reportText = "";
         } else {
           const { report, graph } = await backend.read(root);
+          // Switched to another backend meanwhile: this graph is stale.
+          if (gen !== k.gen) return;
           apply(k, { ...parts, REPORT: report, GRAPH: graph });
         }
       } catch (err) {
+        if (gen !== k.gen) return;
         k.status = k.graph ? "ready" : "error";
         k.error = String(err?.message ?? err);
       } finally {
-        k.loading = null;
+        if (k.loading === loading) k.loading = null;
         changed();
       }
     })();
+    k.loading = loading;
     return k.loading;
   }
 
@@ -987,7 +1478,7 @@ function createStore(api) {
   async function reloadIfChanged(root) {
     const k = kb(root);
     try {
-      const r = await exec(root, backend.stampCommand, 30);
+      const r = await exec(root, (await resolve(root)).stampCommand, 30);
       const stamp = r.output.trim();
       if (!stamp || stamp === k.stamp) return false;
     } catch {
@@ -1003,7 +1494,7 @@ function createStore(api) {
     if (k.snapshotIds.has(name)) return k.snapshotIds.get(name);
     let ids = new Set();
     try {
-      ids = new Set((JSON.parse(await backend.readSnapshot(root, name)).nodes ?? []).map((node) => String(node.id)));
+      ids = new Set((JSON.parse(await backendOf(root).readSnapshot(root, name)).nodes ?? []).map((node) => String(node.id)));
     } catch {
       // A snapshot without a readable graph shows as empty.
     }
@@ -1023,8 +1514,16 @@ function createStore(api) {
       if (!quiet) api.toast("The knowledge graph is already being built");
       return;
     }
+    const backend = await resolve(root);
+    if (backend.state.state !== "ok" && !(await backend.detect())) {
+      if (!quiet) api.toast(`${backend.label} isn't installed; install it from the Knowledge page`, "error");
+      return;
+    }
     if (mode === "agent") {
-      if (!backend.caps.deepBuild) return;
+      if (!backend.caps.deepBuild) {
+        if (!quiet) api.toast(`A deep build needs graphify; this project uses ${backend.label}`);
+        return;
+      }
       if (workspaceId && api.state().activeWorkspaceId !== workspaceId) api.execute({ type: "workspace.switch", target: { id: workspaceId } });
       api.execute({ type: "pane.spawn", provider: "default", worktree: false, prompt: backend.deepPrompt(!!k.graph) });
       api.execute({ type: "ui.view", view: "workspace" });
@@ -1099,11 +1598,15 @@ function createStore(api) {
   return {
     settings,
     activity,
-    backend,
-    install: (opts) => backend.install(opts),
+    backends,
+    backendOf,
+    resolve,
+    setBackend,
+    loaded,
+    install: (opts, id = "graphify") => backends[id].install(opts),
     kb,
     exec,
-    detect: () => backend.detect(),
+    detect: (id = "graphify") => backends[id].detect(),
     load,
     reloadIfChanged,
     snapshotIds,
@@ -3152,8 +3655,9 @@ function mountPage(el, store, api) {
     ui.answer = { question, busy: true, text: "", nodes: [] };
     renderAnswer();
     try {
-      const r = await store.exec(k.root, run(store.backend.commands.query(question, { budget: 2000 })), 90);
-      if (r.code !== 0) throw new Error(lastLines(r.output) || "graphify query failed");
+      const b = store.backendOf(k.root);
+      const r = await store.exec(k.root, run(b.commands.query(question, { budget: 2000 })), 90);
+      if (r.code !== 0) throw new Error(lastLines(r.output) || `${b.label} query failed`);
       const nodes = nodesInOutput(k.graph, r.output);
       ui.answer = { question, busy: false, text: r.output.trim(), nodes };
       ui.selected = -1;
@@ -3408,7 +3912,7 @@ function mountPage(el, store, api) {
         ),
       g && h("div", { class: "kb-tabs kb-glass" }, tab("galaxy", "Galaxy", "orbit"), tab("insights", "Insights", "grid")),
       k &&
-        store.backend.state.state !== "missing" &&
+        store.backendOf(k.root).state.state !== "missing" &&
         h(
           "div",
           { class: "kb-split" },
@@ -3417,7 +3921,7 @@ function mountPage(el, store, api) {
             {
               class: "kb-btn kb-primary",
               disabled: !!building,
-              title: "Re-read the code (graphify update, no AI)",
+              title: `Re-read the code (${store.backendOf(k.root).quickHint})`,
               onclick: () => void store.build(k.root, "quick"),
             },
             icon("refresh"),
@@ -3984,7 +4488,7 @@ function mountPage(el, store, api) {
               },
               `Show all ${a.nodes.length}`,
             ),
-          a.text && h("details", { class: "kb-raw" }, h("summary", {}, "graphify output"), h("pre", {}, a.text)),
+          a.text && h("details", { class: "kb-raw" }, h("summary", {}, `${store.backendOf(current()?.root).label} output`), h("pre", {}, a.text)),
           !a.group &&
             h(
               "div",
@@ -3993,7 +4497,7 @@ function mountPage(el, store, api) {
                 "button",
                 {
                   class: "kb-btn kb-primary",
-                  onclick: () => spawnAgent(`${a.question}\n\nStart with the kb_query tool from winfer's knowledge base (this project's graphify graph), then read the code it points to.`),
+                  onclick: () => spawnAgent(`${a.question}\n\nStart with the kb_query tool from winfer's knowledge base (this project's code graph), then read the code it points to.`),
                 },
                 icon("bot"),
                 "Ask an agent",
@@ -4110,7 +4614,7 @@ function mountPage(el, store, api) {
         h("span", { class: "kb-sep" }),
         h(
           "div",
-          { class: "kb-timeline", title: `${plural(k.snapshots.length, "snapshot")} in ${OUT}/` },
+          { class: "kb-timeline", title: `${plural(k.snapshots.length, "snapshot")} in ${store.backendOf(k.root).outDir}/` },
           h("button", { class: `kb-tool${ui.timeline.playing ? " kb-on" : ""}`, title: ui.timeline.playing ? "Stop" : "Replay how the graph grew", onclick: () => void replay() }, icon(ui.timeline.playing ? "pause" : "clock")),
           timelineSlider,
           timelineLabel,
@@ -4146,7 +4650,7 @@ function mountPage(el, store, api) {
 
   function renderOverlay() {
     const k = current();
-    const gf = store.backend.state;
+    const gf = store.backendOf(k?.root).state;
     let content = null;
     let insights = false;
     if (k?.graph) {
@@ -4154,7 +4658,7 @@ function mountPage(el, store, api) {
         content = insightsView(k);
         insights = true;
       }
-    } else if (gf.state === "missing" || gf.state === "installing") content = installCard();
+    } else if (gf.state === "missing" || gf.state === "installing") content = installCard(k);
     else if (!k || k.status === "idle" || k.status === "loading" || gf.state === "unknown" || gf.state === "checking") content = loadingCard();
     else if (k.building) content = buildingCard(k);
     else if (k.status === "error") content = errorCard(k);
@@ -4171,8 +4675,43 @@ function mountPage(el, store, api) {
     return hero("Reading the knowledge graph…", null);
   }
 
-  /** Installs uv (if needed) and graphify after asking, showing what will run. */
-  async function installGraphify() {
+  /** A switch between the graph tools for the project, with what each one is good at. */
+  function engineSwitch(k, { label = true } = {}) {
+    if (!k) return null;
+    const current = store.backendOf(k.root);
+    return h(
+      "div",
+      { class: "kb-engine" },
+      label && h("span", { class: "kb-subtle" }, "Engine"),
+      h(
+        "div",
+        { class: "kb-tabs kb-glass" },
+        Object.values(store.backends).map((b) =>
+          h(
+            "button",
+            {
+              class: `kb-tab${b === current ? " kb-on" : ""}`,
+              title: b.about,
+              disabled: !!k.building,
+              onclick: () => b !== current && store.setBackend(k.root, b.id),
+            },
+            b.label,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /** Installs a backend after asking, showing what will run: graphify with uv (installing uv if needed), codegraph with its own installer. */
+  async function installBackend(b) {
+    if (b.id === "codegraph") {
+      const ok = await api.confirm(
+        `winfer will run:\n\n${CG_INSTALL}\n\ncodegraph's official installer downloads a self-contained bundle (it brings its own Node.js runtime) from GitHub Releases to ${IS_WIN ? "%LOCALAPPDATA%\\codegraph" : "~/.codegraph, linked into ~/.local/bin"}. It doesn't change your agents' settings.`,
+        { title: "Install codegraph", okLabel: "Install", kind: "info" },
+      );
+      if (ok) await store.install({}, "codegraph");
+      return;
+    }
     const hasUv = (await store.exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30).catch(() => ({ output: "" }))).output.trim() !== "";
     const steps = [
       ...(hasUv ? [] : [IS_WIN ? `irm ${UV_INSTALLER_WIN} | iex` : `curl -LsSf ${UV_INSTALLER} | sh`]),
@@ -4182,31 +4721,36 @@ function mountPage(el, store, api) {
       `winfer will run:\n\n${steps.join("\n")}\n\n${hasUv ? "" : "uv is a Python package manager from Astral; its installer adds ~/.local/bin to your PATH. "}graphify (from PyPI) then goes to ~/.local/bin. uv downloads Python itself if needed.`,
       { title: "Install graphify", okLabel: "Install", kind: "info" },
     );
-    if (ok) await store.install();
+    if (ok) await store.install({}, "graphify");
   }
 
-  function installCard() {
-    const gf = store.backend.state;
+  function installCard(k) {
+    const b = store.backendOf(k?.root);
+    const gf = b.state;
     if (gf.state === "installing") {
-      return hero("Installing graphify", gf.step || "Working…", h("div", { class: "kb-progress" }, h("span", {})), h("p", { class: "kb-subtle" }, "This takes up to a minute the first time."));
+      return hero(`Installing ${b.label}`, gf.step || "Working…", h("div", { class: "kb-progress" }, h("span", {})), h("p", { class: "kb-subtle" }, "This takes up to a minute the first time."));
     }
-    const manual = IS_WIN ? [`powershell -c "irm ${UV_INSTALLER_WIN} | iex"`, INSTALL] : [`curl -LsSf ${UV_INSTALLER} | sh`, INSTALL];
+    const cg = b.id === "codegraph";
+    const manual = cg ? [CG_INSTALL] : IS_WIN ? [`powershell -c "irm ${UV_INSTALLER_WIN} | iex"`, INSTALL] : [`curl -LsSf ${UV_INSTALLER} | sh`, INSTALL];
     return hero(
-      "Install graphify",
-      "The knowledge base is built by graphify, a free open-source tool that turns code, docs, papers and images into a knowledge graph. winfer can install it for you with uv.",
+      `Install ${b.label}`,
+      cg
+        ? "codegraph is a free open-source tool that indexes the code with tree-sitter into a local database: exact calls, imports and what a change affects, kept fresh in seconds. No AI, no API keys."
+        : "The knowledge base is built by graphify, a free open-source tool that turns code, docs, papers and images into a knowledge graph. winfer can install it for you with uv.",
+      engineSwitch(k),
       gf.installError && h("div", { class: "kb-alert kb-glass kb-install-error" }, icon("alert"), h("span", { class: "kb-grow" }, gf.installError)),
       h(
         "div",
         { class: "kb-actions kb-center" },
-        h("button", { class: "kb-btn kb-primary kb-big", onclick: () => void installGraphify() }, icon("wand"), gf.installError ? "Try again" : "Install graphify"),
-        h("button", { class: "kb-btn", onclick: () => void store.detect() }, icon("refresh"), "Check again"),
+        h("button", { class: "kb-btn kb-primary kb-big", onclick: () => void installBackend(b) }, icon("wand"), gf.installError ? "Try again" : `Install ${b.label}`),
+        h("button", { class: "kb-btn", onclick: () => void store.detect(b.id) }, icon("refresh"), "Check again"),
       ),
       h(
         "details",
         { class: "kb-manual" },
         h("summary", {}, "Install it yourself"),
         manual.map((cmd) => h("div", { class: "kb-code-row kb-glass" }, h("code", {}, cmd), h("button", { class: "kb-btn", onclick: () => copy(cmd, "Command copied") }, icon("copy"), "Copy"))),
-        h("p", { class: "kb-subtle" }, "or ", h("code", {}, "pipx install graphifyy"), " · needs Python 3.10+"),
+        cg ? h("p", { class: "kb-subtle" }, "or ", h("code", {}, "npm i -g @colbymchenry/codegraph")) : h("p", { class: "kb-subtle" }, "or ", h("code", {}, "pipx install graphifyy"), " · needs Python 3.10+"),
       ),
     );
   }
@@ -4225,7 +4769,7 @@ function mountPage(el, store, api) {
       agent ? "An agent is mapping this project" : "Mapping the project…",
       agent
         ? "It reads the code, docs and notes and works out concepts and why things are the way they are. This page fills in when the agent finishes."
-        : "graphify parses the code. This usually takes seconds.",
+        : `${store.backendOf(k.root).label} parses the code. This usually takes seconds.`,
       h("div", { class: "kb-progress" }, h("span", {})),
       agent && h("div", { class: "kb-actions kb-center" }, h("button", { class: "kb-btn", onclick: () => store.cancelBuild(k.root) }, "Stop waiting")),
     );
@@ -4235,13 +4779,18 @@ function mountPage(el, store, api) {
     const ws = workspace();
     const option = (ic, title, text, tags, button) =>
       h("div", { class: "kb-option kb-glass" }, h("div", { class: "kb-option-icon" }, icon(ic)), h("div", { class: "kb-option-title" }, title), h("div", { class: "kb-option-text" }, text), h("div", { class: "kb-tags" }, tags.map((t) => h("span", { class: "kb-tag" }, t))), button);
+    const b = store.backendOf(k.root);
     return hero(
       `Map ${ws?.name ?? "this project"}`,
       "Build a knowledge graph of the project once. Agents can then ask it where things live and what a change would break, and you can explore it here in 3D.",
+      engineSwitch(k),
       h(
         "div",
         { class: "kb-options" },
-        option("terminal", "Quick map", "Functions, classes, files, calls and imports, read straight from the code.", ["Seconds", "No AI", "Free"], h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "quick") }, icon("zap"), "Map code")),
+        b.caps.deepBuild
+          ? option("terminal", "Quick map", "Functions, classes, files, calls and imports, read straight from the code.", ["Seconds", "No AI", "Free"], h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "quick") }, icon("zap"), "Map code"))
+          : option("terminal", "Index the code", "Every function, class and file with exact calls, imports and references, from tree-sitter. Folders become the galaxy's communities.", ["Seconds", "No AI", "Free"], h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "quick") }, icon("zap"), "Index code")),
+        b.caps.deepBuild &&
         option(
           "bot",
           "Deep map with an agent",
@@ -4250,7 +4799,7 @@ function mountPage(el, store, api) {
           h("button", { class: "kb-btn kb-primary", onclick: () => void store.build(k.root, "agent", { workspaceId: ws?.id }) }, icon("sparkles"), "Start agent"),
         ),
       ),
-      h("p", { class: "kb-subtle kb-center" }, "Everything stays in ", h("code", {}, `${OUT}/`), " in the project folder."),
+      h("p", { class: "kb-subtle kb-center" }, "Everything stays in ", h("code", {}, `${b.outDir}/`), " in the project folder."),
     );
   }
 
@@ -4399,14 +4948,14 @@ function mountPage(el, store, api) {
             { class: "kb-fresh" },
             h("div", {}, h("span", { class: "kb-subtle" }, "Graph built from"), h("code", {}, g.commit?.slice(0, 10) ?? "unknown")),
             h("div", {}, h("span", { class: "kb-subtle" }, "Project is at"), h("code", {}, k.head?.slice(0, 10) ?? "not a git repo")),
-            h("div", {}, h("span", { class: "kb-subtle" }, "Snapshots"), h("b", {}, k.snapshots.length)),
+            store.backendOf(k.root).caps.snapshots && h("div", {}, h("span", { class: "kb-subtle" }, "Snapshots"), h("b", {}, k.snapshots.length)),
           ),
           stale ? h("div", { class: "kb-alert kb-alert-info" }, icon("alert"), "The code moved on since the graph was built.") : h("div", { class: "kb-ok" }, icon("check"), "Up to date with the checked out commit."),
           h(
             "div",
             { class: "kb-actions" },
             h("button", { class: "kb-btn kb-primary", disabled: !!k.building, onclick: () => void store.build(k.root, "quick") }, icon("refresh"), "Update code graph"),
-            h("button", { class: "kb-btn", disabled: !!k.building, onclick: () => void store.build(k.root, "agent", { workspaceId: workspace()?.id }) }, icon("bot"), "Deep update"),
+            store.backendOf(k.root).caps.deepBuild && h("button", { class: "kb-btn", disabled: !!k.building, onclick: () => void store.build(k.root, "agent", { workspaceId: workspace()?.id }) }, icon("bot"), "Deep update"),
           ),
         ),
       ),
@@ -4463,18 +5012,31 @@ function mountPage(el, store, api) {
         icon(ic),
         h("span", { class: "kb-menu-text" }, h("b", {}, title), h("span", {}, text)),
       );
+    const b = store.backendOf(k.root);
+    if (ui.menu === "build" && b.id === "codegraph") {
+      fill(
+        menus,
+        h(
+          "div",
+          { class: "kb-menu kb-glass" },
+          item("refresh", "Sync the index", b.quickHint, () => void store.build(k.root, "quick"), !!k.building),
+          item("alert", "Rebuild the index", "codegraph index · re-reads every file", () => void store.build(k.root, "quick", { force: true }), !!k.building || !k.graph),
+        ),
+      );
+      return;
+    }
     if (ui.menu === "build") {
       const ws = workspace();
       fill(menus, 
         h(
           "div",
           { class: "kb-menu kb-glass" },
-          item("refresh", "Update code graph", "graphify update · seconds, no AI", () => void store.build(k.root, "quick"), !!k.building),
+          item("refresh", "Update code graph", b.quickHint, () => void store.build(k.root, "quick"), !!k.building),
           item("bot", "Deep build with an agent", "Your default agent adds docs, concepts and rationale", () => void store.build(k.root, "agent", { workspaceId: ws?.id }), !!k.building),
           item("alert", "Force update", "Keep the new graph even if it's smaller", () => void store.build(k.root, "quick", { force: true }), !!k.building || !k.graph),
           h("div", { class: "kb-menu-sep" }),
-          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", store.backend.commands.exportHtml()), !k.graph),
-          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", store.backend.commands.tree(), true), !k.graph),
+          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", b.commands.exportHtml()), !k.graph),
+          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", b.commands.tree(), true), !k.graph),
           item("file", "Open the report", "GRAPH_REPORT.md, in the browser panel", () => void openOutput(k, "GRAPH_REPORT.md"), !k.graph),
         ),
       );
@@ -4495,12 +5057,13 @@ function mountPage(el, store, api) {
           },
         }),
       );
-    const gf = store.backend.state;
+    const gf = b.state;
     fill(menus, 
       h(
         "div",
         { class: "kb-menu kb-menu-settings kb-glass" },
         h("div", { class: "kb-menu-title" }, "Knowledge base"),
+        h("div", { class: "kb-setting" }, h("span", { class: "kb-menu-text" }, h("b", {}, "Engine"), h("span", {}, b.about)), engineSwitch(k, { label: false })),
         setting("autoUpdate", "Update after agents finish", "Re-reads the code 20 s after an agent stops (no AI)"),
         setting("motion", "Motion", "Flowing links and a slow spin when idle", () => {
           store.set({ flow: store.settings.motion });
@@ -4518,26 +5081,26 @@ function mountPage(el, store, api) {
             {
               class: "kb-menu-item",
               onclick: async () => {
-                const r = await store.exec(k.root, IS_WIN ? `Add-Content -LiteralPath '.gitignore' -Value @('', '${OUT}/')` : `printf '\\n%s\\n' '${OUT}/' >> .gitignore`, 15);
+                const r = await store.exec(k.root, IS_WIN ? `Add-Content -LiteralPath '.gitignore' -Value @('', '${b.outDir}/')` : `printf '\\n%s\\n' '${b.outDir}/' >> .gitignore`, 15);
                 if (r.code === 0) {
                   k.ignored = true;
-                  api.toast(`Added ${OUT}/ to .gitignore`, "success");
+                  api.toast(`Added ${b.outDir}/ to .gitignore`, "success");
                 } else api.toast("Couldn't change .gitignore", "error");
                 renderMenus();
               },
             },
             icon("git"),
-            h("span", { class: "kb-menu-text" }, h("b", {}, `Add ${OUT}/ to .gitignore`), h("span", {}, "It's in the project folder but not ignored")),
+            h("span", { class: "kb-menu-text" }, h("b", {}, `Add ${b.outDir}/ to .gitignore`), h("span", {}, "It's in the project folder but not ignored")),
           ),
         h("div", { class: "kb-menu-sep" }),
         h(
           "div",
           { class: "kb-graphify-row" },
           h("span", { class: `kb-status-dot${gf.state === "ok" ? " kb-ok-dot" : gf.state === "missing" ? " kb-bad-dot" : ""}` }),
-          h("span", { class: "kb-grow kb-subtle", title: gf.path }, gf.step || (gf.state === "ok" ? `graphify ${gf.version} · ${gf.path}` : gf.state === "missing" ? "graphify isn't installed" : "Checking graphify…")),
-          gf.state === "ok" && h("button", { class: "kb-link", disabled: !!gf.step, onclick: () => void store.install({ update: true }) }, "Update"),
-          gf.state === "missing" && h("button", { class: "kb-link", onclick: () => void installGraphify() }, "Install"),
-          h("button", { class: "kb-link", onclick: () => void store.detect() }, "Check"),
+          h("span", { class: "kb-grow kb-subtle", title: gf.path }, gf.step || (gf.state === "ok" ? `${b.label} ${gf.version} · ${gf.path}` : gf.state === "missing" ? `${b.label} isn't installed` : `Checking ${b.label}…`)),
+          gf.state === "ok" && h("button", { class: "kb-link", disabled: !!gf.step, onclick: () => void store.install({ update: true }, b.id) }, "Update"),
+          gf.state === "missing" && h("button", { class: "kb-link", onclick: () => void installBackend(b) }, "Install"),
+          h("button", { class: "kb-link", onclick: () => void store.detect(b.id) }, "Check"),
         ),
       ),
     );
@@ -4717,7 +5280,7 @@ function mountPage(el, store, api) {
   });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
 
-  if (store.backend.state.state === "unknown") void store.detect();
+  if (store.backendOf(current()?.root).state.state === "unknown") void store.detect(store.backendOf(current()?.root).id);
   renderAll();
   shell.focus({ preventScroll: true });
   const k = current();
@@ -5022,6 +5585,9 @@ button.kb-chip.kb-warn { color: var(--color-warning); border-color: color-mix(in
   background: linear-gradient(120deg, var(--color-fg) 20%, #9aa5ff 50%, #ff9fc0 70%, var(--color-fg) 90%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: kb-shine 8s ease-in-out infinite; }
 @keyframes kb-shine { 50% { background-position: 100% 0; } }
 .kb-hero-text { margin: 0; max-width: 560px; font-size: 13.5px; line-height: 1.6; color: var(--color-fg-muted); }
+.kb-engine { display: flex; align-items: center; gap: 10px; justify-content: center; }
+.kb-engine .kb-tab:disabled { opacity: 0.5; cursor: default; }
+.kb-setting .kb-engine { flex-shrink: 0; }
 .kb-hero code, .kb-subtle code, .kb-fresh code { font-family: var(--font-mono); font-size: 11.5px; padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--color-fg) 8%, transparent); color: var(--color-fg); }
 .kb-big-orb { position: relative; width: 108px; height: 108px; }
 .kb-big-orb span { position: absolute; inset: 0; border-radius: 50%; }
@@ -5130,7 +5696,7 @@ button.kb-bar-row:hover { background: color-mix(in srgb, var(--color-fg) 6%, tra
 // Agent tools and activation ---------------------------------------------------------------------
 
 /** The parts of GRAPH_REPORT.md an agent asked for. */
-function reportSection(md, section) {
+export function reportSection(md, section) {
   const parts = md.split(/^(?=## )/m);
   const head = parts[0];
   const pick = (names) => parts.filter((p) => names.some((n) => p.toLowerCase().startsWith(`## ${n}`)));
@@ -5151,20 +5717,26 @@ export function activate(api) {
   const activeRoot = () => rootOf(api.state().activeWorkspaceId);
   /**
    * Runs one of the backend's commands for an agent in its workspace's project folder; returns
-   * what the agent sees. `command` picks it from `backend.commands` (null: the backend can't).
+   * what the agent sees. `pick(backend)` gives the command from `backend.commands`: a shell
+   * command, `{local}` answered here from the loaded graph, or nothing when the backend can't.
    */
-  async function runTool(caller, tool, command, { record = true, timeoutSec = 90, summary = "" } = {}) {
-    const backend = store.backend;
+  async function runTool(caller, tool, pick, { record = true, timeoutSec = 90, summary = "" } = {}) {
     const root = rootOf(caller.workspaceId) ?? caller.cwd;
+    const backend = await store.resolve(root);
     const name = backend.label;
+    const command = pick(backend);
     if (!command) throw new Error(`${tool} isn't available with ${name}, the tool behind this project's knowledge graph.`);
-    const r = await store.exec(root, backend.ifGraph(headOf(command)), timeoutSec);
-    const out = r.output.trim();
-    if (out.includes("@@NOGRAPH")) throw new Error(backend.noGraph(root));
-    if (r.timedOut) throw new Error(`${name} took too long and was stopped.`);
-    if (r.code !== 0) {
-      if (r.code === 127 || /command not found|not recognized/i.test(out)) throw new Error(`${name} isn't installed. Ask the user to install it from winfer's Knowledge page (one click).`);
-      throw new Error(out || `${name} failed (exit code ${r.code}).`);
+    let out;
+    if (typeof command === "object") out = String(await command.local(root)).trim();
+    else {
+      const r = await store.exec(root, backend.ifGraph(headOf(command)), timeoutSec);
+      out = r.output.trim();
+      if (out.includes("@@NOGRAPH")) throw new Error(backend.noGraph(root));
+      if (r.timedOut) throw new Error(`${name} took too long and was stopped.`);
+      if (r.code !== 0) {
+        if (r.code === 127 || /command not found|not recognized/i.test(out)) throw new Error(`${name} isn't installed. Ask the user to install it from winfer's Knowledge page (one click).`);
+        throw new Error(out || `${name} failed (exit code ${r.code}).`);
+      }
     }
     if (record) store.record({ root, workspaceId: caller.workspaceId, paneId: caller.paneId, provider: caller.provider, label: caller.label, tool, output: out, summary });
     return truncate(out, TOOL_OUTPUT_MAX);
@@ -5180,7 +5752,7 @@ export function activate(api) {
   api.registerAgentTool({
     name: "kb_query",
     description:
-      "Ask this project's knowledge graph (built by graphify from its code and docs) a question in plain words. Returns the most relevant nodes (functions, classes, files, docs, concepts) with file:line, their community and how they connect. Use it before searching or reading code to find where things live and how they relate.",
+      "Ask this project's knowledge graph (built by graphify from its code and docs, or by codegraph from its code) a question in plain words. Returns the most relevant nodes (functions, classes, files, and with graphify docs and concepts) with file:line, their community and how they connect. Use it before searching or reading code to find where things live and how they relate.",
     inputSchema: {
       type: "object",
       properties: {
@@ -5193,7 +5765,7 @@ export function activate(api) {
     run: (args, caller) => {
       const question = need(args.question, "question");
       const budget = clamp(Math.round(Number(args.budget) || 1500), 200, 6000);
-      return runTool(caller, "kb_query", store.backend.commands.query?.(question, { budget, depthFirst: !!args.depth_first }), { summary: question });
+      return runTool(caller, "kb_query", (b) => b.commands.query?.(question, { budget, depthFirst: !!args.depth_first }), { summary: question });
     },
   });
 
@@ -5204,7 +5776,7 @@ export function activate(api) {
     inputSchema: { type: "object", properties: { node: { type: "string", description: "The node's label as kb_query shows it" } }, required: ["node"] },
     run: (args, caller) => {
       const node = need(args.node, "node");
-      return runTool(caller, "kb_explain", store.backend.commands.explain?.(node), { summary: node });
+      return runTool(caller, "kb_explain", (b) => b.commands.explain?.(node), { summary: node });
     },
   });
 
@@ -5219,7 +5791,7 @@ export function activate(api) {
     run: (args, caller) => {
       const from = need(args.from, "from");
       const to = need(args.to, "to");
-      return runTool(caller, "kb_path", store.backend.commands.path?.(from, to), { summary: `${from} → ${to}` });
+      return runTool(caller, "kb_path", (b) => b.commands.path?.(from, to), { summary: `${from} → ${to}` });
     },
   });
 
@@ -5235,7 +5807,7 @@ export function activate(api) {
     run: (args, caller) => {
       const node = need(args.node, "node");
       const depth = clamp(Math.round(Number(args.depth) || 2), 1, 4);
-      return runTool(caller, "kb_affected", store.backend.commands.affected?.(node, depth), { summary: node });
+      return runTool(caller, "kb_affected", (b) => b.commands.affected?.(node, depth), { summary: node });
     },
   });
 
@@ -5251,9 +5823,9 @@ export function activate(api) {
       const root = rootOf(caller.workspaceId) ?? caller.cwd;
       let md;
       try {
-        md = await store.backend.report(root);
+        md = await (await store.resolve(root)).report(root);
       } catch {
-        throw new Error(store.backend.noGraph(root));
+        throw new Error(store.backendOf(root).noGraph(root));
       }
       return truncate(reportSection(md, text(args.section) || "overview"), TOOL_OUTPUT_MAX);
     },
@@ -5261,7 +5833,7 @@ export function activate(api) {
 
   api.registerAgentTool({
     name: "kb_save",
-    description: "Save a question you answered about this project (and the nodes it relied on) to the knowledge graph's memory, so later questions build on it.",
+    description: "Save a question you answered about this project (and the nodes it relied on) to the knowledge graph's memory, so later questions build on it (graphify graphs only).",
     inputSchema: {
       type: "object",
       properties: {
@@ -5273,7 +5845,7 @@ export function activate(api) {
     },
     run: async (args, caller) => {
       const nodes = Array.isArray(args.nodes) ? args.nodes.map(text).filter(Boolean).slice(0, 50) : [];
-      await runTool(caller, "kb_save", store.backend.commands.save?.(need(args.question, "question"), need(args.answer, "answer"), nodes), { record: false });
+      await runTool(caller, "kb_save", (b) => b.commands.save?.(need(args.question, "question"), need(args.answer, "answer"), nodes), { record: false });
       return "Saved to the knowledge graph's memory.";
     },
   });
@@ -5284,7 +5856,7 @@ export function activate(api) {
     inputSchema: { type: "object", properties: {} },
     run: async (_args, caller) => {
       const root = rootOf(caller.workspaceId) ?? caller.cwd;
-      return store.backend.status(root);
+      return (await store.resolve(root)).status(root);
     },
   });
 
@@ -5300,11 +5872,25 @@ export function activate(api) {
   api.registerTool({
     id: "update",
     title: "Knowledge: update the graph",
-    description: "Update the knowledge graph of this project from its code with graphify",
+    description: "Update the knowledge graph of this project from its code (graphify or codegraph)",
     palette: true,
     run: () => {
       const root = activeRoot();
       if (root) void store.build(root, "quick");
+    },
+  });
+  api.registerTool({
+    id: "engine",
+    title: "Knowledge: switch engine (graphify ↔ codegraph)",
+    description: "Build this project's knowledge graph with the other tool: graphify (code, docs, concepts) or codegraph (code only, exact and fast)",
+    palette: true,
+    run: () => {
+      const root = activeRoot();
+      if (!root) return;
+      const next = store.backendOf(root).id === "codegraph" ? "graphify" : "codegraph";
+      store.setBackend(root, next);
+      api.toast(`Knowledge base now uses ${next} for this project`);
+      api.openPage("galaxy");
     },
   });
   api.registerTool({
@@ -5326,7 +5912,7 @@ export function activate(api) {
     if (root) store.agentFinished(root);
   });
 
-  void store.detect();
+  void store.detect("graphify");
   // Background builds with an API key are gone; don't leave the key behind in the keychain.
   void api.vault
     .list()

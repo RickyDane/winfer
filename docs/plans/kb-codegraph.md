@@ -60,7 +60,31 @@ Tool descriptions come from the active backend's caps (codegraph never claims do
 hide UI the caps don't support (snapshot timeline, deep build, html exports, docs filter).
 Resolve the backend once per agent call.
 
-## Phases
+## Status
+
+Done in Knowledge Base 1.5.0 (all phases). What changed from the plan once codegraph 1.6.2 was
+checked against a real index:
+
+- **Install** with codegraph's official installer (`install.sh` / `install.ps1`, a self-contained
+  bundle with its own Node runtime) after a confirm; update with `codegraph upgrade`. npm installs
+  are found too. `codegraph install` (agent configs) is never run.
+- **Telemetry/update checks** off per run via `CODEGRAPH_TELEMETRY=0 CODEGRAPH_NO_UPDATE_CHECK=1`
+  (env, so the user's own `~/.codegraph/telemetry.json` is untouched).
+- **Galaxy dump**: one SQL query (`CG_SQL`) builds the node-link JSON; `sqlite3 -readonly` where it
+  exists, else the same query through Node's `node:sqlite` (codegraph's bundled node, else `node`).
+  Imports, properties and enum members are left out. Stamp = `codegraph.db` mtime (codegraph
+  checkpoints its WAL when a run ends).
+- **Communities**: folders, as deep as needed for 6+ groups; a folder over 20% of the nodes splits
+  into its subfolders; at most 30 (the rest is "Other folders").
+- **Agent tools**: `kb_query` → `explore`, `kb_explain` → `node` (file mode for paths), `kb_path` →
+  BFS on the loaded graph, `kb_affected` → `impact`, `kb_report` → synthesized report, `kb_status` →
+  `status --json` (pending changes = freshness), `kb_save` → unsupported.
+- **Engine choice**: `settings.backends[root]`; unset → `.codegraph/` alone means codegraph, else
+  graphify. Switch in Settings, on the install/map cards, and the palette ("Knowledge: switch engine").
+- Tests: `scripts/knowledge-base.test.mjs`; dev mock `?kb=codegraph`; TESTING.md checklist.
+
+## Phases (original plan)
+
 
 1. **Refactor, no behaviour change** — graphify code behind `createGraphifyBackend`; store, page
    and tools go through it. Dev mock (`src/dev/knowledgeBase.ts`) keeps working.

@@ -4,7 +4,9 @@
  * app, whose files match the showcase agents' transcripts. Open the dev server with `?kb` to
  * install the plugin, `?kb=empty` to start without a graph, `?kb=missing` without graphify
  * (and uv) to try the installer, or `?kb=big` for a graph with 60,000 more nodes to profile
- * (`&kbn=180000` for another count).
+ * (`&kbn=180000` for another count). `?kb=codegraph` starts with a codegraph index of the same app
+ * instead (and no graphify graph); in the other modes codegraph isn't installed, to try its
+ * installer from the engine switch.
  */
 
 type Node = { id: string; label: string; file_type: string; source_file: string; source_location: string; community: number };
@@ -57,11 +59,15 @@ interface Fake {
 }
 
 let fake: Fake | null = null;
-let exists = MODE !== "empty" && MODE !== "missing";
+let exists = MODE !== "empty" && MODE !== "missing" && MODE !== "codegraph";
 let installed = MODE !== "missing";
 let uvInstalled = MODE !== "missing";
 const BIN = "/Users/maya/.local/bin/graphify";
 let generation = 0;
+let cgExists = MODE === "codegraph";
+let cgInstalled = MODE === "codegraph";
+const CG_BIN = "/Users/maya/.local/bin/codegraph";
+const CG_DB = ".codegraph/codegraph.db";
 
 function generate(extra: number): Fake {
   const rand = rng(42);
@@ -290,6 +296,121 @@ function explain(f: Fake, label: string) {
   ].join("\n");
 }
 
+// codegraph -----------------------------------------------------------------------------------
+
+const symbolName = (label: string) => label.replace(/\(\)$/, "");
+const lineOf = (n: Node) => Number(/\d+/.exec(n.source_location)?.[0] ?? 1);
+
+/** The page's dump of the codegraph index: the fake graph's code, as codegraph's rows. */
+function codegraphDump(f: Fake) {
+  const code = f.nodes.filter((n) => n.file_type === "code");
+  const keep = new Set(code.map((n) => n.id));
+  const kind = (n: Node) => (n.label === n.source_file.split("/").pop() ? "file" : n.label.endsWith("()") ? "function" : /Service|Store|Client|Schema/.test(n.label) ? "class" : "component");
+  return JSON.stringify({
+    directed: true,
+    built_at_commit: f.commit,
+    nodes: code.map((n) => ({ id: n.id, kind: kind(n), name: symbolName(n.label), source_file: n.source_file, source_location: n.source_location })),
+    links: f.links.filter((l) => keep.has(l.source) && keep.has(l.target)).map((l) => ({ source: l.source, target: l.target, relation: l.relation === "uses" ? "references" : l.relation, c: l.confidence === "INFERRED" ? 0.7 : 0.9, line: null })),
+  });
+}
+
+function codegraphExplore(f: Fake, question: string) {
+  const words = question.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const d = degree(f);
+  const hits = f.nodes
+    .filter((n) => n.file_type === "code" && words.some((w) => `${n.label} ${n.source_file}`.toLowerCase().includes(w)))
+    .sort((a, b) => (d.get(b.id) ?? 0) - (d.get(a.id) ?? 0))
+    .slice(0, 12);
+  if (!hits.length) return `**Exploration: ${question}**\n\nNo matching symbols.`;
+  const files = new Set(hits.map((n) => n.source_file));
+  return [
+    `**Exploration: ${question}**`,
+    "",
+    `Found ${hits.length} symbols across ${files.size} files.`,
+    "",
+    "**Blast radius — what depends on these (update/verify before editing)**",
+    "",
+    ...hits.map((n) => `- \`${symbolName(n.label)}\` (${n.source_file}:${lineOf(n)}) — ${d.get(n.id) ?? 0} links`),
+  ].join("\n");
+}
+
+function codegraphNode(f: Fake, name: string) {
+  const n = f.nodes.find((x) => symbolName(x.label) === name || x.source_file === name);
+  if (!n) return `No symbol named "${name}".`;
+  const byId = new Map(f.nodes.map((x) => [x.id, x]));
+  const out = f.links.filter((l) => l.source === n.id && l.relation === "calls").map((l) => byId.get(l.target)!);
+  const into = f.links.filter((l) => l.target === n.id && l.relation === "calls").map((l) => byId.get(l.source)!);
+  const ref = (x: Node) => `${symbolName(x.label)} (${x.source_file}:${lineOf(x)})`;
+  return [`**${symbolName(n.label)}** (function)`, "", `**Location:** ${n.source_file}:${lineOf(n)}`, "", `**Calls →** ${out.map(ref).join(", ") || "nothing"}`, `**Called by ←** ${into.map(ref).join(", ") || "nothing"}`].join("\n");
+}
+
+function codegraphImpact(f: Fake, name: string, depth: number) {
+  const n = f.nodes.find((x) => symbolName(x.label) === name);
+  if (!n) return `No symbol named "${name}".`;
+  const byId = new Map(f.nodes.map((x) => [x.id, x]));
+  const seen = new Set([n.id]);
+  let frontier = [n.id];
+  for (let k = 0; k < depth; k++) {
+    const next: string[] = [];
+    for (const l of f.links) {
+      if (!frontier.includes(l.target) || seen.has(l.source) || l.relation === "contains") continue;
+      seen.add(l.source);
+      next.push(l.source);
+    }
+    frontier = next;
+  }
+  const byFile = new Map<string, Node[]>();
+  for (const id of seen) {
+    const x = byId.get(id)!;
+    byFile.set(x.source_file, [...(byFile.get(x.source_file) ?? []), x]);
+  }
+  return [`Impact of changing "${name}" — ${seen.size} affected symbols:`, "", ...[...byFile].flatMap(([file, list]) => [file, ...list.map((x) => `  function    ${symbolName(x.label)}:${lineOf(x)}`), ""])].join("\n");
+}
+
+function codegraphStatus(f: Fake) {
+  const code = f.nodes.filter((n) => n.file_type === "code");
+  return JSON.stringify({ initialized: true, version: "1.6.2", fileCount: new Set(code.map((n) => n.source_file)).size, nodeCount: code.length, edgeCount: f.links.length, languages: ["tsx", "typescript"], lastIndexed: new Date(f.stamp * 1000).toISOString(), pendingChanges: { added: 0, modified: generation % 2, removed: 0 }, index: { reindexRecommended: false } });
+}
+
+/** Answers the plugin's codegraph commands (run as `env … '<bin>' <verb> …`); null for other commands. */
+function codegraphExec(raw: string) {
+  if (raw.startsWith("b=$(command -v codegraph")) {
+    if (!cgInstalled) return ok("@@MISSING\n");
+    return ok(`@@BIN ${CG_BIN}\n@@ONPATH 1\n@@VERSION 1.6.2\n@@REAL /Users/maya/.codegraph/current/bin/codegraph\n`);
+  }
+  if (raw.startsWith("curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh")) {
+    cgInstalled = true;
+    return delay(2000, ok(`Installing CodeGraph v1.6.2 (darwin-arm64)\nLinked     ${CG_BIN}\n`));
+  }
+  if (raw.includes("@@GRAPHIFY")) return ok(`${exists ? "@@GRAPHIFY\n" : ""}${cgExists ? "@@CODEGRAPH\n" : ""}`);
+  if (!raw.includes(".codegraph/") && !raw.includes(CG_BIN)) return null;
+  if (raw.includes("@@NOGRAPH") && !cgExists) return ok("@@NOGRAPH\n");
+  if (raw.includes("@@NONE")) {
+    if (!cgExists) return delay(200, ok("@@NONE\n"));
+    const f = current();
+    return delay(150, ok(`@@STAMP ${f.stamp}\n@@HEAD ${f.commit}\n@@IGNORED 0\n`));
+  }
+  if (raw.startsWith(`date -r ${CG_DB}`)) return ok(cgExists ? `${current().stamp}\n` : "");
+  if (raw.startsWith("if command -v sqlite3")) return delay(150, ok(""));
+  const command = raw.replace(/env CODEGRAPH_TELEMETRY=0 CODEGRAPH_NO_UPDATE_CHECK=1 '[^']+'/g, "codegraph");
+  if (/codegraph (sync|init -y|index) \./.test(command)) {
+    const first = !cgExists;
+    cgExists = true;
+    generation += first ? 0 : 1;
+    fake = generate(Math.min(18, generation * 6));
+    fake.stamp += generation;
+    return delay(first ? 2200 : 900, ok(first ? `Indexed ${new Set(fake.nodes.map((n) => n.source_file)).size} files\n${fake.nodes.length} nodes, ${fake.links.length} edges\nDone\n` : "Synced 3 files\nDone\n"));
+  }
+  const f = current();
+  const args = unquote(command);
+  if (command.includes("codegraph explore")) return delay(400, ok(codegraphExplore(f, args[0] ?? "")));
+  if (command.includes("codegraph node")) return delay(150, ok(codegraphNode(f, args[0] ?? "")));
+  if (command.includes("codegraph impact")) return delay(200, ok(codegraphImpact(f, args[0] ?? "", Number(/--depth (\d+)/.exec(command)?.[1] ?? 2))));
+  if (command.includes("codegraph status --json")) return ok(codegraphStatus(f));
+  if (command.includes("codegraph upgrade")) return delay(800, ok("CodeGraph is up to date (1.6.2)\n"));
+  return ok("");
+}
+
 const delay = <T,>(ms: number, value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
 const ok = (output: string) => ({ code: 0, timedOut: false, output });
 
@@ -300,6 +421,7 @@ let tempCounter = 0;
 
 function fileText(rel: string): string | null {
   const f = current();
+  if (rel === ".codegraph/winfer-graph.json") return cgExists ? codegraphDump(f) : null;
   if (rel === "graphify-out/graph.json") return graphJson(f);
   if (rel === "graphify-out/GRAPH_REPORT.md") return report(f);
   const snapshot = /^graphify-out\/(\d{4}-\d{2}-\d{2}(?:_\d+)?)\/graph\.json$/.exec(rel);
@@ -319,14 +441,16 @@ async function gzipBase64(text: string) {
 
 /** Answers `plugins_read_file` for the knowledge-base plugin's graph files. */
 export function knowledgeBaseFile(path: string): ArrayBuffer {
-  const rel = /graphify-out\/.*$/.exec(path)?.[0];
-  const text = exists && rel ? fileText(rel) : null;
+  const rel = /(?:graphify-out|\.codegraph)\/.*$/.exec(path)?.[0];
+  const text = rel && (exists || rel.startsWith(".codegraph/")) ? fileText(rel) : null;
   if (text === null) throw new Error(`can't read ${path}: No such file or directory`);
   return new TextEncoder().encode(text).buffer as ArrayBuffer;
 }
 
 /** Answers one `vault_exec` call of the knowledge-base plugin. */
 export function knowledgeBaseExec(raw: string): Promise<{ code: number; timedOut: boolean; output: string }> | { code: number; timedOut: boolean; output: string } {
+  const cg = codegraphExec(raw);
+  if (cg) return cg;
   // The plugin runs graphify by its full path.
   const command = raw.replaceAll(`'${BIN}'`, "graphify");
   if (command.startsWith("b=$(command -v graphify")) {
