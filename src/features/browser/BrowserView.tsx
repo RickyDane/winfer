@@ -23,7 +23,22 @@ const KEY_CODES: Record<string, number> = {
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46,
 };
 
-const keyCode = (e: KeyboardEvent) => KEY_CODES[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase().charCodeAt(0) : 0);
+// Windows virtual-key codes of the punctuation keys, by physical key.
+const CODE_VK: Record<string, number> = {
+  Semicolon: 186, Equal: 187, Comma: 188, Minus: 189, Period: 190, Slash: 191, Backquote: 192,
+  BracketLeft: 219, Backslash: 220, BracketRight: 221, Quote: 222, IntlBackslash: 226,
+};
+
+/**
+ * The key's virtual-key code. Taken from the physical key, not the character: a character's code
+ * can be another key's ("." is 46 = Delete, "(" is 40 = ArrowDown), which Chrome then acts on.
+ */
+const keyCode = (e: KeyboardEvent) => {
+  if (KEY_CODES[e.key] !== undefined) return KEY_CODES[e.key];
+  if (/^Key[A-Z]$/.test(e.code)) return e.code.charCodeAt(3);
+  if (/^Digit\d$/.test(e.code)) return e.code.charCodeAt(5);
+  return CODE_VK[e.code] ?? e.keyCode ?? 0;
+};
 
 /** Smallest and largest page size the edges can be dragged to. */
 const MIN_SIZE = 200;
@@ -214,7 +229,9 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     };
     const onKey = (e: KeyboardEvent) => {
       const down = e.type === "keydown";
-      if (e.metaKey || (e.ctrlKey && !navigator.userAgent.includes("Mac"))) {
+      // AltGr arrives as Ctrl+Alt on Windows and types characters ("@" on many layouts).
+      const altGr = e.getModifierState("AltGraph");
+      if (e.metaKey || (e.ctrlKey && !altGr && !navigator.userAgent.includes("Mac"))) {
         const k = e.key.toLowerCase();
         if (down && k === "c") {
           e.preventDefault();
@@ -232,7 +249,9 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       const base = { key: e.key, code: e.code, windowsVirtualKeyCode: keyCode(e), modifiers: modifiers(e) };
       if (!down) send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
       else if (e.key === "Enter") send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "\r" });
-      else if (e.key.length === 1) send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: e.key });
+      // Option composes characters on macOS ("@" is ⌥L on many layouts); sent as Alt, Chrome would
+      // treat it as a shortcut and drop the text. Same for AltGr's Ctrl+Alt.
+      else if (e.key.length === 1) send("Input.dispatchKeyEvent", { type: "keyDown", ...base, modifiers: base.modifiers & (altGr ? ~3 : ~1), text: e.key });
       else send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
     };
     const onPaste = (e: ClipboardEvent) => {

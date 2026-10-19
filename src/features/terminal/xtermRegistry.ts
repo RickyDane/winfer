@@ -209,6 +209,20 @@ function create(pane: Pane): Entry {
     },
     { passive: false, capture: true },
   );
+  // xterm only brackets a paste when the program enabled bracketed paste mode (it can be lost,
+  // e.g. after a reload, or never set); otherwise every line would be submitted separately.
+  // Agent prompts always get multi-line pastes as one bracketed block.
+  host.addEventListener(
+    "paste",
+    (e) => {
+      const text = e.clipboardData?.getData("text/plain");
+      if (!text || !/[\r\n]/.test(text.trimEnd()) || term.modes.bracketedPasteMode || pane.provider === "shell") return;
+      e.preventDefault();
+      e.stopPropagation();
+      pasteText(pane.id, text.replace(/\x1b\[20[01]~/g, "").replace(/\r?\n/g, "\r"));
+    },
+    { capture: true },
+  );
 
   return { pane, term, fit, search, searchResults: { index: -1, count: 0 }, host, opened: false, spawned: false, exited: false, lastOutput: 0, decoder: new TextDecoder() };
 }
