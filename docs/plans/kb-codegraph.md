@@ -102,6 +102,10 @@ harness-bench fixtures. Now, the way codegraph is meant to be used:
 - winfer's server then leaves out `kb_query`/`kb_explain`/`kb_path`/`kb_affected`
   (`mcp::CODEGRAPH_COVERS`); `kb_report`/`kb_status` stay. Worktree panes (no `.codegraph/` in
   the worktree) keep the kb tools.
+- **Worktrees** (race/A/B panes): `worktree::seed_codegraph` copies the main checkout's
+  `.codegraph/` index into each new worktree (an APFS/reflink clone, so instant even at GBs),
+  so those agents get codegraph too; its server re-syncs the copy on start. winfer code
+  (`WINFER_HARNESS_MCP`) also gets `alwaysLoad`.
 - `kb_query` on codegraph: `budget` is real (default 3000 tokens ≈ 12k chars, max 4500);
   `fitExplore` drops whole file blocks that don't fit and lists them by name, renames
   `codegraph_explore` → `kb_query` and drops codegraph's "make another call" footer. `NO_COLOR=1`

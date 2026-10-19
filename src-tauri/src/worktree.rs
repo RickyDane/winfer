@@ -186,12 +186,33 @@ pub fn create_from_branch(worktrees_dir: &Path, dir: &Path, branch: &str, new_br
             e
         }
     })?;
+    seed_codegraph(&repo, &path);
     Ok(WorktreeInfo {
         repo: repo.to_string_lossy().into_owned(),
         path: path_str,
         branch: local,
         base,
     })
+}
+
+/// Files of a codegraph index (`.codegraph/`, gitignored); its daemon's socket and pid stay behind.
+const CODEGRAPH_FILES: [&str; 4] = ["codegraph.db", "codegraph.db-wal", "codegraph.db-shm", ".gitignore"];
+
+/// Gives a new worktree a copy of the main checkout's codegraph index, so agents in it get
+/// codegraph too (see `mcp::codegraph_server`): `.codegraph/` is gitignored, so `git worktree
+/// add` leaves it out. codegraph re-syncs the copy against the worktree's files when its server
+/// starts. On APFS (and reflink filesystems) the copy is a clone, instant at any size.
+fn seed_codegraph(repo: &Path, worktree: &Path) {
+    let (from, to) = (repo.join(".codegraph"), worktree.join(".codegraph"));
+    if !from.join("codegraph.db").is_file() || to.exists() {
+        return;
+    }
+    let copied = std::fs::create_dir_all(&to).is_ok()
+        && CODEGRAPH_FILES.iter().all(|f| !from.join(f).is_file() || std::fs::copy(from.join(f), to.join(f)).is_ok());
+    // A partial index is worse than none: codegraph would trust it.
+    if !copied {
+        let _ = std::fs::remove_dir_all(&to);
+    }
 }
 
 /// Updates remote branches (`git fetch --all --prune`).
@@ -245,6 +266,7 @@ pub fn create(
             ],
         ) {
             Ok(_) => {
+                seed_codegraph(&repo, &path);
                 return Ok(Some(WorktreeInfo {
                     repo: repo.to_string_lossy().into_owned(),
                     path: path.to_string_lossy().into_owned(),
@@ -729,6 +751,22 @@ mod tests {
              && echo one > a.txt && git add . && git commit -qm init",
         );
         dir
+    }
+
+    #[test]
+    fn new_worktrees_get_a_copy_of_the_codegraph_index() {
+        let repo = repo();
+        std::fs::create_dir_all(repo.join(".codegraph")).unwrap();
+        std::fs::write(repo.join(".codegraph/codegraph.db"), "db").unwrap();
+        std::fs::write(repo.join(".codegraph/daemon.pid"), "1").unwrap();
+        let wt = create(&temp_dir("wt"), &repo, "claude").unwrap().unwrap();
+        let index = Path::new(&wt.path).join(".codegraph");
+        assert_eq!(std::fs::read_to_string(index.join("codegraph.db")).unwrap(), "db");
+        assert!(!index.join("daemon.pid").exists());
+        // No index in the repo: none in the worktree.
+        let plain = repo();
+        let wt = create(&temp_dir("wt"), &plain, "claude").unwrap().unwrap();
+        assert!(!Path::new(&wt.path).join(".codegraph").exists());
     }
 
     #[test]

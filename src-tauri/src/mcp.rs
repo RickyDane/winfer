@@ -437,7 +437,12 @@ pub fn agent_env(provider_id: &str, servers: &[Server], plugin: Option<&str>, au
             .iter()
             .map(|s| {
                 let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
-                (s.name.to_string(), json!({ "command": s.command, "args": s.args, "env": env }))
+                let mut entry = json!({ "command": s.command, "args": s.args, "env": env });
+                // winfer code's Claude backend hands these to `--mcp-config` as they are.
+                if s.name == CODEGRAPH {
+                    entry["alwaysLoad"] = json!(true);
+                }
+                (s.name.to_string(), entry)
             })
             .collect();
         let var = if provider_id == "pi" { "WINFER_PI_MCP" } else { "WINFER_HARNESS_MCP" };
