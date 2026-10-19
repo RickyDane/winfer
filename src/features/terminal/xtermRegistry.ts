@@ -5,7 +5,6 @@
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -13,14 +12,14 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { create as createStore } from "zustand";
-import { cleanAgentTitle, systemPromptOf, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { cleanAgentTitle, hiddenToolsOf, systemPromptOf, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { reportInput, reportOutput, reportStatus, reportTerminalNotice } from "@/features/status/agentStatus";
 import { createWorktree } from "@/features/worktree/worktree";
 import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
 import { terminalMinContrast, terminalTheme } from "@/features/theme/themes";
 import { optionTypedChar } from "./optionKey";
-import { fileLinkProvider, openTerminalUri } from "@/features/viewer/terminalLinks";
+import { fileLinkProvider, openTerminalUri, openWebLink } from "@/features/viewer/terminalLinks";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 /** Glyph-atlas pages a terminal may grow before the WebGL renderer's atlas is cleared. */
@@ -112,7 +111,7 @@ function create(pane: Pane): Entry {
     allowProposedApi: true,
     theme: terminalTheme(useWorkspaces.getState().theme),
     minimumContrastRatio: terminalMinContrast(useWorkspaces.getState().theme),
-    // OSC 8 hyperlinks: files open in the viewer, web links in the default browser.
+    // OSC 8 hyperlinks: files open in the viewer, web links in winfer's browser.
     linkHandler: {
       activate: (event, uri) => openTerminalUri(event, uri, cwdOf(pane.id, pane.cwd)),
       allowNonHttpProtocols: true,
@@ -126,7 +125,7 @@ function create(pane: Pane): Entry {
     const entry = entries.get(pane.id);
     if (entry) entry.searchResults = { index: resultIndex, count: resultCount };
   });
-  term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)));
+  term.loadAddon(new WebLinksAddon((event, uri) => openWebLink(event, uri)));
   term.registerLinkProvider(fileLinkProvider(term, () => cwdOf(pane.id, pane.cwd)));
 
   // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows, plus any the user assigned) must reach
@@ -319,6 +318,7 @@ async function spawn(entry: Entry) {
         systemPrompt: systemPromptOf(useWorkspaces.getState()),
         plain: entry.pane.plain,
         lean: entry.pane.provider === "codex" && useWorkspaces.getState().leanCodex,
+        hiddenTools: hiddenToolsOf(useWorkspaces.getState()),
         cols: entry.term.cols,
         rows: entry.term.rows,
       },

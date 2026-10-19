@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
+import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
@@ -326,6 +326,7 @@ function AgentSettings() {
       <VersionSettings />
       <AutoApproveSettings />
       <SystemPromptSettings />
+      <AgentToolSettings />
     </>
   );
 }
@@ -438,6 +439,23 @@ function SystemPromptSettings() {
           className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:border-accent"
         />
       </Row>
+    </Card>
+  );
+}
+
+/** The rarely used MCP tools agents start without, to turn back on one by one. */
+function AgentToolSettings() {
+  const { enabledTools, setToolEnabled } = useWorkspaces();
+  return (
+    <Card
+      title="Agent tools"
+      description="Tools agents rarely use are left out, since every tool an agent is offered takes up context in each request. Turn on the ones you want. Applies to agents started (or restarted) after the change."
+    >
+      {OPTIONAL_TOOLS.map((t) => (
+        <Row key={t.name} label={`${t.server}: ${t.name}`} hint={t.hint}>
+          <Toggle label={t.name} checked={enabledTools.includes(t.name)} onChange={(on) => setToolEnabled(t.name, on)} />
+        </Row>
+      ))}
     </Card>
   );
 }
@@ -836,6 +854,8 @@ interface HarnessSettings {
   leanAllSkills: boolean;
   leanSkills: string[];
   planSidebar: boolean;
+  leanCodex: boolean;
+  leanCodexPrompt: boolean;
 }
 
 /** A skill Claude Code can load from the user's setup (`~/.claude/skills` or an enabled plugin). */
@@ -1012,11 +1032,25 @@ function HarnessSettings() {
         </Row>
         <Row
           label="Codex"
-          hint="Codex panes leave out ChatGPT apps (Sites, Spaces, Pets…), plugins and their skills, bundled skills, image generation, computer use, Codex's own browser and goals: about 100 fewer tools. winfer's tools stay. Off by default: turning Codex features off can break its prompt-cache prefix, so it may cost more."
+          hint="When winfer code runs a Codex model: no ChatGPT apps, plugins and their skills, bundled skills, image generation, computer use, Codex's own browser or goals, no permission, apps and collaboration-mode instructions, only the skills picked below, and each tool result capped at 4k tokens. winfer's tools stay. In the bench: 37% fewer input tokens, same pass rate."
         >
-          <Toggle label="Lean Codex" checked={leanCodex} onChange={setLeanCodex} />
+          <Toggle label="Lean Codex" checked={settings.leanCodex} onChange={(leanCodex) => void save({ leanCodex })} />
         </Row>
-        {(settings.leanBridges || leanCodex) && (
+        {settings.leanCodex && (
+          <Row
+            label="Short Codex prompt"
+            hint="Also swaps Codex's built-in system prompt (about 5k tokens) for a short one. In the bench: 52% fewer input tokens instead of 37%, same pass rate on 12 tasks, but Codex loses its own guidance on its tools."
+          >
+            <Toggle label="Short Codex prompt" checked={settings.leanCodexPrompt} onChange={(leanCodexPrompt) => void save({ leanCodexPrompt })} />
+          </Row>
+        )}
+        <Row
+          label="Codex CLI panes too"
+          hint="Gives Codex CLI panes (not just winfer code) the same lean setup and output cap, with Codex's built-in prompt. Off by default: Codex runs as you configured it. A setup other sessions don't share may miss Codex's prompt cache, so it can cost more."
+        >
+          <Toggle label="Lean Codex CLI panes" checked={leanCodex} onChange={setLeanCodex} />
+        </Row>
+        {(settings.leanBridges || settings.leanCodex || leanCodex) && (
           <>
             <Row
               label="Skills"

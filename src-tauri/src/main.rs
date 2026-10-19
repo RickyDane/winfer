@@ -6,6 +6,10 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("mcp-stdio") {
         return winfer_lib::run_mcp_stdio();
     }
+    // `winfer mcp-filter <tools> -- <command>`: an MCP server without some of its tools (see mcp.rs).
+    if std::env::args().nth(1).as_deref() == Some("mcp-filter") {
+        std::process::exit(winfer_lib::run_mcp_filter(&std::env::args().skip(2).collect::<Vec<_>>()));
+    }
     // `winfer hook <provider> <event>`: run by agent hooks to report status (see hooks.rs).
     if std::env::args().nth(1).as_deref() == Some("hook") {
         return winfer_lib::run_hook(&std::env::args().skip(2).collect::<Vec<_>>());

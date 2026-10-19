@@ -95,10 +95,12 @@ interface WorkspaceState {
   agentModels: Record<ProviderId, string>;
   /** Agents started with their permission prompts skipped (persisted). */
   autoApprove: ProviderId[];
-  /** Start Codex without its bundled apps, plugins and extra tools (persisted, default off: may cost more, see harness bench). */
+  /** Codex CLI panes start lean and with an output cap (persisted, default off; winfer code's Codex has its own setting). */
   leanCodex: boolean;
   /** Added to every agent's system prompt at start (persisted); null = DEFAULT_SYSTEM_PROMPT, "" = none. */
   systemPrompt: string | null;
+  /** OPTIONAL_TOOLS the user turned back on (persisted); the others are left out of agents' tool lists. */
+  enabledTools: string[];
   /** Agent for new panes (⌘T, splits, "open a window"); null = Claude Code if installed. */
   defaultProvider: ProviderId | null;
   /** Code editor "Open in editor" uses (see features/editors); null = the first one installed. */
@@ -175,6 +177,7 @@ interface WorkspaceState {
   setAgentModel: (provider: ProviderId, model: string | null) => void;
   setAutoApprove: (provider: ProviderId, on: boolean) => void;
   setLeanCodex: (on: boolean) => void;
+  setToolEnabled: (name: string, on: boolean) => void;
   setSystemPrompt: (prompt: string | null) => void;
   setDefaultProvider: (provider: ProviderId | null) => void;
   setEditor: (editor: string | null) => void;
@@ -227,7 +230,23 @@ const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null)
 export const DEFAULT_BROWSER_WIDTH = 420;
 export const DEFAULT_TERMINAL_FONT_SIZE = 12.5;
 export const DEFAULT_SYSTEM_PROMPT =
-  "Use your tools (MCP, browser, skills, subagents, shell) wherever they're faster or more reliable than by hand, and to verify your work. Prefer winfer's integrated tools over external ones. Open and test web pages only in winfer's browser (its browser tools or open_url), never via `open`/`xdg-open`/`start` or other browser automation.";
+  "Use your tools (MCP, browser, skills, subagents, shell) wherever they're faster or more reliable than by hand, and to verify your work. Prefer winfer's integrated tools over external ones. Open and test web pages only in winfer's browser (its browser tools or open_url), never via `open`/`xdg-open`/`start` or other browser automation. Keep tool output small, it fills your context: search with line numbers before reading, read only the lines you need (your file-read tool with an offset and limit rather than printing whole files with cat or sed), don't re-read a file you haven't changed, and trim long command output to the part you need. Change existing files with your edit tool (only the changed lines), not by rewriting whole files with Write or shell heredocs.";
+
+/**
+ * MCP tools agents rarely use, off by default: each tool an agent is offered costs context in
+ * every request. Settings → Agent tools turns them back on one by one.
+ */
+export const OPTIONAL_TOOLS: { name: string; server: string; hint: string }[] = [
+  { name: "browser_drag", server: "Browser", hint: "Drag and drop between two elements." },
+  { name: "browser_drop", server: "Browser", hint: "Drop files or data onto an element from outside the page." },
+  { name: "browser_emulate_media", server: "Browser", hint: "Emulate dark/light scheme, reduced motion or print media." },
+  { name: "browser_navigate_back", server: "Browser", hint: "Go back in the page history (agents can also navigate to the URL)." },
+  { name: "kb_explain", server: "Knowledge Base", hint: "Explain one node of the knowledge graph and its connections." },
+  { name: "kb_save", server: "Knowledge Base", hint: "Save an answer to the knowledge graph's memory." },
+];
+
+/** The MCP tools agents start without: the optional ones the user hasn't turned on. */
+export const hiddenToolsOf = (s: { enabledTools: string[] }) => OPTIONAL_TOOLS.map((t) => t.name).filter((n) => !s.enabledTools.includes(n));
 
 /** The system prompt agents start with: the user's, else the default. */
 export const systemPromptOf = (s: { systemPrompt: string | null }) => s.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
@@ -276,6 +295,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   autoApprove: [],
   leanCodex: false,
   systemPrompt: null,
+  enabledTools: [],
   defaultProvider: null,
   editor: null,
   shortcuts: {},
@@ -336,6 +356,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       autoApprove: ui.autoApprove ?? [],
       leanCodex: ui.leanCodex ?? false,
       systemPrompt: ui.systemPrompt ?? null,
+      enabledTools: ui.enabledTools ?? [],
       defaultProvider: ui.defaultProvider ?? null,
       editor: ui.editor ?? null,
       shortcuts: ui.shortcuts ?? {},
@@ -519,6 +540,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     }),
   setAutoApprove: (provider, on) => set((s) => ({ autoApprove: [...s.autoApprove.filter((p) => p !== provider), ...(on ? [provider] : [])] })),
   setLeanCodex: (leanCodex) => set({ leanCodex }),
+  setToolEnabled: (name, on) => set((s) => ({ enabledTools: on ? [...new Set([...s.enabledTools, name])] : s.enabledTools.filter((t) => t !== name) })),
   setSystemPrompt: (systemPrompt) => set({ systemPrompt }),
   setDefaultProvider: (provider) => set({ defaultProvider: provider }),
   setEditor: (editor) => set({ editor }),
@@ -592,6 +614,7 @@ interface Snapshot {
     autoApprove?: ProviderId[];
     leanCodex?: boolean;
     systemPrompt?: string | null;
+    enabledTools?: string[];
     defaultProvider?: ProviderId | null;
     editor?: string | null;
     shortcuts?: Record<string, string>;
@@ -634,7 +657,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
   };
 }
 

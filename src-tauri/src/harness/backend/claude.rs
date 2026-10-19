@@ -43,7 +43,9 @@ fn permission_mode(mode: Mode) -> &'static str {
 /// Claude Code's tools in lean mode; `Skill` comes on top when it has skills to load.
 /// TodoWrite is the plan tool of older Claude Code versions; newer ones plan with the Task* tools.
 /// AskUserQuestion's questions come to the TUI as an approval with `questions`.
-const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion";
+/// ToolSearch keeps MCP tools deferred (only their names up front, loaded when used): without it
+/// in the list, Claude Code sends every MCP tool's full definition with each request.
+const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ToolSearch";
 
 pub fn args(opts: &Opts) -> Vec<String> {
     let mut args: Vec<String> = [

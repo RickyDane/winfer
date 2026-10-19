@@ -135,7 +135,10 @@ struct Instance {
     port: u16,
     exe: Executable,
     profile: PathBuf,
-    cdp: OnceCell<Arc<Cdp>>,
+    /// The DevTools connection; replaced when it drops while the browser keeps running.
+    cdp: Mutex<Option<Arc<Cdp>>>,
+    /// One (re)connect at a time.
+    connecting: tokio::sync::Mutex<()>,
     /// Page targets in creation order.
     tabs: Mutex<Vec<Tab>>,
     sessions: Mutex<HashMap<String, String>>,
@@ -301,7 +304,7 @@ impl Instance {
                     }
                 }
                 drop(screencast);
-                if let Some(cdp) = self.cdp.get() {
+                if let Some(cdp) = self.live_cdp() {
                     cdp.send(
                         "Page.screencastFrameAck",
                         json!({ "sessionId": event.params["sessionId"] }),
@@ -316,13 +319,13 @@ impl Instance {
     /// Follows up on a frame: re-applies our scale and mobile flags at an agent's new size and
     /// tells the panel, or restores emulation that a disconnecting agent cleared.
     async fn on_resized(&self, action: FrameAction, target: String, session: String, v: Viewport) {
-        let Some(cdp) = self.cdp.get() else {
+        let Some(cdp) = self.live_cdp() else {
             return;
         };
         match action {
             FrameAction::None => {}
             FrameAction::Adopt(width, height) => {
-                let _ = apply_viewport(cdp, &target, &session, &v).await;
+                let _ = apply_viewport(&cdp, &target, &session, &v).await;
                 let _ = self.app.emit(
                     "browser://viewport",
                     ViewportEvent {
@@ -344,35 +347,57 @@ impl Instance {
                     .ok()
                     .and_then(|r| r["result"]["value"].as_f64());
                 if ratio.is_some_and(|r| (r - v.device_scale_factor).abs() > 0.01) {
-                    let _ = apply_viewport(cdp, &target, &session, &v).await;
+                    let _ = apply_viewport(&cdp, &target, &session, &v).await;
                 }
             }
         }
     }
 
+    /// The live connection, if there is one (no connecting).
+    fn live_cdp(&self) -> Option<Arc<Cdp>> {
+        self.cdp.lock().unwrap().clone().filter(|cdp| !cdp.is_closed())
+    }
+
+    /// The connection, made (again) if there's none or it dropped, e.g. after the computer slept.
     async fn cdp(self: &Arc<Self>) -> Result<Arc<Cdp>, String> {
+        if let Some(cdp) = self.live_cdp() {
+            return Ok(cdp);
+        }
+        let _guard = self.connecting.lock().await;
+        if let Some(cdp) = self.live_cdp() {
+            return Ok(cdp);
+        }
+        let reconnect = self.cdp.lock().unwrap().take().is_some();
+        if reconnect {
+            log::warning!("[{}] browser connection dropped, reconnecting", self.workspace_id);
+            // Sessions and the screencast belonged to the old connection.
+            self.sessions.lock().unwrap().clear();
+            self.attaching.lock().unwrap().clear();
+            *self.screencast.lock().unwrap() = None;
+        }
+        let ws_url = log::check(&format!("[{}] browser start", self.workspace_id), self.wait_ws_url().await)?;
+        log::info!("[{}] connecting to {ws_url}", self.workspace_id);
         let weak: Weak<Self> = Arc::downgrade(self);
-        let cdp = self
-            .cdp
-            .get_or_try_init(|| async move {
-                let ws_url = log::check(&format!("[{}] browser start", self.workspace_id), self.wait_ws_url().await)?;
-                log::info!("[{}] connecting to {ws_url}", self.workspace_id);
-                let cdp = Cdp::connect(&ws_url, move |event| {
-                    if let Some(instance) = weak.upgrade() {
-                        instance.on_event(event);
-                    }
-                })
-                .await?;
-                cdp.call(
-                    "Target.setDiscoverTargets",
-                    json!({ "discover": true }),
-                    None,
-                )
-                .await?;
-                Ok::<_, String>(cdp)
-            })
+        let cdp = Cdp::connect(&ws_url, move |event| {
+            if let Some(instance) = weak.upgrade() {
+                instance.on_event(event);
+            }
+        })
+        .await?;
+        cdp.call("Target.setDiscoverTargets", json!({ "discover": true }), None)
             .await?;
-        Ok(cdp.clone())
+        *self.cdp.lock().unwrap() = Some(cdp.clone());
+        // When it drops (the computer slept, the socket failed), tell the panel: showing its tab
+        // again connects anew, instead of the view sitting frozen until something fails.
+        let (weak, watched) = (Arc::downgrade(self), cdp.clone());
+        tauri::async_runtime::spawn(async move {
+            watched.closed().await;
+            if let Some(instance) = weak.upgrade() {
+                log::warning!("[{}] browser connection lost", instance.workspace_id);
+                let _ = instance.app.emit("browser://disconnected", instance.workspace_id.clone());
+            }
+        });
+        Ok(cdp)
     }
 
     /// Polls the DevTools endpoint until the browser is up (it was started without waiting).
@@ -483,10 +508,10 @@ impl Instance {
         // Serialized with attaches, so this can't put back a tab the panel just moved away from.
         let _guard = self.attach_lock.lock().await;
         let shown = self.screencast.lock().unwrap().as_ref().map(|sc| (sc.target_id.clone(), sc.session_id.clone()));
-        let (Some((target, session)), Some(cdp)) = (shown, self.cdp.get()) else {
+        let (Some((target, session)), Some(cdp)) = (shown, self.live_cdp()) else {
             return;
         };
-        front(cdp, &target, &session, &self.workspace_id).await;
+        front(&cdp, &target, &session, &self.workspace_id).await;
     }
 
     fn forget_session(&self, target_id: &str, session: &str) {
@@ -561,7 +586,8 @@ impl BrowserManager {
             port: launched.port,
             exe,
             profile,
-            cdp: OnceCell::new(),
+            cdp: Mutex::default(),
+            connecting: tokio::sync::Mutex::new(()),
             tabs: Mutex::default(),
             sessions: Mutex::default(),
             attaching: Mutex::default(),
@@ -1163,6 +1189,27 @@ mod tests {
                 .unwrap();
             assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "JPEG magic");
             assert!(capture(&cdp, &context, "http://127.0.0.1:9/").await.is_err(), "refused URL errors");
+        });
+    }
+
+    /// Real Chrome: a connection whose browser goes away reports itself closed, so it's replaced.
+    #[test]
+    fn notices_a_lost_connection() {
+        let tmp = std::env::temp_dir().join(format!("winfer-lost-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let mut guard = chrome::ChromeGuard(launched.child);
+        tauri::async_runtime::block_on(async {
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), |_| {}).await.unwrap();
+            cdp.call("Browser.getVersion", json!({}), None).await.unwrap();
+            assert!(!cdp.is_closed());
+            guard.0.kill().unwrap();
+            tokio::time::timeout(Duration::from_secs(10), cdp.closed()).await.expect("close noticed");
+            assert!(cdp.is_closed());
+            assert!(cdp.call("Browser.getVersion", json!({}), None).await.is_err());
         });
     }
 

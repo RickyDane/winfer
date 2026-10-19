@@ -32,6 +32,11 @@ pub struct Config {
     pub lean_skills: Vec<String>,
     /// Show the plan in a sidebar on the right when the terminal is wide enough.
     pub plan_sidebar: bool,
+    /// Start Codex lean (without its bundled extras, extra instructions and unpicked skills) and
+    /// with a cap on each tool result, when a Codex model runs.
+    pub lean_codex: bool,
+    /// With `lean_codex`, a short system prompt in place of Codex's built-in one.
+    pub lean_codex_prompt: bool,
 }
 
 impl Default for Config {
@@ -49,6 +54,8 @@ impl Default for Config {
             lean_all_skills: true,
             lean_skills: Vec::new(),
             plan_sidebar: true,
+            lean_codex: true,
+            lean_codex_prompt: false,
         }
     }
 }

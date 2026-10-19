@@ -95,6 +95,14 @@ pub struct Settings {
     lean_all_skills: bool,
     lean_skills: Vec<String>,
     plan_sidebar: bool,
+    #[serde(default = "yes")]
+    lean_codex: bool,
+    #[serde(default)]
+    lean_codex_prompt: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -112,6 +120,8 @@ pub fn harness_settings() -> Settings {
         lean_all_skills: c.lean_all_skills,
         lean_skills: c.lean_skills,
         plan_sidebar: c.plan_sidebar,
+        lean_codex: c.lean_codex,
+        lean_codex_prompt: c.lean_codex_prompt,
     }
 }
 
@@ -138,6 +148,8 @@ pub fn harness_set_settings(settings: Settings) -> Result<(), String> {
         c.lean_all_skills = settings.lean_all_skills;
         c.lean_skills = settings.lean_skills;
         c.plan_sidebar = settings.plan_sidebar;
+        c.lean_codex = settings.lean_codex;
+        c.lean_codex_prompt = settings.lean_codex_prompt;
     });
     Ok(())
 }

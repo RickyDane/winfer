@@ -7,6 +7,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -14,6 +15,26 @@ pub struct Part {
     pub kind: &'static str,
     pub label: &'static str,
     pub tokens: u64,
+    /// What it's made of, biggest first: for tool results, the tools that returned them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<Source>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Source {
+    pub label: String,
+    pub tokens: u64,
+}
+
+/// Tool results get this many sources listed by name; the rest go under "Other".
+const TOP_SOURCES: usize = 4;
+
+/// A tool's name as the breakdown shows it: an MCP tool without its `mcp__server__` prefix.
+fn tool_label(name: &str) -> String {
+    match name.strip_prefix("mcp__") {
+        Some(rest) => rest.split_once("__").map_or(rest, |(_, tool)| tool).to_string(),
+        None => name.to_string(),
+    }
 }
 
 const SYSTEM: usize = 0;
@@ -49,11 +70,47 @@ struct Tally {
     /// The first request's prompt tokens and the conversation's characters sent with it.
     first_prompt: Option<u64>,
     sent_with_first: Option<u64>,
+    /// Tool-result characters per tool.
+    results: HashMap<String, u64>,
+    /// Tool names by call id, to name the results that answer them.
+    calls: HashMap<String, String>,
 }
 
 impl Tally {
     fn add(&mut self, kind: usize, chars: u64) {
         self.chars[kind] += chars;
+    }
+
+    /// A tool result: answering call `id` (named by [`Tally::call`]), or from tool `name`.
+    fn result(&mut self, id: Option<&str>, name: Option<&str>, chars: u64) {
+        self.add(TOOL_RESULTS, chars);
+        let label = name.map(tool_label).or_else(|| id.and_then(|id| self.calls.get(id).cloned())).unwrap_or_else(|| "Other".into());
+        *self.results.entry(label).or_default() += chars;
+    }
+
+    /// A tool call, remembered to name its result.
+    fn call(&mut self, id: Option<&str>, name: Option<&str>) {
+        if let (Some(id), Some(name)) = (id, name) {
+            self.calls.insert(id.to_string(), tool_label(name));
+        }
+    }
+
+    /// Tool results per tool, scaled like the rest, biggest first.
+    fn sources(&self, scale: f64) -> Vec<Source> {
+        let mut by_tool: Vec<(&String, u64)> = self.results.iter().map(|(k, v)| (k, *v)).collect();
+        by_tool.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let mut sources: Vec<Source> = Vec::new();
+        let mut other = 0;
+        for (label, chars) in by_tool {
+            if sources.len() < TOP_SOURCES && label != "Other" {
+                sources.push(Source { label: label.clone(), tokens: (chars as f64 * scale).round() as u64 });
+            } else {
+                other += chars;
+            }
+        }
+        sources.push(Source { label: "Other".into(), tokens: (other as f64 * scale).round() as u64 });
+        sources.retain(|s| s.tokens > 0);
+        sources
     }
 
     fn conversation(&self) -> u64 {
@@ -77,7 +134,7 @@ impl Tally {
                 let sent = self.sent_with_first.unwrap_or_else(|| self.conversation());
                 fixed = prompt.saturating_sub((sent as f64 / CHARS_PER_TOKEN) as u64).min(total);
                 if fixed > 0 {
-                    parts.push(Part { kind: "setup", label: "System prompt & tools", tokens: fixed });
+                    parts.push(Part { kind: "setup", label: "System prompt & tools", tokens: fixed, sources: Vec::new() });
                 }
             }
         }
@@ -89,7 +146,8 @@ impl Tally {
         for (i, (kind, label)) in KINDS.iter().enumerate() {
             let tokens = (self.chars[i] as f64 * scale).round() as u64;
             if tokens > 0 {
-                parts.push(Part { kind, label, tokens });
+                let sources = if i == TOOL_RESULTS { self.sources(scale) } else { Vec::new() };
+                parts.push(Part { kind, label, tokens, sources });
             }
         }
         parts
@@ -127,22 +185,17 @@ fn claude_injected(text: &str) -> bool {
 pub fn claude_breakdown(transcript: &str, total: u64) -> Vec<Part> {
     let mut t = Tally::default();
     // The latest request's system prompt and tools, which outlive compactions.
-    let mut setup: Option<[u64; 3]> = None;
+    let mut shape: Option<Value> = None;
+    // Deferred tools (`defer_loading`) are in the context only once tool search has loaded them
+    // (a `tool_reference` names them); the others are placeholders the model doesn't see.
+    let mut loaded: std::collections::HashSet<String> = Default::default();
     for line in transcript.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         if v["isSidechain"].as_bool() == Some(true) {
             continue;
         }
         match v["type"].as_str().unwrap_or_default() {
-            "api-request-shape" => {
-                let shape = &v["shape"];
-                let (mut tools, mut mcp) = (0, 0);
-                for tool in shape["tools"].as_array().into_iter().flatten() {
-                    let len = tool.to_string().len() as u64;
-                    if tool["name"].as_str().is_some_and(|n| n.starts_with("mcp__")) { mcp += len } else { tools += len }
-                }
-                setup = Some([text_len(&shape["system"]), tools, mcp]);
-            }
+            "api-request-shape" => shape = Some(v["shape"].clone()),
             "system" if v["subtype"].as_str() == Some("compact_boundary") => t = Tally::default(),
             "attachment" => {
                 // Snapshots and records are bookkeeping, not sent to the model.
@@ -159,7 +212,12 @@ pub fn claude_breakdown(transcript: &str, total: u64) -> Vec<Part> {
                     Value::Array(blocks) => {
                         for b in blocks {
                             match b["type"].as_str().unwrap_or_default() {
-                                "tool_result" => t.add(TOOL_RESULTS, text_len(&b["content"])),
+                                "tool_result" => {
+                                    for r in b["content"].as_array().into_iter().flatten().filter(|r| r["type"] == "tool_reference") {
+                                        loaded.extend(r["tool_name"].as_str().map(String::from));
+                                    }
+                                    t.result(b["tool_use_id"].as_str(), None, text_len(&b["content"]));
+                                }
                                 "text" => {
                                     let s = b["text"].as_str().unwrap_or_default();
                                     t.add(text_kind(s), s.len() as u64);
@@ -187,8 +245,11 @@ pub fn claude_breakdown(transcript: &str, total: u64) -> Vec<Part> {
                         "text" => t.add(REPLIES, text_len(&b["text"])),
                         "thinking" => t.add(THINKING, text_len(&b["thinking"])),
                         "redacted_thinking" => {}
-                        "tool_use" | "server_tool_use" => t.add(TOOL_CALLS, text_len(&b["name"]) + b["input"].to_string().len() as u64),
-                        "web_search_tool_result" => t.add(TOOL_RESULTS, text_len(&b["content"])),
+                        "tool_use" | "server_tool_use" => {
+                            t.call(b["id"].as_str(), b["name"].as_str());
+                            t.add(TOOL_CALLS, text_len(&b["name"]) + b["input"].to_string().len() as u64);
+                        }
+                        "web_search_tool_result" => t.result(b["tool_use_id"].as_str(), None, text_len(&b["content"])),
                         _ => t.add(REPLIES, text_len(b)),
                     }
                 }
@@ -196,8 +257,17 @@ pub fn claude_breakdown(transcript: &str, total: u64) -> Vec<Part> {
             _ => {}
         }
     }
-    if let Some([system, tools, mcp]) = setup {
-        t.chars[SYSTEM] = system;
+    if let Some(shape) = shape {
+        let (mut tools, mut mcp) = (0, 0);
+        for tool in shape["tools"].as_array().into_iter().flatten() {
+            let name = tool["name"].as_str().unwrap_or_default();
+            if tool["defer_loading"].as_bool() == Some(true) && !loaded.contains(name) {
+                continue;
+            }
+            let len = tool.to_string().len() as u64;
+            if name.starts_with("mcp__") { mcp += len } else { tools += len }
+        }
+        t.chars[SYSTEM] = text_len(&shape["system"]);
         t.chars[TOOLS] = tools;
         t.chars[MCP] = mcp;
     }
@@ -236,9 +306,12 @@ fn codex_item(t: &mut Tally, item: &Value) {
             let encrypted = item["encrypted_content"].as_str().map_or(0, |e| e.len() as u64 * 3 / 4);
             t.add(THINKING, text_len(&item["summary"]) + text_len(&item["content"]) + encrypted);
         }
-        k if k.ends_with("_output") => t.add(TOOL_RESULTS, text_len(item)),
+        k if k.ends_with("_output") => t.result(item["call_id"].as_str(), None, text_len(item)),
         k if k.ends_with("_call") => {
             t.output_starts();
+            // Function and custom tools are named; built-in ones (`local_shell_call`) by their type.
+            let name = item["name"].as_str().unwrap_or_else(|| k.trim_end_matches("_call"));
+            t.call(item["call_id"].as_str(), Some(name));
             t.add(TOOL_CALLS, text_len(item));
         }
         _ => {}
@@ -314,7 +387,7 @@ pub fn opencode_breakdown(conn: &rusqlite::Connection, session: &str, total: u64
                         "tool" => {
                             let state = &part["state"];
                             t.add(TOOL_CALLS, text_len(&part["name"]) + state["input"].to_string().len() as u64);
-                            t.add(TOOL_RESULTS, text_len(&state["content"]) + text_len(&state["error"]));
+                            t.result(None, part["name"].as_str(), text_len(&state["content"]) + text_len(&state["error"]));
                         }
                         _ => t.add(REPLIES, text_len(&part["text"])),
                     }
@@ -357,6 +430,11 @@ mod tests {
         parts.iter().find(|p| p.kind == kind).map_or(0, |p| p.tokens)
     }
 
+    /// The tools named under tool results.
+    fn sources(parts: &[Part]) -> Vec<&str> {
+        parts.iter().find(|p| p.kind == "toolResults").map_or(Vec::new(), |p| p.sources.iter().map(|s| s.label.as_str()).collect())
+    }
+
     #[test]
     fn splits_a_claude_transcript() {
         let transcript = [
@@ -379,8 +457,28 @@ mod tests {
         assert!(get(&parts, "system") > get(&parts, "instructions"));
         assert!(get(&parts, "mcp") > 0 && get(&parts, "tools") > 0 && get(&parts, "replies") > 0);
         assert_eq!(get(&parts, "setup"), 0);
+        assert_eq!(sources(&parts), ["Read"]);
         // The compacted question and the subagent aren't counted: messages is the one sentence.
         assert!(get(&parts, "messages") < get(&parts, "instructions") * 2);
+    }
+
+    #[test]
+    fn counts_deferred_tools_once_loaded() {
+        let schema = "x".repeat(400);
+        let shape = |tools: &str| format!(r#"{{"type":"api-request-shape","shape":{{"system":[{{"type":"text","text":"s"}}],"tools":[{{"name":"Read","description":"d"}},{tools}]}}}}"#);
+        let deferred = |name: &str| format!(r#"{{"name":"{name}","description":"{schema}","defer_loading":true}}"#);
+        let run = |lines: &[String]| {
+            let parts = claude_breakdown(&lines.join("\n"), 10_000);
+            (get(&parts, "mcp"), get(&parts, "tools"))
+        };
+        // Not loaded: a placeholder and an MCP tool tool search hasn't returned yet count nothing.
+        let before = shape(&format!("{},{}", deferred("DeferredToolPlaceholder"), deferred("mcp__winfer__list_panes")));
+        let reply = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}"#.to_string();
+        assert_eq!(run(&[before.clone(), reply.clone()]).0, 0);
+        // Loaded by tool search: the MCP tool is in the context, the placeholder still isn't.
+        let found = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"tool_reference","tool_name":"mcp__winfer__list_panes"}]}]}}"#.to_string();
+        let (mcp, tools) = run(&[found, before, reply]);
+        assert!(mcp > tools * 10, "{mcp} {tools}");
     }
 
     #[test]
@@ -412,6 +510,24 @@ mod tests {
         assert!(get(&parts, "setup") > 950, "{parts:?}");
         assert!(get(&parts, "instructions") > get(&parts, "messages"));
         assert!(get(&parts, "toolResults") > 0 && get(&parts, "toolCalls") > 0 && get(&parts, "replies") > 0);
+        assert_eq!(sources(&parts), ["shell"]);
+    }
+
+    #[test]
+    fn names_tool_results_by_tool() {
+        let mut t = Tally::default();
+        for (i, (name, chars)) in [("Bash", 600), ("Read", 300), ("mcp__winfer__kb_query", 50), ("Grep", 40), ("Glob", 20), ("Edit", 10)].iter().enumerate() {
+            let id = i.to_string();
+            t.call(Some(&id), Some(name));
+            t.result(Some(&id), None, *chars);
+        }
+        t.result(Some("unknown"), None, 5);
+        let parts = t.parts(1025);
+        let results = parts.iter().find(|p| p.kind == "toolResults").unwrap();
+        let named: Vec<(&str, u64)> = results.sources.iter().map(|s| (s.label.as_str(), s.tokens)).collect();
+        // Top four by size, MCP tools without their server prefix, the rest (and unnamed) as Other.
+        assert_eq!(named, [("Bash", 600), ("Read", 300), ("kb_query", 50), ("Grep", 40), ("Other", 35)]);
+        assert_eq!(tool_label("mcp__winfer-browser__browser_snapshot"), "browser_snapshot");
     }
 
     #[test]
@@ -436,6 +552,7 @@ mod tests {
         let parts = opencode_breakdown(&conn, "s1", 1100).unwrap();
         assert!(get(&parts, "setup") > 990, "{parts:?}");
         assert!(get(&parts, "toolResults") > 0 && get(&parts, "messages") > 0 && get(&parts, "thinking") > 0);
+        assert_eq!(sources(&parts), ["shell"]);
     }
 
     /// This machine's newest Claude transcript: `cargo test claude_breakdown_on_this_machine -- --ignored --nocapture`.

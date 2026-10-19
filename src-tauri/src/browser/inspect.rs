@@ -215,7 +215,7 @@ impl Instance {
     }
 
     async fn screenshot_element(&self, session: &str, backend_node_id: i64) -> Res<String> {
-        let cdp = self.cdp.get().ok_or("not connected")?;
+        let cdp = self.live_cdp().ok_or("not connected")?;
         let model = cdp
             .call(
                 "DOM.getBoxModel",

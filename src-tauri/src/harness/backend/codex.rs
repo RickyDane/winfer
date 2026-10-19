@@ -120,6 +120,13 @@ struct Child {
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut args = vec!["app-server".to_string()];
     args.extend(mcp_args(&opts.mcp));
+    // Lean Codex (Settings → winfer code → Lean setup): on by default for winfer code; Codex CLI
+    // panes have their own switch.
+    let config = crate::harness::config::Config::load();
+    if config.lean_codex {
+        args.extend(crate::pty::codex_output_cap());
+        args.extend(crate::pty::lean_codex_args(config.lean_codex_prompt));
+    }
     let proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me) {
         Ok(p) => p,
         Err(e) => {

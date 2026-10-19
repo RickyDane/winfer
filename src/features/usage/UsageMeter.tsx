@@ -1,5 +1,5 @@
 import { ChevronRight, Gauge, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -456,7 +456,12 @@ export function ContextMeter({ paneId, provider }: { paneId: string; provider: s
             ) : breakdown?.length ? (
               <div className="space-y-1">
                 {breakdown.map((p) => (
-                  <ContextRow key={p.kind} color={PART_COLORS[p.kind] ?? "var(--color-fg-subtle)"} label={p.label} tokens={p.tokens} percent={pct(p.tokens)} />
+                  <Fragment key={p.kind}>
+                    <ContextRow color={PART_COLORS[p.kind] ?? "var(--color-fg-subtle)"} label={p.label} tokens={p.tokens} percent={pct(p.tokens)} />
+                    {p.sources?.map((s) => (
+                      <ContextRow key={s.label} label={s.label} tokens={s.tokens} percent={pct(s.tokens)} nested />
+                    ))}
+                  </Fragment>
                 ))}
                 <ContextRow color="var(--color-hover)" label="Free space" tokens={free} percent={pct(free)} muted />
                 <div className="pt-1 text-[10px] text-fg-subtle">Estimated from the session's conversation.</div>
@@ -471,10 +476,15 @@ export function ContextMeter({ paneId, provider }: { paneId: string; provider: s
   );
 }
 
-function ContextRow({ color, label, tokens: n, percent, muted }: { color: string; label: string; tokens: number; percent: number; muted?: boolean }) {
+/** A row of the context card; `nested` rows break down the row above (no colour of their own). */
+function ContextRow({ color, label, tokens: n, percent, muted, nested }: { color?: string; label: string; tokens: number; percent: number; muted?: boolean; nested?: boolean }) {
   return (
-    <div className="flex items-center gap-2 text-[11px]">
-      <span className="size-2 shrink-0 rounded-sm" style={{ background: color, outline: muted ? "1px solid var(--color-border-strong)" : undefined }} />
+    <div className={cn("flex items-center gap-2", nested ? "pl-4 text-[10px]" : "text-[11px]")}>
+      {nested ? (
+        <span className="w-2 shrink-0 text-center text-fg-subtle">·</span>
+      ) : (
+        <span className="size-2 shrink-0 rounded-sm" style={{ background: color, outline: muted ? "1px solid var(--color-border-strong)" : undefined }} />
+      )}
       <span className={cn("flex-1 truncate", muted ? "text-fg-subtle" : "text-fg-muted")}>{label}</span>
       <span className="font-mono text-fg">{tokens(n)}</span>
       <span className="w-10 text-right font-mono text-fg-subtle">{percent < 1 && n > 0 ? "<1" : Math.round(percent)}%</span>

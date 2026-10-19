@@ -32,6 +32,12 @@ pub fn run_mcp_stdio() {
     mcp::run_stdio();
 }
 
+/// `winfer mcp-filter <tools> -- <command> [args]`: runs an MCP server with some of its tools
+/// hidden; returns its exit code.
+pub fn run_mcp_filter(args: &[String]) -> i32 {
+    mcp::run_filter(args)
+}
+
 /// `winfer statusline`: reports Claude Code's usage limits, then runs the user's status line.
 pub fn run_statusline() {
     usage::run_statusline();

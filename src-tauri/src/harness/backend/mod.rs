@@ -93,7 +93,8 @@ pub struct Opts {
     pub trim_at: u8,
     pub compact_at: u8,
     /// Start Claude Code lean: a short system prompt and only the tools a coding task needs,
-    /// instead of its full default setup (see [`LEAN_PROMPT`]). Codex stays as it is.
+    /// instead of its full default setup (see [`LEAN_PROMPT`]). Codex goes lean with its own
+    /// setting (`Config::lean_codex`, see codex.rs).
     pub lean: bool,
     /// The skills Claude Code loads in lean mode.
     pub skills: crate::harness::claude_skills::LeanSkills,
@@ -103,6 +104,10 @@ pub struct Opts {
 /// to thousands of tokens per request). It's the same text every time, so the prompt cache keeps
 /// it warm across sessions; where the agent is comes after it.
 pub const LEAN_PROMPT: &str = "You are a coding agent working in the user's repository from their terminal. Work autonomously: explore with search and reads, read a file before editing it, make focused changes that match the surrounding code, and verify with the project's tests or a quick run. Put independent tool calls in one response. Don't stop to ask unless you're blocked or the request is ambiguous. Reply tersely in Markdown and reference code as path:line.";
+
+/// Lean Codex's short system prompt (Settings → winfer code → Short Codex prompt), in place of
+/// Codex's built-in one; its tools describe themselves.
+pub const CODEX_LEAN_PROMPT: &str = "You are a coding agent working in the user's repository from their terminal. Work autonomously: explore with search and reads, read a file before editing it, make focused changes that match the surrounding code, and verify with the project's tests or a quick run. Edit files with apply_patch. Put independent tool calls in one response. Don't stop to ask unless you're blocked or the request is ambiguous. Reply tersely in Markdown and reference code as path:line.";
 
 /// Where the agent is (Claude Code drops it with its default prompt); goes after [`LEAN_PROMPT`]
 /// so the cached prefix stays the same.

@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { logBrowser, setPageSize, type Device, type PageSize } from "./browser";
@@ -90,6 +91,14 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // The browser connection dropped (e.g. the computer slept): show the tab again, which reconnects.
+  useEffect(() => {
+    const unlisten = listen<string>("browser://disconnected", ({ payload }) => {
+      if (payload === workspaceId) setAttempt((a) => a + 1);
+    });
+    return () => void unlisten.then((off) => off());
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!measured) return;

@@ -44,6 +44,8 @@ export interface ContextPart {
   kind: string;
   label: string;
   tokens: number;
+  /** What it's made of, biggest first: for tool results, the tools that returned them. */
+  sources?: { label: string; tokens: number }[];
 }
 
 /** What a pane's context is made of; null when the agent's session can't be read. */

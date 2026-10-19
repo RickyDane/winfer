@@ -6,6 +6,8 @@
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 import { openInEditor } from "@/features/editors/editors";
+import { openUrl as openInBrowser } from "@/features/browser/browser";
+import { useWorkspaces } from "@/stores/workspaces";
 import { fileFromUri, findPaths } from "./paths";
 import { openFile, openFileFrom, resolveFiles } from "./viewer";
 
@@ -79,7 +81,19 @@ export function fileLinkProvider(term: Terminal, cwdOf: () => string): ILinkProv
   };
 }
 
-/** Opens an OSC 8 hyperlink: files in the viewer (or editor), web links in the default browser. */
+/**
+ * Opens a web link from a terminal in winfer's browser panel; ⌘-click (Ctrl-click) opens it
+ * in the default browser instead. mailto: and other non-web links go to the system.
+ */
+export function openWebLink(event: MouseEvent | undefined, uri: string) {
+  const external = event && (IS_MAC ? event.metaKey : event.ctrlKey);
+  if (/^https?:/i.test(uri) && !external) {
+    useWorkspaces.getState().setSidePanel("browser");
+    void openInBrowser(uri, { newTab: true });
+  } else void openExternal(uri);
+}
+
+/** Opens an OSC 8 hyperlink: files in the viewer (or editor), web links in winfer's browser. */
 export function openTerminalUri(event: MouseEvent, uri: string, cwd: string) {
   const file = fileFromUri(uri);
   if (file) {
@@ -90,5 +104,5 @@ export function openTerminalUri(event: MouseEvent, uri: string, cwd: string) {
     } else void openFileFrom(cwd, file.path, { line: file.line });
     return;
   }
-  if (/^(https?|mailto):/i.test(uri)) void openExternal(uri);
+  if (/^(https?|mailto):/i.test(uri)) openWebLink(event, uri);
 }

@@ -45,7 +45,7 @@ const providers = [
   { id: "shell", name: "Shell", command: null, args: [], resumeArgs: [], aliases: [], statusHooks: false, promptArg: false, approveInput: null, modelArg: null, modelCommand: null, installed: true },
 ];
 
-let harnessSettings = { model: "", effort: null, mode: "ask", trimAt: 0, compactAt: 0, allowedCommands: ["git"], mcpServers: {}, leanBridges: true, leanAllSkills: false, leanSkills: ["graphify"], planSidebar: true };
+let harnessSettings = { model: "", effort: null, mode: "ask", trimAt: 0, compactAt: 0, allowedCommands: ["git"], mcpServers: {}, leanBridges: true, leanAllSkills: false, leanSkills: ["graphify"], planSidebar: true, leanCodex: true, leanCodexPrompt: false };
 
 // Fake plugins: the store is the repo's plugins/ folder; one local plugin is broken.
 const storeManifests = import.meta.glob<Record<string, unknown>>("../../plugins/*/plugin.json", { eager: true, import: "default" });
@@ -520,7 +520,13 @@ mockIPC(
           ["toolCalls", "Tool calls", 0.12],
           ["toolResults", "Tool results", 0.33],
         ];
-        return shares.map(([kind, label, f]) => ({ kind, label, tokens: Math.round(total * f) }));
+        const results: [string, number][] = [["Bash", 0.6], ["Read", 0.25], ["browser_snapshot", 0.1], ["Other", 0.05]];
+        return shares.map(([kind, label, f]) => ({
+          kind,
+          label,
+          tokens: Math.round(total * f),
+          ...(kind === "toolResults" && { sources: results.map(([l, g]) => ({ label: l, tokens: Math.round(total * f * g) })) }),
+        }));
       }
       case "usage_dirs":
         return (a.dirs as string[]).map((dir, i) => {

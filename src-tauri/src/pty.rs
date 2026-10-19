@@ -81,9 +81,13 @@ pub struct SpawnRequest {
     /// user's own MCP servers and skills (see [`plain_args`]). Status hooks stay on.
     #[serde(default)]
     plain: bool,
-    /// Start the agent without its bundled extras (see [`lean_args`]), from settings.
+    /// Codex CLI panes: start Codex lean and with its output cap (see [`lean_codex_args`]), from
+    /// settings (off by default; winfer code's Codex has its own switch).
     #[serde(default)]
     lean: bool,
+    /// MCP tools to leave out of the agent's tool list (Settings → Agent tools).
+    #[serde(default)]
+    hidden_tools: Vec<String>,
     cols: u16,
     rows: u16,
 }
@@ -224,6 +228,86 @@ fn lean_args(provider_id: &str) -> Vec<String> {
     }
 }
 
+/// Claude Code's limits on a single tool result, lowered from its defaults (30k characters of
+/// shell output, 25k tokens per file read or MCP result): tool output is most of an agent's
+/// context, and the biggest results are a few percent of calls but almost a third of the tokens.
+/// Over the limit, shell output is cut and an oversized read fails asking for an offset and
+/// limit. `winfer code` passes them on to the Claude Code it runs.
+const OUTPUT_CAPS: [(&str, &str); 3] = [
+    ("BASH_MAX_OUTPUT_LENGTH", "15000"),
+    ("CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS", "12000"),
+    ("MAX_MCP_OUTPUT_TOKENS", "15000"),
+];
+
+/// Codex's limit on a single tool result, in tokens: about the shell cap Claude Code gets (its
+/// own default for Codex models is 10k).
+const CODEX_OUTPUT_TOKENS: u32 = 4000;
+
+/// Codex's output cap as config overrides, unless the user's Codex config sets one itself (an
+/// override would win over it). For `winfer code`'s Codex backend, and Codex CLI panes with Lean
+/// Codex on.
+pub(crate) fn codex_output_cap() -> Vec<String> {
+    let home = std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
+    let config = home.and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok()).unwrap_or_default();
+    if sets_output_limit(&config) {
+        return Vec::new();
+    }
+    vec!["-c".into(), format!("tool_output_token_limit={CODEX_OUTPUT_TOKENS}")]
+}
+
+/// Whether a Codex config sets `tool_output_token_limit` (at the top level or in a profile).
+fn sets_output_limit(config: &str) -> bool {
+    config.lines().any(|l| l.trim_start().strip_prefix("tool_output_token_limit").is_some_and(|rest| rest.trim_start().starts_with('=')))
+}
+
+/// The [`OUTPUT_CAPS`] a provider gets: those the user hasn't set themselves (compared without
+/// case, as Windows does).
+fn output_caps(provider_id: &str, env: &HashMap<String, String>) -> Vec<(String, String)> {
+    if !matches!(provider_id, "claude" | "winfer") {
+        return Vec::new();
+    }
+    OUTPUT_CAPS
+        .iter()
+        .filter(|(key, _)| !env.keys().any(|k| k.eq_ignore_ascii_case(key)))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// Instructions Codex adds to every request that winfer's panes don't need: its permissions
+/// (approvals come from winfer's settings), ChatGPT apps and collaboration modes.
+const CODEX_LEAN_INSTRUCTIONS: &[&str] = &[
+    "include_permissions_instructions=false",
+    "include_apps_instructions=false",
+    "include_collaboration_mode_instructions=false",
+];
+
+/// Everything Lean Codex turns off, as config overrides: the bundled extras ([`lean_args`]), the
+/// instructions above and the skills not picked (Settings → winfer code → Skills); with
+/// `short_prompt`, Codex's built-in system prompt is swapped for a short one too. In the bench
+/// (12 tasks, same pass rate): 37% fewer input tokens, 52% with the short prompt.
+pub(crate) fn lean_codex_args(short_prompt: bool) -> Vec<String> {
+    let mut args = lean_args("codex");
+    args.extend(CODEX_LEAN_INSTRUCTIONS.iter().flat_map(|o| ["-c".to_string(), o.to_string()]));
+    args.extend(crate::harness::claude_skills::codex_args(&crate::harness::config::Config::load().lean_skills()));
+    if let Some(file) = short_prompt.then(codex_prompt_file).flatten() {
+        // A JSON string is a valid TOML string, backslashes of Windows paths included.
+        args.extend(["-c".into(), format!("model_instructions_file={}", serde_json::to_string(&file.to_string_lossy()).unwrap_or_default())]);
+    }
+    args
+}
+
+/// The short prompt for Lean Codex as a file (Codex reads its system prompt from one), written
+/// when missing or out of date.
+fn codex_prompt_file() -> Option<PathBuf> {
+    let dir = crate::harness::config::dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = dir.join("codex-lean-prompt.md");
+    if std::fs::read_to_string(&file).ok().as_deref() != Some(crate::harness::backend::CODEX_LEAN_PROMPT) {
+        std::fs::write(&file, crate::harness::backend::CODEX_LEAN_PROMPT).ok()?;
+    }
+    Some(file)
+}
+
 /// `winfer code` runs this GUI-subsystem binary, which Windows doesn't attach to the pane's
 /// pseudoconsole (its TUI aborted with exit code 0xC0000409). cmd.exe, a console program, holds
 /// the console and waits for it (`start /b /wait`, which also passes on its exit code); winfer
@@ -258,9 +342,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             let servers: Vec<_> = if req.plain {
                 Vec::new()
             } else {
-                mcp::winfer_server(&req.pane_id)
+                mcp::winfer_server(&req.pane_id, &req.hidden_tools)
                     .into_iter()
-                    .chain(cdp_url.map(browser::playwright_server))
+                    .chain(cdp_url.map(|url| mcp::filtered(browser::playwright_server(url), &req.hidden_tools)))
                     .collect()
             };
             let launcher = crate::env::launcher(command)
@@ -289,6 +373,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 config_approve,
                 login_env().get("OPENCODE_CONFIG_CONTENT").map(String::as_str),
             );
+            if !req.plain {
+                agent_env.extend(output_caps(&provider.id, login_env()));
+            }
             // OpenCode 2 runs sessions in a shared background server that never sees this
             // process's environment (so our MCP servers and plugin); its own private server does.
             if opencode_v2 && !agent_env.is_empty() {
@@ -303,13 +390,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 (plain_args(&provider.id), hooks::provider_args(&provider.id))
             } else {
                 let mut mcp = mcp::agent_args(&provider.id, &servers);
-                if req.lean {
-                    mcp.extend(lean_args(&provider.id));
-                    // Same skill choice as winfer code's lean Claude Code (Settings → winfer code).
-                    if provider.id == "codex" {
-                        let skills = crate::harness::config::Config::load().lean_skills();
-                        mcp.extend(crate::harness::claude_skills::codex_args(&skills));
-                    }
+                if req.lean && provider.id == "codex" {
+                    mcp.extend(codex_output_cap());
+                    mcp.extend(lean_codex_args(false));
                 }
                 (mcp, hooks::provider_args(&provider.id))
             };
@@ -556,6 +639,7 @@ mod tests {
             system_prompt: None,
             plain: false,
             lean: false,
+            hidden_tools: Vec::new(),
             cols: 80,
             rows: 24,
         };
@@ -658,6 +742,7 @@ mod tests {
             system_prompt: Some("Use your tools.".into()),
             plain: false,
             lean: false,
+            hidden_tools: Vec::new(),
             cols: 80,
             rows: 24,
         };
@@ -692,6 +777,39 @@ mod tests {
     }
 
     #[test]
+    fn codex_output_cap_yields_to_the_users_config() {
+        assert!(!sets_output_limit("model = \"gpt-5\"\n# tool_output_token_limit = 1\n"));
+        assert!(sets_output_limit("tool_output_token_limit = 20000\n"));
+        assert!(sets_output_limit("[profiles.big]\n  tool_output_token_limit=50000\n"));
+        assert!(!sets_output_limit("tool_output_token_limit_extra = 1\n"));
+    }
+
+    #[test]
+    fn output_caps_leave_the_users_own_alone() {
+        let none = HashMap::new();
+        assert_eq!(output_caps("claude", &none).len(), 3);
+        assert_eq!(output_caps("winfer", &none).len(), 3);
+        assert!(output_caps("codex", &none).is_empty());
+        // Windows environment names ignore case.
+        let own = HashMap::from([("Bash_Max_Output_Length".to_string(), "50000".to_string())]);
+        let caps = output_caps("claude", &own);
+        assert_eq!(caps.len(), 2);
+        assert!(caps.iter().all(|(k, _)| k != "BASH_MAX_OUTPUT_LENGTH"));
+    }
+
+    #[test]
+    fn lean_codex_drops_instructions_and_can_swap_the_prompt() {
+        let args = lean_codex_args(false);
+        assert!(args.windows(2).any(|w| w == ["-c", "include_permissions_instructions=false"]));
+        assert!(args.windows(2).any(|w| w == ["-c", "features.apps=false"]));
+        assert!(!args.iter().any(|a| a.starts_with("model_instructions_file")));
+        let short = lean_codex_args(true);
+        let file = short.iter().find_map(|a| a.strip_prefix("model_instructions_file=")).expect("short prompt");
+        let path: String = serde_json::from_str(file).unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), crate::harness::backend::CODEX_LEAN_PROMPT);
+    }
+
+    #[test]
     fn lean_codex_turns_off_bundled_extras() {
         let args = lean_args("codex");
         assert!(args.chunks(2).all(|p| p[0] == "-c"));
@@ -721,6 +839,7 @@ mod tests {
             system_prompt: None,
             plain: false,
             lean: false,
+            hidden_tools: Vec::new(),
             cols: 80,
             rows: 24,
         };

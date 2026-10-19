@@ -218,12 +218,14 @@ pub fn run_stdio() {
         var("WINFER_TOKEN"),
         var("WINFER_PANE_ID"),
     );
+    let hidden = hidden_tools();
     let stdout = std::io::stdout();
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(response) = handle(&message, &env) {
+        if let Some(mut response) = handle(&message, &env) {
+            hide_tools(&mut response, &hidden);
             let mut out = stdout.lock();
             let _ = writeln!(out, "{response}");
             let _ = out.flush();
@@ -241,20 +243,88 @@ pub struct Server {
     pub env: Vec<(&'static str, String)>,
 }
 
-/// The winfer server for a pane, if the hook server is running.
-pub fn winfer_server(pane_id: &str) -> Option<Server> {
+/// The winfer server for a pane, if the hook server is running, without the `hidden` tools.
+pub fn winfer_server(pane_id: &str, hidden: &[String]) -> Option<Server> {
     let hooks = hooks::server()?;
     let exe = std::env::current_exe().ok()?;
-    Some(Server {
-        name: "winfer",
-        command: exe.to_string_lossy().into_owned(),
-        args: vec!["mcp-stdio".into()],
-        env: vec![
-            ("WINFER_HOOK", hooks.addr.clone()),
-            ("WINFER_TOKEN", hooks.token.clone()),
-            ("WINFER_PANE_ID", pane_id.to_string()),
-        ],
-    })
+    let mut env = vec![
+        ("WINFER_HOOK", hooks.addr.clone()),
+        ("WINFER_TOKEN", hooks.token.clone()),
+        ("WINFER_PANE_ID", pane_id.to_string()),
+    ];
+    if !hidden.is_empty() {
+        env.push((HIDE_ENV, hidden.join(",")));
+    }
+    Some(Server { name: "winfer", command: exe.to_string_lossy().into_owned(), args: vec!["mcp-stdio".into()], env })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hiding tools: each one an agent is offered costs context in every request, so the ones the
+// user turned off (Settings → Agent tools) are left out of `tools/list`. winfer's own server
+// reads them from its environment; other servers (the browser's Playwright MCP, which can't
+// leave tools out itself) run behind `winfer mcp-filter`, which drops them from the replies.
+
+/// Tool names to hide, comma-separated, for `winfer mcp-stdio`.
+const HIDE_ENV: &str = "WINFER_MCP_HIDE";
+
+fn hidden_tools() -> Vec<String> {
+    std::env::var(HIDE_ENV).unwrap_or_default().split(',').map(str::trim).filter(|t| !t.is_empty()).map(String::from).collect()
+}
+
+/// Drops the `hidden` tools from a `tools/list` reply; other messages pass unchanged.
+fn hide_tools(message: &mut Value, hidden: &[String]) -> bool {
+    let Some(tools) = message.pointer_mut("/result/tools").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let before = tools.len();
+    tools.retain(|t| !t["name"].as_str().is_some_and(|n| hidden.iter().any(|h| h == n)));
+    tools.len() != before
+}
+
+/// `server` started through `winfer mcp-filter`, which hides the `hidden` tools of it.
+pub fn filtered(server: Server, hidden: &[String]) -> Server {
+    let Some(exe) = std::env::current_exe().ok().filter(|_| !hidden.is_empty()) else {
+        return server;
+    };
+    let mut args = vec!["mcp-filter".to_string(), hidden.join(","), "--".into(), server.command];
+    args.extend(server.args);
+    Server { name: server.name, command: exe.to_string_lossy().into_owned(), args, env: server.env }
+}
+
+/// Entry point for `winfer mcp-filter <tools> -- <command> [args]`: runs the MCP server
+/// `command` with stdin passed through and its `tools/list` replies without `tools`
+/// (comma-separated). Exits with the server's exit code.
+pub fn run_filter(args: &[String]) -> i32 {
+    let (Some(hidden), Some("--"), Some(command)) = (args.first(), args.get(1).map(String::as_str), args.get(2)) else {
+        eprintln!("usage: winfer mcp-filter <tools> -- <command> [args]");
+        return 2;
+    };
+    let hidden: Vec<String> = hidden.split(',').filter(|t| !t.is_empty()).map(String::from).collect();
+    let mut cmd = std::process::Command::new(command);
+    cmd.args(&args[3..]).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+    // From the GUI binary on Windows, a console program (`cmd /c npx`) would open a window.
+    let mut child = match crate::env::no_window(&mut cmd).spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!("winfer mcp-filter: couldn't start {command}: {err}");
+            return 1;
+        }
+    };
+    let mut to_child = child.stdin.take().expect("piped stdin");
+    // The agent's requests go through as they are; when it closes stdin, so does the server's.
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut to_child);
+    });
+    let from_child = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
+    let stdout = std::io::stdout();
+    for line in from_child.lines().map_while(Result::ok) {
+        let mut out = stdout.lock();
+        // Only a reply that lists tools is rewritten; everything else is passed on byte for byte.
+        let rewritten = line.contains("\"tools\"").then(|| serde_json::from_str::<Value>(&line).ok()).flatten().and_then(|mut v| hide_tools(&mut v, &hidden).then(|| v.to_string()));
+        let _ = writeln!(out, "{}", rewritten.as_deref().unwrap_or(&line));
+        let _ = out.flush();
+    }
+    child.wait().ok().and_then(|s| s.code()).unwrap_or(1)
 }
 
 /// CLI arguments that register `servers` with an agent (Claude Code or Codex; OpenCode and pi:
@@ -487,6 +557,28 @@ mod tests {
                 .unwrap()
                 .contains("couldn't reach winfer")
         );
+    }
+
+    #[test]
+    fn hides_tools_from_lists_only() {
+        let hidden = ["browser_drag".to_string(), "kb_save".to_string()];
+        let mut list = json!({ "jsonrpc": "2.0", "id": 1, "result": { "tools": [{ "name": "browser_click" }, { "name": "browser_drag" }, { "name": "kb_save" }] } });
+        assert!(hide_tools(&mut list, &hidden));
+        assert_eq!(list["result"]["tools"], json!([{ "name": "browser_click" }]));
+        // Nothing to hide, or not a list: left alone.
+        assert!(!hide_tools(&mut list, &hidden));
+        let mut call = json!({ "jsonrpc": "2.0", "id": 2, "result": { "content": [] } });
+        assert!(!hide_tools(&mut call, &hidden));
+    }
+
+    #[test]
+    fn filters_a_server_through_this_binary() {
+        let server = || Server { name: "winfer-browser", command: "cmd".into(), args: vec!["/c".into(), "npx".into()], env: Vec::new() };
+        let wrapped = filtered(server(), &["browser_drag".into(), "browser_drop".into()]);
+        assert_eq!(wrapped.command, std::env::current_exe().unwrap().to_string_lossy());
+        assert_eq!(wrapped.args, ["mcp-filter", "browser_drag,browser_drop", "--", "cmd", "/c", "npx"]);
+        // Nothing hidden: started as it is.
+        assert_eq!(filtered(server(), &[]).command, "cmd");
     }
 
     #[test]
