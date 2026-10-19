@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl as openExternal, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Check, Code, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, MessageSquarePlus, Pencil, Plus, RotateCw, Send, X } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ThemedToken } from "shiki";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -15,6 +16,7 @@ import { leaves } from "@/features/layout/tree";
 import { pasteText, sendText } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { findComments, insertComment, parseCommentValue, removeComment } from "./comments";
+import { languageFor, lineTokens, tokenStyle, useHighlight } from "./highlight";
 import { dirName, fileFromUri, fileName, isImage, isMarkdown, relativeTo, slugger } from "./paths";
 import { closeFile, openFile, openFileFrom, pickFile, resolveFiles, useViewerJump } from "./viewer";
 
@@ -344,7 +346,7 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
             )}
           </div>
         ) : (
-          <CodeView text={file.text} line={jump.path === path ? jump.line : null} />
+          <CodeView text={file.text} line={jump.path === path ? jump.line : null} lang={languageFor(path)} />
         )}
       </div>
       {composing && rendered && (
@@ -451,18 +453,47 @@ function CommentNote({ author, at, children, onRemove }: { author: string; at: n
   );
 }
 
-function CodeView({ text, line }: { text: string; line: number | null }) {
+function CodeView({ text, line, lang }: { text: string; line: number | null; lang: string | null }) {
   const lines = text.split(/\r?\n/);
+  const tokens = useHighlight(text, lines.length > MAX_NUMBERED_LINES ? null : lang);
   if (lines.length > MAX_NUMBERED_LINES) return <pre className="p-3 font-mono text-[12px] leading-5 whitespace-pre text-fg">{text}</pre>;
   return (
     <div className="py-2 font-mono text-[12px] leading-5">
       {lines.map((l, i) => (
         <div key={i} data-row={i + 1} className={cn("flex", line === i + 1 && "bg-accent-soft")}>
           <span className="w-12 shrink-0 pr-3 text-right text-fg-subtle select-none">{i + 1}</span>
-          <span className="pr-4 whitespace-pre text-fg">{l || " "}</span>
+          <span className="pr-4 whitespace-pre text-fg">{l ? <Tokenized line={l} tokens={lineTokens(tokens, i, l)} /> : " "}</span>
         </div>
       ))}
     </div>
+  );
+}
+
+function Tokenized({ line, tokens }: { line: string; tokens: ThemedToken[] | null }) {
+  if (!tokens) return line;
+  return tokens.map((t, j) => (
+    <span key={j} className="shiki-tok" style={tokenStyle(t)}>
+      {t.content}
+    </span>
+  ));
+}
+
+/** A fenced code block in markdown, highlighted when its language is known. */
+function FencedCode({ className, children, ...rest }: React.ComponentProps<"code">) {
+  const lang = /language-([\w+#.-]+)/.exec(className ?? "")?.[1] ?? null;
+  const code = typeof children === "string" ? children.replace(/\n$/, "") : null;
+  const tokens = useHighlight(code ?? "", code === null ? null : lang);
+  if (!tokens || code === null) return <code className={className} {...rest}>{children}</code>;
+  const lines = code.split(/\r?\n/);
+  return (
+    <code className={className} {...rest}>
+      {lines.map((l, i) => (
+        <Fragment key={i}>
+          {i > 0 && "\n"}
+          <Tokenized line={l} tokens={lineTokens(tokens, i, l)} />
+        </Fragment>
+      ))}
+    </code>
   );
 }
 
@@ -567,6 +598,7 @@ const Markdown = memo(function Markdown({ text, path, onRemoveComment }: { text:
         </CommentNote>
       );
     },
+    code: ({ node: _node, ...rest }) => <FencedCode {...rest} />,
     img: ({ src, alt, node: _node, ...rest }) => <LocalImage {...rest} src={typeof src === "string" ? src : undefined} alt={alt} base={dirName(path)} />,
   };
   return (

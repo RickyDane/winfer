@@ -14,11 +14,15 @@ import { BENCH_DEMO, harnessBenchExec, harnessBenchFile, harnessBenchWrite } fro
 
 // Fake files for the file viewer: the repo's own docs, under /Users/you/winfer.
 const REPO = "/Users/you/winfer";
-const repoDocs = import.meta.glob<string>(["../../*.md", "../../docs/**/*.md"], { eager: true, query: "?raw", import: "default" });
+const repoDocs = import.meta.glob<string>(
+  ["../../*.md", "../../docs/**/*.md", "../../src/features/viewer/*.ts", "../../src/features/viewer/*.tsx", "../../src/styles/globals.css", "../../src-tauri/src/lib.rs", "../../package.json"],
+  { eager: true, query: "?raw", import: "default" },
+);
 const repoImages = import.meta.glob<string>("../../docs/screenshots/*.png", { eager: true, query: "?url", import: "default" });
 /** Files saved from the viewer (edits, comments), kept in memory with their change time. */
 const savedDocs = new Map<string, { text: string; modified: number }>();
-const repoFile = (rel: string) => savedDocs.get(rel)?.text ?? repoDocs[`../../${rel}`] ?? null;
+// Vite writes keys under src/ relative to this folder ("../features/…").
+const repoFile = (rel: string) => savedDocs.get(rel)?.text ?? repoDocs[`../../${rel}`] ?? (rel.startsWith("src/") ? repoDocs[`../${rel.slice(4)}`] : null) ?? null;
 const repoModified = (rel: string) => savedDocs.get(rel)?.modified ?? 1;
 function mockResolve(cwd: string, path: string) {
   const full = path.startsWith("/") ? path : `${cwd.replace(/^~/, "/Users/you").replace(/\/$/, "")}/${path}`;

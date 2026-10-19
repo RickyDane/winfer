@@ -268,6 +268,9 @@ body.resizing * {
   .md-body code { font-family: var(--font-mono); font-size: 0.86em; padding: 0.15em 0.4em; border-radius: 4px; background: var(--color-active); }
   .md-body pre { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; padding: 12px 14px; border-radius: 8px; background: var(--color-panel-raised); border: 1px solid var(--color-border); overflow-x: auto; }
   .md-body pre code { padding: 0; background: none; font-size: inherit; }
+  /* Syntax-highlighted tokens (features/viewer/highlight.ts) carry both themes' colors. */
+  .shiki-tok { color: var(--shiki-dark); }
+  :root[data-mode="light"] .shiki-tok { color: var(--shiki-light); }
   /* Review comments kept in the document as <!-- @user: … --> */
   .md-body .md-comment { display: block; margin: 0 0 14px; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; border: 1px solid var(--color-border); border-left-width: 3px; background: var(--color-panel-raised); }
   .md-body .md-comment-user { border-left-color: var(--color-accent); }

@@ -47,3 +47,4 @@ m-video/
 .opencode/
 .specsmd/
 __pycache__/
+.codegraph/
