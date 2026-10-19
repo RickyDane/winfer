@@ -9,23 +9,55 @@ export interface PathMatch {
   end: number;
 }
 
-/** A file mention: optional drive, `~`, `./` or `../`, folders, then a name with an extension that has a letter in it
- * (so `1.2.3` doesn't count), then an optional `:line`, `:line:col`, `:from-to` (OpenCode) or `#L12` (Codex). */
-const PATH = /(?<![\w/\\.~@%+-])((?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|[\\/])?(?:[\w@+-][\w.@+-]*[\\/])*[\w@+-][\w.@+-]*\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,12})(?:(?::|#L)(\d+)(?:[:-]L?\d+)?)?(?![\w\\/@+-])/g;
+const START = String.raw`[\p{L}\p{N}_@+\-]`;
+const REST = String.raw`[\p{L}\p{N}_.@+\-]`;
+/** A folder or file name, letters of any script; dotfolders (`.github`) too. */
+const SEG = String.raw`\.?${START}${REST}*`;
+/** Files people name without an extension. */
+const KNOWN = String.raw`(?:Makefile|Dockerfile|Containerfile|Justfile|Gemfile|Rakefile|Procfile|Brewfile|Vagrantfile|Caddyfile|LICENSE|README|CHANGELOG|CODEOWNERS)`;
+const ROOT = String.raw`(?:[A-Za-z]:[\\/]|~[\\/]|\.{1,2}[\\/]|[\\/])`;
+const POS = String.raw`(?:(?::|#L)(\d+)(?:[:-]L?\d+)?)?`;
+/**
+ * A file mention: optional drive, `~`, `./` or `../`, folders, then a name with an extension that has a letter in it
+ * (so `1.2.3` doesn't count), a dotfile (`.gitignore`), a well-known extensionless name (`Makefile`), or any name
+ * after at least one folder (`bin/dev`); then an optional `:line`, `:line:col`, `:from-to` (OpenCode) or `#L12` (Codex).
+ */
+const PATH = new RegExp(
+  String.raw`(?<![\p{L}\p{N}_/\\.~@%+\-])(${ROOT}?(?:(?:${SEG}[\\/])*(?:${SEG}\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,12}|\.[A-Za-z][\w\-]*|${KNOWN})|(?:${SEG}[\\/])+${START}(?:${REST}*${START})?))${POS}(?![\p{L}\p{N}_\\/@+\-])`,
+  "gu",
+);
+/** A quoted path with spaces in it: `"~/My Site/index.html"`. */
+const QUOTED = new RegExp(String.raw`(["'\x60])((?:${ROOT}|${SEG}[\\/])[^"'\x60\n]*? [^"'\x60\n]*?\.[A-Za-z0-9]{1,12})${POS}\1`, "gu");
 const WEB_URL = /\b[a-z][\w+.-]*:\/\/\S+/gi;
 
 /** File-path-looking mentions in a line of text, leaving out anything inside a URL. */
 export function findPaths(text: string): PathMatch[] {
   const urls = [...text.matchAll(WEB_URL)].map((m) => [m.index, m.index + m[0].length]);
-  const out: PathMatch[] = [];
+  const quoted: PathMatch[] = [];
+  for (const m of text.matchAll(QUOTED)) {
+    const start = m.index + 1;
+    quoted.push({ path: m[2], line: m[3] ? Number(m[3]) : undefined, start, end: m.index + m[0].length - 1 });
+  }
+  const out: PathMatch[] = [...quoted];
   for (const m of text.matchAll(PATH)) {
     const start = m.index;
     const end = start + m[0].length;
     if (urls.some(([a, b]) => start < b && end > a)) continue;
+    if (quoted.some((q) => start < q.end && end > q.start)) continue;
     // "foo.md." at the end of a sentence: the regex can't end on a dot, so this is already clean.
     out.push({ path: m[1], line: m[2] ? Number(m[2]) : undefined, start, end });
   }
-  return out;
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** Files better seen as web pages: open in winfer's browser, not the viewer. */
+const WEB_PAGE = /\.(html?|xhtml|svg)$/i;
+export const isWebPage = (path: string) => WEB_PAGE.test(path);
+
+/** `file://` URL for an absolute path. */
+export function fileUrl(path: string) {
+  const p = path.replace(/\\/g, "/");
+  return `file://${p.startsWith("/") ? "" : "/"}${encodeURI(p).replace(/[?#]/g, encodeURIComponent)}`;
 }
 
 const MARKDOWN = /\.(md|markdown|mdown|mkd|mkdn|mdx)$/i;

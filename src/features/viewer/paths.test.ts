@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileFromUri, findPaths, relativeTo, slugger } from "./paths";
+import { fileFromUri, fileUrl, findPaths, isWebPage, relativeTo, slugger } from "./paths";
 
 const paths = (text: string) => findPaths(text).map((m) => (m.line ? `${m.path}:${m.line}` : m.path));
 
@@ -13,6 +13,14 @@ describe("findPaths", () => {
     expect(paths("C:\\work\\repo\\README.md")).toEqual(["C:\\work\\repo\\README.md"]);
     expect(paths("→ Read src/foo.ts:10-20")).toEqual(["src/foo.ts:10"]);
     expect(paths("see `src/app.ts#L42`")).toEqual(["src/app.ts:42"]);
+  });
+
+  it("finds dotfiles, extensionless and non-ASCII names, and quoted paths with spaces", () => {
+    expect(paths("Edit .github/workflows/ci.yml and .gitignore")).toEqual([".github/workflows/ci.yml", ".gitignore"]);
+    expect(paths("see Makefile and bin/dev.")).toEqual(["Makefile", "bin/dev"]);
+    expect(paths("Wrote docs/Übersicht.md")).toEqual(["docs/Übersicht.md"]);
+    expect(paths('open "~/My Site/index.html" now')).toEqual(["~/My Site/index.html"]);
+    expect(paths("Write(/Users/r/site/index.html)")).toEqual(["/Users/r/site/index.html"]);
   });
 
   it("reports where the match is, suffix included", () => {
@@ -52,4 +60,11 @@ it("slugs headings like GitHub", () => {
   expect(slug("Getting started!")).toBe("getting-started");
   expect(slug("Getting started")).toBe("getting-started-1");
   expect(slug("M0 — Shell & tiling")).toBe("m0--shell--tiling");
+});
+
+it("sends web pages to the browser", () => {
+  expect(isWebPage("/a/index.html")).toBe(true);
+  expect(isWebPage("/a/logo.SVG")).toBe(true);
+  expect(isWebPage("/a/README.md")).toBe(false);
+  expect(fileUrl("/Users/r/My Site/a#1.html")).toBe("file:///Users/r/My%20Site/a%231.html");
 });

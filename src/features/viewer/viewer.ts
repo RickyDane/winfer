@@ -17,9 +17,14 @@ export const useViewerJump = create<{ path: string | null; line: number | null; 
   nonce: 0,
 }));
 
-/** Absolute paths of the files `paths` name (relative ones from `cwd`), null where there's no such file. */
-export function resolveFiles(cwd: string, paths: string[]): Promise<(string | null)[]> {
-  return invoke<(string | null)[]>("files_resolve", { cwd, paths }).catch(() => paths.map(() => null));
+/**
+ * Absolute paths of the files `paths` name, null where there's no such file. Relative ones are
+ * looked up from `cwd`, the folders above it in its checkout, then `roots`, then by name in the checkout.
+ */
+export function resolveFiles(cwd: string, paths: string[], roots?: string[]): Promise<(string | null)[]> {
+  return invoke<(string | null)[]>("files_resolve", roots?.length ? { cwd, paths, roots } : { cwd, paths }).catch(() =>
+    paths.map(() => null),
+  );
 }
 
 /** Shows `path` (absolute) in the viewer tab of the side panel, opening the panel if needed. */

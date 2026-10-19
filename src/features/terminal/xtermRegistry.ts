@@ -100,6 +100,12 @@ function cwdOf(id: string, fallback: string) {
   return useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === id)?.cwd ?? fallback;
 }
 
+/** The pane's workspace folder: a second place to look for the relative paths it prints. */
+function rootsOf(id: string) {
+  const ws = useWorkspaces.getState().workspaces.find((w) => w.panes.some((p) => p.id === id));
+  return ws?.rootDir ? [ws.rootDir] : [];
+}
+
 function create(pane: Pane): Entry {
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace',
@@ -126,7 +132,7 @@ function create(pane: Pane): Entry {
     if (entry) entry.searchResults = { index: resultIndex, count: resultCount };
   });
   term.loadAddon(new WebLinksAddon((event, uri) => openWebLink(event, uri)));
-  term.registerLinkProvider(fileLinkProvider(term, () => cwdOf(pane.id, pane.cwd)));
+  term.registerLinkProvider(fileLinkProvider(term, () => cwdOf(pane.id, pane.cwd), () => rootsOf(pane.id)));
 
   // App shortcuts (⌘… on macOS, Ctrl+Shift+… on Windows, plus any the user assigned) must reach
   // the app, not the PTY. Returning false skips xterm only; the browser still fires copy/paste events.

@@ -1,18 +1,20 @@
 /**
  * Clickable file paths in terminals: paths agents print (`Read(docs/PLAN.md)`, `src/a.ts:12`)
  * and OSC 8 hyperlinks to files (`file://…`, `vscode://file/…`). Click opens the file in the
- * side panel's viewer; ⌘-click (Ctrl-click) opens it in the code editor instead.
+ * side panel's viewer (web pages, .html and .svg, in winfer's browser); ⌘-click (Ctrl-click)
+ * opens it in the code editor instead.
  */
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 import { openInEditor } from "@/features/editors/editors";
 import { openUrl as openInBrowser } from "@/features/browser/browser";
 import { useWorkspaces } from "@/stores/workspaces";
-import { fileFromUri, findPaths } from "./paths";
+import { fileFromUri, fileUrl, findPaths, isWebPage } from "./paths";
 import { openFile, openFileFrom, resolveFiles } from "./viewer";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
-const HINT = `Click to open in the viewer · ${IS_MAC ? "⌘" : "Ctrl"}-click to open in the editor`;
+const MOD = IS_MAC ? "⌘" : "Ctrl";
+const hint = (path: string) => `Click to open in the ${isWebPage(path) ? "browser" : "viewer"} · ${MOD}-click to open in the editor`;
 /** How long a lookup is trusted: found files rarely vanish, missing ones often appear soon. */
 const FOUND_MS = 60_000;
 const MISSING_MS = 4_000;
@@ -21,34 +23,47 @@ const cache = new Map<string, { path: string | null; at: number }>();
 
 function open(event: MouseEvent, path: string, line?: number) {
   if (IS_MAC ? event.metaKey : event.ctrlKey) void openInEditor(path);
-  else openFile(path, { line });
+  else if (isWebPage(path)) {
+    useWorkspaces.getState().setSidePanel("browser");
+    void openInBrowser(fileUrl(path), { newTab: true });
+  } else openFile(path, { line });
 }
 
-/** A buffer line's text, with the cell column of each character (wide characters take two cells). */
+/**
+ * The whole logical line row `y` belongs to (rows a long line wrapped onto included), with the
+ * buffer cell of each character (wide characters take two cells).
+ */
 function lineText(term: Terminal, y: number) {
-  const line = term.buffer.active.getLine(y - 1);
-  if (!line) return null;
+  const buf = term.buffer.active;
+  let top = y - 1;
+  while (top > 0 && buf.getLine(top)?.isWrapped) top--;
   let text = "";
-  const cols: number[] = [];
-  for (let x = 0; x < line.length; x++) {
-    const cell = line.getCell(x);
-    if (!cell) break;
-    if (cell.getWidth() === 0) continue;
-    const chars = cell.getChars() || " ";
-    for (let i = 0; i < chars.length; i++) cols.push(x);
-    text += chars;
+  const cells: { x: number; y: number }[] = [];
+  for (let row = top; ; row++) {
+    const line = buf.getLine(row);
+    if (!line || (row > top && !line.isWrapped)) break;
+    for (let x = 0; x < line.length; x++) {
+      const cell = line.getCell(x);
+      if (!cell) break;
+      if (cell.getWidth() === 0) continue;
+      const chars = cell.getChars() || " ";
+      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1, y: row + 1 });
+      text += chars;
+    }
   }
-  return { text, cols };
+  return { text, cells };
 }
 
 /** Links for the paths on a terminal line that name existing files, looked up from the pane's folder. */
-export function fileLinkProvider(term: Terminal, cwdOf: () => string): ILinkProvider {
+export function fileLinkProvider(term: Terminal, cwdOf: () => string, rootsOf: () => string[] = () => []): ILinkProvider {
   return {
     provideLinks(y, callback) {
       const line = lineText(term, y);
-      const matches = line ? findPaths(line.text) : [];
-      if (!line || matches.length === 0) return callback(undefined);
+      // Only the paths that touch this row: the other rows ask for theirs.
+      const matches = findPaths(line.text).filter((m) => line.cells[m.start].y <= y && line.cells[m.end - 1].y >= y);
+      if (matches.length === 0) return callback(undefined);
       const cwd = cwdOf();
+      const roots = rootsOf();
       const now = Date.now();
       const key = (p: string) => `${cwd}\0${p}`;
       const fresh = (p: string) => {
@@ -56,19 +71,19 @@ export function fileLinkProvider(term: Terminal, cwdOf: () => string): ILinkProv
         return hit && now - hit.at < (hit.path ? FOUND_MS : MISSING_MS) ? hit : undefined;
       };
       const unknown = [...new Set(matches.map((m) => m.path).filter((p) => !fresh(p)))];
-      void (unknown.length ? resolveFiles(cwd, unknown) : Promise.resolve([])).then((found) => {
+      void (unknown.length ? resolveFiles(cwd, unknown, roots) : Promise.resolve([])).then((found) => {
         unknown.forEach((p, i) => cache.set(key(p), { path: found[i], at: now }));
         const links: ILink[] = [];
         for (const m of matches) {
           const path = cache.get(key(m.path))?.path;
           if (!path) continue;
           links.push({
-            range: { start: { x: line.cols[m.start] + 1, y }, end: { x: line.cols[m.end - 1] + 1, y } },
+            range: { start: line.cells[m.start], end: line.cells[m.end - 1] },
             text: m.path,
             decorations: { pointerCursor: true, underline: true },
             activate: (event) => open(event, path, m.line),
             hover: (event) => {
-              (event.target as HTMLElement | null)?.setAttribute("title", HINT);
+              (event.target as HTMLElement | null)?.setAttribute("title", hint(path));
             },
             leave: (event) => {
               (event.target as HTMLElement | null)?.removeAttribute("title");
@@ -101,6 +116,8 @@ export function openTerminalUri(event: MouseEvent, uri: string, cwd: string) {
       void resolveFiles(cwd, [file.path]).then(([p]) => {
         if (p) void openInEditor(p);
       });
+    } else if (isWebPage(file.path)) {
+      void resolveFiles(cwd, [file.path]).then(([p]) => p && open(event, p));
     } else void openFileFrom(cwd, file.path, { line: file.line });
     return;
   }
