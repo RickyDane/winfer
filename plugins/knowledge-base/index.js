@@ -675,7 +675,158 @@ function deepMapPrompt(update, gf) {
   return lines.filter(Boolean).join(" ");
 }
 
-/** Graphs by project folder, settings, graphify's install state and what agents asked lately. */
+// Backends ---------------------------------------------------------------------------------------
+
+/**
+ * A backend builds and queries a project's graph. The store, the page and the agent tools only go
+ * through this interface (see docs/plans/kb-codegraph.md), so another graph tool can sit behind
+ * the same kb_* tools and galaxy.
+ *
+ * - `state`: install state, `{state: "unknown"|"checking"|"ok"|"missing"|"installing", path, version, step, installError}`
+ * - `metaCommand`: one shell call printing @@NONE, or @@STAMP/@@HEAD/@@IGNORED/@@SNAPSHOTS parts
+ * - `read(root)`: `{graph, report}`, node-link JSON text and markdown
+ * - `build(root, {force})`: a quick build; `{output, needsForce}`, throws on failure
+ * - `commands.*`: the shell command an agent tool runs, or null when the backend can't
+ */
+function createGraphifyBackend({ api, exec, readText, changed }) {
+  let state = { state: "unknown", path: "", version: "" };
+
+  /** The graphify command, quoted, for building shell commands. */
+  const bin = () => (state.bin ? `${IS_WIN ? "& " : ""}${q(state.bin)}` : "graphify");
+
+  /**
+   * Finds graphify: on the PATH, or where uv puts it (a fresh install isn't on winfer's PATH
+   * until it restarts), plus its version and the folder with its skill files for agents.
+   */
+  async function detect() {
+    state = { ...state, state: "checking" };
+    changed();
+    try {
+      const r = await exec("", IS_WIN ? DETECT_WIN : DETECT_UNIX, 30);
+      const parts = splitMarked(r.output);
+      const found = (parts.BIN ?? "").trim();
+      state = found
+        ? {
+            state: "ok",
+            path: found,
+            bin: found,
+            onPath: parts.ONPATH?.trim() === "1",
+            version: /graphify v?([\d.]+)/i.exec(parts.VERSION ?? "")?.[1] ?? "",
+            skillDir: (parts.SKILLS ?? "").trim(),
+          }
+        : { state: "missing", path: "", version: "", installError: state.installError };
+    } catch (err) {
+      state = { state: "missing", path: "", version: "", error: String(err?.message ?? err) };
+    }
+    changed();
+    return state.state === "ok";
+  }
+
+  /**
+   * Installs graphify with uv, installing uv first when it's missing (with its official
+   * installer), or updates it the way it was installed. Progress is in `state.step`.
+   */
+  async function install({ update = false } = {}) {
+    const step = (text) => {
+      state = { ...state, state: update ? state.state : "installing", step: text, installError: "" };
+      changed();
+    };
+    try {
+      // ~/.local/bin/graphify is a link; the package folder tells how it was installed.
+      const where = `${state.skillDir ?? ""} ${state.bin ?? ""}`;
+      if (update && !/[\\/]uv[\\/]tools[\\/]/.test(where)) {
+        if (!/[\\/]pipx[\\/]/.test(where)) throw new Error(`graphify at ${state.bin} wasn't installed with uv or pipx; update it the way you installed it.`);
+        step("Updating graphify…");
+        const r = await exec("", run("pipx upgrade graphifyy"), 900);
+        if (r.code !== 0) throw new Error(lastLines(r.output, 8));
+      } else {
+        step("Looking for uv…");
+        let uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
+        if (!uv) {
+          step("Installing uv…");
+          const r = await exec("", IS_WIN ? `irm ${UV_INSTALLER_WIN} | iex` : `curl -LsSf ${UV_INSTALLER} | sh`, 600);
+          if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing uv failed.");
+          uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
+          if (!uv) throw new Error("uv was installed but winfer can't find it. Restart winfer and try again.");
+        }
+        step(update ? "Updating graphify…" : "Installing graphify…");
+        const r = await exec("", run(`${IS_WIN ? "& " : ""}${q(uv)} tool install --upgrade graphifyy`), 900);
+        if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing graphify failed.");
+      }
+      const was = state.version;
+      state = { ...state, step: "" };
+      if (!(await detect())) throw new Error("graphify was installed but winfer can't find it. Restart winfer and try again.");
+      api.toast(update ? (was === state.version ? `graphify ${state.version} is up to date` : `graphify updated to ${state.version}`) : `graphify ${state.version} installed`, "success");
+      return true;
+    } catch (err) {
+      const message = String(err?.message ?? err);
+      state = { ...state, state: update ? state.state : "missing", step: "", installError: message };
+      if (update) api.toast(`Updating graphify failed: ${message}`, "error");
+      changed();
+      return false;
+    }
+  }
+
+  const noGraph = (root) =>
+    `This project has no knowledge graph yet (no ${OUT}/graph.json in ${root}). Ask the user to build it from winfer's Knowledge page, or run \`graphify update .\` in the project folder for a code-only graph.`;
+
+  return {
+    id: "graphify",
+    label: "graphify",
+    outDir: OUT,
+    caps: { docs: true, communities: true, report: true, explain: true, path: true, save: true, snapshots: true, deepBuild: true, exports: true },
+    get state() {
+      return state;
+    },
+    get bin() {
+      return bin();
+    },
+    detect,
+    install,
+    metaCommand: IS_WIN ? META_WIN : META_UNIX,
+    stampCommand: STAMP,
+    ifGraph,
+    noGraph,
+    async read(root) {
+      const [report, graph] = await Promise.all([readText(root, `${OUT}/GRAPH_REPORT.md`).catch(() => ""), readText(root, `${OUT}/graph.json`)]);
+      return { report, graph };
+    },
+    /** Node-link JSON text of a dated snapshot (graphify-out/<date>/graph.json). */
+    readSnapshot: (root, name) => readText(root, `${OUT}/${name}/graph.json`),
+    /** `graphify update`: code only (tree-sitter), no AI, seconds. */
+    async build(root, { force = false } = {}) {
+      const r = await exec(root, run(`${bin()} update .${force ? " --force" : ""}`), 900);
+      if (r.timedOut) throw Object.assign(new Error("graphify took too long and was stopped."), { output: r.output });
+      if (r.code !== 0) throw Object.assign(new Error(lastLines(r.output) || `graphify exited with code ${r.code}.`), { output: r.output });
+      return { output: r.output, needsForce: /--force/.test(r.output) && !/Rebuilt:/i.test(r.output) };
+    },
+    deepPrompt: (update) => deepMapPrompt(update, state),
+    commands: {
+      query: (question, { budget = 1500, depthFirst = false } = {}) => `${bin()} query ${q(question)} --budget ${budget}${depthFirst ? " --dfs" : ""}`,
+      explain: (node) => `${bin()} explain ${q(node)}`,
+      path: (from, to) => `${bin()} path ${q(from)} ${q(to)}`,
+      affected: (node, depth) => `${bin()} affected ${q(node)} --depth ${depth}`,
+      save: (question, answer, nodes) => `${bin()} save-result --question ${q(question)} --answer ${q(answer)} --type query${nodes.length ? ` --nodes ${nodes.map(q).join(" ")}` : ""}`,
+      tree: () => `${bin()} tree`,
+      exportHtml: () => `${bin()} export html`,
+    },
+    /** GRAPH_REPORT.md; throws when there's no graph. */
+    report: (root) => readText(root, `${OUT}/GRAPH_REPORT.md`),
+    /** The report's overview and whether the checked out commit is the one the graph was built from. */
+    async status(root) {
+      const r = await exec(root, ifGraph(IS_WIN ? `'@@HEAD ' + (git rev-parse HEAD 2>$null); Get-Content -LiteralPath '${OUT}/GRAPH_REPORT.md' -TotalCount 16` : `echo "@@HEAD $(git rev-parse HEAD 2>/dev/null)"; sed -n '1,16p' ${OUT}/GRAPH_REPORT.md`), 30);
+      if (r.output.includes("@@NOGRAPH")) return noGraph(root);
+      const head = /@@HEAD ([0-9a-f]+)/.exec(r.output)?.[1];
+      const report = r.output.replace(/^@@HEAD.*\n/m, "");
+      const built = /Built from commit: `([0-9a-f]+)`/.exec(report)?.[1];
+      const summary = reportSection(report, "overview").trim();
+      const fresh = !head || !built ? "" : head.startsWith(built) ? "\n\nThe graph matches the checked out commit." : `\n\nThe code changed since the graph was built (graph: ${built}, project: ${head.slice(0, 8)}). Results may miss recent changes; winfer updates the code graph after agents finish if the user turned that on.`;
+      return truncate(`Knowledge graph in ${root}/${OUT}:\n\n${summary}${fresh}`, TOOL_OUTPUT_MAX);
+    },
+  };
+}
+
+/** Graphs by project folder, settings, the backend's install state and what agents asked lately. */
 function createStore(api) {
   let saved = {};
   try {
@@ -688,7 +839,6 @@ function createStore(api) {
   const listeners = new Set();
   const activityListeners = new Set();
   const activity = [];
-  let graphify = { state: "unknown", path: "", version: "" };
   const timers = new Map();
 
   const changed = () => listeners.forEach((fn) => fn());
@@ -715,6 +865,7 @@ function createStore(api) {
     const s = api.state();
     return s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.rootDir ?? s.workspaces[0]?.rootDir ?? ".";
   };
+  const backend = createGraphifyBackend({ api, exec, readText, changed });
 
   function kb(root) {
     let k = kbs.get(root);
@@ -725,89 +876,13 @@ function createStore(api) {
     return k;
   }
 
-  /**
-   * Finds graphify: on the PATH, or where uv puts it (a fresh install isn't on winfer's PATH
-   * until it restarts), plus its version and the folder with its skill files for agents.
-   */
-  async function detect() {
-    graphify = { ...graphify, state: "checking" };
-    changed();
-    try {
-      const r = await exec("", IS_WIN ? DETECT_WIN : DETECT_UNIX, 30);
-      const parts = splitMarked(r.output);
-      const bin = (parts.BIN ?? "").trim();
-      graphify = bin
-        ? {
-            state: "ok",
-            path: bin,
-            bin,
-            onPath: parts.ONPATH?.trim() === "1",
-            version: /graphify v?([\d.]+)/i.exec(parts.VERSION ?? "")?.[1] ?? "",
-            skillDir: (parts.SKILLS ?? "").trim(),
-          }
-        : { state: "missing", path: "", version: "", installError: graphify.installError };
-    } catch (err) {
-      graphify = { state: "missing", path: "", version: "", error: String(err?.message ?? err) };
-    }
-    changed();
-    return graphify.state === "ok";
-  }
-
-  /** The graphify command, quoted, for building shell commands. */
-  const bin = () => (graphify.bin ? `${IS_WIN ? "& " : ""}${q(graphify.bin)}` : "graphify");
-
-  /**
-   * Installs graphify with uv, installing uv first when it's missing (with its official
-   * installer), or updates it the way it was installed. Progress is in `graphify.step`.
-   */
-  async function install({ update = false } = {}) {
-    const step = (text) => {
-      graphify = { ...graphify, state: update ? graphify.state : "installing", step: text, installError: "" };
-      changed();
-    };
-    try {
-      // ~/.local/bin/graphify is a link; the package folder tells how it was installed.
-      const where = `${graphify.skillDir ?? ""} ${graphify.bin ?? ""}`;
-      if (update && !/[\\/]uv[\\/]tools[\\/]/.test(where)) {
-        if (!/[\\/]pipx[\\/]/.test(where)) throw new Error(`graphify at ${graphify.bin} wasn't installed with uv or pipx; update it the way you installed it.`);
-        step("Updating graphify…");
-        const r = await exec("", run("pipx upgrade graphifyy"), 900);
-        if (r.code !== 0) throw new Error(lastLines(r.output, 8));
-      } else {
-        step("Looking for uv…");
-        let uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
-        if (!uv) {
-          step("Installing uv…");
-          const r = await exec("", IS_WIN ? `irm ${UV_INSTALLER_WIN} | iex` : `curl -LsSf ${UV_INSTALLER} | sh`, 600);
-          if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing uv failed.");
-          uv = (await exec("", IS_WIN ? FIND_UV_WIN : FIND_UV_UNIX, 30)).output.trim().split("\n").pop()?.trim() ?? "";
-          if (!uv) throw new Error("uv was installed but winfer can't find it. Restart winfer and try again.");
-        }
-        step(update ? "Updating graphify…" : "Installing graphify…");
-        const r = await exec("", run(`${IS_WIN ? "& " : ""}${q(uv)} tool install --upgrade graphifyy`), 900);
-        if (r.code !== 0) throw new Error(lastLines(r.output, 8) || "Installing graphify failed.");
-      }
-      const was = graphify.version;
-      graphify = { ...graphify, step: "" };
-      if (!(await detect())) throw new Error("graphify was installed but winfer can't find it. Restart winfer and try again.");
-      api.toast(update ? (was === graphify.version ? `graphify ${graphify.version} is up to date` : `graphify updated to ${graphify.version}`) : `graphify ${graphify.version} installed`, "success");
-      return true;
-    } catch (err) {
-      const message = String(err?.message ?? err);
-      graphify = { ...graphify, state: update ? graphify.state : "missing", step: "", installError: message };
-      if (update) api.toast(`Updating graphify failed: ${message}`, "error");
-      changed();
-      return false;
-    }
-  }
-
   function apply(k, parts) {
     const report = parseReport(parts.REPORT ?? "");
     let raw;
     try {
       raw = JSON.parse(parts.GRAPH ?? "");
     } catch {
-      throw new Error(`${OUT}/graph.json isn't valid JSON (is a build still writing it?)`);
+      throw new Error(`The graph in ${backend.outDir}/ isn't valid JSON (is a build still writing it?)`);
     }
     k.previousIds = k.graph ? new Set(k.graph.ids) : null;
     k.graph = compactGraph(raw, report.names);
@@ -886,7 +961,7 @@ function createStore(api) {
       if (!k.graph) k.status = "loading";
       changed();
       try {
-        const r = await exec(root, IS_WIN ? META_WIN : META_UNIX, 60);
+        const r = await exec(root, backend.metaCommand, 60);
         if (r.timedOut) throw new Error("Reading the graph took too long");
         const parts = splitMarked(r.output);
         if ("NONE" in parts) {
@@ -894,7 +969,7 @@ function createStore(api) {
           k.graph = null;
           k.report = null;
         } else {
-          const [report, graph] = await Promise.all([readText(root, `${OUT}/GRAPH_REPORT.md`).catch(() => ""), readText(root, `${OUT}/graph.json`)]);
+          const { report, graph } = await backend.read(root);
           apply(k, { ...parts, REPORT: report, GRAPH: graph });
         }
       } catch (err) {
@@ -908,11 +983,11 @@ function createStore(api) {
     return k.loading;
   }
 
-  /** Reloads if graph.json changed on disk; true if it did. */
+  /** Reloads if the graph changed on disk; true if it did. */
   async function reloadIfChanged(root) {
     const k = kb(root);
     try {
-      const r = await exec(root, STAMP, 30);
+      const r = await exec(root, backend.stampCommand, 30);
       const stamp = r.output.trim();
       if (!stamp || stamp === k.stamp) return false;
     } catch {
@@ -922,13 +997,13 @@ function createStore(api) {
     return true;
   }
 
-  /** Node ids of a dated snapshot (graphify-out/<date>/graph.json), for the timeline. */
+  /** Node ids of a dated snapshot, for the timeline. */
   async function snapshotIds(root, name) {
     const k = kb(root);
     if (k.snapshotIds.has(name)) return k.snapshotIds.get(name);
     let ids = new Set();
     try {
-      ids = new Set((JSON.parse(await readText(root, `${OUT}/${name}/graph.json`)).nodes ?? []).map((node) => String(node.id)));
+      ids = new Set((JSON.parse(await backend.readSnapshot(root, name)).nodes ?? []).map((node) => String(node.id)));
     } catch {
       // A snapshot without a readable graph shows as empty.
     }
@@ -938,7 +1013,7 @@ function createStore(api) {
 
   /**
    * Builds or updates a project's graph:
-   * - "quick": `graphify update`, code only (tree-sitter), no AI, seconds.
+   * - "quick": the backend's own build (graphify: `graphify update`, code only, no AI, seconds).
    * - "agent": the default agent, in a pane in the project folder, runs graphify's skill, which
    *   also reads docs and finds concepts and rationale; the page reloads when that agent finishes.
    */
@@ -949,8 +1024,9 @@ function createStore(api) {
       return;
     }
     if (mode === "agent") {
+      if (!backend.caps.deepBuild) return;
       if (workspaceId && api.state().activeWorkspaceId !== workspaceId) api.execute({ type: "workspace.switch", target: { id: workspaceId } });
-      api.execute({ type: "pane.spawn", provider: "default", worktree: false, prompt: deepMapPrompt(!!k.graph, graphify) });
+      api.execute({ type: "pane.spawn", provider: "default", worktree: false, prompt: backend.deepPrompt(!!k.graph) });
       api.execute({ type: "ui.view", view: "workspace" });
       k.building = { mode, startedAt: Date.now(), workspaceId };
       changed();
@@ -960,11 +1036,12 @@ function createStore(api) {
     k.needsForce = false;
     changed();
     try {
-      const r = await exec(root, run(`${bin()} update .${force ? " --force" : ""}`), 900);
+      const r = await backend.build(root, { force }).catch((err) => {
+        k.log = err?.output ?? "";
+        throw err;
+      });
       k.log = r.output;
-      if (r.timedOut) throw new Error("graphify took too long and was stopped.");
-      if (r.code !== 0) throw new Error(lastLines(r.output) || `graphify exited with code ${r.code}.`);
-      k.needsForce = /--force/.test(r.output) && !/Rebuilt:/i.test(r.output);
+      k.needsForce = r.needsForce;
       k.building = null;
       const before = k.graph?.n ?? 0;
       await load(root);
@@ -1022,16 +1099,11 @@ function createStore(api) {
   return {
     settings,
     activity,
-    get graphify() {
-      return graphify;
-    },
-    get bin() {
-      return bin();
-    },
-    install,
+    backend,
+    install: (opts) => backend.install(opts),
     kb,
     exec,
-    detect,
+    detect: () => backend.detect(),
     load,
     reloadIfChanged,
     snapshotIds,
@@ -3080,7 +3152,7 @@ function mountPage(el, store, api) {
     ui.answer = { question, busy: true, text: "", nodes: [] };
     renderAnswer();
     try {
-      const r = await store.exec(k.root, run(`${store.bin} query ${q(question)} --budget 2000`), 90);
+      const r = await store.exec(k.root, run(store.backend.commands.query(question, { budget: 2000 })), 90);
       if (r.code !== 0) throw new Error(lastLines(r.output) || "graphify query failed");
       const nodes = nodesInOutput(k.graph, r.output);
       ui.answer = { question, busy: false, text: r.output.trim(), nodes };
@@ -3336,7 +3408,7 @@ function mountPage(el, store, api) {
         ),
       g && h("div", { class: "kb-tabs kb-glass" }, tab("galaxy", "Galaxy", "orbit"), tab("insights", "Insights", "grid")),
       k &&
-        store.graphify.state !== "missing" &&
+        store.backend.state.state !== "missing" &&
         h(
           "div",
           { class: "kb-split" },
@@ -4074,7 +4146,7 @@ function mountPage(el, store, api) {
 
   function renderOverlay() {
     const k = current();
-    const gf = store.graphify;
+    const gf = store.backend.state;
     let content = null;
     let insights = false;
     if (k?.graph) {
@@ -4114,7 +4186,7 @@ function mountPage(el, store, api) {
   }
 
   function installCard() {
-    const gf = store.graphify;
+    const gf = store.backend.state;
     if (gf.state === "installing") {
       return hero("Installing graphify", gf.step || "Working…", h("div", { class: "kb-progress" }, h("span", {})), h("p", { class: "kb-subtle" }, "This takes up to a minute the first time."));
     }
@@ -4401,8 +4473,8 @@ function mountPage(el, store, api) {
           item("bot", "Deep build with an agent", "Your default agent adds docs, concepts and rationale", () => void store.build(k.root, "agent", { workspaceId: ws?.id }), !!k.building),
           item("alert", "Force update", "Keep the new graph even if it's smaller", () => void store.build(k.root, "quick", { force: true }), !!k.building || !k.graph),
           h("div", { class: "kb-menu-sep" }),
-          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", `${store.bin} export html`), !k.graph),
-          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", `${store.bin} tree`, true), !k.graph),
+          item("external", "Open graph.html", "graphify's own 2D view, in the browser panel", () => void openOutput(k, "graph.html", store.backend.commands.exportHtml()), !k.graph),
+          item("layers", "Open tree view", "Collapsible file tree with each symbol's links", () => void openOutput(k, "GRAPH_TREE.html", store.backend.commands.tree(), true), !k.graph),
           item("file", "Open the report", "GRAPH_REPORT.md, in the browser panel", () => void openOutput(k, "GRAPH_REPORT.md"), !k.graph),
         ),
       );
@@ -4423,7 +4495,7 @@ function mountPage(el, store, api) {
           },
         }),
       );
-    const gf = store.graphify;
+    const gf = store.backend.state;
     fill(menus, 
       h(
         "div",
@@ -4645,7 +4717,7 @@ function mountPage(el, store, api) {
   });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
 
-  if (store.graphify.state === "unknown") void store.detect();
+  if (store.backend.state.state === "unknown") void store.detect();
   renderAll();
   shell.focus({ preventScroll: true });
   const k = current();
@@ -5077,19 +5149,22 @@ export function activate(api) {
   const store = createStore(api);
   const rootOf = (workspaceId) => api.state().workspaces.find((w) => w.id === workspaceId)?.rootDir;
   const activeRoot = () => rootOf(api.state().activeWorkspaceId);
-  const noGraph = (root) =>
-    `This project has no knowledge graph yet (no ${OUT}/graph.json in ${root}). Ask the user to build it from winfer's Knowledge page, or run \`graphify update .\` in the project folder for a code-only graph.`;
-
-  /** Runs graphify for an agent in its workspace's project folder; returns what the agent sees. */
-  async function graphify(caller, tool, command, { record = true, timeoutSec = 90, summary = "" } = {}) {
+  /**
+   * Runs one of the backend's commands for an agent in its workspace's project folder; returns
+   * what the agent sees. `command` picks it from `backend.commands` (null: the backend can't).
+   */
+  async function runTool(caller, tool, command, { record = true, timeoutSec = 90, summary = "" } = {}) {
+    const backend = store.backend;
     const root = rootOf(caller.workspaceId) ?? caller.cwd;
-    const r = await store.exec(root, ifGraph(headOf(command)), timeoutSec);
+    const name = backend.label;
+    if (!command) throw new Error(`${tool} isn't available with ${name}, the tool behind this project's knowledge graph.`);
+    const r = await store.exec(root, backend.ifGraph(headOf(command)), timeoutSec);
     const out = r.output.trim();
-    if (out.includes("@@NOGRAPH")) throw new Error(noGraph(root));
-    if (r.timedOut) throw new Error("graphify took too long and was stopped.");
+    if (out.includes("@@NOGRAPH")) throw new Error(backend.noGraph(root));
+    if (r.timedOut) throw new Error(`${name} took too long and was stopped.`);
     if (r.code !== 0) {
-      if (r.code === 127 || /command not found|not recognized/i.test(out)) throw new Error("graphify isn't installed. Ask the user to install it from winfer's Knowledge page (one click).");
-      throw new Error(out || `graphify failed (exit code ${r.code}).`);
+      if (r.code === 127 || /command not found|not recognized/i.test(out)) throw new Error(`${name} isn't installed. Ask the user to install it from winfer's Knowledge page (one click).`);
+      throw new Error(out || `${name} failed (exit code ${r.code}).`);
     }
     if (record) store.record({ root, workspaceId: caller.workspaceId, paneId: caller.paneId, provider: caller.provider, label: caller.label, tool, output: out, summary });
     return truncate(out, TOOL_OUTPUT_MAX);
@@ -5118,7 +5193,7 @@ export function activate(api) {
     run: (args, caller) => {
       const question = need(args.question, "question");
       const budget = clamp(Math.round(Number(args.budget) || 1500), 200, 6000);
-      return graphify(caller, "kb_query", `${store.bin} query ${q(question)} --budget ${budget}${args.depth_first ? " --dfs" : ""}`, { summary: question });
+      return runTool(caller, "kb_query", store.backend.commands.query?.(question, { budget, depthFirst: !!args.depth_first }), { summary: question });
     },
   });
 
@@ -5129,7 +5204,7 @@ export function activate(api) {
     inputSchema: { type: "object", properties: { node: { type: "string", description: "The node's label as kb_query shows it" } }, required: ["node"] },
     run: (args, caller) => {
       const node = need(args.node, "node");
-      return graphify(caller, "kb_explain", `${store.bin} explain ${q(node)}`, { summary: node });
+      return runTool(caller, "kb_explain", store.backend.commands.explain?.(node), { summary: node });
     },
   });
 
@@ -5144,7 +5219,7 @@ export function activate(api) {
     run: (args, caller) => {
       const from = need(args.from, "from");
       const to = need(args.to, "to");
-      return graphify(caller, "kb_path", `${store.bin} path ${q(from)} ${q(to)}`, { summary: `${from} → ${to}` });
+      return runTool(caller, "kb_path", store.backend.commands.path?.(from, to), { summary: `${from} → ${to}` });
     },
   });
 
@@ -5160,7 +5235,7 @@ export function activate(api) {
     run: (args, caller) => {
       const node = need(args.node, "node");
       const depth = clamp(Math.round(Number(args.depth) || 2), 1, 4);
-      return graphify(caller, "kb_affected", `${store.bin} affected ${q(node)} --depth ${depth}`, { summary: node });
+      return runTool(caller, "kb_affected", store.backend.commands.affected?.(node, depth), { summary: node });
     },
   });
 
@@ -5176,9 +5251,9 @@ export function activate(api) {
       const root = rootOf(caller.workspaceId) ?? caller.cwd;
       let md;
       try {
-        md = await store.readText(root, `${OUT}/GRAPH_REPORT.md`);
+        md = await store.backend.report(root);
       } catch {
-        throw new Error(noGraph(root));
+        throw new Error(store.backend.noGraph(root));
       }
       return truncate(reportSection(md, text(args.section) || "overview"), TOOL_OUTPUT_MAX);
     },
@@ -5198,7 +5273,7 @@ export function activate(api) {
     },
     run: async (args, caller) => {
       const nodes = Array.isArray(args.nodes) ? args.nodes.map(text).filter(Boolean).slice(0, 50) : [];
-      await graphify(caller, "kb_save", `${store.bin} save-result --question ${q(need(args.question, "question"))} --answer ${q(need(args.answer, "answer"))} --type query${nodes.length ? ` --nodes ${nodes.map(q).join(" ")}` : ""}`, { record: false });
+      await runTool(caller, "kb_save", store.backend.commands.save?.(need(args.question, "question"), need(args.answer, "answer"), nodes), { record: false });
       return "Saved to the knowledge graph's memory.";
     },
   });
@@ -5209,14 +5284,7 @@ export function activate(api) {
     inputSchema: { type: "object", properties: {} },
     run: async (_args, caller) => {
       const root = rootOf(caller.workspaceId) ?? caller.cwd;
-      const r = await store.exec(root, ifGraph(IS_WIN ? `'@@HEAD ' + (git rev-parse HEAD 2>$null); Get-Content -LiteralPath '${OUT}/GRAPH_REPORT.md' -TotalCount 16` : `echo "@@HEAD $(git rev-parse HEAD 2>/dev/null)"; sed -n '1,16p' ${OUT}/GRAPH_REPORT.md`), 30);
-      if (r.output.includes("@@NOGRAPH")) return noGraph(root);
-      const head = /@@HEAD ([0-9a-f]+)/.exec(r.output)?.[1];
-      const report = r.output.replace(/^@@HEAD.*\n/m, "");
-      const built = /Built from commit: `([0-9a-f]+)`/.exec(report)?.[1];
-      const summary = reportSection(report, "overview").trim();
-      const fresh = !head || !built ? "" : head.startsWith(built) ? "\n\nThe graph matches the checked out commit." : `\n\nThe code changed since the graph was built (graph: ${built}, project: ${head.slice(0, 8)}). Results may miss recent changes; winfer updates the code graph after agents finish if the user turned that on.`;
-      return truncate(`Knowledge graph in ${root}/${OUT}:\n\n${summary}${fresh}`, TOOL_OUTPUT_MAX);
+      return store.backend.status(root);
     },
   });
 
