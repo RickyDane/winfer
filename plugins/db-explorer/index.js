@@ -664,6 +664,19 @@ export function parseConnectionString(text) {
   };
 }
 
+/**
+ * sqlcmd's -N mode for a connection string's or URL's Encrypt value: "o" (optional) for
+ * False / No / Optional, as old ADO.NET strings on an intranet expect; "m" or "s" for
+ * True / Mandatory / Strict; null when unset or unknown (sqlcmd's own default).
+ */
+export function msEncrypt(value) {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (/^(false|no|0|optional|disable)$/.test(v)) return "o";
+  if (/^(true|yes|1|mandatory)$/.test(v)) return "m";
+  if (v === "strict") return "s";
+  return null;
+}
+
 /** A database URL, or a SQL Server connection string; null if it's neither. */
 export function parseConnection(text) {
   const t = String(text).trim();
@@ -820,6 +833,7 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     if (meta.user) args.push("-U", meta.user);
     else args.push("-E");
     if (meta.trustCert) args.push("-C");
+    if (/^[mos]$/.test(meta.encrypt ?? "")) args.push(`-N${meta.encrypt}`);
     if (win) args.push("-f", "65001");
     if (meta.hasPassword) env.push(["SQLCMDPASSWORD", { secret: key }]);
   } else if (meta.kind === "sqlite") {
@@ -1625,7 +1639,8 @@ function createStore(api) {
     const text = errorText(output);
     const { cli, name } = KINDS[conn.meta.kind];
     if (new RegExp(`(${cli}: (command )?not found|not recognized as|cannot find the file)`, "i").test(text)) return `${cli} isn't installed or isn't on the PATH. Install the ${name} command-line client and try again.\n\n${text}`;
-    if (conn.meta.kind === "mssql" && /certificate/i.test(text) && !conn.meta.trustCert) return `The server's certificate isn't trusted. For a local or dev server, add ?trustServerCertificate=true to the URL.\n\n${text}`;
+    if (conn.meta.kind === "mssql" && /certificate/i.test(text) && !conn.meta.trustCert) return `The server's certificate isn't trusted. For a local or dev server, add TrustServerCertificate=True; to the connection string (or ?trustServerCertificate=true to the URL).\n\n${text}`;
+    if (conn.meta.kind === "mssql" && !conn.meta.user && !IS_WIN && /(login failed|kerberos|krb5|sspi|gssapi|integrated|trusted)/i.test(text)) return `Windows authentication (Integrated Security) needs a Kerberos ticket on macOS and Linux: run kinit you@YOUR.DOMAIN in a terminal, then try again. Or use a SQL login (User ID=…;Password=…).\n\n${text}`;
     return text;
   }
 
@@ -2641,6 +2656,11 @@ function openEditor(ctx, conn, initialKind = "postgres") {
     );
   }
   setKind(kind);
+  // A pasted connection string or URL of another kind picks that kind (new connections only).
+  url.addEventListener("input", () => {
+    const parsed = editing ? null : parseConnection(url.value);
+    if (parsed?.kind && parsed.kind !== kind) setKind(parsed.kind);
+  });
 
   const show = (text, ok = false) => {
     message.className = `db-alert${ok ? " db-ok" : ""}`;
@@ -2668,13 +2688,14 @@ function openEditor(ctx, conn, initialKind = "postgres") {
       return { key, value: undefined, meta: { ...meta, ...next } };
     }
     if (!parsed) throw new Error(`That isn't a ${kind === "mssql" ? "connection string or URL" : "URL"}. It looks like ${kind === "mssql" ? "Server=tcp:host,1433;Initial Catalog=app;User ID=me;Password=…" : KINDS[kind].placeholder}`);
-    if (parsed.kind !== kind) throw new Error(`That's not a ${KINDS[kind].name} ${kind === "mssql" ? "connection string" : "URL"}; it should start with ${{ postgres: "postgres://", mysql: "mysql://", mssql: "Server= or sqlserver://" }[kind]}.`);
+    if (parsed.kind !== kind) throw new Error(`That's not a ${KINDS[kind].name} ${kind === "mssql" ? "connection string" : "URL"}; it should start with ${{ postgres: "postgres://", mysql: "mysql://", mssql: "Server=, Data Source= or sqlserver://" }[kind]}.`);
     const shown = { host: parsed.host, port: parsed.port, user: parsed.user, database: parsed.database };
     // psql takes the whole URL; mysql and sqlcmd take the parts as flags and only the password stays secret.
     if (kind === "postgres") return { key, value: text, meta: { ...next, ...shown } };
     if (kind === "mssql") {
       const trustCert = /^(true|yes|1)$/i.test(parsed.params.trustservercertificate ?? "");
-      return { key, value: parsed.password || "-", meta: { ...next, ...shown, instance: parsed.instance ?? "", hasPassword: !!parsed.password, trustCert } };
+      const encrypt = msEncrypt(parsed.params.encrypt);
+      return { key, value: parsed.password || "-", meta: { ...next, ...shown, instance: parsed.instance ?? "", hasPassword: !!parsed.password, trustCert, ...(encrypt ? { encrypt } : {}) } };
     }
     return { key, value: parsed.password || "-", meta: { ...next, ...shown, hasPassword: !!parsed.password } };
   }

@@ -15,6 +15,7 @@ import {
   neighbourhood,
   parseConnection,
   parseConnectionString,
+  msEncrypt,
   parseCsv,
   parseDbUrl,
   parseResult,
@@ -257,6 +258,11 @@ describe("SQL Server", () => {
     // No user: Windows authentication.
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql" } }, "SELECT 1", { win: false })).toContain("'-S' 'tcp:localhost,1433'");
     expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql" } }, "SELECT 1", { win: false })).toContain("'-E'");
+    const legacy = buildCommand({ key: "DB_MS", meta: { kind: "mssql", host: "MDDEVSQL04", database: "MGOLother_BALM", encrypt: "o" } }, "SELECT 1", { win: false });
+    expect(legacy).toContain("'-S' 'tcp:MDDEVSQL04,1433'");
+    expect(legacy).toContain("'-d' 'MGOLother_BALM' '-E'");
+    expect(legacy).toContain("'-No'");
+    expect(legacy).not.toContain("SQLCMDPASSWORD");
   });
 
   it("builds every row as one CSV line after a header result set", () => {
@@ -525,6 +531,16 @@ describe("SQL Server connection strings", () => {
   it("reads named instances, local servers and Windows authentication", () => {
     expect(parseConnectionString("Server=.\\SQLEXPRESS;Database=app;Trusted_Connection=yes;User ID=ignored")).toMatchObject({ host: "localhost", instance: "SQLEXPRESS", user: "", password: "", database: "app" });
     expect(parseConnectionString("Server=(local);Integrated Security=SSPI")).toMatchObject({ host: "localhost", user: "" });
+    expect(parseConnection("Data Source=MDDEVSQL04;Initial Catalog=MGOLother_BALM;Integrated Security=True;")).toEqual({
+      kind: "mssql",
+      user: "",
+      password: "",
+      host: "MDDEVSQL04",
+      port: null,
+      instance: "",
+      database: "MGOLother_BALM",
+      params: {},
+    });
   });
 
   it("reads ODBC and JDBC strings", () => {
@@ -594,5 +610,16 @@ describe("choosing a database on the server", () => {
   it("lists the server's databases with a read-only query", () => {
     for (const kind of ["postgres", "mysql", "mssql"]) expect(checkReadOnly(databasesSql(kind), kind)).toBeNull();
     expect(databasesSql("sqlite")).toBeNull();
+  });
+});
+
+describe("msEncrypt", () => {
+  it("maps Encrypt values to sqlcmd's -N modes", () => {
+    expect(msEncrypt("False")).toBe("o");
+    expect(msEncrypt("optional")).toBe("o");
+    expect(msEncrypt("yes")).toBe("m");
+    expect(msEncrypt("Strict")).toBe("s");
+    expect(msEncrypt(undefined)).toBeNull();
+    expect(msEncrypt("maybe")).toBeNull();
   });
 });
