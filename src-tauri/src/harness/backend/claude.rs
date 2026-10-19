@@ -97,7 +97,8 @@ pub fn args(opts: &Opts) -> Vec<String> {
             Some(Some(dir)) => args.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]),
             None => {}
         }
-        args.extend(["--system-prompt".into(), format!("{}\n\n{}", super::LEAN_PROMPT, super::environment(&opts.cwd))]);
+        let prompt = if opts.mcp.contains_key("codegraph") { super::LEAN_CODEGRAPH_PROMPT } else { super::LEAN_PROMPT };
+        args.extend(["--system-prompt".into(), format!("{prompt}\n\n{}", super::environment(&opts.cwd))]);
     }
     if let Some(system) = &opts.system {
         args.extend(["--append-system-prompt".into(), system.clone()]);
@@ -814,6 +815,11 @@ mod tests {
         assert!(!all.iter().any(|a| a == "--disable-slash-commands" || a == "--add-dir"));
         let full = args(&opts(false, LeanSkills::All));
         assert!(!full.iter().any(|a| a == "--tools" || a == "--system-prompt"));
+        // With codegraph attached, the prompt explores through it rather than "search and reads".
+        assert!(lean.iter().any(|a| a.starts_with(super::super::LEAN_PROMPT)));
+        let mut cg = opts(true, LeanSkills::Only(Vec::new()));
+        cg.mcp.insert("codegraph".into(), json!({ "command": "codegraph" }));
+        assert!(args(&cg).iter().any(|a| a.starts_with(super::super::LEAN_CODEGRAPH_PROMPT)));
     }
 
     #[test]
