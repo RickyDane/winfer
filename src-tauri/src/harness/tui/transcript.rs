@@ -31,6 +31,8 @@ pub enum Block {
     Reasoning { id: String, text: String, started: Instant, ended: Option<Instant> },
     Tool { id: String, name: String, title: String, output: String, diff: Option<String>, status: Status, started: Instant, ended: Option<Instant> },
     Notice { text: String, kind: NoticeKind },
+    /// A thin rule closing a turn, with how long it took in the middle.
+    TurnTime { took: Duration },
 }
 
 pub struct Item {
@@ -72,6 +74,7 @@ impl Item {
         match &self.block {
             Block::Tool { status, ended, .. } => *status == Status::Running || ended.is_some_and(|e| e.elapsed() < SETTLE),
             Block::Reasoning { ended, .. } => ended.is_none(),
+            Block::TurnTime { .. } => self.born.elapsed() < RULE_GROW,
             _ => false,
         }
     }
@@ -85,8 +88,11 @@ impl Item {
                 }
             }
         }
-        let mut lines = render(&self.block, width, expanded, now, epoch, self.background, self.exit_code);
         let age = now.saturating_duration_since(self.born);
+        let mut lines = match &self.block {
+            Block::TurnTime { took } if age < RULE_GROW => turn_rule(*took, width, age.as_secs_f32() / RULE_GROW.as_secs_f32()),
+            block => render(block, width, expanded, now, epoch, self.background, self.exit_code),
+        };
         if age < FADE_IN {
             anim::fade(&mut lines, age.as_secs_f32() / FADE_IN.as_secs_f32());
         }
@@ -226,7 +232,28 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
                 })
                 .collect()
         }
+        Block::TurnTime { took } => turn_rule(*took, width, 1.0),
     }
+}
+
+/// How long a turn's rule takes to draw itself out from the middle.
+const RULE_GROW: Duration = Duration::from_millis(600);
+
+/// A turn's closing rule, `p` of the way through its intro: the time counts up to `took`
+/// while the line grows out to both edges.
+fn turn_rule(took: Duration, width: usize, p: f32) -> Vec<Line<'static>> {
+    let k = anim::ease_out(p.clamp(0.0, 1.0));
+    let label = format!(" {} ", anim::elapsed(took.mul_f32(k)));
+    let side = width.saturating_sub(label.chars().count());
+    let (left, right) = (side / 2, side - side / 2);
+    let (l, r) = ((left as f32 * k).round() as usize, (right as f32 * k).round() as usize);
+    let rule = |n: usize| Span::styled("─".repeat(n), theme::fg(theme::FAINT()));
+    vec![Line::from(vec![
+        Span::raw(" ".repeat(left - l)),
+        rule(l),
+        Span::styled(label, theme::dim()),
+        rule(r),
+    ])]
 }
 
 /// Output lines a collapsed tool card shows (clicking its header or ctrl+o shows all).
@@ -444,6 +471,18 @@ pub fn diff_lines(diff: &str, width: usize) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_rule_grows_from_the_middle_and_counts_up() {
+        let text = |p: f32| turn_rule(Duration::from_secs(64), 40, p)[0].spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        let start = text(0.0);
+        assert_eq!(start.trim(), "0s");
+        let mid = text(0.3);
+        assert!(mid.starts_with(' ') && mid.contains('─') && !mid.contains("1m 04s"), "{mid:?}");
+        let end = text(1.0);
+        assert!(end.starts_with('─') && end.ends_with('─') && end.contains(" 1m 04s "), "{end:?}");
+        assert_eq!(end.chars().count(), 40);
+    }
 
     #[test]
     fn diff_lines_number_and_color() {

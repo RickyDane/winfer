@@ -253,8 +253,10 @@ fn render(name: &str, setup: fn(&mut App), frames: usize, step_ms: u64) -> Strin
         // Shift every clock back so frame i is drawn i*step later (fade-ins settle by frame ~6).
         let shift = Duration::from_millis(1200 + i as u64 * step_ms);
         a.epoch = base - shift;
-        for item in &mut a.items {
-            item.born = base - shift;
+        let fresh = a.items.len().saturating_sub(1);
+        for (n, item) in a.items.iter_mut().enumerate() {
+            // The animated turn-time scene: its last rule appears on frame 0.
+            item.born = if name.contains("animated") && n == fresh { base - Duration::from_millis(i as u64 * step_ms) } else { base - shift };
         }
         let mut term = Terminal::new(TestBackend::new(SNAP_W.with(|w| w.get()), height)).unwrap();
         term.draw(|f| view::draw(f, &mut a)).unwrap();
@@ -287,7 +289,20 @@ fn intro() -> String {
 fn snapshots() {
     let dir = std::env::var("WF_SNAP_DIR").unwrap_or_else(|_| "/tmp/wf-tui".into());
     std::fs::create_dir_all(&dir).unwrap();
-    let scenes: [(&str, fn(&mut App), usize); 11] = [
+    let scenes: [(&str, fn(&mut App), usize); 13] = [
+        ("turn time animated", |a| {
+            conversation(a);
+            a.items.pop();
+            a.items.push(Item::new(Block::TurnTime { took: Duration::from_secs(64) }));
+        }, 24),
+        ("turn time", |a| {
+            conversation(a);
+            a.items.pop();
+            a.items.push(Item::new(Block::TurnTime { took: Duration::from_secs(64) }));
+            a.items.push(Item::new(Block::User { text: "Nice, also handle negative sizes.".into() }));
+            a.items.push(Item::new(Block::Assistant { id: "b".into(), text: "Done — negatives now print with a leading `-`.".into() }));
+            a.items.push(Item::new(Block::TurnTime { took: Duration::from_secs(8) }));
+        }, 1),
         ("background shells", background_shells, 60),
         ("welcome", |_| {}, 60),
         ("conversation", conversation, 1),

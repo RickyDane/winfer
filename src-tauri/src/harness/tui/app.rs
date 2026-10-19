@@ -666,6 +666,10 @@ impl App {
         self.busy = false;
         self.approvals.clear();
         self.finish_running();
+        // A thin rule with the turn's time, once the agent has shown something for it.
+        if was_busy && self.items.last().is_some_and(|i| !matches!(i.block, Block::User { .. } | Block::TurnTime { .. })) {
+            self.items.push(Item::new(Block::TurnTime { took: self.turn_started.elapsed() }));
+        }
         self.save();
         if !self.queue.is_empty() {
             let msg = self.queue.remove(0);
@@ -2610,6 +2614,25 @@ mod tests {
         assert!(!a.working() && !a.reported_working);
         let s = screen(&mut a, 120, 30);
         assert!(!s.contains("1 agent") && !s.contains("background agent"), "{s}");
+    }
+
+    #[test]
+    fn a_finished_turn_ends_with_its_time() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        // Nothing shown for the turn: no rule.
+        a.on_agent(g, Ev::TurnStart);
+        a.on_agent(g, Ev::TurnDone);
+        assert!(matches!(a.items.last().unwrap().block, Block::User { .. }));
+        a.on_agent(g, Ev::TurnStart);
+        a.items.push(Item::new(Block::Assistant { id: "a".into(), text: "done".into() }));
+        a.on_agent(g, Ev::TurnDone);
+        assert!(matches!(a.items.last().unwrap().block, Block::TurnTime { .. }));
+        // Once its intro has played.
+        a.items.last_mut().unwrap().born -= Duration::from_secs(1);
+        let s = screen(&mut a, 60, 12);
+        assert!(s.contains("── 0s ──"), "{s}");
     }
 
     #[test]
