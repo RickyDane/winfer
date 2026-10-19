@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
@@ -17,6 +17,7 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
+import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
 import {
   copyFile,
   copyLabel,
@@ -1150,6 +1151,133 @@ function HarnessSettings() {
   );
 }
 
+/* Mobile */
+
+const ago = (at: number) => {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+};
+
+/** Pair phones with the mobile companion (docs/mobile/protocol.md) and manage them. */
+function MobileSettings() {
+  const [status, setStatus] = useState<MobileStatus | null>(null);
+  const [pairing, setPairing] = useState<Pairing | null>(null);
+  const [relay, setRelay] = useState("");
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => void mobileStatus().then((s) => alive && setStatus(s)).catch(() => {});
+    refresh();
+    const unlisten = onMobileChange(refresh);
+    // Relative times and link expiry move on even when nothing changes.
+    const timer = window.setInterval(refresh, 15_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      void unlisten.then((f) => f());
+    };
+  }, []);
+  useEffect(() => {
+    if (status) setRelay(status.relayUrl);
+  }, [status?.relayUrl]);
+
+  // The QR code goes away once the phone has used it, or once it expires.
+  const pending = pairing && status?.devices.find((d) => d.deviceId === pairing.deviceId);
+  useEffect(() => {
+    if (!pairing) return;
+    if (pending?.paired) {
+      setPairing(null);
+      setResult({ ok: true, text: `Paired ${pending.name}.` });
+    } else if (Date.now() > pairing.expiresAt) {
+      setPairing(null);
+      setResult({ ok: false, text: "The pairing code expired. Make a new one." });
+    }
+  }, [pairing, status, pending]);
+
+  const pair = async () => {
+    setResult(null);
+    try {
+      setPairing(await startPairing());
+    } catch (err) {
+      setResult({ ok: false, text: String(err) });
+    }
+  };
+  const saveRelay = async () => {
+    try {
+      await setRelayUrl(relay);
+      setResult({ ok: true, text: "Relay saved. Phones reconnect to it." });
+    } catch (err) {
+      setResult({ ok: false, text: String(err) });
+    }
+  };
+  const revoke = async (id: string, name: string) => {
+    if (!(await ask(`${name} will stop getting notifications and can't reach your agents until you pair it again.`, { title: `Unpair ${name}`, kind: "warning", okLabel: "Unpair" }))) return;
+    await revokeDevice(id).catch((err) => setResult({ ok: false, text: String(err) }));
+  };
+
+  const paired = status?.devices.filter((d) => d.paired) ?? [];
+  return (
+    <>
+      <Card
+        title="Phone"
+        description="Follow your agents from your phone: get a notification when one finishes or asks something, read its thread and answer it. Messages are end-to-end encrypted; the relay only passes them on."
+      >
+        <Row label="Pair a phone" hint="Scan the code with your phone's camera, open the page and add it to your Home Screen. On iPhone, notifications need iOS 16.4 or later and the Home Screen app.">
+          <button className={buttonClass} onClick={() => void pair()}>
+            <Smartphone size={13} />
+            {pairing ? "New code" : "Pair phone"}
+          </button>
+        </Row>
+        {pairing && (
+          <div className="anim-fade flex items-center gap-4 px-3.5 py-3">
+            <div className="size-[180px] shrink-0 overflow-hidden rounded-md bg-white p-1 [&>svg]:size-full" dangerouslySetInnerHTML={{ __html: pairing.qrSvg }} />
+            <div className="min-w-0 space-y-2 text-xs text-fg-muted">
+              <p>{pending?.connected ? "Waiting for your phone…" : pending?.error ? `Can't reach the relay: ${pending.error}` : "Connecting to the relay…"}</p>
+              <p>The code works once, for 10 minutes. It holds the key to your agents: don't share it.</p>
+              <button
+                className={buttonClass}
+                onClick={() => void navigator.clipboard.writeText(pairing.link).then(() => setResult({ ok: true, text: "Link copied." }))}
+              >
+                <Copy size={13} />
+                Copy link
+              </button>
+            </div>
+          </div>
+        )}
+        {paired.map((d) => (
+          <Row
+            key={d.deviceId}
+            label={d.name}
+            hint={[
+              d.phones > 0 ? "Open now" : d.lastSeen ? `Last seen ${ago(d.lastSeen)}` : "Paired",
+              d.push ? "notifications on" : "notifications off",
+              !d.connected && d.error ? `relay: ${d.error}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          >
+            <span className={cn("size-2 rounded-full", d.phones > 0 ? "bg-success" : d.connected ? "bg-fg-subtle" : "bg-danger")} title={d.connected ? "Connected to the relay" : "Not connected to the relay"} />
+            <button className={buttonClass} onClick={() => void revoke(d.deviceId, d.name)}>
+              <Trash2 size={13} />
+              Unpair
+            </button>
+          </Row>
+        ))}
+      </Card>
+      <Card title="Relay" description="Where winfer and your phones meet. Change it only if you run your own relay (relay/ in the winfer repo).">
+        <Row label="Relay URL" hint={status && status.relayUrl !== status.defaultRelayUrl ? `Default: ${status.defaultRelayUrl}` : undefined}>
+          <input className={cn(inputClass, "w-64")} value={relay} onChange={(e) => setRelay(e.target.value)} spellCheck={false} />
+          <button className={buttonClass} disabled={!status || relay.trim().replace(/\/+$/, "") === status.relayUrl} onClick={() => void saveRelay()}>
+            Save
+          </button>
+        </Row>
+      </Card>
+      <Result result={result} />
+    </>
+  );
+}
+
 const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.ReactNode }[] = [
   {
     id: "general",
@@ -1178,6 +1306,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   },
   { id: "voice", label: "Voice", icon: Mic, render: () => <VoiceSettings /> },
   { id: "ai", label: "AI", icon: Sparkles, render: () => <AiSettings /> },
+  { id: "mobile", label: "Mobile", icon: Smartphone, render: () => <MobileSettings /> },
   { id: "winfer-code", label: "winfer code", icon: SquareTerminal, render: () => <HarnessSettings /> },
   {
     id: "usage",

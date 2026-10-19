@@ -1,0 +1,85 @@
+import type { DesktopMsg, Message, Pane, PhoneMsg, ThreadSource } from "./protocol";
+
+export interface Thread {
+  messages: Message[];
+  source: ThreadSource;
+  loadedAt: number;
+}
+
+export interface ClientState {
+  socket: "connecting" | "open" | "closed";
+  /** null until the relay reports presence. */
+  desktopOnline: boolean | null;
+  welcome: { desktop: string; version: string; vapidPublicKey: string } | null;
+  panes: Pane[];
+  threads: Record<string, Thread>;
+  error: string | null;
+}
+
+export interface DesktopClient {
+  readonly name: string;
+  getState(): ClientState;
+  subscribe(fn: () => void): () => void;
+  /** Send a request and wait for the reply carrying the same id. */
+  request(msg: PhoneMsg): Promise<DesktopMsg>;
+  reconnect(): void;
+  close(): void;
+}
+
+export const initialState = (): ClientState => ({
+  socket: "connecting",
+  desktopOnline: null,
+  welcome: null,
+  panes: [],
+  threads: {},
+  error: null,
+});
+
+/** Shared state + reducer for real and mock clients. */
+export abstract class BaseClient implements DesktopClient {
+  protected state = initialState();
+  private listeners = new Set<() => void>();
+  abstract readonly name: string;
+  abstract request(msg: PhoneMsg): Promise<DesktopMsg>;
+  abstract reconnect(): void;
+  abstract close(): void;
+
+  getState = () => this.state;
+
+  subscribe = (fn: () => void) => {
+    this.listeners.add(fn);
+    return () => void this.listeners.delete(fn);
+  };
+
+  protected set(patch: Partial<ClientState>) {
+    this.state = { ...this.state, ...patch };
+    for (const fn of this.listeners) fn();
+  }
+
+  /** Fold a desktop message into state. */
+  protected apply(msg: DesktopMsg) {
+    switch (msg.t) {
+      case "welcome":
+        this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey }, error: null });
+        break;
+      case "panes":
+        this.set({ panes: msg.panes });
+        break;
+      case "status": {
+        const rest = this.state.panes.filter((p) => p.id !== msg.pane.id);
+        this.set({ panes: [...rest, msg.pane] });
+        break;
+      }
+      case "thread":
+        this.set({
+          threads: { ...this.state.threads, [msg.paneId]: { messages: msg.messages, source: msg.source, loadedAt: Date.now() } },
+        });
+        break;
+      case "error":
+        if (!msg.id) this.set({ error: msg.error });
+        break;
+      case "ack":
+        break;
+    }
+  }
+}

@@ -9,6 +9,7 @@ mod harness;
 mod hooks;
 mod llm;
 mod mcp;
+mod mobile;
 mod notify;
 mod plugins;
 mod skills;
@@ -127,6 +128,7 @@ pub fn run() {
             app.manage(usage_history::UsageHistory::open(&data_dir.join("usage.db"))?);
             usage_history::start(app.handle());
             hooks::start(app.handle().clone(), &data_dir)?;
+            mobile::start(app.handle().clone(), &data_dir);
             browser::kill_orphans(app.handle());
             voice::preload(app.handle());
             voice::register_shortcuts(app.handle());
@@ -221,6 +223,13 @@ pub fn run() {
             voice::voice_start,
             voice::voice_stop,
             mcp::mcp_respond,
+            mobile::mobile_status,
+            mobile::mobile_pair_start,
+            mobile::mobile_revoke,
+            mobile::mobile_set_relay_url,
+            mobile::mobile_send,
+            mobile::mobile_activity,
+            mobile::mobile_thread,
             usage::usage_codex,
             usage::usage_claude,
             usage::usage_codex_context,

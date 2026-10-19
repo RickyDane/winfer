@@ -1,0 +1,9 @@
+{
+  "description": "Shared vectors for docs/mobile/protocol.md: HKDF-SHA256(salt='winfer-mobile-v1'), AES-256-GCM frame = base64url(nonce || ciphertext+tag). All binary values base64url without padding.",
+  "key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+  "authToken": "jAEmAUiO6YEo7hB8oaZ9AnCFx_KmDiQhO-16GmTzYUs",
+  "encKey": "-SEy6dEvvoWpKBGlBBR01En5OmDxdoo07UdsXV4aJMQ",
+  "nonce": "AgICAgICAgICAgIC",
+  "plaintext": "{\"t\":\"hello\",\"id\":\"1\",\"device\":\"test\",\"ua\":\"vector\"}",
+  "frame": "AgICAgICAgICAgICvYR6WpVUMyUkIFbIWnYztab3uXYCBQw4o6fxTJCW4oJHsEHBWqvZYRvjK7K575pvdXriJdmCV3ppLrURiaXZu8mJDas"
+}

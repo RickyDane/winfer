@@ -440,6 +440,9 @@ impl App {
         }
         self.reported_working = working;
         if working {
+            // Saved as the turn starts (and after each tool) too, so winfer's phone thread
+            // shows the prompt and progress before the turn ends.
+            self.save();
             hook("turn_start", json!({ "session_id": self.saved.id }));
         } else {
             let reply = self.items.iter().rev().find_map(|i| match &i.block {
@@ -589,6 +592,7 @@ impl App {
                     item.touch();
                 }
                 self.sync_shell_cards();
+                self.save();
             }
             Ev::Approval(a) => {
                 if self.approvals.is_empty() {
@@ -689,11 +693,22 @@ impl App {
             let (role, text) = match &item.block {
                 Block::User { text } => ("user", text.clone()),
                 Block::Assistant { text, .. } => ("assistant", text.clone()),
-                Block::Tool { name, title, .. } => ("tool", format!("{name}\t{title}")),
+                Block::Tool { id, name, title, status, .. } => {
+                    // A background call returns at once; its task says how it really is.
+                    let task = self.tasks.iter().find(|t| t.tool_id.as_deref() == Some(id.as_str()));
+                    let state = match task.map_or(*status, |t| t.status) {
+                        Status::Running => "running",
+                        Status::Ok => "done",
+                        Status::Failed => "failed",
+                    };
+                    let background = item.background || task.is_some();
+                    transcript.push(Entry { role: "tool".into(), text: format!("{name}\t{title}"), state: Some(state.into()), background });
+                    continue;
+                }
                 Block::Notice { text, kind: NoticeKind::Info } => ("notice", text.clone()),
                 _ => continue,
             };
-            transcript.push(Entry { role: role.into(), text });
+            transcript.push(Entry { role: role.into(), text, ..Default::default() });
         }
         // (A session whose only turn was undone is still saved, emptied.)
         if transcript.iter().all(|e| e.role != "user") && self.saved.transcript.is_empty() {
@@ -1290,6 +1305,10 @@ impl App {
         }
         self.sync_shell_cards();
         self.poll_shell_output();
+        // Background work starting or ending shows on winfer's phone thread.
+        if t.status.is_some() && !self.saved.transcript.is_empty() {
+            self.save();
+        }
     }
 
     pub fn running_shells(&self) -> usize {

@@ -48,7 +48,7 @@ fn service(plugin: &str) -> String {
 }
 
 #[cfg(not(test))]
-mod values {
+pub(crate) mod values {
     fn entry(service: &str, key: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(service, key).map_err(|e| e.to_string())
     }
@@ -99,7 +99,7 @@ mod values {
 
 /// Tests keep values in memory instead of the developer's keychain.
 #[cfg(test)]
-mod values {
+pub(crate) mod values {
     use std::collections::HashMap;
     use std::sync::Mutex;
     static VALUES: Mutex<Option<HashMap<(String, String), String>>> = Mutex::new(None);

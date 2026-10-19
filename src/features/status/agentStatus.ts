@@ -15,8 +15,17 @@ import { logActivity } from "@/stores/activity";
 import { speak } from "@/features/voice/readback";
 import { agentFinished } from "@/features/review/reviews";
 import { estimateNow, markFinished } from "@/features/progress/progress";
+import { noteStatusMessage } from "@/features/mobile/mobile";
 
 const IDLE_AFTER_MS = 4000;
+
+/**
+ * Hook agents marked "working" only because the user pressed Enter, and when.
+ * Most input starts a turn and the agent's hook confirms it; local commands (/clear, /undo,
+ * /model…) and empty lines start none, so without a hook and with a quiet screen (working
+ * agents animate a spinner) the guess is taken back.
+ */
+const guessed = new Map<string, number>();
 
 const findPane = (id: string): Pane | undefined =>
   useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === id);
@@ -86,6 +95,9 @@ function onNotificationAction({ paneId, action, text }: { paneId: string; action
 export function reportStatus(paneId: string, status: AgentStatus, message?: string) {
   const pane = findPane(paneId);
   if (!pane || pane.status === status) return;
+  // Any other status ends an input-guessed "working".
+  if (status !== "working") guessed.delete(paneId);
+  noteStatusMessage(paneId, message);
   useWorkspaces.getState().setPaneStatus(paneId, status);
   // Hook agents report "done"; the others go quiet (working → idle).
   if (status === "done") {
@@ -121,7 +133,25 @@ export function reportTerminalNotice(paneId: string, message?: string) {
 /** The user submitted input to an agent: it's working now. */
 export function reportInput(paneId: string) {
   const pane = findPane(paneId);
-  if (pane && pane.provider !== "shell") reportStatus(paneId, "working");
+  if (!pane || pane.provider === "shell") return;
+  if (hasHooks(pane) && pane.status !== "working") guessed.set(paneId, Date.now());
+  reportStatus(paneId, "working");
+}
+
+/** Reverts input-guessed "working" that no hook confirmed once the agent's screen is quiet. */
+export function settleGuesses(now = Date.now()) {
+  for (const [id, at] of guessed) {
+    const pane = findPane(id);
+    if (!pane || pane.status !== "working") {
+      guessed.delete(id);
+      continue;
+    }
+    if (now - at > IDLE_AFTER_MS && outputAge(id) > IDLE_AFTER_MS) {
+      guessed.delete(id);
+      // Idle, not the status before: a repeated "done" would notify (and push) again.
+      useWorkspaces.getState().setPaneStatus(id, "idle");
+    }
+  }
 }
 
 /** Output arrived from an agent without hooks. */
@@ -139,6 +169,8 @@ export function startStatusTracking() {
   started = true;
   void listen<Parameters<typeof onNotificationAction>[0]>("notification://action", ({ payload }) => onNotificationAction(payload));
   void listen<{ paneId: string; status: AgentStatus; message?: string; reply?: string | null; session?: string | null }>("agent://status", ({ payload }) => {
+    // The agent spoke for itself: no more guessing.
+    guessed.delete(payload.paneId);
     // Remembered so the pane (or its worktree, reopened later) resumes this very session.
     if (payload.session) useWorkspaces.getState().setPaneSession(payload.paneId, payload.session);
     // Set before the status change so plugins see the reply with the "done" event.
@@ -148,6 +180,7 @@ export function startStatusTracking() {
 
   // Agents without hooks: quiet output means they're waiting.
   window.setInterval(() => {
+    settleGuesses();
     for (const pane of useWorkspaces.getState().workspaces.flatMap((w) => w.panes)) {
       if (pane.status === "working" && pane.provider !== "shell" && !hasHooks(pane) && outputAge(pane.id) > IDLE_AFTER_MS) {
         reportStatus(pane.id, "idle");

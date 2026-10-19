@@ -19,11 +19,17 @@ pub struct Saved {
     pub transcript: Vec<Entry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entry {
     /// "user" | "assistant" | "tool" | "notice"
     pub role: String,
     pub text: String,
+    /// Tools: "running" | "done" | "failed" (a background task's own status once it has one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Tools: a background shell or subagent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background: bool,
 }
 
 fn dir() -> PathBuf {

@@ -11,11 +11,15 @@ export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
   test: {
     // Harness Bench task fixtures hold deliberately broken repos for agents to fix; not our tests.
-    exclude: ["**/node_modules/**", "**/dist/**", "plugins-src/harness-bench/**"],
+    // mobile/ and relay/ are separate packages with their own vitest setups.
+    exclude: ["**/node_modules/**", "**/dist/**", "plugins-src/harness-bench/**", "mobile/**", "relay/**"],
   },
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "src") },
   },
+  // Only the app's own page: mobile/index.html (the PWA) has its own React, and pre-bundling
+  // both copies breaks hooks in the desktop app.
+  optimizeDeps: { entries: ["index.html"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

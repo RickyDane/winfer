@@ -30,7 +30,7 @@ pub struct Source {
 const TOP_SOURCES: usize = 4;
 
 /// A tool's name as the breakdown shows it: an MCP tool without its `mcp__server__` prefix.
-fn tool_label(name: &str) -> String {
+pub(crate) fn tool_label(name: &str) -> String {
     match name.strip_prefix("mcp__") {
         Some(rest) => rest.split_once("__").map_or(rest, |(_, tool)| tool).to_string(),
         None => name.to_string(),
@@ -176,7 +176,7 @@ fn text_len(v: &Value) -> u64 {
 // Claude Code ------------------------------------------------------------------------------------
 
 /// Injected context (CLAUDE.md, hook output, reminders) rather than something the user typed.
-fn claude_injected(text: &str) -> bool {
+pub(crate) fn claude_injected(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("<system-reminder>") || t.starts_with("<local-command-") || t.starts_with("<command-")
 }
@@ -277,7 +277,7 @@ pub fn claude_breakdown(transcript: &str, total: u64) -> Vec<Part> {
 // Codex ------------------------------------------------------------------------------------------
 
 /// Context Codex adds as user messages (environment, AGENTS.md, permissions).
-fn codex_injected(text: &str) -> bool {
+pub(crate) fn codex_injected(text: &str) -> bool {
     let t = text.trim_start();
     ["<environment_context>", "<user_instructions>", "# AGENTS.md", "<permissions", "<skills_instructions>", "<turn_aborted>"]
         .iter()
