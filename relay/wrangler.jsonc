@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "winfer-mobile",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Stable home of the phone app and relay. workers.dev stays on so phones paired before keep working.
+  "routes": [{ "pattern": "winfer.danehub.com", "custom_domain": true }],
+  "workers_dev": true,
+  // PWA build output (mobile/). Only /r/* hits the Worker; everything else is static.
+  "assets": {
+    "directory": "../mobile/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/r/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

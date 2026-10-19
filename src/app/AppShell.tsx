@@ -36,6 +36,7 @@ import { WhatsNew } from "@/features/updates/WhatsNew";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
+import { startMobileBridge } from "@/features/mobile/mobile";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
 import { loadHome } from "@/lib/home";
@@ -162,6 +163,7 @@ export function AppShell() {
     void loadEditors();
     startTerminalEvents();
     startStatusTracking();
+    startMobileBridge();
     startRunTimes();
     startVoice();
     startAgentApi();

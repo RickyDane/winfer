@@ -763,6 +763,19 @@ mockIPC(
       }
       case "plugin:notification|is_permission_granted":
         return true;
+      case "mobile_status":
+        return {
+          relayUrl: "https://winfer-mobile.workers.dev",
+          defaultRelayUrl: "https://winfer-mobile.workers.dev",
+          devices: [{ deviceId: "d1", name: "iPhone", createdAt: Date.now() - 86_400_000, lastSeen: Date.now() - 600_000, paired: true, expiresAt: null, push: true, connected: true, phones: 0, error: null }],
+        };
+      case "mobile_pair_start":
+        return {
+          deviceId: "d2",
+          link: "https://winfer-mobile.workers.dev/#p=mock",
+          qrSvg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/><rect x="1" y="1" width="3" height="3"/><rect x="6" y="1" width="3" height="3"/><rect x="1" y="6" width="3" height="3"/></svg>',
+          expiresAt: Date.now() + 600_000,
+        };
       default:
         console.debug("[mock] unhandled", cmd, args);
         return null;
