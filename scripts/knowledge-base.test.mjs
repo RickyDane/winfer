@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codegraphGraph, compactGraph, nodeByName, nodesInOutput, parseReport, pathText, reportSection } from "../plugins/knowledge-base/index.js";
+import { codegraphGraph, compactGraph, fitExplore, nodeByName, nodesInOutput, parseReport, pathText, reportSection } from "../plugins/knowledge-base/index.js";
 
 // A small codegraph dump, as the plugin's SQL query writes it: symbols with their kind, links with
 // codegraph's 0–1 confidence.
@@ -111,5 +111,48 @@ describe("codegraph answers on the loaded graph", () => {
     const impact = 'Impact of changing "query" — 2 affected symbols:\n\nsrc/db/db.ts\n  function    query:10\n\nsrc/app.ts\n  function    main:3\n';
     expect(nodesInOutput(g, impact).map((i) => g.labels[i])).toEqual(["query()", "main()"]);
     expect(nodesInOutput(g, pathText(g, "testMain", "Pool")).map((i) => g.labels[i])).toEqual(["testMain()", "main()", "query()", "Pool"]);
+  });
+});
+
+describe("fitExplore", () => {
+  const file = (path, n) => [`**\`${path}\`** — f(function)`, "", "```js", ...Array.from({ length: n }, (_, i) => `${i + 1}\tline ${i}`), "```"].join("\n");
+  const out = [
+    "**Exploration: q**",
+    "",
+    "**Source Code**",
+    "",
+    "> verbatim source",
+    "",
+    file("a.js", 5),
+    "",
+    file("big.js", 400),
+    "",
+    file("c.js", 5),
+    "",
+    "**Not shown above — explore these names for their source**",
+    "",
+    "- d.js: x:1",
+    "",
+    "---",
+    "> **Complete source for 3 files** … make ANOTHER codegraph_explore",
+  ].join("\n");
+
+  it("keeps files whole, lists the ones over budget and drops codegraph's footer", () => {
+    const fit = fitExplore(out, 1500);
+    expect(fit.length).toBeLessThanOrEqual(1500);
+    expect(fit).toContain("**`a.js`**");
+    expect(fit).toContain("**`c.js`**");
+    expect(fit).not.toContain("line 399");
+    expect(fit).toMatch(/not shown\*\*.*\n- `big.js`/);
+    expect(fit).toContain("- d.js: x:1");
+    expect(fit).not.toContain("codegraph_explore");
+    expect(fit).not.toContain("ANOTHER");
+    expect((fit.match(/^```/gm) ?? []).length % 2).toBe(0);
+  });
+
+  it("leaves output that fits as it is, apart from the footer", () => {
+    const fit = fitExplore(out, 100_000);
+    expect(fit).toContain("line 399");
+    expect(fit).not.toContain("Over the output budget");
   });
 });

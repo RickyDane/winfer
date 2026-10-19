@@ -259,6 +259,47 @@ pub fn winfer_server(pane_id: &str, hidden: &[String]) -> Option<Server> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// codegraph (https://github.com/colbymchenry/codegraph): in a project the user indexed with it,
+// agents get its own MCP server the way codegraph intends, not winfer's kb_* wrappers around its
+// CLI: one always-loaded `codegraph_explore` tool that returns the relevant symbols' source,
+// call paths and blast radius in one call, with codegraph's own usage instructions and a file
+// watcher that keeps the index fresh while the agent edits.
+
+/// Knowledge Base tools `codegraph_explore` covers; left out of winfer's server when it's attached.
+pub const CODEGRAPH_COVERS: [&str; 4] = ["kb_query", "kb_explain", "kb_path", "kb_affected"];
+const CODEGRAPH: &str = "codegraph";
+
+/// The project folder `dir` is in, if it has a codegraph index (`.codegraph/codegraph.db`).
+/// Looks up to the repository root, so a pane opened in a subfolder still finds it.
+fn codegraph_root(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    for d in dir.ancestors() {
+        if d.join(".codegraph").join("codegraph.db").is_file() {
+            return Some(d.to_path_buf());
+        }
+        if d.join(".git").exists() {
+            return None;
+        }
+    }
+    None
+}
+
+/// codegraph's MCP server for the project `dir` is in, if it's indexed and codegraph is installed.
+pub fn codegraph_server(dir: &std::path::Path) -> Option<Server> {
+    let root = codegraph_root(dir)?;
+    // A .cmd shim would hand its arguments to cmd.exe; the launcher resolves npm's to node.
+    let launcher = crate::env::launcher(CODEGRAPH).filter(|l| !l.batch)?;
+    let mut args = launcher.args.clone();
+    args.extend(["serve", "--mcp", "--path"].map(String::from));
+    args.push(root.to_string_lossy().into_owned());
+    Some(Server {
+        name: CODEGRAPH,
+        command: launcher.program.to_string_lossy().into_owned(),
+        args,
+        env: vec![("CODEGRAPH_TELEMETRY", "0".into()), ("CODEGRAPH_NO_UPDATE_CHECK", "1".into())],
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
 // Hiding tools: each one an agent is offered costs context in every request, so the ones the
 // user turned off (Settings → Agent tools) are left out of `tools/list`. winfer's own server
 // reads them from its environment; other servers (the browser's Playwright MCP, which can't
@@ -343,10 +384,13 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
                         .iter()
                         .map(|(k, v)| (k.to_string(), json!(v)))
                         .collect();
-                    (
-                        s.name.to_string(),
-                        json!({ "command": s.command, "args": s.args, "env": env }),
-                    )
+                    let mut entry = json!({ "command": s.command, "args": s.args, "env": env });
+                    // Claude Code defers MCP tools behind a tool search; codegraph's one tool is
+                    // meant to be at hand from the first prompt.
+                    if s.name == CODEGRAPH {
+                        entry["alwaysLoad"] = json!(true);
+                    }
+                    (s.name.to_string(), entry)
                 })
                 .collect();
             vec![
@@ -599,5 +643,23 @@ mod tests {
         assert!(codex.contains(&r#"mcp_servers.winfer.command="/app/winfer""#.to_string()));
         assert!(codex.contains(&r#"mcp_servers.winfer.env={WINFER_PANE_ID="p-1"}"#.to_string()));
         assert!(agent_args("agy", &servers).is_empty());
+        assert!(config["mcpServers"]["winfer"].get("alwaysLoad").is_none());
+        let cg = [Server { name: CODEGRAPH, command: "/bin/codegraph".into(), args: vec!["serve".into(), "--mcp".into()], env: Vec::new() }];
+        let config: Value = serde_json::from_str(&agent_args("claude", &cg)[1]).unwrap();
+        assert_eq!(config["mcpServers"]["codegraph"]["alwaysLoad"], true);
+    }
+
+    #[test]
+    fn finds_the_codegraph_index_up_to_the_repo_root() {
+        let dir = std::env::temp_dir().join(format!("winfer-cg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("repo/.codegraph")).unwrap();
+        std::fs::create_dir_all(dir.join("repo/src/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("other/.git")).unwrap();
+        std::fs::write(dir.join("repo/.codegraph/codegraph.db"), "").unwrap();
+        assert_eq!(codegraph_root(&dir.join("repo/src/deep")), Some(dir.join("repo")));
+        assert_eq!(codegraph_root(&dir.join("repo")), Some(dir.join("repo")));
+        assert_eq!(codegraph_root(&dir.join("other")), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

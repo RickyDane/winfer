@@ -131,7 +131,7 @@ function q(value) {
  * (a quoted path came out as `"\"C:\...\uv.exe""`). An encoded command has no quotes at all.
  */
 function powershell(script) {
-  const text = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'; $env:CODEGRAPH_TELEMETRY = '0'; $env:CODEGRAPH_NO_UPDATE_CHECK = '1'\n${script}`;
+  const text = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; $OutputEncoding = [Text.Encoding]::UTF8; $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'; $env:CODEGRAPH_TELEMETRY = '0'; $env:CODEGRAPH_NO_UPDATE_CHECK = '1'; $env:NO_COLOR = '1'\n${script}`;
   let bytes = "";
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
@@ -145,7 +145,62 @@ const run = (command) => (IS_WIN ? `${command}; exit $LASTEXITCODE` : command);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 const baseName = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() ?? String(p);
-const truncate = (text, max) => (text.length > max ? `${text.slice(0, max)}\n… (cut at ${max.toLocaleString()} characters)` : text);
+/**
+ * Keeps `text` under `max` characters, cut at a line end (and closing a code block it cut into),
+ * so what's kept reads whole.
+ */
+function truncate(text, max) {
+  if (text.length <= max) return text;
+  let kept = text.slice(0, max);
+  const nl = kept.lastIndexOf("\n");
+  if (nl > max / 2) kept = kept.slice(0, nl);
+  if ((kept.match(/^```/gm) ?? []).length % 2) kept += "\n```";
+  return `${kept}\n… (${(text.length - kept.length).toLocaleString()} more characters left out)`;
+}
+/** Colours and other terminal escapes, which only cost an agent tokens. */
+const stripAnsi = (text) => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+
+/**
+ * Fits `codegraph explore` output into `max` characters without cutting a file's source in
+ * half: files that don't fit are listed by name instead, for a narrower follow-up query. Names
+ * codegraph's own tool after ours and leaves out its advice on how many calls to make.
+ */
+export function fitExplore(text, max) {
+  text = text.replace(/codegraph_explore/g, "kb_query");
+  const lines = text.split("\n");
+  const src = lines.findIndex((l) => l.startsWith("**Source Code**"));
+  const tail = lines.findIndex((l) => l.startsWith("**Not shown above"));
+  // codegraph's footer: a rule, then a note on what's included and its advice on more calls.
+  let end = lines.length;
+  for (let i = lines.length - 1; i > Math.max(src, tail); i--) if (lines[i].trim() === "---") end = i;
+  const footer = "> Source above is current and line-numbered: treat it as already read. For names under \"Not shown above\", call kb_query again naming them.";
+  if (src < 0) return truncate(lines.slice(0, end).join("\n").trim(), max);
+  const head = truncate(lines.slice(0, src).join("\n").trim(), Math.floor(max / 3));
+  const intro = [];
+  const blocks = [];
+  for (const line of lines.slice(src, tail < 0 ? end : tail)) {
+    if (line.startsWith("**`")) blocks.push([line]);
+    else (blocks.length ? blocks[blocks.length - 1] : intro).push(line);
+  }
+  const rest = tail < 0 ? "" : lines.slice(tail, end).join("\n").trim();
+  let room = max - head.length - intro.join("\n").length - footer.length - 200;
+  const shown = [];
+  const left = [];
+  for (const block of blocks) {
+    const body = block.join("\n");
+    if (body.length <= room) {
+      shown.push(body);
+      room -= body.length;
+    } else if (!shown.length && !left.length && room > 2000) {
+      // The best match alone is over budget: its start beats no source at all.
+      shown.push(truncate(body, room - 400));
+      room = 400;
+    } else left.push(block[0]);
+  }
+  const over = left.length ? `**Over the output budget, not shown** (ask for them by name):\n${left.map((t) => `- ${t.replace(/\*\*/g, "")}`).join("\n")}` : "";
+  const extra = truncate([over, rest].filter(Boolean).join("\n\n"), Math.max(400, room));
+  return [head, intro.join("\n").trim(), ...shown.map((b) => b.trim()), extra, footer].filter(Boolean).join("\n\n");
+}
 
 function ago(ms) {
   if (!ms) return "never";
@@ -870,7 +925,7 @@ const CG_DUMP = `${CG_OUT}/winfer-graph.json`;
 const CG_REPO = "https://raw.githubusercontent.com/colbymchenry/codegraph/main";
 const CG_INSTALL = IS_WIN ? `irm ${CG_REPO}/install.ps1 | iex` : `curl -fsSL ${CG_REPO}/install.sh | sh`;
 /** No anonymous usage telemetry or update checks for the runs winfer makes (set for Windows in `powershell`). */
-const CG_ENV = "CODEGRAPH_TELEMETRY=0 CODEGRAPH_NO_UPDATE_CHECK=1";
+const CG_ENV = "CODEGRAPH_TELEMETRY=0 CODEGRAPH_NO_UPDATE_CHECK=1 NO_COLOR=1";
 /** Left out of the galaxy: import statements, fields and enum members would drown the rest. */
 const CG_SKIP = "('import', 'property', 'enum_member')";
 /** The graph as node-link data in one query (codegraph's schema, extraction version 27). */
@@ -1261,7 +1316,7 @@ function createCodegraphBackend({ api, exec, readText, changed, graphOf, absolut
     },
     deepPrompt: () => "",
     commands: {
-      query: (question, { budget = 1500 } = {}) => `${bin()} explore ${arg(question)} --max-files ${clamp(Math.round(budget / 500), 1, 8)}`,
+      query: (question, { budget = 3000 } = {}) => ({ command: `${bin()} explore ${arg(question)} --max-files ${clamp(Math.round(budget / 1000), 1, 4)}`, fit: (out) => fitExplore(out, budget * 4) }),
       explain: (node) => (looksLikeFile(node) ? `${bin()} node -f ${arg(node.replace(/^\.\//, ""))} --symbols-only` : `${bin()} node ${arg(symbolOf(node))}`),
       path: (from, to) => ({ local: async (root) => pathText((await graphOf(root)).graph, from, to) }),
       affected: (node, depth) => `${bin()} impact ${arg(symbolOf(node))} --depth ${depth}`,
@@ -5768,13 +5823,15 @@ export function activate(api) {
     const root = rootOf(caller.workspaceId) ?? caller.cwd;
     const backend = await store.resolve(root);
     const name = backend.label;
-    const command = pick(backend);
+    let command = pick(backend);
+    let fit = (out) => truncate(out, TOOL_OUTPUT_MAX);
+    if (command?.fit) ({ command, fit } = command);
     if (!command) throw new Error(`${tool} isn't available with ${name}, the tool behind this project's knowledge graph.`);
     let out;
     if (typeof command === "object") out = String(await command.local(root)).trim();
     else {
       const r = await store.exec(root, backend.ifGraph(headOf(command)), timeoutSec);
-      out = r.output.trim();
+      out = stripAnsi(r.output).trim();
       if (out.includes("@@NOGRAPH")) throw new Error(backend.noGraph(root));
       if (r.timedOut) throw new Error(`${name} took too long and was stopped.`);
       if (r.code !== 0) {
@@ -5783,7 +5840,7 @@ export function activate(api) {
       }
     }
     if (record) store.record({ root, workspaceId: caller.workspaceId, paneId: caller.paneId, provider: caller.provider, label: caller.label, tool, output: out, summary });
-    return truncate(out, TOOL_OUTPUT_MAX);
+    return fit(out);
   }
 
   const text = (v) => String(v ?? "").trim();
@@ -5796,19 +5853,19 @@ export function activate(api) {
   api.registerAgentTool({
     name: "kb_query",
     description:
-      "Ask this project's knowledge graph (built by graphify from its code and docs, or by codegraph from its code) a question in plain words. Returns the most relevant nodes (functions, classes, files, and with graphify docs and concepts) with file:line, their community and how they connect. Use it before searching or reading code to find where things live and how they relate.",
+      "Ask this project's knowledge graph (built by graphify from its code and docs, or by codegraph from its code) a question in plain words. Returns the most relevant symbols with file:line and how they connect (with codegraph also their current source, so you needn't Read it again; with graphify also docs and concepts). Name likely symbols or files in the question. Best for finding where things live and how a flow connects; for one known string or file, grep or Read is cheaper.",
     inputSchema: {
       type: "object",
       properties: {
         question: { type: "string", description: "What you want to know, e.g. 'how does the plugin store verify downloads'" },
-        budget: { type: "number", description: "Max tokens of output (default 1500)" },
+        budget: { type: "number", description: "Max tokens of output (default 3000 with codegraph, 1500 with graphify)" },
         depth_first: { type: "boolean", description: "Trace one path deeply instead of a broad neighborhood" },
       },
       required: ["question"],
     },
     run: (args, caller) => {
       const question = need(args.question, "question");
-      const budget = clamp(Math.round(Number(args.budget) || 1500), 200, 6000);
+      const budget = args.budget ? clamp(Math.round(Number(args.budget) || 1500), 200, 4500) : undefined;
       return runTool(caller, "kb_query", (b) => b.commands.query?.(question, { budget, depthFirst: !!args.depth_first }), { summary: question });
     },
   });

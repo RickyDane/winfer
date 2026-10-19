@@ -87,6 +87,31 @@ checked against a real index:
   awaited before the first command. Paths are normalized to `/`.
 - Tests: `scripts/knowledge-base.test.mjs`, `scripts/knowledge-base-windows.test.mjs` (the PowerShell sent); dev mock `?kb=codegraph`; TESTING.md checklist.
 
+## Agent integration, fixed (1.6.0)
+
+The `kb_*` wrappers made agents spend *more*: deferred tools (a ToolSearch first), six narrow
+tools, `budget` that didn't limit codegraph's output (cut mid-source at 12k chars), ANSI colours,
+output pointing at a `codegraph_explore` tool agents didn't have, and an index half made of
+harness-bench fixtures. Now, the way codegraph is meant to be used:
+
+- **codegraph's own MCP server** (`codegraph serve --mcp --path <root>`) is attached to every
+  non-plain agent whose cwd is in a project with `.codegraph/codegraph.db` (up to the repo root)
+  and codegraph on PATH (`mcp::codegraph_server`, `pty.rs`). Claude Code gets `alwaysLoad: true`,
+  so `codegraph_explore` is loaded from the first prompt; codegraph's server instructions and
+  file watcher (fresh index while the agent edits, staleness banner) come with it.
+- winfer's server then leaves out `kb_query`/`kb_explain`/`kb_path`/`kb_affected`
+  (`mcp::CODEGRAPH_COVERS`); `kb_report`/`kb_status` stay. Worktree panes (no `.codegraph/` in
+  the worktree) keep the kb tools.
+- `kb_query` on codegraph: `budget` is real (default 3000 tokens ≈ 12k chars, max 4500);
+  `fitExplore` drops whole file blocks that don't fit and lists them by name, renames
+  `codegraph_explore` → `kb_query` and drops codegraph's "make another call" footer. `NO_COLOR=1`
+  plus an ANSI strip on all tool output; `truncate` cuts at line ends and closes code fences.
+- `codegraph.json` excludes `plugins-src/harness-bench/suites/` (607 → 280 files) and
+  deprioritizes `spikes/`, `voice-evals/`, `scripts/`.
+- Don't steer agents with a "graph first, N calls" system prompt or hand exploration to
+  subagents: codegraph's instructions reach the main agent only, and its savings are on
+  discovery-heavy questions (≈ even on narrow ones, per its benchmark).
+
 ## Phases (original plan)
 
 

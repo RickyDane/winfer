@@ -342,8 +342,15 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             let servers: Vec<_> = if req.plain {
                 Vec::new()
             } else {
-                mcp::winfer_server(&req.pane_id, &req.hidden_tools)
+                // In a project indexed with codegraph, its own server replaces the kb_* tools it covers.
+                let codegraph = mcp::codegraph_server(&resolve_cwd(req.cwd.as_deref()));
+                let mut hidden = req.hidden_tools.clone();
+                if codegraph.is_some() {
+                    hidden.extend(mcp::CODEGRAPH_COVERS.map(String::from));
+                }
+                mcp::winfer_server(&req.pane_id, &hidden)
                     .into_iter()
+                    .chain(codegraph)
                     .chain(cdp_url.map(|url| mcp::filtered(browser::playwright_server(url), &req.hidden_tools)))
                     .collect()
             };
