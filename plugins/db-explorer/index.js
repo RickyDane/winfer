@@ -562,6 +562,7 @@ const MSSQL_KEYS = {
   integrated: ["integrated security", "trusted_connection", "integratedsecurity"],
   trustservercertificate: ["trustservercertificate", "trust server certificate"],
   encrypt: ["encrypt"],
+  applicationintent: ["applicationintent", "application intent"],
   port: ["port", "portnumber"],
   instance: ["instancename", "instance name"],
 };
@@ -648,7 +649,7 @@ export function parseConnectionString(text) {
   instance = get("instance") ?? instance;
   const integrated = /^(true|yes|sspi)$/i.test(get("integrated") ?? "");
   const params = {};
-  for (const name of ["trustservercertificate", "encrypt"]) {
+  for (const name of ["trustservercertificate", "encrypt", "applicationintent"]) {
     const v = get(name);
     if (v !== undefined) params[name] = v;
   }
@@ -827,7 +828,11 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     // A named instance without a port is found through the SQL Server Browser.
     const server = meta.instance && !meta.port ? `${meta.host || "localhost"}\\${meta.instance}` : `tcp:${meta.host || "localhost"},${meta.port || 1433}`;
     // -x: no $(variable) substitution, which could print the environment (the password).
-    args = ["-S", server, "-b", "-x", "-y", "0", "-l", "10", "-K", "ReadOnly"];
+    args = ["-S", server, "-b", "-x", "-y", "0", "-l", "10"];
+    // Only when the connection string asks for it: an Availability Group primary that allows
+    // read-write connections only refuses read-only intent ("cannot open database … login failed").
+    // Reads stay safe without it (checkReadOnly, and each query is rolled back).
+    if (meta.readOnlyIntent) args.push("-K", "ReadOnly");
     if (query) args.push("-s", MS_SEP, "-t", String(Math.max(1, timeoutSec - 2)));
     if (database) args.push("-d", database);
     if (meta.user) args.push("-U", meta.user);
@@ -2695,7 +2700,8 @@ function openEditor(ctx, conn, initialKind = "postgres") {
     if (kind === "mssql") {
       const trustCert = /^(true|yes|1)$/i.test(parsed.params.trustservercertificate ?? "");
       const encrypt = msEncrypt(parsed.params.encrypt);
-      return { key, value: parsed.password || "-", meta: { ...next, ...shown, instance: parsed.instance ?? "", hasPassword: !!parsed.password, trustCert, ...(encrypt ? { encrypt } : {}) } };
+      const readOnlyIntent = /^readonly$/i.test(parsed.params.applicationintent ?? "");
+      return { key, value: parsed.password || "-", meta: { ...next, ...shown, instance: parsed.instance ?? "", hasPassword: !!parsed.password, trustCert, readOnlyIntent, ...(encrypt ? { encrypt } : {}) } };
     }
     return { key, value: parsed.password || "-", meta: { ...next, ...shown, hasPassword: !!parsed.password } };
   }

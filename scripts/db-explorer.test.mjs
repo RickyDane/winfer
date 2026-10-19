@@ -263,6 +263,10 @@ describe("SQL Server", () => {
     expect(legacy).toContain("'-d' 'MGOLother_BALM' '-E'");
     expect(legacy).toContain("'-No'");
     expect(legacy).not.toContain("SQLCMDPASSWORD");
+    // Read-only intent only when asked for: AG primaries can refuse it.
+    expect(legacy).not.toContain("'-K'");
+    expect(buildCommand({ key: "DB_MS", meta: { kind: "mssql", readOnlyIntent: true } }, "SELECT 1", { win: false })).toContain("'-K' 'ReadOnly'");
+    expect(parseConnection("Server=db;Integrated Security=True;ApplicationIntent=ReadOnly").params).toEqual({ applicationintent: "ReadOnly" });
   });
 
   it("builds every row as one CSV line after a header result set", () => {

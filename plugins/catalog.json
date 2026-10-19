@@ -31,7 +31,7 @@
     {
       "id": "db-explorer",
       "name": "Databases",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "description": "Your Postgres, MySQL, SQLite and SQL Server databases in one place, read-only: browse tables, run queries with a history, and see the schema as a class diagram with keys, relations and their cardinality (join tables and relations without a foreign key found for you, Mermaid, PlantUML and SVG export). Paste a URL or a SQL Server connection string. Agents query and describe them by name without ever seeing the credentials.",
       "author": "winfer",
       "tags": [
@@ -52,11 +52,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "2838025fab83f619ead1695d7f67ec52dbff217b2b543bb2d2168b97080ff711"
+          "sha256": "e619b098a198e1dad425a23caf341433194c9b96d4f5023691c5b52fba94b0f6"
         },
         {
           "path": "plugin.json",
-          "sha256": "c3619d10749dec08470dc28a18829de7844693d4aa4f360483a399d3999465c0"
+          "sha256": "ccdbe8a97bd4e477b57706b92397dd4d159c0c6163757bb346f7cf554fb15875"
         }
       ]
     },
@@ -109,7 +109,7 @@
         },
         {
           "path": "bench/run.py",
-          "sha256": "5957d9c5b12e715d4f690c739e903021783d7156f89e32dac2ba41978558521a"
+          "sha256": "0b6b538e5bad45b31d07c621af24535dc0782d23eb4853f1db151b47247cf445"
         },
         {
           "path": "bench/suites.tar.gz",
@@ -117,7 +117,7 @@
         },
         {
           "path": "bench/test_run.py",
-          "sha256": "0ca0320b10f9fe1e783808e2895758512aef0159d103f836cc6ebb39d3afe731"
+          "sha256": "13d5c8010281f3819b04d684e981377c702ee77afb6ca10cb51637a67faaf8e9"
         },
         {
           "path": "index.js",
