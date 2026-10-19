@@ -755,16 +755,16 @@ mod tests {
 
     #[test]
     fn new_worktrees_get_a_copy_of_the_codegraph_index() {
-        let repo = repo();
-        std::fs::create_dir_all(repo.join(".codegraph")).unwrap();
-        std::fs::write(repo.join(".codegraph/codegraph.db"), "db").unwrap();
-        std::fs::write(repo.join(".codegraph/daemon.pid"), "1").unwrap();
-        let wt = create(&temp_dir("wt"), &repo, "claude").unwrap().unwrap();
+        let plain = repo();
+        let indexed = repo();
+        std::fs::create_dir_all(indexed.join(".codegraph")).unwrap();
+        std::fs::write(indexed.join(".codegraph/codegraph.db"), "db").unwrap();
+        std::fs::write(indexed.join(".codegraph/daemon.pid"), "1").unwrap();
+        let wt = create(&temp_dir("wt"), &indexed, "claude").unwrap().unwrap();
         let index = Path::new(&wt.path).join(".codegraph");
         assert_eq!(std::fs::read_to_string(index.join("codegraph.db")).unwrap(), "db");
         assert!(!index.join("daemon.pid").exists());
         // No index in the repo: none in the worktree.
-        let plain = repo();
         let wt = create(&temp_dir("wt"), &plain, "claude").unwrap().unwrap();
         assert!(!Path::new(&wt.path).join(".codegraph").exists());
     }
