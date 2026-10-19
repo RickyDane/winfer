@@ -486,6 +486,7 @@ export function nodesInOutput(g, text) {
   const seen = new Set();
   const add = (label, file) => {
     label = label.trim();
+    file = file?.replace(/\\/g, "/");
     let i = findNode(g, label, file?.trim());
     // codegraph names functions without the "()" its graph labels carry.
     if (i < 0 && !label.endsWith(")")) i = findNode(g, `${label}()`, file?.trim());
@@ -512,7 +513,7 @@ export function nodesInOutput(g, text) {
       continue;
     }
     let cg = false;
-    for (const m of line.matchAll(/`?([A-Za-z_$][\w$.]*)`? \(([\w./@-]+\.[A-Za-z0-9]{1,5}):\d+\)/g)) {
+    for (const m of line.matchAll(/`?([A-Za-z_$][\w$.]*)`? \(([\w./\\@-]+\.[A-Za-z0-9]{1,5}):\d+\)/g)) {
       add(m[1], m[2]);
       cg = true;
     }
@@ -724,8 +725,11 @@ function createGraphifyBackend({ api, exec, readText, changed }) {
   /**
    * Finds graphify: on the PATH, or where uv puts it (a fresh install isn't on winfer's PATH
    * until it restarts), plus its version and the folder with its skill files for agents.
+   * Concurrent calls share one look.
    */
-  async function detect() {
+  let detecting = null;
+  const detect = () => (detecting ??= look().finally(() => (detecting = null)));
+  async function look() {
     state = { ...state, state: "checking" };
     changed();
     try {
@@ -898,6 +902,10 @@ const CG_DETECT_WIN = [
   "'@@ONPATH ' + [int][bool]$c",
   "'@@VERSION ' + [string](& $b --version 2>&1 | Select-Object -First 1)",
   "'@@REAL ' + $b",
+  // The bundle's node.exe and entry script (next to bin\, or in npm's node_modules): winfer runs
+  // those directly, since codegraph.cmd passes arguments through cmd.exe (see createCodegraphBackend).
+  "$dirs = @((Split-Path (Split-Path $b))) + @(Get-ChildItem (Join-Path (Split-Path $b) 'node_modules\\@colbymchenry') -Directory -Filter 'codegraph-win32-*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })",
+  "foreach ($d in $dirs) { $n = Join-Path $d 'node.exe'; $e = Join-Path $d 'lib\\dist\\bin\\codegraph.js'; if ((Test-Path $n) -and (Test-Path $e)) { '@@NODE ' + $n; '@@ENTRY ' + $e; break } }",
 ].join("\n");
 const CG_META_UNIX = [
   `if [ ! -f ${CG_DB} ]; then echo @@NONE; exit 0; fi`,
@@ -933,7 +941,8 @@ const confidenceOf = (c) => (c === null || c === undefined || Number(c) >= 0.8 ?
 export function codegraphGraph(dump, { title = "Project", version = "" } = {}) {
   const rawNodes = Array.isArray(dump?.nodes) ? dump.nodes : [];
   const rawLinks = Array.isArray(dump?.links) ? dump.links : [];
-  const dirs = rawNodes.map((node) => String(node.source_file ?? "").split("/").slice(0, -1));
+  const fileOf = (node) => String(node.source_file ?? "").replace(/\\/g, "/");
+  const dirs = rawNodes.map((node) => fileOf(node).split("/").slice(0, -1));
   const keysAt = (depth) => dirs.map((parts) => (parts.length ? parts.slice(0, depth).join("/") : "(top level)"));
   let depth = 1;
   let keys = keysAt(1);
@@ -973,7 +982,7 @@ export function codegraphGraph(dump, { title = "Project", version = "" } = {}) {
       label: kind === "function" || kind === "method" ? `${name}()` : name,
       kind,
       file_type: "code",
-      source_file: String(node.source_file ?? ""),
+      source_file: fileOf(node),
       source_location: String(node.source_location ?? ""),
       community: commOf.get(keys[i]) ?? -1,
     };
@@ -1099,15 +1108,40 @@ export function pathText(g, from, to) {
 /** codegraph behind the backend interface (see createGraphifyBackend). */
 function createCodegraphBackend({ api, exec, readText, changed, graphOf, absolute: absoluteRoot }) {
   let state = { state: "unknown", path: "", version: "" };
-  const bin = () => (state.bin ? (IS_WIN ? `& ${q(state.bin)}` : `env ${CG_ENV} ${q(state.bin)}`) : IS_WIN ? "codegraph" : `env ${CG_ENV} codegraph`);
+  /**
+   * The codegraph command. On Windows it's the bundle's node.exe with codegraph's entry script, as
+   * codegraph's own npm launcher does: codegraph.cmd hands its arguments to cmd.exe, which would
+   * expand %VARS% and act on & | < > in an agent's question.
+   */
+  const bin = () => {
+    if (IS_WIN) return state.node && state.entry ? `& ${q(state.node)} --liftoff-only --disable-warning=ExperimentalWarning ${q(state.entry)}` : `& ${q(state.bin || "codegraph")}`;
+    return `env ${CG_ENV} ${q(state.bin || "codegraph")}`;
+  };
+  /**
+   * One argument for the codegraph command. Windows PowerShell 5 doesn't escape double quotes for
+   * programs, so they become single ones; without the bundle's node.exe (going through cmd.exe)
+   * text cmd.exe would act on is refused.
+   */
+  const arg = (value) => {
+    let s = String(value);
+    if (IS_WIN) {
+      s = s.replace(/"/g, "'");
+      if (!(state.node && state.entry) && /[%&|<>^!]/.test(s)) throw new Error("On Windows this codegraph install runs through cmd.exe, so % & | < > ^ ! can't be passed to it. Rephrase without them, or reinstall codegraph from winfer's Knowledge page.");
+    }
+    return q(s);
+  };
   /** The Node runtime codegraph ships with (next to its bin/ folder), for reading the index without sqlite3. */
   const bundledNode = () => {
+    if (state.node) return state.node;
     const real = state.real || state.bin || "";
     const dir = real.replace(/[\\/][^\\/]+[\\/][^\\/]+$/, "");
     return dir && dir !== real ? `${dir}${IS_WIN ? "\\node.exe" : "/node"}` : "";
   };
 
-  async function detect() {
+  let detecting = null;
+  /** Finds codegraph and its bundled runtime; concurrent calls share one look. */
+  const detect = () => (detecting ??= look().finally(() => (detecting = null)));
+  async function look() {
     state = { ...state, state: "checking" };
     changed();
     try {
@@ -1115,7 +1149,16 @@ function createCodegraphBackend({ api, exec, readText, changed, graphOf, absolut
       const parts = splitMarked(r.output);
       const found = (parts.BIN ?? "").trim();
       state = found
-        ? { state: "ok", path: found, bin: found, real: (parts.REAL ?? "").trim(), onPath: parts.ONPATH?.trim() === "1", version: /(\d+\.\d+\.\d+)/.exec(parts.VERSION ?? "")?.[1] ?? "" }
+        ? {
+            state: "ok",
+            path: found,
+            bin: found,
+            real: (parts.REAL ?? "").trim(),
+            node: (parts.NODE ?? "").trim(),
+            entry: (parts.ENTRY ?? "").trim(),
+            onPath: parts.ONPATH?.trim() === "1",
+            version: /(\d+\.\d+\.\d+)/.exec(parts.VERSION ?? "")?.[1] ?? "",
+          }
         : { state: "missing", path: "", version: "", installError: state.installError };
     } catch (err) {
       state = { state: "missing", path: "", version: "", error: String(err?.message ?? err) };
@@ -1218,10 +1261,10 @@ function createCodegraphBackend({ api, exec, readText, changed, graphOf, absolut
     },
     deepPrompt: () => "",
     commands: {
-      query: (question, { budget = 1500 } = {}) => `${bin()} explore ${q(question)} --max-files ${clamp(Math.round(budget / 500), 1, 8)}`,
-      explain: (node) => (looksLikeFile(node) ? `${bin()} node -f ${q(node.replace(/^\.\//, ""))} --symbols-only` : `${bin()} node ${q(symbolOf(node))}`),
+      query: (question, { budget = 1500 } = {}) => `${bin()} explore ${arg(question)} --max-files ${clamp(Math.round(budget / 500), 1, 8)}`,
+      explain: (node) => (looksLikeFile(node) ? `${bin()} node -f ${arg(node.replace(/^\.\//, ""))} --symbols-only` : `${bin()} node ${arg(symbolOf(node))}`),
       path: (from, to) => ({ local: async (root) => pathText((await graphOf(root)).graph, from, to) }),
-      affected: (node, depth) => `${bin()} impact ${q(symbolOf(node))} --depth ${depth}`,
+      affected: (node, depth) => `${bin()} impact ${arg(symbolOf(node))} --depth ${depth}`,
     },
     async report(root) {
       return (await graphOf(root)).reportText;
@@ -1328,7 +1371,8 @@ function createStore(api) {
       }
     }
     const backend = backendOf(root);
-    if (backend.state.state === "unknown") void backend.detect();
+    // Commands need the binary's path (on Windows, codegraph's bundled node.exe).
+    if (backend.state.state === "unknown" || backend.state.state === "checking") await backend.detect();
     return backend;
   }
 

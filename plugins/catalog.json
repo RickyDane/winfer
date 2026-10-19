@@ -136,7 +136,7 @@
     {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "description": "Turns each project into a knowledge graph you explore as a live 3D galaxy, a flat glowing galaxy or a plain 2D map, and replay call flows step by step. Built by graphify (code, docs and concepts) or codegraph (code only, exact and fast to keep fresh), per project. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -151,11 +151,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "a9d6b406de7c96df35177fa339c1bcb42212536072083795f08f772a186a92f1"
+          "sha256": "fb1491e0b397a671c357aa38c6b56cf7020b558d93b25cb7c06a5aabf08679cc"
         },
         {
           "path": "plugin.json",
-          "sha256": "762b3195f00238b3aa4afc5c54a13b801466983ca3d50e489afd0191d8ae3bc1"
+          "sha256": "147868806954a65c0b165bc235e3e0a9fba4a1a532b9f554379cfaa1a5a541de"
         }
       ]
     },

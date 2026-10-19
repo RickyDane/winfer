@@ -81,7 +81,11 @@ checked against a real index:
   `status --json` (pending changes = freshness), `kb_save` → unsupported.
 - **Engine choice**: `settings.backends[root]`; unset → `.codegraph/` alone means codegraph, else
   graphify. Switch in Settings, on the install/map cards, and the palette ("Knowledge: switch engine").
-- Tests: `scripts/knowledge-base.test.mjs`; dev mock `?kb=codegraph`; TESTING.md checklist.
+- **Windows** (1.5.1): codegraph runs as `<bundle>\node.exe --liftoff-only … lib\dist\bin\codegraph.js`,
+  like codegraph's own npm launcher, because `codegraph.cmd` passes arguments through cmd.exe (an
+  agent's `&`/`%VAR%` would be acted on). Without the bundle, such text is refused. Detection is
+  awaited before the first command. Paths are normalized to `/`.
+- Tests: `scripts/knowledge-base.test.mjs`, `scripts/knowledge-base-windows.test.mjs` (the PowerShell sent); dev mock `?kb=codegraph`; TESTING.md checklist.
 
 ## Phases (original plan)
 
