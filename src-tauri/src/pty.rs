@@ -8,7 +8,8 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
@@ -22,9 +23,20 @@ use crate::{browser, hooks, mcp};
 const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
 const READ_BUF_BYTES: usize = 64 * 1024;
 
+/// Shortest gap between two messages to the webview while a program keeps printing. Every
+/// message is a script evaluation on the app's UI thread (on Windows also an IPC round trip
+/// when it's big), and ConPTY hands over output in many small pieces: a TUI repainting on every
+/// mouse move or resize sent hundreds per second and froze the window. Output that arrives
+/// during the gap goes out together after it; the first bytes after a quiet spell go at once.
+const FLUSH_GAP: Duration = Duration::from_millis(8);
+
 struct Output {
     scrollback: VecDeque<u8>,
     channel: Option<Channel>,
+    /// Bytes not yet sent to the channel.
+    pending: Vec<u8>,
+    /// The program's output ended: the sender flushes what's left and stops.
+    closed: bool,
 }
 
 impl Output {
@@ -32,9 +44,52 @@ impl Output {
         self.scrollback.extend(bytes);
         let overflow = self.scrollback.len().saturating_sub(SCROLLBACK_BYTES);
         self.scrollback.drain(..overflow);
-        if let Some(channel) = &self.channel {
+        if self.channel.is_some() {
+            self.pending.extend_from_slice(bytes);
+        }
+    }
+
+    /// Sends what's pending. Called with the lock held, so messages never overtake each other.
+    fn flush(&mut self) {
+        let bytes = std::mem::take(&mut self.pending);
+        if let (false, Some(channel)) = (bytes.is_empty(), &self.channel) {
             // Fails only if the webview went away; scrollback still has the data.
-            let _ = channel.send(InvokeResponseBody::Raw(bytes.to_vec()));
+            let _ = channel.send(InvokeResponseBody::Raw(bytes));
+        }
+    }
+}
+
+/// A pane's output, shared by its reader thread, its sender thread and re-attaches.
+struct OutputStream {
+    state: Mutex<Output>,
+    /// Signalled when output is pending or the stream closed.
+    ready: Condvar,
+}
+
+impl OutputStream {
+    fn push(&self, bytes: &[u8]) {
+        self.state.lock().unwrap().push(bytes);
+        self.ready.notify_one();
+    }
+
+    fn close(&self) {
+        self.state.lock().unwrap().closed = true;
+        self.ready.notify_one();
+    }
+
+    /// Sends pending output to the webview, at most one message per `FLUSH_GAP`, until closed.
+    fn send_loop(&self) {
+        loop {
+            let mut state = self.state.lock().unwrap();
+            while state.pending.is_empty() && !state.closed {
+                state = self.ready.wait(state).unwrap();
+            }
+            state.flush();
+            if state.closed {
+                return;
+            }
+            drop(state);
+            std::thread::sleep(FLUSH_GAP);
         }
     }
 }
@@ -47,7 +102,7 @@ struct Session {
     input: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
-    output: Arc<Mutex<Output>>,
+    output: Arc<OutputStream>,
 }
 
 /// A pane whose process is being started.
@@ -485,12 +540,14 @@ pub async fn pty_spawn(app: AppHandle, req: SpawnRequest, on_data: Channel) -> R
 
 /// Re-attaches a running pane to a new channel: replays scrollback, then routes live output there.
 fn reattach(session: &Session, req: &SpawnRequest, on_data: Channel) -> SpawnResult {
-    // Holding the output lock keeps replay and live bytes in order.
-    let mut output = session.output.lock().unwrap();
+    // Holding the output lock keeps replay and live bytes in order. The replay already has
+    // what was still pending for the old channel.
+    let mut output = session.output.state.lock().unwrap();
     let replay: Vec<u8> = output.scrollback.iter().copied().collect();
     if !replay.is_empty() {
         let _ = on_data.send(InvokeResponseBody::Raw(replay));
     }
+    output.pending.clear();
     output.channel = Some(on_data);
     let _ = session.master.resize(size(req.cols, req.rows));
     SpawnResult { attached: true, pid: session.pid }
@@ -527,10 +584,15 @@ fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result
     let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let pid = child.process_id();
     let mut killer = child.clone_killer();
-    let output = Arc::new(Mutex::new(Output {
-        scrollback: VecDeque::new(),
-        channel: Some(on_data),
-    }));
+    let output = Arc::new(OutputStream {
+        state: Mutex::new(Output {
+            scrollback: VecDeque::new(),
+            channel: Some(on_data),
+            pending: Vec::new(),
+            closed: false,
+        }),
+        ready: Condvar::new(),
+    });
     let (input, inputs) = mpsc::channel::<Vec<u8>>();
 
     {
@@ -570,16 +632,22 @@ fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => reader_output.lock().unwrap().push(&buf[..n]),
+                Ok(n) => reader_output.push(&buf[..n]),
             }
         }
+        reader_output.close();
     });
+
+    let sender_output = output.clone();
+    std::thread::spawn(move || sender_output.send_loop());
 
     let exit_app = app.clone();
     let pane_id = req.pane_id.clone();
     let session_output = output;
     std::thread::spawn(move || {
         let code = child.wait().map(|s| s.exit_code()).unwrap_or(1);
+        // The program's last words before the exit notice.
+        session_output.state.lock().unwrap().flush();
         let manager = exit_app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         // Only drop the session if it is still this one (not killed and respawned).
@@ -636,7 +704,10 @@ pub fn pty_write(
         .map_err(|_| "the pane's program has exited".to_string())
 }
 
-#[tauri::command]
+/// Off the main thread: resizing a ConPTY waits on conhost, which is busy repainting the whole
+/// screen of a full-screen program, and the window would hang while it's dragged. The frontend
+/// sends one resize at a time, so they still land in order.
+#[tauri::command(async)]
 pub fn pty_resize(
     state: State<'_, PtyManager>,
     pane_id: String,
