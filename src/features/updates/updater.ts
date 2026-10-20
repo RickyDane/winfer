@@ -1,17 +1,23 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { invoke } from "@tauri-apps/api/core";
+import { Update } from "@tauri-apps/plugin-updater";
 import { create } from "zustand";
 import { toast, updateToast } from "@/stores/toasts";
 import { parseChanges, type ReleaseChanges, releasesBetween } from "./releaseNotes";
 
 /**
- * App updates from GitHub releases: the updater plugin reads latest.json from the latest release,
- * or the unstable-channel release for unstable builds (built by release.yml), and installs the signed bundle for this platform. Nothing installs
+ * App updates from GitHub releases: latest.json on the latest release (stable channel) or on the
+ * unstable-channel release (unstable channel, every push to main), whichever the user picked in
+ * settings (built by release.yml, checked by app_updates.rs), and installs the signed bundle for this platform. Nothing installs
  * without the user's say-so, since restarting stops every running agent.
  */
+export type UpdateChannel = "stable" | "unstable";
+
 interface UpdateState {
   version: string | null;
+  /** Where updates come from. */
+  channel: UpdateChannel;
   checking: boolean;
   installing: boolean;
   /** The newer release, once a check found one. */
@@ -26,8 +32,13 @@ interface UpdateState {
   notesOpen: "available" | "installed" | null;
 }
 
+const CHANNEL = "winfer.updateChannel";
+const savedChannel = localStorage.getItem(CHANNEL);
+
 export const useUpdates = create<UpdateState>(() => ({
   version: null,
+  // Until picked, the channel of the build itself (unstable builds are versioned X.Y.Z-N).
+  channel: savedChannel === "stable" || savedChannel === "unstable" ? savedChannel : "stable",
   checking: false,
   installing: false,
   available: null,
@@ -52,13 +63,25 @@ const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 /** Versions already offered in a toast, so the periodic check doesn't nag about the same one. */
 const offered = new Set<string>();
 
+/** Switches the update channel and checks it right away. */
+export function setUpdateChannel(channel: UpdateChannel) {
+  localStorage.setItem(CHANNEL, channel);
+  useUpdates.setState({ channel, available: null, availableNotes: [] });
+  void checkForUpdates();
+}
+
 /** Checks now; `quiet` (background checks) skips the "up to date" and error toasts. */
 export async function checkForUpdates(quiet = false): Promise<Update | null> {
   if (useUpdates.getState().checking) return useUpdates.getState().available;
   useUpdates.setState({ checking: true, error: null });
+  const { channel } = useUpdates.getState();
+  // The channel was switched mid-check: drop this result and check the new channel.
+  const switched = () => useUpdates.getState().channel !== channel;
   try {
-    const update = await check();
+    const meta = await invoke<ConstructorParameters<typeof Update>[0] | null>("app_update_check", { channel });
+    const update = meta ? new Update(meta) : null;
     const availableNotes = update ? await notesFor(update) : [];
+    if (switched()) return null;
     useUpdates.setState({ available: update, availableNotes });
     if (update && (!quiet || !offered.has(update.version))) {
       offered.add(update.version);
@@ -74,11 +97,13 @@ export async function checkForUpdates(quiet = false): Promise<Update | null> {
     }
     return update;
   } catch (err) {
+    if (switched()) return null;
     useUpdates.setState({ error: String(err) });
     if (!quiet) toast("Couldn't check for updates", "error", String(err));
     return null;
   } finally {
     useUpdates.setState({ checking: false });
+    if (switched()) void checkForUpdates(quiet);
   }
 }
 
@@ -116,7 +141,7 @@ export function startUpdateChecks() {
   started = true;
   void getVersion().then(
     (version) => {
-      useUpdates.setState({ version });
+      useUpdates.setState({ version, ...(savedChannel ? {} : { channel: version.includes("-") ? "unstable" : "stable" }) });
       void announceUpdate(version);
     },
     () => {},

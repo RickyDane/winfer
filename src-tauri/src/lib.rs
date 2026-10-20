@@ -1,4 +1,5 @@
 mod android;
+mod app_updates;
 mod browser;
 mod chatgpt;
 mod context_breakdown;
@@ -114,7 +115,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         // Updates come from latest.json on the latest GitHub release, or on the unstable-channel
-        // release for unstable builds (see release.yml).
+        // release, per the channel picked in settings (see app_updates.rs).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(pty::PtyManager::default())
@@ -136,6 +137,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_updates::app_update_check,
             providers::providers_list,
             providers::providers_models,
             provider_updates::providers_versions,

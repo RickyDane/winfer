@@ -11,7 +11,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type StoreEntry, type PluginInfo } from "@/features/plugins/plugins";
 import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
-import { checkForUpdates, installUpdate, showReleaseNotes, useUpdates } from "@/features/updates/updater";
+import { checkForUpdates, installUpdate, setUpdateChannel, showReleaseNotes, type UpdateChannel, useUpdates } from "@/features/updates/updater";
 import { UsageSettings } from "@/features/usage/UsagePage";
 import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates } from "@/features/providers/updates";
 import { THEMES } from "@/features/theme/themes";
@@ -149,10 +149,21 @@ function AppearanceSettings() {
 
 /** App version and installing a newer release from GitHub, pinned to the bottom of the settings sidebar. */
 function UpdateFooter() {
-  const { version, checking, installing, available, installed } = useUpdates();
+  const { version, channel, checking, installing, available, installed } = useUpdates();
   const small = "flex h-7 w-full items-center justify-center gap-1.5 rounded-md px-2.5 text-xs disabled:opacity-50";
   return (
     <div className="mt-auto space-y-1.5 border-t border-border px-0.5 pt-3 pb-1">
+      <Select
+        aria-label="Update channel"
+        title="Stable: tested releases. Unstable: every change as soon as it lands."
+        value={channel}
+        onChange={(e) => setUpdateChannel(e.target.value as UpdateChannel)}
+        disabled={installing}
+        className="w-full"
+      >
+        <option value="stable">Stable updates</option>
+        <option value="unstable">Unstable updates</option>
+      </Select>
       <div className="px-2 text-[11px] text-fg-subtle">
         {available ? (
           <>
@@ -160,7 +171,10 @@ function UpdateFooter() {
             <div>You have {version ?? "?"}</div>
           </>
         ) : (
-          <span className="font-mono">winfer {version ?? ""}</span>
+          <>
+            <span className="font-mono">winfer {version ?? ""}</span>
+            {channel === "stable" && version?.includes("-") && <div>Moves to stable with the next stable release</div>}
+          </>
         )}
       </div>
       {available ? (

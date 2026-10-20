@@ -3,10 +3,11 @@ name: release
 # Builds macOS and Windows bundles for a tag and publishes them as a GitHub release. The tag is
 # the version (stamped into the app here, so the files in the repo don't need bumping) and picks
 # the channel:
-#   unstable  v0.1.102-57  every push to main (unstable.yml); a pre-release, and the app polls the
-#                          "unstable-channel" release's latest.json for updates
-#   stable    v0.1.102     promoted from an unstable build (stable.yml); the latest release, and
-#                          the app polls releases/latest/download/latest.json
+#   unstable  v0.1.102-57  every push to main (unstable.yml); a pre-release, published to the
+#                          unstable feed ("unstable-channel" release's latest.json)
+#   stable    v0.1.102     promoted from an unstable build (stable.yml); the latest release
+#                          (releases/latest/download/latest.json), also published to the unstable feed
+# Users pick which feed their app follows in settings, whichever build they installed.
 # Run manually to rebuild an existing tag.
 on:
   workflow_call:
@@ -108,12 +109,11 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      # The tag is the version. Unstable builds (numeric pre-release, which the MSI bundler
-      # requires) also poll the unstable feed instead of the latest stable release.
-      - name: Stamp version and update channel
+      # The tag is the version (unstable ones with a numeric pre-release, which the MSI bundler
+      # requires). Unstable builds start on the unstable update channel; users can switch either
+      # way in settings (app_updates.rs).
+      - name: Stamp version
         shell: bash
-        env:
-          FEED_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/latest.json
         run: |
           if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
             echo "::error::Tag $TAG isn't vX.Y.Z (stable) or vX.Y.Z-N (unstable)"
@@ -126,7 +126,6 @@ jobs:
           edit("src-tauri/tauri.conf.json", (s) => {
             const conf = JSON.parse(s);
             conf.version = version;
-            if (version.includes("-")) conf.plugins.updater.endpoints = [process.env.FEED_URL];
             return JSON.stringify(conf, null, 2) + "\n";
           });
           edit("src-tauri/Cargo.toml", (s) => s.replace(/^version = ".*"$/m, `version = "${version}"`));
