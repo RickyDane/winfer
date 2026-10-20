@@ -7,7 +7,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
@@ -40,15 +41,28 @@ impl Output {
 
 struct Session {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// Input for the pane's writer thread. Writing to a pty blocks while the program isn't
+    /// reading (a big paste into a busy agent; on Windows the ConPTY pipe is small), so it
+    /// never happens on the thread that handles the command.
+    input: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
     output: Arc<Mutex<Output>>,
 }
 
+/// A pane whose process is being started.
+#[derive(Default)]
+struct Starting {
+    /// Held while starting, so a pane never gets two processes.
+    lock: Mutex<()>,
+    /// Set when the pane is killed while starting: its process is ended instead of kept.
+    killed: AtomicBool,
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, Session>>,
+    starting: Mutex<HashMap<String, Arc<Starting>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -459,35 +473,45 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
     Ok((cmd, type_prompt))
 }
 
+/// Starts (or re-attaches to) a pane's process. On a blocking thread: starting an agent can take
+/// seconds (the workspace browser launches on demand, Windows process start-up), which on the
+/// main thread would freeze the whole window.
 #[tauri::command]
-pub fn pty_spawn(
-    app: AppHandle,
-    state: State<'_, PtyManager>,
-    req: SpawnRequest,
-    on_data: Channel,
-) -> Result<SpawnResult, String> {
-    let mut sessions = state.sessions.lock().unwrap();
+pub async fn pty_spawn(app: AppHandle, req: SpawnRequest, on_data: Channel) -> Result<SpawnResult, String> {
+    tauri::async_runtime::spawn_blocking(move || spawn_session(&app, req, on_data))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
-    if let Some(session) = sessions.get(&req.pane_id) {
-        // Re-attach: replay scrollback, then route live output to the new channel.
-        // Holding the output lock keeps replay and live bytes in order.
-        let mut output = session.output.lock().unwrap();
-        let replay: Vec<u8> = output.scrollback.iter().copied().collect();
-        if !replay.is_empty() {
-            let _ = on_data.send(InvokeResponseBody::Raw(replay));
-        }
-        output.channel = Some(on_data);
-        let _ = session.master.resize(size(req.cols, req.rows));
-        return Ok(SpawnResult {
-            attached: true,
-            pid: session.pid,
-        });
+/// Re-attaches a running pane to a new channel: replays scrollback, then routes live output there.
+fn reattach(session: &Session, req: &SpawnRequest, on_data: Channel) -> SpawnResult {
+    // Holding the output lock keeps replay and live bytes in order.
+    let mut output = session.output.lock().unwrap();
+    let replay: Vec<u8> = output.scrollback.iter().copied().collect();
+    if !replay.is_empty() {
+        let _ = on_data.send(InvokeResponseBody::Raw(replay));
+    }
+    output.channel = Some(on_data);
+    let _ = session.master.resize(size(req.cols, req.rows));
+    SpawnResult { attached: true, pid: session.pid }
+}
+
+fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result<SpawnResult, String> {
+    let manager = app.state::<PtyManager>();
+    let starting = manager.starting.lock().unwrap().entry(req.pane_id.clone()).or_default().clone();
+    let _starting = starting.lock.lock().unwrap_or_else(|e| e.into_inner());
+    // Only a kill during this start counts, not one of an earlier process.
+    starting.killed.store(false, Ordering::SeqCst);
+
+    // The sessions lock is only held briefly: pty_write and pty_resize need it on the main thread.
+    if let Some(session) = manager.sessions.lock().unwrap().get(&req.pane_id) {
+        return Ok(reattach(session, &req, on_data));
     }
 
     // Agents share the workspace browser (started on demand if one is installed).
     let cdp_url = match (&req.workspace_id, req.provider_id.as_str()) {
         (Some(ws), provider) if provider != "shell" && !req.plain => {
-            app.state::<browser::BrowserManager>().cdp_url(&app, ws)
+            app.state::<browser::BrowserManager>().cdp_url(app, ws)
         }
         _ => None,
     };
@@ -500,13 +524,45 @@ pub fn pty_spawn(
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let pid = child.process_id();
-    let killer = child.clone_killer();
+    let mut killer = child.clone_killer();
     let output = Arc::new(Mutex::new(Output {
         scrollback: VecDeque::new(),
         channel: Some(on_data),
     }));
+    let (input, inputs) = mpsc::channel::<Vec<u8>>();
+
+    {
+        let mut sessions = manager.sessions.lock().unwrap();
+        if starting.killed.load(Ordering::SeqCst) {
+            drop(sessions);
+            terminate(pid, killer.as_mut());
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Err("the pane was closed while it started".into());
+        }
+        sessions.insert(
+            req.pane_id.clone(),
+            Session {
+                master: pair.master,
+                input: input.clone(),
+                killer,
+                pid,
+                output: output.clone(),
+            },
+        );
+    }
+
+    // Ends when the session is dropped (its sender goes) or the program is gone.
+    std::thread::spawn(move || {
+        for data in inputs {
+            if writer.write_all(&data).is_err() {
+                break;
+            }
+        }
+    });
 
     let reader_output = output.clone();
     std::thread::spawn(move || {
@@ -519,12 +575,12 @@ pub fn pty_spawn(
         }
     });
 
-    let app_for_prompt = app.clone();
+    let exit_app = app.clone();
     let pane_id = req.pane_id.clone();
-    let session_output = output.clone();
+    let session_output = output;
     std::thread::spawn(move || {
         let code = child.wait().map(|s| s.exit_code()).unwrap_or(1);
-        let manager = app.state::<PtyManager>();
+        let manager = exit_app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         // Only drop the session if it is still this one (not killed and respawned).
         if sessions
@@ -534,19 +590,8 @@ pub fn pty_spawn(
             sessions.remove(&pane_id);
         }
         drop(sessions);
-        let _ = app.emit("pty://exit", ExitEvent { pane_id, code, pid });
+        let _ = exit_app.emit("pty://exit", ExitEvent { pane_id, code, pid });
     });
-
-    sessions.insert(
-        req.pane_id.clone(),
-        Session {
-            master: pair.master,
-            writer,
-            killer,
-            pid,
-            output,
-        },
-    );
 
     // CLIs without a prompt argument get the prompt typed in once they've had time to start.
     let typed_prompt = req.prompt.clone().filter(|_| {
@@ -554,22 +599,17 @@ pub fn pty_spawn(
             && (type_prompt || !providers::find(&req.provider_id).is_some_and(|p| p.prompt_arg || p.prompt_flag.is_some()))
     });
     if let Some(prompt) = typed_prompt {
-        let pane_id = req.pane_id.clone();
-        let app = app_for_prompt;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(2500));
-            let manager = app.state::<PtyManager>();
-            let mut sessions = manager.sessions.lock().unwrap();
-            if let Some(session) = sessions.get_mut(&pane_id) {
-                // Multi-line prompts go in as one bracketed paste so the agent doesn't submit
-                // at the first line break.
-                let text = if prompt.contains('\n') {
-                    format!("\x1b[200~{prompt}\x1b[201~\r")
-                } else {
-                    format!("{prompt}\r")
-                };
-                let _ = session.writer.write_all(text.as_bytes());
-            }
+            // Multi-line prompts go in as one bracketed paste so the agent doesn't submit
+            // at the first line break.
+            let text = if prompt.contains('\n') {
+                format!("\x1b[200~{prompt}\x1b[201~\r")
+            } else {
+                format!("{prompt}\r")
+            };
+            // Fails only if the pane is gone by now.
+            let _ = input.send(text.into_bytes());
         });
     }
 
@@ -579,18 +619,21 @@ pub fn pty_spawn(
     })
 }
 
+/// Queues input for the pane's writer thread, so a program that isn't reading can't block the
+/// main thread. Stays a sync command: those run in the order they're invoked, which keeps
+/// keystrokes in order (async ones may run in parallel).
 #[tauri::command]
 pub fn pty_write(
     state: State<'_, PtyManager>,
     pane_id: String,
     data: String,
 ) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
-    let session = sessions.get_mut(&pane_id).ok_or("no such pane")?;
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.get(&pane_id).ok_or("no such pane")?;
     session
-        .writer
-        .write_all(data.as_bytes())
-        .map_err(|e| e.to_string())
+        .input
+        .send(data.into_bytes())
+        .map_err(|_| "the pane's program has exited".to_string())
 }
 
 #[tauri::command]
@@ -610,14 +653,23 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, PtyManager>, pane_id: String) {
+    // Before looking for the session: a start still under way then ends its process itself.
+    if let Some(starting) = state.starting.lock().unwrap().get(&pane_id) {
+        starting.killed.store(true, Ordering::SeqCst);
+    }
     let Some(mut session) = state.sessions.lock().unwrap().remove(&pane_id) else {
         return;
     };
+    terminate(session.pid, session.killer.as_mut());
+}
+
+/// Ends a pane's program and whatever it started.
+fn terminate(pid: Option<u32>, killer: &mut (dyn ChildKiller + Send + Sync)) {
     // The child is a session leader (setsid), so its pid is also its process group id:
     // hang up the whole group so tools the agent started go away too, then force-kill
     // whatever ignored the hangup (a stuck command, a shell trapping SIGHUP).
     #[cfg(unix)]
-    if let Some(pid) = session.pid {
+    if let Some(pid) = pid {
         unsafe {
             libc::kill(-(pid as i32), libc::SIGHUP);
         }
@@ -628,7 +680,9 @@ pub fn pty_kill(state: State<'_, PtyManager>, pane_id: String) {
             }
         });
     }
-    let _ = session.killer.kill();
+    #[cfg(not(unix))]
+    let _ = pid;
+    let _ = killer.kill();
 }
 
 #[cfg(all(test, unix))]
