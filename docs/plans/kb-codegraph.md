@@ -124,6 +124,7 @@ unfamiliar repos −7% cost / −8% quality; edits worse. A Haiku/Sonnet "scout"
 and returns a short map: −35…−50% cost but −15% quality on unfamiliar code (kept out of main; see
 `git stash list`). codegraph's own A/B matrix and issues #1700/#1393 report the same against lean
 baselines; its README's big wins are against Opus 4.8 exploring with 28+ tool calls.
+Codex (gpt-6-luna): never calls codegraph unless told to; told to, same cost and ~3/20 lower quality.
 
 ## Phases (original plan)
 

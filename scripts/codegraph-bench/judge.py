@@ -3,13 +3,16 @@ B=os.environ.get('CGBENCH_DIR','/tmp/cgbench'); sys.path.insert(0,os.path.dirnam
 from run import TASKS
 random.seed(7)
 def answer(p):
+    if os.environ.get('JUDGE_SRC')=='codex':
+        msgs=[json.loads(l)['item']['text'] for l in open(p) if '"agent_message"' in l and '"item.completed"' in l]
+        return msgs[-1] if msgs else ''
     for l in open(p):
         if '"type":"result"' in l: return json.loads(l).get('result','')
     return ''
 for task in sys.argv[1:]:
     repo, edit, q = TASKS[task]
     ARMS_J=tuple(os.environ.get('JUDGE_ARMS','plain,cg,cg_scouth').split(','))
-    runs=sorted(p for p in glob.glob(f'{B}/results/{task}/*.jsonl') if os.path.basename(p).rsplit('-',1)[0] in ARMS_J); random.shuffle(runs)
+    runs=sorted(p for p in glob.glob(f'{B}/'+os.environ.get('JUDGE_SRC','results')+f'/{task}/*.jsonl') if os.path.basename(p).rsplit('-',1)[0] in ARMS_J); random.shuffle(runs)
     labels={}; parts=[]
     for i,p in enumerate(runs):
         lab=f'S{i+1}'; labels[lab]=os.path.basename(p)[:-6]
@@ -30,12 +33,12 @@ for task in sys.argv[1:]:
     try:
         ev=json.loads(out); text=ev['result'] if isinstance(ev,dict) else [e for e in ev if e.get('type')=='result'][-1]['result']
     except Exception: text=out
-    open(f'{B}/results/{task}/judge'+os.environ.get('JUDGE_TAG','2')+'.raw.txt','w').write(text)
+    open(f'{B}/'+os.environ.get('JUDGE_SRC','results')+f'/{task}/judge'+os.environ.get('JUDGE_TAG','2')+'.raw.txt','w').write(text)
     scores={}
     i=text.rfind('{"S')
     while i>=0 and not scores:
         try: scores=json.JSONDecoder().raw_decode(text[i:])[0]
         except Exception: i=text.rfind('{"S',0,i)
     res={labels[k]:v for k,v in scores.items() if k in labels}
-    json.dump({'task':task,'scores':res,'raw':text}, open(f'{B}/results/{task}/judge'+os.environ.get('JUDGE_TAG','2')+'.json','w'), indent=1)
+    json.dump({'task':task,'scores':res,'raw':text}, open(f'{B}/'+os.environ.get('JUDGE_SRC','results')+f'/{task}/judge'+os.environ.get('JUDGE_TAG','2')+'.json','w'), indent=1)
     print(task, json.dumps({k:(v['correctness'],v['completeness']) for k,v in sorted(res.items())}), flush=True)

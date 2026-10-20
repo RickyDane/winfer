@@ -42,3 +42,22 @@ explore payload (sized by repo, not by `maxFiles`) rarely pays for itself. It he
 a little on familiar code and cost a little on large unfamiliar code. Delegating exploration to a
 scout subagent halves the cost but loses accuracy (inferred or wrong hops, uncalled code). On edits,
 explore's sample of the code makes agents miss peripheral registration sites that grep finds.
+
+## Codex (2026-10-20, codex-cli 0.163.0, gpt-6-luna medium, 3 runs per arm)
+
+`codex_run.py` runs a stock Codex pane as winfer starts it (winfer's default prompt as
+`developer_instructions`, no other MCP servers, codegraph CLI kept off PATH); `codex_summary.py`
+reports a cost proxy (uncached input + 0.1 × cached + 8 × output tokens). Judge:
+`JUDGE_SRC=codex JUDGE_ARMS=plain,cg_hint python3 -I judge.py <task>`.
+
+| Tasks | Arm | Cost proxy (sum) | Judge (/20) |
+|---|---|---|---|
+| 11 read tasks | plain | 1.05M | 16.4 |
+| | codegraph attached, no hint | 1.03M | — (never called it: 0 explores in 33 runs) |
+| | codegraph + "use codegraph_explore first" hint | 1.03M | 13.6 |
+| 2 edit tasks | plain | 0.50M | 12.5 |
+| | codegraph + hint | 0.61M | 11.2 |
+
+Codex ignores codegraph unless told to use it, and when told to, it trusts explore's slice of the code:
+quality drops on familiar (16.5 → 14.2) and unfamiliar code (16.3 → 13.0) at the same cost, and it's
+slower on VS Code (~54s vs ~28s). Don't steer Codex to codegraph.
