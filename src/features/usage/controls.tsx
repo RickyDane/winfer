@@ -64,7 +64,7 @@ export const ChartKindToggle = ({ value, onChange }: { value: ChartKind; onChang
   <Segmented value={value} options={KINDS} onChange={onChange} />
 );
 
-export type UsageTab = "usage" | "limits";
+export type UsageTab = "usage" | "limits" | "tools";
 export const USAGE_TAB_KEY = "winfer.usageTab";
 
 /** Which tab the Usage page in settings opens on next. */

@@ -227,7 +227,7 @@ function ByTask({ days }: { days: number }) {
   );
 }
 
-const Stat = ({ label, value, detail }: { label: string; value: string; detail?: string }) => (
+export const Stat = ({ label, value, detail }: { label: string; value: string; detail?: string }) => (
   <div className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-3 py-2.5">
     <div className="text-[11px] text-fg-subtle">{label}</div>
     <div className="mt-0.5 font-mono text-lg text-fg">{value}</div>

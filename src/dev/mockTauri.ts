@@ -561,6 +561,36 @@ mockIPC(
         return { provider: "openai", model: "gpt-5.5", plan: true };
       case "usage_opencode":
         return { tokens: 412_300, cost: 0.83, sessions: 14 };
+      case "usage_tool_stats": {
+        const scale = Math.max(1, Number(a.days));
+        const stat = (name: string, calls: number, failed: number, avgMs: number, tokensPerCall: number) => ({
+          name,
+          calls: calls * scale,
+          failed: failed * scale,
+          tokens: calls * scale * tokensPerCall,
+          durationMs: calls * scale * avgMs,
+          maxMs: avgMs * 12,
+          timed: calls * scale,
+        });
+        const tools = [stat("Bash", 182, 9, 2400, 420), stat("Read", 96, 1, 40, 1300), stat("Edit", 54, 2, 15, 160), stat("Grep", 41, 0, 60, 380), stat("Agent", 6, 0, 95_000, 2100), stat("browser_take_screenshot", 4, 1, 900, 1600)];
+        const commands = [stat("git", 48, 1, 300, 250), stat("npm", 31, 6, 9000, 900), stat("rg", 27, 1, 120, 500), stat("cargo", 12, 1, 41_000, 1200)];
+        const sum = (k: "calls" | "failed" | "tokens" | "durationMs") => tools.reduce((s, t) => s + t[k], 0);
+        const now = Date.now();
+        return {
+          calls: sum("calls"),
+          failed: sum("failed"),
+          tokens: sum("tokens"),
+          durationMs: sum("durationMs"),
+          sessions: 9 * scale,
+          tools,
+          commands,
+          failures: [
+            { tool: "Bash", provider: "claude", at: now - 4 * 60_000, input: "npm test -- --run usage", error: "Exit code 1\n FAIL  src/features/usage/usage.test.ts > formats tokens", cwd: "/Users/me/app", durationMs: 8400 },
+            { tool: "Edit", provider: "claude", at: now - 38 * 60_000, input: "/Users/me/app/src/main.tsx", error: "String to replace not found in file.", cwd: "/Users/me/app", durationMs: 12 },
+            { tool: "exec", provider: "codex", at: now - 3 * 3600_000, input: "cargo build", error: "error[E0425]: cannot find value `x` in this scope", cwd: "/Users/me/app", durationMs: 41_000 },
+          ],
+        };
+      }
       case "usage_history": {
         // Hourly rows for the range: busier in working hours, quiet weekends, deterministic.
         const hour = 3600_000;

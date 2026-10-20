@@ -1,12 +1,14 @@
-import { ChartColumn, Gauge } from "lucide-react";
+import { ChartColumn, Gauge, Wrench } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ChartKindToggle, USAGE_TAB_KEY, useSaved, type ChartKind, type UsageTab } from "./controls";
+import { ToolStats } from "./ToolStatsTab";
 import { UsageHistory } from "./UsageHistory";
 import { Limits } from "./UsageMeter";
 
 const TABS: { id: UsageTab; label: string; icon: typeof Gauge }[] = [
   { id: "usage", label: "Usage", icon: ChartColumn },
   { id: "limits", label: "Limits", icon: Gauge },
+  { id: "tools", label: "Tools", icon: Wrench },
 ];
 
 /** The agents' plan limits over the current windows, as bars or lines. */
@@ -26,9 +28,9 @@ function LimitsTab() {
   );
 }
 
-/** Settings → Usage: token use and API cost over time, or the plan limits. `children` goes on the usage tab. */
+/** Settings → Usage: token use and API cost over time, the plan limits, or the agents' tool calls. `children` goes on the usage tab. */
 export function UsageSettings({ children }: { children?: React.ReactNode }) {
-  const [tab, setTab] = useSaved<UsageTab>(USAGE_TAB_KEY, ["usage", "limits"], "usage");
+  const [tab, setTab] = useSaved<UsageTab>(USAGE_TAB_KEY, ["usage", "limits", "tools"], "usage");
   return (
     <div className="space-y-6">
       <div role="tablist" className="flex w-max items-center gap-0.5 rounded-lg border border-border bg-panel p-0.5">
@@ -50,6 +52,8 @@ export function UsageSettings({ children }: { children?: React.ReactNode }) {
       </div>
       {tab === "usage" ? (
         <UsageHistory>{children}</UsageHistory>
+      ) : tab === "tools" ? (
+        <ToolStats />
       ) : (
         <LimitsTab />
       )}
