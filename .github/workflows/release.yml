@@ -1,24 +1,35 @@
 name: release
 
-# Push a tag like v0.2.0 (matching "version" in src-tauri/tauri.conf.json) to build macOS and
-# Windows bundles and publish them as a GitHub release. Run manually to rebuild an existing tag.
+# Builds macOS and Windows bundles for a tag and publishes them as a GitHub release. The tag is
+# the version (stamped into the app here, so the files in the repo don't need bumping) and picks
+# the channel:
+#   unstable  v0.1.102-57  every push to main (unstable.yml); a pre-release, and the app polls the
+#                          "unstable-channel" release's latest.json for updates
+#   stable    v0.1.102     promoted from an unstable build (stable.yml); the latest release, and
+#                          the app polls releases/latest/download/latest.json
+# Run manually to rebuild an existing tag.
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to (re)build, e.g. v0.1.0
+        description: Existing tag to (re)build, e.g. v0.1.102 or v0.1.102-57
         required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag }}
 
 env:
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag }}
+  # The unstable channel's update feed: a fixed release whose latest.json each build replaces.
+  FEED_TAG: unstable-channel
 
 jobs:
   # One job creates the release; the bundle jobs only upload to it. (When each bundle job
@@ -46,7 +57,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+            # Stable notes cover everything since the previous stable release; unstable ones,
+            # since the previous build of either channel.
+            if [[ $TAG == *-* ]]; then
+              prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$TAG^" 2>/dev/null || true)
+              channel=(--prerelease)
+            else
+              prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "$TAG^" 2>/dev/null || true)
+              channel=()
+            fi
             {
               echo "### Changes"
               # Commit subjects since the previous release, minus the version-bump commits.
@@ -55,7 +74,7 @@ jobs:
             } > notes.md
             # Not "latest" yet: the previous release keeps that spot (and serves latest.json to
             # installed apps) until the updater-json job has every bundle up.
-            gh release create "$TAG" --title "winfer $TAG" --notes-file notes.md --latest=false
+            gh release create "$TAG" --title "winfer $TAG" --notes-file notes.md --latest=false "${channel[@]}"
           fi
           echo "id=$(gh release view "$TAG" --json databaseId -q .databaseId)" >> "$GITHUB_OUTPUT"
 
@@ -82,21 +101,38 @@ jobs:
         with:
           ref: ${{ env.TAG }}
 
-      - name: Tag matches app version
-        shell: bash
-        run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [ "v$version" != "$TAG" ]; then
-            echo "::error::Tag $TAG doesn't match tauri.conf.json version $version"
-            exit 1
-          fi
-
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
+
+      # The tag is the version. Unstable builds (numeric pre-release, which the MSI bundler
+      # requires) also poll the unstable feed instead of the latest stable release.
+      - name: Stamp version and update channel
+        shell: bash
+        env:
+          FEED_URL: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/latest.json
+        run: |
+          if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            echo "::error::Tag $TAG isn't vX.Y.Z (stable) or vX.Y.Z-N (unstable)"
+            exit 1
+          fi
+          node - <<'EOF'
+          const fs = require("fs");
+          const version = process.env.TAG.replace(/^v/, "");
+          const edit = (file, fn) => fs.writeFileSync(file, fn(fs.readFileSync(file, "utf8")));
+          edit("src-tauri/tauri.conf.json", (s) => {
+            const conf = JSON.parse(s);
+            conf.version = version;
+            if (version.includes("-")) conf.plugins.updater.endpoints = [process.env.FEED_URL];
+            return JSON.stringify(conf, null, 2) + "\n";
+          });
+          edit("src-tauri/Cargo.toml", (s) => s.replace(/^version = ".*"$/m, `version = "${version}"`));
+          edit("package.json", (s) => s.replace(/"version": ".*?"/, `"version": "${version}"`));
+          EOF
+          git diff --stat
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -196,8 +232,9 @@ jobs:
         shell: bash
         run: sccache --show-stats
 
-  # latest.json is what installed apps poll (releases/latest/download/latest.json): the newest
-  # version and, per platform, the signed bundle's URL and signature.
+  # latest.json is what installed apps poll: the newest version and, per platform, the signed
+  # bundle's URL and signature. Stable apps read it from the latest release, unstable apps from
+  # the unstable-channel release.
   updater-json:
     needs: [release, bundle]
     runs-on: avrea-ubuntu-latest-2-vcpu
@@ -233,7 +270,33 @@ jobs:
             '{version: $version, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
           cat latest.json
           gh release upload "$TAG" latest.json --clobber
+      # Unstable builds always go to the feed; stable ones too, so unstable apps move onto a stable
+      # release of their version. Never replace a newer build (e.g. when rebuilding an old tag).
+      - name: Publish to the unstable channel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Sortable key: X.Y.Z-N sorts before X.Y.Z, as in semver.
+          key() {
+            local core=${1%%-*} pre=
+            [[ $1 == *-* ]] && pre=${1#*-}
+            IFS=. read -r a b c <<<"$core"
+            if [ -n "$pre" ]; then printf '%06d.%06d.%06d.0%06d' "$a" "$b" "$c" "$pre"; else printf '%06d.%06d.%06d.1' "$a" "$b" "$c"; fi
+          }
+          if ! gh release view "$FEED_TAG" >/dev/null 2>&1; then
+            gh release create "$FEED_TAG" --prerelease --latest=false --target "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" -q .object.sha)" \
+              --title "Unstable channel" --notes "Update feed for unstable builds of winfer. Download the newest pre-release instead."
+          fi
+          mkdir feed
+          current=$(gh release download "$FEED_TAG" --pattern latest.json --dir feed >/dev/null 2>&1 && jq -r .version feed/latest.json || true)
+          if [ -n "$current" ] && [[ $(key "$current") > $(key "${TAG#v}") ]]; then
+            echo "The unstable channel already has $current; leaving it"
+            exit 0
+          fi
+          gh release upload "$FEED_TAG" latest.json --clobber
       - name: Mark the release as latest
+        if: ${{ !contains(inputs.tag, '-') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -242,6 +305,7 @@ jobs:
         # Rebuilding an older tag by hand leaves "latest" on the newer release.
         run: |
           current=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          [[ $current == *-* ]] && current=
           newest=$(printf '%s\n%s\n' "$current" "$TAG" | sed '/^$/d' | sort -V | tail -n1)
           if [ "$newest" != "$TAG" ]; then
             echo "$current is newer than $TAG; leaving it as latest"

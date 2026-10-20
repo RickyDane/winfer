@@ -6,8 +6,8 @@ import { toast, updateToast } from "@/stores/toasts";
 import { parseChanges, type ReleaseChanges, releasesBetween } from "./releaseNotes";
 
 /**
- * App updates from GitHub releases: the updater plugin reads latest.json on the latest release
- * (built by release.yml), and installs the signed bundle for this platform. Nothing installs
+ * App updates from GitHub releases: the updater plugin reads latest.json from the latest release,
+ * or the unstable-channel release for unstable builds (built by release.yml), and installs the signed bundle for this platform. Nothing installs
  * without the user's say-so, since restarting stops every running agent.
  */
 interface UpdateState {

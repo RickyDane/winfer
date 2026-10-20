@@ -1,0 +1,59 @@
+name: stable
+
+# Promotes an unstable build to the stable channel: tags its commit vX.Y.Z (the unstable build's
+# version without the -N) and builds that as the latest release. Run it from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Unstable build to promote, e.g. v0.1.102-57 (empty = the newest one that finished)
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stable-release
+
+jobs:
+  tag:
+    runs-on: avrea-ubuntu-latest-2-vcpu
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag the promoted build
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FROM: ${{ inputs.from }}
+        run: |
+          # Only builds whose bundles all made it (latest.json is uploaded last) can be promoted.
+          finished() { gh release view "$1" --json assets -q '.assets[].name' 2>/dev/null | grep -qx latest.json; }
+          if [ -z "$FROM" ]; then
+            for t in $(git tag -l 'v*-*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' | sort -V -r); do
+              if finished "$t"; then FROM=$t; break; fi
+            done
+            [ -n "$FROM" ] || { echo "::error::No finished unstable build to promote"; exit 1; }
+          elif ! [[ $FROM =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]] || ! finished "$FROM"; then
+            echo "::error::$FROM isn't a finished unstable build"
+            exit 1
+          fi
+          tag=${FROM%-*}
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag is released already; push to main for a newer unstable build first"
+            exit 1
+          fi
+          git tag "$tag" "$FROM^{commit}"
+          git push origin "$tag"
+          echo "Promoting $FROM ($(git rev-parse --short "$FROM^{commit}")) as $tag" >> "$GITHUB_STEP_SUMMARY"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit

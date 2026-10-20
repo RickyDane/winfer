@@ -1,0 +1,52 @@
+name: unstable
+
+# Every push to main ships to the unstable channel as vX.Y.Z-N: X.Y.Z is the next stable version
+# (the patch after the last stable tag, or tauri.conf.json's version when that's newer, so a
+# minor/major bump is just editing it) and N this workflow's run number. Pushes landing while a
+# build runs are batched into the next one.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unstable-release
+
+jobs:
+  tag:
+    runs-on: avrea-ubuntu-latest-2-vcpu
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag the build
+        id: tag
+        run: |
+          stable=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+          conf=$(jq -r .version src-tauri/tauri.conf.json)
+          next=$conf
+          if [ -n "$stable" ]; then
+            IFS=. read -r major minor patch <<<"${stable#v}"
+            next=$(printf '%s\n%s\n' "$major.$minor.$((patch + 1))" "$conf" | sort -V | tail -n1)
+          fi
+          tag="v$next-${{ github.run_number }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag exists already (re-run)"
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "$tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit
