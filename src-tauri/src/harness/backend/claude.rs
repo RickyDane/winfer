@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{In, LineProcess, Opts};
 use crate::harness::claude_skills::{self, LeanSkills};
 use crate::harness::diff;
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, Skill, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, Skill, TaskEv, Todo, TurnTokens, Usage, UserMsg};
 
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("claude").is_none() {
@@ -156,6 +156,26 @@ struct Call {
     input: Value,
 }
 
+/// Usage as the turn runs. Claude Code's `result` gives the turn's totals; until it arrives the
+/// turn is added up from stream events: each request's input at `message_start`, its exact
+/// output at `message_delta`, and the text streamed in between as an estimate.
+#[derive(Default)]
+struct Live {
+    /// The last usage sent: session totals, the window and the session's cost.
+    usage: Usage,
+    /// Totals of the session's finished turns.
+    input: u64,
+    cached: u64,
+    output: u64,
+    /// The running turn: its input so far, its finished requests' output, and the streaming
+    /// request's output.
+    turn_input: u64,
+    turn_cached: u64,
+    done: u64,
+    msg: u64,
+    turn: TurnTokens,
+}
+
 struct Bridge {
     events: Events,
     calls: HashMap<String, Call>,
@@ -166,6 +186,9 @@ struct Bridge {
     /// Streamed text blocks already matched to their final text.
     finalized: std::collections::HashSet<String>,
     message: String,
+    /// The running turn's usage, built from stream events so the token count moves while the
+    /// agent works instead of only when the turn's `result` arrives.
+    live: Live,
     busy: bool,
     seq: u64,
     /// The user turns for /undo, newest last. Claude Code snapshots files before each user
@@ -264,6 +287,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         blocks: HashMap::new(),
         finalized: Default::default(),
         message: String::new(),
+        live: Live::default(),
         busy: false,
         seq: 0,
         checkpoints: Vec::new(),
@@ -297,6 +321,21 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
 }
 
 impl Bridge {
+    /// Sends the running turn's usage on top of the session's finished turns.
+    fn emit_live(&mut self) {
+        let l = &mut self.live;
+        let turn = l.turn.now();
+        l.usage.input = l.input + l.turn_input;
+        l.usage.cached = l.cached + l.turn_cached;
+        l.usage.output = l.output + turn;
+        l.usage.turn = turn;
+        if l.usage.window == 0 {
+            l.usage.window = 200_000;
+        }
+        let u = l.usage.clone();
+        self.emit(Ev::Usage(u));
+    }
+
     fn emit(&self, ev: Ev) {
         let _ = self.events.send(ev);
     }
@@ -506,14 +545,22 @@ impl Bridge {
                     .as_object()
                     .and_then(|m| m.values().filter_map(|u| u["contextWindow"].as_u64()).max())
                     .unwrap_or(200_000);
-                self.emit(Ev::Usage(Usage {
+                // `usage` is this turn's; the session's totals add up across turns.
+                let l = &mut self.live;
+                l.input += n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+                l.cached += n("cache_read_input_tokens");
+                l.output += n("output_tokens");
+                let u = Usage {
                     context: ln("input_tokens") + ln("cache_read_input_tokens") + ln("cache_creation_input_tokens") + ln("output_tokens"),
                     window,
-                    input: n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
-                    output: n("output_tokens"),
-                    cached: n("cache_read_input_tokens"),
+                    input: l.input,
+                    output: l.output,
+                    cached: l.cached,
                     cost: v["total_cost_usd"].as_f64(),
-                }));
+                    turn: n("output_tokens"),
+                };
+                *l = Live { usage: u.clone(), input: l.input, cached: l.cached, output: l.output, ..Default::default() };
+                self.emit(Ev::Usage(u));
                 if v["is_error"].as_bool() == Some(true) && v["subtype"] != "error_during_execution" {
                     let text = v["result"].as_str().unwrap_or("Claude Code reported an error.");
                     self.emit(Ev::Error(text.to_string()));
@@ -609,6 +656,30 @@ impl Bridge {
         match e["type"].as_str().unwrap_or("") {
             "message_start" => {
                 self.message = e["message"]["id"].as_str().unwrap_or("").to_string();
+                let u = &e["message"]["usage"];
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                let input = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+                let l = &mut self.live;
+                l.turn_input += input;
+                l.turn_cached += n("cache_read_input_tokens");
+                l.msg = n("output_tokens");
+                l.turn.exact(l.done + l.msg);
+                l.usage.context = input + l.msg;
+                self.emit_live();
+            }
+            "message_delta" => {
+                if let Some(out) = e["usage"]["output_tokens"].as_u64() {
+                    let l = &mut self.live;
+                    l.usage.context += out.saturating_sub(l.msg);
+                    l.msg = out;
+                    l.turn.exact(l.done + l.msg);
+                    self.emit_live();
+                }
+            }
+            "message_stop" => {
+                let l = &mut self.live;
+                l.done = l.turn.now();
+                l.msg = 0;
             }
             "content_block_start" => {
                 let index = e["index"].as_u64().unwrap_or(0);
@@ -620,6 +691,11 @@ impl Bridge {
                 let Some((id, _)) = self.blocks.get(&index) else { return };
                 let id = id.clone();
                 let d = &e["delta"];
+                if let Some(text) = ["text", "thinking", "partial_json"].iter().find_map(|k| d[k].as_str()) {
+                    if self.live.turn.streamed(text) {
+                        self.emit_live();
+                    }
+                }
                 match d["type"].as_str() {
                     Some("text_delta") => self.emit(Ev::TextDelta { id, text: d["text"].as_str().unwrap_or("").into() }),
                     Some("thinking_delta") => self.emit(Ev::ReasoningDelta { id, text: d["thinking"].as_str().unwrap_or("").into() }),
@@ -816,6 +892,7 @@ mod tests {
             blocks: HashMap::new(),
             finalized: Default::default(),
             message: String::new(),
+            live: Live::default(),
             busy: true,
             seq: 0,
             checkpoints: Vec::new(),
@@ -933,6 +1010,27 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, Ev::ToolEnd { ok: true, diff: Some(d), .. } if d.contains("+b"))));
         assert!(evs.iter().any(|e| matches!(e, Ev::Usage(u) if u.window == 1000 && u.cost == Some(0.5))));
         assert!(matches!(evs.last(), Some(Ev::TurnDone)));
+    }
+
+    #[test]
+    fn output_tokens_count_up_during_the_turn() {
+        let (mut b, rx) = bridge();
+        let ev = |e: Value| json!({ "type": "stream_event", "event": e });
+        let outputs = |rx: &std::sync::mpsc::Receiver<Ev>| rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u.turn) } else { None }).collect::<Vec<_>>();
+        b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m1", "usage": { "input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 2 } } })));
+        b.on_line(&ev(json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text" } })));
+        b.on_line(&ev(json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "x".repeat(400) } })));
+        assert_eq!(outputs(&rx), vec![2, 102], "streamed text is estimated at 4 chars a token");
+        b.on_line(&ev(json!({ "type": "message_delta", "usage": { "output_tokens": 120 } })));
+        b.on_line(&ev(json!({ "type": "message_stop" })));
+        b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m2", "usage": { "input_tokens": 300, "output_tokens": 1 } } })));
+        assert_eq!(outputs(&rx), vec![120, 121], "finished requests add up");
+        b.on_line(&json!({ "type": "result", "total_cost_usd": 0.1, "usage": { "output_tokens": 130 }, "modelUsage": { "x": { "contextWindow": 1000 } } }));
+        b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m3", "usage": { "output_tokens": 3 } } })));
+        let us: Vec<Usage> = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).collect();
+        assert_eq!(us.iter().map(|u| u.turn).collect::<Vec<_>>(), vec![130, 3], "the next turn counts from zero");
+        assert_eq!(us.iter().map(|u| u.output).collect::<Vec<_>>(), vec![130, 133], "the session's output adds up");
+        assert!(us[1].window == 1000 && us[1].cost == Some(0.1));
     }
 
     #[test]

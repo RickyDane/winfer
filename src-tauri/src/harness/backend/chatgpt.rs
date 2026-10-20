@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, TurnTokens, Usage, UserMsg};
 use crate::harness::mcp_client;
 use crate::harness::tools::{self, Risk};
 
@@ -68,6 +68,9 @@ struct State {
     mode: Mode,
     allowed: HashSet<String>,
     usage: Usage,
+    /// The running turn's output tokens, and the session's output total when it started.
+    turn: TurnTokens,
+    turn_base: u64,
     trim_at: u8,
     compact_at: u8,
     /// Whether the account's route caches prompts (None until seen): without a cache, resending
@@ -160,6 +163,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             compact_at: opts.compact_at,
             cache: None,
             cache_misses: 0,
+            turn: TurnTokens::default(),
+            turn_base: 0,
             undo: Vec::new(),
         }),
         events: events.clone(),
@@ -483,14 +488,28 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                 emit(e);
             }
         };
+        // The turn's output so far, estimated from the text until the response reports its count
+        // (a subagent's counts too: its tokens add to the totals).
+        let streamed = |d: &str| {
+            let mut st = shared.state.lock().unwrap();
+            if st.turn.streamed(d) {
+                st.usage.turn = st.turn.now();
+                emit(Ev::Usage(st.usage.clone()));
+            }
+        };
         let id = ev["item_id"].as_str().unwrap_or("").to_string();
         match ev["type"].as_str().unwrap_or("") {
             "response.output_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("").to_string();
                 partial.entry(id.clone()).or_default().push_str(&d);
+                streamed(&d);
                 stream(Ev::TextDelta { id, text: d });
             }
-            "response.reasoning_summary_text.delta" => stream(Ev::ReasoningDelta { id, text: ev["delta"].as_str().unwrap_or("").into() }),
+            "response.reasoning_summary_text.delta" => {
+                let d = ev["delta"].as_str().unwrap_or("");
+                streamed(d);
+                stream(Ev::ReasoningDelta { id, text: d.into() });
+            }
             "response.reasoning_summary_part.added" if ev["summary_index"].as_u64().unwrap_or(0) > 0 => {
                 stream(Ev::ReasoningDelta { id, text: "\n\n".into() })
             }
@@ -517,6 +536,9 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                     st.usage.output += output;
                     let cached = u["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
                     st.usage.cached += cached;
+                    let turn = st.usage.output.saturating_sub(st.turn_base);
+                    st.turn.exact(turn);
+                    st.usage.turn = turn;
                     if sub.is_none() {
                         if cached > 0 {
                             st.cache = Some(true);
@@ -550,6 +572,11 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         let _ = shared.events.send(e);
     };
     emit(Ev::TurnStart);
+    {
+        let mut st = shared.state.lock().unwrap();
+        st.turn = TurnTokens::default();
+        st.turn_base = st.usage.output;
+    }
     // Compact first when the context is nearly full.
     let full = {
         let st = shared.state.lock().unwrap();
@@ -1170,6 +1197,8 @@ mod tests {
                 compact_at: 0,
                 cache: None,
                 cache_misses: 0,
+                turn: TurnTokens::default(),
+                turn_base: 0,
                 undo: vec![UndoTurn::default()],
             }),
             events,

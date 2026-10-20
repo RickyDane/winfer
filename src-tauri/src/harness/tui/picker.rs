@@ -37,6 +37,15 @@ pub enum PickKind {
     CompactAt,
     /// Live list of subagents; enter jumps to the agent's card.
     Agents,
+    /// Live list of background shells; enter jumps to the command's card.
+    Tasks,
+}
+
+impl PickKind {
+    /// Live lists of background work: enter jumps to a card, ctrl+x stops one.
+    pub fn is_live(self) -> bool {
+        matches!(self, PickKind::Agents | PickKind::Tasks)
+    }
 }
 
 pub struct Picker {

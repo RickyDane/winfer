@@ -14,7 +14,6 @@ use ratatui::widgets::{Block as Frame_, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::app::App;
-use super::picker::PickKind;
 use super::transcript::{Block, NoticeKind, Status, diff_lines, truncate};
 use super::{anim, theme};
 use crate::harness::event::Mode;
@@ -496,8 +495,8 @@ fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
     let right = if app.busy {
         left.extend(anim::nebula_shimmer(&format!("{}…", app.verb), t, theme::FG()));
         let mut info = format!("  {}", anim::elapsed(app.turn_started.elapsed()));
-        if app.usage.output > 0 {
-            info.push_str(&format!(" · ↓ {}", anim::tokens(app.usage.output)));
+        if app.usage.turn > 0 {
+            info.push_str(&format!(" · ↓ {}", anim::tokens(app.usage.turn)));
         }
         left.push(Span::styled(info, theme::muted()));
         theme::key_hint("esc", "to stop").to_vec()
@@ -510,13 +509,19 @@ fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
             (a, s) => format!("{} · {}", plural(a, "agent"), plural(s, "shell")),
         };
         left.extend(anim::nebula_shimmer(&format!("{label} running…"), t, theme::FG()));
-        if let Some(since) = app.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.started).min() {
+        // The user's turn is still going: its clock keeps running.
+        let since = if app.turn_open { Some(app.turn_started) } else { app.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.started).min() };
+        if let Some(since) = since {
             left.push(Span::styled(format!("  {}", anim::elapsed(since.elapsed())), theme::muted()));
         }
         let mut keys = theme::key_hint("esc", "to stop").to_vec();
         if agents > 0 {
             keys.push(Span::raw(" "));
             keys.extend(theme::key_hint("ctrl+g", "agents"));
+        }
+        if shells > 0 {
+            keys.push(Span::raw(" "));
+            keys.extend(theme::key_hint("ctrl+b", "tasks"));
         }
         keys
     };
@@ -899,9 +904,9 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
                 Span::styled(" ↑↓", theme::muted()),
                 Span::styled(" select   ", theme::dim()),
                 Span::styled("enter", theme::muted()),
-                Span::styled(if p.kind == PickKind::Agents { " jump   " } else { " choose   " }, theme::dim()),
+                Span::styled(if p.kind.is_live() { " jump   " } else { " choose   " }, theme::dim()),
             ];
-            if p.kind == PickKind::Agents {
+            if p.kind.is_live() {
                 keys.extend([Span::styled("ctrl+x", theme::muted()), Span::styled(" stop   ", theme::dim())]);
             }
             keys.extend([Span::styled("esc", theme::muted()), Span::styled(" close ", theme::dim())]);

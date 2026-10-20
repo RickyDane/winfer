@@ -148,6 +148,7 @@ pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
+            app.flush_usage();
             if app.quit {
                 break;
             }

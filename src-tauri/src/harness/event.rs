@@ -97,9 +97,45 @@ pub struct Usage {
     pub context: u64,
     pub window: u64,
     pub input: u64,
+    /// Session totals.
     pub output: u64,
     pub cached: u64,
     pub cost: Option<f64>,
+    /// Output tokens of the running turn (or the last one, between turns), partly estimated
+    /// while it streams.
+    pub turn: u64,
+}
+
+/// Counts a turn's output tokens as it runs. Backends report exact counts once per model
+/// request; between those, streamed text counts at about 4 characters a token.
+#[derive(Debug, Default)]
+pub struct TurnTokens {
+    exact: u64,
+    chars: u64,
+    shown: u64,
+}
+
+impl TurnTokens {
+    pub fn now(&self) -> u64 {
+        self.exact + self.chars / 4
+    }
+
+    /// The backend's exact count for the turn so far; the estimate it covers is dropped.
+    pub fn exact(&mut self, tokens: u64) {
+        self.exact = tokens;
+        self.chars = 0;
+        self.shown = self.now();
+    }
+
+    /// Streamed text; true when the count moved enough (~25 tokens) to be worth sending.
+    pub fn streamed(&mut self, text: &str) -> bool {
+        self.chars += text.len() as u64;
+        if self.now() < self.shown + 25 {
+            return false;
+        }
+        self.shown = self.now();
+        true
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

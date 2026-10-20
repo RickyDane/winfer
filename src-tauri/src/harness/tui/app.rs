@@ -51,7 +51,7 @@ pub struct Launch {
     pub system: Option<String>,
 }
 
-pub const COMMANDS: [(&str, &str); 23] = [
+pub const COMMANDS: [(&str, &str); 24] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
@@ -67,6 +67,7 @@ pub const COMMANDS: [(&str, &str); 23] = [
     ("/copy", "Copy the last reply"),
     ("/export", "Save the conversation as Markdown"),
     ("/agents", "Subagents running and finished (ctrl+g)"),
+    ("/tasks", "Background shells running and finished (ctrl+b)"),
     ("/mcp", "MCP servers in use"),
     ("/login", "How to sign in to each backend"),
     ("/help", "Keys and commands"),
@@ -153,6 +154,9 @@ pub struct App {
     pub alive: bool,
     pub busy: bool,
     pub turn_started: Instant,
+    /// The user's turn is still going: its agent turn ended while background tasks ran, so a
+    /// turn the backend starts on their reports continues it (same clock) rather than a new one.
+    pub turn_open: bool,
     pub verb: &'static str,
     pub approvals: VecDeque<Approval>,
     pub approval_choice: usize,
@@ -201,6 +205,10 @@ pub struct App {
     hooked: bool,
     /// The backend session and where it's kept (transcript or log), for winfer's context breakdown.
     usage_source: Option<(String, String)>,
+    /// When usage was last sent to winfer, and whether newer usage waits: live counts can come
+    /// several times a second, the header only needs a few.
+    usage_sent: Option<Instant>,
+    usage_unsent: bool,
     /// Whether winfer was last told this pane is working (a turn or background task runs).
     reported_working: bool,
     /// Snapshots the workspace around turns, for /undo (None in tests).
@@ -262,6 +270,7 @@ impl App {
             alive: false,
             busy: false,
             turn_started: Instant::now(),
+            turn_open: false,
             verb: VERBS[0],
             approvals: VecDeque::new(),
             approval_choice: 0,
@@ -298,6 +307,8 @@ impl App {
             shell_seq: 0,
             hooked: false,
             usage_source: None,
+            usage_sent: None,
+            usage_unsent: false,
             reported_working: false,
             checkpoints: None,
             turns: Vec::new(),
@@ -365,6 +376,7 @@ impl App {
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.alive = true;
         self.busy = false;
+        self.turn_open = false;
         self.approvals.clear();
         self.report_status();
     }
@@ -478,6 +490,18 @@ impl App {
     /// Sends context fill and spend to winfer for the pane header's meter and cost chip, with
     /// the backend and its session's log so winfer can break the context down and know whose
     /// plan limits apply.
+    /// Sends the latest usage if it hasn't gone out yet and the last send was over half a second
+    /// ago; the main loop calls it again, so what waits goes out shortly after.
+    pub fn flush_usage(&mut self) {
+        if !self.usage_unsent || self.usage_sent.is_some_and(|t| t.elapsed() < Duration::from_millis(500)) {
+            return;
+        }
+        self.usage_unsent = false;
+        self.usage_sent = Some(Instant::now());
+        let u = self.usage.clone();
+        self.report_usage(&u);
+    }
+
     fn report_usage(&mut self, u: &Usage) {
         if u.window == 0 {
             return;
@@ -489,7 +513,7 @@ impl App {
             json!({
                 "backend": self.kind.id(),
                 "context": { "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at, "source": source, "provider": self.kind.id() },
-                "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "at": at },
+                "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "turn": u.turn, "at": at },
             }),
         );
     }
@@ -500,7 +524,11 @@ impl App {
                 self.saved.backend_session = Some(s);
                 if !self.hooked {
                     self.hooked = true;
-                    hook("session_start", json!({ "session_id": self.saved.id }));
+                    // Claude Code names its session only once the first turn runs: "idle" then
+                    // would mark the pane idle mid-turn (turn_start already carried the id).
+                    if !self.reported_working {
+                        hook("session_start", json!({ "session_id": self.saved.id }));
+                    }
                 }
             }
             Ev::Model(m) => self.actual_model = m,
@@ -617,16 +645,21 @@ impl App {
             Ev::Usage(u) => {
                 let pct = if u.window > 0 { u.context as f32 / u.window as f32 } else { 0.0 };
                 self.ctx_shown.set(pct, 600);
-                self.report_usage(&u);
                 self.usage = u;
+                self.usage_unsent = true;
+                self.flush_usage();
             }
             Ev::Notice(n) => self.notice(n, NoticeKind::Info),
             Ev::Error(e) => self.notice(e, NoticeKind::Error),
             Ev::TurnStart => {
                 if !self.busy {
                     self.busy = true;
-                    self.turn_started = Instant::now();
-                    self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
+                    // A turn on background tasks' reports continues the user's turn.
+                    if !self.turn_open {
+                        self.turn_open = true;
+                        self.turn_started = Instant::now();
+                        self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
+                    }
                 }
             }
             Ev::TurnDone => self.turn_done(),
@@ -634,6 +667,7 @@ impl App {
             Ev::Exited(reason) => {
                 self.alive = false;
                 self.busy = false;
+                self.turn_open = false;
                 self.approvals.clear();
                 for task in &mut self.tasks {
                     if task.status == Status::Running {
@@ -672,8 +706,15 @@ impl App {
         self.busy = false;
         self.approvals.clear();
         self.finish_running();
+        // Background tasks still running keep the turn open: the agent isn't idle yet, and the
+        // backend may start a turn on their reports.
+        // (Not after the user stopped everything: that ends the turn.)
+        let settled = !self.turn_open || !self.background_running();
+        if settled {
+            self.turn_open = false;
+        }
         // A thin rule with the turn's time, once the agent has shown something for it.
-        if was_busy && self.items.last().is_some_and(|i| !matches!(i.block, Block::User { .. } | Block::TurnTime { .. })) {
+        if was_busy && settled && self.items.last().is_some_and(|i| !matches!(i.block, Block::User { .. } | Block::TurnTime { .. })) {
             self.items.push(Item::new(Block::TurnTime { took: self.turn_started.elapsed() }));
         }
         self.save();
@@ -832,6 +873,7 @@ impl App {
             self.start_backend(self.saved.backend_session.clone());
         }
         self.busy = true;
+        self.turn_open = true;
         self.turn_started = Instant::now();
         self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
         // Snapshot the workspace first, so /undo can put back whatever the turn changes.
@@ -1048,7 +1090,8 @@ impl App {
                 config::Config::update(|c| c.plan_sidebar = on);
                 self.toast(if on { "Plan sidebar on (shows when the pane is wide enough)" } else { "Plan sidebar off" }, NoticeKind::Success);
             }
-            "/agents" | "/subagents" | "/tasks" => self.open_agents(),
+            "/agents" | "/subagents" => self.open_agents(),
+            "/tasks" | "/shells" | "/bashes" => self.open_tasks(),
             "/copy" => self.copy_last(),
             "/export" => self.export(),
             "/mcp" => {
@@ -1070,7 +1113,7 @@ impl App {
     }
 
     fn help(&mut self) {
-        let mut s = String::from("Keys\n  enter send · shift/alt+enter or ctrl+j newline · esc interrupt · ctrl+c clear/quit\n  shift+tab permission mode · ctrl+o expand details · ctrl+p command palette · ctrl+t model · ctrl+r effort · ctrl+g subagents (ctrl+x there stops one) · ctrl+x plan (or click it)\n  ↑/↓ history · pgup/pgdn or wheel scroll · @ attach file · ctrl+v paste image · ! run shell command\n  drag to select and copy · double-click a word · triple-click a line · shift+drag for the terminal's own selection\n\nCommands\n");
+        let mut s = String::from("Keys\n  enter send · shift/alt+enter or ctrl+j newline · esc interrupt · ctrl+c clear/quit\n  shift+tab permission mode · ctrl+o expand details · ctrl+p command palette · ctrl+t model · ctrl+r effort · ctrl+g subagents · ctrl+b background tasks (ctrl+x there stops one) · ctrl+x plan (or click it)\n  ↑/↓ history · pgup/pgdn or wheel scroll · @ attach file · ctrl+v paste image · ! run shell command\n  drag to select and copy · double-click a word · triple-click a line · shift+drag for the terminal's own selection\n\nCommands\n");
         for (c, d) in COMMANDS {
             s.push_str(&format!("  {c:<10} {d}\n"));
         }
@@ -1418,12 +1461,69 @@ impl App {
         }
     }
 
-    /// Keeps an open subagent list live: new agents, progress and elapsed times.
-    pub fn refresh_agents(&mut self) {
-        if !self.picker.as_ref().is_some_and(|p| p.kind == PickKind::Agents) {
+    /// Background shells (non-agent tasks): running ones first, oldest first, then finished
+    /// ones, newest first. The value is the card id to jump to, else the task id.
+    fn task_items(&self) -> Vec<PickItem> {
+        let now = Instant::now();
+        let mut shells: Vec<&Task> = self.tasks.iter().filter(|t| !t.agent).collect();
+        shells.sort_by(|a, b| {
+            let (ra, rb) = (a.status == Status::Running, b.status == Status::Running);
+            rb.cmp(&ra).then_with(|| if ra { a.started.cmp(&b.started) } else { b.started.cmp(&a.started) })
+        });
+        shells
+            .into_iter()
+            .take(60)
+            .map(|t| {
+                let card = t.tool_id.as_deref().and_then(|id| {
+                    self.items.iter().find_map(|i| match &i.block {
+                        Block::Tool { id: card, title, output, .. } if card == id => Some((title.as_str(), output.as_str())),
+                        _ => None,
+                    })
+                });
+                let took = super::anim::elapsed(t.ended.unwrap_or(now).duration_since(t.started));
+                let last = card.and_then(|(_, out)| out.lines().rev().find(|l| !l.trim().is_empty())).map(str::trim).unwrap_or("");
+                let detail = match (t.status, t.exit_code) {
+                    (Status::Running, _) if !last.is_empty() => format!("{took} · {last}"),
+                    (Status::Running, _) => format!("{took} · running"),
+                    (_, Some(code)) => format!("exit {code} after {took}"),
+                    (Status::Ok, None) => format!("done in {took}"),
+                    (_, None) => format!("stopped after {took}"),
+                };
+                let title = Some(t.title.trim()).filter(|s| !s.is_empty()).or_else(|| card.map(|(title, _)| title.trim()).filter(|s| !s.is_empty()));
+                let label = title.unwrap_or("(background shell)").to_string();
+                let value = t.tool_id.clone().unwrap_or_else(|| t.id.clone());
+                PickItem::new(label, detail, value).group(if t.status == Status::Running { "Running" } else { "Finished" })
+            })
+            .collect()
+    }
+
+    pub fn open_tasks(&mut self) {
+        let items = self.task_items();
+        if items.is_empty() {
+            self.toast("No background tasks in this conversation yet.", NoticeKind::Info);
             return;
         }
-        let items = self.agent_items();
+        self.open(Picker::new(PickKind::Tasks, "Background tasks", items));
+    }
+
+    /// Stops the running background shell picked in `/tasks` (by its card id or task id).
+    fn stop_task(&mut self, value: &str) {
+        let task = self.tasks.iter().find(|t| !t.agent && (t.id == value || t.tool_id.as_deref() == Some(value)));
+        match task {
+            Some(t) if t.status == Status::Running => {
+                let id = t.id.clone();
+                self.send(Cmd::StopTask(id));
+                self.toast("Stopping background task…", NoticeKind::Info);
+            }
+            Some(_) => self.toast("That task already finished.", NoticeKind::Info),
+            None => self.toast("Can't find that task.", NoticeKind::Info),
+        }
+    }
+
+    /// Keeps an open subagent or task list live: new entries, progress and elapsed times.
+    pub fn refresh_agents(&mut self) {
+        let Some(kind) = self.picker.as_ref().map(|p| p.kind).filter(|k| k.is_live()) else { return };
+        let items = if kind == PickKind::Tasks { self.task_items() } else { self.agent_items() };
         let Some(p) = &mut self.picker else { return };
         let chosen = p.chosen().map(|i| i.value.clone());
         p.items = items;
@@ -1469,7 +1569,7 @@ impl App {
                     self.set_compaction(p.kind == PickKind::TrimAt, percent);
                 }
             }
-            PickKind::Agents => self.jump_to_tool(&item.value),
+            PickKind::Agents | PickKind::Tasks => self.jump_to_tool(&item.value),
             PickKind::Session => {
                 if self.busy {
                     self.send(Cmd::Interrupt);
@@ -1553,12 +1653,17 @@ impl App {
         self.todos.clear();
         self.tasks.clear();
         self.queue.clear();
+        self.turn_open = false;
         self.usage = Usage::default();
         self.ctx_shown = Tween::new(0.0);
         self.saved = Saved { id: session::new_id(), cwd: self.cwd.to_string_lossy().into_owned(), model: self.spec(), ..Default::default() };
-        self.hooked = false;
         self.forget_turns();
+        // A fresh session is idle, not a finished turn; say so now (the backend may only name
+        // its session once the next turn runs) so winfer drops the "working" its Enter guessed.
+        self.reported_working = false;
         self.start_backend(None);
+        self.hooked = true;
+        hook("session_start", json!({ "session_id": self.saved.id }));
         self.epoch = Instant::now();
     }
 
@@ -1909,9 +2014,14 @@ impl App {
                 KeyCode::Down | KeyCode::Tab => p.move_by(1),
                 KeyCode::Char('p') | KeyCode::Char('k') if ctrl => p.move_by(-1),
                 KeyCode::Char('n') | KeyCode::Char('j') if ctrl => p.move_by(1),
-                KeyCode::Char('x') if ctrl && p.kind == PickKind::Agents => {
+                KeyCode::Char('x') if ctrl && p.kind.is_live() => {
+                    let kind = p.kind;
                     if let Some(value) = p.chosen().map(|i| i.value.clone()) {
-                        self.stop_agent(&value);
+                        if kind == PickKind::Tasks {
+                            self.stop_task(&value);
+                        } else {
+                            self.stop_agent(&value);
+                        }
                     }
                 }
                 KeyCode::PageUp => p.move_by(-8),
@@ -2019,6 +2129,7 @@ impl App {
             KeyCode::Char('t') if ctrl => self.open_models(),
             KeyCode::Char('r') if ctrl => self.cycle_effort(),
             KeyCode::Char('g') if ctrl => self.open_agents(),
+            KeyCode::Char('b') if ctrl => self.open_tasks(),
             KeyCode::Char('x') if ctrl => self.plan_open = !self.plan_open,
             KeyCode::Char('l') if ctrl => self.scroll = 0,
             KeyCode::Char('a') if ctrl => self.composer.home(),
@@ -2075,6 +2186,8 @@ impl App {
         } else if self.busy {
             self.send(Cmd::Interrupt);
         }
+        // The user stopped the work: whatever reports still arrive start a new turn.
+        self.turn_open = false;
         self.turns.retain(|t| t.sent);
         let running: Vec<String> = self.tasks.iter().filter(|t| t.status == Status::Running).map(|t| t.id.clone()).collect();
         for id in &running {
@@ -2172,8 +2285,19 @@ pub fn hook(event: &str, body: serde_json::Value) {
     if addr.is_empty() || pane.is_empty() {
         return;
     }
-    let event = event.to_string();
-    std::thread::spawn(move || crate::hooks::send_hook(&addr, &token, &pane, "winfer", &event, body.to_string()));
+    // One sender thread, so winfer gets the events in the order they happened (a thread each
+    // could deliver turn_start after the session_start that followed it).
+    static QUEUE: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<(String, String)>>> = std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
+        std::thread::spawn(move || {
+            for (event, body) in rx {
+                crate::hooks::send_hook(&addr, &token, &pane, "winfer", &event, body);
+            }
+        });
+        std::sync::Mutex::new(tx)
+    });
+    let _ = queue.lock().unwrap().send((event.to_string(), body.to_string()));
 }
 
 
@@ -2639,6 +2763,20 @@ mod tests {
     }
 
     #[test]
+    fn a_session_named_mid_turn_or_cleared_keeps_the_status_true() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.on_agent(g, Ev::TurnStart);
+        // Claude Code names its session in the first turn: still working, no idle in between.
+        a.on_agent(g, Ev::Session("s1".into()));
+        assert!(a.hooked && a.reported_working);
+        // /clear: a fresh, idle session, not a finished turn.
+        a.new_session();
+        assert!(a.hooked && !a.reported_working && a.items.is_empty());
+    }
+
+    #[test]
     fn a_finished_turn_ends_with_its_time() {
         let mut a = app();
         let g = a.generation;
@@ -2655,6 +2793,33 @@ mod tests {
         a.items.last_mut().unwrap().born -= Duration::from_secs(1);
         let s = screen(&mut a, 60, 12);
         assert!(s.contains("── 0s ──"), "{s}");
+    }
+
+    #[test]
+    fn a_turn_on_background_reports_continues_the_users_turn() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        a.on_agent(g, Ev::TurnStart);
+        let started = Instant::now() - Duration::from_secs(30);
+        a.turn_started = started;
+        a.on_agent(g, Ev::Task(TaskEv { id: "k1".into(), agent: Some("Explore".into()), status: Some("running".into()), ..Default::default() }));
+        a.items.push(Item::new(Block::Assistant { id: "a".into(), text: "waiting on it".into() }));
+        a.on_agent(g, Ev::TurnDone);
+        // Not idle yet: no turn time, the clock keeps going.
+        assert!(a.turn_open && !matches!(a.items.last().unwrap().block, Block::TurnTime { .. }));
+        a.on_agent(g, Ev::Task(TaskEv { id: "k1".into(), status: Some("completed".into()), ..Default::default() }));
+        // The backend picks up the report: same turn, same clock.
+        a.on_agent(g, Ev::TurnStart);
+        assert_eq!(a.turn_started, started);
+        a.items.push(Item::new(Block::Assistant { id: "b".into(), text: "done".into() }));
+        a.on_agent(g, Ev::TurnDone);
+        assert!(!a.turn_open);
+        assert_eq!(a.items.iter().filter(|i| matches!(i.block, Block::TurnTime { .. })).count(), 1);
+        assert!(matches!(a.items.last().unwrap().block, Block::TurnTime { took } if took >= Duration::from_secs(30)));
+        // The next turn the backend starts on its own is a new one.
+        a.on_agent(g, Ev::TurnStart);
+        assert!(a.turn_started > started);
     }
 
     #[test]
@@ -2680,6 +2845,34 @@ mod tests {
         let n = a.items.len();
         key(&mut a, KeyCode::Esc);
         assert_eq!(a.items.len(), n);
+    }
+
+    #[test]
+    fn background_shells_list_in_their_picker_and_stop_from_it() {
+        let mut a = app();
+        let g = a.generation;
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)));
+        assert!(a.picker.is_none(), "nothing to list yet");
+        a.on_agent(g, Ev::TurnStart);
+        a.on_agent(g, Ev::ToolStart { id: "c1".into(), name: "Bash".into(), title: "pnpm dev".into(), input: json!({}) });
+        a.on_agent(g, Ev::Task(TaskEv { id: "b1".into(), tool_id: Some("c1".into()), status: Some("running".into()), ..Default::default() }));
+        a.on_agent(g, Ev::ToolOutput { id: "c1".into(), chunk: "ready on :5173\n".into() });
+        a.on_agent(g, Ev::Task(TaskEv { id: "b2".into(), title: Some("cargo test".into()), status: Some("running".into()), ..Default::default() }));
+        a.on_agent(g, Ev::Task(TaskEv { id: "b2".into(), status: Some("failed".into()), exit_code: Some(101), ..Default::default() }));
+        a.on_agent(g, Ev::TurnDone);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("ctrl+b tasks"), "{s}");
+
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)));
+        assert_eq!(a.picker.as_ref().unwrap().kind, PickKind::Tasks);
+        a.overlay = Tween::new(1.0);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("Background tasks") && s.contains("Running") && s.contains("Finished") && s.contains("ctrl+x stop"), "{s}");
+        assert!(s.contains("pnpm dev") && s.contains("ready on :5173") && s.contains("cargo test") && s.contains("exit 101"), "{s}");
+
+        // The running shell is listed first; ctrl+x stops it by its task id.
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)));
+        assert_eq!(a.toast.as_ref().map(|t| t.0.as_str()), Some("Stopping background task…"));
     }
 
     #[test]

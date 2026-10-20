@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, TurnTokens, Usage, UserMsg};
 
 fn approval_policy(mode: Mode) -> &'static str {
     match mode {
@@ -94,6 +94,9 @@ struct Bridge {
     children: HashMap<String, Child>,
     /// The main thread's own token usage, before the subagents' is added.
     usage: Usage,
+    /// The running turn's output tokens, and the session's output total when it started.
+    turn_tokens: TurnTokens,
+    turn_base: u64,
     /// Skills Codex found (`skills/list`): name → SKILL.md path.
     skills: HashMap<String, String>,
     /// The user turns, newest last, for /undo.
@@ -153,6 +156,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         diffs: HashMap::new(),
         children: HashMap::new(),
         usage: Usage::default(),
+        turn_tokens: TurnTokens::default(),
+        turn_base: 0,
         skills: HashMap::new(),
         turns: Vec::new(),
         commands: HashMap::new(),
@@ -498,7 +503,11 @@ impl Bridge {
             return self.on_child(&thread, method, p);
         }
         match method {
-            "turn/started" => self.turn = p["turn"]["id"].as_str().map(str::to_string),
+            "turn/started" => {
+                self.turn = p["turn"]["id"].as_str().map(str::to_string);
+                self.turn_tokens = TurnTokens::default();
+                self.turn_base = self.output_total();
+            }
             "turn/completed" => {
                 let turn = &p["turn"];
                 if turn["status"] == "failed" {
@@ -521,8 +530,14 @@ impl Bridge {
                     self.emit(Ev::Error(format!("Codex: {message}")));
                 }
             }
-            "item/agentMessage/delta" => self.emit(Ev::TextDelta { id: s(p, "itemId"), text: s(p, "delta") }),
-            "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") }),
+            "item/agentMessage/delta" => {
+                self.streamed(p);
+                self.emit(Ev::TextDelta { id: s(p, "itemId"), text: s(p, "delta") });
+            }
+            "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+                self.streamed(p);
+                self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") });
+            }
             "item/reasoning/summaryPartAdded" => self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: "\n\n".into() }),
             "item/commandExecution/outputDelta" => self.emit(Ev::ToolOutput { id: s(p, "itemId"), chunk: s(p, "delta") }),
             "turn/plan/updated" => {
@@ -551,8 +566,9 @@ impl Bridge {
                     output: n("total", "outputTokens"),
                     cached: n("total", "cachedInputTokens"),
                     cost: None,
+                    turn: 0,
                 };
-                self.emit_usage();
+                self.counted();
             }
             "thread/compacted" => self.emit(Ev::Notice("Context compacted.".into())),
             "model/rerouted" => {
@@ -574,7 +590,28 @@ impl Bridge {
             u.output += c.output;
             u.cached += c.cached;
         }
+        u.turn = self.turn_tokens.now();
         self.emit(Ev::Usage(u));
+    }
+
+    /// Output tokens of the main thread and its subagents.
+    fn output_total(&self) -> u64 {
+        self.usage.output + self.children.values().map(|c| c.output).sum::<u64>()
+    }
+
+    /// Codex counts tokens per request; the text streamed in between counts as an estimate.
+    fn streamed(&mut self, p: &Value) {
+        if self.turn_tokens.streamed(p["delta"].as_str().unwrap_or("")) {
+            self.emit_usage();
+        }
+    }
+
+    /// Codex's exact totals arrived: the turn's output is what grew since it started.
+    fn counted(&mut self) {
+        // Not only during the turn: the last count can land just after `turn/completed`.
+        let n = self.output_total().saturating_sub(self.turn_base);
+        self.turn_tokens.exact(n);
+        self.emit_usage();
     }
 
     fn task(&self, t: TaskEv) {
@@ -619,7 +656,7 @@ impl Bridge {
                 child.input = u["inputTokens"].as_u64().unwrap_or(0);
                 child.output = u["outputTokens"].as_u64().unwrap_or(0);
                 child.cached = u["cachedInputTokens"].as_u64().unwrap_or(0);
-                self.emit_usage();
+                self.counted();
             }
             _ => {}
         }
@@ -1177,6 +1214,8 @@ mod tests {
             diffs: HashMap::new(),
             children: HashMap::new(),
             usage: Usage::default(),
+            turn_tokens: TurnTokens::default(),
+            turn_base: 0,
             skills: HashMap::new(),
             turns: Vec::new(),
             commands: HashMap::new(),
@@ -1184,6 +1223,19 @@ mod tests {
             processes: HashMap::new(),
         };
         (b, rx)
+    }
+
+    #[test]
+    fn turn_output_counts_from_the_turns_start() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        let usage = |out: u64| json!({ "threadId": "main", "tokenUsage": { "total": { "outputTokens": out }, "last": {} } });
+        n(&mut b, "thread/tokenUsage/updated", usage(500));
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        n(&mut b, "item/agentMessage/delta", json!({ "threadId": "main", "itemId": "m", "delta": "x".repeat(200) }));
+        n(&mut b, "thread/tokenUsage/updated", usage(560));
+        let turns: Vec<(u64, u64)> = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some((u.turn, u.output)) } else { None }).collect();
+        assert_eq!(turns, vec![(500, 500), (50, 500), (60, 560)]);
     }
 
     #[test]
