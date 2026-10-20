@@ -720,8 +720,9 @@ mod tests {
     #[test]
     fn tool_definitions_stay_lean() {
         let size = serde_json::to_string(&definitions()).unwrap().len();
-        // ~2.25 KB with bg (~1.87 KB without; was ~3.5 KB); most of it is JSON schema boilerplate.
-        assert!(size < 2300, "tool definitions grew to {size} bytes");
+        // ~2.27 KB with bg (~1.87 KB without; was ~3.5 KB), ~2.31 KB with Windows' longer shell
+        // description; most of it is JSON schema boilerplate.
+        assert!(size < 2350, "tool definitions grew to {size} bytes");
     }
 
     #[test]
