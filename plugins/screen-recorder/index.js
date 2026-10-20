@@ -163,13 +163,15 @@ export function activate(api) {
       else entry.recorder.stop();
     });
     entry.recorder.stream.getTracks().forEach((t) => t.stop());
-    const blob = new Blob(entry.chunks, { type: entry.format.mime.split(";")[0] });
+    const ms = Date.now() - entry.startedAt;
+    const type = entry.format.mime.split(";")[0];
+    const blob = new Blob(entry.chunks, { type });
     if (blob.size === 0) throw new Error("The recording is empty.");
 
     const name = fileName(source, entry.format.ext, new Date(entry.startedAt));
     let path = await api.writeFile(join(settings.folder, name), blob);
-    if (entry.format.ext === "webm") path = await toMp4(path);
-    settings.recent = [{ path, source, at: entry.startedAt, ms: Date.now() - entry.startedAt }, ...settings.recent].slice(0, 30);
+    path = entry.format.ext === "webm" ? await toMp4(path) : await defragment(path);
+    settings.recent = [{ path, source, at: entry.startedAt, ms }, ...settings.recent].slice(0, 30);
     save(settings);
     changed();
     return path;
@@ -189,6 +191,28 @@ export function activate(api) {
       api.toast("Saved as WebM: this webview can't record MP4; install ffmpeg to get MP4s", "error");
     }
     return webm;
+  }
+
+  /**
+   * WebKit's MediaRecorder writes fragmented MP4 (moov says duration 0, the video follows as
+   * moof/mdat fragments), which many players treat like a live stream: no end time, no seeking.
+   * Rewrites it as a regular MP4 with ffmpeg (stream copy, no re-encode, well under a second).
+   */
+  async function defragment(mp4) {
+    const dir = mp4.replace(/[\\/][^\\/]*$/, "");
+    const tmp = mp4.replace(/\.mp4$/, ".tmp.mp4");
+    const move = isWindows() ? `move /y ${quote(tmp)} ${quote(mp4)}` : `mv -f ${quote(tmp)} ${quote(mp4)}`;
+    // cmd binds `&` looser than `||`, so the Windows cleanup needs its own parentheses.
+    const cleanup = isWindows() ? `(del ${quote(tmp)} 2>nul & exit 1)` : `{ rm -f ${quote(tmp)}; exit 1; }`;
+    const command = `(ffmpeg -y -loglevel error -i ${quote(mp4)} -c copy -movflags +faststart ${quote(tmp)} && ${move}) || ${cleanup}`;
+    try {
+      const run = await api.vault.exec({ command, cwd: dir, keys: [], timeoutSec: 300 });
+      if (run.code === 0) return mp4;
+    } catch {
+      // Falls through to the hint below.
+    }
+    api.toast("Saved, but players may not seek it: install ffmpeg so winfer can finalize MP4 recordings", "error");
+    return mp4;
   }
 
   /** Deletes a saved recording's file (if it's still there) and drops it from the list. */
