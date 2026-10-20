@@ -77,6 +77,7 @@ struct State {
     turn_base: u64,
     /// The session's input total when the running turn started.
     turn_input_base: u64,
+    turn_cached_base: u64,
     trim_at: u8,
     compact_at: u8,
     /// Whether the account's route caches prompts (None until seen): without a cache, resending
@@ -172,6 +173,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             turn: TurnTokens::default(),
             turn_base: 0,
             turn_input_base: 0,
+            turn_cached_base: 0,
             undo: Vec::new(),
         }),
         events: events.clone(),
@@ -603,6 +605,7 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                     st.turn.exact(turn);
                     st.usage.turn = turn;
                     st.usage.turn_input = st.usage.input.saturating_sub(st.turn_input_base);
+                    st.usage.turn_cached = st.usage.cached.saturating_sub(st.turn_cached_base);
                     if sub.is_none() {
                         if cached > 0 {
                             st.cache = Some(true);
@@ -641,6 +644,7 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         st.turn = TurnTokens::default();
         st.turn_base = st.usage.output;
         st.turn_input_base = st.usage.input;
+        st.turn_cached_base = st.usage.cached;
     }
     // Compact first when the context is nearly full.
     let full = {
@@ -1271,6 +1275,7 @@ mod tests {
                 turn: TurnTokens::default(),
                 turn_base: 0,
             turn_input_base: 0,
+            turn_cached_base: 0,
                 undo: vec![UndoTurn::default()],
             }),
             events,

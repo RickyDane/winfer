@@ -106,6 +106,8 @@ pub struct Usage {
     pub turn: u64,
     /// Input tokens of the running turn (or the last one), summed over its requests.
     pub turn_input: u64,
+    /// The part of `turn_input` read from the prompt cache.
+    pub turn_cached: u64,
 }
 
 /// Counts a turn's output tokens as it runs. Backends report exact counts once per model
