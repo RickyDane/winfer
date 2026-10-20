@@ -37,6 +37,9 @@ pub struct Snapshot {
     pub windows: Vec<Window>,
     /// When the numbers were measured (unix ms).
     pub at: i64,
+    /// Codex: rate limit resets the account can redeem (granted by OpenAI or referrals).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<i64>,
 }
 
 fn now_ms() -> i64 {
@@ -138,7 +141,7 @@ fn claude_credentials() -> Option<Value> {
 
 fn claude_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
     let windows = claude_windows(&json!({ "rate_limits": body }));
-    (!windows.is_empty()).then(|| Snapshot { provider: "claude".into(), windows, at })
+    (!windows.is_empty()).then(|| Snapshot { provider: "claude".into(), windows, at, reset_credits: None })
 }
 
 /// Account-wide limits, including use outside winfer. Errors keep the previous reading visible.
@@ -254,21 +257,34 @@ const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// (Codex refreshes it on its next run).
 /// Falls back to OpenCode's ChatGPT sign-in: the same plan limits, used through OpenCode.
 fn codex_live() -> Option<Snapshot> {
-    let codex = codex_home()
+    let (token, account) = codex_auth()?;
+    let req = with_codex_auth(codex_agent().get(CODEX_USAGE_URL), &token, account.as_deref());
+    let body: Value = req.call().ok()?.body_mut().read_json().ok()?;
+    codex_usage_snapshot(&body, now_ms())
+}
+
+/// Codex's ChatGPT sign-in (access token, account id), or OpenCode's when Codex has none.
+fn codex_auth() -> Option<(String, Option<String>)> {
+    codex_home()
         .and_then(|home| std::fs::read_to_string(home.join("auth.json")).ok())
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|auth| {
             let token = auth["tokens"]["access_token"].as_str().filter(|t| !t.is_empty())?.to_string();
             Some((token, auth["tokens"]["account_id"].as_str().map(String::from)))
-        });
-    let (token, account) = codex.or_else(opencode_chatgpt_token)?;
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
-    let mut req = agent.get(CODEX_USAGE_URL).header("Authorization", &format!("Bearer {token}")).header("User-Agent", "codex-cli");
-    if let Some(account) = account {
-        req = req.header("ChatGPT-Account-Id", &account);
+        })
+        .or_else(opencode_chatgpt_token)
+}
+
+fn codex_agent() -> ureq::Agent {
+    ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(15))).http_status_as_error(false).build().into()
+}
+
+fn with_codex_auth<B>(req: ureq::RequestBuilder<B>, token: &str, account: Option<&str>) -> ureq::RequestBuilder<B> {
+    let req = req.header("Authorization", &format!("Bearer {token}")).header("User-Agent", "codex-cli");
+    match account {
+        Some(account) => req.header("ChatGPT-Account-Id", account),
+        None => req,
     }
-    let body: Value = req.call().ok()?.body_mut().read_json().ok()?;
-    codex_usage_snapshot(&body, now_ms())
 }
 
 /// The usage endpoint's answer as a snapshot.
@@ -286,7 +302,8 @@ pub fn codex_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
         })
         .collect();
     windows.extend(credit_window(&body["spend_control"]["individual_limit"]));
-    (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at })
+    let reset_credits = body["rate_limit_reset_credits"]["available_count"].as_i64();
+    (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at, reset_credits })
 }
 
 /// Workspace plans: the member's monthly credit limit. None when no credits are allotted (a
@@ -383,7 +400,7 @@ pub fn codex_snapshot_in(log: &str) -> Option<Snapshot> {
             })
             .collect();
         windows.extend(credit_window(&limits["individual_limit"]));
-        (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at })
+        (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at, reset_credits: None })
     })
 }
 
@@ -466,6 +483,88 @@ pub async fn usage_codex() -> Option<Snapshot> {
     .await
     .ok()
     .flatten()
+}
+
+const CODEX_RESETS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+
+/// A Codex rate limit reset the account can redeem: resets the plan's windows right away.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetCredit {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// Unix ms.
+    pub granted_at: Option<i64>,
+    pub expires_at: Option<i64>,
+}
+
+fn codex_reset_credits(body: &Value) -> Vec<ResetCredit> {
+    body["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["status"].as_str().is_none_or(|s| s == "available"))
+        .filter_map(|c| {
+            Some(ResetCredit {
+                id: c["id"].as_str().filter(|s| !s.is_empty())?.to_string(),
+                title: c["title"].as_str().map(String::from),
+                description: c["description"].as_str().map(String::from),
+                granted_at: seconds_or_date(&c["granted_at"]),
+                expires_at: seconds_or_date(&c["expires_at"]),
+            })
+        })
+        .collect()
+}
+
+/// What redeeming a reset did: "reset", "nothing_to_reset", "no_credit" or "already_redeemed".
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetOutcome {
+    pub code: String,
+    pub windows_reset: i64,
+}
+
+fn codex_call(url: &str, body: Option<Value>) -> Result<Value, String> {
+    let (token, account) = codex_auth().ok_or("Sign in to Codex with ChatGPT to use rate limit resets.")?;
+    let agent = codex_agent();
+    let result = match body {
+        Some(body) => with_codex_auth(agent.post(url), &token, account.as_deref()).send_json(body),
+        None => with_codex_auth(agent.get(url), &token, account.as_deref()).call(),
+    };
+    let mut response = result.map_err(|e| format!("Couldn't reach ChatGPT: {e}"))?;
+    let status = response.status().as_u16();
+    let value: Value = response.body_mut().read_json().unwrap_or(Value::Null);
+    match status {
+        200..=299 => Ok(value),
+        401 | 403 => Err("Codex's sign-in has expired. Run Codex once to refresh it, then try again.".into()),
+        _ => Err(value["detail"].as_str().or(value["error"]["message"].as_str()).map(String::from).unwrap_or_else(|| format!("ChatGPT answered {status}."))),
+    }
+}
+
+#[tauri::command]
+pub async fn usage_codex_resets() -> Result<Vec<ResetCredit>, String> {
+    tauri::async_runtime::spawn_blocking(|| codex_call(CODEX_RESETS_URL, None).map(|body| codex_reset_credits(&body)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Redeems a reset (the given one, else whichever the server picks).
+#[tauri::command]
+pub async fn usage_codex_redeem_reset(credit_id: Option<String>) -> Result<ResetOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut request = json!({ "redeem_request_id": format!("winfer-{:016x}", rand::random::<u64>()) });
+        if let Some(id) = credit_id.filter(|s| !s.is_empty()) {
+            request["credit_id"] = json!(id);
+        }
+        let body = codex_call(&format!("{CODEX_RESETS_URL}/consume"), Some(request))?;
+        Ok(ResetOutcome {
+            code: body["code"].as_str().unwrap_or("unknown").to_string(),
+            windows_reset: body["windows_reset"].as_i64().unwrap_or(0),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // OpenCode --------------------------------------------------------------------------------------
@@ -811,6 +910,26 @@ mod tests {
         assert_eq!((s.windows[1].kind.as_str(), s.windows[1].used_percent, s.windows[1].resets_at), ("week", 7.0, Some(1_000_000 + 9_000_000)));
         assert_eq!((s.windows[2].kind.as_str(), s.windows[2].used_percent), ("month-credit", 25.0));
         assert!(codex_usage_snapshot(&json!({ "rate_limit": null }), 0).is_none());
+        assert_eq!(s.reset_credits, None);
+        let with_resets = json!({ "rate_limit": body["rate_limit"], "rate_limit_reset_credits": { "available_count": 2 } });
+        assert_eq!(codex_usage_snapshot(&with_resets, 0).unwrap().reset_credits, Some(2));
+    }
+
+    #[test]
+    fn lists_available_codex_resets() {
+        let body = json!({
+            "credits": [
+                { "id": "credit-1", "reset_type": "codex_rate_limits", "status": "available", "granted_at": "2026-06-17T00:00:00Z",
+                  "expires_at": "2026-07-17T00:00:00Z", "title": "Full reset (Weekly + 5 hr)", "description": "Ready to redeem" },
+                { "id": "credit-2", "status": "redeemed", "granted_at": "2026-06-18T00:00:00Z", "expires_at": null },
+                { "id": "credit-3", "status": "available", "granted_at": "2026-06-18T00:00:00Z", "expires_at": null }
+            ],
+            "available_count": 2
+        });
+        let credits = codex_reset_credits(&body);
+        assert_eq!(credits.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["credit-1", "credit-3"]);
+        assert_eq!(credits[0].title.as_deref(), Some("Full reset (Weekly + 5 hr)"));
+        assert!(credits[0].expires_at.is_some() && credits[1].expires_at.is_none());
     }
 
     #[test]

@@ -1,11 +1,11 @@
-import { ChevronRight, Gauge, RefreshCw } from "lucide-react";
+import { ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
-import { contextBreakdown, contextColor, duration, leftNow, levelColor, refreshUsage, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type UsageWindow } from "./usage";
+import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, refreshUsage, resetOutcomeText, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type ResetCredit, type UsageWindow } from "./usage";
 import { UsageSummary } from "./UsageHistory";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
@@ -182,6 +182,66 @@ function useLimited() {
   return { limited, showOpencode, installed };
 }
 
+/** Codex's redeemable rate limit resets: pick one to put the 5-hour and weekly limits back to full. */
+function CodexResets({ count }: { count: number }) {
+  const [credits, setCredits] = useState<ResetCredit[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
+
+  const run = async (key: string, work: () => Promise<void>) => {
+    setBusy(key);
+    setMessage(null);
+    try {
+      await work();
+    } catch (e) {
+      setMessage({ text: String(e), error: true });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const open = () => run("list", async () => {
+    const list = await listCodexResets();
+    setCredits(list);
+    if (!list.length) setMessage({ text: "No resets available right now." });
+  });
+  const redeem = (credit: ResetCredit) => run(credit.id, async () => {
+    const { code } = await redeemCodexReset(credit.id);
+    setMessage({ text: resetOutcomeText(code), error: code !== "reset" && code !== "nothing_to_reset" });
+    setCredits(null);
+  });
+
+  if (count <= 0 && !message) return null;
+  return (
+    <div className="space-y-1.5 rounded-md border border-border bg-hover/40 p-2 text-[11px]">
+      <div className="flex items-center gap-2">
+        <RotateCcw size={12} className="text-fg-muted" />
+        <span className="flex-1 text-fg-muted">{count > 0 ? `${count} limit reset${count === 1 ? "" : "s"} available` : "Limit resets"}</span>
+        {count > 0 && (credits === null ? (
+          <button type="button" onClick={() => void open()} disabled={busy !== null}
+            className="rounded px-1.5 py-0.5 text-fg hover:bg-hover disabled:opacity-50">
+            {busy === "list" ? "Loading…" : "Use a reset…"}
+          </button>
+        ) : (
+          <button type="button" onClick={() => setCredits(null)} disabled={busy !== null} className="rounded px-1.5 py-0.5 text-fg-subtle hover:bg-hover hover:text-fg">Cancel</button>
+        ))}
+      </div>
+      {credits?.map((c) => (
+        <div key={c.id} className="flex items-center gap-2 pl-5">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-fg">{c.title ?? "Full reset (5-hour + weekly)"}</div>
+            <div className="text-fg-subtle">{c.expiresAt ? `expires ${when(c.expiresAt)}` : c.description ?? "doesn't expire"}</div>
+          </div>
+          <button type="button" onClick={() => void redeem(c)} disabled={busy !== null} aria-busy={busy === c.id}
+            className="shrink-0 rounded bg-accent px-2 py-0.5 font-medium text-on-accent hover:opacity-90 disabled:opacity-50">
+            {busy === c.id ? "Resetting…" : "Reset now"}
+          </button>
+        </div>
+      ))}
+      {message && <p role="status" className={message.error ? "text-warning" : "text-fg-subtle"}>{message.text}</p>}
+    </div>
+  );
+}
+
 const CARD = "w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl";
 
 /** Every agent's limits as bars or lines, plus OpenCode's spend today. */
@@ -214,6 +274,7 @@ export function Limits({ chart = "bars", refresh = true }: { chart?: ChartKind; 
           {s.windows.map((w) => (
             <Window key={w.kind} provider={s.provider} window={w} />
           ))}
+          {s.provider === "codex" && <CodexResets count={s.resetCredits ?? 0} />}
         </section>
       ))}
       {showOpencode && opencode && (

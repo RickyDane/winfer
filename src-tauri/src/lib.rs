@@ -231,6 +231,8 @@ pub fn run() {
             mobile::mobile_activity,
             mobile::mobile_thread,
             usage::usage_codex,
+            usage::usage_codex_resets,
+            usage::usage_codex_redeem_reset,
             usage::usage_claude,
             usage::usage_codex_context,
             context_breakdown::usage_context_breakdown,

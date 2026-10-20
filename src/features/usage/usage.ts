@@ -25,6 +25,18 @@ export interface Snapshot {
   windows: UsageWindow[];
   /** When it was measured (unix ms). */
   at: number;
+  /** Codex: rate limit resets the account can redeem. */
+  resetCredits?: number;
+}
+
+/** A Codex rate limit reset waiting to be redeemed. */
+export interface ResetCredit {
+  id: string;
+  title: string | null;
+  description: string | null;
+  /** Unix ms. */
+  grantedAt: number | null;
+  expiresAt: number | null;
 }
 
 /** How full a pane's context window is. */
@@ -177,7 +189,11 @@ async function warn(provider: string, w: UsageWindow, left: number) {
   // At the limit: offer to carry the work over to an agent that still has room.
   const target = left <= 0 ? handoffTarget(provider) : null;
   const pane = target ? paneToHandOff(provider) : null;
-  const action = target && pane ? { label: `Continue in ${providerName(useWorkspaces.getState().providers, target)}`, run: () => continueIn(pane, target) } : undefined;
+  // A Codex reset puts the limits back to full: offer it before handing work elsewhere.
+  const resets = left <= 0 && provider === "codex" ? (useUsage.getState().snapshots.codex?.resetCredits ?? 0) : 0;
+  const action = resets > 0
+    ? { label: "Use a reset", run: () => void redeemCodexReset().then(toastResetOutcome, (e: unknown) => toast(String(e), "error")) }
+    : target && pane ? { label: `Continue in ${providerName(useWorkspaces.getState().providers, target)}`, run: () => continueIn(pane, target) } : undefined;
   toast(text, left <= 5 ? "error" : "info", detail, action);
   if (!document.hasFocus() && (await isPermissionGranted().catch(() => false))) sendNotification({ title: text, body: detail });
 }
@@ -249,6 +265,34 @@ export function refreshCodex() {
     if (!codexRead || !current || snapshot.at >= current.at) record(snapshot);
     codexRead = true;
   });
+}
+
+/** The Codex resets the account can redeem now. */
+export const listCodexResets = () => invoke<ResetCredit[]>("usage_codex_resets");
+
+export type ResetCode = "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed" | (string & {});
+
+/** Redeems a Codex reset (the given one, else the server's pick), then rereads the limits. */
+export async function redeemCodexReset(creditId?: string): Promise<{ code: ResetCode; windowsReset: number }> {
+  try {
+    return await invoke<{ code: ResetCode; windowsReset: number }>("usage_codex_redeem_reset", { creditId: creditId ?? null });
+  } finally {
+    await refreshCodex();
+  }
+}
+
+export function resetOutcomeText(code: ResetCode): string {
+  switch (code) {
+    case "reset": return "Codex limits reset — full again.";
+    case "nothing_to_reset": return "Nothing to reset: Codex's limits aren't used. The reset was kept.";
+    case "no_credit": return "No Codex reset available.";
+    case "already_redeemed": return "That reset was already used.";
+    default: return `Codex answered “${code}”.`;
+  }
+}
+
+export function toastResetOutcome({ code }: { code: ResetCode }) {
+  toast(resetOutcomeText(code), code === "reset" ? "success" : "info");
 }
 
 export function refreshClaude() {

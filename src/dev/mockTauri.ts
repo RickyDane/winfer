@@ -180,6 +180,13 @@ if (SHOWCASE) {
 
 // Limit windows reset at fixed times for the session, so their readings line up into a history.
 const LOADED = Date.now();
+/** Codex rate limit resets to redeem in the usage popover. */
+const mockResetCredits = [
+  { id: "credit-1", title: "Full reset (Weekly + 5 hr)", description: "From a friend's referral", grantedAt: LOADED - 2 * 86400_000, expiresAt: LOADED + 12 * 86400_000 },
+  { id: "credit-2", title: "Full reset (Weekly + 5 hr)", description: "Ready to redeem", grantedAt: LOADED - 86400_000, expiresAt: null },
+];
+let mockCodexReset = false;
+
 const RESETS = {
   claude: { session: LOADED + 108 * 60_000, week: LOADED + 2.5 * 86400_000 },
   codex: { session: LOADED + 48 * 60_000, week: LOADED + 5 * 86400_000 },
@@ -495,14 +502,25 @@ mockIPC(
         };
       case "usage_codex": {
         const now = Date.now();
+        const used = mockCodexReset ? 0 : 1;
         return {
           provider: "codex",
-          at: now - 60_000,
+          at: now - (mockCodexReset ? 0 : 60_000),
+          resetCredits: mockResetCredits.length,
           windows: [
-            { kind: "session", label: "5-hour", usedPercent: 81, resetsAt: RESETS.codex.session },
-            { kind: "week", label: "Weekly", usedPercent: 6, resetsAt: RESETS.codex.week },
+            { kind: "session", label: "5-hour", usedPercent: 81 * used, resetsAt: RESETS.codex.session },
+            { kind: "week", label: "Weekly", usedPercent: 6 * used, resetsAt: RESETS.codex.week },
           ],
         };
+      }
+      case "usage_codex_resets":
+        return new Promise((r) => setTimeout(() => r(mockResetCredits), 400));
+      case "usage_codex_redeem_reset": {
+        const i = mockResetCredits.findIndex((c) => c.id === (args as { creditId?: string }).creditId);
+        if (i < 0) return { code: "no_credit", windowsReset: 0 };
+        mockResetCredits.splice(i, 1);
+        mockCodexReset = true;
+        return new Promise((r) => setTimeout(() => r({ code: "reset", windowsReset: 2 }), 700));
       }
       case "usage_codex_context": {
         // Deterministic per folder, so each mock Codex pane shows its own fill.
