@@ -289,8 +289,14 @@ pub fn codex_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
     (!windows.is_empty()).then(|| Snapshot { provider: "codex".into(), windows, at })
 }
 
-/// Workspace plans: the member's monthly credit limit.
+/// Workspace plans: the member's monthly credit limit. None when no credits are allotted (a
+/// limit of 0), which isn't "used up".
 fn credit_window(credit: &Value) -> Option<Window> {
+    let limit = &credit["limit"];
+    let amount = limit.as_f64().or_else(|| limit.as_str().and_then(|s| s.trim().parse().ok()));
+    if amount.is_some_and(|a| a <= 0.0) {
+        return None;
+    }
     let left = credit["remaining_percent"].as_f64()?;
     Some(Window {
         kind: "month-credit".into(),
@@ -805,6 +811,17 @@ mod tests {
         assert_eq!((s.windows[1].kind.as_str(), s.windows[1].used_percent, s.windows[1].resets_at), ("week", 7.0, Some(1_000_000 + 9_000_000)));
         assert_eq!((s.windows[2].kind.as_str(), s.windows[2].used_percent), ("month-credit", 25.0));
         assert!(codex_usage_snapshot(&json!({ "rate_limit": null }), 0).is_none());
+    }
+
+    #[test]
+    fn skips_a_codex_credit_limit_of_zero() {
+        let body = json!({
+            "rate_limit": { "primary_window": { "used_percent": 10, "limit_window_seconds": 18000 } },
+            "spend_control": { "reached": true, "individual_limit": { "limit": "0", "used": "0", "remaining_percent": 0 } }
+        });
+        let s = codex_usage_snapshot(&body, 0).unwrap();
+        assert_eq!(s.windows.len(), 1);
+        assert_eq!(s.windows[0].kind, "session");
     }
 
     /// Asks the real endpoint with this machine's Codex sign-in: `cargo test codex_live -- --ignored --nocapture`.

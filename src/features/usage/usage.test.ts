@@ -26,6 +26,13 @@ describe("usage", () => {
     expect(tightest({ provider: "claude", at: now, windows: [session, week] }, now)?.kind).toBe("week");
   });
 
+  it("counts monthly credits only once the plan limits are out", () => {
+    const credit = { kind: "month-credit", label: "Monthly credit", usedPercent: 100, resetsAt: now + 500 * HOUR };
+    expect(tightest({ provider: "codex", at: now, windows: [session, credit] }, now)?.kind).toBe("session");
+    const out = { ...session, usedPercent: 100 };
+    expect(tightest({ provider: "codex", at: now, windows: [out, { ...credit, usedPercent: 20 }] }, now)?.kind).toBe("month-credit");
+  });
+
   it("projects running out only when that's before the reset", () => {
     const key = `claude:session:${session.resetsAt}`;
     // 20% in the last hour: the remaining 60% takes 3h, just past the reset.

@@ -111,10 +111,20 @@ export function usedNow(w: UsageWindow, now = Date.now()): number {
 
 export const leftNow = (w: UsageWindow, now = Date.now()) => Math.max(0, Math.min(100, 100 - usedNow(w, now)));
 
-/** The window that runs out first (least left): what the ring shows. */
+/** Monthly credits only kick in once the plan's limits are used up. */
+const isCredit = (w: UsageWindow) => w.kind === "month-credit";
+
+/** The window that runs out first (least left): what the ring shows. Credits count only once
+ *  every plan limit is out, since until then they aren't what's holding the agent back. */
 export function tightest(snapshot: Snapshot | undefined, now = Date.now()): UsageWindow | null {
   if (!snapshot?.windows.length) return null;
-  return snapshot.windows.reduce((a, b) => (leftNow(b, now) < leftNow(a, now) ? b : a));
+  const least = (ws: UsageWindow[]) => ws.reduce((a, b) => (leftNow(b, now) < leftNow(a, now) ? b : a));
+  const plan = snapshot.windows.filter((w) => !isCredit(w));
+  if (!plan.length) return least(snapshot.windows);
+  const tightPlan = least(plan);
+  if (leftNow(tightPlan, now) > 0) return tightPlan;
+  const credits = snapshot.windows.filter(isCredit);
+  return credits.length ? credits.reduce((a, b) => (leftNow(b, now) > leftNow(a, now) ? b : a)) : tightPlan;
 }
 
 /** When the window runs out at the pace measured in it, if that's before it resets. */
