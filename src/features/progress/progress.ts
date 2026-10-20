@@ -6,7 +6,7 @@
 import { llmCompose, llmEnabled, replyLanguage, wrongScript } from "@/features/llm/llm";
 import { create } from "zustand";
 import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
-import { worktreeDiff } from "@/features/worktree/worktree";
+import { worktreeChangedFiles } from "@/features/worktree/worktree";
 import { speak } from "@/features/voice/readback";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 
@@ -198,9 +198,9 @@ export async function estimate(pane: Pane) {
 
   let changes = "";
   if (pane.worktree) {
-    const diff = await worktreeDiff(pane.worktree).catch(() => null);
-    const files = diff?.diff.match(/^diff --git a\/.+ b\/(.+)$/gm)?.map((l) => l.replace(/^.* b\//, "")) ?? [];
-    if (diff) changes = `Files changed so far: ${[...files, ...diff.untracked].join(", ") || "none"}`;
+    // Just the names: the full diff can be megabytes, and this runs for every working agent.
+    const files = await worktreeChangedFiles(pane.worktree).catch(() => null);
+    if (files) changes = `Files changed so far: ${files.join(", ") || "none"}`;
   }
   const user = [
     `Task: ${task}`,

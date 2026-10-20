@@ -5,9 +5,11 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -38,19 +40,86 @@ pub struct WorktreeDiff {
     pub dirty: bool,
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::env::no_window(&mut Command::new("git"))
+/// Longest a git command may run. One stuck on an antivirus scan, a network drive or a
+/// credential prompt must not hold its thread (and the UI waiting on it) forever.
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Fetching talks to remotes, which can be slow on big repos.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(300);
+
+struct GitOutput {
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Runs git in `dir`, killing it after `timeout`.
+///
+/// `GIT_OPTIONAL_LOCKS=0`: the sidebar polls `git status`, which would otherwise refresh the
+/// index and take `index.lock`, making an agent's own git commands in that worktree fail with
+/// "Another git process seems to be running".
+fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<GitOutput, String> {
+    let mut child = crate::env::no_window(&mut Command::new("git"))
         .arg("-C")
         .arg(dir)
         .args(args)
         .envs(login_env())
-        .output()
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("couldn't run git: {e}"))?;
-    if out.status.success() {
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    // Most git calls take a few ms: poll often at first, then back off.
+    let mut pause = Duration::from_millis(1);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // The drain threads end once git's helpers let go of the pipes; not waited for.
+                return Err(format!("git {} took longer than {}s and was stopped", args.first().unwrap_or(&""), timeout.as_secs()));
+            }
+            Ok(None) => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("couldn't run git: {e}")),
+        }
+    };
+    Ok(GitOutput {
+        code: status.code(),
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+/// Reads a child's pipe to the end on its own thread, so a full pipe can't stall the child
+/// while we wait for it.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
+fn git_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let out = run_git(dir, args, timeout)?;
+    if out.code == Some(0) {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
+}
+
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    git_with_timeout(dir, args, GIT_TIMEOUT)
 }
 
 fn repo_root(dir: &Path) -> Option<PathBuf> {
@@ -107,6 +176,9 @@ pub struct Branch {
     pub last_commit_at: Option<u64>,
     /// Folder where it's checked out (main checkout or a worktree), if anywhere.
     pub checked_out_at: Option<String>,
+    /// The remote branch it can be brought up to date from ("origin/feature/login"): its
+    /// upstream for a local branch, itself for a remote one.
+    pub upstream: Option<String>,
 }
 
 /// Local branches (newest first), then remote ones without a local branch of the same name.
@@ -117,7 +189,7 @@ pub fn branches(dir: &Path) -> Result<Vec<Branch>, String> {
         &[
             "for-each-ref",
             "--sort=-committerdate",
-            "--format=%(refname)%09%(committerdate:unix)%09%(worktreepath)",
+            "--format=%(refname)%09%(committerdate:unix)%09%(worktreepath)%09%(upstream:short)%09%(upstream:remotename)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -126,16 +198,20 @@ pub fn branches(dir: &Path) -> Result<Vec<Branch>, String> {
     let mut remote = Vec::new();
     for line in refs.lines() {
         let mut parts = line.split('\t');
-        let (Some(refname), Some(date), worktree) = (parts.next(), parts.next(), parts.next()) else {
+        let (Some(refname), Some(date), worktree, upstream, upstream_remote) =
+            (parts.next(), parts.next(), parts.next(), parts.next(), parts.next())
+        else {
             continue;
         };
         let last_commit_at = date.trim().parse::<u64>().ok().map(|s| s * 1000);
         let checked_out_at = worktree.filter(|w| !w.is_empty()).map(String::from);
         if let Some(name) = refname.strip_prefix("refs/heads/") {
-            local.push(Branch { name: name.into(), remote: false, last_commit_at, checked_out_at });
+            // An upstream that's another local branch (remote ".") has nothing to pull.
+            let upstream = upstream.filter(|u| !u.is_empty() && upstream_remote.is_some_and(|r| !r.is_empty() && r != ".")).map(String::from);
+            local.push(Branch { name: name.into(), remote: false, last_commit_at, checked_out_at, upstream });
         } else if let Some(name) = refname.strip_prefix("refs/remotes/") {
             if !name.ends_with("/HEAD") {
-                remote.push(Branch { name: name.into(), remote: true, last_commit_at, checked_out_at: None });
+                remote.push(Branch { name: name.into(), remote: true, last_commit_at, checked_out_at: None, upstream: Some(name.into()) });
             }
         }
     }
@@ -146,9 +222,73 @@ pub fn branches(dir: &Path) -> Result<Vec<Branch>, String> {
     Ok(local)
 }
 
+fn already_checked_out(branch: &str) -> String {
+    format!("“{branch}” is already checked out in another folder. Open that worktree from the sidebar instead.")
+}
+
+/// Fetches the remote `branch` comes from and returns what to start the worktree from so it has
+/// the remote's latest commits. A local branch behind its upstream is fast-forwarded (a new
+/// branch starts from the upstream instead); one with unpushed commits on top is already up to
+/// date; one that has diverged is an error.
+fn pull_latest(repo: &Path, branch: &str, is_remote: bool, new_branch: bool) -> Result<String, String> {
+    let (upstream, remote) = if is_remote {
+        // "origin/x": the remote is the longest remote name the ref starts with.
+        let remotes = git(repo, &["remote"])?;
+        let remote = remotes
+            .lines()
+            .filter(|r| branch.strip_prefix(r).is_some_and(|rest| rest.starts_with('/')))
+            .max_by_key(|r| r.len())
+            .ok_or_else(|| format!("Couldn't tell which remote “{branch}” comes from."))?
+            .to_string();
+        (branch.to_string(), remote)
+    } else {
+        let local_ref = format!("refs/heads/{branch}");
+        let up = git(repo, &["for-each-ref", "--format=%(upstream:short)%09%(upstream:remotename)", &local_ref])?;
+        match up.split_once('\t') {
+            Some((u, r)) if !u.is_empty() && !r.is_empty() && r != "." => (u.to_string(), r.to_string()),
+            _ => return Err(format!("“{branch}” has no remote branch to pull from. Use the local branch instead.")),
+        }
+    };
+    git_with_timeout(repo, &["fetch", "--quiet", "--prune", &remote], FETCH_TIMEOUT).map_err(|e| format!("Fetching {remote} failed: {e}"))?;
+    let latest = git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{upstream}^{{commit}}")])
+        .map_err(|_| format!("“{upstream}” is gone from {remote}."))?;
+    if is_remote {
+        return Ok(branch.to_string());
+    }
+
+    let current = git(repo, &["rev-parse", &format!("refs/heads/{branch}")])?;
+    let is_ancestor = |a: &str, b: &str| git(repo, &["merge-base", "--is-ancestor", a, b]).is_ok();
+    if current == latest || is_ancestor(&latest, &current) {
+        // Up to date, or ahead with unpushed commits.
+        return Ok(branch.to_string());
+    }
+    if !is_ancestor(&current, &latest) {
+        return Err(format!("“{branch}” and “{upstream}” have diverged. Pull it by hand, or use the local branch."));
+    }
+    // Behind. A new branch just starts from the upstream, leaving the local one alone.
+    if new_branch {
+        return Ok(upstream);
+    }
+    // Otherwise fast-forward it, unless it's checked out (moving the ref under its files would
+    // make them look changed; the worktree couldn't be made anyway).
+    let checked_out = !git(repo, &["for-each-ref", "--format=%(worktreepath)", &format!("refs/heads/{branch}")])?.is_empty();
+    if checked_out {
+        return Err(already_checked_out(branch));
+    }
+    git(repo, &["update-ref", "-m", "winfer: fast-forward to remote", &format!("refs/heads/{branch}"), &latest, &current])?;
+    Ok(branch.to_string())
+}
+
 /// A worktree for an existing branch, or — with `new_branch` — for a new branch started from it.
-/// Remote branches ("origin/x") get a local tracking branch "x".
-pub fn create_from_branch(worktrees_dir: &Path, dir: &Path, branch: &str, new_branch: Option<&str>) -> Result<WorktreeInfo, String> {
+/// Remote branches ("origin/x") get a local tracking branch "x". With `latest`, the branch is
+/// first brought up to date with its remote (see `pull_latest`); otherwise it's used as it is.
+pub fn create_from_branch(
+    worktrees_dir: &Path,
+    dir: &Path,
+    branch: &str,
+    new_branch: Option<&str>,
+    latest: bool,
+) -> Result<WorktreeInfo, String> {
     let repo = main_checkout(dir).ok_or("not a git repository")?;
     let base = current_branch(&repo)?;
     let is_remote = git(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{branch}")]).is_ok()
@@ -160,6 +300,7 @@ pub fn create_from_branch(worktrees_dir: &Path, dir: &Path, branch: &str, new_br
             return Err(format!("A branch named “{name}” already exists. Pick it from the list instead."));
         }
     }
+    let start = if latest { pull_latest(&repo, branch, is_remote, new_branch.is_some())? } else { branch.to_string() };
     let local = match (new_branch, is_remote) {
         (Some(name), _) => name.to_string(),
         (None, true) => branch.split_once('/').map_or(branch, |(_, short)| short).to_string(),
@@ -175,13 +316,14 @@ pub fn create_from_branch(worktrees_dir: &Path, dir: &Path, branch: &str, new_br
     std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
     let path_str = path.to_string_lossy().into_owned();
     match (new_branch, is_remote) {
-        (Some(name), _) => git(&repo, &["worktree", "add", "-b", name, &path_str, branch]),
-        (None, true) => git(&repo, &["worktree", "add", "--track", "-b", &local, &path_str, branch]),
-        (None, false) => git(&repo, &["worktree", "add", &path_str, branch]),
+        // --no-track: started from a remote branch, it would otherwise track one of another name.
+        (Some(name), _) => git(&repo, &["worktree", "add", "--no-track", "-b", name, &path_str, &start]),
+        (None, true) => git(&repo, &["worktree", "add", "--track", "-b", &local, &path_str, &start]),
+        (None, false) => git(&repo, &["worktree", "add", &path_str, &start]),
     }
     .map_err(|e| {
         if e.contains("already checked out") || e.contains("is already used by worktree") {
-            format!("“{branch}” is already checked out in another folder. Open that worktree from the sidebar instead.")
+            already_checked_out(branch)
         } else {
             e
         }
@@ -218,7 +360,7 @@ fn seed_codegraph(repo: &Path, worktree: &Path) {
 /// Updates remote branches (`git fetch --all --prune`).
 pub fn fetch(dir: &Path) -> Result<(), String> {
     let repo = main_checkout(dir).ok_or("not a git repository")?;
-    git(&repo, &["fetch", "--all", "--prune", "--quiet"]).map(|_| ())
+    git_with_timeout(&repo, &["fetch", "--all", "--prune", "--quiet"], FETCH_TIMEOUT).map(|_| ())
 }
 
 /// Creates a worktree for `provider` in the repo containing `dir`. `Ok(None)` if not a git repo.
@@ -373,14 +515,8 @@ fn changed_files(info: &WorktreeInfo) -> Result<Vec<String>, String> {
 /// Files that conflict when `theirs` is merged into `ours` (both commits or branches), without
 /// touching any checkout. Empty when it merges cleanly.
 fn merge_conflicts(repo: &Path, ours: &str, theirs: &str) -> Result<Vec<String>, String> {
-    let out = crate::env::no_window(&mut Command::new("git"))
-        .arg("-C")
-        .arg(repo)
-        .args(["merge-tree", "--write-tree", "--name-only", "--no-messages", ours, theirs])
-        .envs(login_env())
-        .output()
-        .map_err(|e| format!("couldn't run git: {e}"))?;
-    match out.status.code() {
+    let out = run_git(repo, &["merge-tree", "--write-tree", "--name-only", "--no-messages", ours, theirs], GIT_TIMEOUT)?;
+    match out.code {
         Some(0) => Ok(Vec::new()),
         // Exit 1: conflicts. The tree id comes first, then the conflicted files.
         Some(1) => {
@@ -654,6 +790,36 @@ pub fn remove(info: &WorktreeInfo, delete_branch: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveRequest {
+    pub info: WorktreeInfo,
+    pub delete_branch: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveFailure {
+    pub path: String,
+    pub branch: String,
+    pub error: String,
+}
+
+/// Removes several worktrees one after another (git locks its admin files, so not in parallel).
+/// One failing doesn't stop the rest; the failures come back.
+pub fn remove_many(items: &[RemoveRequest]) -> Vec<RemoveFailure> {
+    items
+        .iter()
+        .filter_map(|item| {
+            remove(&item.info, item.delete_branch).err().map(|error| RemoveFailure {
+                path: item.info.path.clone(),
+                branch: item.info.branch.clone(),
+                error,
+            })
+        })
+        .collect()
+}
+
 fn worktrees_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
         .path()
@@ -662,63 +828,90 @@ fn worktrees_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .join("worktrees"))
 }
 
+/// Runs git work on a blocking thread. Async commands share a few runtime threads with the rest
+/// of the app; git calls that take seconds (big repos, Windows process start-up, antivirus)
+/// would starve every other command and freeze the UI.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn worktree_create(
     app: AppHandle,
     dir: String,
     provider: String,
 ) -> Result<Option<WorktreeInfo>, String> {
-    create(&worktrees_dir(&app)?, &resolve_cwd(Some(&dir)), &provider)
+    let worktrees = worktrees_dir(&app)?;
+    blocking(move || create(&worktrees, &resolve_cwd(Some(&dir)), &provider)).await
 }
 
 #[tauri::command]
 pub async fn worktree_diff(info: WorktreeInfo) -> Result<WorktreeDiff, String> {
-    diff(&info)
+    blocking(move || diff(&info)).await
+}
+
+/// Just the names of the files a worktree changed: for callers that don't need the diff itself.
+#[tauri::command]
+pub async fn worktree_changed_files(info: WorktreeInfo) -> Result<Vec<String>, String> {
+    blocking(move || changed_files(&info)).await
 }
 
 #[tauri::command]
 pub async fn worktree_merge(info: WorktreeInfo) -> Result<String, String> {
-    merge(&info)
+    blocking(move || merge(&info)).await
 }
 
 #[tauri::command]
 pub async fn worktree_list(dir: String) -> Result<Vec<ExistingWorktree>, String> {
-    list(&resolve_cwd(Some(&dir)))
+    blocking(move || list(&resolve_cwd(Some(&dir)))).await
 }
 
 #[tauri::command]
 pub async fn worktree_branches(dir: String) -> Result<Vec<Branch>, String> {
-    branches(&resolve_cwd(Some(&dir)))
+    blocking(move || branches(&resolve_cwd(Some(&dir)))).await
 }
 
 #[tauri::command]
-pub async fn worktree_from_branch(app: AppHandle, dir: String, branch: String, new_branch: Option<String>) -> Result<WorktreeInfo, String> {
-    create_from_branch(&worktrees_dir(&app)?, &resolve_cwd(Some(&dir)), &branch, new_branch.as_deref())
+pub async fn worktree_from_branch(
+    app: AppHandle,
+    dir: String,
+    branch: String,
+    new_branch: Option<String>,
+    latest: Option<bool>,
+) -> Result<WorktreeInfo, String> {
+    let worktrees = worktrees_dir(&app)?;
+    let latest = latest.unwrap_or(false);
+    blocking(move || create_from_branch(&worktrees, &resolve_cwd(Some(&dir)), &branch, new_branch.as_deref(), latest)).await
 }
 
 #[tauri::command]
 pub async fn worktree_fetch(dir: String) -> Result<(), String> {
-    fetch(&resolve_cwd(Some(&dir)))
+    blocking(move || fetch(&resolve_cwd(Some(&dir)))).await
 }
 
 #[tauri::command]
 pub async fn worktree_commit(info: WorktreeInfo, message: String) -> Result<(), String> {
-    commit_all(&info, &message)
+    blocking(move || commit_all(&info, &message)).await
 }
 
 #[tauri::command]
 pub async fn worktree_conflicts(infos: Vec<WorktreeInfo>) -> Result<ConflictReport, String> {
-    Ok(conflicts(&infos))
+    blocking(move || Ok(conflicts(&infos))).await
 }
 
 #[tauri::command]
 pub async fn worktree_sync(info: WorktreeInfo) -> Result<SyncOutcome, String> {
-    sync_with_base(&info)
+    blocking(move || sync_with_base(&info)).await
 }
 
 #[tauri::command]
 pub async fn worktree_remove(info: WorktreeInfo, delete_branch: bool) -> Result<(), String> {
-    remove(&info, delete_branch)
+    blocking(move || remove(&info, delete_branch)).await
+}
+
+#[tauri::command]
+pub async fn worktree_remove_many(items: Vec<RemoveRequest>) -> Result<Vec<RemoveFailure>, String> {
+    blocking(move || Ok(remove_many(&items))).await
 }
 
 #[cfg(test)]
@@ -834,6 +1027,26 @@ mod tests {
     }
 
     #[test]
+    fn removes_many_and_reports_the_ones_that_fail() {
+        let repo = repo();
+        let wts = temp_dir("wt");
+        let a = create(&wts, &repo, "claude").unwrap().unwrap();
+        let b = create(&wts, &repo, "claude").unwrap().unwrap();
+        let gone = WorktreeInfo { path: wts.join("nope").to_string_lossy().into_owned(), branch: "winfer/nope".into(), ..a.clone() };
+        let failed = remove_many(&[
+            RemoveRequest { info: a.clone(), delete_branch: true },
+            RemoveRequest { info: gone.clone(), delete_branch: true },
+            RemoveRequest { info: b.clone(), delete_branch: false },
+        ]);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].path, gone.path);
+        assert!(!Path::new(&a.path).exists() && !Path::new(&b.path).exists());
+        assert!(!branch_exists(&repo, &a.branch));
+        // Only the branches asked for go.
+        assert!(branch_exists(&repo, &b.branch));
+    }
+
+    #[test]
     fn lists_the_main_checkout_first_then_worktrees() {
         let repo = repo();
         let wts = temp_dir("wt");
@@ -887,26 +1100,71 @@ mod tests {
         assert!(!names.iter().any(|(n, _)| n == "origin/main"));
 
         // Remote branch: a local tracking branch with the short name.
-        let login = create_from_branch(&wts, &clone, "origin/feature/login", None).unwrap();
+        let login = create_from_branch(&wts, &clone, "origin/feature/login", None, false).unwrap();
         assert_eq!((login.branch.as_str(), login.base.as_str()), ("feature/login", "main"));
         assert!(git(Path::new(&login.path), &["rev-parse", "--abbrev-ref", "@{u}"]).unwrap().contains("origin/feature/login"));
 
         // Existing local branch, and a new branch started from one.
-        let local = create_from_branch(&wts, &clone, "local-only", None).unwrap();
+        let local = create_from_branch(&wts, &clone, "local-only", None, false).unwrap();
         assert_eq!(local.branch, "local-only");
-        let fresh = create_from_branch(&wts, &clone, "main", Some("spike/idea")).unwrap();
+        let fresh = create_from_branch(&wts, &clone, "main", Some("spike/idea"), false).unwrap();
         assert_eq!(fresh.branch, "spike/idea");
         assert!(fresh.path.ends_with("spike-idea"));
 
         // The checked-out branch (main) can't get a second worktree; a clear error instead.
-        assert!(create_from_branch(&wts, &clone, "main", None).unwrap_err().contains("already checked out"));
-        assert!(create_from_branch(&wts, &clone, "main", Some("bad name")).unwrap_err().contains("valid branch name"));
-        assert!(create_from_branch(&wts, &clone, "main", Some("local-only")).unwrap_err().contains("already exists"));
+        assert!(create_from_branch(&wts, &clone, "main", None, false).unwrap_err().contains("already checked out"));
+        assert!(create_from_branch(&wts, &clone, "main", Some("bad name"), false).unwrap_err().contains("valid branch name"));
+        assert!(create_from_branch(&wts, &clone, "main", Some("local-only"), false).unwrap_err().contains("already exists"));
 
         // Branches now show where they're checked out; works from inside a worktree too.
         let from_inside = branches(Path::new(&local.path)).unwrap();
         let local_only = from_inside.iter().find(|b| b.name == "local-only").unwrap();
         assert!(local_only.checked_out_at.as_deref().is_some_and(|p| p.ends_with("local-only")));
+    }
+
+    #[test]
+    fn worktrees_from_the_latest_remote_branch() {
+        let origin = repo();
+        sh(&origin, "git branch release && git branch feature/login && git branch wip");
+        let clone = temp_dir("clone");
+        let origin_path = origin.display().to_string().replace('\\', "/");
+        sh(&clone, &format!("git clone -q '{origin_path}' . && git config user.email t@t && git config user.name t"));
+        sh(&clone, "git branch release origin/release && git branch wip origin/wip && git branch local-only");
+        // The remote moves on after the clone; wip also gets a local commit, so it diverges.
+        sh(&origin, "for b in release feature/login wip; do git checkout -q $b && echo $b >> a.txt && git commit -qam $b; done && git checkout -q main");
+        sh(&clone, "git checkout -q wip && echo mine >> a.txt && git commit -qam mine && git checkout -q main");
+        let wts = temp_dir("wt");
+        let head = |p: &str| git(Path::new(p), &["rev-parse", "HEAD"]).unwrap();
+        let tip = |b: &str| git(&origin, &["rev-parse", b]).unwrap();
+
+        let ups: Vec<_> = branches(&clone).unwrap().into_iter().map(|b| (b.name, b.upstream)).collect();
+        assert!(ups.contains(&("release".into(), Some("origin/release".into()))));
+        assert!(ups.contains(&("local-only".into(), None)));
+
+        // As it is locally: the old commit. Latest: the remote's, fetched first.
+        let stale = create_from_branch(&wts, &clone, "release", Some("r-old"), false).unwrap();
+        assert_ne!(head(&stale.path), tip("release"));
+        let fresh = create_from_branch(&wts, &clone, "release", Some("r-new"), true).unwrap();
+        assert_eq!(head(&fresh.path), tip("release"));
+        // A new branch doesn't track the remote one it started from.
+        assert!(git(Path::new(&fresh.path), &["rev-parse", "--abbrev-ref", "@{u}"]).is_err());
+        // Working on the branch itself fast-forwards it.
+        let release = create_from_branch(&wts, &clone, "release", None, true).unwrap();
+        assert_eq!(head(&release.path), tip("release"));
+        // Remote branches too.
+        let login = create_from_branch(&wts, &clone, "origin/feature/login", None, true).unwrap();
+        assert_eq!(head(&login.path), tip("feature/login"));
+
+        assert!(create_from_branch(&wts, &clone, "local-only", None, true).unwrap_err().contains("no remote branch"));
+        assert!(create_from_branch(&wts, &clone, "wip", None, true).unwrap_err().contains("diverged"));
+        // The checked-out branch isn't moved under its files.
+        sh(&origin, "echo more >> a.txt && git commit -qam more");
+        let main_before = git(&clone, &["rev-parse", "main"]).unwrap();
+        assert!(create_from_branch(&wts, &clone, "main", None, true).unwrap_err().contains("already checked out"));
+        assert_eq!(git(&clone, &["rev-parse", "main"]).unwrap(), main_before);
+        // …but a new branch can still start from the remote's latest.
+        let spike = create_from_branch(&wts, &clone, "main", Some("spike"), true).unwrap();
+        assert_eq!(head(&spike.path), tip("main"));
     }
 
     #[test]

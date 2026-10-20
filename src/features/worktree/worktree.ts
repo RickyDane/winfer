@@ -36,23 +36,41 @@ export interface Branch {
   lastCommitAt: number | null;
   /** Folder where it's checked out, if anywhere. */
   checkedOutAt: string | null;
+  /** Remote branch it can be updated from: its upstream, or itself for remote ones. */
+  upstream: string | null;
 }
 
 export const listBranches = (dir: string) => invoke<Branch[]>("worktree_branches", { dir });
 
-/** A worktree for `branch`, or for a new branch `newBranch` started from it. */
-export const worktreeFromBranch = (dir: string, branch: string, newBranch: string | null) =>
-  invoke<WorktreeInfo>("worktree_from_branch", { dir, branch, newBranch });
+/**
+ * A worktree for `branch`, or for a new branch `newBranch` started from it. With `latest`, the
+ * branch's remote is fetched first and the worktree gets the remote's newest commits.
+ */
+export const worktreeFromBranch = (dir: string, branch: string, newBranch: string | null, latest = false) =>
+  invoke<WorktreeInfo>("worktree_from_branch", { dir, branch, newBranch, latest });
 
 export const fetchBranches = (dir: string) => invoke<void>("worktree_fetch", { dir });
 
+/** Listings under way, by folder: callers asking at the same time share one (each runs several git commands per worktree). */
+const listing = new Map<string, Promise<ExistingWorktree[]>>();
+
 /** Linked worktrees of the repo containing `dir` (not the main checkout). */
-export const listWorktrees = (dir: string) => invoke<ExistingWorktree[]>("worktree_list", { dir });
+export function listWorktrees(dir: string): Promise<ExistingWorktree[]> {
+  let pending = listing.get(dir);
+  if (!pending) {
+    pending = invoke<ExistingWorktree[]>("worktree_list", { dir }).finally(() => listing.delete(dir));
+    listing.set(dir, pending);
+  }
+  return pending;
+}
 
 export const createWorktree = (dir: string, provider: string) =>
   invoke<WorktreeInfo | null>("worktree_create", { dir, provider });
 
 export const worktreeDiff = (info: WorktreeInfo) => invoke<WorktreeDiff>("worktree_diff", { info });
+
+/** Files the worktree changed since it branched off (untracked included), without the diff itself. */
+export const worktreeChangedFiles = (info: WorktreeInfo) => invoke<string[]>("worktree_changed_files", { info });
 
 export const mergeWorktree = (info: WorktreeInfo) => invoke<string>("worktree_merge", { info });
 
@@ -61,6 +79,29 @@ export const commitWorktree = (info: WorktreeInfo, message: string) => invoke<vo
 
 export const removeWorktree = (info: WorktreeInfo, deleteBranch: boolean) =>
   invoke<void>("worktree_remove", { info, deleteBranch });
+
+export interface RemoveFailure {
+  path: string;
+  branch: string;
+  error: string;
+}
+
+/** Removes several worktrees one after another; the ones that couldn't go come back. */
+export const removeWorktrees = (items: { info: WorktreeInfo; deleteBranch: boolean }[]) =>
+  invoke<RemoveFailure[]>("worktree_remove_many", { items });
+
+/** Worktrees with no activity for this long count as stale. */
+export const STALE_DAYS = 10;
+const STALE_MS = STALE_DAYS * 86_400_000;
+
+/** Last activity: the branch's last commit, else when the folder was made. */
+export const lastActivity = (wt: ExistingWorktree) => wt.lastCommitAt ?? wt.createdAt;
+
+/** No commit (or, without one, folder creation) for `STALE_DAYS` days. Never the project folder. */
+export const isStale = (wt: ExistingWorktree, now = Date.now()) => {
+  const at = lastActivity(wt);
+  return !wt.isMain && at !== null && now - at > STALE_MS;
+};
 
 export interface ConflictItem {
   path: string;

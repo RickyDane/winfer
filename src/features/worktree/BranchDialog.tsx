@@ -1,4 +1,4 @@
-import { CloudDownload, FolderPlus, GitBranch, Play, Search, X } from "lucide-react";
+import { CloudDownload, FolderPlus, GitBranch, HardDrive, Play, Search, X } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
@@ -10,7 +10,8 @@ const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?
 
 /**
  * New worktree from a branch: pick a local or remote branch (or start a new branch from one),
- * then open an agent in it or make it a workspace of its own.
+ * then open an agent in it or make it a workspace of its own. It starts from the branch as it is
+ * locally, or from the remote's latest (fetched first).
  */
 export function BranchDialog() {
   const { overlay, setOverlay, providers } = useWorkspaces();
@@ -19,6 +20,8 @@ export function BranchDialog() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Branch | null>(null);
   const [newBranch, setNewBranch] = useState<string | null>(null);
+  // Kept between openings: whoever pulls first usually always does.
+  const [latest, setLatest] = useState(false);
   const [busy, setBusy] = useState<"fetch" | "agent" | "workspace" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const search = useRef<HTMLInputElement>(null);
@@ -50,13 +53,15 @@ export function BranchDialog() {
   const shown = (branches ?? []).filter((b) => words.every((w) => b.name.toLowerCase().includes(w)));
   const blocked = selected && newBranch === null && selected.checkedOutAt;
   const agent = providerName(providers, defaultProviderId());
+  const canPull = !!selected?.upstream;
+  const pull = latest && canPull;
 
   const create = async (as: "agent" | "workspace") => {
     if (!selected) return;
     setBusy(as);
     setError(null);
     try {
-      const info = await worktreeFromBranch(dir, selected.name, newBranch?.trim() || null);
+      const info = await worktreeFromBranch(dir, selected.name, newBranch?.trim() || null, pull);
       const s = useWorkspaces.getState();
       if (as === "workspace") {
         // Its own workspace, rooted in the worktree: agents there work on this branch directly.
@@ -164,6 +169,32 @@ export function BranchDialog() {
                 className="h-6 min-w-0 flex-1 rounded border border-border bg-panel-raised px-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
               />
             </label>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-fg-muted">
+            <span>Start from</span>
+            <div className="flex rounded-md border border-border p-0.5">
+              <button
+                onClick={() => setLatest(false)}
+                className={cn("flex items-center gap-1 rounded px-2 py-0.5", !pull ? "bg-accent-soft text-fg" : "hover:text-fg")}
+                title="Use the branch as it is in this repo, without contacting the remote"
+              >
+                <HardDrive size={11} /> Local branch
+              </button>
+              <button
+                onClick={() => setLatest(true)}
+                disabled={!!selected && !canPull}
+                className={cn("flex items-center gap-1 rounded px-2 py-0.5 disabled:opacity-40", pull || (latest && !selected) ? "bg-accent-soft text-fg" : "hover:text-fg")}
+                title={
+                  selected && !canPull
+                    ? `${selected.name} has no remote branch to pull from`
+                    : `Fetch ${selected?.upstream ?? "the remote"} first and start from its newest commits`
+                }
+              >
+                <CloudDownload size={11} /> Latest from remote
+              </button>
+            </div>
+            {pull && <span className="truncate font-mono text-[11px] text-fg-subtle">{selected!.upstream}</span>}
+            {latest && selected && !canPull && <span className="text-[11px] text-fg-subtle">No remote branch: using the local one</span>}
           </div>
           {blocked && (
             <p className="text-xs text-warning">
