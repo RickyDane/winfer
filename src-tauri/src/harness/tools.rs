@@ -318,7 +318,7 @@ pub fn shell_display() -> &'static str {
 /// The `bash` tool's description, naming the shell commands run in.
 fn shell_description() -> &'static str {
     if cfg!(windows) {
-        "Run PowerShell command (not bash; timeout ms, default 120000). Read files with the read tool, not Get-Content."
+        "Run PowerShell (not bash, not for reading files; timeout ms, default 120000)."
     } else {
         "Run shell command (timeout ms, default 120000)."
     }
