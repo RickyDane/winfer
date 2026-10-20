@@ -216,7 +216,7 @@ export class MockClient extends BaseClient {
       }
       case "send":
         this.push(msg.paneId, { role: "user", text: msg.text });
-        this.update(msg.paneId, { status: "working", message: "Thinking…", request: null });
+        this.update(msg.paneId, { status: "working", message: null, request: null });
         this.finishLater(msg.paneId, `Got it — "${msg.text.slice(0, 40)}". Done.`);
         return { t: "ack", id, ok: true };
       case "approve":

@@ -157,6 +157,8 @@ pub fn claude(transcript: &str) -> Vec<Message> {
     // Tool calls by their id and background tasks by theirs, to mark them done later.
     let mut by_call: HashMap<String, usize> = HashMap::new();
     let mut by_task: HashMap<String, usize> = HashMap::new();
+    // Whether the newest entry is the agent reasoning (nothing has followed it yet).
+    let mut thinking = false;
     for (n, line) in transcript.lines().enumerate() {
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
@@ -167,6 +169,7 @@ pub fn claude(transcript: &str) -> Vec<Message> {
         let content = &v["message"]["content"];
         match v["type"].as_str().unwrap_or_default() {
             "user" => {
+                thinking = false;
                 let texts: Vec<&str> = match content {
                     Value::String(s) => vec![s.as_str()],
                     Value::Array(blocks) => blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect(),
@@ -205,7 +208,9 @@ pub fn claude(transcript: &str) -> Vec<Message> {
             "assistant" => {
                 for (i, block) in content.as_array().into_iter().flatten().enumerate() {
                     let id = format!("{uuid}:{i}");
-                    match block["type"].as_str().unwrap_or_default() {
+                    let kind = block["type"].as_str().unwrap_or_default();
+                    thinking = matches!(kind, "thinking" | "redacted_thinking");
+                    match kind {
                         "text" => push(&mut out, id, "assistant", block["text"].as_str().unwrap_or_default(), None, ts),
                         "tool_use" => {
                             let name = block["name"].as_str().unwrap_or("tool");
@@ -222,19 +227,30 @@ pub fn claude(transcript: &str) -> Vec<Message> {
             _ => {}
         }
     }
+    mark_thinking(&mut out, thinking);
     out
+}
+
+/// Ends the thread with a "thinking" marker when the agent is reasoning right now, so the phone
+/// says "Thinking…" only then (the marker has no text and is never shown as a message).
+fn mark_thinking(out: &mut Vec<Message>, thinking: bool) {
+    if thinking {
+        out.push(Message { id: "thinking".into(), role: "thinking", text: String::new(), tool: None, ts: None, state: None, background: false });
+    }
 }
 
 /// From a Codex session log (JSONL).
 pub fn codex(log: &str) -> Vec<Message> {
     let mut out = Vec::new();
     let mut by_call: HashMap<String, usize> = HashMap::new();
+    let mut thinking = false;
     for (n, line) in log.lines().enumerate() {
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         if v["type"] != "response_item" {
             continue;
         }
         let item = &v["payload"];
+        thinking = item["type"] == "reasoning";
         let ts = v["timestamp"].as_str().and_then(parse_ts);
         let id = item["id"].as_str().or(item["call_id"].as_str()).map_or_else(|| n.to_string(), String::from);
         let kind = item["type"].as_str().unwrap_or(if item["role"].is_string() { "message" } else { "" });
@@ -266,6 +282,7 @@ pub fn codex(log: &str) -> Vec<Message> {
             _ => {}
         }
     }
+    mark_thinking(&mut out, thinking);
     out
 }
 
@@ -355,6 +372,16 @@ pub fn read(provider: &str, source: &str, limit: usize) -> Option<Vec<Message>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marks_a_thread_whose_agent_is_reasoning() {
+        let thought = r#"{"type":"assistant","uuid":"a1","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}"#;
+        let replied = r#"{"type":"assistant","uuid":"a2","message":{"content":[{"type":"text","text":"Done."}]}}"#;
+        assert_eq!(claude(thought).last().map(|m| m.role), Some("thinking"));
+        assert!(claude(&format!("{thought}\n{replied}")).iter().all(|m| m.role != "thinking"));
+        let reasoning = r#"{"type":"response_item","payload":{"type":"reasoning","summary":[]}}"#;
+        assert_eq!(codex(reasoning).last().map(|m| m.role), Some("thinking"));
+    }
 
     #[test]
     fn reads_a_claude_transcript_as_chat() {

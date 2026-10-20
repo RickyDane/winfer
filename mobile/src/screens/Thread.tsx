@@ -82,7 +82,7 @@ const clock = (ms: number) => {
 };
 
 /** In the chat, below the last message: what the agent is doing right now. */
-function Activity({ pane, current }: { pane: Pane; current: Message | null }) {
+function Activity({ pane, current, thinking }: { pane: Pane; current: Message | null; thinking: boolean }) {
   useTick(1000);
   return (
     <div className="msg assistant activity" role="status">
@@ -100,8 +100,10 @@ function Activity({ pane, current }: { pane: Pane; current: Message | null }) {
             <>
               <b>{current.tool ?? "Tool"}</b> {toolText(current.tool, current.text)}
             </>
+          ) : thinking ? (
+            "Thinking…"
           ) : (
-            (pane.message ?? "Thinking…")
+            pane.message
           )}
         </span>
         <span className="activity-clock">{clock(Date.now() - (current?.ts ?? pane.updatedAt))}</span>
@@ -171,7 +173,10 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const seen = useRef<Set<string> | null>(null);
   const ready = state.socket === "open" && state.desktopOnline !== false;
 
-  const messages = thread?.messages ?? [];
+  const raw = thread?.messages ?? [];
+  // The desktop ends the thread with a marker while the agent is reasoning.
+  const thinking = raw.at(-1)?.role === "thinking";
+  const messages = thinking ? raw.slice(0, -1) : raw;
   const bgRunning = messages.some((m) => m.background && m.state === "running");
 
   // Refetch on every status change for this pane, every 4 s while it works, and every 6 s while
@@ -340,7 +345,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             );
           })}
           {pane && background.length > 0 && <Background items={background} />}
-          {pane && working && <Activity pane={pane} current={current} />}
+          {pane && working && <Activity pane={pane} current={current} thinking={thinking} />}
           {pane && !working && (pane.status === "done" || pane.status === "error") && messages.length > 0 && <EndMark pane={pane} />}
         </div>
       </div>

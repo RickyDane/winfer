@@ -36,7 +36,8 @@ export interface Pane {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant" | "tool";
+  /** "thinking": a text-less marker ending the thread while the agent reasons; never shown. */
+  role: "user" | "assistant" | "tool" | "thinking";
   text: string;
   tool?: string;
   ts: number | null;

@@ -33,7 +33,7 @@ export interface MobilePane {
 
 export interface MobileMessage {
   id: string;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "thinking";
   text: string;
   tool?: string;
   ts: number | null;
