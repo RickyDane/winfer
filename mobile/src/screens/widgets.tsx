@@ -78,8 +78,13 @@ export function Segmented<T extends string>({ options, value, onChange }: { opti
 /* ---------- Swipeable card: right = primary action, left = secondary ---------- */
 type SwipeAction = { label: string; icon: IconName; run: () => void };
 const ARM = 96;
-export function SwipeCard({ right, left, onTap, children, status, index }: { right?: SwipeAction; left?: SwipeAction; onTap: () => void; children: ReactNode; status: AgentStatus; index: number }) {
+export function SwipeCard({ right, left, onTap, onLongPress, children, status, index }: { right?: SwipeAction; left?: SwipeAction; onTap: () => void; onLongPress?: () => void; children: ReactNode; status: AgentStatus; index: number }) {
   const card = useRef<HTMLDivElement>(null);
+  // Holding still on the card for a moment opens its menu instead of the thread.
+  const hold = useRef<{ timer: number; fired: boolean } | null>(null);
+  const release = () => {
+    if (hold.current) clearTimeout(hold.current.timer);
+  };
   const under = useRef<{ r: HTMLDivElement | null; l: HTMLDivElement | null }>({ r: null, l: null });
   const g = useRef<{ x: number; y: number; dx: number; axis: "x" | "y" | null; id: number; armed: boolean } | null>(null);
   const moved = useRef(false);
@@ -124,6 +129,16 @@ export function SwipeCard({ right, left, onTap, children, status, index }: { rig
         tabIndex={0}
         data-status={status}
         onKeyDown={(e) => e.key === "Enter" && onTap()}
+        onContextMenu={(e) => {
+          if (!onLongPress) return;
+          e.preventDefault();
+          // Right-click, or a touch browser's own long press: whichever comes first opens the menu once.
+          if (hold.current?.fired) return;
+          release();
+          if (hold.current) hold.current.fired = true;
+          haptic(14);
+          onLongPress();
+        }}
         onPointerDown={(e) => {
           if (e.pointerType === "mouse" && e.button !== 0) return;
           // Inline buttons handle their own taps.
@@ -133,6 +148,18 @@ export function SwipeCard({ right, left, onTap, children, status, index }: { rig
           }
           g.current = { x: e.clientX, y: e.clientY, dx: 0, axis: null, id: e.pointerId, armed: false };
           moved.current = false;
+          release();
+          hold.current = onLongPress
+            ? {
+                fired: false,
+                timer: window.setTimeout(() => {
+                  if (!hold.current || g.current?.axis) return;
+                  hold.current.fired = true;
+                  haptic(14);
+                  onLongPress();
+                }, 480),
+              }
+            : null;
         }}
         onPointerMove={(e) => {
           const s = g.current;
@@ -140,6 +167,7 @@ export function SwipeCard({ right, left, onTap, children, status, index }: { rig
           const dx = e.clientX - s.x;
           const dy = e.clientY - s.y;
           if (!s.axis && Math.hypot(dx, dy) > 8) {
+            release();
             s.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? "x" : "y";
             if (s.axis === "x") {
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -163,6 +191,8 @@ export function SwipeCard({ right, left, onTap, children, status, index }: { rig
           g.current = null;
           const el = e.currentTarget;
           delete el.dataset.dragging;
+          release();
+          if (hold.current?.fired) return;
           if (!s || s.axis !== "x") {
             if (s && !moved.current) onTap();
             return;
@@ -182,6 +212,7 @@ export function SwipeCard({ right, left, onTap, children, status, index }: { rig
           }
         }}
         onPointerCancel={(e) => {
+          release();
           g.current = null;
           delete e.currentTarget.dataset.dragging;
           paint(0);

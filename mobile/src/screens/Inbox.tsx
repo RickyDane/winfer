@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { DesktopClient } from "../client";
 import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
@@ -39,6 +40,19 @@ export function Inbox({ client }: { client: DesktopClient }) {
   const state = useClient(client);
   useTick(30_000);
   const [filter, setFilter] = useState<Filter>("all");
+  const [menu, setMenu] = useState<Pane | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const openMenu = (p: Pane) => {
+    setConfirm(false);
+    setMenu(p);
+  };
+  const closeSession = (p: Pane) => {
+    // A working agent is stopped mid-turn: ask once more.
+    if (p.status === "working" && !confirm) return setConfirm(true);
+    haptic([10, 30, 10]);
+    setMenu(null);
+    void client.request({ t: "pane.close", paneId: p.id }).catch(() => {});
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const screen = useRef<HTMLDivElement>(null);
   const ptr = useRef<HTMLDivElement>(null);
@@ -87,6 +101,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
         index={i++}
         status={p.status}
         onTap={() => open(p)}
+        onLongPress={() => openMenu(p)}
         right={approval ? { label: "Approve", icon: "check", run: () => act(p, "approve") } : undefined}
         left={approval ? { label: "Decline", icon: "x", run: () => act(p, "decline") } : p.status === "working" ? { label: "Interrupt", icon: "stop", run: () => act(p, "interrupt") } : undefined}
       >
@@ -213,6 +228,30 @@ export function Inbox({ client }: { client: DesktopClient }) {
           )}
         </div>
       </div>
+      {menu &&
+        createPortal(
+          <div className="menu-backdrop" onClick={() => setMenu(null)}>
+            <div className="menu-sheet" role="menu" onClick={(e) => e.stopPropagation()}>
+              <div className="menu-group">
+                <div className="menu-head">
+                  {menu.title} · {menu.workspace}
+                </div>
+                <button className="menu-item" role="menuitem" onClick={() => (setMenu(null), open(menu))}>
+                  Open
+                </button>
+                <button className="menu-item danger" role="menuitem" disabled={link !== "online"} onClick={() => closeSession(menu)}>
+                  <Icon name="x" size={18} /> {confirm ? "Stop the agent and close?" : "Close session"}
+                </button>
+              </div>
+              <div className="menu-group">
+                <button className="menu-item" onClick={() => setMenu(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

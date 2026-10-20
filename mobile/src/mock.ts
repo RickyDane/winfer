@@ -229,6 +229,11 @@ export class MockClient extends BaseClient {
       case "interrupt":
         this.update(msg.paneId, { status: "idle", message: "Interrupted", request: null });
         return { t: "ack", id, ok: true };
+      case "pane.close":
+        this.panes = this.panes.filter((p) => p.id !== msg.paneId);
+        delete this.threads[msg.paneId];
+        this.apply(this.mirror());
+        return { t: "ack", id, ok: true };
       case "choose": {
         const pane = this.panes.find((p) => p.id === msg.paneId);
         const o = pane?.request?.options?.find((x) => x.n === msg.option);

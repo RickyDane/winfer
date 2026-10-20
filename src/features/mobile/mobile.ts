@@ -197,6 +197,10 @@ async function onRequest(device: string, req: Request) {
       execute({ type: "pane.interrupt", target });
       logActivity(pane.workspaceId, req.t === "decline" ? "Declined from your phone" : "Interrupted from your phone", pane.provider);
       return reply({ t: "ack", ok: true });
+    case "pane.close":
+      // Closes the pane as on the desktop: its terminal ends and it leaves the workspace.
+      execute({ type: "pane.close", target });
+      return reply({ t: "ack", ok: true });
     default:
       return reply({ t: "error", error: `unknown request ${req.t}` });
   }

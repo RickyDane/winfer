@@ -71,6 +71,7 @@ export type PhoneMsg =
   | { t: "approve" | "decline" | "interrupt"; paneId: string }
   | { t: "choose"; paneId: string; option: number; text?: string }
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string }
+  | { t: "pane.close"; paneId: string }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
   | { t: "push.unsubscribe" };
 
