@@ -81,6 +81,13 @@ fn draw(terminal: &mut Term, out: &mut FrameOut, app: &mut App) -> std::io::Resu
     drawn.and(out.commit())
 }
 
+/// The terminal title for a session: its topic without control characters, else "winfer code".
+fn window_title(topic: &str) -> String {
+    let clean: String = topic.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let clean = clean.trim();
+    if clean.is_empty() { "winfer code".into() } else { clean.into() }
+}
+
 pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
     // Raw mode, the alternate screen and a panic hook that restores the terminal; its stdout
     // backend is swapped for one that writes whole frames.
@@ -99,17 +106,22 @@ pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
     if enhanced {
         let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     }
-    // Title for the terminal tab.
-    let _ = write!(out, "\x1b]0;winfer code\x07");
-
     let (tx, rx) = channel::<Msg>();
     app::spawn_input(tx.clone());
     let mut app = App::new(tx, launch);
+    // Title for the terminal tab: the session's topic once there is one (winfer names the pane
+    // after it, and on Windows the console's own title would otherwise be cmd.exe's path).
+    let mut titled: Option<String> = None;
     let result = (|| -> std::io::Result<()> {
         // Redraws at most every FRAME for streamed output; keys draw at once.
         const FRAME: Duration = Duration::from_millis(33);
         loop {
             draw(&mut terminal, &mut frames, &mut app)?;
+            if titled.as_deref() != Some(app.saved.title.as_str()) {
+                titled = Some(app.saved.title.clone());
+                let _ = write!(out, "\x1b]0;{}\x07", window_title(&app.saved.title));
+                let _ = out.flush();
+            }
             let drawn = std::time::Instant::now();
             if app.quit {
                 break;

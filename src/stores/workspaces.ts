@@ -709,6 +709,9 @@ export function cleanAgentTitle(raw: string, providerNames: string[]): string | 
   if (!title) return null;
   const lower = title.toLowerCase();
   if (providerNames.some((n) => n.toLowerCase() === lower)) return null;
+  // A console's default title is the program's path (Windows: "C:\WINDOWS\system32\cmd.exe",
+  // maybe after "Administrator: "): not a topic.
+  if (/^(?:[^:]*:\s*)?(?:[a-z]:)?[\\/][^\s]*$|\.exe$/i.test(raw.trim())) return null;
   return title;
 }
 
