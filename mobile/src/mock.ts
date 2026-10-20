@@ -1,6 +1,6 @@
 // `?mock=1`: an in-memory desktop so the UI runs without relay or winfer.
 import { BaseClient } from "./client";
-import type { DesktopMsg, Message, Pane, PhoneMsg } from "./protocol";
+import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
 
 const now = Date.now();
 const min = 60_000;
@@ -8,6 +8,7 @@ const min = 60_000;
 const PANES: Pane[] = [
   {
     id: "p-auth",
+    workspaceId: "w-winfer",
     title: "claude · auth refactor",
     workspace: "winfer",
     provider: "claude",
@@ -19,6 +20,7 @@ const PANES: Pane[] = [
   },
   {
     id: "p-docs",
+    workspaceId: "w-winfer",
     title: "codex · docs",
     workspace: "winfer",
     provider: "codex",
@@ -30,6 +32,7 @@ const PANES: Pane[] = [
   },
   {
     id: "p-relay",
+    workspaceId: "w-mobile",
     title: "claude · relay worker",
     workspace: "winfer-mobile-app",
     provider: "claude",
@@ -41,6 +44,7 @@ const PANES: Pane[] = [
   },
   {
     id: "p-q",
+    workspaceId: "w-api",
     title: "opencode · schema",
     workspace: "api",
     provider: "opencode",
@@ -61,6 +65,7 @@ const PANES: Pane[] = [
   },
   {
     id: "p-idle",
+    workspaceId: "w-winfer",
     title: "shell",
     workspace: "winfer",
     provider: null,
@@ -70,6 +75,19 @@ const PANES: Pane[] = [
     request: null,
     reply: null,
   },
+];
+
+const WORKSPACES: Workspace[] = [
+  { id: "w-winfer", name: "winfer", active: true },
+  { id: "w-mobile", name: "winfer-mobile-app", active: false },
+  { id: "w-api", name: "api", active: false },
+  { id: "w-site", name: "website", active: false },
+];
+
+const PROVIDERS: Provider[] = [
+  { id: "claude", name: "Claude Code" },
+  { id: "codex", name: "Codex" },
+  { id: "opencode", name: "OpenCode" },
 ];
 
 const m = (id: string, role: Message["role"], text: string, ago: number, tool?: string): Message => ({
@@ -126,13 +144,17 @@ export class MockClient extends BaseClient {
     setTimeout(() => {
       this.set({ socket: "open", desktopOnline: true });
       this.apply({ t: "welcome", desktop: this.name, version: "mock", vapidPublicKey: "" });
-      this.apply({ t: "panes", panes: this.panes });
+      this.apply(this.mirror());
     }, 150);
     // A live event so the island, FLIP re-order and ring animate in the demo.
     setTimeout(() => {
       this.push("p-relay", { role: "tool", text: "Bash npx wrangler deploy", tool: "Bash" });
       this.update("p-relay", { status: "needs-input", message: "Allow Bash: npx wrangler deploy?", request: { kind: "approval", text: "Bash(npx wrangler deploy)\nDeploy the relay to Cloudflare" } });
     }, 7000);
+  }
+
+  private mirror(id?: string): DesktopMsg {
+    return { t: "panes", id, panes: this.panes.map((p) => ({ ...p })), workspaces: WORKSPACES, providers: PROVIDERS, defaultProvider: "claude" };
   }
 
   private update(id: string, patch: Partial<Pane>) {
@@ -164,8 +186,23 @@ export class MockClient extends BaseClient {
     switch (msg.t) {
       case "hello":
       case "panes.get":
-        this.apply({ t: "panes", panes: this.panes.map((p) => ({ ...p })) });
-        return { t: "panes", id, panes: this.panes };
+        this.apply(this.mirror());
+        return this.mirror(id);
+      case "pane.new": {
+        const ws = WORKSPACES.find((w) => w.id === msg.workspaceId);
+        const provider = PROVIDERS.find((p) => p.id === msg.provider) ?? PROVIDERS[0];
+        if (!ws) return { t: "ack", id, ok: false, error: "That workspace is gone." };
+        const paneId = `p-new-${++this.n}`;
+        const text = msg.text?.trim();
+        this.panes.push({ id: paneId, workspaceId: ws.id, workspace: ws.name, title: text ? text.slice(0, 40) : ws.name, provider: provider.id, status: text ? "working" : "idle", message: null, updatedAt: Date.now(), request: null, reply: null });
+        this.threads[paneId] = [];
+        this.apply(this.mirror());
+        if (text) {
+          this.push(paneId, { role: "user", text });
+          this.finishLater(paneId, `Started on "${text.slice(0, 40)}". Done.`);
+        }
+        return { t: "ack", id, ok: true, paneId };
+      }
       case "thread.get": {
         const reply: DesktopMsg = {
           t: "thread",

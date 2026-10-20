@@ -5,6 +5,7 @@ import { go, useRoute } from "./hooks";
 import { MockClient } from "./mock";
 import { activePairing, addPairing, parsePairPayload } from "./pairing";
 import { Inbox } from "./screens/Inbox";
+import { NewSession } from "./screens/NewSession";
 import { Island } from "./screens/Island";
 import { TabBar } from "./screens/TabBar";
 import { Pair } from "./screens/Pair";
@@ -68,6 +69,8 @@ export function App() {
   const screen =
     route.name === "settings" ? (
       <Settings client={client} mock={MOCK} onChanged={changed} />
+    ) : route.name === "new" ? (
+      <NewSession client={client} workspaceId={route.workspaceId} />
     ) : route.name === "pane" ? (
       <Thread key={route.id} client={client} paneId={route.id} />
     ) : (
@@ -76,7 +79,7 @@ export function App() {
   return (
     <>
       {screen}
-      {route.name !== "pane" && <TabBar client={client} active={route.name === "settings" ? "settings" : "inbox"} />}
+      {route.name !== "pane" && route.name !== "new" && <TabBar client={client} active={route.name === "settings" ? "settings" : "inbox"} />}
       <Island client={client} openPaneId={route.name === "pane" ? route.id : null} />
     </>
   );

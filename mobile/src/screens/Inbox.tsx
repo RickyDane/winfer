@@ -70,6 +70,13 @@ export function Inbox({ client }: { client: DesktopClient }) {
   };
 
   const open = (p: Pane) => go(`/pane/${encodeURIComponent(p.id)}`);
+  const canStart = state.workspaces.length > 0 && state.providers.length > 0;
+  const startIn = (workspaceId: string) => {
+    haptic(6);
+    go(`/new/${encodeURIComponent(workspaceId)}`);
+  };
+  // "All" mirrors the desktop: each workspace in sidebar order, its sessions in tile order.
+  const byWorkspace = filter === "all" && state.workspaces.length > 0;
   let i = 0;
   const card = (p: Pane) => {
     const pv = preview(p);
@@ -97,8 +104,12 @@ export function Inbox({ client }: { client: DesktopClient }) {
               <span className="status-text" data-status={p.status}>
                 {STATUS_LABEL[p.status]}
               </span>
-              <span className="sep">•</span>
-              <span className="ws">{p.workspace}</span>
+              {!byWorkspace && (
+                <>
+                  <span className="sep">•</span>
+                  <span className="ws">{p.workspace}</span>
+                </>
+              )}
               {info && (
                 <>
                   <span className="sep">•</span>
@@ -175,7 +186,35 @@ export function Inbox({ client }: { client: DesktopClient }) {
         </div>
         <ConnNotice state={state} onRetry={() => client.reconnect()} />
         <div className="list" ref={list}>
-          {filter === "all"
+          {byWorkspace
+            ? state.workspaces.map((w) => {
+                const items = state.panes.filter((p) => p.workspaceId === w.id);
+                return [
+                  <div key={`w-${w.id}`} className="group-label ws-label" data-flip>
+                    <span className="ws-name">{w.name}</span>
+                    {w.active && <span className="ws-open">open</span>}
+                    {canStart && (
+                      <button className="ws-add" aria-label={`New session in ${w.name}`} disabled={link !== "online"} onClick={() => startIn(w.id)}>
+                        <Icon name="plus" size={15} />
+                      </button>
+                    )}
+                  </div>,
+                  ...(items.length
+                    ? items.map(card)
+                    : [
+                        <button key={`e-${w.id}`} className="ws-empty" data-flip disabled={!canStart || link !== "online"} onClick={() => startIn(w.id)}>
+                          {canStart ? (
+                            <>
+                              <Icon name="plus" size={14} /> No sessions · start one
+                            </>
+                          ) : (
+                            "No sessions"
+                          )}
+                        </button>,
+                      ]),
+                ];
+              })
+            : filter === "all"
             ? GROUPS.map((g) => {
                 const items = shown.filter((p) => g.statuses.includes(p.status));
                 if (!items.length) return null;
@@ -187,7 +226,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
                 ];
               })
             : shown.map(card)}
-          {link === "online" && shown.length === 0 && (
+          {link === "online" && shown.length === 0 && !byWorkspace && (
             <div className="empty">
               <div className="orbit-art">
                 <i />
@@ -195,7 +234,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
                 <img src="./icons/logo.svg" alt="" />
               </div>
               <h3>{state.panes.length ? "Nothing here" : "No agents running"}</h3>
-              <p className="sub">{state.panes.length ? "Try another filter." : "Start one in winfer and it appears here, live."}</p>
+              <p className="sub">{state.panes.length ? "Try another filter." : canStart ? "Start one here or in winfer; it appears live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
         </div>

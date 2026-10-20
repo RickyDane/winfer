@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { ClientState, DesktopClient } from "./client";
 
-export type Route = { name: "inbox" } | { name: "pane"; id: string } | { name: "settings" } | { name: "pair" };
+export type Route = { name: "inbox" } | { name: "pane"; id: string } | { name: "new"; workspaceId: string | null } | { name: "settings" } | { name: "pair" };
 
 export function parseRoute(hash: string): Route {
   const h = hash.replace(/^#/, "");
   const pane = h.match(/^\/pane\/(.+)$/);
   if (pane) return { name: "pane", id: decodeURIComponent(pane[1]) };
+  const fresh = h.match(/^\/new(?:\/(.+))?$/);
+  if (fresh) return { name: "new", workspaceId: fresh[1] ? decodeURIComponent(fresh[1]) : null };
   if (h === "/settings") return { name: "settings" };
   if (h === "/pair") return { name: "pair" };
   return { name: "inbox" };
@@ -15,7 +17,7 @@ export function parseRoute(hash: string): Route {
 
 // One hash listener for the app; screen changes run inside a view transition so the old screen
 // slides out and shared elements (an agent's avatar and title) morph into the next screen.
-const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, settings: 0 };
+const DEPTH: Record<Route["name"], number> = { inbox: 0, pair: 0, pane: 1, new: 1, settings: 0 };
 /** Screens reached from the bottom tab bar: switching between them cross-fades. */
 export const TABS: Route["name"][] = ["inbox", "settings"];
 let current = location.hash;

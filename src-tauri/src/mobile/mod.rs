@@ -455,7 +455,8 @@ pub fn mobile_send(device: Option<String>, msg: Value) -> Result<(), String> {
             for device in paired {
                 m.send_to(&device, &msg);
             }
-            if msg["t"] == "status" {
+            // Silent updates (a new title, a renamed workspace) aren't news.
+            if msg["t"] == "status" && msg["silent"] != true {
                 m.maybe_push(&msg["pane"]);
             }
         }

@@ -1,4 +1,4 @@
-import type { DesktopMsg, Message, Pane, PhoneMsg, ThreadSource } from "./protocol";
+import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, ThreadSource, Workspace } from "./protocol";
 
 export interface Thread {
   messages: Message[];
@@ -12,6 +12,11 @@ export interface ClientState {
   desktopOnline: boolean | null;
   welcome: { desktop: string; version: string; vapidPublicKey: string } | null;
   panes: Pane[];
+  /** The desktop's workspaces (empty from desktops that don't send them). */
+  workspaces: Workspace[];
+  /** Agents the phone can start sessions with. */
+  providers: Provider[];
+  defaultProvider: string | null;
   threads: Record<string, Thread>;
   error: string | null;
 }
@@ -31,6 +36,9 @@ export const initialState = (): ClientState => ({
   desktopOnline: null,
   welcome: null,
   panes: [],
+  workspaces: [],
+  providers: [],
+  defaultProvider: null,
   threads: {},
   error: null,
 });
@@ -63,11 +71,20 @@ export abstract class BaseClient implements DesktopClient {
         this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey }, error: null });
         break;
       case "panes":
-        this.set({ panes: msg.panes });
+        this.set({
+          panes: msg.panes,
+          ...(msg.workspaces && { workspaces: msg.workspaces }),
+          ...(msg.providers && { providers: msg.providers }),
+          ...(msg.defaultProvider !== undefined && { defaultProvider: msg.defaultProvider }),
+        });
         break;
       case "status": {
-        const rest = this.state.panes.filter((p) => p.id !== msg.pane.id);
-        this.set({ panes: [...rest, msg.pane] });
+        // In place, so the desktop's order holds; a pane we didn't know goes last.
+        const i = this.state.panes.findIndex((p) => p.id === msg.pane.id);
+        const panes = [...this.state.panes];
+        if (i < 0) panes.push(msg.pane);
+        else panes[i] = msg.pane;
+        this.set({ panes });
         break;
       }
       case "thread":

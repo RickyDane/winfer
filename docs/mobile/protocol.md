@@ -56,6 +56,7 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | `send` | `paneId`, `text` | `ack` |
 | `approve` / `decline` / `interrupt` | `paneId` | `ack` |
 | `choose` | `paneId`, `option` (an option's `n`), `text?` (answer for a "Type something" row) | `ack` |
+| `pane.new` | `workspaceId`, `provider?` (an id from `providers`; default: the desktop's default agent), `text?` (first message) | `ack` + `paneId` |
 | `push.subscribe` | `subscription` (PushSubscription JSON) | `ack` |
 | `push.unsubscribe` | | `ack` |
 
@@ -64,8 +65,8 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | t | fields |
 |---|---|
 | `welcome` | `id`, `desktop` (name), `version`, `vapidPublicKey` (base64url, uncompressed P-256) |
-| `panes` | `id?`, `panes: Pane[]` |
-| `status` | `pane: Pane` (pushed whenever a pane's status/message/request changes) |
+| `panes` | `id?`, `panes: Pane[]` (every workspace's, in desktop order), `workspaces: {id, name, active}[]`, `providers: {id, name}[]` (installed agents), `defaultProvider` — the whole mirror; sent on `panes.get` and whenever panes come, go or move, or workspaces or agents change |
+| `status` | `pane: Pane`, `silent?` (pushed whenever a pane's status/message/request changes; `silent: true` for other changes such as a new title, which never push a notification) |
 | `thread` | `id`, `paneId`, `messages: Message[]`, `source` (`claude`/`codex`/`opencode`/`winfer`/`screen`) |
 | `ack` | `id`, `ok`, `error?` |
 | `error` | `id?`, `error` |
@@ -73,7 +74,8 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 ```ts
 type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
 interface Pane {
-  id: string; title: string; workspace: string; provider: string | null;
+  id: string; title: string; workspace: string; workspaceId: string; archived: boolean;
+  provider: string | null;
   status: AgentStatus; message: string | null; updatedAt: number; // ms epoch
   request: {
     kind: "approval" | "question"; text: string;
@@ -94,7 +96,7 @@ interface Message {
 }
 ```
 
-Phone re-requests `thread.get` for the open pane on each `status` for it, every 4 s while that pane is `working`, and every 6 s while any background tool is `running`.
+Phone handles frames strictly in arrival order and re-requests `panes.get` every 20 s while visible (self-heals anything lost on the way). It re-requests `thread.get` for the open pane on each `status` for it, every 4 s while that pane is `working`, and every 6 s while any background tool is `running`.
 
 ## Push
 

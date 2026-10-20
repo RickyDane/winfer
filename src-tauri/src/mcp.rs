@@ -283,8 +283,16 @@ fn codegraph_root(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
-/// codegraph's MCP server for the project `dir` is in, if it's indexed and codegraph is installed.
+/// The plugin that brings codegraph to agents; without it (uninstalled or off) they don't get it,
+/// even in a project indexed earlier or with codegraph still installed.
+const CODEGRAPH_PLUGIN: &str = "knowledge-base";
+
+/// codegraph's MCP server for the project `dir` is in, if the Knowledge Base plugin is on, the
+/// project is indexed and codegraph is installed.
 pub fn codegraph_server(dir: &std::path::Path) -> Option<Server> {
+    if !crate::plugins::is_enabled(CODEGRAPH_PLUGIN) {
+        return None;
+    }
     let root = codegraph_root(dir)?;
     // A .cmd shim would hand its arguments to cmd.exe; the launcher resolves npm's to node.
     let launcher = crate::env::launcher(CODEGRAPH).filter(|l| !l.batch)?;

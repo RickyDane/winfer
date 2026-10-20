@@ -5,6 +5,8 @@ import type { DesktopMsg, PhoneMsg, Presence } from "./protocol";
 
 const REQUEST_TIMEOUT = 20_000;
 const MAX_BACKOFF = 30_000;
+/** How often the open app re-reads the desktop's panes, healing anything lost on the way. */
+const RESYNC_EVERY = 20_000;
 
 interface Pending {
   resolve: (m: DesktopMsg) => void;
@@ -24,6 +26,9 @@ export class RelayClient extends BaseClient {
   private closed = false;
   private keepalive: ReturnType<typeof setInterval> | null = null;
   private lastPong = 0;
+  /** Frames are decrypted one after another: in parallel, a later one could land first. */
+  private frames: Promise<void> = Promise.resolve();
+  private resync: ReturnType<typeof setInterval> | null = null;
 
   constructor(private pairing: Pairing) {
     super();
@@ -32,6 +37,9 @@ export class RelayClient extends BaseClient {
     document.addEventListener("visibilitychange", this.onVisible);
     window.addEventListener("online", this.onVisible);
     void this.connect();
+    this.resync = setInterval(() => {
+      if (document.visibilityState === "visible" && this.state.socket === "open" && this.state.desktopOnline) this.request({ t: "panes.get" }).catch(() => {});
+    }, RESYNC_EVERY);
   }
 
   private onVisible = () => {
@@ -67,7 +75,8 @@ export class RelayClient extends BaseClient {
         this.lastPong = Date.now();
         return;
       }
-      void this.onFrame(ev.data, keys);
+      const data = ev.data;
+      this.frames = this.frames.then(() => (this.ws === ws ? this.onFrame(data, keys) : undefined)).catch(() => {});
     };
     ws.onclose = (ev) => {
       if (this.ws !== ws) return;
@@ -184,6 +193,7 @@ export class RelayClient extends BaseClient {
   close() {
     this.closed = true;
     this.stopKeepalive();
+    if (this.resync) clearInterval(this.resync);
     if (this.retry) clearTimeout(this.retry);
     document.removeEventListener("visibilitychange", this.onVisible);
     window.removeEventListener("online", this.onVisible);

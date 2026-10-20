@@ -22,6 +22,10 @@ export interface Pane {
   id: string;
   title: string;
   workspace: string;
+  /** Older desktops don't send these. */
+  workspaceId?: string;
+  /** Put aside in the desktop's archive (still running). */
+  archived?: boolean;
   provider: string | null;
   status: AgentStatus;
   message: string | null;
@@ -42,6 +46,20 @@ export interface Message {
   background?: boolean;
 }
 
+/** A desktop workspace, in sidebar order. */
+export interface Workspace {
+  id: string;
+  name: string;
+  /** Open on the desktop right now. */
+  active: boolean;
+}
+
+/** An agent installed on the desktop. */
+export interface Provider {
+  id: string;
+  name: string;
+}
+
 export type ThreadSource = "claude" | "codex" | "opencode" | "winfer" | "screen";
 
 export type PhoneMsg =
@@ -51,15 +69,16 @@ export type PhoneMsg =
   | { t: "send"; paneId: string; text: string }
   | { t: "approve" | "decline" | "interrupt"; paneId: string }
   | { t: "choose"; paneId: string; option: number; text?: string }
+  | { t: "pane.new"; workspaceId: string; provider?: string; text?: string }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
   | { t: "push.unsubscribe" };
 
 export type DesktopMsg =
   | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string }
-  | { t: "panes"; id?: string; panes: Pane[] }
-  | { t: "status"; pane: Pane }
+  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string }
+  | { t: "status"; pane: Pane; silent?: boolean }
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
-  | { t: "ack"; id: string; ok: boolean; error?: string }
+  | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
   | { t: "error"; id?: string; error: string };
 
 export interface Presence {
