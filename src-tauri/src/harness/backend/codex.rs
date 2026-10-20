@@ -12,7 +12,8 @@ use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo
 
 fn approval_policy(mode: Mode) -> &'static str {
     match mode {
-        Mode::Yolo => "never",
+        // Yolo-plan runs in the read-only sandbox, so not asking can't change anything.
+        Mode::Yolo | Mode::YoloPlan => "never",
         _ => "on-request",
     }
 }
@@ -20,7 +21,7 @@ fn approval_policy(mode: Mode) -> &'static str {
 fn sandbox(mode: Mode) -> &'static str {
     match mode {
         Mode::Yolo => "danger-full-access",
-        Mode::Plan => "read-only",
+        Mode::Plan | Mode::YoloPlan => "read-only",
         _ => "workspace-write",
     }
 }
@@ -28,7 +29,7 @@ fn sandbox(mode: Mode) -> &'static str {
 fn sandbox_policy(mode: Mode, cwd: &str) -> Value {
     match mode {
         Mode::Yolo => json!({ "type": "dangerFullAccess" }),
-        Mode::Plan => json!({ "type": "readOnly", "networkAccess": false }),
+        Mode::Plan | Mode::YoloPlan => json!({ "type": "readOnly", "networkAccess": false }),
         _ => json!({ "type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false }),
     }
 }

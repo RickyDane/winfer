@@ -54,7 +54,7 @@ pub struct Launch {
 pub const COMMANDS: [(&str, &str); 23] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),
-    ("/mode", "Permission mode: ask, auto-edit, plan, yolo"),
+    ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
     ("/new", "Start a new conversation"),
     ("/resume", "Resume a past session"),
     ("/compact", "Summarize the conversation to free context"),
@@ -504,6 +504,8 @@ impl App {
                 }
             }
             Ev::Model(m) => self.actual_model = m,
+            // Session only: the saved default mode stays what the user picked.
+            Ev::Mode(m) => self.config.mode = m,
             Ev::TextDelta { id, text } => {
                 self.end_reasoning();
                 match self.find(|b| matches!(b, Block::Assistant { id: i, .. } if *i == id)) {
@@ -1009,7 +1011,7 @@ impl App {
                 "" => self.open_modes(),
                 m => match serde_json::from_value::<Mode>(json!(m)) {
                     Ok(m) => self.set_mode(m),
-                    Err(_) => self.toast("Modes: ask, auto-edit, plan, yolo", NoticeKind::Error),
+                    Err(_) => self.toast("Modes: ask, auto-edit, plan, yolo-plan, yolo", NoticeKind::Error),
                 },
             },
             "/new" | "/clear" | "/reset" => self.new_session(),
@@ -1112,6 +1114,7 @@ impl App {
             (Mode::Ask, "Ask", "ask before edits, commands and network"),
             (Mode::AutoEdit, "Auto-edit", "file edits go through; commands ask"),
             (Mode::Plan, "Plan", "read-only: explore and plan, no changes"),
+            (Mode::YoloPlan, "Yolo-plan", "plan without approving tool calls; still no edits"),
             (Mode::Yolo, "Yolo", "nothing asks — be careful"),
         ]
         .iter()

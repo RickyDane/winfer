@@ -184,7 +184,7 @@ Options:
   -c, --continue               Resume the latest session in this directory
   -p, --print                  Run the prompt without the UI and print the answer
       --json                   With --print: one JSON event per line
-      --mode <ask|auto-edit|plan|yolo>
+      --mode <ask|auto-edit|plan|yolo-plan|yolo>
       --yolo                   Same as --mode yolo
       --effort <level>         Reasoning effort
       --append-system-prompt <text>
@@ -367,6 +367,7 @@ fn event_json(ev: &Ev) -> serde_json::Value {
     match ev {
         Ev::Session(s) => json!({ "type": "session", "id": s }),
         Ev::Model(m) => json!({ "type": "model", "model": m }),
+        Ev::Mode(m) => json!({ "type": "mode", "mode": m }),
         Ev::TextDelta { id, text } => json!({ "type": "text_delta", "id": id, "text": text }),
         Ev::Text { id, text } => json!({ "type": "text", "id": id, "text": text }),
         Ev::ReasoningDelta { id, text } => json!({ "type": "reasoning_delta", "id": id, "text": text }),

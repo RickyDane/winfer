@@ -296,6 +296,7 @@ fn mode_color(mode: Mode) -> Option<ratatui::style::Color> {
         Mode::Ask => None,
         Mode::AutoEdit => Some(theme::GREEN()),
         Mode::Plan => Some(theme::BLUE()),
+        Mode::YoloPlan => Some(theme::VIOLET()),
         Mode::Yolo => Some(theme::RED()),
     }
 }

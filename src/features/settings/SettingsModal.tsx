@@ -846,7 +846,7 @@ function AiSettings() {
 interface HarnessSettings {
   model: string;
   effort: string | null;
-  mode: "ask" | "auto-edit" | "plan" | "yolo";
+  mode: "ask" | "auto-edit" | "plan" | "yolo-plan" | "yolo";
   trimAt: number;
   compactAt: number;
   allowedCommands: string[];
@@ -1003,6 +1003,7 @@ function HarnessSettings() {
             <option value="ask">Ask before edits and commands</option>
             <option value="auto-edit">Auto-edit (commands still ask)</option>
             <option value="plan">Plan (read-only)</option>
+            <option value="yolo-plan">Yolo-plan (read-only, never ask)</option>
             <option value="yolo">Yolo (never ask)</option>
           </Select>
         </Row>

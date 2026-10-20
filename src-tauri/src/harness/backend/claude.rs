@@ -35,9 +35,19 @@ fn permission_mode(mode: Mode) -> &'static str {
     match mode {
         Mode::Ask => "default",
         Mode::AutoEdit => "acceptEdits",
-        Mode::Plan => "plan",
+        Mode::Plan | Mode::YoloPlan => "plan",
         Mode::Yolo => "bypassPermissions",
     }
+}
+
+fn mode_of(mode: &str) -> Option<Mode> {
+    Some(match mode {
+        "default" => Mode::Ask,
+        "acceptEdits" => Mode::AutoEdit,
+        "plan" => Mode::Plan,
+        "bypassPermissions" => Mode::Yolo,
+        _ => return None,
+    })
 }
 
 /// Claude Code's tools in lean mode; `Skill` comes on top when it has skills to load.
@@ -45,7 +55,8 @@ fn permission_mode(mode: Mode) -> &'static str {
 /// AskUserQuestion's questions come to the TUI as an approval with `questions`.
 /// ToolSearch keeps MCP tools deferred (only their names up front, loaded when used): without it
 /// in the list, Claude Code sends every MCP tool's full definition with each request.
-const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ToolSearch";
+/// ExitPlanMode is how plan mode hands its plan over for approval; without it the agent can't leave plan mode.
+const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ToolSearch,ExitPlanMode";
 
 pub fn args(opts: &Opts) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -165,6 +176,8 @@ struct Bridge {
     /// Lines to write to Claude Code once the current one is handled.
     outbox: Vec<Value>,
     plan: Plan,
+    /// The permission mode as winfer sees it (Claude Code only knows "plan" for yolo-plan).
+    mode: Mode,
 }
 
 struct Checkpoint {
@@ -257,6 +270,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         undoing: None,
         outbox: Vec::new(),
         plan: Plan::default(),
+        mode: opts.mode,
     };
     while let Some(msg) = super::recv(&rx) {
         match msg {
@@ -327,7 +341,10 @@ impl Bridge {
                 }));
             }
             Cmd::SetModel(model) => self.control(proc, json!({ "subtype": "set_model", "model": model })),
-            Cmd::SetMode(mode) => self.control(proc, json!({ "subtype": "set_permission_mode", "mode": permission_mode(mode) })),
+            Cmd::SetMode(mode) => {
+                self.mode = mode;
+                self.control(proc, json!({ "subtype": "set_permission_mode", "mode": permission_mode(mode) }));
+            }
             // Live: Claude Code applies `effortLevel` from flag settings to the running session (as
             // its own /effort does); null goes back to the model's default.
             Cmd::SetEffort(e) => {
@@ -398,6 +415,15 @@ impl Bridge {
                     }
                 }
                 Some("compact_boundary") => self.emit(Ev::Notice("Context compacted.".into())),
+                // Claude Code changed its permission mode itself (an approved plan leaves plan mode).
+                Some("status") => {
+                    if let Some(m) = v["permissionMode"].as_str().and_then(mode_of) {
+                        if permission_mode(m) != permission_mode(self.mode) {
+                            self.mode = m;
+                            self.emit(Ev::Mode(m));
+                        }
+                    }
+                }
                 Some("task_started" | "task_progress" | "task_updated" | "task_notification") => {
                     if let Some(t) = task_event(v) {
                         self.emit(Ev::Task(t));
@@ -511,6 +537,17 @@ impl Bridge {
                 if req["subtype"] == "can_use_tool" {
                     let name = req["tool_name"].as_str().unwrap_or("tool");
                     let input = req["input"].clone();
+                    // Yolo-plan answers on its own: edits are refused, the rest runs. Handing
+                    // over the plan and questions still go to the user.
+                    if self.mode == Mode::YoloPlan && !matches!(name, "ExitPlanMode" | "AskUserQuestion") {
+                        let response = if EDIT_TOOLS.contains(&name) {
+                            json!({ "behavior": "deny", "message": "Plan mode is on: files can't be edited. Describe the change in the plan instead." })
+                        } else {
+                            json!({ "behavior": "allow", "updatedInput": input })
+                        };
+                        self.outbox.push(json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } }));
+                        return;
+                    }
                     let detail = req["description"]
                         .as_str()
                         .or_else(|| req["decision_reason"].as_str())
@@ -721,6 +758,7 @@ pub fn title(name: &str, input: &Value) -> String {
         "Task" | "Agent" => s("description"),
         "Skill" => format!("{} {}", s("skill"), s("args")).trim_end().to_string(),
         "TodoWrite" => "update todos".into(),
+        "ExitPlanMode" => "approve the plan and start working".into(),
         "AskUserQuestion" => input["questions"][0]["question"].as_str().unwrap_or("").to_string(),
         "TaskCreate" => s("subject"),
         "TaskUpdate" => {
@@ -784,6 +822,7 @@ mod tests {
             undoing: None,
             outbox: Vec::new(),
             plan: Plan::default(),
+            mode: Mode::Ask,
         };
         (b, rx)
     }
@@ -838,6 +877,33 @@ mod tests {
         let out = answered(input, vec!["nom".into(), "mac, linux".into()]);
         assert_eq!(out["answers"], json!({ "Which library?": "nom", "Which targets?": "mac, linux" }));
         assert!(out["questions"].is_array());
+    }
+
+    #[test]
+    fn follows_claude_codes_own_mode_changes() {
+        assert!(LEAN_TOOLS.split(',').any(|t| t == "ExitPlanMode"));
+        let (mut b, rx) = bridge();
+        b.mode = Mode::Plan;
+        b.on_line(&json!({ "type": "system", "subtype": "status", "status": null, "permissionMode": "default" }));
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Mode(Mode::Ask))));
+    }
+
+    #[test]
+    fn yolo_plan_answers_permission_requests_itself() {
+        let (mut b, rx) = bridge();
+        b.mode = Mode::YoloPlan;
+        let ask = |b: &mut Bridge, id: &str, tool: &str| {
+            b.on_line(&json!({ "type": "control_request", "request_id": id, "request": { "subtype": "can_use_tool", "tool_name": tool, "input": {} } }));
+            b.outbox.pop().map(|o| o["response"]["response"]["behavior"].as_str().unwrap().to_string())
+        };
+        assert_eq!(ask(&mut b, "r1", "mcp__winfer-browser__browser_navigate").as_deref(), Some("allow"));
+        assert_eq!(ask(&mut b, "r2", "Edit").as_deref(), Some("deny"));
+        assert_eq!(ask(&mut b, "r3", "ExitPlanMode"), None);
+        let approvals: Vec<String> = rx.try_iter().filter_map(|e| if let Ev::Approval(a) = e { Some(a.tool) } else { None }).collect();
+        assert_eq!(approvals, ["ExitPlanMode"]);
+        // Claude Code reports yolo-plan as plain "plan": not a mode change.
+        b.on_line(&json!({ "type": "system", "subtype": "status", "permissionMode": "plan" }));
+        assert_eq!(b.mode, Mode::YoloPlan);
     }
 
     #[test]

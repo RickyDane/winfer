@@ -688,17 +688,19 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
             "mcp" => format!("mcp:{}:{}", args["server"].as_str().unwrap_or(""), args["tool"].as_str().unwrap_or("")),
             _ => name.to_string(),
         };
-        let allowed = st.allowed.contains(&key);
+        // Plan mode refuses file edits even when they were always-allowed; commands and MCP tools
+        // (the browser, panes) ask as usual, or just run in yolo-plan.
+        let allowed = st.allowed.contains(&key) && !(st.mode.plans() && risk == Risk::Edit);
         (if allowed { Mode::Yolo } else { st.mode }, key)
     };
     let ask = match (risk, mode) {
         (Risk::Read, _) | (_, Mode::Yolo) => false,
-        (_, Mode::Plan) => {
-            let msg = "Plan mode is on: this is read-only. Describe the change instead of making it.".to_string();
+        (Risk::Edit, m) if m.plans() => {
+            let msg = "Plan mode is on: files can't be edited. Describe the change instead of making it.".to_string();
             card(Ev::ToolEnd { id, ok: false, output: msg.clone(), diff: None });
             return msg;
         }
-        (Risk::Edit, Mode::AutoEdit) => false,
+        (Risk::Edit, Mode::AutoEdit) | (_, Mode::YoloPlan) => false,
         _ => true,
     };
     if ask {
@@ -1254,6 +1256,38 @@ mod tests {
         assert!(!out.contains("declined"), "{out}");
         assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "new");
         assert!(shared.decisions.lock().unwrap().contains_key("a-other"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn plan_mode_refuses_edits_but_asks_for_commands() {
+        let (shared, rx, dir) = shared(Mode::Plan);
+        shared.state.lock().unwrap().allowed.insert("write".into());
+        let out = run_call(&shared, &call("w1", "write", json!({ "path": "b.txt", "content": "new" })), None);
+        assert!(out.contains("Plan mode") && !dir.join("b.txt").exists(), "{out}");
+        let answer = std::thread::spawn({
+            let shared = shared.clone();
+            move || loop {
+                if let Ok(Ev::Approval(a)) = rx.recv() {
+                    shared.decisions.lock().unwrap().insert(a.id, Decision::Allow);
+                    break;
+                }
+            }
+        });
+        let out = run_call(&shared, &call("b1", "bash", json!({ "command": "echo hi" })), None);
+        answer.join().unwrap();
+        assert!(out.contains("hi") && !out.contains("Plan mode"), "{out}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn yolo_plan_refuses_edits_and_runs_commands_without_asking() {
+        let (shared, rx, dir) = shared(Mode::YoloPlan);
+        let out = run_call(&shared, &call("w1", "write", json!({ "path": "b.txt", "content": "new" })), None);
+        assert!(out.contains("Plan mode") && !dir.join("b.txt").exists(), "{out}");
+        let out = run_call(&shared, &call("b1", "bash", json!({ "command": "echo hi" })), None);
+        assert!(out.contains("hi"), "{out}");
+        assert!(!rx.try_iter().any(|e| matches!(e, Ev::Approval(_))));
         let _ = std::fs::remove_dir_all(dir);
     }
 

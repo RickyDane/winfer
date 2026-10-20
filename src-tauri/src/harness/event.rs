@@ -13,6 +13,8 @@ pub enum Ev {
     Session(String),
     /// The model actually answering (bridges resolve aliases).
     Model(String),
+    /// The backend switched permission mode on its own (e.g. leaving plan mode once the plan is approved).
+    Mode(Mode),
     TextDelta { id: String, text: String },
     /// The full text of a message, when the backend sends it whole (replaces the deltas).
     Text { id: String, text: String },
@@ -166,6 +168,9 @@ pub enum Mode {
     Yolo,
     /// Read-only: plan without changing anything.
     Plan,
+    /// Plan without asking: still no file edits, but commands and tools run without approval.
+    /// Handing over the plan and questions still come to the user.
+    YoloPlan,
 }
 
 impl Mode {
@@ -173,7 +178,8 @@ impl Mode {
         match self {
             Mode::Ask => Mode::AutoEdit,
             Mode::AutoEdit => Mode::Plan,
-            Mode::Plan => Mode::Yolo,
+            Mode::Plan => Mode::YoloPlan,
+            Mode::YoloPlan => Mode::Yolo,
             Mode::Yolo => Mode::Ask,
         }
     }
@@ -183,7 +189,12 @@ impl Mode {
             Mode::AutoEdit => "auto-edit",
             Mode::Yolo => "yolo",
             Mode::Plan => "plan",
+            Mode::YoloPlan => "yolo-plan",
         }
+    }
+    /// Plan mode, asking or not.
+    pub fn plans(self) -> bool {
+        matches!(self, Mode::Plan | Mode::YoloPlan)
     }
 }
 
