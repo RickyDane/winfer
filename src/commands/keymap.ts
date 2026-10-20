@@ -65,6 +65,18 @@ const SPECS: BindingSpec[] = [
   { keys: "Mod+Ctrl+Down", title: "Make pane taller", group: "Layout", repeat: true, command: { type: "pane.resize", target: "focused", axis: "col", delta: RESIZE_STEP } },
   { keys: "Mod+Ctrl+Up", title: "Make pane shorter", group: "Layout", repeat: true, command: { type: "pane.resize", target: "focused", axis: "col", delta: -RESIZE_STEP } },
   { keys: "Mod+Shift+O", win: "Ctrl+Shift+Alt+O", title: "Overview of all workspaces", group: "Workspaces", command: { type: "ui.view", view: "toggle" } },
+  { keys: "Mod+Shift+Y", win: "Ctrl+Shift+Alt+Y", title: "Archived sessions", group: "Workspaces", command: { type: "ui.view", view: "archive" } },
+  {
+    keys: "Mod+Shift+A",
+    win: "Ctrl+Shift+Alt+A",
+    title: "Archive or restore pane",
+    group: "Panes",
+    command: () => {
+      const s = useWorkspaces.getState();
+      const pane = s.workspaces.flatMap((w) => w.panes).find((p) => p.id === s.focusedPaneId);
+      return pane ? { type: "pane.archive", target: "focused", restore: pane.archived } : null;
+    },
+  },
   { keys: "Mod+O", title: "Session progress", group: "Panes", command: { type: "ui.overlay", overlay: "progress" } },
   { keys: "Mod+Shift+H", win: "Ctrl+Shift+Alt+H", title: "History of merged features", group: "Panes", command: { type: "ui.overlay", overlay: "history" } },
   { keys: "Mod+Shift+E", win: "Ctrl+Shift+Alt+E", title: "Open in code editor", group: "Panes", command: { type: "editor.open", target: "focused" } },

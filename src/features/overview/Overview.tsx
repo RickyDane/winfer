@@ -2,7 +2,7 @@ import { execute } from "@/commands/bus";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
-import { useWorkspaces } from "@/stores/workspaces";
+import { livePanes, useWorkspaces } from "@/stores/workspaces";
 import { AgentBar } from "./AgentBar";
 
 /**
@@ -12,10 +12,10 @@ import { AgentBar } from "./AgentBar";
  */
 export function Overview() {
   const { workspaces, overview, focusedPaneId, updateOverview } = useWorkspaces();
-  const panes = new Map(workspaces.flatMap((w) => w.panes.map((p) => [p.id, p] as const)));
+  const panes = new Map(workspaces.flatMap((w) => livePanes(w).map((p) => [p.id, p] as const)));
   const names = new Map(workspaces.map((w) => [w.id, w.name]));
   const order = overview.layout ? leaves(overview.layout) : [];
-  const occupied = workspaces.filter((w) => w.panes.length > 0).length;
+  const occupied = workspaces.filter((w) => livePanes(w).length > 0).length;
 
   const renderLeaf = (id: string) => {
     const pane = panes.get(id);

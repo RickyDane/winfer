@@ -6,8 +6,8 @@ import type { Recipe } from "@/features/recipes/recipes";
 import { getHome } from "@/lib/home";
 import { DEFAULT_THEME, isThemeId, themeById } from "@/features/theme/themes";
 
-/** Main area: workspace tiles, the overview, or a plugin page (`page:<plugin>/<page>`). */
-export type View = "workspace" | "overview" | `page:${string}`;
+/** Main area: workspace tiles, the overview, the archive, or a plugin page (`page:<plugin>/<page>`). */
+export type View = "workspace" | "overview" | "archive" | `page:${string}`;
 
 export type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
@@ -51,6 +51,8 @@ export interface Pane {
   agentTitle: string | null;
   /** Name the user gave the session; replaces the agent's title wherever the pane is shown. */
   customTitle: string | null;
+  /** Moved to the archive: still running, but out of the workspace's tiles until restored. */
+  archived: boolean;
 }
 
 export interface Workspace {
@@ -157,6 +159,10 @@ interface WorkspaceState {
     opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
   ) => string;
   removePane: (id: string) => void;
+  /** Moves a pane out of its workspace's tiles into the archive; its process keeps running. */
+  archivePane: (id: string) => void;
+  /** Puts an archived pane back into its workspace's tiles. */
+  unarchivePane: (id: string) => void;
   updatePane: (id: string, patch: Partial<Pane>) => void;
   /** Names a session; an empty name goes back to the agent's own title. */
   renamePane: (id: string, name: string) => void;
@@ -263,8 +269,14 @@ const GRID = PRESETS.indexOf("grid");
 
 /** Every session, grouped by workspace, each workspace in its own tile order. */
 export function overviewOrder(workspaces: Workspace[]): string[] {
-  return workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : w.panes.map((p) => p.id)));
+  return workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : w.panes.filter((p) => !p.archived).map((p) => p.id)));
 }
+
+/** Every archived pane, grouped by workspace in sidebar order. */
+export const archivedPanes = (workspaces: Workspace[]): Pane[] => workspaces.flatMap((w) => w.panes.filter((p) => p.archived));
+
+/** The panes shown in a workspace's tiles (all but the archived ones). */
+export const livePanes = (w: Workspace): Pane[] => w.panes.filter((p) => !p.archived);
 
 export type Theme = string;
 
@@ -337,7 +349,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !!p.sessionId || !resumed.has(key);
         if (!p.sessionId) resumed.add(key);
-        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, archived: p.archived ?? false, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -412,8 +424,18 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
 
   moveWorkspace: (id, index) => set((s) => ({ workspaces: moveItem(s.workspaces, id, index) })),
 
+  // `index` counts the sidebar's list, which shows archived panes apart, after the others.
   movePaneInList: (id, index) =>
-    set((s) => ({ workspaces: s.workspaces.map((w) => (w.panes.some((p) => p.id === id) ? { ...w, panes: moveItem(w.panes, id, index) } : w)) })),
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => {
+        const pane = w.panes.find((p) => p.id === id);
+        if (!pane) return w;
+        const group = w.panes.filter((p) => p.archived === pane.archived);
+        const rest = w.panes.filter((p) => p.archived !== pane.archived);
+        const moved = moveItem(group, id, index);
+        return { ...w, panes: pane.archived ? [...rest, ...moved] : [...moved, ...rest] };
+      }),
+    })),
 
   focusPane: (id) => {
     // In a zoomed workspace the focused pane must be the visible one, so the zoom follows.
@@ -434,6 +456,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     const id = newId("p");
     set((s) => ({
       focusedPaneId: background ? s.focusedPaneId : id,
+      // A new pane opens in the tiles, so the archive makes way.
+      view: !background && s.view === "archive" ? "workspace" : s.view,
       workspaces: updateWorkspace(s.workspaces, workspaceId, (w) => ({
         ...w,
         panes: [
@@ -457,6 +481,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             plain: opts?.plain ?? false,
             prompt: opts?.prompt ?? null,
             model: opts?.model ?? get().agentModels[provider] ?? null,
+            archived: false,
           },
         ],
         layout: insertDwindle(w.layout, id, opts?.splitFrom ?? (background ? null : focusedPaneId)),
@@ -483,6 +508,38 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         s.focusedPaneId === id ? (active?.layout ? leaves(active.layout).at(-1)! : null) : s.focusedPaneId;
       return { workspaces, focusedPaneId };
     }),
+
+  archivePane: (id) =>
+    set((s) => {
+      const workspaces = s.workspaces.map((w) =>
+        w.panes.some((p) => p.id === id && !p.archived)
+          ? {
+              ...w,
+              panes: w.panes.map((p) => (p.id === id ? { ...p, archived: true } : p)),
+              layout: removeLeaf(w.layout, id),
+              zoomedPaneId: w.zoomedPaneId === id ? null : w.zoomedPaneId,
+            }
+          : w,
+      );
+      // In the archive the pane stays in view (and focused); elsewhere focus moves to a visible one.
+      if (s.view === "archive" || s.focusedPaneId !== id) return { workspaces };
+      const active = workspaces.find((w) => w.id === s.activeWorkspaceId);
+      return { workspaces, focusedPaneId: active?.layout ? leaves(active.layout).at(-1)! : null };
+    }),
+
+  unarchivePane: (id) =>
+    set((s) => ({
+      workspaces: s.workspaces.map((w) =>
+        w.panes.some((p) => p.id === id && p.archived)
+          ? {
+              ...w,
+              panes: w.panes.map((p) => (p.id === id ? { ...p, archived: false } : p)),
+              layout: insertDwindle(w.layout, id, w.id === s.activeWorkspaceId && s.view === "workspace" ? s.focusedPaneId : null),
+              zoomedPaneId: null,
+            }
+          : w,
+      ),
+    })),
 
   renamePane: (id, name) => get().updatePane(id, { customTitle: name.replace(/\s+/g, " ").trim().slice(0, 80) || null }),
 
@@ -558,7 +615,13 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setAndroidSerial: (serial) => set({ androidSerial: serial }),
   setTheme: (theme) => set({ theme: isThemeId(theme) ? theme : DEFAULT_THEME }),
   toggleTheme: () => set((s) => ({ theme: themeById(s.theme).pair })),
-  setView: (view) => set({ view }),
+  setView: (view) =>
+    set((s) => {
+      // Leaving the archive: focus a pane that's on screen again.
+      const focused = s.workspaces.flatMap((w) => w.panes).find((p) => p.id === s.focusedPaneId);
+      if (view === "archive" || !focused?.archived) return { view };
+      return { view, focusedPaneId: firstPane(s.workspaces.find((w) => w.id === s.activeWorkspaceId)) };
+    }),
   setTerminalFontSize: (size) =>
     set({ terminalFontSize: Math.round(Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, size)) * 2) / 2 }),
   setPinnedPages: (pinnedPages) => set({ pinnedPages: [...new Set(pinnedPages)] }),
@@ -599,7 +662,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { raceId?: string | null; plain?: boolean; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { archived?: boolean; raceId?: string | null; plain?: boolean; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -655,7 +718,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived })),
     })),
     ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
   };

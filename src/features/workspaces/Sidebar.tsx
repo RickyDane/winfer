@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import logoUrl from "@/assets/logo.svg";
-import { Activity, ChevronRight, GitBranch, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Activity, Archive, ChevronRight, GitBranch, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
 import { progressTitle, useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
@@ -12,7 +12,7 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { paneMenu, workspaceMenu } from "./sidebarMenus";
-import { paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
+import { livePanes, paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { useSortable } from "./useSortable";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { PaneTitleInput } from "@/features/terminal/PaneTitleInput";
@@ -22,7 +22,7 @@ import { themeById } from "@/features/theme/themes";
 import { UsageButton } from "@/features/usage/UsageMeter";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
-function PaneName({ pane, className }: { pane: Pane; className?: string }) {
+export function PaneName({ pane, className }: { pane: Pane; className?: string }) {
   const providers = useWorkspaces((s) => s.providers);
   const task = useProgress((s) => progressTitle(s.byPane[pane.id]));
   const label = paneLabel(pane, providers, task);
@@ -53,7 +53,7 @@ function PanePercent({ pane }: { pane: Pane }) {
 }
 
 /** Second line of an agent row: its branch and what it is doing right now. */
-function PaneDetail({ pane }: { pane: Pane }) {
+export function PaneDetail({ pane }: { pane: Pane }) {
   const step = useProgress((s) => s.byPane[pane.id]?.step);
   const branch = pane.worktree?.branch.replace(/^winfer\//, "");
   const doing = pane.status === "needs-input" ? "Needs your input" : step;
@@ -189,59 +189,79 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
   const movePaneInList = useWorkspaces((s) => s.movePaneInList);
   const { drag, begin, dropLine } = useSortable(movePaneInList);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const live = livePanes(ws);
+  const archived = ws.panes.filter((p) => p.archived);
+  // Archived rows sit in their own list, dimmed and not draggable.
+  const row = (pane: Pane, i: number, sortable: boolean) => {
+    const focused = pane.id === focusedPaneId;
+    const line = sortable ? dropLine(i, live.length) : null;
+    return (
+      // Not a <button>: the rename field sits inside the row, and WebKit won't focus inputs in buttons.
+      <div
+        key={pane.id}
+        role="button"
+        tabIndex={0}
+        data-sort-id={sortable ? pane.id : undefined}
+        onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          execute({ type: "pane.focus", target: { id: pane.id } });
+        }}
+        onPointerDown={sortable ? (e) => begin(e, pane.id) : undefined}
+        onDoubleClick={() => setRenaming(pane.id)}
+        onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane, () => setRenaming(pane.id)) })}
+        className={cn(
+          "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] cursor-pointer rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+          focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+          drag?.id === pane.id && "opacity-50",
+          pane.archived && !focused && "opacity-70",
+        )}
+      >
+        {line && <DropLine at={line} />}
+        {/* Marks the focused session on the guide line. */}
+        {focused && <span className="absolute top-1.5 bottom-1.5 -left-2 w-0.5 -translate-x-1/2 rounded-full bg-accent" />}
+        {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
+        {(pane.status === "done" || pane.status === "needs-input") && (
+          <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
+        )}
+        <span className="flex items-center gap-2">
+          <StatusDot status={pane.status} />
+          <ProviderIcon provider={pane.provider} size={12} />
+          {renaming === pane.id ? (
+            <PaneTitleInput pane={pane} onDone={() => setRenaming(null)} className="h-5 flex-1 text-[13px]" />
+          ) : (
+            <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
+          )}
+          <PanePercent pane={pane} />
+        </span>
+        <span className="block pl-[26px]">
+          <PaneDetail pane={pane} />
+          <PaneProgress pane={pane} />
+        </span>
+      </div>
+    );
+  };
   return (
     <div className="relative pr-1 pb-1.5 pl-[17px]">
       {/* Guide line tying the sessions to their workspace. */}
       <span className="absolute top-0 bottom-2.5 left-[17px] w-px bg-border" />
-      {ws.panes.map((pane, i) => {
-        const focused = pane.id === focusedPaneId;
-        const line = dropLine(i, ws.panes.length);
-        return (
-          // Not a <button>: the rename field sits inside the row, and WebKit won't focus inputs in buttons.
-          <div
-            key={pane.id}
-            role="button"
-            tabIndex={0}
-            data-sort-id={pane.id}
-            onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
-            onKeyDown={(e) => {
-              if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-              e.preventDefault();
-              execute({ type: "pane.focus", target: { id: pane.id } });
-            }}
-            onPointerDown={(e) => begin(e, pane.id)}
-            onDoubleClick={() => setRenaming(pane.id)}
-            onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane, () => setRenaming(pane.id)) })}
-            className={cn(
-              "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] cursor-pointer rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
-              focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
-              drag?.id === pane.id && "opacity-50",
-            )}
+      {live.map((pane, i) => row(pane, i, true))}
+      {archived.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            className="ml-2 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
+            title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
           >
-            {line && <DropLine at={line} />}
-            {/* Marks the focused session on the guide line. */}
-            {focused && <span className="absolute top-1.5 bottom-1.5 -left-2 w-0.5 -translate-x-1/2 rounded-full bg-accent" />}
-            {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
-            {(pane.status === "done" || pane.status === "needs-input") && (
-              <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
-            )}
-            <span className="flex items-center gap-2">
-              <StatusDot status={pane.status} />
-              <ProviderIcon provider={pane.provider} size={12} />
-              {renaming === pane.id ? (
-                <PaneTitleInput pane={pane} onDone={() => setRenaming(null)} className="h-5 flex-1 text-[13px]" />
-              ) : (
-                <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
-              )}
-              <PanePercent pane={pane} />
-            </span>
-            <span className="block pl-[26px]">
-              <PaneDetail pane={pane} />
-              <PaneProgress pane={pane} />
-            </span>
-          </div>
-        );
-      })}
+            <Archive size={12} />
+            <span className="flex-1">Archived · {archived.length}</span>
+            <ChevronRight size={12} className={cn("transition-transform duration-200", showArchived && "rotate-90")} />
+          </button>
+          {showArchived && archived.map((pane, i) => row(pane, i, false))}
+        </div>
+      )}
       {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "ui.overlay", overlay: "newPane" })} starts one</span>}
       <WorktreeList workspace={ws} />
     </div>
@@ -306,7 +326,7 @@ export function Sidebar() {
               >
                 <WorkspaceAvatar name={ws.name} active={active} />
                 <span className="flex-1 truncate">{ws.name}</span>
-                {!expanded && <WorkspaceDots panes={ws.panes} />}
+                {!expanded && <WorkspaceDots panes={livePanes(ws)} />}
                 <ChevronRight
                   size={13}
                   className={cn("shrink-0 text-fg-subtle transition-transform duration-200", expanded ? "rotate-90" : "opacity-0 group-hover:opacity-100")}

@@ -9,7 +9,7 @@
 import type { Command, PaneRef } from "@/commands/bus";
 import type { ModelInfo, Provider } from "@/features/providers/providers";
 import { leaves, PRESETS, type Preset } from "@/features/layout/tree";
-import { providerName, type SidePanelTab, type Workspace } from "@/stores/workspaces";
+import { archivedPanes, paneLabel, providerName, type SidePanelTab, type Workspace } from "@/stores/workspaces";
 import { allRecipes, describeRecipe } from "@/features/recipes/recipes";
 import { isThemeId, THEMES } from "@/features/theme/themes";
 import { pluginPages, pluginTools } from "@/features/plugins/plugins";
@@ -293,6 +293,33 @@ export const TOOLS: ToolDef[] = [
       { title: "Smaller terminal text", args: { change: "smaller" } },
       { title: "Default terminal text size", args: { change: "reset" } },
     ],
+  },
+  {
+    id: "archive_pane",
+    title: "Archive pane",
+    description: "Move a finished pane to the archive (it keeps running, out of the way), or restore an archived one",
+    risk: "safe",
+    params: {
+      target: { kind: "enum", ask: "Which pane should be archived or restored?", options: paneTargets },
+      restore: { kind: "bool", ask: "Does the user want to bring an archived pane back rather than archive one?" },
+    },
+    toCommands: (args, ctx) => perPane(args, ctx, (t) => ({ type: "pane.archive", target: t, restore: !!args.restore })),
+    palette: (ctx) => [
+      { title: "Archive pane", args: { target: "focused" } },
+      ...archivedPanes(ctx.workspaces).map((p) => {
+        const ws = ctx.workspaces.find((w) => w.id === p.workspaceId);
+        return { title: `Restore from archive: ${paneLabel(p, ctx.providers)}${ws ? ` (${ws.name})` : ""}`, args: { target: p.id, restore: true } };
+      }),
+    ],
+  },
+  {
+    id: "show_archive",
+    title: "Archived sessions",
+    description: "Switch to the archive tab listing archived panes, to look at or talk to them",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "ui.view", view: "archive" }],
+    palette: () => [{ title: "Archived sessions", args: {} }],
   },
   {
     id: "show_overview",

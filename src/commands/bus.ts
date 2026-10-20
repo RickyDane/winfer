@@ -25,7 +25,7 @@ import { readProgressAloud, setTask } from "@/features/progress/progress";
 import { openInEditor } from "@/features/editors/editors";
 import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
-import { DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, providerName, useWorkspaces, type SidePanelTab, type View, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
+import { archivedPanes, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, livePanes, providerName, useWorkspaces, type SidePanelTab, type View, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 import { runPluginCommand, setPluginDispatch } from "@/features/plugins/plugins";
 import type { Args } from "@/tools/registry";
@@ -48,6 +48,8 @@ export type Command =
   | { type: "pane.move"; paneId: string; targetId: string; side: DropSide }
   | { type: "pane.resize"; target: PaneRef; axis: SplitDir; delta: number }
   | { type: "pane.zoom"; target: PaneRef }
+  /** Moves a pane to the archive (it keeps running), or with `restore` back into its workspace's tiles. */
+  | { type: "pane.archive"; target: PaneRef; restore?: boolean }
   /** Stops every running agent in the active workspace; panes stay open. */
   | { type: "pane.interruptAll" }
   /** Closes every pane in the active workspace. */
@@ -140,10 +142,11 @@ function typeInto(paneId: string, text: string, submit: boolean) {
 
 const paneById = (id: string | null) => (id ? store().workspaces.flatMap((w) => w.panes).find((p) => p.id === id) : undefined);
 
-/** "focused" and positions refer to the active workspace; ids work in any workspace (the overview). */
+/** "focused" and positions refer to what's on screen (the active workspace, the overview or the archive); ids work in any workspace. */
 export function resolvePane(target: PaneRef): string | null {
-  const layout = store().view === "overview" ? store().overview.layout : active().layout;
-  const ids = layout ? leaves(layout) : [];
+  const { view, overview, workspaces } = store();
+  const layout = view === "overview" ? overview.layout : active().layout;
+  const ids = view === "archive" ? archivedPanes(workspaces).map((p) => p.id) : layout ? leaves(layout) : [];
   if (target === "focused") return store().focusedPaneId && ids.includes(store().focusedPaneId!) ? store().focusedPaneId : null;
   if ("id" in target) return store().workspaces.some((w) => w.panes.some((p) => p.id === target.id)) ? target.id : null;
   return ids[target.index - 1] ?? null;
@@ -206,18 +209,21 @@ export function execute(cmd: Command): void {
     }
     case "pane.interruptAll": {
       const ws = active();
-      for (const pane of ws.panes) sendText(pane.id, pane.provider === "shell" ? "\x03" : "\x1b");
-      logActivity(ws.id, `Stopped all ${ws.panes.length} sessions`);
+      const panes = livePanes(ws);
+      for (const pane of panes) sendText(pane.id, pane.provider === "shell" ? "\x03" : "\x1b");
+      logActivity(ws.id, `Stopped all ${panes.length} sessions`);
       return;
     }
     case "pane.closeAll": {
+      // Archived panes are kept: they were put aside on purpose.
       const ws = active();
-      if (ws.panes.length === 0) return;
-      for (const pane of [...ws.panes]) {
+      const panes = livePanes(ws);
+      if (panes.length === 0) return;
+      for (const pane of panes) {
         closeTerminal(pane.id);
         s.removePane(pane.id);
       }
-      logActivity(ws.id, `Closed all ${ws.panes.length} panes`);
+      logActivity(ws.id, `Closed all ${panes.length} panes`);
       return;
     }
     case "pane.interrupt": {
@@ -231,7 +237,7 @@ export function execute(cmd: Command): void {
       return;
     }
     case "pane.broadcast": {
-      const targets = cmd.paneIds ?? active().panes.filter((p) => p.provider !== "shell").map((p) => p.id);
+      const targets = cmd.paneIds ?? livePanes(active()).filter((p) => p.provider !== "shell").map((p) => p.id);
       targets.forEach((id) => typeInto(id, cmd.text, cmd.submit !== false));
       return;
     }
@@ -285,7 +291,23 @@ export function execute(cmd: Command): void {
       if (!pane) return;
       // The pane's workspace becomes active, so new panes and "focused" commands go there.
       if (pane.workspaceId !== s.activeWorkspaceId) s.setActiveWorkspace(pane.workspaceId);
+      // An archived pane is shown in the archive; any other one where it's tiled.
+      if (pane.archived) s.setView("archive");
+      else if (s.view === "archive") s.setView("workspace");
       store().focusPane(pane.id);
+      return;
+    }
+    case "pane.archive": {
+      const pane = paneById(resolvePane(cmd.target));
+      if (!pane || pane.archived === !cmd.restore) return;
+      const name = providerName(s.providers, pane.provider);
+      if (cmd.restore) {
+        s.unarchivePane(pane.id);
+        logActivity(pane.workspaceId, `Restored ${name} from the archive`, pane.provider);
+        return execute({ type: "pane.focus", target: { id: pane.id } });
+      }
+      s.archivePane(pane.id);
+      logActivity(pane.workspaceId, `Archived ${name}`, pane.provider);
       return;
     }
     case "pane.focusDir": {
@@ -312,7 +334,8 @@ export function execute(cmd: Command): void {
     }
     case "pane.zoom": {
       const id = resolvePane(cmd.target);
-      if (!id) return;
+      // Archived panes aren't tiled; the archive shows one at a time anyway.
+      if (!id || paneById(id)?.archived) return;
       s.focusPane(id);
       updateLayout((w) => ({ zoomedPaneId: w.zoomedPaneId === id ? null : id }));
       return;

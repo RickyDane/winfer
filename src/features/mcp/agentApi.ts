@@ -26,8 +26,10 @@ interface Call {
 
 class ToolError extends Error {}
 
+/** Tiled panes in layout order, then archived ones (still running, so still reachable). */
 function order(ws: Workspace): Pane[] {
-  return ws.layout ? leaves(ws.layout).map((id) => ws.panes.find((p) => p.id === id)!) : [];
+  const tiled = ws.layout ? leaves(ws.layout).map((id) => ws.panes.find((p) => p.id === id)!) : [];
+  return [...tiled, ...ws.panes.filter((p) => p.archived)];
 }
 
 function resolve(ws: Workspace, ref: unknown): Pane {
@@ -54,6 +56,7 @@ export async function runTool(call: Call): Promise<string> {
       const rows = order(ws).map((p, i) => {
         const parts = [`${i + 1}. ${providerName(s.providers, p.provider)}`, p.status];
         if (p.worktree) parts.push(`branch ${p.worktree.branch}`);
+        if (p.archived) parts.push("archived");
         if (p.id === self.id) parts.push("(you)");
         return parts.join(" · ");
       });

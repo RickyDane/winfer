@@ -37,7 +37,12 @@ export function PaneMenu({ pane, onRename }: { pane: Pane; onRename: () => void 
         execute({ type: "ui.overlay", overlay: "model" });
       },
     },
-    { label: "Zoom", run: () => execute({ type: "pane.zoom", target } satisfies Command) },
+    ...(pane.archived
+      ? [{ label: "Restore from archive", run: () => execute({ type: "pane.archive", target, restore: true }) }]
+      : [
+          { label: "Zoom", run: () => execute({ type: "pane.zoom", target } satisfies Command) },
+          { label: "Archive", run: () => execute({ type: "pane.archive", target }) },
+        ]),
     { label: "Close", run: () => execute({ type: "pane.close", target }) },
   ];
 

@@ -74,14 +74,19 @@ export function paneMenu(pane: Pane, rename: () => void): MenuItem[] {
   const wt = pane.worktree;
   return [
     { label: "Focus", run: () => execute({ type: "pane.focus", target }) },
-    { label: "Zoom", hint: keysFor({ type: "pane.zoom", target: "focused" }), run: () => execute({ type: "pane.zoom", target }) },
-    {
-      label: "Show in overview",
-      run: () => {
-        execute({ type: "pane.focus", target });
-        execute({ type: "ui.view", view: "overview" });
-      },
-    },
+    ...(pane.archived
+      ? [{ label: "Restore from archive", run: () => execute({ type: "pane.archive", target, restore: true }) }]
+      : [
+          { label: "Zoom", hint: keysFor({ type: "pane.zoom", target: "focused" }), run: () => execute({ type: "pane.zoom", target }) },
+          {
+            label: "Show in overview",
+            run: () => {
+              execute({ type: "pane.focus", target });
+              execute({ type: "ui.view", view: "overview" });
+            },
+          },
+          { label: "Archive", run: () => execute({ type: "pane.archive", target }) },
+        ]),
     { label: "Rename…", run: rename },
     ...(pane.customTitle ? [{ label: "Reset name", run: () => useWorkspaces.getState().renamePane(pane.id, "") }] : []),
     "separator",

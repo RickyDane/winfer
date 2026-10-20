@@ -42,6 +42,9 @@ pub struct PaneRecord {
     /// A/B test baseline started without winfer's tools; restarts the same way.
     #[serde(default)]
     pub plain: bool,
+    /// Moved to the archive: kept running, out of the workspace's tiles.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -127,6 +130,9 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE panes ADD COLUMN session_id TEXT;
     ALTER TABLE panes ADD COLUMN plain INTEGER NOT NULL DEFAULT 0;
 "#,
+    r#"
+    ALTER TABLE panes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 /// A merged feature in the history (from the review inbox, the pane menu, voice or a race).
@@ -205,7 +211,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut panes = conn.prepare(
-            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title, custom_title, session_id, plain FROM panes WHERE workspace_id = ?1 ORDER BY sort",
+            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title, custom_title, session_id, plain, archived FROM panes WHERE workspace_id = ?1 ORDER BY sort",
         )?;
         for ws in &mut workspaces {
             ws.panes = panes
@@ -222,6 +228,7 @@ impl Store {
                         custom_title: r.get(8)?,
                         session_id: r.get(9)?,
                         plain: r.get(10)?,
+                        archived: r.get(11)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -260,8 +267,8 @@ impl Store {
             )?;
             for (j, pane) in ws.panes.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title, custom_title, session_id, plain)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title, custom_title, session_id, plain, archived)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                     params![
                         pane.id,
                         ws.id,
@@ -276,6 +283,7 @@ impl Store {
                         pane.custom_title,
                         pane.session_id,
                         pane.plain,
+                        pane.archived,
                     ],
                 )?;
             }
@@ -448,7 +456,7 @@ mod tests {
             "workspaces": [{ "id": "ws-1", "name": "api", "rootDir": "~", "layout": null, "zoomedPaneId": null,
                 "presetIndex": 0, "useWorktrees": true,
                 "panes": [{ "id": "p-1", "provider": "claude", "title": "api", "cwd": "~", "worktree": null,
-                            "agentTitle": "Fix the login redirect", "customTitle": "Login bug" }] }],
+                            "agentTitle": "Fix the login redirect", "customTitle": "Login bug", "archived": true }] }],
             "ui": null
         }))
         .unwrap();
@@ -456,6 +464,7 @@ mod tests {
         let pane = &store.load().unwrap().workspaces[0].panes[0];
         assert_eq!(pane.agent_title.as_deref(), Some("Fix the login redirect"));
         assert_eq!(pane.custom_title.as_deref(), Some("Login bug"));
+        assert!(pane.archived);
     }
 
     #[test]

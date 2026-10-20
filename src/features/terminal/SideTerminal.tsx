@@ -40,6 +40,7 @@ const shellPane = (workspace: Workspace): Pane => ({
   model: null,
   agentTitle: null,
   customTitle: null,
+  archived: false,
 });
 
 /**

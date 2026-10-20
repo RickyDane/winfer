@@ -1,4 +1,4 @@
-import { ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useState } from "react";
 import { execute } from "@/commands/bus";
@@ -70,10 +70,11 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
         beingDragged && "opacity-40",
       )}
     >
+      {/* Archived panes aren't tiled, so there's nowhere to drag them. */}
       <header
-        onPointerDown={(e) => beginDrag(e, pane.id)}
-        title="Drag to move this pane"
-        className="@container relative flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border px-3 active:cursor-grabbing"
+        onPointerDown={pane.archived ? undefined : (e) => beginDrag(e, pane.id)}
+        title={pane.archived ? undefined : "Drag to move this pane"}
+        className={cn("@container relative flex h-8 shrink-0 items-center gap-2 border-b border-border px-3", !pane.archived && "cursor-grab active:cursor-grabbing")}
       >
         {showProgress && (
           <span title={progressLabel(progress)} className="absolute inset-x-0 -bottom-px">
@@ -142,18 +143,35 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
           </button>
         )}
         <PaneMenu pane={pane} onRename={() => setRenaming(true)} />
-        <HeaderButton title={`${zoomed ? "Restore" : "Zoom"} (${keysFor({ type: "pane.zoom", target: "focused" })})`} onClick={() => execute({ type: "pane.zoom", target })}>
-          {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-        </HeaderButton>
-        <HeaderButton
-          title={`Split right (${keysFor({ type: "pane.split", dir: "row" })})`}
-          onClick={() => {
-            onFocus();
-            execute({ type: "pane.split", dir: "row" });
-          }}
-        >
-          <Plus size={14} />
-        </HeaderButton>
+        {pane.archived ? (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => execute({ type: "pane.archive", target, restore: true })}
+            title={`Put back into ${workspaceName ?? "its workspace"}`}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-fg-muted hover:bg-hover hover:text-fg"
+          >
+            <ArchiveRestore size={12} />
+            Restore
+          </button>
+        ) : (
+          <>
+            <HeaderButton title="Archive: keep it running, out of the way" onClick={() => execute({ type: "pane.archive", target })}>
+              <Archive size={13} />
+            </HeaderButton>
+            <HeaderButton title={`${zoomed ? "Restore" : "Zoom"} (${keysFor({ type: "pane.zoom", target: "focused" })})`} onClick={() => execute({ type: "pane.zoom", target })}>
+              {zoomed ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            </HeaderButton>
+            <HeaderButton
+              title={`Split right (${keysFor({ type: "pane.split", dir: "row" })})`}
+              onClick={() => {
+                onFocus();
+                execute({ type: "pane.split", dir: "row" });
+              }}
+            >
+              <Plus size={14} />
+            </HeaderButton>
+          </>
+        )}
         <HeaderButton title={`Close (${keysFor({ type: "pane.close", target: "focused" })})`} onClick={() => execute({ type: "pane.close", target })}>
           <X size={14} />
         </HeaderButton>

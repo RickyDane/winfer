@@ -3,11 +3,12 @@ import { NewPaneDialog } from "@/features/worktree/NewPaneDialog";
 import { HistoryView } from "@/features/history/HistoryView";
 import { AgentBar } from "@/features/overview/AgentBar";
 import { Overview } from "@/features/overview/Overview";
+import { ArchiveView } from "@/features/archive/ArchiveView";
 import { SessionsOverview } from "@/features/progress/SessionsOverview";
 import { startProgressTracking } from "@/features/progress/progress";
 import { ReviewInbox } from "@/features/review/ReviewInbox";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
+import { Archive, Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
@@ -46,7 +47,7 @@ import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar } from "@/features/workspaces/Sidebar";
-import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { livePanes, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
 import { applyTheme, themeById } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
 import { PluginPageView, usePluginPages } from "@/features/plugins/PluginPage";
@@ -79,11 +80,14 @@ function TitleBar() {
   );
 }
 
-/** Title bar tabs: the active workspace's tiles, the overview of every workspace's sessions, and plugin pages. */
+/** Title bar tabs: the active workspace's tiles, the overview of every workspace's sessions, the archive, and plugin pages. */
 function ViewTabs({ workspace }: { workspace: string }) {
   const view = useWorkspaces((s) => s.view);
-  const sessions = useWorkspaces((s) => s.workspaces).flatMap((w) => w.panes);
+  const all = useWorkspaces((s) => s.workspaces).flatMap((w) => w.panes);
+  const sessions = all.filter((p) => !p.archived);
+  const archived = all.filter((p) => p.archived);
   const waiting = sessions.filter((p) => p.status === "needs-input").length;
+  const archivedWaiting = archived.filter((p) => p.status === "needs-input").length;
   const tab = (active: boolean) =>
     cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
@@ -104,6 +108,20 @@ function ViewTabs({ workspace }: { workspace: string }) {
         <span className="font-mono text-[10px] text-fg-subtle">{sessions.length}</span>
         {waiting > 0 && <span className="anim-ring size-1.5 rounded-full bg-warning text-warning" title={`${waiting} waiting for you`} />}
       </button>
+      {(archived.length > 0 || view === "archive") && (
+        <button
+          role="tab"
+          aria-selected={view === "archive"}
+          onClick={() => execute({ type: "ui.view", view: "archive" })}
+          className={tab(view === "archive")}
+          title={`Archived sessions: still running, out of the way (${keysFor({ type: "ui.view", view: "archive" })})`}
+        >
+          <Archive size={12} />
+          Archive
+          <span className="font-mono text-[10px] text-fg-subtle">{archived.length}</span>
+          {archivedWaiting > 0 && <span className="anim-ring size-1.5 rounded-full bg-warning text-warning" title={`${archivedWaiting} waiting for you`} />}
+        </button>
+      )}
       <PageTabs tab={tab} />
     </div>
   );
@@ -197,15 +215,17 @@ export function AppShell() {
       <main className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {sidebarOpen && <Sidebar />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {view === "workspace" && workspace.panes.some((p) => p.provider !== "shell") && (
-            <AgentBar panes={workspace.panes} scope={{ workspace: workspace.name }} />
+          {view === "workspace" && livePanes(workspace).some((p) => p.provider !== "shell") && (
+            <AgentBar panes={livePanes(workspace)} scope={{ workspace: workspace.name }} />
           )}
           {/* Keyed so switching workspace or view fades the new content in. */}
-          <div key={page ? view : `${view}:${view === "overview" ? "" : workspace.id}`} className="anim-fade flex min-h-0 min-w-0 flex-1">
+          <div key={page ? view : `${view}:${view === "overview" || view === "archive" ? "" : workspace.id}`} className="anim-fade flex min-h-0 min-w-0 flex-1">
             {page ? (
               <PluginPageView page={page} />
             ) : view === "overview" ? (
               <Overview />
+            ) : view === "archive" ? (
+              <ArchiveView />
             ) : workspace.layout && zoomed ? (
               renderLeaf(zoomed)
             ) : workspace.layout ? (
