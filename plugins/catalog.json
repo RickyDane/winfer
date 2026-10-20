@@ -31,7 +31,7 @@
     {
       "id": "db-explorer",
       "name": "Databases",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "description": "Your Postgres, MySQL, SQLite and SQL Server databases in one place, read-only: browse tables, run queries with a history, and see the schema as a class diagram with keys, relations and their cardinality (join tables and relations without a foreign key found for you, Mermaid, PlantUML and SVG export). Paste a URL or a SQL Server connection string. Agents query and describe them by name without ever seeing the credentials.",
       "author": "winfer",
       "tags": [
@@ -52,11 +52,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "e619b098a198e1dad425a23caf341433194c9b96d4f5023691c5b52fba94b0f6"
+          "sha256": "b35cf8c13314baea79944d0aed50f9f4a1037cb22eeb12b4c8be144a410fc83a"
         },
         {
           "path": "plugin.json",
-          "sha256": "ccdbe8a97bd4e477b57706b92397dd4d159c0c6163757bb346f7cf554fb15875"
+          "sha256": "192fc147ef8f897488d5ac9814e6fcd689ba78621f09a4b86dd56819072c6798"
         }
       ]
     },
@@ -162,7 +162,7 @@
     {
       "id": "prompt-library",
       "name": "Prompt Library",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "Save the prompts you keep retyping, with {{placeholders}} you fill in when you use them. Send one to an agent from the palette or by voice, broadcast it to every agent, or start a new agent with it.",
       "author": "winfer",
       "tags": [
@@ -176,11 +176,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "ad9ed1535232dfeb26b506830d81c1240d292be8c13564acd41cb623e620b856"
+          "sha256": "777097ec50174e5e07879b7da4dbf26b548f38a255ae8b301c4d651a653e4eca"
         },
         {
           "path": "plugin.json",
-          "sha256": "7b2f90cf33c00852cbfde93243a3db392e37fac2fab871611b528623fe94a325"
+          "sha256": "ed359a79bc8759cd63bcdf8e26139c998822a0550396a6879d36e5c146c4d366"
         }
       ]
     },
@@ -202,7 +202,7 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "8b3b5f182677ec0e426f9429f17aca02ccc074aba99ca11f78cbf755cfc6e7b1"
+          "sha256": "bf0d7dc04ff98d14932a886529137b9a2c73925f96eefd64046d0763a9c9301e"
         },
         {
           "path": "plugin.json",
@@ -213,7 +213,7 @@
     {
       "id": "secrets",
       "name": "Secrets",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "description": "Keep API keys, environment variables and logins in your keychain. Agents use them by name without ever seeing the values.",
       "author": "winfer",
       "tags": [
@@ -225,11 +225,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "1f7636049f4ac7f83b314f10bf2b93fd4b8c67d4a3dc9d04af6a3e0572cc7b52"
+          "sha256": "c1da67263f7c7b5514306a4f5ceb7d82fd4906efeb0155b9e75effd6d7ea2f02"
         },
         {
           "path": "plugin.json",
-          "sha256": "c15c34ff49cae892e5c9965221828caff692ac668f35b7c42a7f9de0f9d4a62d"
+          "sha256": "2c719ea8752ec817add1606e133a91cb153e148628f3085cf0abdbc110c942ee"
         }
       ]
     },

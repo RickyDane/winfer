@@ -1853,7 +1853,7 @@ export function activate(api) {
       const problem = checkReadOnly(sql, conn.meta.kind);
       if (problem) throw new Error(problem);
       if (needsApproval(conn)) {
-        const ok = await api.confirm(`${caller.label} in “${caller.workspaceName}” wants to query ${label(conn)} (read-only):\n\n${sql}`, { title: "Allow database query?", okLabel: "Run query", kind: "info" });
+        const ok = await api.confirm(`${caller.label} in “${caller.workspaceName}” wants to query ${label(conn)} (read-only):\n\n${sql}`, { title: "Allow database query?", okLabel: "Run query", kind: "info", caller });
         if (!ok) {
           store.record({ conn: conn.key, db, sql, by: caller.label, error: "Declined by you", ms: 0 });
           throw new Error("The user declined this query.");

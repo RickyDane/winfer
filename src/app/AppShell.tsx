@@ -33,6 +33,7 @@ import { startWakes } from "@/features/usage/agentUsage";
 import { startUpdateChecks } from "@/features/updates/updater";
 import { startProviderUpdateChecks } from "@/features/providers/updates";
 import { WhatsNew } from "@/features/updates/WhatsNew";
+import { ApprovalDialog } from "@/features/plugins/ApprovalDialog";
 import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
 import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -230,6 +231,7 @@ export function AppShell() {
       <DiffView />
       <SettingsModal />
       <WhatsNew />
+      <ApprovalDialog />
       <RaceView />
       <RaceResults />
       <ReviewInbox />

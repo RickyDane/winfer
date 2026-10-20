@@ -452,7 +452,7 @@ export function activate(api) {
       const title = String(args.title ?? "").trim();
       const body = String(args.body ?? "");
       if (!title || !body.trim()) throw new Error("A prompt needs a title and a body.");
-      const ok = await api.confirm(`${caller.label} wants to save a prompt to your library:\n\n${title}\n\n${body}`, { title: "Save prompt?", okLabel: "Save", kind: "info" });
+      const ok = await api.confirm(`${caller.label} wants to save a prompt to your library:\n\n${title}\n\n${body}`, { title: "Save prompt?", okLabel: "Save", kind: "info", caller });
       if (!ok) throw new Error("The user declined saving this prompt.");
       const p = store.add({ title, body, tags: Array.isArray(args.tags) ? parseTags(args.tags.join(",")) : [] });
       return `Saved “${p.title}” [${p.id}].`;

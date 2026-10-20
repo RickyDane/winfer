@@ -56,6 +56,7 @@ export function activate(api) {
     const ok = await api.confirm(`${caller.label} in “${caller.workspaceName}” wants to ${action}\n\nusing ${asking.map((s) => s.key).join(", ")}.`, {
       title: "Allow use of secrets?",
       okLabel: "Allow",
+      caller,
     });
     if (!ok) throw new Error("The user declined using these secrets.");
   }

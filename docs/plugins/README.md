@@ -117,7 +117,7 @@ export function deactivate() {}  // optional
 | `paneRequest(paneId)` | What an agent in `needs-input` asks: `{ kind: "approval" \| "question", text }`, or null. |
 | `usage(provider?)` | Plan usage limits, read live first: `[{ provider, at, windows: [{ kind, label, usedPercent, resetsAt }] }]` for `"claude"` and `"codex"` (or just `provider`); plans without numbers are left out. |
 | `toast(text, kind?)` | `info`, `success` or `error`. |
-| `confirm(message, { title?, okLabel?, kind? })` | Asks the user; resolves to true if they agreed. |
+| `confirm(message, { title?, okLabel?, kind?, caller? })` | Asks the user in an in-app dialog; resolves to true if they agreed. Pass an agent tool's `caller` (found by itself inside a lone `run`) and the question also shows as that pane's approval on paired phones. |
 | `registerPage({ id, title, icon?, mount(el) })` | A tab in the title bar next to Overview. `mount` renders into `el` and may return a cleanup. Icons: bot, camera, database, file, gauge, globe, key, lock, network, puzzle, shield, star, terminal, video. |
 | `openPage(id)` | Shows one of the plugin's pages. |
 | `registerPanelAction({ id, panel, title, icon?, label?, active?, run() })` | A button on a side panel's toolbar: `panel` is `"browser"` (the address bar) or `"android"` (the mirror's device bar). `title` is the tooltip, `label` short text beside the icon, `active` draws it highlighted. Icons as for pages, plus camera, record and stop. |

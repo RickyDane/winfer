@@ -13,7 +13,6 @@
  * copied into the plugins folder by hand (those start off until the user turns them on).
  */
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
 import type { Command } from "@/commands/bus";
@@ -25,6 +24,7 @@ import { providerName, useWorkspaces, type AgentStatus, type Pane, type Workspac
 import { leaves } from "@/features/layout/tree";
 import { describeRequest, type AgentRequest } from "@/features/status/request";
 import { lastReply } from "@/features/status/replies";
+import { requestApproval } from "./approvals";
 
 /** Mirrors `Manifest` in src-tauri/src/plugins.rs. */
 export interface PluginManifest {
@@ -188,8 +188,11 @@ export interface PluginApi {
   /** Shows one of this plugin's pages. */
   openPage(id: string): void;
   vault: PluginVault;
-  /** Asks the user; true if they agreed. */
-  confirm(message: string, opts?: { title?: string; okLabel?: string; kind?: "info" | "warning" }): Promise<boolean>;
+  /**
+   * Asks the user; true if they agreed. Pass an agent tool's `caller` to show the question as that
+   * pane's approval on the paired phones too (inside an agent tool's `run` it's found by itself).
+   */
+  confirm(message: string, opts?: { title?: string; okLabel?: string; kind?: "info" | "warning"; caller?: AgentCaller }): Promise<boolean>;
   /** Handles `{ type: "plugin.run", plugin: <this id>, command: name, args }`. */
   registerCommand(name: string, handler: (args: Args) => void | Promise<void>): Disposer;
   /** Runs any Command Bus command. */
@@ -404,11 +407,22 @@ export function pluginAgentToolList(): { name: string; description: string; inpu
   }));
 }
 
+/** Callers of each plugin's running agent tools, so `confirm` can tell which pane is asking. */
+const inflight = new Map<string, AgentCaller[]>();
+
 /** Runs an agent's call of a plugin tool; null if no plugin offers `name`. */
 export async function runPluginAgentTool(name: string, args: Record<string, unknown>, caller: AgentCaller): Promise<string | null> {
   const found = agentTools().find((t) => t.spec.name === name);
   if (!found) return null;
-  return String(await found.spec.run(args, caller));
+  const calls = inflight.get(found.pluginId) ?? [];
+  inflight.set(found.pluginId, [...calls, caller]);
+  try {
+    return String(await found.spec.run(args, caller));
+  } finally {
+    const rest = (inflight.get(found.pluginId) ?? []).filter((c) => c !== caller);
+    if (rest.length) inflight.set(found.pluginId, rest);
+    else inflight.delete(found.pluginId);
+  }
 }
 
 /** Describes the pane `paneId` for plugin agent tools; null if it's gone. */
@@ -524,7 +538,19 @@ function makeApi(id: string, dir: string, runtime: Runtime): PluginApi {
     },
     openPage: (page) => dispatch({ type: "ui.view", view: `page:${id}/${page}` }),
     vault: makeVault(id),
-    confirm: (message, opts = {}) => ask(message, { title: opts.title ?? manifestName(id), okLabel: opts.okLabel, kind: opts.kind ?? "warning" }),
+    confirm: (message, opts = {}) => {
+      // Without an explicit caller, an agent tool running alone for this plugin is the asker.
+      const calls = inflight.get(id) ?? [];
+      const caller = opts.caller ?? (calls.length === 1 ? calls[0] : undefined);
+      return requestApproval({
+        pluginId: id,
+        paneId: caller?.paneId ?? null,
+        title: opts.title ?? manifestName(id),
+        message: String(message),
+        okLabel: opts.okLabel ?? "OK",
+        kind: opts.kind ?? "warning",
+      });
+    },
     registerCommand(name, handler) {
       runtime.commands.set(name, handler);
       return track(() => runtime.commands.delete(name));

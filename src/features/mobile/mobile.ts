@@ -12,6 +12,7 @@ import { logActivity } from "@/stores/activity";
 import { describeRequest, type AgentRequest } from "@/features/status/request";
 import { lastReply } from "@/features/status/replies";
 import { useUsage } from "@/features/usage/usage";
+import { answerApproval, approvalFor, useApprovals } from "@/features/plugins/approvals";
 
 /** A pane as the phone sees it. */
 export interface MobilePane {
@@ -41,6 +42,8 @@ const messages = new Map<string, string | null>();
 const changedAt = new Map<string, number>();
 /** Needs-input panes' requests, read from the screen once the prompt is drawn. */
 const requests = new Map<string, AgentRequest>();
+/** When each pending plugin approval was asked. */
+const approvalAt = new Map<number, number>();
 
 /** Called by reportStatus with the message that comes with a status change. */
 export function noteStatusMessage(paneId: string, message: string | undefined) {
@@ -51,7 +54,7 @@ const allPanes = () => useWorkspaces.getState().workspaces.flatMap((w) => w.pane
 
 export function snapshot(pane: WorkspacePane): MobilePane {
   const s = useWorkspaces.getState();
-  return {
+  const base: MobilePane = {
     id: pane.id,
     title: paneLabel(pane, s.providers),
     workspace: s.workspaces.find((w) => w.id === pane.workspaceId)?.name ?? "",
@@ -61,6 +64,17 @@ export function snapshot(pane: WorkspacePane): MobilePane {
     updatedAt: changedAt.get(pane.id) ?? Date.now(),
     request: pane.status === "needs-input" ? (requests.get(pane.id) ?? null) : null,
     reply: pane.status === "done" ? lastReply(pane.id) : null,
+  };
+  // A plugin asking for approval on this agent's behalf (its tool call waits on the answer).
+  const approval = approvalFor(pane.id);
+  if (!approval) return base;
+  return {
+    ...base,
+    status: "needs-input",
+    message: approval.title,
+    updatedAt: approvalAt.get(approval.id) ?? Date.now(),
+    request: { kind: "approval", text: `${approval.title}\n\n${approval.message}` },
+    reply: null,
   };
 }
 
@@ -120,6 +134,17 @@ async function onRequest(device: string, req: Request) {
       return reply({ t: "ack", ok: true });
     }
     case "approve":
+    case "decline":
+    case "interrupt": {
+      const approval = approvalFor(pane.id);
+      if (!approval) break;
+      answerApproval(approval.id, req.t === "approve");
+      logActivity(pane.workspaceId, `${req.t === "approve" ? "Approved" : "Declined"} “${approval.title}” from your phone`, pane.provider);
+      return reply({ t: "ack", ok: true });
+    }
+  }
+  switch (req.t) {
+    case "approve":
       execute({ type: "pane.approve", target });
       logActivity(pane.workspaceId, "Approved from your phone", pane.provider);
       return reply({ t: "ack", ok: true });
@@ -172,6 +197,16 @@ export function startMobileBridge() {
   started = true;
   trackActivity();
   void listen<{ device: string; msg: Request }>("mobile://request", ({ payload }) => void onRequest(payload.device, payload.msg));
+
+  // Plugin approvals change what a pane shows on the phone.
+  let asking = new Set<string>();
+  useApprovals.subscribe(({ queue }) => {
+    for (const a of queue) if (!approvalAt.has(a.id)) approvalAt.set(a.id, Date.now());
+    for (const id of approvalAt.keys()) if (!queue.some((a) => a.id === id)) approvalAt.delete(id);
+    const now = new Set(queue.flatMap((a) => (a.paneId ? [a.paneId] : [])));
+    for (const id of new Set([...asking, ...now])) broadcast(id);
+    asking = now;
+  });
 
   const seen = new Map<string, AgentStatus>(allPanes().map((p) => [p.id, p.status]));
   useWorkspaces.subscribe((s) => {

@@ -25,6 +25,7 @@ vi.mock("@/features/usage/usage", async () => {
 import { noteStatusMessage, startMobileBridge } from "./mobile";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { useUsage } from "@/features/usage/usage";
+import { requestApproval, useApprovals } from "@/features/plugins/approvals";
 
 const pane = (over: Partial<Pane> = {}) => ({ id: "p1", workspaceId: "w1", provider: "claude", title: "", cwd: "/", status: "working", agentTitle: "Fix login", customTitle: null, prompt: null, ...over }) as Pane;
 
@@ -52,6 +53,25 @@ describe("mobile bridge", () => {
     const [{ device, msg }] = sent();
     expect(device).toBe("d1");
     expect(msg).toMatchObject({ t: "panes", id: "1", panes: [{ id: "p1", title: "Fix login", workspace: "winfer", provider: "claude", status: "working", request: null }] });
+  });
+
+  it("shows a plugin's approval as the pane's request and answers it from the phone", async () => {
+    const answer = requestApproval({ pluginId: "secrets", paneId: "p1", title: "Allow use of secrets?", message: "pane 1 wants to log in", okLabel: "Allow", kind: "warning" });
+    const status = sent().find((s) => s.msg.t === "status")!;
+    expect(status.device).toBeNull();
+    expect(status.msg.pane).toMatchObject({ id: "p1", status: "needs-input", request: { kind: "approval", text: "Allow use of secrets?\n\npane 1 wants to log in" } });
+    request({ t: "approve", id: "a1", paneId: "p1" });
+    await flush();
+    await expect(answer).resolves.toBe(true);
+    expect(h.execute).not.toHaveBeenCalled();
+    expect(useApprovals.getState().queue).toEqual([]);
+    expect(sent().filter((s) => s.msg.t === "status").at(-1)!.msg.pane).toMatchObject({ status: "working", request: null });
+
+    h.invoke.mockClear();
+    const declined = requestApproval({ pluginId: "secrets", paneId: "p1", title: "Allow?", message: "x", okLabel: "Allow", kind: "warning" });
+    request({ t: "decline", id: "a2", paneId: "p1" });
+    await expect(declined).resolves.toBe(false);
+    expect(h.execute).not.toHaveBeenCalled();
   });
 
   it("types the phone's answer into the pane and acks", async () => {

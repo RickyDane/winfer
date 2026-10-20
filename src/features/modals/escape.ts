@@ -4,11 +4,14 @@ import { closeRaceResults, useRaceResults } from "@/features/orchestration/resul
 import { focusTerminal } from "@/features/terminal/xtermRegistry";
 import { closeReleaseNotes, useUpdates } from "@/features/updates/updater";
 import { useWorkspaces } from "@/stores/workspaces";
+import { answerApproval, useApprovals } from "@/features/plugins/approvals";
 
 const ws = () => useWorkspaces.getState();
 
 /** Every modal, topmost first. */
 const MODALS: { open: () => boolean; close: () => void }[] = [
+  // Escape answers a plugin's question with "no".
+  { open: () => useApprovals.getState().queue.length > 0, close: () => answerApproval(useApprovals.getState().queue[0].id, false) },
   { open: () => !!useRaceResults.getState().raceId, close: closeRaceResults },
   { open: () => !!useUpdates.getState().notesOpen, close: closeReleaseNotes },
   { open: () => ws().paletteQuery !== null, close: () => ws().closePalette() },
