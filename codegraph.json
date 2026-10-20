@@ -1,4 +1,0 @@
-{
-  "exclude": ["plugins-src/harness-bench/suites/"],
-  "deprioritize": ["spikes/", "voice-evals/", "scripts/"]
-}
