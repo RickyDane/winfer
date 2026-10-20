@@ -16,7 +16,7 @@ import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/work
 import { progressTitle, useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { ContextMeter } from "@/features/usage/UsageMeter";
-import { PaneCost } from "@/features/usage/TaskCostChip";
+import { PaneCost, PaneTurnTokens } from "@/features/usage/TaskCostChip";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -54,7 +54,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const showProgress = pane.provider !== "shell" && progress?.percent != null;
   const starting = useStarting((s) => s[pane.id]);
   const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
-  const label = useWorkspaces((s) => paneLabel(pane, s.providers, progressTitle(progress)));
+  const label = useWorkspaces((s) => paneLabel(pane, s.providers, progressTitle(progress), progress?.title));
   const [renaming, setRenaming] = useState(false);
   const [isNew] = useState(() => !seen.has(pane.id));
   seen.add(pane.id);
@@ -100,6 +100,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
             {label}
           </span>
         )}
+        <PaneTurnTokens pane={pane} />
         <ContextMeter paneId={pane.id} provider={pane.provider} />
         <PaneCost pane={pane} />
         {showProgress && (

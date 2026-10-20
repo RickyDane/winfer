@@ -5,7 +5,7 @@ let output = "";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args: unknown) => invoke(cmd, args) }));
 vi.mock("@/features/terminal/xtermRegistry", () => ({ readTerminal: vi.fn(() => output), outputAge: vi.fn(() => 0) }));
 
-const { cleanTitle, estimate, markFinished, nameSession, parseEstimate, setTask, taskHeadline, useProgress } = await import("./progress");
+const { cleanTitle, estimate, markFinished, nameSession, parseEstimate, setTask, startProgressTracking, taskHeadline, useProgress } = await import("./progress");
 const { useWorkspaces } = await import("@/stores/workspaces");
 const { useChatGpt } = await import("@/features/llm/chatgpt");
 // The LLM runs on the ChatGPT sign-in.
@@ -67,12 +67,29 @@ describe("session progress", () => {
     expect(useProgress.getState().byPane.p1).toMatchObject({ task: "Now add a high score table", percent: 0, title: "Old" });
   });
 
-  it("names the session with the LLM, keeping the current title as context", async () => {
-    useProgress.setState({ byPane: { p1: { task: "x", title: "Flappy Bird clone", percent: 0, step: null, updatedAt: null, estimating: false, error: null } } });
+  it("names the session from its first prompt with the quickest model, and keeps that name", async () => {
+    useProgress.setState({ byPane: { p1: { task: "x", title: null, percent: 0, step: null, updatedAt: null, estimating: false, error: null } } });
     invoke.mockResolvedValueOnce('Title: "Add high score table."');
     await nameSession("p1", "Now add a high score table to the game");
     expect(useProgress.getState().byPane.p1.title).toBe("Add high score table");
-    expect((invoke.mock.calls[0][1] as { req: { user: string } }).req.user).toContain("Current title: Flappy Bird clone");
+    expect((invoke.mock.calls[0][1] as { req: { fast?: boolean } }).req.fast).toBe(true);
+    setTask("p1", "Also make the pipes move faster please");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves titles per session id and restores them when the session is resumed", () => {
+    vi.stubGlobal("window", { setTimeout: () => 0, setInterval: () => 0 });
+    useWorkspaces.setState({ hydrated: true, sessionTitles: {}, workspaces: [{ id: "w1", panes: [Object.assign({}, pane, { sessionId: "s1" })] }] as never });
+    useProgress.setState({ byPane: { p1: { task: "x", title: null, percent: 0, step: null, updatedAt: null, estimating: false, error: null } } });
+    invoke.mockReturnValue(new Promise(() => {}));
+    setTask("p1", "Build a Flappy Bird clone"); // naming pending
+    useProgress.setState({ byPane: {} });
+    useWorkspaces.setState({ sessionTitles: { s1: "Flappy Bird clone" }, workspaces: [{ id: "w1", panes: [Object.assign({}, pane, { id: "p2", sessionId: "s1" })] }] as never });
+    startProgressTracking();
+    useWorkspaces.setState({ workspaces: [{ id: "w1", panes: [Object.assign({}, pane, { id: "p2", sessionId: "s1", status: "idle" })] }] as never });
+    expect(useProgress.getState().byPane.p2?.title).toBe("Flappy Bird clone");
+    useWorkspaces.setState({ hydrated: false, workspaces: [] });
+    vi.unstubAllGlobals();
   });
 
   it("cleans title answers and rejects prose", () => {

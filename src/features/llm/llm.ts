@@ -55,12 +55,15 @@ export function wrongScript(text: string, task: string): boolean {
   return nonLatin.test(text) && !nonLatin.test(task);
 }
 
-/** One question to the LLM; rejects when it's off or the call fails. */
-export async function llmCompose(system: string, user: string): Promise<string> {
+/**
+ * One question to the LLM; rejects when it's off or the call fails. `fast` is for tiny jobs
+ * (session titles): the backend uses its quickest model.
+ */
+export async function llmCompose(system: string, user: string, opts?: { fast?: boolean }): Promise<string> {
   const provider = llmProvider();
   if (!provider) throw new Error("No LLM: sign in with ChatGPT or install Codex or Claude Code (Settings → AI)");
   const { writer, writerModel } = useWorkspaces.getState().voiceConfig;
   // A model picked for the other backend doesn't apply.
   const model = writer === provider ? (writerModel ?? "") : "";
-  return invoke<string>("llm_compose", { req: { provider, model, system, user } });
+  return invoke<string>("llm_compose", { req: { provider, model, system, user, ...(opts?.fast ? { fast: true } : {}) } });
 }

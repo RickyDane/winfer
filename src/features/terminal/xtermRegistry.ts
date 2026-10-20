@@ -71,6 +71,57 @@ interface ExitPayload {
 
 const entries = new Map<string, Entry>();
 
+/**
+ * Input waiting for a pane's in-flight pty_write. Every IPC call runs on the app's UI thread
+ * (on Windows a slow web-request round trip), and programs that track the mouse (OpenCode)
+ * get a report for every cell the pointer crosses: one call per report froze the window.
+ * So a pane has at most one write in flight; what's typed meanwhile goes in the next one,
+ * in order.
+ */
+const queuedInput = new Map<string, string>();
+const writing = new Set<string>();
+/** An SGR mouse report of the pointer moving with no button held. */
+const HOVER_REPORT = /^\x1b\[<35;\d+;\d+M$/;
+const ENDS_WITH_HOVER_REPORT = /\x1b\[<35;\d+;\d+M$/;
+
+function writeInput(paneId: string, data: string) {
+  const queued = queuedInput.get(paneId) ?? "";
+  // Only the latest pointer position matters to a program that's still catching up.
+  const base = HOVER_REPORT.test(data) ? queued.replace(ENDS_WITH_HOVER_REPORT, "") : queued;
+  queuedInput.set(paneId, base + data);
+  if (!writing.has(paneId)) flushInput(paneId);
+}
+
+function flushInput(paneId: string) {
+  const data = queuedInput.get(paneId);
+  queuedInput.delete(paneId);
+  if (!data) {
+    writing.delete(paneId);
+    return;
+  }
+  writing.add(paneId);
+  invoke("pty_write", { paneId, data })
+    .catch(() => {})
+    .finally(() => flushInput(paneId));
+}
+
+/** Size waiting for a pane's in-flight pty_resize (it runs off the UI thread, so one at a time keeps them in order). */
+const queuedSize = new Map<string, { cols: number; rows: number }>();
+const resizing = new Set<string>();
+
+function resizePty(paneId: string, cols: number, rows: number) {
+  queuedSize.set(paneId, { cols, rows });
+  if (resizing.has(paneId)) return;
+  resizing.add(paneId);
+  void (async () => {
+    for (let size = queuedSize.get(paneId); size; size = queuedSize.get(paneId)) {
+      queuedSize.delete(paneId);
+      await invoke("pty_resize", { paneId, ...size }).catch(() => {});
+    }
+    resizing.delete(paneId);
+  })();
+}
+
 let started = false;
 
 /** Subscribes to PTY exit events. Called once at startup. */
@@ -154,7 +205,7 @@ function create(pane: Pane): Entry {
   term.onData((data) => {
     const entry = entries.get(pane.id);
     if (!entry?.spawned || entry.exited) return;
-    void invoke("pty_write", { paneId: pane.id, data });
+    writeInput(pane.id, data);
     if (!data.startsWith("\x1b")) {
       for (const ch of data) {
         if (ch === "\r") {
@@ -192,7 +243,7 @@ function create(pane: Pane): Entry {
     const entry = entries.get(pane.id);
     if (!entry?.spawned) return;
     clearTimeout(entry.resizeTimer);
-    entry.resizeTimer = window.setTimeout(() => void invoke("pty_resize", { paneId: pane.id, cols, rows }), 50);
+    entry.resizeTimer = window.setTimeout(() => resizePty(pane.id, cols, rows), 50);
   });
 
   const host = document.createElement("div");
@@ -336,6 +387,8 @@ async function spawn(entry: Entry) {
     // stay "working" forever. A status a hook reported while spawning wins.
     const busy = entry.pane.provider !== "shell" && !entry.pane.resume && !!entry.pane.prompt?.trim();
     if (paneStatus(id) === statusBefore) useWorkspaces.getState().setPaneStatus(id, busy ? "working" : "idle");
+    // The start prompt is the session's first message: it names the session right away.
+    if (busy) setTask(id, entry.pane.prompt!);
     entry.earlyExits?.forEach((exit) => onExit(entry, exit));
     entry.earlyExits = undefined;
   } catch (err) {
@@ -490,7 +543,7 @@ export function searchTerminal(paneId: string, query: string, direction: "next" 
 export function sendText(paneId: string, text: string) {
   const entry = entries.get(paneId);
   if (!entry?.spawned || entry.exited) return;
-  void invoke("pty_write", { paneId, data: text });
+  writeInput(paneId, text);
   if (text.includes("\r")) reportInput(paneId);
 }
 
@@ -533,6 +586,8 @@ export const sideTerminalId = (workspaceId: string) => `side-terminal-${workspac
 export function closeTerminal(paneId: string): Promise<void> {
   const entry = entries.get(paneId);
   const killed = invoke<void>("pty_kill", { paneId }).catch(() => {});
+  queuedInput.delete(paneId);
+  queuedSize.delete(paneId);
   setStarting(paneId, null);
   if (!entry) return killed;
   entry.observer?.disconnect();

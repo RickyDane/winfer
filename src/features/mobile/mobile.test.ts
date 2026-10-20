@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   invoke: vi.fn(async (_cmd: string, _args?: unknown): Promise<unknown> => null),
   execute: vi.fn(),
   sendText: vi.fn(),
+  startDetached: vi.fn(),
   screen: "",
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: h.invoke }));
@@ -15,7 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 vi.mock("@/commands/bus", () => ({ execute: h.execute }));
-vi.mock("@/features/terminal/xtermRegistry", () => ({ readTerminal: () => h.screen, sendText: h.sendText }));
+vi.mock("@/features/terminal/xtermRegistry", () => ({ readTerminal: () => h.screen, sendText: h.sendText, startDetached: h.startDetached }));
 vi.mock("@/stores/activity", () => ({ logActivity: vi.fn() }));
 vi.mock("@/features/usage/usage", async () => {
   const { create } = await import("zustand");
@@ -29,8 +30,8 @@ import { requestApproval, useApprovals } from "@/features/plugins/approvals";
 
 const pane = (over: Partial<Pane> = {}) => ({ id: "p1", workspaceId: "w1", provider: "claude", title: "", cwd: "/", status: "working", agentTitle: "Fix login", customTitle: null, prompt: null, ...over }) as Pane;
 
-function setPanes(panes: Pane[]) {
-  useWorkspaces.setState({ workspaces: [{ id: "w1", name: "winfer", rootDir: "/", panes, layout: null, zoomedPaneId: null, presetIndex: 0, useWorktrees: false }] });
+function setPanes(panes: Pane[], name = "winfer") {
+  useWorkspaces.setState({ workspaces: [{ id: "w1", name, rootDir: "/", panes, layout: null, zoomedPaneId: null, presetIndex: 0, useWorktrees: false }] });
 }
 
 const request = (msg: Record<string, unknown>) => h.listeners.get("mobile://request")!({ payload: { device: "d1", msg } });
@@ -132,7 +133,7 @@ describe("mobile bridge", () => {
     expect(msg.pane.request.text).toContain("Do you want to proceed?");
 
     setPanes([]);
-    expect(sent().at(-1)!.msg).toEqual({ t: "panes", panes: [] });
+    expect(sent().at(-1)!.msg).toMatchObject({ t: "panes", panes: [], workspaces: [{ id: "w1", name: "winfer" }] });
   });
 
   it("sends a question's options and picks one by typing its number", async () => {
@@ -160,6 +161,49 @@ describe("mobile bridge", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(sent().at(-1)!.msg).toMatchObject({ t: "ack", id: "c3", ok: false });
     vi.useRealTimers();
+    setPanes([pane()]);
+  });
+
+  it("mirrors every pane, also when only its title or workspace changes, without pushing", async () => {
+    // Let the previous tests' pending sync run first.
+    await new Promise((r) => setTimeout(r, 200));
+    vi.useFakeTimers();
+    setPanes([pane({ status: "idle" })]);
+    vi.advanceTimersByTime(200);
+    h.invoke.mockClear();
+    setPanes([pane({ status: "idle", agentTitle: "Fix signup" })]);
+    expect(sent()).toEqual([]);
+    vi.advanceTimersByTime(200);
+    expect(sent().map((s) => s.msg)).toEqual([{ t: "status", silent: true, pane: expect.objectContaining({ title: "Fix signup", status: "idle" }) }]);
+    // Nothing changed: nothing sent.
+    h.invoke.mockClear();
+    setPanes([pane({ status: "idle", agentTitle: "Fix signup" })]);
+    vi.advanceTimersByTime(200);
+    expect(sent()).toEqual([]);
+    // A new pane or a renamed workspace: the whole mirror, at once.
+    setPanes([pane({ status: "idle", agentTitle: "Fix signup" }), pane({ id: "p9", status: "idle" })]);
+    expect(sent().at(-1)!.msg).toMatchObject({ t: "panes", panes: [{ id: "p1" }, { id: "p9" }] });
+    setPanes([pane({ status: "idle", agentTitle: "Fix signup" })], "renamed");
+    expect(sent().at(-1)!.msg).toMatchObject({ t: "panes", panes: [{ id: "p1", workspace: "renamed" }], workspaces: [{ id: "w1", name: "renamed" }] });
+    vi.useRealTimers();
+    setPanes([pane()]);
+  });
+
+  it("starts a new session in a workspace from the phone", async () => {
+    useWorkspaces.setState({ providers: [{ id: "claude", name: "Claude Code", installed: true }, { id: "shell", name: "Shell", installed: true }] as never, activeWorkspaceId: "w1" });
+    request({ t: "pane.new", id: "n1", workspaceId: "w1", provider: "claude", text: " add a test " });
+    await flush();
+    const added = useWorkspaces.getState().workspaces[0].panes.at(-1)!;
+    expect(added).toMatchObject({ provider: "claude", prompt: "add a test", workspaceId: "w1" });
+    expect(h.startDetached).toHaveBeenCalledWith(expect.objectContaining({ id: added.id }));
+    expect(sent().filter((s) => s.msg.t === "panes").at(-1)!.msg.panes.map((p: { id: string }) => p.id)).toContain(added.id);
+    expect(sent().at(-1)!.msg).toEqual({ t: "ack", id: "n1", ok: true, paneId: added.id });
+
+    request({ t: "pane.new", id: "n2", workspaceId: "w1", provider: "shell" });
+    request({ t: "pane.new", id: "n3", workspaceId: "nope" });
+    await flush();
+    expect(sent().at(-2)!.msg).toMatchObject({ t: "ack", id: "n2", ok: false });
+    expect(sent().at(-1)!.msg).toMatchObject({ t: "ack", id: "n3", ok: false });
     setPanes([pane()]);
   });
 });

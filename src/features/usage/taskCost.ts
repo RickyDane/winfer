@@ -84,7 +84,7 @@ export function dirLabel(dir: string, panes: Pane[] = useWorkspaces.getState().w
   const workspace = useWorkspaces.getState().workspaces.find((w) => normDir(w.rootDir) === d);
   const leaf = d.split("/").pop() || d;
   if (pane) {
-    const title = pane.customTitle ?? pane.agentTitle ?? pane.worktree?.branch.replace(/^winfer\//, "") ?? leaf;
+    const title = pane.customTitle ?? useWorkspaces.getState().paneTasks[pane.id]?.title ?? pane.agentTitle ?? pane.worktree?.branch.replace(/^winfer\//, "") ?? leaf;
     return { title, detail: pane.worktree?.branch ?? d, paneId: pane.id };
   }
   if (workspace) return { title: workspace.name, detail: "project folder", paneId: null };

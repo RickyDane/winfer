@@ -5,8 +5,9 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { paneLabel, useWorkspaces, type AgentStatus, type Pane as WorkspacePane } from "@/stores/workspaces";
-import { readTerminal, sendText } from "@/features/terminal/xtermRegistry";
+import { defaultProviderId, paneLabel, useWorkspaces, type AgentStatus, type Pane as WorkspacePane, type Workspace } from "@/stores/workspaces";
+import { readTerminal, sendText, startDetached } from "@/features/terminal/xtermRegistry";
+import { leaves } from "@/features/layout/tree";
 import { execute } from "@/commands/bus";
 import { logActivity } from "@/stores/activity";
 import { describeRequest, type AgentRequest } from "@/features/status/request";
@@ -19,6 +20,9 @@ export interface MobilePane {
   id: string;
   title: string;
   workspace: string;
+  workspaceId: string;
+  /** Put aside in the desktop's archive (still running). */
+  archived: boolean;
   provider: string | null;
   status: AgentStatus;
   message: string | null;
@@ -35,7 +39,21 @@ export interface MobileMessage {
   ts: number | null;
 }
 
-type Request = { t: string; id?: string; paneId?: string; text?: string; limit?: number; option?: number };
+/** A workspace as the phone sees it, in the desktop's sidebar order. */
+export interface MobileWorkspace {
+  id: string;
+  name: string;
+  /** The workspace open on the desktop. */
+  active: boolean;
+}
+
+/** An agent the phone can start a session with. */
+export interface MobileProvider {
+  id: string;
+  name: string;
+}
+
+type Request = { t: string; id?: string; paneId?: string; workspaceId?: string; provider?: string; text?: string; limit?: number; option?: number };
 
 /** Each pane's latest status message (the hook's or notify_user's) and when its status changed. */
 const messages = new Map<string, string | null>();
@@ -52,18 +70,40 @@ export function noteStatusMessage(paneId: string, message: string | undefined) {
 
 const allPanes = () => useWorkspaces.getState().workspaces.flatMap((w) => w.panes);
 
+/** A workspace's panes as the desktop shows them: tiles in layout order, then the rest (archive). */
+function ordered(ws: Workspace): WorkspacePane[] {
+  const tiled = ws.layout ? leaves(ws.layout).flatMap((id) => ws.panes.find((p) => p.id === id) ?? []) : [];
+  return [...tiled, ...ws.panes.filter((p) => !tiled.includes(p))];
+}
+
+/** Replies longer than this are cut in the pane list (the thread has them whole). */
+const MAX_REPLY = 4000;
+
+/** Everything the phone mirrors: every pane of every workspace, the workspaces, the agents. */
+export function mirror() {
+  const s = useWorkspaces.getState();
+  return {
+    panes: s.workspaces.flatMap(ordered).map(snapshot),
+    workspaces: s.workspaces.map((w): MobileWorkspace => ({ id: w.id, name: w.name, active: w.id === s.activeWorkspaceId })),
+    providers: s.providers.filter((p) => p.installed && p.id !== "shell").map((p): MobileProvider => ({ id: p.id, name: p.name })),
+    defaultProvider: defaultProviderId(s),
+  };
+}
+
 export function snapshot(pane: WorkspacePane): MobilePane {
   const s = useWorkspaces.getState();
   const base: MobilePane = {
     id: pane.id,
-    title: paneLabel(pane, s.providers),
+    title: paneLabel(pane, s.providers, null, s.paneTasks[pane.id]?.title),
     workspace: s.workspaces.find((w) => w.id === pane.workspaceId)?.name ?? "",
+    workspaceId: pane.workspaceId,
+    archived: pane.archived ?? false,
     provider: pane.provider === "shell" ? null : pane.provider,
     status: pane.status,
     message: messages.get(pane.id) ?? null,
     updatedAt: changedAt.get(pane.id) ?? Date.now(),
     request: pane.status === "needs-input" ? (requests.get(pane.id) ?? null) : null,
-    reply: pane.status === "done" ? lastReply(pane.id) : null,
+    reply: pane.status === "done" ? cutReply(lastReply(pane.id)) : null,
   };
   // A plugin asking for approval on this agent's behalf (its tool call waits on the answer).
   const approval = approvalFor(pane.id);
@@ -77,6 +117,8 @@ export function snapshot(pane: WorkspacePane): MobilePane {
     reply: null,
   };
 }
+
+const cutReply = (text: string | null) => (text && text.length > MAX_REPLY ? `${text.slice(0, MAX_REPLY)}…` : text);
 
 const send = (device: string | null, msg: unknown) => invoke("mobile_send", { device, msg }).catch(() => {});
 
@@ -101,8 +143,9 @@ async function thread(pane: WorkspacePane, limit: number): Promise<{ messages: M
 async function onRequest(device: string, req: Request) {
   const reply = (msg: Record<string, unknown>) => send(device, { ...msg, id: req.id });
   if (req.t === "panes.get") {
-    return reply({ t: "panes", panes: allPanes().map(snapshot) });
+    return reply({ t: "panes", ...mirror() });
   }
+  if (req.t === "pane.new") return reply(newPane(req));
   const pane = allPanes().find((p) => p.id === req.paneId);
   if (!pane) return reply({ t: req.t === "thread.get" ? "error" : "ack", ok: false, error: "That agent is gone." });
   const target = { id: pane.id };
@@ -159,6 +202,24 @@ async function onRequest(device: string, req: Request) {
   }
 }
 
+/** Starts an agent session in a workspace for the phone; its first message is optional. */
+function newPane(req: Request): Record<string, unknown> {
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.id === req.workspaceId);
+  if (!ws) return { t: "ack", ok: false, error: "That workspace is gone." };
+  const providerId = req.provider && req.provider !== "default" ? req.provider : defaultProviderId(s);
+  const provider = s.providers.find((p) => p.id === providerId && p.installed && p.id !== "shell");
+  if (!provider) return { t: "ack", ok: false, error: "That agent isn't installed on the desktop." };
+  const prompt = req.text?.trim() || undefined;
+  const id = s.addPane(provider.id, { workspaceId: ws.id, prompt });
+  // Started right away: the desktop may be minimized or show another workspace, and its
+  // tile only starts a pane once it's drawn. The tile adopts the running terminal later.
+  const pane = allPanes().find((p) => p.id === id);
+  if (pane) startDetached(pane);
+  logActivity(ws.id, `Started ${provider.name} from your phone${prompt ? `: ${prompt.slice(0, 80)}` : ""}`, provider.id);
+  return { t: "ack", ok: true, paneId: id };
+}
+
 /** Reads a waiting pane's request from its screen again and tells the phones when it changed. */
 function rereadRequest(id: string, delay: number) {
   setTimeout(() => {
@@ -171,10 +232,54 @@ function rereadRequest(id: string, delay: number) {
   }, delay);
 }
 
-/** Tells the phones about a pane whose status changed (and pushes a notification from Rust). */
-function broadcast(paneId: string) {
+/** What the phones were last told about each pane (its snapshot, minus the time). */
+const lastSent = new Map<string, string>();
+const signature = (p: MobilePane) => JSON.stringify({ ...p, updatedAt: 0 });
+
+/**
+ * Tells the phones about a pane. A status change also pushes a notification from Rust;
+ * `silent` updates (a new title, a moved pane) don't.
+ */
+function broadcast(paneId: string, silent = false) {
   const pane = allPanes().find((p) => p.id === paneId);
-  if (pane) void send(null, { t: "status", pane: snapshot(pane) });
+  if (!pane) return;
+  const snap = snapshot(pane);
+  lastSent.set(pane.id, signature(snap));
+  void send(null, silent ? { t: "status", pane: snap, silent: true } : { t: "status", pane: snap });
+}
+
+/** The whole mirror, when panes come or go or the workspaces or agents change. */
+function broadcastAll() {
+  const all = mirror();
+  for (const p of all.panes) lastSent.set(p.id, signature(p));
+  void send(null, { t: "panes", ...all });
+}
+
+/** Which panes, workspaces and agents there are, in the desktop's order. */
+function layoutKey(): string {
+  const s = useWorkspaces.getState();
+  return JSON.stringify([
+    s.activeWorkspaceId,
+    s.workspaces.map((w) => [w.id, w.name, ordered(w).map((p) => p.id)]),
+    s.providers.filter((p) => p.installed).map((p) => p.id),
+    s.defaultProvider,
+  ]);
+}
+
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Sends the panes whose snapshot changed without a status change (title, workspace name…). */
+function scheduleSync() {
+  if (syncTimer) return;
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    for (const pane of allPanes()) {
+      // A waiting pane goes out (with its push) once its question is read off the screen.
+      if (pane.status === "needs-input" && !requests.has(pane.id) && !approvalFor(pane.id)) continue;
+      const snap = snapshot(pane);
+      if (lastSent.get(pane.id) !== signature(snap)) broadcast(pane.id, true);
+    }
+  }, 150);
 }
 
 let started = false;
@@ -209,31 +314,35 @@ export function startMobileBridge() {
   });
 
   const seen = new Map<string, AgentStatus>(allPanes().map((p) => [p.id, p.status]));
+  let layout = layoutKey();
   useWorkspaces.subscribe((s) => {
     const panes = s.workspaces.flatMap((w) => w.panes);
+    const before = layout;
+    layout = layoutKey();
     for (const pane of panes) {
       if (seen.get(pane.id) === pane.status) continue;
+      const known = seen.has(pane.id);
       seen.set(pane.id, pane.status);
       changedAt.set(pane.id, Date.now());
       requests.delete(pane.id);
       if (pane.status === "needs-input") {
         // The hook fires as the prompt appears; give the terminal a moment to draw it.
         rereadRequest(pane.id, 450);
-      } else {
+      } else if (known) {
         broadcast(pane.id);
       }
     }
-    // Closed panes: the phones refresh their list.
-    if (seen.size > panes.length) {
-      const ids = new Set(panes.map((p) => p.id));
-      for (const id of [...seen.keys()].filter((id) => !ids.has(id))) {
-        seen.delete(id);
-        messages.delete(id);
-        changedAt.delete(id);
-        requests.delete(id);
-      }
-      void send(null, { t: "panes", panes: panes.map(snapshot) });
+    const ids = new Set(panes.map((p) => p.id));
+    for (const id of [...seen.keys()].filter((id) => !ids.has(id))) {
+      seen.delete(id);
+      messages.delete(id);
+      changedAt.delete(id);
+      requests.delete(id);
+      lastSent.delete(id);
     }
+    // New, closed or moved panes, renamed workspaces: the phones get the whole mirror again.
+    if (layout !== before) broadcastAll();
+    scheduleSync();
   });
 }
 

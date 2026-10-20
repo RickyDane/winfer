@@ -447,12 +447,14 @@ function SystemPromptSettings() {
 /** The rarely used MCP tools agents start without, to turn back on one by one. */
 function AgentToolSettings() {
   const { enabledTools, setToolEnabled } = useWorkspaces();
+  const plugins = usePlugins((s) => s.plugins);
+  const tools = OPTIONAL_TOOLS.filter((t) => !t.plugin || plugins.some((p) => p.id === t.plugin && p.enabled && !p.error && p.manifest));
   return (
     <Card
       title="Agent tools"
       description="Tools agents rarely use are left out, since every tool an agent is offered takes up context in each request. Turn on the ones you want. Applies to agents started (or restarted) after the change."
     >
-      {OPTIONAL_TOOLS.map((t) => (
+      {tools.map((t) => (
         <Row key={t.name} label={`${t.server}: ${t.name}`} hint={t.hint}>
           <Toggle label={t.name} checked={enabledTools.includes(t.name)} onChange={(on) => setToolEnabled(t.name, on)} />
         </Row>
@@ -1747,7 +1749,7 @@ function PluginSettings() {
                 Open folder
               </button>
               <button onClick={() => void loadPlugins()} aria-label="Reload plugins" title="Reload plugins" className={cn(buttonClass, "w-7 justify-center px-0")}>
-                <RefreshCw size={12} />
+                <RefreshCw size={15} className="shrink-0" />
               </button>
             </Row>
           </Card>

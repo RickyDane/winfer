@@ -79,6 +79,8 @@ export interface PaneSpend {
   input: number;
   output: number;
   cached: number;
+  /** Output tokens of the running (or last) turn, partly estimated while it streams; harness panes only. */
+  turn?: number;
   at: number;
 }
 

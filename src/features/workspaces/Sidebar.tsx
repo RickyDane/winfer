@@ -25,7 +25,8 @@ import { UsageButton } from "@/features/usage/UsageMeter";
 export function PaneName({ pane, className }: { pane: Pane; className?: string }) {
   const providers = useWorkspaces((s) => s.providers);
   const task = useProgress((s) => progressTitle(s.byPane[pane.id]));
-  const label = paneLabel(pane, providers, task);
+  const title = useProgress((s) => s.byPane[pane.id]?.title ?? null);
+  const label = paneLabel(pane, providers, task, title);
   const name = providerName(providers, pane.provider);
   return (
     <span className={cn("min-w-0 truncate", className)} title={label === name ? name : `${name}: ${label}`}>

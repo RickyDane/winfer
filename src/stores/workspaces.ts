@@ -141,6 +141,8 @@ interface WorkspaceState {
   recentSessions: Record<string, string>;
   /** Each pane's task and its short title (see progress.ts), kept so session titles survive restarts. */
   paneTasks: Record<string, PaneTask>;
+  /** The LLM's title per agent session id (persisted), so a resumed session keeps its title. */
+  sessionTitles: Record<string, string>;
   /** Voice model choices, persisted and pushed to the backend on launch. */
   voiceConfig: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string };
   hydrate: () => Promise<void>;
@@ -242,13 +244,13 @@ export const DEFAULT_SYSTEM_PROMPT =
  * MCP tools agents rarely use, off by default: each tool an agent is offered costs context in
  * every request. Settings → Agent tools turns them back on one by one.
  */
-export const OPTIONAL_TOOLS: { name: string; server: string; hint: string }[] = [
+export const OPTIONAL_TOOLS: { name: string; server: string; hint: string; /** Plugin that provides the tool; shown only while it's installed and enabled. */ plugin?: string }[] = [
   { name: "browser_drag", server: "Browser", hint: "Drag and drop between two elements." },
   { name: "browser_drop", server: "Browser", hint: "Drop files or data onto an element from outside the page." },
   { name: "browser_emulate_media", server: "Browser", hint: "Emulate dark/light scheme, reduced motion or print media." },
   { name: "browser_navigate_back", server: "Browser", hint: "Go back in the page history (agents can also navigate to the URL)." },
-  { name: "kb_explain", server: "Knowledge Base", hint: "Explain one node of the knowledge graph and its connections." },
-  { name: "kb_save", server: "Knowledge Base", hint: "Save an answer to the knowledge graph's memory." },
+  { name: "kb_explain", server: "Knowledge Base", plugin: "knowledge-base", hint: "Explain one node of the knowledge graph and its connections." },
+  { name: "kb_save", server: "Knowledge Base", plugin: "knowledge-base", hint: "Save an answer to the knowledge graph's memory." },
 ];
 
 /** The MCP tools agents start without: the optional ones the user hasn't turned on. */
@@ -327,6 +329,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   searchPaneId: null,
   recentSessions: {},
   paneTasks: {},
+  sessionTitles: {},
   voiceConfig: {},
 
   hydrate: async () => {
@@ -387,6 +390,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       pageTabIconsOnly: ui.pageTabIconsOnly ?? false,
       recentSessions: ui.recentSessions ?? {},
       paneTasks: ui.paneTasks ?? {},
+      sessionTitles: ui.sessionTitles ?? {},
     });
   },
 
@@ -696,6 +700,7 @@ interface Snapshot {
     pageTabIconsOnly?: boolean;
     recentSessions?: Record<string, string>;
     paneTasks?: Record<string, PaneTask>;
+    sessionTitles?: Record<string, string>;
   } | null;
 }
 
@@ -720,7 +725,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s) },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
   };
 }
 
@@ -781,8 +786,14 @@ export function cleanAgentTitle(raw: string, providerNames: string[]): string | 
 /** The pane's title: the user's name for it, else the agent's own title. */
 export const paneTitle = (pane: Pane): string | null => pane.customTitle ?? pane.agentTitle;
 
-/** What to call a pane in lists: its title, else its task, else its CLI's name. */
-export function paneLabel(pane: Pane, providers: Provider[], task?: string | null): string {
+/** Sessions whose titles are kept; older ones are dropped. */
+export const MAX_SESSION_TITLES = 500;
+
+/**
+ * What to call a pane in lists: the user's name for it, else the LLM's session title (the same
+ * for every provider), else the agent's own terminal title, else its task, else its CLI's name.
+ */
+export function paneLabel(pane: Pane, providers: Provider[], task?: string | null, sessionTitle?: string | null): string {
   const fallback = task ?? pane.prompt;
-  return paneTitle(pane) ?? (fallback ? fallback.split("\n")[0].slice(0, 80) : providerName(providers, pane.provider));
+  return pane.customTitle ?? sessionTitle ?? pane.agentTitle ?? (fallback ? fallback.split("\n")[0].slice(0, 80) : providerName(providers, pane.provider));
 }

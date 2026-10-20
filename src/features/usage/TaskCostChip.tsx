@@ -82,3 +82,14 @@ function LoggedCost({ pane, show }: { pane: Pane; show: boolean }) {
     </span>
   );
 }
+
+/** Pane header, while a winfer code agent works: the turn's output tokens so far, as in its "↓ 12K". */
+export function PaneTurnTokens({ pane }: { pane: Pane }) {
+  const turn = useUsage((s) => s.paneSpend[pane.id]?.turn);
+  if (pane.status !== "working" || !turn) return null;
+  return (
+    <span className="hidden shrink-0 font-mono text-[11px] text-fg-subtle @[20rem]:inline" title="Output tokens this turn">
+      ↓ {formatTokens(turn)}
+    </span>
+  );
+}

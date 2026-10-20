@@ -8,7 +8,7 @@ import { create } from "zustand";
 import { outputAge, readTerminal } from "@/features/terminal/xtermRegistry";
 import { worktreeChangedFiles } from "@/features/worktree/worktree";
 import { speak } from "@/features/voice/readback";
-import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { MAX_SESSION_TITLES, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 
 export interface Progress {
   /** What the agent was asked to do (its start prompt or the last message it got). */
@@ -45,6 +45,30 @@ function saveTask(paneId: string) {
   const saved = useWorkspaces.getState().paneTasks[paneId];
   if (saved?.task === task && saved?.title === title) return;
   useWorkspaces.setState((s) => ({ paneTasks: { ...s.paneTasks, [paneId]: { task, title } } }));
+  syncSessionTitles();
+}
+
+/**
+ * Ties titles to agent sessions: a pane's title is saved under its session id, and a pane that
+ * resumes a titled session (by id, or once its agent reports the id) gets that title back.
+ */
+function syncSessionTitles() {
+  const s = useWorkspaces.getState();
+  let titles = s.sessionTitles;
+  for (const pane of s.workspaces.flatMap((w) => w.panes)) {
+    if (!pane.sessionId) continue;
+    const title = get(pane.id).title;
+    const saved = titles[pane.sessionId];
+    if (title && saved !== title) {
+      // Newest last; only the most recent sessions are kept.
+      const { [pane.sessionId]: _, ...rest } = titles;
+      titles = Object.fromEntries([...Object.entries(rest), [pane.sessionId, title]].slice(-MAX_SESSION_TITLES));
+    } else if (!title && saved) {
+      patch(pane.id, { title: saved });
+      return syncSessionTitles();
+    }
+  }
+  if (titles !== s.sessionTitles) useWorkspaces.setState({ sessionTitles: titles });
 }
 
 /** Brings back the tasks and titles saved before the last restart (panes that have none yet). */
@@ -55,6 +79,7 @@ function restoreTasks() {
     for (const [id, { task, title }] of Object.entries(saved)) if (!byPane[id]) byPane[id] = { ...EMPTY, task, title };
     return { byPane };
   });
+  syncSessionTitles();
 }
 
 export function forgetProgress(paneId: string) {
@@ -76,15 +101,15 @@ export function setTask(paneId: string, text: string) {
   // The title stays until the new one arrives: a follow-up usually continues the same work.
   patch(paneId, { task, percent: 0, step: null, updatedAt: null, error: null });
   lastEstimate.delete(paneId);
-  void nameSession(paneId, task);
+  // The first prompt names the session; later messages keep that name.
+  if (!get(paneId).title && !naming.has(paneId)) void nameSession(paneId, task);
 }
 
 const NAMING = [
   "You name a coding agent's session for a list of sessions, like a short issue title.",
-  "Given the session's current title (if any) and the user's newest message to the agent, reply with a title of 2 to 6 words summarizing the goal of the work,",
+  "Given the user's first message to the agent, reply with a title of 2 to 6 words summarizing the goal of the work,",
   'e.g. "Fix login redirect loop", "Persist session titles", "Dark mode for settings".',
   "Describe the work, don't quote or paraphrase the message: no filler (please, I noticed, can you), no trailing punctuation, no quotes.",
-  "If the message continues or refines the current work (a follow-up, a correction, an answer, a small addition), reply with the current title unchanged.",
   "Reply with the title only.",
 ].join(" ");
 
@@ -92,18 +117,17 @@ const NAMING = [
 const naming = new Map<string, number>();
 let namingSeq = 0;
 
-/** Asks the LLM for a short title for the session's work (keeps the old one for follow-ups). */
+/** Asks the LLM's quickest model for a short title for the session, from its first message. */
 export async function nameSession(paneId: string, message: string) {
   if (!llmEnabled()) return;
   const seq = ++namingSeq;
   naming.set(paneId, seq);
-  const current = get(paneId).title;
-  const user = [current ? `Current title: ${current}` : "Current title: (none, this is the first message)", `Newest message:\n${message.slice(0, 2000)}`].join("\n\n");
   try {
-    const answer = await llmCompose(`${NAMING} Write it in ${replyLanguage(message)}.`, user);
+    const answer = await llmCompose(`${NAMING} Write it in ${replyLanguage(message)}.`, `First message:\n${message.slice(0, 2000)}`, { fast: true });
     const title = cleanTitle(answer);
     if (naming.get(paneId) !== seq || !title || wrongScript(title, message)) return;
-    if (useProgress.getState().byPane[paneId]) patch(paneId, { title });
+    // A title restored from the resumed session meanwhile wins.
+    if (useProgress.getState().byPane[paneId] && !get(paneId).title) patch(paneId, { title });
   } catch {
     // No title then: the task's headline stands in.
   } finally {
@@ -225,7 +249,8 @@ export async function estimate(pane: Pane) {
     const cap = status(pane.id) === "working" ? 99 : 100;
     const percent = Math.min(cap, Math.max(current.percent ?? 0, result.percent));
     // The naming call owns the title; the estimate's only fills in when there's none yet.
-    patch(pane.id, { percent, step: result.step ?? current.step, title: current.title ?? result.title, updatedAt: Date.now(), estimating: false, error: null });
+    const title = current.title ?? (naming.has(pane.id) ? null : result.title);
+    patch(pane.id, { percent, step: result.step ?? current.step, title, updatedAt: Date.now(), estimating: false, error: null });
   } catch (err) {
     patch(pane.id, { estimating: false, error: String(err) });
   }
@@ -246,6 +271,15 @@ export function startProgressTracking() {
       restoreTasks();
     });
   }
+  // A pane learns its session id from its agent's hooks: bring back or save that session's title.
+  let sessions = "";
+  useWorkspaces.subscribe((s) => {
+    if (!s.hydrated) return;
+    const now = s.workspaces.flatMap((w) => w.panes.map((p) => `${p.id}=${p.sessionId ?? ""}`)).join(",");
+    if (now === sessions) return;
+    sessions = now;
+    syncSessionTitles();
+  });
   window.setInterval(() => {
     const s = useWorkspaces.getState();
     if (s.progressConfig.enabled === false) return;
