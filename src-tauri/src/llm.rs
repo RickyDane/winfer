@@ -32,6 +32,8 @@ pub struct ComposeRequest {
 
 /// Claude Code's quickest model, for tiny jobs like session titles.
 const CLAUDE_FAST_MODEL: &str = "haiku";
+/// Codex's quickest model, for the same jobs.
+const CODEX_FAST_MODEL: &str = "gpt-6-luna";
 
 /// Runs a prepared CLI command with `input` on stdin, in a scratch directory, and waits for it.
 /// Returns stdout. The prompt goes in on stdin: it's multi-line, which a command-line argument
@@ -181,7 +183,7 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
 pub async fn llm_compose(req: ComposeRequest) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || match req.provider.as_str() {
         "claude" => claude(if req.fast { CLAUDE_FAST_MODEL } else { &req.model }, &req.system, &req.user),
-        "codex" => codex(&req.model, &req.system, &req.user),
+        "codex" => codex(if req.fast { CODEX_FAST_MODEL } else { &req.model }, &req.system, &req.user),
         "chatgpt" => crate::chatgpt::respond(&req.model, &req.system, &req.user),
         other => Err(format!("unknown LLM provider {other}")),
     })
