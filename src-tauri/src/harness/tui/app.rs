@@ -2293,7 +2293,9 @@ fn git_branch(cwd: &std::path::Path) -> Option<String> {
 pub fn hook(event: &str, body: serde_json::Value) {
     let var = |k: &str| std::env::var(k).unwrap_or_default();
     let (addr, token, pane) = (var("WINFER_HOOK"), var("WINFER_TOKEN"), var("WINFER_PANE_ID"));
-    if addr.is_empty() || pane.is_empty() {
+    // Tests run by an agent in a pane inherit its env: they must not report as that pane (a
+    // test's session_start would point the pane at the test's empty session).
+    if cfg!(test) || addr.is_empty() || pane.is_empty() {
         return;
     }
     // One sender thread, so winfer gets the events in the order they happened (a thread each

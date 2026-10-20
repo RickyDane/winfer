@@ -61,6 +61,10 @@ impl Default for Config {
 }
 
 pub fn dir() -> PathBuf {
+    // Tests never touch the user's sessions, config or checkpoints.
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("winfer-harness-test-{}", std::process::id()));
+    }
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("dev.winfer.app").join("harness")
 }
 
