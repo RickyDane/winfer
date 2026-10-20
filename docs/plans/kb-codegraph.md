@@ -116,6 +116,15 @@ harness-bench fixtures. Now, the way codegraph is meant to be used:
   subagents: codegraph's instructions reach the main agent only, and its savings are on
   discovery-heavy questions (≈ even on narrow ones, per its benchmark).
 
+## Measured (2026-10-20)
+
+~200 headless Opus 5.5 runs (`scripts/codegraph-bench/README.md`): no codegraph setup beat plain
+lean grep on both cost and quality. Direct codegraph: familiar code +4% quality / +40% cost; large
+unfamiliar repos −7% cost / −8% quality; edits worse. A Haiku/Sonnet "scout" subagent that explores
+and returns a short map: −35…−50% cost but −15% quality on unfamiliar code (kept out of main; see
+`git stash list`). codegraph's own A/B matrix and issues #1700/#1393 report the same against lean
+baselines; its README's big wins are against Opus 4.8 exploring with 28+ tool calls.
+
 ## Phases (original plan)
 
 
