@@ -40,6 +40,7 @@ import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startMobileBridge } from "@/features/mobile/mobile";
 import { startAgentApi } from "@/features/mcp/agentApi";
+import { startBgNotices } from "@/features/mcp/bgNotices";
 import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
 import { loadHome } from "@/lib/home";
 import { loadEditors } from "@/features/editors/editors";
@@ -186,6 +187,7 @@ export function AppShell() {
     startRunTimes();
     startVoice();
     startAgentApi();
+    startBgNotices();
     startProgressTracking();
     startUsageTracking();
     startWakes();

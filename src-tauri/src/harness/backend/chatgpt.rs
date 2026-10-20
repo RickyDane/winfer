@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use super::{In, Opts};
 use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, TurnTokens, Usage, UserMsg};
 use crate::harness::mcp_client;
+use crate::harness::bg;
 use crate::harness::tools::{self, Risk};
 
 pub const DEFAULT_MODEL: &str = "gpt-6.1-sol";
@@ -33,6 +34,9 @@ pub fn models() -> Vec<ModelInfo> {
 }
 
 const SYSTEM: &str = "You are winfer code, a terminal coding agent. Explore with grep/glob/read; read before edit; verify with bash. Put every tool call you can already make into one response (e.g. read all relevant files at once); chain shell steps in one bash call. Use todo only for long multi-step work, never just to tick off the last item. Hand broad searches and independent subtasks to agent (several in one response run in parallel; background: true keeps you working meanwhile). If a call is declined, ask. Reply tersely in Markdown; cite path:line.";
+
+/// Steers long-running processes to the `bg` tool when it's on.
+const BG_HINT: &str = " Run dev servers, watchers and loops with bg (not bash with &/nohup); wait on them with bg read until (not sleep loops) and stop them when done.";
 
 /// A subagent's instructions, in place of `SYSTEM`.
 const SUB_SYSTEM: &str = "You are a winfer code subagent: another agent handed you one task. Work on it alone with your tools (explore with grep/glob/read; read before edit; verify with bash; batch independent calls in one response). You can't ask questions: if something is ambiguous, pick the sensible reading and say so. End with a compact report of what you found or did (paths as path:line, what changed, anything left open); that report is all the other agent sees.";
@@ -186,6 +190,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
     });
     let _ = events.send(Ev::Session(session));
     let _ = events.send(Ev::Model(shared.state.lock().unwrap().model.clone()));
+    {
+        let me = Arc::downgrade(&shared);
+        bg::listen(move |u| {
+            if let Some(shared) = me.upgrade() {
+                on_bg(&shared, u);
+            }
+        });
+    }
 
     // MCP servers start in the background while the user types.
     {
@@ -193,7 +205,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         let servers = opts.mcp.clone();
         *shared.mcp_start.lock().unwrap() = Some(std::thread::spawn(move || {
             let shared = me;
-            for (name, spec) in servers {
+            for (name, mut spec) in servers {
+                if tools::bg_enabled() {
+                    hide_mcp_bg(&mut spec);
+                }
                 match mcp_client::Server::start(&name, &spec, &shared.cwd) {
                     Ok(s) => shared.mcp.lock().unwrap().push(s),
                     Err(e) => {
@@ -275,8 +290,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             }
             Cmd::StopTask(id) => match shared.agents.lock().unwrap().get(&id) {
                 Some(stop) => stop.store(true, Ordering::Relaxed),
+                None if bg::stop(&id) => {}
                 None => {
-                    let _ = shared.events.send(Ev::Notice("That subagent isn't running.".into()));
+                    let _ = shared.events.send(Ev::Notice("That task isn't running.".into()));
                 }
             },
             Cmd::Shutdown => {
@@ -287,6 +303,49 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
                 break;
             }
         }
+    }
+    // Background processes end with the backend (winfer code exiting, /model, /new).
+    bg::stop_all();
+}
+
+/// winfer's MCP server also offers `bg`; this backend has its own (with the task list), so the
+/// agent gets only that one.
+fn hide_mcp_bg(spec: &mut Value) {
+    if !spec["args"].as_array().is_some_and(|a| a.iter().any(|x| x == "mcp-stdio")) {
+        return;
+    }
+    let env = spec.as_object_mut().unwrap().entry("env").or_insert_with(|| json!({}));
+    let Some(env) = env.as_object_mut() else { return };
+    let hidden = env.get(crate::mcp::HIDE_ENV).and_then(Value::as_str).unwrap_or("");
+    let list = if hidden.is_empty() { "bg".to_string() } else { format!("{hidden},bg") };
+    env.insert(crate::mcp::HIDE_ENV.into(), json!(list));
+}
+
+/// A background process started, exited or was stopped: update its task in winfer code's list,
+/// and tell the agent when it ended in a way it hasn't seen.
+fn on_bg(shared: &Shared, u: bg::Update) {
+    let first = |cmd: &str| cmd.lines().next().unwrap_or("").to_string();
+    let (task, note) = match u {
+        bg::Update::Started { id, tool_id, cmd, log, .. } => (
+            TaskEv { id, tool_id: Some(tool_id), title: Some(first(&cmd)), status: Some("running".into()), output_file: Some(log.to_string_lossy().into_owned()), ..Default::default() },
+            None,
+        ),
+        bg::Update::Exited { id, cmd, code, secs, seen, tail, .. } => {
+            let note = (!seen).then(|| {
+                let out = if tail.trim().is_empty() || tail == "(no new output)" { "No new output.".to_string() } else { format!("Its output since your last read:\n{tail}") };
+                format!("Background task {id} (`{}`) exited with code {code} after {secs}s. {out}", first(&cmd))
+            });
+            let status = if code == 0 { "completed" } else { "failed" };
+            (TaskEv { id, status: Some(status.into()), exit_code: Some(code), ..Default::default() }, note)
+        }
+        bg::Update::Stopped { id, cmd, by_user, .. } => {
+            let note = by_user.then(|| format!("The user stopped background task {id} (`{}`).", first(&cmd)));
+            (TaskEv { id, status: Some("stopped".into()), ..Default::default() }, note)
+        }
+    };
+    let _ = shared.events.send(Ev::Task(task));
+    if let Some(note) = note {
+        shared.notes.lock().unwrap().push(note);
     }
 }
 
@@ -341,8 +400,9 @@ fn instructions(opts: &Opts) -> String {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let bg = if tools::bg_enabled() { BG_HINT } else { "" };
     let mut s = format!(
-        "{SYSTEM}\n\ncwd {cwd} · {} · shell {} · {}{}",
+        "{SYSTEM}{bg}\n\ncwd {cwd} · {} · shell {} · {}{}",
         std::env::consts::OS,
         crate::env::shell_label(),
         today(),
@@ -711,12 +771,14 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     let risk = match &mcp {
         Some((_, tool)) if tool.is_empty() => Risk::Read,
         Some(_) => Risk::Exec,
-        None => tools::risk(name),
+        None => tools::risk(name, &args),
     };
     let (mode, key) = {
         let st = shared.state.lock().unwrap();
         let key = match name {
             "bash" => format!("bash:{}", args["cmd"].as_str().or(args["command"].as_str()).unwrap_or("").split_whitespace().next().unwrap_or("")),
+            // Allowing one program in the background doesn't allow every other one.
+            "bg" => format!("bg:{}", args["cmd"].as_str().unwrap_or("").split_whitespace().next().unwrap_or("")),
             "mcp" => format!("mcp:{}:{}", args["server"].as_str().unwrap_or(""), args["tool"].as_str().unwrap_or("")),
             _ => name.to_string(),
         };
@@ -793,7 +855,7 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     let outcome = {
         let stop = sub.map_or_else(|| shared.stop.clone(), |s| s.stop.clone());
         let reads = sub.map_or(&shared.reads, |s| &s.reads);
-        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, snapshots: &mut snapshots, reads };
+        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, call_id: &id, snapshots: &mut snapshots, reads };
         tools::run(name, &args, &mut ctx)
     };
     if !snapshots.is_empty() {
@@ -927,6 +989,7 @@ fn display_name(name: &str) -> &str {
         "write" => "Write",
         "edit" => "Edit",
         "bash" => tools::shell_display(),
+        "bg" => "Background",
         "grep" => "Grep",
         "glob" => "Glob",
         "fetch" | "web_fetch" => "Fetch",
@@ -968,7 +1031,10 @@ fn parallel(call: &Value) -> bool {
     match call["name"].as_str().unwrap_or("") {
         "mcp" => false,
         "agent" => true,
-        name => tools::risk(name) == Risk::Read,
+        name => {
+            let args: Value = serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(Value::Null);
+            tools::risk(name, &args) == Risk::Read
+        }
     }
 }
 
@@ -1248,6 +1314,49 @@ mod tests {
         assert!(!names(tools::definitions()).contains(&"agent".to_string()));
         assert!(parallel(&call("1", "agent", json!({}))) && parallel(&call("2", "read", json!({}))));
         assert!(!parallel(&call("3", "bash", json!({}))) && !parallel(&call("4", "mcp", json!({}))));
+    }
+
+    #[test]
+    fn background_tasks_become_tasks_and_unseen_exits_notes() {
+        let (shared, rx, dir) = shared(Mode::Ask);
+        on_bg(&shared, bg::Update::Started { id: "bg7".into(), owner: String::new(), tool_id: "c1".into(), cmd: "npm run dev\nmore".into(), log: "/tmp/bg7.log".into() });
+        on_bg(&shared, bg::Update::Exited { id: "bg7".into(), owner: String::new(), cmd: "npm run dev".into(), code: 1, secs: 3, seen: false, tail: "Error: port in use".into() });
+        on_bg(&shared, bg::Update::Exited { id: "bg8".into(), owner: String::new(), cmd: "make".into(), code: 0, secs: 1, seen: true, tail: String::new() });
+        on_bg(&shared, bg::Update::Stopped { id: "bg9".into(), owner: String::new(), cmd: "watch".into(), by_user: true });
+        on_bg(&shared, bg::Update::Stopped { id: "bg10".into(), owner: String::new(), cmd: "watch".into(), by_user: false });
+        let tasks: Vec<TaskEv> = rx.try_iter().filter_map(|e| if let Ev::Task(t) = e { Some(t) } else { None }).collect();
+        assert_eq!(tasks[0].tool_id.as_deref(), Some("c1"));
+        assert_eq!((tasks[0].title.as_deref(), tasks[0].output_file.as_deref(), tasks[0].status.as_deref()), (Some("npm run dev"), Some("/tmp/bg7.log"), Some("running")));
+        assert_eq!((tasks[1].status.as_deref(), tasks[1].exit_code), (Some("failed"), Some(1)));
+        assert_eq!(tasks[2].status.as_deref(), Some("completed"));
+        assert_eq!(tasks[3].status.as_deref(), Some("stopped"));
+        let notes = shared.notes.lock().unwrap().clone();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("bg7") && notes[0].contains("code 1") && notes[0].contains("port in use"));
+        assert!(notes[1].contains("user stopped") && notes[1].contains("bg9"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn winfers_mcp_bg_is_hidden_behind_the_own_one() {
+        let mut winfer = json!({ "command": "/w", "args": ["mcp-stdio"], "env": { "WINFER_MCP_HIDE": "kb_save" } });
+        hide_mcp_bg(&mut winfer);
+        assert_eq!(winfer["env"]["WINFER_MCP_HIDE"], "kb_save,bg");
+        let mut bare = json!({ "command": "/w", "args": ["mcp-stdio"] });
+        hide_mcp_bg(&mut bare);
+        assert_eq!(bare["env"]["WINFER_MCP_HIDE"], "bg");
+        let mut other = json!({ "command": "codegraph" });
+        hide_mcp_bg(&mut other);
+        assert!(other.get("env").is_none());
+    }
+
+    #[test]
+    fn bg_asks_only_to_start_something() {
+        let (shared, rx, dir) = shared(Mode::Ask);
+        assert!(parallel(&call("1", "bg", json!({ "action": "read", "id": "bg1" }))) && !parallel(&call("2", "bg", json!({ "action": "start", "cmd": "x" }))));
+        let out = run_call(&shared, &call("r1", "bg", json!({ "action": "list" })), None);
+        assert!(!rx.try_iter().any(|e| matches!(e, Ev::Approval(_))), "{out}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

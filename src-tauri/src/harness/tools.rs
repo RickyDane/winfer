@@ -22,8 +22,10 @@ pub enum Risk {
     Exec,
 }
 
-pub fn risk(name: &str) -> Risk {
+/// `bg` only runs something new on `start`.
+pub fn risk(name: &str, args: &Value) -> Risk {
     match canonical(name) {
+        "bg" if args["action"].as_str().map_or(!args["cmd"].is_string(), |a| a != "start") => Risk::Read,
         "read" | "grep" | "glob" | "todo" => Risk::Read,
         "write" | "edit" => Risk::Edit,
         _ => Risk::Exec,
@@ -67,11 +69,17 @@ pub fn definitions() -> Vec<Value> {
     let s = json!({ "type": "string" });
     let n = json!({ "type": "integer" });
     let b = json!({ "type": "boolean" });
-    vec![
+    let mut tools = vec![
         f("read", "Read file (numbered lines) or list dir.", json!({ "path": s, "offset": n, "limit": n }), &["path"]),
         f("write", "Create/overwrite file.", json!({ "path": s, "content": s }), &["path", "content"]),
         f("edit", "Replace exact unique text in file (all: every match).", json!({ "path": s, "old": s, "new": s, "all": b }), &["path", "old", "new"]),
         f("bash", shell_description(), json!({ "cmd": s, "timeout": n }), &["cmd"]),
+        f(
+            "bg",
+            super::bg::DESCRIPTION,
+            json!({ "action": { "enum": ["start", "read", "stop", "list"] }, "cmd": s, "id": s, "until": s, "wait": n }),
+            &["action"],
+        ),
         f("grep", "Regex search file contents (i: ignore case).", json!({ "pattern": s, "path": s, "glob": s, "i": b }), &["pattern"]),
         f("glob", "Find files by glob, newest first.", json!({ "pattern": s, "path": s }), &["pattern"]),
         f("fetch", "Fetch URL as text.", json!({ "url": s }), &["url"]),
@@ -81,7 +89,16 @@ pub fn definitions() -> Vec<Value> {
             json!({ "items": { "type": "array", "items": { "type": "object", "properties": { "content": s, "status": { "enum": ["pending", "in_progress", "completed"] } } } } }),
             &["items"],
         ),
-    ]
+    ];
+    if !bg_enabled() {
+        tools.retain(|t| t["name"] != "bg");
+    }
+    tools
+}
+
+/// Whether agents get the `bg` tool (`WINFER_CODE_NO_BG=1` turns it off, e.g. to compare).
+pub fn bg_enabled() -> bool {
+    std::env::var_os("WINFER_CODE_NO_BG").is_none_or(|v| v.is_empty() || v == "0")
 }
 
 pub struct Ctx<'a> {
@@ -89,6 +106,8 @@ pub struct Ctx<'a> {
     pub stop: Arc<AtomicBool>,
     /// Live output (bash).
     pub output: &'a dyn Fn(&str),
+    /// The tool call's id (links a `bg` task to its card).
+    pub call_id: &'a str,
     /// Original contents of files this turn changed (None: didn't exist), for /undo.
     pub snapshots: &'a mut HashMap<PathBuf, Option<String>>,
     /// What this session has read, so an unchanged re-read costs a line instead of the file.
@@ -106,10 +125,10 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn ok(output: impl Into<String>) -> Self {
+    pub(super) fn ok(output: impl Into<String>) -> Self {
         Outcome { ok: true, output: output.into(), diff: None, todos: None }
     }
-    fn err(output: impl Into<String>) -> Self {
+    pub(super) fn err(output: impl Into<String>) -> Self {
         Outcome { ok: false, output: output.into(), diff: None, todos: None }
     }
 }
@@ -149,6 +168,7 @@ pub fn title(name: &str, args: &Value) -> String {
     let t = match canonical(name) {
         "read" | "write" | "edit" => short_path(&s("path")),
         "bash" => s("cmd"),
+        "bg" => format!("{} {}", s("action"), if args["cmd"].is_string() { s("cmd") } else { s("id") }).trim().to_string(),
         "grep" => format!("{}{}", s("pattern"), args["path"].as_str().map(|p| format!(" in {p}")).unwrap_or_default()),
         "glob" => s("pattern"),
         "fetch" => s("url"),
@@ -194,6 +214,7 @@ pub fn run(name: &str, args: &Value, ctx: &mut Ctx) -> Outcome {
         "read" => read(ctx, args),
         n @ ("write" | "edit") => write(n, args, ctx),
         "bash" => bash(args, ctx),
+        "bg" => super::bg::run(args, ctx.cwd, &ctx.stop, ctx.call_id, ""),
         "grep" => grep(ctx.cwd, args),
         "glob" => glob(ctx.cwd, args),
         "fetch" => web_fetch(args),
@@ -354,18 +375,8 @@ fn bash(args: &Value, ctx: &mut Ctx) -> Outcome {
 
 /// Runs `command` through the user's shell, streaming output; stops on timeout or `stop`.
 pub fn run_shell(command: &str, cwd: &Path, timeout: Duration, stop: &AtomicBool, output: &dyn Fn(&str)) -> Outcome {
-    let (sh, flags) = shell();
-    let mut cmd = Command::new(sh);
-    cmd.args(flags).current_dir(cwd);
-    if cfg!(windows) { cmd.args(powershell_args(&powershell_script(command))) } else { cmd.arg(command) };
-    cmd.env("PATH", crate::env::path_var()).env("TERM", "dumb").env("NO_COLOR", "1").env("GIT_PAGER", "cat").env("PAGER", "cat");
+    let mut cmd = shell_command(command, cwd);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    crate::env::no_window(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return Outcome::err(format!("couldn't run the command: {e}")),
@@ -429,7 +440,23 @@ pub fn run_shell(command: &str, cwd: &Path, timeout: Duration, stop: &AtomicBool
     Outcome { ok: code == 0, output: out, diff: None, todos: None }
 }
 
-fn kill_tree(child: &mut std::process::Child) {
+/// `command` for the user's shell in its own process group, so `kill_tree` gets all of it.
+pub fn shell_command(command: &str, cwd: &Path) -> Command {
+    let (sh, flags) = shell();
+    let mut cmd = Command::new(sh);
+    cmd.args(flags).current_dir(cwd);
+    if cfg!(windows) { cmd.args(powershell_args(&powershell_script(command))) } else { cmd.arg(command) };
+    cmd.env("PATH", crate::env::path_var()).env("TERM", "dumb").env("NO_COLOR", "1").env("GIT_PAGER", "cat").env("PAGER", "cat");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    crate::env::no_window(&mut cmd);
+    cmd
+}
+
+pub fn kill_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
@@ -684,7 +711,7 @@ mod tests {
     fn ctx_run_with(name: &str, args: Value, dir: &Path, reads: &ReadCache) -> (Outcome, HashMap<PathBuf, Option<String>>) {
         let mut snaps = HashMap::new();
         let out = {
-            let mut ctx = Ctx { cwd: dir, stop: Arc::new(AtomicBool::new(false)), output: &|_| {}, snapshots: &mut snaps, reads };
+            let mut ctx = Ctx { cwd: dir, stop: Arc::new(AtomicBool::new(false)), output: &|_| {}, call_id: "call", snapshots: &mut snaps, reads };
             run(name, &args, &mut ctx)
         };
         (out, snaps)
@@ -693,8 +720,8 @@ mod tests {
     #[test]
     fn tool_definitions_stay_lean() {
         let size = serde_json::to_string(&definitions()).unwrap().len();
-        // ~1.9 KB (was ~3.5 KB); most of it is the JSON schema boilerplate.
-        assert!(size < 1900, "tool definitions grew to {size} bytes");
+        // ~2.25 KB with bg (~1.87 KB without; was ~3.5 KB); most of it is JSON schema boilerplate.
+        assert!(size < 2300, "tool definitions grew to {size} bytes");
     }
 
     #[test]
@@ -718,7 +745,10 @@ mod tests {
         std::fs::write(d.join("a.txt"), "x").unwrap();
         let (o, _) = ctx_run("ls", json!({ "path": "." }), &d);
         assert_eq!(o.output, "a.txt");
-        assert_eq!(risk("todo_write"), Risk::Read);
+        assert_eq!(risk("todo_write", &Value::Null), Risk::Read);
+        assert_eq!(risk("bg", &json!({ "action": "start", "cmd": "npm run dev" })), Risk::Exec);
+        assert_eq!(risk("bg", &json!({ "action": "read", "id": "bg1" })), Risk::Read);
+        assert_eq!(risk("bg", &json!({ "cmd": "npm run dev" })), Risk::Exec);
         assert_eq!(title("bash", &json!({ "command": "ls -la" })), "ls -la");
     }
 

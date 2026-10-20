@@ -3,6 +3,9 @@
 //! stream-json) and Codex (`codex app-server`), each with its own tools and login.
 
 pub mod backend;
+pub mod bg;
+#[cfg(test)]
+mod bg_bench;
 pub mod checkpoint;
 pub mod claude_skills;
 pub mod config;
@@ -245,9 +248,13 @@ pub fn run(args: &[String]) {
         c.save();
     }
     if print {
-        std::process::exit(headless(launch, json, full_prompt));
+        let code = headless(launch, json, full_prompt);
+        bg::stop_all();
+        std::process::exit(code);
     }
-    if let Err(e) = tui::run(launch, mouse) {
+    let result = tui::run(launch, mouse);
+    bg::stop_all();
+    if let Err(e) = result {
         eprintln!("winfer code: {e}");
         std::process::exit(1);
     }

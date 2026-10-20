@@ -1,0 +1,1 @@
+Start this project's dev server (`python3 server.py`; it builds for a few seconds, then prints the URL it listens on), fetch `/api/secret` from the running server and write the response body to `answer.txt`. Stop the server when you're done.

@@ -269,6 +269,7 @@ pub fn run() {
                 app.state::<browser::BrowserManager>().shutdown();
                 app.state::<android::AndroidManager>().shutdown();
                 voice::shutdown(app);
+                harness::bg::stop_all();
             }
         });
 }

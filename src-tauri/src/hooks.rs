@@ -309,6 +309,7 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
     std::fs::write(&pi_extension, include_str!("../resources/pi-extension.js"))?;
 
     let token = format!("{:032x}", rand::random::<u128>());
+    crate::mcp::listen_bg(app.clone());
     let status_app = app.clone();
     let usage_app = app.clone();
     let addr = serve(
@@ -442,6 +443,106 @@ fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole path a pane agent's `bg` call takes: `winfer mcp-stdio` (the built binary) →
+    /// the hook server → `bg` in the app. With BG_E2E_CLAUDE=1 a real Claude Code agent drives it.
+    /// cargo build && cargo test --lib bg_over_mcp_stdio -- --ignored --nocapture
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "needs the built winfer binary"]
+    fn bg_over_mcp_stdio_end_to_end() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Command, Stdio};
+        let token = "t0k".to_string();
+        static SEEN: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+        let addr = serve(
+            token.clone(),
+            |_| {},
+            |call| {
+                if call.tool != "bg" {
+                    return crate::mcp::Reply { ok: false, text: "app-only tool".into() };
+                }
+                SEEN.lock().unwrap().push((call.pane_id.clone(), call.args["action"].as_str().unwrap_or("").to_string()));
+                crate::mcp::bg_call(&call)
+            },
+            |_, _, _| {},
+        )
+        .unwrap();
+        let used = |pane: &str, action: &str| SEEN.lock().unwrap().iter().any(|(p, a)| p == pane && a == action);
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/winfer");
+        let dir = std::env::temp_dir().join(format!("winfer-bg-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.sh"), "echo building; sleep 1; echo 'ready on :4321'; while :; do echo tick; sleep 0.2; done\n").unwrap();
+        let mut child = Command::new(&bin)
+            .arg("mcp-stdio")
+            .env("WINFER_HOOK", &addr).env("WINFER_TOKEN", &token).env("WINFER_PANE_ID", "p-e2e")
+            .current_dir(&dir)
+            .stdin(Stdio::piped()).stdout(Stdio::piped())
+            .spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut rpc = |id: u64, method: &str, params: Value| -> Value {
+            writeln!(stdin, "{}", json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).unwrap();
+            let mut line = String::new();
+            stdout.read_line(&mut line).unwrap();
+            serde_json::from_str(&line).unwrap()
+        };
+        let init = rpc(1, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+        assert!(init["result"]["instructions"].as_str().unwrap().contains("bg"));
+        let tools = rpc(2, "tools/list", json!({}));
+        assert!(tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "bg"));
+        let text = |v: &Value| v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
+        let start = rpc(3, "tools/call", json!({ "name": "bg", "arguments": { "action": "start", "cmd": "sh server.sh", "until": "ready" } }));
+        let out = text(&start);
+        assert!(out.contains("ready on :4321"), "{out}");
+        let id = out.split_whitespace().nth(1).unwrap().to_string();
+        let read = text(&rpc(4, "tools/call", json!({ "name": "bg", "arguments": { "action": "read", "id": id, "wait": 500 } })));
+        assert!(read.contains("tick") && !read.contains("building"), "{read}");
+        let stop = text(&rpc(5, "tools/call", json!({ "name": "bg", "arguments": { "action": "stop", "id": id } })));
+        assert!(stop.contains("stopped"), "{stop}");
+        drop(stdin);
+        let _ = child.wait();
+        println!("mcp-stdio bg: ok");
+
+        if std::env::var_os("BG_E2E_CLAUDE").is_some() {
+            let config = json!({ "mcpServers": { "winfer": { "command": bin, "args": ["mcp-stdio"], "env": { "WINFER_HOOK": addr, "WINFER_TOKEN": token, "WINFER_PANE_ID": "p-claude" } } } });
+            let out = Command::new("claude")
+                .args(std::env::var("BG_E2E_PROMPT").ok().map(|p| vec!["--append-system-prompt".to_string(), p]).unwrap_or_default())
+                .args(["-p", "--model", "haiku", "--strict-mcp-config", "--mcp-config", &config.to_string(), "--allowedTools", "mcp__winfer__bg,Bash(curl:*)", "--output-format", "stream-json", "--verbose"])
+                .arg("Start the dev server `sh server.sh` (it prints 'ready on :4321' when up) in the background, wait until it is ready, tell me the port, then stop it.")
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            let log = String::from_utf8_lossy(&out.stdout);
+            let calls: Vec<String> = log.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).flat_map(|v| v["message"]["content"].as_array().cloned().unwrap_or_default()).filter(|b| b["type"] == "tool_use").map(|b| format!("{} {}", b["name"].as_str().unwrap_or(""), b["input"])).collect();
+            println!("claude tool calls:\n  {}", calls.join("\n  "));
+            assert!(calls.iter().any(|c| c.starts_with("mcp__winfer__bg") && c.contains("start")), "claude didn't start it with bg");
+            assert!(calls.iter().any(|c| c.starts_with("mcp__winfer__bg") && c.contains("stop")), "claude didn't stop it with bg");
+            let left = crate::harness::bg::run(&json!({ "action": "list" }), &dir, &std::sync::atomic::AtomicBool::new(false), "", "p-claude");
+            assert!(left.output.contains("no background tasks"), "{}", left.output);
+        }
+        if std::env::var_os("BG_E2E_CODEX").is_some() {
+            let out = Command::new("codex")
+                .args(["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--json"])
+                .args(["-c", &format!("mcp_servers.winfer.command={}", json!(bin))])
+                .args(["-c", r#"mcp_servers.winfer.args=["mcp-stdio"]"#])
+                // What winfer passes every Codex pane (its default agent prompt), when given.
+                .args(std::env::var("BG_E2E_PROMPT").ok().map(|p| vec!["-c".to_string(), format!("developer_instructions={}", json!(p))]).unwrap_or_default())
+                .args(["-c", &format!(r#"mcp_servers.winfer.env={{WINFER_HOOK="{addr}", WINFER_TOKEN="{token}", WINFER_PANE_ID="p-codex"}}"#)])
+                .arg("Start the dev server `sh server.sh` (it prints 'ready on :4321' when up) in the background, wait until it is ready, tell me the port, then stop it.")
+                .current_dir(&dir)
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let seen: Vec<_> = SEEN.lock().unwrap().iter().filter(|(p, _)| p == "p-codex").cloned().collect();
+            println!("codex bg calls: {seen:?}");
+            if seen.is_empty() {
+                println!("{}", String::from_utf8_lossy(&out.stdout));
+            }
+            assert!(used("p-codex", "start") && used("p-codex", "stop"), "codex didn't use bg");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn maps_events_to_statuses() {

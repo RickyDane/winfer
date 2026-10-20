@@ -154,3 +154,29 @@ describe("open_file", () => {
     await expect(call("open_file", { path: "nope.md" })).rejects.toThrow("No file at nope.md");
   });
 });
+
+describe("bg exit notices", async () => {
+  const { deliverBgNotes, pendingBgNotes, queueBgNote } = await import("./bgNotices");
+
+  it("types notes into the pane once its agent is idle", () => {
+    useWorkspaces.getState().updatePane("p-1", { status: "working" });
+    queueBgNote("p-1", "[winfer] Background task bg1 (`npm run dev`) exited with code 1 after 4s.");
+    queueBgNote("gone", "dropped");
+    deliverBgNotes();
+    expect(terminal.sendText).not.toHaveBeenCalled();
+    expect(pendingBgNotes("p-1")).toHaveLength(1);
+    expect(pendingBgNotes("gone")).toHaveLength(0);
+    useWorkspaces.getState().updatePane("p-1", { status: "done" });
+    deliverBgNotes();
+    expect(terminal.sendText).toHaveBeenCalledWith("p-1", "[winfer] Background task bg1 (`npm run dev`) exited with code 1 after 4s.");
+    expect(terminal.sendText).toHaveBeenCalledWith("p-1", "\r");
+    expect(pendingBgNotes("p-1")).toHaveLength(0);
+  });
+
+  it("pastes several notes as one message", () => {
+    queueBgNote("p-2", "a");
+    queueBgNote("p-2", "b");
+    deliverBgNotes();
+    expect(terminal.pasteText).toHaveBeenCalledWith("p-2", "a\n\nb");
+  });
+});

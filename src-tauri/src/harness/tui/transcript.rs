@@ -377,7 +377,7 @@ pub fn tool_kind(name: &str) -> (String, ToolKind) {
     let kind = match name {
         "Read" | "Grep" | "Glob" | "LS" | "WebFetch" | "WebSearch" | "read_file" | "list_dir" | "search" | "grep" | "glob" => ToolKind::Read,
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch" | "edit_file" | "write_file" | "edit" | "write" => ToolKind::Edit,
-        "Bash" | "shell" | "exec" | "exec_command" | "bash" | "PowerShell" | "Zsh" | "Sh" => ToolKind::Shell,
+        "Bash" | "shell" | "exec" | "exec_command" | "bash" | "PowerShell" | "Zsh" | "Sh" | "Background" => ToolKind::Shell,
         "Agent" | "Task" => ToolKind::Agent,
         "Skill" => ToolKind::Skill,
         _ => ToolKind::Other,

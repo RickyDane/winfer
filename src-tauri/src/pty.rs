@@ -729,6 +729,8 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, PtyManager>, pane_id: String) {
+    // Background tasks its agent started through winfer's `bg` tool end with the pane.
+    crate::harness::bg::stop_owner(&pane_id);
     // Before looking for the session: a start still under way then ends its process itself.
     if let Some(starting) = state.starting.lock().unwrap().get(&pane_id) {
         starting.killed.store(true, Ordering::SeqCst);

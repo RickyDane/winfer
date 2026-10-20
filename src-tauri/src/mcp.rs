@@ -28,6 +28,9 @@ pub struct Call {
     pub args: Value,
     /// Pane of the agent making the call; scopes it to that pane's workspace.
     pub pane_id: String,
+    /// The agent's working directory (where `bg` runs commands).
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +98,8 @@ fn tools() -> Value {
                 "message": { "type": "string", "description": "What winfer types to wake you, e.g. a reminder of what to continue with (default: usage has reset, continue where you left off)" },
                 "cancel": { "type": "boolean", "description": "Cancel your pending wake-up instead" }
             } }
-        }
+        },
+        crate::harness::bg::mcp_tool()
     ])
 }
 
@@ -108,8 +112,42 @@ fn pending() -> &'static Mutex<HashMap<String, mpsc::Sender<Reply>>> {
     PENDING.get_or_init(Mutex::default)
 }
 
+/// Longest a `bg` read waits through MCP: `forward` gives up after 330 s.
+const BG_WAIT_MAX: u64 = 290_000;
+
+/// Runs a `bg` call in the app, which owns the processes: they outlive the agent's CLI
+/// restarting its MCP server, and end with the calling pane.
+pub(crate) fn bg_call(call: &Call) -> Reply {
+    let mut args = call.args.clone();
+    if args["wait"].as_u64().is_some_and(|w| w > BG_WAIT_MAX) {
+        args["wait"] = json!(BG_WAIT_MAX);
+    }
+    let cwd = call.cwd.as_deref().map(std::path::PathBuf::from).filter(|p| p.is_dir()).or_else(dirs::home_dir).unwrap_or_default();
+    let out = crate::harness::bg::run(&args, &cwd, &std::sync::atomic::AtomicBool::new(false), "", &call.pane_id);
+    Reply { ok: out.ok, text: out.output }
+}
+
+/// Exit notices for `bg` tasks of pane agents: the webview types them into the pane once the
+/// agent is idle (see `bgNotices.ts`).
+pub fn listen_bg(app: AppHandle) {
+    crate::harness::bg::listen(move |u| {
+        if let crate::harness::bg::Update::Exited { id, owner, cmd, code, secs, seen: false, tail } = u {
+            if owner.is_empty() {
+                return;
+            }
+            let cmd = cmd.lines().next().unwrap_or("");
+            let out = if tail.trim().is_empty() || tail == "(no new output)" { String::new() } else { format!(" Last output:\n{tail}") };
+            let text = format!("[winfer] Background task {id} (`{cmd}`) exited with code {code} after {secs}s.{out}");
+            let _ = app.emit("bg://note", json!({ "paneId": owner, "text": text }));
+        }
+    });
+}
+
 /// Forwards a call to the webview and waits for its reply.
 pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
+    if call.tool == "bg" {
+        return bg_call(&call);
+    }
     call.id = format!("{:016x}", rand::random::<u64>());
     let (tx, rx) = mpsc::channel();
     pending().lock().unwrap().insert(call.id.clone(), tx);
@@ -162,7 +200,7 @@ fn forward(hook: &str, token: &str, call: &Call) -> Reply {
 fn all_tools(env: &(String, String, String)) -> Value {
     let mut list = tools();
     let (hook, token, pane) = env;
-    let call = Call { id: String::new(), tool: LIST_PLUGIN_TOOLS.into(), args: json!({}), pane_id: pane.clone() };
+    let call = Call { id: String::new(), tool: LIST_PLUGIN_TOOLS.into(), args: json!({}), pane_id: pane.clone(), cwd: None };
     let reply = forward(hook, token, &call);
     if let (true, Ok(Value::Array(extra))) = (reply.ok, serde_json::from_str::<Value>(&reply.text)) {
         let builtin: Vec<Value> = list.as_array().unwrap().iter().map(|t| t["name"].clone()).collect();
@@ -183,7 +221,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "winfer", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets. The browser is shared with the user: before opening a page, list its open tabs and, when one already shows related content (the same site, dev server or page), select it and work there instead of opening another tab; open a new tab for unrelated content rather than navigating a tab the user has open away. To click, type in or fill page elements, take a browser_snapshot and use browser_click, browser_type or browser_fill_form with its element refs instead of querying the DOM in browser_evaluate; if you must click from browser_evaluate, check the element exists first and return a clear message when it doesn't."
+            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets. The browser is shared with the user: before opening a page, list its open tabs and, when one already shows related content (the same site, dev server or page), select it and work there instead of opening another tab; open a new tab for unrelated content rather than navigating a tab the user has open away. To click, type in or fill page elements, take a browser_snapshot and use browser_click, browser_type or browser_fill_form with its element refs instead of querying the DOM in browser_evaluate; if you must click from browser_evaluate, check the element exists first and return a clear message when it doesn't. Run dev servers, watchers, loops and other long-running commands with bg instead of backgrounding them in your shell (&, nohup, run_in_background, a kept-open terminal session): wait on them with bg read until (not sleep loops) and stop them when done; winfer tells you in this pane when one exits."
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": all_tools(env) }),
@@ -197,6 +235,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
                     .into(),
                 args: message["params"]["arguments"].clone(),
                 pane_id: pane.clone(),
+                cwd: std::env::current_dir().ok().map(|d| d.to_string_lossy().into_owned()),
             };
             let reply = forward(hook, token, &call);
             json!({ "content": [{ "type": "text", "text": reply.text }], "isError": !reply.ok })
@@ -314,7 +353,7 @@ pub fn codegraph_server(dir: &std::path::Path) -> Option<Server> {
 // leave tools out itself) run behind `winfer mcp-filter`, which drops them from the replies.
 
 /// Tool names to hide, comma-separated, for `winfer mcp-stdio`.
-const HIDE_ENV: &str = "WINFER_MCP_HIDE";
+pub const HIDE_ENV: &str = "WINFER_MCP_HIDE";
 
 fn hidden_tools() -> Vec<String> {
     std::env::var(HIDE_ENV).unwrap_or_default().split(',').map(str::trim).filter(|t| !t.is_empty()).map(String::from).collect()
@@ -552,6 +591,22 @@ mod tests {
         assert_eq!(config["winfer"]["env"]["WINFER_PANE_ID"], "p-1");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bg_calls_run_in_the_app_scoped_to_their_pane() {
+        let call = |pane: &str, args: Value| bg_call(&Call { id: String::new(), tool: "bg".into(), args, pane_id: pane.into(), cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()) });
+        let r = call("p-a", json!({ "action": "start", "cmd": "echo hi; sleep 30", "until": "hi", "wait": 999_999 }));
+        assert!(r.ok && r.text.contains("hi"), "{}", r.text);
+        let id = r.text.split_whitespace().nth(1).unwrap().to_string();
+        // Another pane neither sees nor controls it.
+        assert!(!call("p-b", json!({ "action": "list" })).text.contains(&id));
+        assert!(!call("p-b", json!({ "action": "stop", "id": id })).ok);
+        assert!(call("p-a", json!({ "action": "list" })).text.contains(&id));
+        // Closing the pane ends it.
+        crate::harness::bg::stop_owner("p-a");
+        assert!(!call("p-a", json!({ "action": "list" })).text.contains(&id));
+    }
+
     fn env() -> (String, String, String) {
         ("127.0.0.1:1".into(), "t".into(), "p-1".into())
     }
@@ -591,7 +646,8 @@ mod tests {
                 "open_file",
                 "notify_user",
                 "usage_status",
-                "wait_for_usage_reset"
+                "wait_for_usage_reset",
+                "bg"
             ]
         );
 

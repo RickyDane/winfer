@@ -1,0 +1,1 @@
+Start the test watcher (`python3 watch.py`; it reruns the tests whenever `calc.py` changes and never exits) and keep it running while you fix the bugs in `calc.py`. Use the watcher's output to see what fails and to confirm everything passes; don't run the tests any other way. When all tests pass, stop the watcher.

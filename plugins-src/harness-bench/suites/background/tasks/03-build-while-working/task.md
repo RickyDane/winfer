@@ -1,0 +1,1 @@
+Start the release build `./build.sh` (it takes about 25 seconds) in the background, and while it runs: bump `VERSION` in `version.py` to `1.5.0` and add a `## 1.5.0` section with the entry `- Faster startup.` at the top of `CHANGELOG.md` (above 1.4.1). When the build has finished, write the BUILD ID it printed to `answer.txt`.
