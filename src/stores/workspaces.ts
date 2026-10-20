@@ -111,6 +111,8 @@ interface WorkspaceState {
   shortcuts: Record<string, string>;
   /** Browser panel width in px. */
   browserWidth: number;
+  /** Left sidebar width in px. */
+  sidebarWidth: number;
   /** What the side panel shows: the browser, a mirrored Android device, a terminal or the file viewer. */
   sidePanel: SidePanelTab;
   /** Files open in the side panel's viewer (absolute paths) and the one shown. */
@@ -193,6 +195,7 @@ interface WorkspaceState {
   setShortcut: (id: string, chord: string | null) => void;
   resetShortcuts: () => void;
   setBrowserWidth: (width: number) => void;
+  setSidebarWidth: (width: number) => void;
   setSidePanel: (panel: SidePanelTab) => void;
   setViewer: (viewer: { docs: string[]; active: string | null }) => void;
   setAndroidSerial: (serial: string | null) => void;
@@ -236,6 +239,7 @@ function moveItem<T extends { id: string }>(items: T[], id: string, index: numbe
 const firstPane = (ws?: Workspace) => (ws?.layout ? leaves(ws.layout)[0] : null);
 
 export const DEFAULT_BROWSER_WIDTH = 420;
+export const DEFAULT_SIDEBAR_WIDTH = 256;
 export const DEFAULT_TERMINAL_FONT_SIZE = 12.5;
 export const DEFAULT_SYSTEM_PROMPT =
   "Use your tools (MCP, browser, skills, subagents, shell) wherever they're faster or more reliable than by hand, and to verify your work. Prefer winfer's integrated tools over external ones. Open and test web pages only in winfer's browser (its browser tools or open_url), never via `open`/`xdg-open`/`start` or other browser automation. Keep tool output small, it fills your context: search with line numbers before reading, read only the lines you need (your file-read tool with an offset and limit rather than printing whole files with cat or sed), don't re-read a file you haven't changed, and trim long command output to the part you need. Change existing files with your edit tool (only the changed lines), not by rewriting whole files with Write or shell heredocs.";
@@ -314,6 +318,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   editor: null,
   shortcuts: {},
   browserWidth: DEFAULT_BROWSER_WIDTH,
+  sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   sidePanel: "browser",
   viewer: { docs: [], active: null },
   androidSerial: null,
@@ -376,6 +381,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       editor: ui.editor ?? null,
       shortcuts: ui.shortcuts ?? {},
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
+      sidebarWidth: ui.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH,
       sidePanel: ui.sidePanel ?? "browser",
       viewer: { docs: ui.viewer?.docs ?? [], active: ui.viewer?.active ?? null },
       androidSerial: ui.androidSerial ?? null,
@@ -614,6 +620,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     }),
   resetShortcuts: () => set({ shortcuts: {} }),
   setBrowserWidth: (width) => set({ browserWidth: Math.round(width) }),
+  setSidebarWidth: (width) => set({ sidebarWidth: Math.round(width) }),
   setSidePanel: (panel) => set({ sidePanel: panel, browserOpen: true }),
   setViewer: (viewer) => set({ viewer }),
   setAndroidSerial: (serial) => set({ androidSerial: serial }),
@@ -686,6 +693,7 @@ interface Snapshot {
     editor?: string | null;
     shortcuts?: Record<string, string>;
     browserWidth?: number;
+    sidebarWidth?: number;
     sidePanel?: SidePanelTab;
     viewer?: { docs?: string[]; active?: string | null };
     androidSerial?: string | null;
@@ -725,7 +733,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
   };
 }
 

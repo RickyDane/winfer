@@ -67,6 +67,7 @@ export function BrowserResizer() {
   };
   return (
     <div
+      data-resizer
       onPointerDown={start}
       onDoubleClick={() => setWidth(DEFAULT_BROWSER_WIDTH)}
       title="Drag to resize · double-click to reset"

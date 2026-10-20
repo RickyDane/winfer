@@ -46,7 +46,7 @@ import { loadEditors } from "@/features/editors/editors";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
-import { Sidebar } from "@/features/workspaces/Sidebar";
+import { Sidebar, SidebarResizer } from "@/features/workspaces/Sidebar";
 import { livePanes, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
 import { applyTheme, themeById } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
@@ -213,7 +213,12 @@ export function AppShell() {
     <div className="flex h-full flex-col">
       <TitleBar />
       <main className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
-        {sidebarOpen && <Sidebar />}
+        {sidebarOpen && (
+          <>
+            <Sidebar />
+            <SidebarResizer />
+          </>
+        )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {view === "workspace" && livePanes(workspace).some((p) => p.provider !== "shell") && (
             <AgentBar panes={livePanes(workspace)} scope={{ workspace: workspace.name }} />

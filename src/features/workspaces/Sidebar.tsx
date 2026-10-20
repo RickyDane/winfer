@@ -12,7 +12,7 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { paneMenu, workspaceMenu } from "./sidebarMenus";
-import { livePanes, paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
+import { DEFAULT_SIDEBAR_WIDTH, livePanes, paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { useSortable } from "./useSortable";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { PaneTitleInput } from "@/features/terminal/PaneTitleInput";
@@ -271,13 +271,53 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
 
 const iconButton = "rounded-md p-1.5 text-fg-subtle transition-colors hover:bg-hover hover:text-fg";
 
+const MIN_SIDEBAR = 200;
+const MAX_SIDEBAR = 560;
+/** Room the terminals keep when the sidebar is dragged wide. */
+const MIN_TERMINALS = 360;
+
+/** The gap right of the sidebar: drag to resize, double-click for the default width. */
+export function SidebarResizer() {
+  const setWidth = useWorkspaces((s) => s.setSidebarWidth);
+  const start = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const { sidebarWidth: initial, browserOpen, browserWidth } = useWorkspaces.getState();
+    const max = Math.max(Math.min(MAX_SIDEBAR, window.innerWidth - MIN_TERMINALS - (browserOpen ? browserWidth : 0)), MIN_SIDEBAR);
+    const move = (ev: PointerEvent) => setWidth(Math.min(Math.max(initial + ev.clientX - startX, MIN_SIDEBAR), max));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      document.body.classList.remove("resizing");
+    };
+    document.body.style.cursor = "col-resize";
+    // Keeps the terminals and page canvas from eating pointer events mid-drag.
+    document.body.classList.add("resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div
+      data-resizer
+      onPointerDown={start}
+      onDoubleClick={() => setWidth(DEFAULT_SIDEBAR_WIDTH)}
+      title="Drag to resize · double-click to reset"
+      className="group relative -mx-2 w-2 shrink-0 cursor-col-resize"
+    >
+      <div className="absolute inset-y-2 left-[3px] w-0.5 rounded-full bg-accent opacity-0 transition-opacity group-hover:opacity-60" />
+    </div>
+  );
+}
+
 export function Sidebar() {
+  const width = useWorkspaces((s) => s.sidebarWidth);
   const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, moveWorkspace, theme, toggleTheme } = useWorkspaces();
   const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
   const { drag, begin, dropLine } = useSortable(moveWorkspace);
 
   return (
-    <aside className="anim-slide flex h-full w-64 shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+    <aside style={{ width }} className="anim-slide flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
       <div className="flex flex-col gap-px p-2">
         <SessionsEntry />
         <ReviewEntry />

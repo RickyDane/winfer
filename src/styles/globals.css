@@ -95,6 +95,10 @@
 body.resizing * {
   pointer-events: none;
 }
+/* The handle keeps its events so a double-click still lands on it. */
+body.resizing [data-resizer] {
+  pointer-events: auto;
+}
 
 /* xterm's stylesheet paints the viewport black; at fractional sizes its edges show as a frame
    around the terminal, which is visible in light mode. */
