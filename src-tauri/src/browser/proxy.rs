@@ -21,6 +21,29 @@ pub enum Activity<'a> {
     Opened(&'a str),
     /// It acted on the tab.
     Acted(&'a str),
+    /// It moved, pressed or released the mouse in the tab (so the panel can draw its cursor).
+    Pointer(&'a str, Pointer),
+}
+
+/// An agent's mouse event, in page CSS pixels.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Pointer {
+    pub x: f64,
+    pub y: f64,
+    /// CDP's event type: mouseMoved, mousePressed, mouseReleased or mouseWheel.
+    pub kind: String,
+}
+
+impl Pointer {
+    /// The mouse event a command dispatches, if it's one.
+    fn of(text: &str) -> Option<Self> {
+        if !text.contains("\"Input.dispatchMouseEvent\"") {
+            return None;
+        }
+        let v: Value = serde_json::from_str(text).ok()?;
+        let p = &v["params"];
+        Some(Self { x: p["x"].as_f64()?, y: p["y"].as_f64()?, kind: p["type"].as_str()?.to_string() })
+    }
 }
 
 pub type OnActivity = Arc<dyn Fn(Activity) + Send + Sync>;
@@ -180,6 +203,9 @@ async fn websocket(stream: TcpStream, browser: u16, on_activity: OnActivity) -> 
                     let target = tracker.lock().unwrap().command(text);
                     if let Some(target) = target {
                         on_activity(Activity::Acted(&target));
+                        if let Some(pointer) = Pointer::of(text) {
+                            on_activity(Activity::Pointer(&target, pointer));
+                        }
                     }
                 }
                 if upstream_tx.send(msg).await.is_err() {
@@ -276,7 +302,7 @@ impl Tracker {
         if method == "Target.activateTarget" {
             return v["params"]["targetId"].as_str().map(String::from);
         }
-        if !acts(method) {
+        if !acts(method) || reads_title(&v) {
             return None;
         }
         match v["sessionId"].as_str() {
@@ -309,6 +335,19 @@ fn acts(method: &str) -> bool {
                 | "DOM.getContentQuads"
                 | "DOM.describeNode"
         )
+}
+
+/// Playwright's `page.title()`, which Playwright MCP calls on every open tab after each tool call
+/// (for the "Open tabs" list in its answer): reading a background tab's title isn't using it.
+/// It goes through Playwright's utility script, with the function's source as an argument.
+fn reads_title(v: &Value) -> bool {
+    let is_title = |s: &str| s.chars().filter(|c| !c.is_whitespace()).eq("()=>document.title".chars());
+    let params = &v["params"];
+    match v["method"].as_str() {
+        Some("Runtime.callFunctionOn") => params["arguments"].as_array().is_some_and(|args| args.iter().any(|a| a["value"].as_str().is_some_and(is_title))),
+        Some("Runtime.evaluate") => params["expression"].as_str().is_some_and(|e| e.trim() == "document.title"),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +383,12 @@ mod tests {
         assert_eq!(t.command(&command("Network.enable", Some("S1"))), None);
         t.sessions.get_mut("S1").unwrap().1 -= SETUP;
         assert_eq!(t.command(&command("Runtime.evaluate", Some("S1"))).as_deref(), Some("T1"));
+        // Playwright MCP reads every tab's title after each tool call: that isn't using them.
+        let title = serde_json::json!({ "id": 3, "sessionId": "S1", "method": "Runtime.callFunctionOn", "params": {
+            "functionDeclaration": "(utilityScript, ...args) => utilityScript.evaluate(...args)",
+            "arguments": [{ "objectId": "1" }, { "value": true }, { "value": true }, { "value": false }, { "value": "() => document.title" }, { "value": 0 }],
+        } });
+        assert_eq!(t.command(&title.to_string()), None);
         // Unknown sessions and detached ones don't.
         t.event(&serde_json::json!({ "method": "Target.detachedFromTarget", "params": { "sessionId": "S1" } }).to_string());
         assert_eq!(t.command(&command("Input.dispatchKeyEvent", Some("S1"))), None);
@@ -354,6 +399,13 @@ mod tests {
         assert!(t.creating.is_empty());
         let activate = serde_json::json!({ "id": 2, "method": "Target.activateTarget", "params": { "targetId": "T9" } }).to_string();
         assert_eq!(t.command(&activate).as_deref(), Some("T9"));
+    }
+
+    #[test]
+    fn reads_an_agents_mouse_events() {
+        let click = r#"{"id":4,"sessionId":"S1","method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":120.5,"y":40,"button":"left","clickCount":1}}"#;
+        assert_eq!(Pointer::of(click), Some(Pointer { x: 120.5, y: 40.0, kind: "mousePressed".into() }));
+        assert_eq!(Pointer::of(&command("Input.dispatchKeyEvent", Some("S1"))), None);
     }
 
     /// Through a real browser: the agent's URLs point at the proxy, and its input in a tab is reported.
@@ -393,6 +445,8 @@ mod tests {
                 .unwrap();
             assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), format!("Opened({target:?})"));
             assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), format!("Acted({target:?})"));
+            let pointer = Pointer { x: 5.0, y: 5.0, kind: "mouseMoved".into() };
+            assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), format!("{:?}", Activity::Pointer(&target, pointer)));
         });
     }
 

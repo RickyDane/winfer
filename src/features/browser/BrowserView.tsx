@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
+import { AgentCursor } from "./AgentCursor";
 import { logBrowser, setPageSize, type Device, type PageSize } from "./browser";
 
 const MOBILE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
@@ -300,6 +301,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
           onContextMenu={(e) => e.preventDefault()}
           className={cn("block h-full w-full bg-white", own && "ring-1 ring-border-strong", device === "mobile" && "rounded-xl")}
         />
+        <AgentCursor tabId={tabId} page={page} />
         {attachError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-panel px-8 text-center text-xs text-fg-subtle">
             <span className="text-danger">Couldn't show this tab: {attachError}</span>

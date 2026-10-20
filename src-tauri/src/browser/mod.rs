@@ -58,6 +58,16 @@ struct AgentEvent {
     adopted: bool,
 }
 
+/// An agent's mouse event in a tab (see `proxy::Pointer`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PointerEvent {
+    workspace_id: String,
+    target_id: String,
+    #[serde(flatten)]
+    pointer: proxy::Pointer,
+}
+
 /// Agent activity is reported at most this often per tab.
 const AGENT_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -346,6 +356,20 @@ impl Instance {
                 return;
             }
             proxy::Activity::Acted(target) => target,
+            // Not throttled: the cursor follows every move and click.
+            proxy::Activity::Pointer(target, pointer) => {
+                if self.tabs.lock().unwrap().iter().any(|t| t.id == target) {
+                    let _ = self.app.emit(
+                        "browser://agent-pointer",
+                        PointerEvent {
+                            workspace_id: self.workspace_id.clone(),
+                            target_id: target.to_string(),
+                            pointer,
+                        },
+                    );
+                }
+                return;
+            }
         };
         // Review screenshots' hidden pages and non-page targets aren't tabs.
         if !self.tabs.lock().unwrap().iter().any(|t| t.id == target) {
