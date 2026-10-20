@@ -424,6 +424,10 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             let mut cmd = CommandBuilder::new(user_shell());
             #[cfg(unix)]
             cmd.arg("-l");
+            // pwsh's "new version available" banner pads its box to the console width and
+            // crashes the shell (PadRight(-1)) when the pane is narrower than the box.
+            #[cfg(windows)]
+            agent_env.push(("POWERSHELL_UPDATECHECK".to_string(), "Off".to_string()));
             cmd
         }
     };
