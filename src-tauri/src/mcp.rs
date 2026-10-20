@@ -65,7 +65,7 @@ fn tools() -> Value {
         },
         {
             "name": "open_url",
-            "description": "Open a URL in the user's winfer browser panel for this workspace, e.g. to show a dev server preview.",
+            "description": "Open a URL in the user's winfer browser panel for this workspace, e.g. to show a dev server preview. Takes over an open tab that already shows the same site or dev server (navigating it there) instead of opening a duplicate, unless new_tab is true; the reply says which tab.",
             "inputSchema": { "type": "object", "properties": { "url": { "type": "string" }, "new_tab": { "type": "boolean" } }, "required": ["url"] }
         },
         {
@@ -183,7 +183,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "winfer", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets."
+            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets. The browser is shared with the user: before opening a page, list its open tabs and, when one already shows related content (the same site, dev server or page), select it and work there instead of opening another tab; open a new tab for unrelated content rather than navigating a tab the user has open away."
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": all_tools(env) }),

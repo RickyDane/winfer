@@ -7,6 +7,7 @@ mod cdp;
 pub mod chrome;
 pub mod inspect;
 pub mod log;
+mod proxy;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -46,6 +47,19 @@ struct Screencast {
     channel: Channel,
     sizing: Sizing,
 }
+
+/// An agent acted on a tab (see `proxy`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentEvent {
+    workspace_id: String,
+    target_id: String,
+    /// The tab wasn't opened by an agent: it took over one that was already open.
+    adopted: bool,
+}
+
+/// Agent activity is reported at most this often per tab.
+const AGENT_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +166,12 @@ struct Instance {
     console: Mutex<HashMap<String, VecDeque<inspect::ConsoleEntry>>>,
     /// Browser contexts used for review screenshots; their pages never show up as tabs.
     hidden_contexts: Mutex<HashSet<String>>,
+    /// Agents' DevTools endpoint: a proxy that sees which tab they act on.
+    proxy: proxy::Proxy,
+    /// When an agent last acted on each tab, to throttle `browser://agent`.
+    agent_seen: Mutex<HashMap<String, std::time::Instant>>,
+    /// Tabs agents opened themselves; acting on any other tab takes it over.
+    agent_opened: Mutex<HashSet<String>>,
 }
 
 impl Drop for Instance {
@@ -218,6 +238,8 @@ impl Instance {
                 self.sessions.lock().unwrap().remove(id);
                 self.attaching.lock().unwrap().remove(id);
                 self.console.lock().unwrap().remove(id);
+                self.agent_seen.lock().unwrap().remove(id);
+                self.agent_opened.lock().unwrap().remove(id);
                 self.emit_tabs();
             }
             // Our session ended without the tab closing (the page's process swapped or died):
@@ -314,6 +336,37 @@ impl Instance {
             }
             _ => {}
         }
+    }
+
+    /// An agent acted on a tab: tell the panel (throttled), which highlights it.
+    fn on_agent_activity(&self, activity: proxy::Activity) {
+        let target = match activity {
+            proxy::Activity::Opened(target) => {
+                self.agent_opened.lock().unwrap().insert(target.to_string());
+                return;
+            }
+            proxy::Activity::Acted(target) => target,
+        };
+        // Review screenshots' hidden pages and non-page targets aren't tabs.
+        if !self.tabs.lock().unwrap().iter().any(|t| t.id == target) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        {
+            let mut seen = self.agent_seen.lock().unwrap();
+            if seen.get(target).is_some_and(|at| now - *at < AGENT_EVERY) {
+                return;
+            }
+            seen.insert(target.to_string(), now);
+        }
+        let _ = self.app.emit(
+            "browser://agent",
+            AgentEvent {
+                workspace_id: self.workspace_id.clone(),
+                target_id: target.to_string(),
+                adopted: !self.agent_opened.lock().unwrap().contains(target),
+            },
+        );
     }
 
     /// Follows up on a frame: re-applies our scale and mobile flags at an agent's new size and
@@ -579,7 +632,8 @@ impl BrowserManager {
             .join(sanitize(workspace_id));
         let launched = log::check(&format!("[{workspace_id}] launch {}", exe.path.display()), chrome::launch(&exe, &profile))?;
         log::info!("[{workspace_id}] browser launched on port {}", launched.port);
-        let instance = Arc::new(Instance {
+        let listener = proxy::Listener::bind().map_err(|e| format!("CDP proxy: {e}"))?;
+        let instance = Arc::new_cyclic(|weak: &Weak<Instance>| Instance {
             workspace_id: workspace_id.to_string(),
             app: app.clone(),
             child: Mutex::new(launched.child),
@@ -596,6 +650,19 @@ impl BrowserManager {
             wanted_attach: Mutex::default(),
             console: Mutex::default(),
             hidden_contexts: Mutex::default(),
+            proxy: {
+                let weak = weak.clone();
+                listener.serve(
+                    launched.port,
+                    Arc::new(move |activity: proxy::Activity| {
+                        if let Some(instance) = weak.upgrade() {
+                            instance.on_agent_activity(activity);
+                        }
+                    }),
+                )
+            },
+            agent_seen: Mutex::default(),
+            agent_opened: Mutex::default(),
         });
         instances.insert(workspace_id.to_string(), instance.clone());
         Ok(instance)
@@ -605,7 +672,7 @@ impl BrowserManager {
     pub fn cdp_url(&self, app: &AppHandle, workspace_id: &str) -> Option<String> {
         self.ensure(app, workspace_id)
             .ok()
-            .map(|i| format!("http://127.0.0.1:{}", i.port))
+            .map(|i| format!("http://127.0.0.1:{}", i.proxy.port))
     }
 
     /// Ends every browser now, in parallel. Not left to `Drop`: tasks may still hold an

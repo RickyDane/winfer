@@ -182,6 +182,230 @@ body.resizing * {
   }
 }
 
+/* A browser tab an agent is using. One quiet language, in the accent color only: a light that
+   travels around the tab, viewfinder corners that lock onto the page, a thin activity line, and a
+   chip in the URL bar saying who. Nothing covers or resizes the page. */
+@property --agent-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes agent-spin {
+  to {
+    --agent-angle: 360deg;
+  }
+}
+@keyframes agent-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes agent-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 60%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+/* The corners close in on the page, like a camera focusing. */
+@keyframes agent-lock {
+  from {
+    opacity: 0;
+    transform: translate(var(--lock));
+  }
+}
+@keyframes agent-scan {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+/* Unlayered, so it wins over the tab's Tailwind colors. */
+.agent-tab {
+  position: relative;
+  isolation: isolate;
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+/* A short light travelling around the tab's edge. */
+.agent-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  padding: 1px;
+  border-radius: inherit;
+  background: conic-gradient(from var(--agent-angle), transparent 0 60%, color-mix(in srgb, var(--color-accent) 70%, transparent) 85%, color-mix(in srgb, var(--color-accent) 60%, white) 100%);
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: agent-spin 2.4s linear infinite;
+}
+.agent-icon {
+  color: var(--color-accent);
+}
+
+/* The URL bar of a tab an agent is using. */
+.agent-url {
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-panel-raised));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+.agent-chip {
+  display: flex;
+  flex-shrink: 1;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 45%;
+  height: 18px;
+  padding: 0 7px 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: color-mix(in srgb, var(--color-accent) 55%, var(--color-fg));
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  animation: fade-in 180ms ease-out;
+}
+.agent-chip-away {
+  cursor: pointer;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.agent-chip-away:hover {
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+.agent-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  animation: agent-pulse 1.6s ease-out infinite;
+}
+
+/* Over the page: a faint outline and a soft inner edge. */
+.agent-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent),
+    inset 0 0 32px -8px color-mix(in srgb, var(--color-accent) 35%, transparent);
+  animation: fade-in 200ms ease-out;
+}
+/* Viewfinder corners, outlined in dark so they read on light and dark pages alike. */
+.agent-frame > i {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 0 solid var(--color-accent);
+  filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.35)) drop-shadow(0 0 4px color-mix(in srgb, var(--color-accent) 50%, transparent));
+  animation:
+    agent-lock 420ms cubic-bezier(0.2, 0.9, 0.3, 1) backwards,
+    agent-breathe 2.4s ease-in-out 420ms infinite;
+}
+.agent-frame > i:nth-of-type(1) {
+  inset: 8px auto auto 8px;
+  border-width: 2px 0 0 2px;
+  border-top-left-radius: 7px;
+}
+.agent-frame > i:nth-of-type(2) {
+  inset: 8px 8px auto auto;
+  border-width: 2px 2px 0 0;
+  border-top-right-radius: 7px;
+}
+.agent-frame > i:nth-of-type(3) {
+  inset: auto 8px 8px auto;
+  border-width: 0 2px 2px 0;
+  border-bottom-right-radius: 7px;
+}
+.agent-frame > i:nth-of-type(4) {
+  inset: auto auto 8px 8px;
+  border-width: 0 0 2px 2px;
+  border-bottom-left-radius: 7px;
+}
+/* Each corner locks on from further out, diagonally away from the page's centre. */
+.agent-frame > i:nth-of-type(1) {
+  --lock: -10px, -10px;
+}
+.agent-frame > i:nth-of-type(2) {
+  --lock: 10px, -10px;
+}
+.agent-frame > i:nth-of-type(3) {
+  --lock: 10px, 10px;
+}
+.agent-frame > i:nth-of-type(4) {
+  --lock: -10px, 10px;
+}
+/* Still working: a thin light scanning along the top edge. */
+.agent-progress {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+.agent-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+  animation: agent-scan 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+/* Taking over a tab that was already open: the tab pops, and a light sweeps across the page once. */
+@keyframes agent-takeover {
+  0% {
+    transform: scale(0.9);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 70%, transparent);
+  }
+  45% {
+    transform: scale(1.07);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 12px transparent;
+  }
+}
+@keyframes agent-sweep {
+  from {
+    background-position: 130% 0;
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  to {
+    background-position: -30% 0;
+    opacity: 0;
+  }
+}
+.agent-tab.agent-adopted {
+  animation: agent-takeover 650ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.agent-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 35%, color-mix(in srgb, var(--color-accent) 22%, transparent) 50%, transparent 65%) 0 0 / 250% 100% no-repeat;
+  animation: agent-sweep 1s ease-out forwards;
+}
+/* A takeover locks on more slowly, so it reads as an event. */
+.agent-frame.agent-adopted > i {
+  animation-duration: 700ms, 2.4s;
+  animation-delay: 0ms, 700ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Spinners keep turning: they say "still working", not decoration. */
   *:not(.animate-spin),

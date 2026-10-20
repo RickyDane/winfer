@@ -3,7 +3,7 @@ import { DevicePanel } from "@/features/android/DevicePanel";
 import { ViewerPanel } from "@/features/viewer/ViewerPanel";
 import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
-import { ArrowLeft, ArrowRight, Crosshair, Download, FileText, Globe, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, FileText, Globe, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
@@ -23,24 +23,19 @@ import {
   shownWorkspaceId,
   togglePick,
   useBrowser,
-  type Tab,
+  agentName,
+  tabLabel,
 } from "./browser";
 
-const label = (tab: Tab) => {
-  if (tab.title && tab.title !== tab.url) return tab.title;
-  if (!tab.url || tab.url === "about:blank") return "New tab";
-  try {
-    return new URL(tab.url).host || tab.url;
-  } catch {
-    return tab.url;
-  }
-};
+const label = tabLabel;
 
 const IconButton = ({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) => (
   <button title={title} onClick={onClick} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
     {children}
   </button>
 );
+
+const useAgentName = (workspaceId: string) => useWorkspaces((s) => agentName(s, workspaceId));
 
 /** A laptop-sized page to start from when giving the page its own size. */
 const DESKTOP_SIZE = { width: 1280, height: 800 };
@@ -83,7 +78,7 @@ export function BrowserResizer() {
 }
 
 export function BrowserPanel() {
-  const { availability, error, tabs: allTabs, activeTab, device: devices, sizes, focusUrlBar, console: logs, consoleOpen, picking, notice, shown } = useBrowser();
+  const { availability, error, tabs: allTabs, activeTab, device: devices, sizes, focusUrlBar, console: logs, consoleOpen, picking, notice, shown, agentTabs } = useBrowser();
   const workspaces = useWorkspaces((s) => s.workspaces);
   // Re-read on workspace switches until a tab pins the panel to a workspace.
   useWorkspaces((s) => s.activeWorkspaceId);
@@ -95,6 +90,10 @@ export function BrowserPanel() {
   const device = devices[workspaceId] ?? "desktop";
   const size = active ? sizes[active.id] : undefined;
   const errors = active ? (logs[active.id] ?? []).filter((e) => e.level === "error").length : 0;
+  const who = useAgentName(workspaceId);
+  const agentHere = active ? agentTabs[active.id] : undefined;
+  // An agent working in a tab that isn't on screen: offer to show it.
+  const agentElsewhere = agentHere ? undefined : tabs.find((t) => agentTabs[t.id]);
 
   useEffect(() => {
     if (!picking) return;
@@ -151,13 +150,15 @@ export function BrowserPanel() {
                     e.preventDefault();
                     void closeTab(tab.id, workspace.id);
                   }}
-                  title={`${tab.url}\n${workspace.name}`}
+                  title={`${tab.url}\n${workspace.name}${agentTabs[tab.id] ? `\n${agentTabs[tab.id].adopted ? "An agent took over this tab" : "An agent is using this tab"}` : ""}`}
                   className={cn(
                     "group flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs",
                     workspace.id === workspaceId && tab.id === active?.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover",
+                    agentTabs[tab.id] && "agent-tab",
+                    agentTabs[tab.id]?.adopted && "agent-adopted",
                   )}
                 >
-                  <Globe size={12} />
+                  {agentTabs[tab.id] ? <Bot size={12} className="agent-icon shrink-0" /> : <Globe size={12} className="shrink-0" />}
                   <span className="truncate">{label(tab)}</span>
                   <X
                     size={11}
@@ -185,14 +186,14 @@ export function BrowserPanel() {
           <ArrowRight size={14} />
         </IconButton>
         <form
-          className="mx-1 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 text-fg-subtle"
+          className={cn("mx-1 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 text-fg-subtle", agentHere && "agent-url")}
           onSubmit={(e) => {
             e.preventDefault();
             if (address.trim()) void openUrl(address, { newTab: !active, workspaceId });
             urlInput.current?.blur();
           }}
         >
-          <Globe size={12} />
+          {agentHere ? <Bot size={12} className="agent-icon shrink-0" /> : <Globe size={12} className="shrink-0" />}
           <input
             ref={urlInput}
             value={address}
@@ -204,7 +205,25 @@ export function BrowserPanel() {
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg-muted outline-none placeholder:text-fg-subtle"
           />
-          <RotateCw size={12} className="cursor-pointer hover:text-fg" onClick={() => void history(0)} />
+          {agentHere && (
+            <span className="agent-chip" title={`${who} ${agentHere.adopted ? "took over" : "is using"} this tab`}>
+              <span className="agent-dot" />
+              <span className="truncate">{who}</span>
+            </span>
+          )}
+          {agentElsewhere && (
+            <button
+              type="button"
+              onClick={() => selectTab(agentElsewhere.id, workspaceId)}
+              className="agent-chip agent-chip-away"
+              title={`${who} ${agentTabs[agentElsewhere.id].adopted ? "took over" : "is using"} ${label(agentElsewhere)}: show it`}
+            >
+              <span className="agent-dot" />
+              <span className="truncate">{label(agentElsewhere)}</span>
+              <ArrowRight size={11} className="shrink-0" />
+            </button>
+          )}
+          <RotateCw size={12} className="shrink-0 cursor-pointer hover:text-fg" onClick={() => void history(0)} />
         </form>
         <button
           title={`Pick an element and send it to the agent (${keysFor({ type: "browser.pick" })})`}
@@ -251,7 +270,20 @@ export function BrowserPanel() {
       {consoleOpen && active && <ConsoleList tabId={active.id} />}
 
       {availability === "ready" && active ? (
-        <BrowserView key={`${workspaceId}:${active.id}`} workspaceId={workspaceId} tabId={active.id} device={device} size={size} />
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <BrowserView key={`${workspaceId}:${active.id}`} workspaceId={workspaceId} tabId={active.id} device={device} size={size} />
+          {/* Over the page, never resizing it: a faint outline, viewfinder corners and an activity line. */}
+          {agentHere && (
+            <div key={active.id} className={cn("agent-frame", agentHere.adopted && "agent-adopted")}>
+              {agentHere.adopted && <div className="agent-sweep" />}
+              <div className="agent-progress" />
+              <i />
+              <i />
+              <i />
+              <i />
+            </div>
+          )}
+        </div>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-xs text-fg-subtle">
           {availability === "missing" && (

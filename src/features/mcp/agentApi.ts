@@ -5,7 +5,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { leaves } from "@/features/layout/tree";
-import { openUrl, shownWorkspaceId } from "@/features/browser/browser";
+import { markAgentOpened, markAgentTab, openUrl, shownWorkspaceId, tabLabel, useBrowser, type Opened } from "@/features/browser/browser";
+import { relatedTab } from "@/features/browser/related";
+import { normalizeUrl } from "@/features/browser/url";
 import { reportStatus } from "@/features/status/agentStatus";
 import { openFile, resolveFiles } from "@/features/viewer/viewer";
 import { pasteText, readTerminal, sendText, startDetached } from "@/features/terminal/xtermRegistry";
@@ -103,10 +105,29 @@ export async function runTool(call: Call): Promise<string> {
       // Shown when the panel already shows this workspace or it's on screen; otherwise the tab
       // opens in the background and is listed in the panel without taking it over.
       const onScreen = s.view === "workspace" && ws.id === s.activeWorkspaceId;
-      if (onScreen || ws.id === shownWorkspaceId()) await openUrl(url, { newTab: Boolean(a.new_tab), workspaceId: ws.id });
-      else await invoke("browser_new_tab", { workspaceId: ws.id, url });
+      let opened: Opened | undefined;
+      if (onScreen || ws.id === shownWorkspaceId()) opened = await openUrl(url, { newTab: Boolean(a.new_tab), workspaceId: ws.id });
+      else {
+        // In the background too, a tab already on that site is taken over rather than duplicated.
+        const target = normalizeUrl(url);
+        const related = a.new_tab ? undefined : relatedTab(useBrowser.getState().tabs[ws.id] ?? [], target);
+        if (related) await invoke("browser_navigate", { workspaceId: ws.id, targetId: related.id, url: target });
+        opened = related ? { id: related.id, tookOver: related } : { id: await invoke<string>("browser_new_tab", { workspaceId: ws.id, url: target }) };
+      }
+      if (!opened) return `Couldn't open ${url} in the browser panel.`;
+      if (!opened.tookOver) markAgentOpened(opened.id);
+      // Lit up right away; the agent's own browser tools keep it lit while it works there.
+      markAgentTab(opened.id, ws.id, Boolean(opened.tookOver));
+      if (opened.tookOver) {
+        const was = opened.tookOver;
+        logActivity(ws.id, `${describe(ws, self)} took over ${tabLabel(was)} for ${url}`, self.provider);
+        return (
+          `Took over the open tab "${tabLabel(was)}" (${was.url}), which already showed this site, and opened ${url} in it. ` +
+          `To keep working there, select that tab with your browser tools (list the tabs, then select the one now on ${url}) instead of opening a new tab.`
+        );
+      }
       logActivity(ws.id, `${describe(ws, self)} opened ${url}`, self.provider);
-      return `Opened ${url} in the browser panel.`;
+      return `Opened ${url} in a new tab of the browser panel.`;
     }
     case "open_file": {
       const path = String(a.path ?? "").trim();

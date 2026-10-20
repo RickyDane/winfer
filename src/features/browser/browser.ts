@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { useWorkspaces } from "@/stores/workspaces";
 import { pasteText } from "@/features/terminal/xtermRegistry";
 import { normalizeUrl } from "./url";
+import { relatedTab } from "./related";
 import { followedTab } from "./follow";
 
 export { normalizeUrl };
@@ -21,6 +22,28 @@ export interface Tab {
 }
 
 export type Device = "desktop" | "mobile";
+
+/** An agent using a tab; `adopted` when it took over a tab it didn't open (one the user had open). */
+export interface AgentUse {
+  adopted: boolean;
+}
+
+/** A tab's name in the tab strip. */
+export function tabLabel(tab: Tab) {
+  if (tab.title && tab.title !== tab.url) return tab.title;
+  if (!tab.url || tab.url === "about:blank") return "New tab";
+  try {
+    return new URL(tab.url).host || tab.url;
+  } catch {
+    return tab.url;
+  }
+}
+
+/** Who's using a workspace's browser: its one working agent by name, else "An agent". */
+export function agentName(s: Pick<ReturnType<typeof useWorkspaces.getState>, "workspaces" | "providers">, workspaceId: string) {
+  const working = s.workspaces.find((w) => w.id === workspaceId)?.panes.filter((p) => p.provider !== "shell" && p.status === "working") ?? [];
+  return working.length === 1 ? (s.providers.find((p) => p.id === working[0].provider)?.name ?? working[0].provider) : "An agent";
+}
 
 export interface PageSize {
   width: number;
@@ -53,6 +76,8 @@ interface BrowserState {
   notice: string | null;
   /** The workspace whose tab the panel shows; null until the panel first opens. */
   shown: string | null;
+  /** Tabs an agent is using right now (acted on in the last few seconds), by tab id. */
+  agentTabs: Record<string, AgentUse>;
 }
 
 export const useBrowser = create<BrowserState>(() => ({
@@ -68,7 +93,42 @@ export const useBrowser = create<BrowserState>(() => ({
   picking: false,
   notice: null,
   shown: null,
+  agentTabs: {},
 }));
+
+/** How long a tab stays marked as used after an agent's last action in it. */
+const AGENT_LINGER_MS = 3500;
+const agentTimers = new Map<string, number>();
+/** Tabs agents opened through winfer (open_url): using them isn't a takeover. */
+const agentOpened = new Set<string>();
+/** Tabs whose takeover was announced, so it's said once. */
+const announced = new Set<string>();
+
+export function markAgentOpened(tabId: string) {
+  agentOpened.add(tabId);
+}
+
+/** An agent acted on a tab (the backend's CDP proxy saw it): mark it until it goes quiet. */
+export function markAgentTab(tabId: string, workspaceId: string, adopted: boolean) {
+  adopted &&= !agentOpened.has(tabId);
+  const tab = useBrowser.getState().tabs[workspaceId]?.find((t) => t.id === tabId);
+  if (adopted && tab && !announced.has(tabId)) {
+    announced.add(tabId);
+    flash(`${agentName(useWorkspaces.getState(), workspaceId)} took over ${tabLabel(tab)}`);
+  }
+  clearTimeout(agentTimers.get(tabId));
+  agentTimers.set(
+    tabId,
+    window.setTimeout(() => {
+      agentTimers.delete(tabId);
+      useBrowser.setState((s) => {
+        const { [tabId]: _, ...rest } = s.agentTabs;
+        return { agentTabs: rest };
+      });
+    }, AGENT_LINGER_MS),
+  );
+  if (useBrowser.getState().agentTabs[tabId]?.adopted !== adopted) useBrowser.setState((s) => ({ agentTabs: { ...s.agentTabs, [tabId]: { adopted } } }));
+}
 
 const activeWorkspaceId = () => useWorkspaces.getState().activeWorkspaceId;
 
@@ -113,6 +173,9 @@ function listenForTabs() {
   if (listening) return;
   listening = true;
   void listen<{ workspaceId: string; tabs: Tab[] }>("browser://tabs", ({ payload }) => setTabs(payload.workspaceId, payload.tabs));
+  void listen<{ workspaceId: string; targetId: string; adopted: boolean }>("browser://agent", ({ payload }) =>
+    markAgentTab(payload.targetId, payload.workspaceId, payload.adopted),
+  );
   void listen<{ targetId: string; width: number; height: number }>("browser://viewport", ({ payload }) => setPageSize(payload.targetId, payload));
   void listen<{ targetId: string; entry: ConsoleEntry }>("browser://console", ({ payload }) =>
     useBrowser.setState((s) => ({ console: { ...s.console, [payload.targetId]: [...(s.console[payload.targetId] ?? []), payload.entry].slice(-200) } })),
@@ -264,14 +327,6 @@ export async function installBrowser() {
   }
 }
 
-const sameOrigin = (a: string, b: string) => {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
-};
-
 export function activeTabId(workspaceId = shownWorkspaceId()) {
   return useBrowser.getState().activeTab[workspaceId] ?? null;
 }
@@ -281,19 +336,28 @@ export function selectTab(tabId: string, workspaceId = shownWorkspaceId()) {
   useBrowser.setState((s) => ({ activeTab: { ...s.activeTab, [workspaceId]: tabId }, shown: workspaceId }));
 }
 
+/** Where `openUrl` opened a page: the tab, and the open tab it took over (one already on that site), if any. */
+export interface Opened {
+  id: string;
+  tookOver?: Tab;
+}
+
 /**
- * Opens a URL in a workspace's browser (by default the one on screen) and shows it:
- * reuses a tab already on that origin unless `newTab`, else the active tab.
+ * Opens a URL in a workspace's browser (by default the one on screen) and shows it: takes over
+ * a tab already showing that site (see `relatedTab`) unless `newTab`, else a blank active tab.
  */
-export async function openUrl(input: string, opts: { newTab?: boolean; workspaceId?: string } = {}) {
-  if (!input.trim()) return focusUrlBar();
+export async function openUrl(input: string, opts: { newTab?: boolean; workspaceId?: string } = {}): Promise<Opened | undefined> {
+  if (!input.trim()) {
+    focusUrlBar();
+    return undefined;
+  }
   const ws = useWorkspaces.getState();
   if (!ws.browserOpen) ws.toggleBrowser();
   const workspaceId = opts.workspaceId ?? targetWorkspaceId();
   if (!(await ensureBrowser(workspaceId))) return;
   const url = normalizeUrl(input);
   const tabs = useBrowser.getState().tabs[workspaceId] ?? [];
-  const existing = tabs.find((t) => sameOrigin(t.url, url));
+  const existing = relatedTab(tabs, url);
   const current = activeTabId(workspaceId);
   const blank = tabs.find((t) => t.id === current && (t.url === "about:blank" || t.url === ""));
 
@@ -301,12 +365,15 @@ export async function openUrl(input: string, opts: { newTab?: boolean; workspace
     if (!opts.newTab && existing) {
       selectTab(existing.id, workspaceId);
       if (existing.url !== url) await invoke("browser_navigate", { workspaceId, targetId: existing.id, url });
+      return { id: existing.id, tookOver: existing };
     } else if (!opts.newTab && blank) {
       selectTab(blank.id, workspaceId);
       await invoke("browser_navigate", { workspaceId, targetId: blank.id, url });
+      return { id: blank.id };
     } else {
       const id = await invoke<string>("browser_new_tab", { workspaceId, url });
       selectTab(id, workspaceId);
+      return { id };
     }
   } catch (err) {
     // The backend logged the details; say so in the panel rather than failing silently.
