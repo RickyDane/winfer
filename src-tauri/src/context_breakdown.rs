@@ -156,7 +156,7 @@ impl Tally {
 
 /// Characters of text in a value: its strings, not ids, signatures or encrypted blobs; an image
 /// counts as what it costs.
-fn text_len(v: &Value) -> u64 {
+pub(crate) fn text_len(v: &Value) -> u64 {
     match v {
         Value::String(s) => s.len() as u64,
         Value::Array(a) => a.iter().map(text_len).sum(),

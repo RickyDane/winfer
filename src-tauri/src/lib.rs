@@ -21,6 +21,7 @@ mod providers;
 mod pty;
 mod review;
 mod store;
+mod tool_stats;
 mod usage;
 mod usage_history;
 mod vault;
@@ -248,6 +249,7 @@ pub fn run() {
             usage_history::usage_dirs,
             usage_history::usage_sessions,
             usage_history::usage_by_dir,
+            tool_stats::usage_tool_stats,
             llm::llm_compose,
             chatgpt::chatgpt_status,
             chatgpt::chatgpt_sign_in,

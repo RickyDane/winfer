@@ -241,7 +241,8 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-c");
         assert!(args[1].starts_with("skills.config=[{path=\""));
-        assert!(args[1].contains("/.codex/skills/wrangler/SKILL.md\",enabled=false}"));
+        // Windows paths come JSON-escaped (`\\`); compare with `/`.
+        assert!(args[1].replace("\\\\", "/").contains("/.codex/skills/wrangler/SKILL.md\",enabled=false}"));
         assert!(!args[1].contains("graphify") && !args[1].contains("caveman") && !args[1].contains(".system"));
         assert!(codex_args_in(&home, &["graphify".into(), "codex:wrangler".into(), "caveman".into()]).is_empty());
         let _ = std::fs::remove_dir_all(&home);

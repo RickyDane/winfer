@@ -430,7 +430,7 @@ fn scan_file(conn: &mut Connection, path: &Path, cutoff: i64, parse: fn(&str, &P
 }
 
 /// `.jsonl` files under `root` (any depth) changed since `since`.
-fn jsonl_files(root: &Path, since: i64) -> Vec<PathBuf> {
+pub(crate) fn jsonl_files(root: &Path, since: i64) -> Vec<PathBuf> {
     let since = std::time::UNIX_EPOCH + std::time::Duration::from_millis(since.max(0) as u64);
     let mut out = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
@@ -460,7 +460,7 @@ fn timestamp(v: &Value) -> Option<i64> {
 
 // Claude Code ------------------------------------------------------------------------------------
 
-fn claude_projects() -> Option<PathBuf> {
+pub(crate) fn claude_projects() -> Option<PathBuf> {
     let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".claude")))?;
     Some(dir.join("projects"))
 }
@@ -501,7 +501,7 @@ fn claude_events(line: &str, _path: &Path, _at: u64, _state: &mut Value) -> Opti
 
 // Codex -----------------------------------------------------------------------------------------
 
-fn codex_sessions() -> Option<PathBuf> {
+pub(crate) fn codex_sessions() -> Option<PathBuf> {
     let home = std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".codex")))?;
     Some(home.join("sessions"))
 }

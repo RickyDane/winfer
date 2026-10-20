@@ -487,7 +487,7 @@ fn pad_str() -> String {
 }
 
 /// The rule above the prompt while the agent works, with the status set into it:
-/// "── ✹ Warping…  1m 14s · ↓ 25.6k ─────────────── esc to stop ──". A comet runs along it.
+/// "── ✹ Warping…  1m 14s · ↑ 180k · ↓ 25.6k ─────────────── esc to stop ──". A comet runs along it.
 /// Between turns, while subagents or shells still run in the background, it reads
 /// "── ✹ 2 background agents running…  3m 02s ──── ctrl+g agents ──".
 fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
@@ -495,6 +495,9 @@ fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
     let right = if app.busy {
         left.extend(anim::nebula_shimmer(&format!("{}…", app.verb), t, theme::FG()));
         let mut info = format!("  {}", anim::elapsed(app.turn_started.elapsed()));
+        if app.usage.turn_input > 0 {
+            info.push_str(&format!(" · ↑ {}", anim::tokens(app.usage.turn_input)));
+        }
         if app.usage.turn > 0 {
             info.push_str(&format!(" · ↓ {}", anim::tokens(app.usage.turn)));
         }

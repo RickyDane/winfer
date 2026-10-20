@@ -97,6 +97,8 @@ struct Bridge {
     /// The running turn's output tokens, and the session's output total when it started.
     turn_tokens: TurnTokens,
     turn_base: u64,
+    /// Input tokens of the main thread and its subagents when the running turn started.
+    turn_input_base: u64,
     /// Skills Codex found (`skills/list`): name → SKILL.md path.
     skills: HashMap<String, String>,
     /// The user turns, newest last, for /undo.
@@ -158,6 +160,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         usage: Usage::default(),
         turn_tokens: TurnTokens::default(),
         turn_base: 0,
+        turn_input_base: 0,
         skills: HashMap::new(),
         turns: Vec::new(),
         commands: HashMap::new(),
@@ -507,6 +510,7 @@ impl Bridge {
                 self.turn = p["turn"]["id"].as_str().map(str::to_string);
                 self.turn_tokens = TurnTokens::default();
                 self.turn_base = self.output_total();
+                self.turn_input_base = self.usage.input + self.children.values().map(|c| c.input).sum::<u64>();
             }
             "turn/completed" => {
                 let turn = &p["turn"];
@@ -567,6 +571,7 @@ impl Bridge {
                     cached: n("total", "cachedInputTokens"),
                     cost: None,
                     turn: 0,
+                    turn_input: 0,
                 };
                 self.counted();
             }
@@ -591,6 +596,7 @@ impl Bridge {
             u.cached += c.cached;
         }
         u.turn = self.turn_tokens.now();
+        u.turn_input = u.input.saturating_sub(self.turn_input_base);
         self.emit(Ev::Usage(u));
     }
 
@@ -1216,6 +1222,7 @@ mod tests {
             usage: Usage::default(),
             turn_tokens: TurnTokens::default(),
             turn_base: 0,
+            turn_input_base: 0,
             skills: HashMap::new(),
             turns: Vec::new(),
             commands: HashMap::new(),

@@ -1069,10 +1069,12 @@ function relation(from, to, name, fromColumns, toColumns, { onDelete = "", onUpd
  * are together the primary key (or unique), and at most two other columns besides the key.
  */
 export function markJunctions(model) {
+  const declared = new Map();
+  for (const r of model.relations) if (!r.inferred) (declared.get(r.from) ?? declared.set(r.from, []).get(r.from)).push(r);
   for (const t of model.tables) {
     t.junction = null;
     if (t.kind !== "table") continue;
-    const out = model.relations.filter((r) => r.from === t.id && !r.inferred);
+    const out = declared.get(t.id) ?? [];
     if (out.length !== 2) continue;
     const keyCols = [...new Set(out.flatMap((r) => r.fromColumns))];
     const keyed = (t.primaryKey.length > 0 && t.primaryKey.every((c) => keyCols.includes(c))) || t.uniques.some((u) => sameSet(u, keyCols));
@@ -1108,6 +1110,7 @@ export function inferRelations(model) {
     if (!byName.has(key)) byName.set(key, []);
     byName.get(key).push(t);
   }
+  const declared = new Set(model.relations.map((r) => `${r.from}\u0000${r.to}\u0000${[...r.fromColumns].sort().join("\u0000")}`));
   const out = [];
   for (const t of model.tables) {
     if (t.kind !== "table") continue;
@@ -1125,16 +1128,31 @@ export function inferRelations(model) {
       }
       if (!target) continue;
       const rel = relation(t, target, `${c.name} (inferred)`, [c.name], target.primaryKey, { inferred: true });
-      if (!model.relations.some((r) => r.from === rel.from && r.to === rel.to && sameSet(r.fromColumns, rel.fromColumns))) out.push(rel);
+      if (!declared.has(`${rel.from}\u0000${rel.to}\u0000${c.name}`)) out.push(rel);
     }
   }
   return out;
+}
+
+const haystacks = new WeakMap();
+/** Whether a table's name or one of its columns contains `q` (lower case). */
+export function tableMatches(t, q) {
+  if (!q) return true;
+  let hay = haystacks.get(t);
+  if (hay === undefined) {
+    hay = [t.name, ...t.columns.map((c) => c.name)].join("\n").toLowerCase();
+    haystacks.set(t, hay);
+  }
+  return hay.includes(q);
 }
 
 /** Counts for the page and for agents. */
 export function stats(model, inferred = []) {
   const tables = model.tables.filter((t) => t.kind === "table").length;
   const views = model.tables.filter((t) => t.kind === "view" || t.kind === "materialized view").length;
+  const related = new Set();
+  for (const r of model.relations) related.add(r.from).add(r.to);
+  for (const r of inferred) related.add(r.from).add(r.to);
   return {
     tables,
     views,
@@ -1142,7 +1160,7 @@ export function stats(model, inferred = []) {
     relations: model.relations.length,
     inferred: inferred.length,
     junctions: model.tables.filter((t) => t.junction).length,
-    isolated: model.tables.filter((t) => t.kind !== "external" && ![...model.relations, ...inferred].some((r) => r.from === t.id || r.to === t.id)).length,
+    isolated: model.tables.filter((t) => t.kind !== "external" && !related.has(t.id)).length,
     noPrimaryKey: model.tables.filter((t) => t.kind === "table" && t.primaryKey.length === 0).map((t) => t.id),
   };
 }
@@ -1150,9 +1168,10 @@ export function stats(model, inferred = []) {
 /** Foreign keys whose columns no index starts with: joins and cascades on them scan the table. */
 export function unindexedForeignKeys(model) {
   const out = [];
+  const byId = new Map(model.tables.map((t) => [t.id, t]));
   for (const rel of model.relations) {
     if (rel.inferred) continue;
-    const t = model.tables.find((x) => x.id === rel.from);
+    const t = byId.get(rel.from);
     const covered = t.indexes.some((ix) => rel.fromColumns.every((c, i) => ix.columns[i] === c)) || rel.fromColumns.every((c, i) => t.primaryKey[i] === c);
     if (!covered) out.push(rel);
   }
@@ -1281,8 +1300,10 @@ function placeGroup(members, parents, neighbours, sizes) {
   members.forEach(rankOf);
   // Pull tables nothing references next to the tables they reference... they already are; push
   // referenced-only tables right next to their first child instead of far left.
+  const childrenOf = new Map();
+  for (const m of members) for (const p of parents.get(m)) if (inGroup.has(p)) (childrenOf.get(p) ?? childrenOf.set(p, []).get(p)).push(m);
   for (const id of [...members].sort((a, b) => rank.get(b) - rank.get(a))) {
-    const children = members.filter((m) => parents.get(m).has(id));
+    const children = childrenOf.get(id) ?? [];
     if (children.length && parents.get(id).size === 0) rank.set(id, Math.max(0, Math.min(...children.map((c) => rank.get(c))) - 1));
   }
 
@@ -1298,9 +1319,10 @@ function placeGroup(members, parents, neighbours, sizes) {
     const order = sweep % 2 === 0 ? columns.map((_, i) => i) : columns.map((_, i) => columns.length - 1 - i);
     for (const ci of order) {
       const col = columns[ci];
+      const inCol = new Set(col);
       const bary = new Map(
         col.map((id) => {
-          const ns = [...neighbours.get(id)].filter((n) => inGroup.has(n) && !col.includes(n));
+          const ns = [...neighbours.get(id)].filter((n) => inGroup.has(n) && !inCol.has(n));
           return [id, ns.length ? ns.reduce((s, n) => s + index.get(n), 0) / ns.length : index.get(id)];
         }),
       );
@@ -1333,7 +1355,7 @@ function placeGroup(members, parents, neighbours, sizes) {
   const pos = new Map();
   let x = 0;
   for (const col of wrapped) {
-    const w = Math.max(...col.map((id) => sizes.get(id).w));
+    const w = col.reduce((m, id) => Math.max(m, sizes.get(id).w), 0);
     const wanted = col.map((id) => {
       const ys = [...neighbours.get(id)].filter((n) => pos.has(n)).map((n) => pos.get(n).y + sizes.get(n).h / 2);
       return ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length - sizes.get(id).h / 2 : null;
@@ -1349,7 +1371,8 @@ function placeGroup(members, parents, neighbours, sizes) {
     });
     x += w + METRICS.gapX;
   }
-  const minY = Math.min(...[...pos.values()].map((p) => p.y));
+  let minY = Infinity;
+  for (const p of pos.values()) minY = Math.min(minY, p.y);
   let h = 0;
   for (const [id, p] of pos) {
     p.y -= minY;
@@ -2216,6 +2239,7 @@ const CSS = `
 .sd-box rect.sd-row-hl { fill: color-mix(in srgb, var(--color-accent) 14%, transparent); }
 .sd-box.sd-selected rect.sd-card { stroke: var(--color-accent); stroke-width: 2; }
 .sd-box.sd-match rect.sd-card { stroke: var(--color-warning, #e3973a); stroke-width: 2; }
+.sd-far .sd-cols { display: none; }
 .sd-dim .sd-box:not(.sd-lit) { opacity: .28; }
 .sd-dim .sd-edge:not(.sd-lit) { opacity: .12; }
 .sd-edge { transition: opacity .15s; cursor: pointer; }
@@ -3119,6 +3143,14 @@ function mountDiagram(root, ctx) {
   let sizes = new Map();
   let positions = new Map();
   let manual = {};
+  let byId = new Map();
+  let visible = [];
+  let colIndex = new Map();
+  let edgesByTable = new Map();
+  let boxEls = new Map();
+  let edgeEls = new Map();
+  let litNow = { tables: new Set(), edges: new Set() };
+  let sideFor;
   const measure = measurer();
 
   const page = h("div", { class: "sd-root" });
@@ -3137,7 +3169,7 @@ function mountDiagram(root, ctx) {
     spellcheck: "false",
     oninput: (e) => {
       search = e.target.value.trim().toLowerCase();
-      draw();
+      restyle();
     },
     onkeydown: (e) => {
       if (e.key !== "Enter") return;
@@ -3279,8 +3311,16 @@ function mountDiagram(root, ctx) {
     relations = model ? [...model.relations, ...(p.inferred ? inferRelations(model) : [])] : [];
   }
 
-  const visibleTables = () => (model ? model.tables.filter((t) => !schemaFilter || t.schema === schemaFilter || (t.kind === "external" && relations.some((r) => r.to === t.id && model.tables.find((x) => x.id === r.from)?.schema === schemaFilter))) : []);
-  const tableById = (id) => model?.tables.find((t) => t.id === id) ?? null;
+  /** The tables of the chosen schema, plus the external ones they reference. */
+  function computeVisible() {
+    if (!model) return [];
+    if (!schemaFilter) return model.tables;
+    const linked = new Set();
+    for (const r of relations) if (byId.get(r.from)?.schema === schemaFilter) linked.add(r.to);
+    return model.tables.filter((t) => t.schema === schemaFilter || (t.kind === "external" && linked.has(t.id)));
+  }
+  const visibleTables = () => visible;
+  const tableById = (id) => byId.get(id) ?? null;
 
   /** Puts the current connection's model (or its loading state / error) on the canvas. */
   function showModel(fitAfter = false) {
@@ -3304,6 +3344,7 @@ function mountDiagram(root, ctx) {
     }
     const fresh = model !== st.model;
     model = st.model;
+    if (fresh) byId = new Map(model.tables.map((t) => [t.id, t]));
     if (model.tables.length === 0) {
       note.replaceChildren(h("b", { style: "color:var(--color-fg)" }, "No tables"), (conn.meta.kind === "mysql" || conn.meta.kind === "mssql") && !databaseOf(conn) ? "No database chosen: pick one of the server's databases at the top." : "This database has no tables or views yet.");
       note.className = "sd-note";
@@ -3328,6 +3369,9 @@ function mountDiagram(root, ctx) {
   function clearDiagram() {
     edgeLayer.replaceChildren();
     boxLayer.replaceChildren();
+    boxEls = new Map();
+    edgeEls = new Map();
+    visible = [];
     side.style.display = "none";
     stats_.replaceChildren();
   }
@@ -3335,8 +3379,10 @@ function mountDiagram(root, ctx) {
   // Layout + drawing -------------------------------------------------------------------------------
   function relayout(fitAfter) {
     if (!model) return;
-    const tables = visibleTables();
+    visible = computeVisible();
+    const tables = visible;
     sizes = new Map(tables.map((t) => [t.id, measureTable(t, p.columns, measure)]));
+    colIndex = new Map(tables.map((t) => [t.id, new Map(visibleColumns(t, p.columns).map((c, i) => [c.name, i]))]));
     const auto = layout(tables, relations, sizes);
     positions = new Map(tables.map((t) => [t.id, manual[t.id] ? { ...manual[t.id] } : auto.get(t.id)]));
     draw();
@@ -3354,15 +3400,14 @@ function mountDiagram(root, ctx) {
   function matches() {
     if (!search || !model) return [];
     return visibleTables()
-      .filter((t) => t.name.toLowerCase().includes(search) || t.columns.some((c) => c.name.toLowerCase().includes(search)))
+      .filter((t) => tableMatches(t, search))
       .sort((a, b) => (a.name.toLowerCase() === search ? -1 : 0) - (b.name.toLowerCase() === search ? -1 : 0) || (a.name.toLowerCase().includes(search) ? 0 : 1) - (b.name.toLowerCase().includes(search) ? 0 : 1))
       .map((t) => t.id);
   }
 
   /** The y of a column's row inside its box (or the header's middle when it isn't shown). */
   function rowY(table, column) {
-    const cols = visibleColumns(table, p.columns);
-    const i = cols.findIndex((c) => c.name === column);
+    const i = colIndex.get(table.id)?.get(column) ?? -1;
     const top = METRICS.header + (stereotype(table) ? METRICS.stereo : 0);
     if (i < 0) return (METRICS.header + (stereotype(table) ? METRICS.stereo : 0)) / 2;
     return top + i * METRICS.row + METRICS.row / 2 + 2;
@@ -3439,35 +3484,52 @@ function mountDiagram(root, ctx) {
     return { tables: set, edges };
   }
 
-  function drawEdges() {
-    const shown = new Set(positions.keys());
-    const { edges } = lit();
-    edgeLayer.replaceChildren(
-      ...relations
-        .filter((r) => shown.has(r.from) && shown.has(r.to))
-        .map((r) => {
-          const g = edgeGeometry(r);
-          const el = s(
-            "g",
-            {
-              class: `sd-edge${r.inferred ? " sd-inferred" : ""}${edges.has(r.id) ? " sd-lit" : ""}`,
-              onclick: (e) => {
-                e.stopPropagation();
-                selectTable(selectedTable === r.from ? r.to : r.from);
-              },
-            },
-            s("title", {}, edgeTitle(r)),
-            s("path", { class: "sd-wide", d: g.path }),
-            s("path", { class: "sd-line", d: g.path }),
-          );
-          if (p.notation === "uml") {
-            el.append(umlEnd(g.x1, g.y1, g.d1, r.one ? "0..1" : "*", false), umlEnd(g.x2, g.y2, g.d2, r.optional ? "0..1" : "1", true));
-          } else {
-            el.append(crowEnd(g.x1, g.y1, g.d1, { many: !r.one, optional: true }), crowEnd(g.x2, g.y2, g.d2, { many: false, optional: r.optional }));
-          }
-          return el;
-        }),
+  function buildEdge(r) {
+    const g = edgeGeometry(r);
+    const el = s(
+      "g",
+      {
+        class: `sd-edge${r.inferred ? " sd-inferred" : ""}${litNow.edges.has(r.id) ? " sd-lit" : ""}`,
+        onclick: (e) => {
+          e.stopPropagation();
+          selectTable(selectedTable === r.from ? r.to : r.from);
+        },
+      },
+      s("title", {}, edgeTitle(r)),
+      s("path", { class: "sd-wide", d: g.path }),
+      s("path", { class: "sd-line", d: g.path }),
     );
+    if (p.notation === "uml") {
+      el.append(umlEnd(g.x1, g.y1, g.d1, r.one ? "0..1" : "*", false), umlEnd(g.x2, g.y2, g.d2, r.optional ? "0..1" : "1", true));
+    } else {
+      el.append(crowEnd(g.x1, g.y1, g.d1, { many: !r.one, optional: true }), crowEnd(g.x2, g.y2, g.d2, { many: false, optional: r.optional }));
+    }
+    return el;
+  }
+
+  function drawEdges() {
+    edgeEls = new Map();
+    edgesByTable = new Map();
+    const els = [];
+    for (const r of relations) {
+      if (!positions.has(r.from) || !positions.has(r.to)) continue;
+      const el = buildEdge(r);
+      edgeEls.set(r.id, el);
+      els.push(el);
+      for (const id of r.from === r.to ? [r.from] : [r.from, r.to]) (edgesByTable.get(id) ?? edgesByTable.set(id, []).get(id)).push(r);
+    }
+    edgeLayer.replaceChildren(...els);
+  }
+
+  /** Redraws only the relations of one table (while it's dragged). */
+  function redrawEdgesOf(id) {
+    for (const r of edgesByTable.get(id) ?? []) {
+      const old = edgeEls.get(r.id);
+      if (!old) continue;
+      const el = buildEdge(r);
+      old.replaceWith(el);
+      edgeEls.set(r.id, el);
+    }
   }
 
   function drawBox(t) {
@@ -3475,9 +3537,8 @@ function mountDiagram(root, ctx) {
     const { w, h: height } = sizes.get(t.id);
     const st = stereotype(t);
     const top = METRICS.header + (st ? METRICS.stereo : 0);
-    const found = search && (t.name.toLowerCase().includes(search) || t.columns.some((c) => c.name.toLowerCase().includes(search)));
     const g = s("g", {
-      class: `sd-box${t.kind === "view" || t.kind === "materialized view" ? " sd-view" : ""}${t.junction ? " sd-junction" : ""}${t.kind === "external" ? " sd-external" : ""}${selectedTable === t.id ? " sd-selected" : ""}${found ? " sd-match" : ""}`,
+      class: `sd-box${t.kind === "view" || t.kind === "materialized view" ? " sd-view" : ""}${t.junction ? " sd-junction" : ""}${t.kind === "external" ? " sd-external" : ""}`,
       transform: `translate(${pos.x},${pos.y})`,
       "data-table": t.id,
     });
@@ -3491,18 +3552,20 @@ function mountDiagram(root, ctx) {
     g.append(s("text", { class: "sd-name", x: 12, y: st ? 33 : 20 }, fit(t.name, w - 44, measure, "sans")));
     g.append(s("text", { class: "sd-count", x: w - 10, y: st ? 33 : 20, "text-anchor": "end" }, t.rows !== null && t.kind !== "view" ? `${compact(t.rows)} rows` : count === "0" ? "" : `${count} cols`));
     const cols = visibleColumns(t, p.columns);
-    if (cols.length) g.append(s("line", { class: "sd-rule", x1: 0, x2: w, y1: top, y2: top }));
-    const hl = selectedTable && selectedTable !== t.id ? highlightedColumns(t.id) : new Set();
+    // Row highlights (filled by restyle) sit under the columns, which are hidden when zoomed far out.
+    const hls = s("g", { class: "sd-hls" });
+    const body = s("g", { class: "sd-cols" });
+    g.append(hls, body);
+    if (cols.length) body.append(s("line", { class: "sd-rule", x1: 0, x2: w, y1: top, y2: top }));
     cols.forEach((c, i) => {
       const y = top + i * METRICS.row + 4;
-      if (hl.has(c.name)) g.append(s("rect", { class: "sd-row-hl", x: 1, y, width: w - 2, height: METRICS.row }));
       const badge = c.pk ? ["PK", "sd-pk"] : c.fk ? ["FK", "sd-fk"] : c.unique ? ["UK", "sd-uk"] : null;
-      if (badge) g.append(s("text", { class: `sd-badge ${badge[1]}`, x: 10, y: y + 14 }, badge[0]));
-      if (c.pk && c.fk) g.append(s("text", { class: "sd-badge sd-fk", x: 10, y: y + 6, style: "font-size:7px" }, "FK"));
+      if (badge) body.append(s("text", { class: `sd-badge ${badge[1]}`, x: 10, y: y + 14 }, badge[0]));
+      if (c.pk && c.fk) body.append(s("text", { class: "sd-badge sd-fk", x: 10, y: y + 6, style: "font-size:7px" }, "FK"));
       const typeText = `${shortType(c.type)}${c.nullable ? "?" : ""}`;
       const typeW = Math.min(measure(typeText, "mono"), w * 0.45);
-      g.append(s("text", { class: `sd-col${c.nullable ? " sd-nullable" : ""}`, x: 30, y: y + 14 }, s("title", {}, `${c.name} ${c.type}${c.nullable ? "" : " NOT NULL"}${c.default ? ` DEFAULT ${c.default}` : ""}${c.comment ? `\n${c.comment}` : ""}`), fit(c.name, w - 30 - typeW - 20, measure, "mono")));
-      g.append(s("text", { class: "sd-type", x: w - 10, y: y + 14, "text-anchor": "end" }, fit(typeText, w * 0.45, measure, "mono")));
+      body.append(s("text", { class: `sd-col${c.nullable ? " sd-nullable" : ""}`, x: 30, y: y + 14 }, s("title", {}, `${c.name} ${c.type}${c.nullable ? "" : " NOT NULL"}${c.default ? ` DEFAULT ${c.default}` : ""}${c.comment ? `\n${c.comment}` : ""}`), fit(c.name, w - 30 - typeW - 20, measure, "mono")));
+      body.append(s("text", { class: "sd-type", x: w - 10, y: y + 14, "text-anchor": "end" }, fit(typeText, w * 0.45, measure, "mono")));
     });
     if (t.comment) g.append(s("title", {}, t.comment));
     g.addEventListener("pointerdown", (e) => startDrag(e, t.id));
@@ -3519,36 +3582,81 @@ function mountDiagram(root, ctx) {
     return out;
   }
 
+  /** Rebuilds the whole diagram: after a layout, notation or column change. */
   function draw() {
     if (!model) return;
     const tables = visibleTables().filter((t) => positions.has(t.id));
-    const { tables: litTables } = lit();
-    world.setAttribute("class", selectedTable ? "sd-dim" : "");
-    boxLayer.replaceChildren(
-      ...tables.map((t) => {
-        const g = drawBox(t);
-        if (litTables.has(t.id)) g.classList.add("sd-lit");
-        return g;
-      }),
-    );
+    boxEls = new Map(tables.map((t) => [t.id, drawBox(t)]));
+    boxLayer.replaceChildren(...boxEls.values());
+    litNow = { tables: new Set(), edges: new Set() };
     drawEdges();
-    for (const g of edgeLayer.children) if (g.classList.contains("sd-lit")) g.parentNode.append(g);
+    sideFor = undefined;
+    restyle();
     applyView();
     renderStats();
-    renderSide();
     renderLegend();
   }
 
+  /** Selection and search marks, by toggling classes on what's drawn instead of redrawing it. */
+  function restyle() {
+    if (!model) return;
+    const next = lit();
+    world.setAttribute("class", selectedTable ? "sd-dim" : "");
+    for (const [id, g] of boxEls) {
+      g.classList.toggle("sd-selected", id === selectedTable);
+      g.classList.toggle("sd-lit", next.tables.has(id));
+      g.classList.toggle("sd-match", Boolean(search) && tableMatches(byId.get(id), search));
+    }
+    // Row highlights: clear the old lit tables', fill the new ones'.
+    for (const id of litNow.tables) boxEls.get(id)?.querySelector(".sd-hls")?.replaceChildren();
+    if (selectedTable) {
+      for (const id of next.tables) {
+        if (id === selectedTable) continue;
+        const g = boxEls.get(id);
+        const t = byId.get(id);
+        if (!g || !t) continue;
+        const top = METRICS.header + (stereotype(t) ? METRICS.stereo : 0);
+        const w = sizes.get(id).w;
+        const idx = colIndex.get(id);
+        const rows = [];
+        for (const name of highlightedColumns(id)) {
+          const i = idx?.get(name);
+          if (i !== undefined) rows.push(s("rect", { class: "sd-row-hl", x: 1, y: top + i * METRICS.row + 4, width: w - 2, height: METRICS.row }));
+        }
+        g.querySelector(".sd-hls").replaceChildren(...rows);
+      }
+    }
+    for (const id of new Set([...litNow.edges, ...next.edges])) edgeEls.get(id)?.classList.toggle("sd-lit", next.edges.has(id));
+    for (const id of next.edges) {
+      const el = edgeEls.get(id);
+      if (el) edgeLayer.append(el);
+    }
+    litNow = next;
+    if (sideFor !== selectedTable) {
+      sideFor = selectedTable;
+      renderSide();
+    }
+  }
+
   // Pan, zoom, drag --------------------------------------------------------------------------------
+  let viewFrame = 0;
   function applyView() {
+    if (viewFrame) cancelAnimationFrame(viewFrame);
+    viewFrame = 0;
     world.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+    // Far out the column text is unreadable anyway: skip drawing it.
+    svg.classList.toggle("sd-far", view.k < 0.4);
     zoomLabel.textContent = `${Math.round(view.k * 100)}%`;
+  }
+  /** applyView at most once a frame, for pointer and wheel events. */
+  function queueView() {
+    if (!viewFrame) viewFrame = requestAnimationFrame(applyView);
   }
 
   function zoomAt(factor, cx, cy) {
     const k = Math.min(2.5, Math.max(0.08, view.k * factor));
     view = { k, x: cx - ((cx - view.x) * k) / view.k, y: cy - ((cy - view.y) * k) / view.k };
-    applyView();
+    queueView();
   }
 
   function zoomBy(factor) {
@@ -3609,7 +3717,13 @@ function mountDiagram(root, ctx) {
       const pos = { x: Math.round(drag.px + dx), y: Math.round(drag.py + dy) };
       positions.set(drag.id, pos);
       drag.el.setAttribute("transform", `translate(${pos.x},${pos.y})`);
-      drawEdges();
+      if (!drag.frame) {
+        const id = drag.id;
+        drag.frame = requestAnimationFrame(() => {
+          if (drag) drag.frame = 0;
+          redrawEdgesOf(id);
+        });
+      }
       return;
     }
     if (!pan) return;
@@ -3617,11 +3731,13 @@ function mountDiagram(root, ctx) {
     const dy = e.clientY - pan.y;
     if (Math.abs(dx) + Math.abs(dy) > 3) pan.moved = true;
     view = { ...view, x: pan.vx + dx, y: pan.vy + dy };
-    applyView();
+    queueView();
   });
   const endPointer = () => {
     if (drag) {
+      if (drag.frame) cancelAnimationFrame(drag.frame);
       if (drag.moved) {
+        redrawEdgesOf(drag.id);
         manual[drag.id] = positions.get(drag.id);
         if (current()) saveJson(LAYOUTS + scopeKey(current()), manual);
       } else selectTable(selectedTable === drag.id ? null : drag.id);
@@ -3642,7 +3758,7 @@ function mountDiagram(root, ctx) {
       if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
       else {
         view = { ...view, x: view.x - e.deltaX, y: view.y - e.deltaY };
-        applyView();
+        queueView();
       }
     },
     { passive: false },
@@ -3660,12 +3776,12 @@ function mountDiagram(root, ctx) {
 
   function selectTable(id) {
     selectedTable = id;
-    draw();
+    restyle();
   }
 
   function focusTable(id, center) {
     selectedTable = id;
-    draw();
+    restyle();
     if (center) centerOn(id);
   }
 
@@ -3846,8 +3962,10 @@ function mountDiagram(root, ctx) {
   function overview() {
     const st = stats(model, relations.filter((r) => r.inferred));
     const slow = unindexedForeignKeys(model).filter((r) => positions.has(r.from));
+    const incoming = new Map();
+    for (const r of relations) if (r.from !== r.to) incoming.set(r.to, (incoming.get(r.to) ?? 0) + 1);
     const hubs = visibleTables()
-      .map((t) => ({ t, n: relations.filter((r) => r.to === t.id && r.from !== t.id).length }))
+      .map((t) => ({ t, n: incoming.get(t.id) ?? 0 }))
       .filter((x) => x.n > 0)
       .sort((a, b) => b.n - a.n)
       .slice(0, 6);
@@ -3894,6 +4012,7 @@ function mountDiagram(root, ctx) {
       clone.setAttribute("width", String(Math.round(b.x1 - b.x0 + 60)));
       clone.setAttribute("height", String(Math.round(b.y1 - b.y0 + 60)));
       clone.removeAttribute("style");
+      clone.classList.remove("sd-far");
       clone.querySelector("g").setAttribute("transform", "");
       clone.insertBefore(s("style", {}, `svg { ${vars} font-family: ${getComputedStyle(document.body).fontFamily}; } ${CSS.slice(CSS.indexOf("/* Diagram */"), CSS.indexOf("/* Side panel */"))}`), clone.firstChild);
       clone.insertBefore(s("rect", { x: b.x0 - 30, y: b.y0 - 30, width: b.x1 - b.x0 + 60, height: b.y1 - b.y0 + 60, style: `fill:${css.getPropertyValue("--color-panel")}` }), clone.children[1]);

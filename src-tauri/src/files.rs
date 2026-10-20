@@ -253,7 +253,7 @@ mod tests {
         std::fs::write(dir.join("docs/a.md"), "# A").unwrap();
         let cwd = dir.to_string_lossy().into_owned();
         let found = tauri::async_runtime::block_on(files_resolve(cwd.clone(), vec!["docs/a.md".into(), "docs/b.md".into(), "docs".into()], None));
-        assert_eq!(found[0].as_deref(), Some(dir.join("docs/a.md").to_string_lossy().as_ref()));
+        assert_eq!(found[0].as_deref(), Some(dir.join("docs").join("a.md").to_string_lossy().as_ref()));
         assert_eq!(found[1], None);
         assert_eq!(found[2], None);
         let _ = std::fs::remove_dir_all(dir);

@@ -104,6 +104,8 @@ pub struct Usage {
     /// Output tokens of the running turn (or the last one, between turns), partly estimated
     /// while it streams.
     pub turn: u64,
+    /// Input tokens of the running turn (or the last one), summed over its requests.
+    pub turn_input: u64,
 }
 
 /// Counts a turn's output tokens as it runs. Backends report exact counts once per model

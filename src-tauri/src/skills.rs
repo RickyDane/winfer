@@ -268,7 +268,7 @@ fn find_copy(home: &Path, projects: &[PathBuf], name: &str, dir: &str) -> Result
     list_installed(home, projects)
         .into_iter()
         .find(|s| s.name == name)
-        .and_then(|s| s.copies.into_iter().find(|c| c.dir == dir))
+        .and_then(|s| s.copies.into_iter().find(|c| Path::new(&c.dir) == Path::new(dir)))
         .ok_or_else(|| format!("{name} isn't at {dir}"))
 }
 
