@@ -149,6 +149,8 @@ pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
                 Err(RecvTimeoutError::Disconnected) => break,
             }
             app.flush_usage();
+            // The wait for a background report turn runs out without an event.
+            app.report_status();
             if app.quit {
                 break;
             }

@@ -78,6 +78,9 @@ pub const COMMANDS: [(&str, &str); 24] = [
     ("/quit", "Exit"),
 ];
 
+/// How long a turn that outlived its background tasks waits for the turn on their report.
+const REPORT_GRACE: Duration = Duration::from_secs(15);
+
 const VERBS: [&str; 10] = ["Orbiting", "Charting", "Drifting", "Calibrating", "Navigating", "Stargazing", "Launching", "Docking", "Transmitting", "Warping"];
 
 pub struct Completion {
@@ -436,16 +439,24 @@ impl App {
     /// Whether the agent is doing anything: a turn runs, or a subagent or shell it started in
     /// the background still does (Claude Code ends the turn before those finish).
     pub fn working(&self) -> bool {
-        self.busy || self.background_running()
+        self.busy || self.background_running() || self.awaiting_report()
     }
 
     pub fn background_running(&self) -> bool {
         self.running_subagents() > 0 || self.running_shells() > 0
     }
 
+    /// The turn outlived its background work, which just ended: the backend starts a turn on its
+    /// report next, so the agent isn't done yet. Bounded, in case no report turn comes.
+    fn awaiting_report(&self) -> bool {
+        self.turn_open
+            && !self.busy
+            && self.tasks.iter().filter_map(|t| t.ended).any(|ended| ended.elapsed() < REPORT_GRACE)
+    }
+
     /// Tells winfer when the pane starts or stops working, so it isn't "done" while background
-    /// tasks still run.
-    fn report_status(&mut self) {
+    /// tasks still run, nor in the moment between their end and the turn on their report.
+    pub fn report_status(&mut self) {
         let working = self.working();
         if working == self.reported_working {
             return;
@@ -2757,9 +2768,30 @@ mod tests {
         assert!(s.contains("1 background agent running…"), "{s}");
         a.on_agent(g, task(Some("completed"), None));
         assert_eq!(a.running_subagents(), 0);
-        assert!(!a.working() && !a.reported_working);
         let s = screen(&mut a, 120, 30);
         assert!(!s.contains("1 agent") && !s.contains("background agent"), "{s}");
+        // Not done yet: the backend starts a turn on the agent's report, and that ends the work.
+        assert!(a.working() && a.reported_working);
+        a.on_agent(g, Ev::TurnStart);
+        assert!(a.reported_working);
+        a.on_agent(g, Ev::TurnDone);
+        assert!(!a.working() && !a.reported_working);
+    }
+
+    #[test]
+    fn a_missing_report_turn_ends_the_work_after_a_grace() {
+        let mut a = app();
+        let g = a.generation;
+        a.items.push(Item::new(Block::User { text: "go".into() }));
+        let task = |status: &str| Ev::Task(TaskEv { id: "s1".into(), status: Some(status.into()), ..Default::default() });
+        a.on_agent(g, Ev::TurnStart);
+        a.on_agent(g, task("running"));
+        a.on_agent(g, Ev::TurnDone);
+        a.on_agent(g, task("completed"));
+        assert!(a.working() && a.reported_working);
+        a.tasks[0].ended = Some(Instant::now() - REPORT_GRACE);
+        a.report_status();
+        assert!(!a.working() && !a.reported_working);
     }
 
     #[test]

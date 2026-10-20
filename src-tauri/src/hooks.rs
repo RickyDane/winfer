@@ -131,6 +131,70 @@ fn transcript_reply(path: &str) -> Option<String> {
     None
 }
 
+/// Background work started within this long before a stop still counts as running; older
+/// launches without a completion are taken for orphans (their Claude Code process exited).
+const BACKGROUND_MAX_AGE_SECS: u64 = 12 * 3600;
+
+/// Whether a Claude Code session still has background work running (shell commands run in the
+/// background, async subagents): its `Stop` then only ends the current turn, as each task's
+/// completion wakes the agent again. Launches are tool results carrying a `backgroundTaskId`,
+/// or an `agentId` with status `async_launched`; completions are `<task-notification>`s.
+fn background_pending(path: &str) -> bool {
+    let Ok(file) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let cutoff = iso_utc(std::time::SystemTime::now(), BACKGROUND_MAX_AGE_SECS);
+    let mut launched: Vec<String> = Vec::new();
+    let mut finished: Vec<String> = Vec::new();
+    for line in file.lines() {
+        if line.contains("<task-notification>") {
+            let mut rest = line;
+            while let Some(start) = rest.find("<task-id>") {
+                rest = &rest[start + "<task-id>".len()..];
+                let Some(end) = rest.find("</task-id>") else { break };
+                finished.push(rest[..end].to_string());
+                rest = &rest[end..];
+            }
+        }
+        if !line.contains("backgroundTaskId") && !line.contains("async_launched") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
+        if entry["timestamp"].as_str().is_some_and(|t| t < cutoff.as_str()) {
+            continue;
+        }
+        let result = &entry["toolUseResult"];
+        let id = result["backgroundTaskId"]
+            .as_str()
+            .or_else(|| (result["status"] == "async_launched").then(|| result["agentId"].as_str()).flatten());
+        if let Some(id) = id {
+            launched.push(id.to_string());
+        }
+    }
+    launched.iter().any(|id| !finished.contains(id))
+}
+
+/// `now - age_secs` as an RFC 3339 UTC timestamp (`2026-10-20T19:43:24Z`), comparable as a
+/// string with the timestamps in Claude Code's transcripts.
+fn iso_utc(now: std::time::SystemTime, age_secs: u64) -> String {
+    let secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+        .saturating_sub(age_secs);
+    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
 /// The hook program: `winfer hook <provider> <event>`, run without a shell (Claude Code's
 /// exec form, Codex's `notify` argv). A shell command wouldn't work everywhere: on Windows,
 /// Claude Code runs hooks in PowerShell when Git Bash isn't installed, and Codex uses no shell.
@@ -314,11 +378,21 @@ fn serve(
                         if let Ok(report) = serde_json::from_str::<Value>(&body) {
                             on_usage(provider, pane_id, report);
                         }
-                    } else if let Some(status) = status_for(provider, event) {
+                    } else if let Some(mut status) = status_for(provider, event) {
                         let json = serde_json::from_str::<Value>(&body).ok();
                         if is_reminder(provider, event, json.as_ref()) {
                             let _ = req.respond(tiny_http::Response::empty(204));
                             continue;
+                        }
+                        // A turn that ends while background tasks or subagents still run isn't
+                        // the end of the work: their results start another turn.
+                        if (provider.as_str(), event.as_str()) == ("claude", "Stop")
+                            && json
+                                .as_ref()
+                                .and_then(|v| v["transcript_path"].as_str())
+                                .is_some_and(background_pending)
+                        {
+                            status = "working";
                         }
                         let field = |key: &str| json.as_ref().and_then(|v| v.get(key)).and_then(Value::as_str).map(String::from);
                         let message = field("message");
@@ -382,6 +456,34 @@ mod tests {
         assert_eq!(status_for("pi", "agent_settled"), Some("done"));
         assert_eq!(status_for("pi", "agent_aborted"), Some("idle"));
         assert_eq!(status_for("claude", "Unknown"), None);
+    }
+
+    #[test]
+    fn iso_utc_formats_civil_dates() {
+        let at = |secs: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        assert_eq!(iso_utc(at(0), 0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(at(1_803_065_004), 0), "2027-02-19T19:23:24Z");
+        assert_eq!(iso_utc(at(1_709_208_000 + 3600), 3600), "2024-02-29T12:00:00Z");
+    }
+
+    #[test]
+    fn background_work_keeps_the_turn_open() {
+        let now = iso_utc(std::time::SystemTime::now(), 0);
+        let bash = json!({"type":"user","timestamp":now,"toolUseResult":{"stdout":"","backgroundTaskId":"b1"}});
+        let agent = json!({"type":"user","timestamp":now,"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a1"}});
+        let old = json!({"type":"user","timestamp":"2020-01-01T00:00:00.000Z","toolUseResult":{"backgroundTaskId":"b0"}});
+        let note = |id: &str| json!({"type":"queue-operation","content":format!("<task-notification>\n<task-id>{id}</task-id>\n<status>completed</status>\n</task-notification>")});
+        let path = std::env::temp_dir().join(format!("winfer-transcript-{:x}.jsonl", rand::random::<u64>()));
+        let check = |entries: &[&Value]| {
+            let text = entries.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
+            std::fs::write(&path, text).unwrap();
+            background_pending(path.to_str().unwrap())
+        };
+        assert!(!check(&[&old]));
+        assert!(check(&[&bash, &agent, &note("b1")]));
+        assert!(!check(&[&bash, &agent, &note("b1"), &note("a1")]));
+        let _ = std::fs::remove_file(&path);
+        assert!(!background_pending(path.to_str().unwrap()));
     }
 
     #[test]
