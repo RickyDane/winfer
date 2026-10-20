@@ -1,6 +1,6 @@
-name: unstable
+name: nebula
 
-# Every push to main ships to the unstable channel as vX.Y.Z-N: X.Y.Z is the next stable version
+# Every push to main ships to the Nebula channel as vX.Y.Z-N: X.Y.Z is the next stable version
 # (the patch after the last stable tag, or tauri.conf.json's version when that's newer, so a
 # minor/major bump is just editing it) and N this workflow's run number. Pushes landing while a
 # build runs are batched into the next one.
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: unstable-release
+  group: nebula-release
 
 jobs:
   tag:

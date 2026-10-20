@@ -6,10 +6,10 @@ use serde::Serialize;
 use tauri::{Manager, Runtime, Webview};
 use tauri_plugin_updater::UpdaterExt;
 
-/// latest.json on the latest (stable) release, and on the release unstable builds replace
+/// latest.json on the latest (stable) release, and on the release Nebula builds replace
 /// (see .github/workflows/release.yml).
 const STABLE_FEED: &str = "https://github.com/RickyDane/winfer/releases/latest/download/latest.json";
-const UNSTABLE_FEED: &str = "https://github.com/RickyDane/winfer/releases/download/unstable-channel/latest.json";
+const NEBULA_FEED: &str = "https://github.com/RickyDane/winfer/releases/download/nebula-channel/latest.json";
 
 /// What `@tauri-apps/plugin-updater`'s `Update` class is constructed from.
 #[derive(Serialize)]
@@ -23,13 +23,13 @@ pub struct UpdateMetadata {
     raw_json: serde_json::Value,
 }
 
-/// The newer release on `channel` ("stable" or "unstable"), if any. Never a downgrade: an
-/// unstable build switched to stable waits for the stable release of its version.
+/// The newer release on `channel` ("stable" or "nebula"), if any. Never a downgrade: a
+/// Nebula build switched to stable waits for the stable release of its version.
 #[tauri::command]
 pub async fn app_update_check<R: Runtime>(webview: Webview<R>, channel: String) -> Result<Option<UpdateMetadata>, String> {
     let feed = match channel.as_str() {
         "stable" => STABLE_FEED,
-        "unstable" => UNSTABLE_FEED,
+        "nebula" => NEBULA_FEED,
         other => return Err(format!("unknown update channel {other}")),
     };
     let url = feed.parse().map_err(|e| format!("{e}"))?;

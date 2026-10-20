@@ -29,8 +29,8 @@ export interface ReleaseChanges {
 }
 
 /**
- * Orders "0.1.9" before "0.1.10"; a leading "v" is ignored. Unstable builds carry a numeric
- * pre-release ("0.1.102-7", see unstable.yml), which sorts before its release, as in semver.
+ * Orders "0.1.9" before "0.1.10"; a leading "v" is ignored. Nebula builds carry a numeric
+ * pre-release ("0.1.102-7", see nebula.yml), which sorts before its release, as in semver.
  */
 export function compareVersions(a: string, b: string): number {
   const split = (v: string) => {
@@ -56,13 +56,13 @@ export function compareVersions(a: string, b: string): number {
 
 /**
  * The releases after `from` up to and including `to`, newest first, so skipping versions still
- * shows everything that changed. No `from` → just `to`. Unstable (pre-release) builds only count
+ * shows everything that changed. No `from` → just `to`. Nebula (pre-release) builds only count
  * when updating to one; a stable release's notes already cover everything since the last stable.
  */
 export function releasesBetween(releases: { tag_name: string; body?: string | null; draft?: boolean; prerelease?: boolean }[], from: string | null, to: string): ReleaseChanges[] {
-  const unstable = to.includes("-");
+  const nebula = to.includes("-");
   return releases
-    .filter((r) => !r.draft && (unstable || !r.prerelease))
+    .filter((r) => !r.draft && (nebula || !r.prerelease))
     .map((r) => ({ version: r.tag_name.replace(/^v/, ""), changes: parseChanges(r.body) }))
     .filter((r) => compareVersions(r.version, to) <= 0 && (from ? compareVersions(r.version, from) > 0 : compareVersions(r.version, to) === 0))
     .sort((a, b) => compareVersions(b.version, a.version));

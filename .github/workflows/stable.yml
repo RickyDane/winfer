@@ -1,12 +1,12 @@
 name: stable
 
-# Promotes an unstable build to the stable channel: tags its commit vX.Y.Z (the unstable build's
+# Promotes a Nebula build to the stable channel: tags its commit vX.Y.Z (the Nebula build's
 # version without the -N) and builds that as the latest release. Run it from the Actions tab.
 on:
   workflow_dispatch:
     inputs:
       from:
-        description: Unstable build to promote, e.g. v0.1.102-57 (empty = the newest one that finished)
+        description: Nebula build to promote, e.g. v0.1.102-57 (empty = the newest one that finished)
         required: false
 
 permissions:
@@ -36,14 +36,14 @@ jobs:
             for t in $(git tag -l 'v*-*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' | sort -V -r); do
               if finished "$t"; then FROM=$t; break; fi
             done
-            [ -n "$FROM" ] || { echo "::error::No finished unstable build to promote"; exit 1; }
+            [ -n "$FROM" ] || { echo "::error::No finished Nebula build to promote"; exit 1; }
           elif ! [[ $FROM =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]] || ! finished "$FROM"; then
-            echo "::error::$FROM isn't a finished unstable build"
+            echo "::error::$FROM isn't a finished Nebula build"
             exit 1
           fi
           tag=${FROM%-*}
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "::error::$tag is released already; push to main for a newer unstable build first"
+            echo "::error::$tag is released already; push to main for a newer Nebula build first"
             exit 1
           fi
           git tag "$tag" "$FROM^{commit}"

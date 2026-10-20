@@ -3,10 +3,10 @@ name: release
 # Builds macOS and Windows bundles for a tag and publishes them as a GitHub release. The tag is
 # the version (stamped into the app here, so the files in the repo don't need bumping) and picks
 # the channel:
-#   unstable  v0.1.102-57  every push to main (unstable.yml); a pre-release, published to the
-#                          unstable feed ("unstable-channel" release's latest.json)
-#   stable    v0.1.102     promoted from an unstable build (stable.yml); the latest release
-#                          (releases/latest/download/latest.json), also published to the unstable feed
+#   nebula    v0.1.102-57  every push to main (nebula.yml); a pre-release, published to the
+#                          Nebula feed (nebula-channel release's latest.json)
+#   stable    v0.1.102     promoted from a Nebula build (stable.yml); the latest release
+#                          (releases/latest/download/latest.json), also published to the Nebula feed
 # Users pick which feed their app follows in settings, whichever build they installed.
 # Run manually to rebuild an existing tag.
 on:
@@ -29,8 +29,8 @@ concurrency:
 
 env:
   TAG: ${{ inputs.tag }}
-  # The unstable channel's update feed: a fixed release whose latest.json each build replaces.
-  FEED_TAG: unstable-channel
+  # The Nebula channel's update feed: a fixed release whose latest.json each build replaces.
+  FEED_TAG: nebula-channel
 
 jobs:
   # One job creates the release; the bundle jobs only upload to it. (When each bundle job
@@ -58,7 +58,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            # Stable notes cover everything since the previous stable release; unstable ones,
+            # Stable notes cover everything since the previous stable release; Nebula ones,
             # since the previous build of either channel.
             if [[ $TAG == *-* ]]; then
               prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$TAG^" 2>/dev/null || true)
@@ -109,14 +109,14 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      # The tag is the version (unstable ones with a numeric pre-release, which the MSI bundler
-      # requires). Unstable builds start on the unstable update channel; users can switch either
+      # The tag is the version (Nebula ones with a numeric pre-release, which the MSI bundler
+      # requires). Nebula builds start on the Nebula update channel; users can switch either
       # way in settings (app_updates.rs).
       - name: Stamp version
         shell: bash
         run: |
           if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-            echo "::error::Tag $TAG isn't vX.Y.Z (stable) or vX.Y.Z-N (unstable)"
+            echo "::error::Tag $TAG isn't vX.Y.Z (stable) or vX.Y.Z-N (Nebula)"
             exit 1
           fi
           node - <<'EOF'
@@ -232,8 +232,8 @@ jobs:
         run: sccache --show-stats
 
   # latest.json is what installed apps poll: the newest version and, per platform, the signed
-  # bundle's URL and signature. Stable apps read it from the latest release, unstable apps from
-  # the unstable-channel release.
+  # bundle's URL and signature. Stable apps read it from the latest release, Nebula apps from
+  # the nebula-channel release.
   updater-json:
     needs: [release, bundle]
     runs-on: avrea-ubuntu-latest-2-vcpu
@@ -269,9 +269,9 @@ jobs:
             '{version: $version, notes: $notes, pub_date: $date, platforms: $platforms}' > latest.json
           cat latest.json
           gh release upload "$TAG" latest.json --clobber
-      # Unstable builds always go to the feed; stable ones too, so unstable apps move onto a stable
+      # Nebula builds always go to the feed; stable ones too, so Nebula apps move onto a stable
       # release of their version. Never replace a newer build (e.g. when rebuilding an old tag).
-      - name: Publish to the unstable channel
+      - name: Publish to the Nebula channel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -285,12 +285,12 @@ jobs:
           }
           if ! gh release view "$FEED_TAG" >/dev/null 2>&1; then
             gh release create "$FEED_TAG" --prerelease --latest=false --target "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" -q .object.sha)" \
-              --title "Unstable channel" --notes "Update feed for unstable builds of winfer. Download the newest pre-release instead."
+              --title "Nebula channel" --notes "Update feed for Nebula builds of winfer. Download the newest pre-release instead."
           fi
           mkdir feed
           current=$(gh release download "$FEED_TAG" --pattern latest.json --dir feed >/dev/null 2>&1 && jq -r .version feed/latest.json || true)
           if [ -n "$current" ] && [[ $(key "$current") > $(key "${TAG#v}") ]]; then
-            echo "The unstable channel already has $current; leaving it"
+            echo "The Nebula channel already has $current; leaving it"
             exit 0
           fi
           gh release upload "$FEED_TAG" latest.json --clobber

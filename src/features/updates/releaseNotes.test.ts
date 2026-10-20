@@ -44,7 +44,7 @@ describe("compareVersions", () => {
     expect(compareVersions("0.1.43", "v0.1.43")).toBe(0);
   });
 
-  it("orders unstable builds before their release", () => {
+  it("orders nebula builds before their release", () => {
     expect(compareVersions("0.1.102-7", "0.1.102")).toBeLessThan(0);
     expect(compareVersions("0.1.102-7", "0.1.101")).toBeGreaterThan(0);
     expect(compareVersions("0.1.102-9", "0.1.102-10")).toBeLessThan(0);
@@ -71,12 +71,12 @@ describe("releasesBetween", () => {
     expect(releasesBetween(releases, null, "0.1.44")).toEqual([{ version: "0.1.44", changes: ["four"] }]);
   });
 
-  it("includes unstable builds only when updating to one", () => {
-    const withUnstable = [...releases, { tag_name: "v0.1.45-3", body: "- u3", prerelease: true }, { tag_name: "v0.1.45-2", body: "- u2", prerelease: true }];
-    expect(releasesBetween(withUnstable, "0.1.44", "0.1.45-3")).toEqual([
+  it("includes nebula builds only when updating to one", () => {
+    const withNebula = [...releases, { tag_name: "v0.1.45-3", body: "- u3", prerelease: true }, { tag_name: "v0.1.45-2", body: "- u2", prerelease: true }];
+    expect(releasesBetween(withNebula, "0.1.44", "0.1.45-3")).toEqual([
       { version: "0.1.45-3", changes: ["u3"] },
       { version: "0.1.45-2", changes: ["u2"] },
     ]);
-    expect(releasesBetween(withUnstable, "0.1.43", "0.1.44")).toEqual([{ version: "0.1.44", changes: ["four"] }]);
+    expect(releasesBetween(withNebula, "0.1.43", "0.1.44")).toEqual([{ version: "0.1.44", changes: ["four"] }]);
   });
 });

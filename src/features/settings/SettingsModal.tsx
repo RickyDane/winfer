@@ -155,14 +155,14 @@ function UpdateFooter() {
     <div className="mt-auto space-y-1.5 border-t border-border px-0.5 pt-3 pb-1">
       <Select
         aria-label="Update channel"
-        title="Stable: tested releases. Unstable: every change as soon as it lands."
+        title="Stable: tested releases. Nebula: every change as soon as it lands."
         value={channel}
         onChange={(e) => setUpdateChannel(e.target.value as UpdateChannel)}
         disabled={installing}
         className="w-full"
       >
         <option value="stable">Stable updates</option>
-        <option value="unstable">Unstable updates</option>
+        <option value="nebula">Nebula updates</option>
       </Select>
       <div className="px-2 text-[11px] text-fg-subtle">
         {available ? (

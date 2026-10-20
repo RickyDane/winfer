@@ -8,11 +8,11 @@ import { parseChanges, type ReleaseChanges, releasesBetween } from "./releaseNot
 
 /**
  * App updates from GitHub releases: latest.json on the latest release (stable channel) or on the
- * unstable-channel release (unstable channel, every push to main), whichever the user picked in
+ * nebula-channel release (Nebula channel, every push to main), whichever the user picked in
  * settings (built by release.yml, checked by app_updates.rs), and installs the signed bundle for this platform. Nothing installs
  * without the user's say-so, since restarting stops every running agent.
  */
-export type UpdateChannel = "stable" | "unstable";
+export type UpdateChannel = "stable" | "nebula";
 
 interface UpdateState {
   version: string | null;
@@ -33,12 +33,13 @@ interface UpdateState {
 }
 
 const CHANNEL = "winfer.updateChannel";
-const savedChannel = localStorage.getItem(CHANNEL);
+const stored = localStorage.getItem(CHANNEL);
+const savedChannel: UpdateChannel | null = stored === "stable" || stored === "nebula" ? stored : null;
 
 export const useUpdates = create<UpdateState>(() => ({
   version: null,
-  // Until picked, the channel of the build itself (unstable builds are versioned X.Y.Z-N).
-  channel: savedChannel === "stable" || savedChannel === "unstable" ? savedChannel : "stable",
+  // Until picked, the channel of the build itself (Nebula builds are versioned X.Y.Z-N).
+  channel: savedChannel ?? "stable",
   checking: false,
   installing: false,
   available: null,
@@ -141,7 +142,7 @@ export function startUpdateChecks() {
   started = true;
   void getVersion().then(
     (version) => {
-      useUpdates.setState({ version, ...(savedChannel ? {} : { channel: version.includes("-") ? "unstable" : "stable" }) });
+      useUpdates.setState({ version, ...(savedChannel ? {} : { channel: version.includes("-") ? "nebula" : "stable" }) });
       void announceUpdate(version);
     },
     () => {},

@@ -114,7 +114,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        // Updates come from latest.json on the latest GitHub release, or on the unstable-channel
+        // Updates come from latest.json on the latest GitHub release, or on the nebula-channel
         // release, per the channel picked in settings (see app_updates.rs).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())

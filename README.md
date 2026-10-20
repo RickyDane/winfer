@@ -103,11 +103,11 @@ Download the latest `.dmg` (macOS 11+, Apple Silicon and Intel) or the `.exe` / 
 from [Releases](https://github.com/RickyDane/winfer/releases/latest). winfer starts the agent CLIs
 you already have installed (`claude`, `codex`, `opencode`, …) — install and log in to them first.
 
-**Unstable channel** — every change on `main` is built right away as a pre-release (`vX.Y.Z-N`) on
+**Nebula channel** — every change on `main` is built right away as a pre-release (`vX.Y.Z-N`) on
 [Releases](https://github.com/RickyDane/winfer/releases). Pick which updates you get under Settings (bottom
-left): **Stable** only offers stable releases, **Unstable** every build, stable ones included. Installs start on
+left): **Stable** only offers stable releases, **Nebula** every build, stable ones included. Installs start on
 the channel of the build you downloaded.
-Maintainers promote an unstable build to stable with the **stable** workflow in Actions.
+Maintainers promote a Nebula build to stable with the **stable** workflow in Actions.
 
 ## Build from source
 
