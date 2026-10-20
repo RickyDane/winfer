@@ -1,25 +1,29 @@
 import { Ellipsis } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { execute, type Command } from "@/commands/bus";
+import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { preferredEditor } from "@/features/editors/editors";
 import type { Pane } from "@/stores/workspaces";
 
-/** Per-pane actions behind the "…" button. */
-export function PaneMenu({ pane, onRename }: { pane: Pane; onRename: () => void }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
+/** Width of ContextMenu (w-60), to right-align it under the button. */
+const MENU_WIDTH = 240;
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => !root.current?.contains(e.target as Node) && setOpen(false);
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
-  }, [open]);
+/** Per-pane actions behind the "…" button. Portaled to <body> so the pane's overflow clipping can't cut it off. */
+export function PaneMenu({ pane, onRename }: { pane: Pane; onRename: () => void }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+
+  const toggle = () => {
+    if (at) return setAt(null);
+    const r = button.current?.getBoundingClientRect();
+    if (r) setAt({ x: r.right - MENU_WIDTH, y: r.bottom + 4 });
+  };
 
   const target = { id: pane.id };
   const editor = preferredEditor();
-  const items: { label: string; run: () => void; danger?: boolean }[] = [
+  const items: MenuItem[] = [
     { label: "Rename…", run: onRename },
     ...(pane.worktree
       ? [
@@ -47,26 +51,11 @@ export function PaneMenu({ pane, onRename }: { pane: Pane; onRename: () => void 
   ];
 
   return (
-    <div ref={root} className="relative" onMouseDown={(e) => e.stopPropagation()}>
-      <button title="More" onClick={() => setOpen((o) => !o)} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
+    <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+      <button ref={button} title="More" onClick={toggle} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
         <Ellipsis size={14} />
       </button>
-      {open && (
-        <div className="anim-menu absolute right-0 z-40 mt-1 w-56 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
-          {items.map((item) => (
-            <button
-              key={item.label}
-              onClick={() => {
-                setOpen(false);
-                item.run();
-              }}
-              className={`block w-full rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover ${item.danger ? "text-danger" : "text-fg"}`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {at && createPortal(<ContextMenu x={at.x} y={at.y} items={items} onClose={() => setAt(null)} />, document.body)}
     </div>
   );
 }
