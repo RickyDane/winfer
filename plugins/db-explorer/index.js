@@ -1180,6 +1180,9 @@ export function unindexedForeignKeys(model) {
 
 // Layout ------------------------------------------------------------------------------------------
 
+/** Below this zoom the diagram skips the column rows: they'd be unreadable. */
+const FAR = 0.4;
+
 export const METRICS = { header: 32, stereo: 12, row: 20, pad: 8, minWidth: 170, maxWidth: 380, gapX: 120, gapY: 36, gapComp: 90 };
 
 /** The columns a box shows: "all", "keys" (primary, foreign and unique keys) or "none". */
@@ -2086,6 +2089,7 @@ const CSS = `
 .db-filter input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--color-fg); font: inherit; font-size: 12px; user-select: text; }
 .db-table { display: flex; align-items: center; gap: 6px; width: 100%; cursor: pointer; padding: 4px 10px; border: 0; background: transparent; font: inherit; font-size: 12px; color: var(--color-fg); text-align: left; }
 .db-table:hover { background: var(--color-hover); }
+.db-table, .db-col { content-visibility: auto; contain-intrinsic-height: auto 24px; }
 .db-table .db-icon { width: 12px; height: 12px; color: var(--color-fg-subtle); transition: transform .12s; }
 .db-table.db-open > .db-icon:first-child { transform: rotate(90deg); }
 .db-table > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
@@ -2240,6 +2244,8 @@ const CSS = `
 .sd-box.sd-selected rect.sd-card { stroke: var(--color-accent); stroke-width: 2; }
 .sd-box.sd-match rect.sd-card { stroke: var(--color-warning, #e3973a); stroke-width: 2; }
 .sd-far .sd-cols { display: none; }
+/* Fading hundreds of boxes at once makes selecting a table stutter. */
+.sd-big .sd-box, .sd-big .sd-edge { transition: none; }
 .sd-dim .sd-box:not(.sd-lit) { opacity: .28; }
 .sd-dim .sd-edge:not(.sd-lit) { opacity: .12; }
 .sd-edge { transition: opacity .15s; cursor: pointer; }
@@ -2809,7 +2815,12 @@ function mountQuery(root, ctx) {
   let tableFilter = "";
   let maxRows = 500;
   let running = false;
-  let copied = false;
+  let filterFrame = 0;
+  // Sidebar rows, built once per schema model and reused while filtering and opening tables.
+  let rowCache = { model: null, rows: new Map() };
+  // What the result card shows, so unrelated updates (history) don't rebuild a big table.
+  let shownResult = null;
+  let fillTimer = 0;
 
   const page = h("div", { class: "wf-page db-page" });
   root.append(page);
@@ -2897,8 +2908,8 @@ function mountQuery(root, ctx) {
     placeholder: "Filter tables",
     spellcheck: "false",
     oninput: (e) => {
-      tableFilter = e.target.value.toLowerCase();
-      renderSide();
+      tableFilter = e.target.value.trim().toLowerCase();
+      if (!filterFrame) filterFrame = requestAnimationFrame(() => ((filterFrame = 0), renderSide()));
     },
   });
   const schemaLabel = h("div", { class: "db-label" });
@@ -2964,7 +2975,7 @@ function mountQuery(root, ctx) {
     const tables = schema?.state === "ok" ? schema.model.tables.filter((t) => t.kind !== "external") : [];
     schemaLabel.replaceChildren(
       "Tables",
-      schema?.state === "ok" ? h("span", { style: "font-weight:500;text-transform:none;letter-spacing:0" }, String(tables.length)) : null,
+      schema?.state === "ok" ? h("span", { style: "font-weight:500;text-transform:none;letter-spacing:0" }, String(tables.length)) : "",
     );
     if (!schema || schema.state === "loading") {
       schemaList.replaceChildren(h("div", { class: "db-note" }, "Loading tables…"));
@@ -2974,44 +2985,58 @@ function mountQuery(root, ctx) {
       schemaList.replaceChildren(h("div", { class: "db-note db-err" }, schema.error));
       return;
     }
-    const shown = tables.filter((t) => !tableFilter || t.name.toLowerCase().includes(tableFilter) || t.columns.some((c) => c.name.toLowerCase().includes(tableFilter)));
-    const multiSchema = schema.model.schemas.length > 1;
+    const shown = tables.filter((t) => tableMatches(t, tableFilter));
     if (shown.length === 0) {
       schemaList.replaceChildren(h("div", { class: "db-note" }, tables.length ? "No table matches." : "No tables."));
       return;
     }
-    schemaList.replaceChildren(
-      ...shown.flatMap((t) => {
-        const id = `${conn.key}:${t.id}`;
-        const open = openTables.has(id);
-        const row = h(
-          "div",
-          {
-            role: "button",
-            tabindex: "0",
-            class: `db-table${open ? " db-open" : ""}`,
-            title: "Click to show columns, double-click to preview rows",
-            onclick: () => {
-              if (open) openTables.delete(id);
-              else openTables.add(id);
-              renderSide();
-            },
-            ondblclick: () => previewTable(conn, t),
-          },
-          icon("chevron"),
-          h("span", {}, `${multiSchema ? `${t.schema}.` : ""}${t.name}`),
-          h("small", {}, String(t.columns.length)),
-          btn("diagram", "Show on the diagram", () => ctx.showInDiagram(conn, t)),
-          btn("play", "Preview rows", () => previewTable(conn, t)),
-        );
-        if (!open) return [row];
-        return [
-          row,
-          ...t.columns.map((c) =>
-            h("div", { class: "db-col", title: "Insert the column name", onclick: () => insert(quoteName(conn.meta.kind, c.name)) }, h("span", {}, c.name), h("span", {}, `${c.type}${c.nullable ? "" : " ·"}`)),
-          ),
-        ];
-      }),
+    if (rowCache.model !== schema.model) rowCache = { model: schema.model, rows: new Map() };
+    const multiSchema = schema.model.schemas.length > 1;
+    const nodes = [];
+    for (const t of shown) {
+      const entry = tableRow(t, multiSchema);
+      const open = openTables.has(`${conn.key}:${t.id}`);
+      entry.row.classList.toggle("db-open", open);
+      nodes.push(entry.row);
+      if (open) nodes.push(...(entry.cols ??= columnRows(t)));
+    }
+    schemaList.replaceChildren(...nodes);
+  }
+
+  function tableRow(t, multiSchema) {
+    let entry = rowCache.rows.get(t.id);
+    if (entry) return entry;
+    const row = h(
+      "div",
+      {
+        role: "button",
+        tabindex: "0",
+        class: "db-table",
+        title: "Click to show columns, double-click to preview rows",
+        onclick: () => {
+          const conn = current();
+          if (!conn) return;
+          const id = `${conn.key}:${t.id}`;
+          if (openTables.has(id)) openTables.delete(id);
+          else openTables.add(id);
+          renderSide();
+        },
+        ondblclick: () => current() && previewTable(current(), t),
+      },
+      icon("chevron"),
+      h("span", {}, `${multiSchema ? `${t.schema}.` : ""}${t.name}`),
+      h("small", {}, String(t.columns.length)),
+      btn("diagram", "Show on the diagram", () => current() && ctx.showInDiagram(current(), t)),
+      btn("play", "Preview rows", () => current() && previewTable(current(), t)),
+    );
+    entry = { row, cols: null };
+    rowCache.rows.set(t.id, entry);
+    return entry;
+  }
+
+  function columnRows(t) {
+    return t.columns.map((c) =>
+      h("div", { class: "db-col", title: "Insert the column name", onclick: () => current() && insert(quoteName(current().meta.kind, c.name)) }, h("span", {}, c.name), h("span", {}, `${c.type}${c.nullable ? "" : " ·"}`)),
     );
   }
 
@@ -3024,13 +3049,43 @@ function mountQuery(root, ctx) {
     const { columns, rows, total, truncated } = last.result;
     if (columns.length === 0) return h("div", { class: "db-note" }, "The statement returned no rows.");
     const numeric = columns.map((_, i) => rows.length > 0 && rows.every((r) => r[i] === "NULL" || r[i] === "" || /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(r[i] ?? "")));
+    const rowEl = (r, i) => {
+      const tr = document.createElement("tr");
+      const rn = document.createElement("td");
+      rn.className = "db-rn";
+      rn.textContent = String(i + 1);
+      tr.append(rn);
+      for (let j = 0; j < columns.length; j++) {
+        const v = r[j] ?? "";
+        const td = document.createElement("td");
+        if (v === "NULL") td.className = "db-null";
+        else if (numeric[j]) td.className = "db-num";
+        if (v.length > 40) td.title = v;
+        td.textContent = v;
+        tr.append(td);
+      }
+      return tr;
+    };
+    // The first rows right away, the rest in batches so a 5,000-row result doesn't freeze the page.
+    const tbody = h("tbody", {}, rows.slice(0, 300).map(rowEl));
+    clearTimeout(fillTimer);
+    const fill = (from) => {
+      if (from >= rows.length) return;
+      const frag = document.createDocumentFragment();
+      for (let i = from; i < Math.min(rows.length, from + 500); i++) frag.append(rowEl(rows[i], i));
+      tbody.append(frag);
+      fillTimer = setTimeout(() => fill(from + 500), 16);
+    };
+    fillTimer = setTimeout(() => fill(300), 16);
     const copyCsv = async () => {
       const esc = (v) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
       await navigator.clipboard.writeText([columns, ...rows].map((r) => r.map((v) => esc(String(v ?? ""))).join(",")).join("\n"));
-      copied = true;
-      renderMain();
-      setTimeout(() => ((copied = false), renderMain()), 1500);
+      // Swap just the button: rebuilding the table for it would be slow on big results.
+      const done = btn("check", "Copied", () => {}, "db-done");
+      copyButton.replaceWith(done);
+      setTimeout(() => done.replaceWith(copyButton), 1500);
     };
+    const copyButton = btn("copy", "Copy as CSV", () => copyCsv());
     return h(
       "div",
       {},
@@ -3039,7 +3094,7 @@ function mountQuery(root, ctx) {
         { class: "db-result-head" },
         h("span", {}, truncated ? `First ${plural(rows.length, "row")} of about ${total.toLocaleString()}` : plural(total, "row")),
         h("span", { class: "db-grow" }),
-        copied ? btn("check", "Copied", () => {}, "db-done") : btn("copy", "Copy as CSV", copyCsv),
+        copyButton,
       ),
       h(
         "div",
@@ -3048,21 +3103,7 @@ function mountQuery(root, ctx) {
           "table",
           { class: "db-grid-table" },
           h("thead", {}, h("tr", {}, h("th", { class: "db-rn" }, "#"), columns.map((c) => h("th", {}, c)))),
-          h(
-            "tbody",
-            {},
-            rows.map((r, i) =>
-              h(
-                "tr",
-                {},
-                h("td", { class: "db-rn" }, String(i + 1)),
-                columns.map((_, j) => {
-                  const v = r[j] ?? "";
-                  return h("td", { class: v === "NULL" ? "db-null" : numeric[j] ? "db-num" : "", title: v.length > 40 ? v : undefined }, v);
-                }),
-              ),
-            ),
-          ),
+          tbody,
         ),
       ),
     );
@@ -3075,13 +3116,18 @@ function mountQuery(root, ctx) {
     runButton.disabled = !conn || running;
     runButton.replaceChildren(running ? h("span", { class: "db-btn-spinner" }) : icon("play"), running ? "Running…" : "Run", h("span", { class: "db-kbd" }, RUN_KEYS));
     status.textContent = last && last.conn === selected() && !running ? `${last.ok ? "Done" : "Failed"} in ${last.ms.toLocaleString()} ms` : conn ? `${KINDS[conn.meta.kind].short} · read-only` : "";
-    resultCard.replaceChildren(resultView());
+    const want = { last, running, conn: selected() };
+    if (!shownResult || Object.keys(want).some((k) => want[k] !== shownResult[k])) {
+      shownResult = want;
+      clearTimeout(fillTimer);
+      resultCard.replaceChildren(resultView());
+    }
 
     const items = store.history().filter((it) => it.conn === selected()).slice(0, 30);
     historyLabel.replaceChildren(
       "History",
       h("span", { class: "db-grow" }),
-      items.length ? h("button", { class: "wf-button wf-ghost", style: "height:22px;font-size:11px", onclick: () => store.clearHistory(selected()) }, "Clear") : null,
+      items.length ? h("button", { class: "wf-button wf-ghost", style: "height:22px;font-size:11px", onclick: () => store.clearHistory(selected()) }, "Clear") : "",
     );
     historyList.replaceChildren(
       ...(items.length === 0
@@ -3125,6 +3171,8 @@ function mountQuery(root, ctx) {
   void refresh();
   return () => {
     unsubscribe();
+    clearTimeout(fillTimer);
+    cancelAnimationFrame(filterFrame);
     if (selected()) ctx.drafts.set(selected(), editor.value);
     page.remove();
   };
@@ -3151,6 +3199,11 @@ function mountDiagram(root, ctx) {
   let edgeEls = new Map();
   let litNow = { tables: new Set(), edges: new Set() };
   let sideFor;
+  let overviewNodes = null;
+  // Viewport culling: boxes and edges off screen aren't rendered; `hidden` holds what's hidden now.
+  let unfilled = new Map();
+  let hidden = new Set();
+  let canvasSize = { w: 0, h: 0 };
   const measure = measurer();
 
   const page = h("div", { class: "sd-root" });
@@ -3527,6 +3580,7 @@ function mountDiagram(root, ctx) {
       const old = edgeEls.get(r.id);
       if (!old) continue;
       const el = buildEdge(r);
+      if (hidden.has(`e:${r.id}`)) el.style.display = "none";
       old.replaceWith(el);
       edgeEls.set(r.id, el);
     }
@@ -3557,6 +3611,14 @@ function mountDiagram(root, ctx) {
     const body = s("g", { class: "sd-cols" });
     g.append(hls, body);
     if (cols.length) body.append(s("line", { class: "sd-rule", x1: 0, x2: w, y1: top, y2: top }));
+    // The column rows are most of the diagram's elements: built when the box first comes into view.
+    if (cols.length) unfilled.set(t.id, () => fillColumns(body, t, cols, w, top));
+    if (t.comment) g.append(s("title", {}, t.comment));
+    g.addEventListener("pointerdown", (e) => startDrag(e, t.id));
+    return g;
+  }
+
+  function fillColumns(body, t, cols, w, top) {
     cols.forEach((c, i) => {
       const y = top + i * METRICS.row + 4;
       const badge = c.pk ? ["PK", "sd-pk"] : c.fk ? ["FK", "sd-fk"] : c.unique ? ["UK", "sd-uk"] : null;
@@ -3567,9 +3629,6 @@ function mountDiagram(root, ctx) {
       body.append(s("text", { class: `sd-col${c.nullable ? " sd-nullable" : ""}`, x: 30, y: y + 14 }, s("title", {}, `${c.name} ${c.type}${c.nullable ? "" : " NOT NULL"}${c.default ? ` DEFAULT ${c.default}` : ""}${c.comment ? `\n${c.comment}` : ""}`), fit(c.name, w - 30 - typeW - 20, measure, "mono")));
       body.append(s("text", { class: "sd-type", x: w - 10, y: y + 14, "text-anchor": "end" }, fit(typeText, w * 0.45, measure, "mono")));
     });
-    if (t.comment) g.append(s("title", {}, t.comment));
-    g.addEventListener("pointerdown", (e) => startDrag(e, t.id));
-    return g;
   }
 
   /** Columns of `id` on the selected table's relations, to light up. */
@@ -3586,8 +3645,12 @@ function mountDiagram(root, ctx) {
   function draw() {
     if (!model) return;
     const tables = visibleTables().filter((t) => positions.has(t.id));
+    unfilled = new Map();
+    hidden = new Set();
     boxEls = new Map(tables.map((t) => [t.id, drawBox(t)]));
     boxLayer.replaceChildren(...boxEls.values());
+    svg.classList.toggle("sd-big", boxEls.size > 120);
+    overviewNodes = null;
     litNow = { tables: new Set(), edges: new Set() };
     drawEdges();
     sideFor = undefined;
@@ -3645,8 +3708,50 @@ function mountDiagram(root, ctx) {
     viewFrame = 0;
     world.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
     // Far out the column text is unreadable anyway: skip drawing it.
-    svg.classList.toggle("sd-far", view.k < 0.4);
+    svg.classList.toggle("sd-far", view.k < FAR);
     zoomLabel.textContent = `${Math.round(view.k * 100)}%`;
+    cull();
+  }
+
+  /** Shows only the boxes and edges in (or near) the visible part of the canvas. */
+  function cull() {
+    if (!canvasSize.w) canvasSize = { w: canvas.clientWidth, h: canvas.clientHeight };
+    if (!canvasSize.w) return;
+    const margin = 200 / view.k;
+    const x0 = -view.x / view.k - margin;
+    const y0 = -view.y / view.k - margin;
+    const x1 = (canvasSize.w - view.x) / view.k + margin;
+    const y1 = (canvasSize.h - view.y) / view.k + margin;
+    const near = view.k >= FAR;
+    const toggle = (key, el, show) => {
+      if (show === !hidden.has(key)) return;
+      if (show) hidden.delete(key);
+      else hidden.add(key);
+      el.style.display = show ? "" : "none";
+    };
+    for (const [id, g] of boxEls) {
+      const pos = positions.get(id);
+      const sz = sizes.get(id);
+      if (!pos || !sz) continue;
+      const show = pos.x < x1 && pos.x + sz.w > x0 && pos.y < y1 && pos.y + sz.h > y0;
+      toggle(id, g, show);
+      if (show && near && unfilled.has(id)) {
+        unfilled.get(id)();
+        unfilled.delete(id);
+      }
+    }
+    for (const r of relations) {
+      const el = edgeEls.get(r.id);
+      if (!el) continue;
+      const a = positions.get(r.from);
+      const b = positions.get(r.to);
+      const sa = sizes.get(r.from);
+      const sb = sizes.get(r.to);
+      if (!a || !b || !sa || !sb) continue;
+      // The curve stays within both boxes' bounds plus its bulge.
+      const show = Math.min(a.x, b.x) - 60 < x1 && Math.max(a.x + sa.w, b.x + sb.w) + 60 > x0 && Math.min(a.y, b.y) < y1 && Math.max(a.y + sa.h, b.y + sb.h) > y0;
+      toggle(`e:${r.id}`, el, show);
+    }
   }
   /** applyView at most once a frame, for pointer and wheel events. */
   function queueView() {
@@ -3882,7 +3987,8 @@ function mountDiagram(root, ctx) {
     if (!t) {
       side.style.display = model ? "" : "none";
       side.classList.add("sd-overview");
-      if (model) side.replaceChildren(...overview());
+      // The overview only changes with the layout: reused when a table is deselected.
+      if (model) side.replaceChildren(...(overviewNodes ??= overview()));
       return;
     }
     side.style.display = "";
@@ -4004,7 +4110,11 @@ function mountDiagram(root, ctx) {
     if (format === "svg") {
       const b = bounds();
       if (!b) return;
+      // Everything goes in the file, also what's off screen or not built yet.
+      for (const fill of unfilled.values()) fill();
+      unfilled = new Map();
       const clone = svg.cloneNode(true);
+      for (const el of clone.querySelectorAll(".sd-box, .sd-edge")) el.style.removeProperty("display");
       const css = getComputedStyle(page);
       const vars = ["--color-fg", "--color-fg-muted", "--color-fg-subtle", "--color-panel", "--color-panel-raised", "--color-border", "--color-border-strong", "--color-accent", "--color-warning", "--color-bg", "--font-mono"].map((v) => `${v}: ${css.getPropertyValue(v)};`).join(" ");
       clone.setAttribute("xmlns", SVG_NS);
@@ -4064,6 +4174,8 @@ function mountDiagram(root, ctx) {
     } else if (e.type === "connections") void refresh();
   });
   const resize = new ResizeObserver(() => {
+    canvasSize = { w: canvas.clientWidth, h: canvas.clientHeight };
+    cull();
     if (model && positions.size && !resize.fitted) {
       resize.fitted = true;
       fitView();

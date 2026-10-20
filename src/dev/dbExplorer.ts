@@ -47,6 +47,26 @@ const TABLES: Table[] = [
   { t: "billing.payments", rows: 46012, cols: [["id", "uuid", false, "gen_random_uuid()"], ["invoice_id", "uuid", false], ["amount", "numeric(10,2)", false], ["method", "text", false]], pk: ["id"], fks: [{ cols: ["invoice_id"], ref: "billing.invoices", refCols: ["id"] }], idx: [["payments_invoice_idx", ["invoice_id"]]] },
 ];
 
+// `?db=big`: 350 tables and 200 views on top, to check the page stays fast on a large schema.
+if (new URLSearchParams(location.search).get("db") === "big") {
+  for (let i = 0; i < 550; i++) {
+    const view = i >= 350;
+    const refs = view ? [] : [(i * 7 + 1) % 350, (i * 13 + 2) % 350].filter((r) => r !== i);
+    TABLES.push({
+      t: `${view ? "reporting" : "app"}.${view ? "v" : "t"}${i}`,
+      kind: view ? "view" : undefined,
+      rows: view ? undefined : i * 97,
+      cols: [
+        ["id", "bigint", false],
+        ...refs.map((r): [string, string, boolean] => [`t${r}_id`, "bigint", true]),
+        ...Array.from({ length: 6 + (i % 30) }, (_, j): [string, string, boolean] => [`field_${j}`, j % 3 ? "text" : "timestamp with time zone", j % 2 === 0]),
+      ],
+      pk: view ? undefined : ["id"],
+      fks: refs.slice(0, 1).map((r) => ({ cols: [`t${r}_id`], ref: `app.t${r}`, refCols: ["id"] })),
+    });
+  }
+}
+
 const US = "\u001f";
 
 function part(name: string): (string | number)[][] {
@@ -83,11 +103,25 @@ function csv(rows: (string | number)[][]) {
   return rows.map((r) => r.map((v) => String(v)).map((v) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(",")).join("\n");
 }
 
+const catalogFiles = new Map<string, string>();
+let files = 0;
+
+/** A catalog output file `dbExplorerExec` wrote, as bytes; null for any other path. */
+export function dbExplorerFile(path: string): ArrayBuffer | null {
+  const text = catalogFiles.get(path);
+  if (text === undefined) return null;
+  catalogFiles.delete(path);
+  return new TextEncoder().encode(text).buffer as ArrayBuffer;
+}
+
 export function dbExplorerExec(command: string) {
   const catalog = /\/\* erd:(\w+) \*\//.exec(command)?.[1];
   if (catalog) {
     const rows = part(catalog);
-    return new Promise((resolve) => setTimeout(() => resolve({ code: 0, timedOut: false, output: `${csv(rows)}\n\n@@WINFER_ROWS ${rows.length}\n` }), 350));
+    // Catalog queries run with `toFile`: the CSV goes to a (fake) temp file the plugin then reads.
+    const file = `/tmp/winfer-db-${catalog}-${++files}.csv`;
+    catalogFiles.set(file, `${csv(rows)}\n\n@@WINFER_ROWS ${rows.length}\n`);
+    return new Promise((resolve) => setTimeout(() => resolve({ code: 0, timedOut: false, output: `@@WINFER_FILE ${file}\n` }), 350));
   }
   const sql = /<<'WINFER_SQL[_X]*'\n([\s\S]*?)\nWINFER_SQL/.exec(command)?.[1] ?? "";
   const limit = Number(/head -n (\d+)/.exec(command)?.[1] ?? 201) - 1;

@@ -53,10 +53,11 @@ fn mode_of(mode: &str) -> Option<Mode> {
 /// Claude Code's tools in lean mode; `Skill` comes on top when it has skills to load.
 /// TodoWrite is the plan tool of older Claude Code versions; newer ones plan with the Task* tools.
 /// AskUserQuestion's questions come to the TUI as an approval with `questions`.
-/// ToolSearch keeps MCP tools deferred (only their names up front, loaded when used): without it
-/// in the list, Claude Code sends every MCP tool's full definition with each request.
+/// No ToolSearch: MCP tools come with their full definitions up front, as an MCP server's
+/// tools/list gives them, instead of only their names to be looked up first (see `run`'s
+/// ENABLE_TOOL_SEARCH, which covers the non-lean mode too).
 /// ExitPlanMode is how plan mode hands its plan over for approval; without it the agent can't leave plan mode.
-const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ToolSearch,ExitPlanMode";
+const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ExitPlanMode";
 
 pub fn args(opts: &Opts) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -272,6 +273,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
         // Headless Claude Code has no plan tool unless asked for one (TaskCreate/TaskUpdate).
         ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "true"),
+        // MCP tools load directly with their descriptions, not deferred behind ToolSearch.
+        ("ENABLE_TOOL_SEARCH", "false"),
     ], &opts.cwd, me) {
         Ok(p) => p,
         Err(e) => {
@@ -961,6 +964,7 @@ mod tests {
     #[test]
     fn follows_claude_codes_own_mode_changes() {
         assert!(LEAN_TOOLS.split(',').any(|t| t == "ExitPlanMode"));
+        assert!(!LEAN_TOOLS.split(',').any(|t| t == "ToolSearch"));
         let (mut b, rx) = bridge();
         b.mode = Mode::Plan;
         b.on_line(&json!({ "type": "system", "subtype": "status", "status": null, "permissionMode": "default" }));

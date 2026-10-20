@@ -9,7 +9,7 @@ import pkg from "../../package.json";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
-import { DB_CONNECTION, DB_DEMO, dbExplorerExec } from "./dbExplorer";
+import { DB_CONNECTION, DB_DEMO, dbExplorerExec, dbExplorerFile } from "./dbExplorer";
 import { BENCH_DEMO, harnessBenchExec, harnessBenchFile, harnessBenchWrite } from "./harnessBench";
 
 // Fake files for the file viewer: the repo's own docs, under /Users/you/winfer.
@@ -415,6 +415,8 @@ mockIPC(
       case "plugins_read_file": {
         const bench = harnessBenchFile(a.path);
         if (bench !== null) return new TextEncoder().encode(bench).buffer;
+        const dbFile = dbExplorerFile(a.path);
+        if (dbFile !== null) return dbFile;
         return knowledgeBaseFile(a.path);
       }
       case "plugins_app_exe":
