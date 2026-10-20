@@ -233,12 +233,17 @@ fn agent_args(
     args
 }
 
+/// Appended to the system prompt on Windows: agents otherwise write bash-isms into PowerShell
+/// (`Get-Content f | head`, `&&`, `2>/dev/null`) and those commands fail.
+const WINDOWS_SHELL_HINT: &str = "The shell is PowerShell, not bash: read files with your file-read tool (offset/limit), not Get-Content. If you must use Get-Content, use `Get-Content -LiteralPath '<path>' -TotalCount N` (or `| Select-Object -Skip A -First N`); no `head`/`tail`/`sed`, `&&` or `2>/dev/null`.";
+
 /// Moves the system prompt into the start prompt for agents with no system prompt flag (only for
 /// a fresh session, which is the only one that gets a start prompt). Plain A/B runs get none.
 fn with_system_prompt(mut req: SpawnRequest) -> SpawnRequest {
     let Some(system) = req.system_prompt.take().filter(|s| !s.trim().is_empty() && !req.plain) else {
         return req;
     };
+    let system = if cfg!(windows) { format!("{system} {WINDOWS_SHELL_HINT}") } else { system };
     match providers::find(&req.provider_id) {
         Some(p) if p.command.is_some() && !p.system_prompt_args.is_empty() => req.system_prompt = Some(system),
         Some(p) if p.command.is_some() && !req.resume => {
@@ -882,8 +887,10 @@ mod tests {
             cols: 80,
             rows: 24,
         };
+        // Windows agents also hear that the shell is PowerShell.
+        let sys = if cfg!(windows) { format!("Use your tools. {WINDOWS_SHELL_HINT}") } else { "Use your tools.".into() };
         let claude = with_system_prompt(req("claude", Some("fix it"), false));
-        assert_eq!(claude.system_prompt.as_deref(), Some("Use your tools."));
+        assert_eq!(claude.system_prompt.as_deref(), Some(sys.as_str()));
         assert_eq!(claude.prompt.as_deref(), Some("fix it"));
         assert_eq!(
             system_prompt_args(&providers::find("claude").unwrap(), "Use your tools."),
@@ -895,8 +902,8 @@ mod tests {
         );
         // No flag: it leads the start prompt, or is the start prompt.
         let opencode = with_system_prompt(req("opencode", Some("fix it"), false));
-        assert_eq!((opencode.system_prompt, opencode.prompt.as_deref()), (None, Some("Use your tools.\n\nfix it")));
-        assert_eq!(with_system_prompt(req("opencode", None, false)).prompt.as_deref(), Some("Use your tools."));
+        assert_eq!((opencode.system_prompt, opencode.prompt), (None, Some(format!("{sys}\n\nfix it"))));
+        assert_eq!(with_system_prompt(req("opencode", None, false)).prompt, Some(sys));
         // A resumed session already had it; shells and plain runs never get it.
         assert_eq!(with_system_prompt(req("opencode", None, true)).prompt, None);
         assert_eq!(with_system_prompt(req("shell", None, false)).prompt, None);

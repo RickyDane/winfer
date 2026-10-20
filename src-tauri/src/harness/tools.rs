@@ -297,7 +297,7 @@ fn shell() -> (String, Vec<&'static str>) {
     let sh = crate::env::user_shell();
     let name = crate::env::shell_name(&sh);
     if cfg!(windows) {
-        return (sh, vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]);
+        return (sh, vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]);
     }
     if matches!(name.as_str(), "bash" | "zsh") { (sh, vec!["-c"]) } else { ("/bin/sh".into(), vec!["-c"]) }
 }
@@ -318,18 +318,32 @@ pub fn shell_display() -> &'static str {
 /// The `bash` tool's description, naming the shell commands run in.
 fn shell_description() -> &'static str {
     if cfg!(windows) {
-        "Run PowerShell command (not bash; timeout ms, default 120000)."
+        "Run PowerShell command (not bash; timeout ms, default 120000). Read files with the read tool, not Get-Content."
     } else {
         "Run shell command (timeout ms, default 120000)."
     }
 }
 
 /// PowerShell: UTF-8 output, no progress bars, and the exit code of the last native command
-/// (or 1 when a cmdlet failed) instead of always 0/1.
+/// (or 1 when a cmdlet failed) instead of always 0/1. `Get-Content` reads UTF-8 (Windows
+/// PowerShell 5.1 reads BOM-less files as ANSI), and `head`/`tail` work when no such program is
+/// installed, since agents pipe into them out of bash habit.
 fn powershell_script(command: &str) -> String {
     format!(
-        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; $global:LASTEXITCODE=0\n{command}\nif (-not $?) {{ if ($LASTEXITCODE) {{ exit $LASTEXITCODE }} else {{ exit 1 }} }} else {{ exit $LASTEXITCODE }}"
+        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding']='UTF8'\n\
+         if (-not (Get-Command head -ErrorAction SilentlyContinue)) {{ function head {{ param([int]$n = 10, [string]$Path) $c = [Math]::Abs($n); if ($Path) {{ Get-Content -LiteralPath $Path -TotalCount $c }} else {{ $input | Select-Object -First $c }} }} }}\n\
+         if (-not (Get-Command tail -ErrorAction SilentlyContinue)) {{ function tail {{ param([int]$n = 10, [string]$Path) $c = [Math]::Abs($n); if ($Path) {{ Get-Content -LiteralPath $Path -Tail $c }} else {{ $input | Select-Object -Last $c }} }} }}\n\
+         $global:LASTEXITCODE=0\n{command}\nif (-not $?) {{ if ($LASTEXITCODE) {{ exit $LASTEXITCODE }} else {{ exit 1 }} }} else {{ exit $LASTEXITCODE }}"
     )
+}
+
+/// The arguments that hand PowerShell `script`: `-EncodedCommand` (base64 UTF-16LE), which
+/// reaches it intact, where `-Command` loses embedded quotes on Windows PowerShell 5.1. Scripts
+/// too long for a command line (32767 chars) fall back to `-Command`.
+fn powershell_args(script: &str) -> [String; 2] {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    if encoded.len() < 30_000 { ["-EncodedCommand".into(), encoded] } else { ["-Command".into(), script.into()] }
 }
 
 fn bash(args: &Value, ctx: &mut Ctx) -> Outcome {
@@ -343,7 +357,7 @@ pub fn run_shell(command: &str, cwd: &Path, timeout: Duration, stop: &AtomicBool
     let (sh, flags) = shell();
     let mut cmd = Command::new(sh);
     cmd.args(flags).current_dir(cwd);
-    if cfg!(windows) { cmd.arg(powershell_script(command)) } else { cmd.arg(command) };
+    if cfg!(windows) { cmd.args(powershell_args(&powershell_script(command))) } else { cmd.arg(command) };
     cmd.env("PATH", crate::env::path_var()).env("TERM", "dumb").env("NO_COLOR", "1").env("GIT_PAGER", "cat").env("PAGER", "cat");
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
@@ -633,6 +647,35 @@ pub fn image_base64(path: &Path) -> Option<(&'static str, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_gets_the_script_base64_encoded() {
+        let script = "Get-Content -LiteralPath 'C:\\a b\\[x].txt' | head -n 2; \"é\"";
+        let [flag, arg] = powershell_args(script);
+        assert_eq!(flag, "-EncodedCommand");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(arg).unwrap();
+        let units: Vec<u16> = bytes.chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        assert_eq!(String::from_utf16(&units).unwrap(), script);
+        assert_eq!(powershell_args(&"x".repeat(20_000))[0], "-Command");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_reads_awkward_paths_and_accepts_head() {
+        let d = std::env::temp_dir().join(format!("winfer-pwsh-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a 'b' [c].txt"), "één\ntwo\nthree\n").unwrap();
+        let o = run_shell(
+            "Get-Content -LiteralPath \"a 'b' [c].txt\" | head -n 2",
+            &d,
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &|_| {},
+        );
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(o.ok, "{}", o.output);
+        assert!(o.output.contains("één") && o.output.contains("two") && !o.output.contains("three"), "{}", o.output);
+    }
 
     fn ctx_run(name: &str, args: Value, dir: &Path) -> (Outcome, HashMap<PathBuf, Option<String>>) {
         ctx_run_with(name, args, dir, &ReadCache::default())
