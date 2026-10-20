@@ -1,23 +1,42 @@
-name: nebula
+name: build
 
-# Every push to main ships to the Nebula channel as vX.Y.Z-N: X.Y.Z is the next stable version
+# Builds and tests every push and PR. Every push to main ships to the Nebula channel as vX.Y.Z-N: X.Y.Z is the next stable version
 # (the patch after the last stable tag, or tauri.conf.json's version when that's newer, so a
 # minor/major bump is just editing it) and N this workflow's run number. Pushes landing while a
-# build runs are batched into the next one.
+# build runs are batched into the next one. (Kept as nebula.yml so the run number, and so the
+# tag numbering, carries on.)
 on:
   push:
     branches: [main]
     paths-ignore: ["**.md"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# PR runs supersede each other; main runs queue so each batch of pushes still ships.
 concurrency:
-  group: nebula-release
+  group: ${{ github.event_name == 'pull_request' && format('build-{0}', github.ref) || 'nebula-release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  frontend:
+    runs-on: avrea-ubuntu-latest-2-vcpu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+
   tag:
+    needs: frontend
+    if: github.event_name != 'pull_request'
     runs-on: avrea-ubuntu-latest-2-vcpu
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
