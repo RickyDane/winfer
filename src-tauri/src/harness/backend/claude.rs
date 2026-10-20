@@ -419,6 +419,8 @@ impl Bridge {
                     self.emit(Ev::Undone(Err("Nothing to undo.".into())));
                 }
             }
+            // Its `bg` tasks (through winfer's MCP server) run in winfer code, not in Claude Code.
+            Cmd::StopTask(id) if crate::harness::bg::stop(&id) => {}
             Cmd::StopTask(id) => self.control(proc, json!({ "subtype": "stop_task", "task_id": id })),
             Cmd::Shutdown => return false,
         }
@@ -591,6 +593,12 @@ impl Bridge {
                 if req["subtype"] == "can_use_tool" {
                     let name = req["tool_name"].as_str().unwrap_or("tool");
                     let input = req["input"].clone();
+                    // winfer's `bg` only runs something new on start; reading, listing and
+                    // stopping its tasks don't ask (like winfer code's own tools).
+                    if name.starts_with("mcp__winfer") && name.ends_with("__bg") && crate::harness::tools::risk("bg", &input) == crate::harness::tools::Risk::Read {
+                        self.outbox.push(json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": { "behavior": "allow", "updatedInput": input } } }));
+                        return;
+                    }
                     // Yolo-plan answers on its own: edits are refused, the rest runs. Handing
                     // over the plan and questions still go to the user.
                     if self.mode == Mode::YoloPlan && !matches!(name, "ExitPlanMode" | "AskUserQuestion") {

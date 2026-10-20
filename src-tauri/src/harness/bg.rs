@@ -85,6 +85,125 @@ pub fn mcp_tool() -> Value {
     })
 }
 
+impl Update {
+    pub fn owner(&self) -> &str {
+        match self {
+            Update::Started { owner, .. } | Update::Exited { owner, .. } | Update::Stopped { owner, .. } => owner,
+        }
+    }
+
+    /// The task update for winfer code's task list, and the note to give the agent when the
+    /// task ended in a way it hasn't seen.
+    pub fn task_event(self) -> (super::event::TaskEv, Option<String>) {
+        use super::event::TaskEv;
+        let first = |cmd: &str| cmd.lines().next().unwrap_or("").to_string();
+        match self {
+            Update::Started { id, tool_id, cmd, log, .. } => (
+                TaskEv {
+                    id,
+                    tool_id: Some(tool_id).filter(|t| !t.is_empty()),
+                    title: Some(first(&cmd)),
+                    status: Some("running".into()),
+                    output_file: Some(log.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                None,
+            ),
+            Update::Exited { id, cmd, code, secs, seen, tail, .. } => {
+                let note = (!seen).then(|| {
+                    let out = if tail.trim().is_empty() || tail == "(no new output)" { "No new output.".to_string() } else { format!("Its output since your last read:\n{tail}") };
+                    format!("Background task {id} (`{}`) exited with code {code} after {secs}s. {out}", first(&cmd))
+                });
+                let status = if code == 0 { "completed" } else { "failed" };
+                (TaskEv { id, status: Some(status.into()), exit_code: Some(code), ..Default::default() }, note)
+            }
+            Update::Stopped { id, cmd, by_user, .. } => {
+                let note = by_user.then(|| format!("The user stopped background task {id} (`{}`).", first(&cmd)));
+                (TaskEv { id, status: Some("stopped".into()), ..Default::default() }, note)
+            }
+        }
+    }
+}
+
+/// Env var that points `winfer mcp-stdio` at winfer code's own `bg` server ("addr token owner"),
+/// so the Claude Code and Codex backends' background tasks land in winfer code's task list.
+pub const CODE_BG_ENV: &str = "WINFER_CODE_BG";
+
+/// Starts (once) this process's `bg` server for MCP calls and returns `CODE_BG_ENV`'s value for
+/// `owner`. Calls are `POST /bg` with `{ "args", "cwd" }` and the token in `X-Winfer-Token`.
+pub fn serve(owner: &str) -> Option<String> {
+    static SERVER: OnceLock<Option<(String, String)>> = OnceLock::new();
+    let (addr, token) = SERVER
+        .get_or_init(|| {
+            let http = tiny_http::Server::http("127.0.0.1:0").ok()?;
+            let addr = http.server_addr().to_ip()?.to_string();
+            let token = format!("{:032x}", rand::random::<u128>());
+            let secret = token.clone();
+            std::thread::spawn(move || {
+                for mut req in http.incoming_requests() {
+                    let ok = req.headers().iter().any(|h| h.field.equiv("X-Winfer-Token") && h.value.as_str() == secret);
+                    if !ok || req.url() != "/bg" {
+                        let _ = req.respond(tiny_http::Response::empty(401));
+                        continue;
+                    }
+                    std::thread::spawn(move || {
+                        let mut body = String::new();
+                        let _ = req.as_reader().take(1024 * 1024).read_to_string(&mut body);
+                        let v: Value = serde_json::from_str(&body).unwrap_or_default();
+                        let cwd = v["cwd"].as_str().map(PathBuf::from).filter(|p| p.is_dir()).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+                        let out = run(&v["args"], &cwd, &AtomicBool::new(false), "", v["owner"].as_str().unwrap_or(""));
+                        let reply = serde_json::json!({ "ok": out.ok, "text": out.output }).to_string();
+                        let _ = req.respond(tiny_http::Response::from_string(reply));
+                    });
+                }
+            });
+            Some((addr, token))
+        })
+        .as_ref()?;
+    Some(format!("{addr} {token} {owner}"))
+}
+
+/// Runs a `bg` call on the server `env` (`CODE_BG_ENV`'s value) names; for `winfer mcp-stdio`.
+pub fn call_server(env: &str, args: &Value, cwd: &Path) -> (bool, String) {
+    let mut parts = env.splitn(3, ' ');
+    let (Some(addr), Some(token), owner) = (parts.next(), parts.next(), parts.next().unwrap_or("")) else {
+        return (false, "bad WINFER_CODE_BG".into());
+    };
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(WAIT_MAX / 1000 + 30))).http_status_as_error(false).build().into();
+    let body = serde_json::json!({ "args": args, "cwd": cwd, "owner": owner });
+    match agent.post(&format!("http://{addr}/bg")).header("X-Winfer-Token", token).send_json(&body) {
+        Ok(mut r) => match r.body_mut().read_json::<Value>() {
+            Ok(v) => (v["ok"].as_bool().unwrap_or(false), v["text"].as_str().unwrap_or("").to_string()),
+            Err(e) => (false, format!("couldn't read winfer code's reply: {e}")),
+        },
+        Err(e) => (false, format!("couldn't reach winfer code: {e}")),
+    }
+}
+
+/// Points winfer's MCP server among `servers` at this process's `bg` server for `owner` (adding
+/// the server when winfer code runs outside the app).
+pub fn route_mcp(servers: &mut serde_json::Map<String, Value>, owner: &str) {
+    let Some(env) = serve(owner) else { return };
+    let ours = |s: &Value| s["args"].as_array().is_some_and(|a| a.iter().any(|x| x == "mcp-stdio"));
+    if !servers.values().any(ours) {
+        let Ok(exe) = std::env::current_exe() else { return };
+        servers.insert("winfer".into(), serde_json::json!({ "command": exe, "args": ["mcp-stdio"] }));
+    }
+    let exe = std::env::current_exe().ok();
+    for spec in servers.values_mut().filter(|s| ours(s)) {
+        if let Some(o) = spec.as_object_mut() {
+            // This binary knows `CODE_BG_ENV` (an app of another version might not).
+            if let Some(exe) = &exe {
+                o.insert("command".into(), serde_json::json!(exe));
+            }
+            let e = o.entry("env").or_insert_with(|| serde_json::json!({}));
+            if let Some(e) = e.as_object_mut() {
+                e.insert(CODE_BG_ENV.into(), Value::String(env.clone()));
+            }
+        }
+    }
+}
+
 /// How long an exit waits for a running read to show it before it's announced.
 const EXIT_GRACE: Duration = Duration::from_millis(500);
 
@@ -346,6 +465,29 @@ mod tests {
         let st = call(json!({ "action": "stop", "id": id }));
         assert!(st.ok && st.output.contains("stopped"), "{}", st.output);
         assert!(!call(json!({ "action": "list" })).output.contains(&format!("{id} ")));
+    }
+
+    #[test]
+    fn route_mcp_points_winfers_server_at_this_process() {
+        let mut servers: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "winfer": { "command": "/w", "args": ["mcp-stdio"], "env": { "WINFER_PANE_ID": "p-1" } },
+            "codegraph": { "command": "codegraph" }
+        })).unwrap();
+        route_mcp(&mut servers, "code-x");
+        let env = servers["winfer"]["env"][CODE_BG_ENV].as_str().unwrap().to_string();
+        assert!(env.ends_with(" code-x") && env.split(' ').count() == 3, "{env}");
+        assert_eq!(servers["winfer"]["env"]["WINFER_PANE_ID"], "p-1");
+        assert!(servers["codegraph"].get("env").is_none());
+        // Outside the app there's no winfer server yet: one is added for bg.
+        let mut none = serde_json::Map::new();
+        route_mcp(&mut none, "code-y");
+        assert_eq!(none["winfer"]["args"], json!(["mcp-stdio"]));
+        // The server runs calls for that owner.
+        let (ok, text) = call_server(&env, &json!({ "action": "start", "cmd": "echo hi", "until": "hi" }), &std::env::temp_dir());
+        assert!(ok && text.contains("hi"), "{text}");
+        let id = text.split_whitespace().nth(1).unwrap().to_string();
+        assert!(list("code-x").output.contains(&id) && !list("").output.contains(&id));
+        stop_owner("code-x");
     }
 
     #[test]

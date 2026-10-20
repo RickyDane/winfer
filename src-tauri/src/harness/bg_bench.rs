@@ -31,7 +31,7 @@ impl Run {
         self.written += args.to_string().len();
         let mut snapshots = Default::default();
         let reads = ReadCache::default();
-        let mut ctx = Ctx { cwd: dir, stop: Arc::new(AtomicBool::new(false)), output: &|_| {}, call_id: "call", snapshots: &mut snapshots, reads: &reads };
+        let mut ctx = Ctx { cwd: dir, stop: Arc::new(AtomicBool::new(false)), output: &|_| {}, call_id: "call", bg_owner: "", snapshots: &mut snapshots, reads: &reads };
         let t = Instant::now();
         let out = tools::run(name, &args, &mut ctx).output;
         self.times.push(t.elapsed().as_secs_f32());

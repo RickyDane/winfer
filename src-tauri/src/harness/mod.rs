@@ -392,5 +392,6 @@ fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::TurnDone => json!({ "type": "turn_done" }),
         Ev::Exited(e) => json!({ "type": "exited", "text": e }),
         Ev::Undone(r) => json!({ "type": "undone", "files": r.as_ref().ok(), "error": r.as_ref().err() }),
+        Ev::BgNote(n) => json!({ "type": "bg_note", "text": n }),
     }
 }

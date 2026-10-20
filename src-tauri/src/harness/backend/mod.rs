@@ -151,13 +151,36 @@ impl Handle {
     }
 }
 
-pub fn start(kind: Kind, opts: Opts, events: Events) -> Handle {
+pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
     let (tx, rx) = channel();
     let me = tx.clone();
     std::thread::spawn(move || match kind {
         Kind::ChatGpt => chatgpt::run(opts, rx, events),
-        Kind::Claude => claude::run(opts, rx, me, events),
-        Kind::Codex => codex::run(opts, rx, me, events),
+        Kind::Claude | Kind::Codex => {
+            // The CLIs reach `bg` through winfer's MCP server; send those calls here, so the
+            // tasks show in winfer code's task list and end with this backend.
+            let owner = format!("code-{:016x}", rand::random::<u64>());
+            if crate::harness::tools::bg_enabled() {
+                crate::harness::bg::route_mcp(&mut opts.mcp, &owner);
+                let sink = events.clone();
+                let mine = owner.clone();
+                crate::harness::bg::listen(move |u| {
+                    if u.owner() != mine {
+                        return;
+                    }
+                    let (task, note) = u.task_event();
+                    let _ = sink.send(super::event::Ev::Task(task));
+                    if let Some(note) = note {
+                        let _ = sink.send(super::event::Ev::BgNote(note));
+                    }
+                });
+            }
+            match kind {
+                Kind::Claude => claude::run(opts, rx, me, events),
+                _ => codex::run(opts, rx, me, events),
+            }
+            crate::harness::bg::stop_owner(&owner);
+        }
     });
     Handle { tx }
 }

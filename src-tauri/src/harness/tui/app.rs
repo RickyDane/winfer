@@ -675,6 +675,7 @@ impl App {
             }
             Ev::TurnDone => self.turn_done(),
             Ev::Undone(result) => self.undone(result),
+            Ev::BgNote(note) => self.bg_note(note),
             Ev::Exited(reason) => {
                 self.alive = false;
                 self.busy = false;
@@ -1515,6 +1516,20 @@ impl App {
             return;
         }
         self.open(Picker::new(PickKind::Tasks, "Background tasks", items));
+    }
+
+    /// Tells the agent what happened to one of its `bg` tasks: shown, and sent as the next message.
+    fn bg_note(&mut self, note: String) {
+        if !self.alive {
+            return;
+        }
+        self.notice(note.clone(), NoticeKind::Info);
+        let msg = UserMsg { text: format!("[winfer] {note}"), images: Vec::new(), skill: None };
+        if self.busy {
+            self.queue.push(msg);
+        } else {
+            self.dispatch(msg);
+        }
     }
 
     /// Stops the running background shell picked in `/tasks` (by its card id or task id).

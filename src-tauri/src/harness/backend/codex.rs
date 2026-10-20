@@ -309,6 +309,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 Cmd::SetCompaction { .. } => {}
                 Cmd::Undo { files } => b.undo(files),
                 Cmd::StopTask(id) if b.background.contains(&id) => b.stop_shell(id),
+                Cmd::StopTask(id) if crate::harness::bg::stop(&id) => {}
                 Cmd::StopTask(thread) => {
                     match b.children.get(&thread).and_then(|c| c.turn.clone()) {
                         Some(turn) => b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore),

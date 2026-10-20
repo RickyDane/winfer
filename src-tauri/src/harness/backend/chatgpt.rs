@@ -118,6 +118,8 @@ struct Shared {
     next_agent: AtomicU64,
     /// Reports of background subagents not yet seen by the main conversation.
     notes: Mutex<Vec<String>>,
+    /// Owner of this backend's `bg` tasks (a backend started after it has its own).
+    bg_owner: String,
 }
 
 /// A subagent's own conversation.
@@ -189,6 +191,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         agents: Mutex::new(HashMap::new()),
         next_agent: AtomicU64::new(0),
         notes: Mutex::new(Vec::new()),
+        bg_owner: format!("code-{}", new_id()),
     });
     let _ = events.send(Ev::Session(session));
     let _ = events.send(Ev::Model(shared.state.lock().unwrap().model.clone()));
@@ -307,7 +310,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         }
     }
     // Background processes end with the backend (winfer code exiting, /model, /new).
-    bg::stop_all();
+    bg::stop_owner(&shared.bg_owner);
 }
 
 /// winfer's MCP server also offers `bg`; this backend has its own (with the task list), so the
@@ -326,25 +329,10 @@ fn hide_mcp_bg(spec: &mut Value) {
 /// A background process started, exited or was stopped: update its task in winfer code's list,
 /// and tell the agent when it ended in a way it hasn't seen.
 fn on_bg(shared: &Shared, u: bg::Update) {
-    let first = |cmd: &str| cmd.lines().next().unwrap_or("").to_string();
-    let (task, note) = match u {
-        bg::Update::Started { id, tool_id, cmd, log, .. } => (
-            TaskEv { id, tool_id: Some(tool_id), title: Some(first(&cmd)), status: Some("running".into()), output_file: Some(log.to_string_lossy().into_owned()), ..Default::default() },
-            None,
-        ),
-        bg::Update::Exited { id, cmd, code, secs, seen, tail, .. } => {
-            let note = (!seen).then(|| {
-                let out = if tail.trim().is_empty() || tail == "(no new output)" { "No new output.".to_string() } else { format!("Its output since your last read:\n{tail}") };
-                format!("Background task {id} (`{}`) exited with code {code} after {secs}s. {out}", first(&cmd))
-            });
-            let status = if code == 0 { "completed" } else { "failed" };
-            (TaskEv { id, status: Some(status.into()), exit_code: Some(code), ..Default::default() }, note)
-        }
-        bg::Update::Stopped { id, cmd, by_user, .. } => {
-            let note = by_user.then(|| format!("The user stopped background task {id} (`{}`).", first(&cmd)));
-            (TaskEv { id, status: Some("stopped".into()), ..Default::default() }, note)
-        }
-    };
+    if u.owner() != shared.bg_owner {
+        return;
+    }
+    let (task, note) = u.task_event();
     let _ = shared.events.send(Ev::Task(task));
     if let Some(note) = note {
         shared.notes.lock().unwrap().push(note);
@@ -859,7 +847,7 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     let outcome = {
         let stop = sub.map_or_else(|| shared.stop.clone(), |s| s.stop.clone());
         let reads = sub.map_or(&shared.reads, |s| &s.reads);
-        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, call_id: &id, snapshots: &mut snapshots, reads };
+        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, call_id: &id, bg_owner: &shared.bg_owner, snapshots: &mut snapshots, reads };
         tools::run(name, &args, &mut ctx)
     };
     if !snapshots.is_empty() {
@@ -1291,6 +1279,7 @@ mod tests {
             agents: Mutex::new(HashMap::new()),
             next_agent: AtomicU64::new(0),
             notes: Mutex::new(Vec::new()),
+            bg_owner: String::new(),
         });
         (shared, rx, dir)
     }

@@ -108,6 +108,8 @@ pub struct Ctx<'a> {
     pub output: &'a dyn Fn(&str),
     /// The tool call's id (links a `bg` task to its card).
     pub call_id: &'a str,
+    /// Whose `bg` tasks these are (one backend's).
+    pub bg_owner: &'a str,
     /// Original contents of files this turn changed (None: didn't exist), for /undo.
     pub snapshots: &'a mut HashMap<PathBuf, Option<String>>,
     /// What this session has read, so an unchanged re-read costs a line instead of the file.
@@ -214,7 +216,7 @@ pub fn run(name: &str, args: &Value, ctx: &mut Ctx) -> Outcome {
         "read" => read(ctx, args),
         n @ ("write" | "edit") => write(n, args, ctx),
         "bash" => bash(args, ctx),
-        "bg" => super::bg::run(args, ctx.cwd, &ctx.stop, ctx.call_id, ""),
+        "bg" => super::bg::run(args, ctx.cwd, &ctx.stop, ctx.call_id, ctx.bg_owner),
         "grep" => grep(ctx.cwd, args),
         "glob" => glob(ctx.cwd, args),
         "fetch" => web_fetch(args),
@@ -711,7 +713,7 @@ mod tests {
     fn ctx_run_with(name: &str, args: Value, dir: &Path, reads: &ReadCache) -> (Outcome, HashMap<PathBuf, Option<String>>) {
         let mut snaps = HashMap::new();
         let out = {
-            let mut ctx = Ctx { cwd: dir, stop: Arc::new(AtomicBool::new(false)), output: &|_| {}, call_id: "call", snapshots: &mut snaps, reads };
+            let mut ctx = Ctx { cwd: dir, stop: Arc::new(AtomicBool::new(false)), output: &|_| {}, call_id: "call", bg_owner: "", snapshots: &mut snaps, reads };
             run(name, &args, &mut ctx)
         };
         (out, snaps)

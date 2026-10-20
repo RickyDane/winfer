@@ -224,7 +224,14 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets. The browser is shared with the user: before opening a page, list its open tabs and, when one already shows related content (the same site, dev server or page), select it and work there instead of opening another tab; open a new tab for unrelated content rather than navigating a tab the user has open away. To click, type in or fill page elements, take a browser_snapshot and use browser_click, browser_type or browser_fill_form with its element refs instead of querying the DOM in browser_evaluate; if you must click from browser_evaluate, check the element exists first and return a clear message when it doesn't. Run dev servers, watchers, loops and other long-running commands with bg instead of backgrounding them in your shell (&, nohup, run_in_background, a kept-open terminal session): wait on them with bg read until (not sleep loops) and stop them when done; winfer tells you in this pane when one exits."
         }),
         "ping" => json!({}),
+        // Outside the app (winfer code on its own) only winfer code's `bg` works.
+        "tools/list" if env.0.is_empty() => json!({ "tools": if code_bg().is_some() { vec![crate::harness::bg::mcp_tool()] } else { Vec::new() } }),
         "tools/list" => json!({ "tools": all_tools(env) }),
+        "tools/call" if message["params"]["name"] == "bg" && code_bg().is_some() => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let (ok, text) = crate::harness::bg::call_server(&code_bg().unwrap(), &message["params"]["arguments"], &cwd);
+            json!({ "content": [{ "type": "text", "text": text }], "isError": !ok })
+        }
         "tools/call" => {
             let (hook, token, pane) = env;
             let call = Call {
@@ -247,6 +254,12 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
         }
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// winfer code's own `bg` server, when winfer code started this MCP server for Claude Code or
+/// Codex (see `bg::route_mcp`).
+fn code_bg() -> Option<String> {
+    std::env::var(crate::harness::bg::CODE_BG_ENV).ok().filter(|v| !v.is_empty())
 }
 
 /// Entry point for `winfer mcp-stdio`: newline-delimited JSON-RPC on stdin/stdout.

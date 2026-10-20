@@ -40,6 +40,9 @@ pub enum Ev {
     /// Answer to [`Cmd::Undo`]: the last user turn is gone from the conversation, with the files
     /// the backend reverted itself (when asked to); or why it couldn't be undone.
     Undone(Result<Vec<String>, String>),
+    /// Something the agent should hear about its `bg` tasks (one exited unseen, the user stopped
+    /// one): the TUI sends it as the next message (backends with their own queue don't emit it).
+    BgNote(String),
 }
 
 /// One update about a background task; unset fields are unchanged.
