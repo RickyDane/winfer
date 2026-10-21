@@ -28,7 +28,21 @@ pub enum Msg {
     Shell { id: String, command: String, output: String, ok: bool },
     Checkpoint(Done),
     /// A `/btw` side question's answer.
-    Btw { id: String, question: String, answer: Result<String, String> },
+    Btw { id: String, answer: Result<String, String> },
+}
+
+/// A `/btw` side question, shown in its own modal (not the transcript, where it would get lost
+/// while the agent works).
+pub struct Btw {
+    pub id: String,
+    pub question: String,
+    /// None while it's being answered.
+    pub answer: Option<Result<String, String>>,
+    /// The modal is showing; closing it early reopens it when the answer arrives.
+    pub open: bool,
+    /// Lines scrolled down in the answer.
+    pub scroll: u16,
+    pub started: Instant,
 }
 
 /// A user turn, for /undo: its message in the transcript and whether the workspace was
@@ -176,6 +190,7 @@ pub struct App {
     pub approval_choice: usize,
     pub answering: Answering,
     pub picker: Option<Picker>,
+    pub btw: Option<Btw>,
     pub overlay: Tween,
     pub completion: Option<Completion>,
     pub todos: Vec<Todo>,
@@ -290,6 +305,7 @@ impl App {
             approval_choice: 0,
             answering: Answering::default(),
             picker: None,
+            btw: None,
             overlay: Tween::new(0.0),
             completion: None,
             todos: Vec::new(),
@@ -417,6 +433,7 @@ impl App {
             || self.items.is_empty()
             || self.overlay.moving()
             || self.picker.is_some()
+            || self.btw.as_ref().is_some_and(|b| b.open)
             || self.ctx_shown.moving()
             || !self.approvals.is_empty()
             || self.toast.as_ref().is_some_and(|t| t.1.elapsed() < Duration::from_millis(4000))
@@ -1050,17 +1067,9 @@ impl App {
         }
         self.shell_seq += 1;
         let id = format!("btw-{}", self.shell_seq);
-        self.items.push(Item::new(Block::Tool {
-            id: id.clone(),
-            name: "btw".into(),
-            title: question.clone(),
-            output: String::new(),
-            diff: None,
-            status: Status::Running,
-            started: Instant::now(),
-            ended: None,
-        }));
-        self.scroll = 0;
+        self.btw = Some(Btw { id: id.clone(), question: question.clone(), answer: None, open: true, scroll: 0, started: Instant::now() });
+        self.overlay = Tween::new(0.0);
+        self.overlay.set(1.0, 180);
         let system = BTW_SYSTEM.to_string();
         let user = format!(
             "<session cwd=\"{}\" status=\"{}\">\n{}\n</session>\n\nQuestion: {question}",
@@ -1072,7 +1081,7 @@ impl App {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let answer = crate::llm::respond(provider, &model, &system, &user);
-            let _ = tx.send(Msg::Btw { id, question, answer });
+            let _ = tx.send(Msg::Btw { id, answer });
         });
     }
 
@@ -1083,7 +1092,7 @@ impl App {
             match &item.block {
                 Block::User { text } => out.push_str(&format!("[user]\n{text}\n\n")),
                 Block::Assistant { text, .. } => out.push_str(&format!("[assistant]\n{text}\n\n")),
-                Block::Tool { id, name, title, output, diff, .. } if !id.starts_with("btw-") => {
+                Block::Tool { name, title, output, diff, .. } => {
                     let body = diff.as_deref().unwrap_or(output).trim();
                     out.push_str(&format!("[tool {name}] {title}\n{}\n\n", tools::clip(body, 1500)));
                 }
@@ -1097,13 +1106,56 @@ impl App {
         out.trim_end().to_string()
     }
 
-    pub fn on_btw(&mut self, id: String, question: String, answer: Result<String, String>) {
-        let Some(item) = self.find(|b| matches!(b, Block::Tool { id: i, .. } if *i == id)) else { return };
-        item.block = match answer {
-            Ok(a) => Block::Notice { text: format!("btw: {question}\n\n{}", a.trim()), kind: NoticeKind::Info },
-            Err(e) => Block::Notice { text: format!("btw: {question}\n{e}"), kind: NoticeKind::Error },
-        };
-        item.touch();
+    /// A `/btw` answer: (re)opens its modal. Answers to replaced questions are dropped.
+    pub fn on_btw(&mut self, id: String, answer: Result<String, String>) {
+        let Some(b) = self.btw.as_mut().filter(|b| b.id == id) else { return };
+        b.answer = Some(answer.map(|a| a.trim().to_string()));
+        if !b.open {
+            b.open = true;
+            b.scroll = 0;
+            self.overlay = Tween::new(0.0);
+            self.overlay.set(1.0, 180);
+        }
+    }
+
+    /// Keys while the `/btw` modal shows. Closing it before the answer arrives keeps waiting.
+    fn btw_key(&mut self, k: KeyEvent) {
+        let Some(b) = &mut self.btw else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                if b.answer.is_some() {
+                    self.btw = None;
+                } else {
+                    b.open = false;
+                    self.toast("The answer opens when it's ready.", NoticeKind::Info);
+                }
+            }
+            KeyCode::Char('c') if ctrl => {
+                if b.answer.is_some() {
+                    self.btw = None;
+                } else {
+                    b.open = false;
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => b.scroll = b.scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => b.scroll = b.scroll.saturating_add(1),
+            KeyCode::PageUp => b.scroll = b.scroll.saturating_sub(10),
+            KeyCode::PageDown | KeyCode::Char(' ') => b.scroll = b.scroll.saturating_add(10),
+            KeyCode::Home | KeyCode::Char('g') => b.scroll = 0,
+            KeyCode::Char('y') => {
+                if let Some(Ok(a)) = &b.answer {
+                    copy(a);
+                    self.toast("Copied the answer.", NoticeKind::Success);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The `/btw` modal is showing and takes the keys.
+    pub fn btw_showing(&self) -> bool {
+        self.picker.is_none() && self.btw.as_ref().is_some_and(|b| b.open)
     }
 
     pub fn on_shell(&mut self, id: String, command: String, output: String, ok: bool) {
@@ -1915,9 +1967,17 @@ impl App {
 
     fn on_mouse(&mut self, m: MouseEvent) {
         match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if self.btw_showing() => {
+                if let Some(b) = &mut self.btw {
+                    b.scroll = if m.kind == MouseEventKind::ScrollUp { b.scroll.saturating_sub(3) } else { b.scroll.saturating_add(3) };
+                }
+            }
             MouseEventKind::ScrollUp => self.scroll += 3,
             MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(3),
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.btw_showing() {
+                    return;
+                }
                 if self.picker.is_none() && self.plan_rows.is_some_and(|(top, bottom)| m.row >= top && m.row < bottom) {
                     self.plan_open = !self.plan_open;
                     self.selection = None;
@@ -2093,6 +2153,11 @@ impl App {
             if k.code == KeyCode::Esc {
                 return;
             }
+        }
+
+        if self.btw_showing() {
+            self.btw_key(k);
+            return;
         }
 
         if ctrl && k.code == KeyCode::Char('c') {
@@ -2480,7 +2545,7 @@ pub fn drain(app: &mut App, rx: &Receiver<Msg>, first: Msg) {
         Msg::Files(f) => app.files = f,
         Msg::Shell { id, command, output, ok } => app.on_shell(id, command, output, ok),
         Msg::Checkpoint(d) => app.on_checkpoint(d),
-        Msg::Btw { id, question, answer } => app.on_btw(id, question, answer),
+        Msg::Btw { id, answer } => app.on_btw(id, answer),
     };
     handle(app, first);
     while let Ok(m) = rx.try_recv() {
@@ -2503,31 +2568,38 @@ mod tests {
     }
 
     #[test]
-    fn btw_sees_the_transcript_and_answers_beside_it() {
+    fn btw_answers_in_a_modal_without_touching_the_turn() {
         let mut a = app();
         a.items.push(Item::new(Block::User { text: "fix the parser".into() }));
         a.items.push(Item::new(Block::Assistant { id: "m1".into(), text: "Looking at parse.rs".into() }));
-        let tool = |id: &str| Block::Tool {
-            id: id.into(),
-            name: "btw".into(),
-            title: "what file?".into(),
-            output: String::new(),
-            diff: None,
-            status: Status::Running,
-            started: Instant::now(),
-            ended: None,
-        };
-        a.items.push(Item::new(tool("btw-1")));
         let ctx = a.btw_context(10_000);
         assert!(ctx.contains("[user]\nfix the parser") && ctx.contains("Looking at parse.rs"));
-        // Earlier side questions aren't part of the session.
-        assert!(!ctx.contains("what file?"));
         assert!(a.btw_context(20).starts_with("… [earlier conversation omitted]"));
 
         a.busy = true;
-        a.on_btw("btw-1".into(), "what file?".into(), Ok("parse.rs\n".into()));
-        assert!(matches!(&a.items.last().unwrap().block, Block::Notice { text, kind: NoticeKind::Info } if text == "btw: what file?\n\nparse.rs"));
-        // The running turn is untouched.
+        let n = a.items.len();
+        a.btw = Some(Btw { id: "btw-1".into(), question: "what file?".into(), answer: None, open: true, scroll: 0, started: Instant::now() });
+        // Esc before the answer only hides the modal.
+        a.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(a.btw.as_ref().is_some_and(|b| !b.open));
+        // A stale answer is dropped; the right one reopens the modal.
+        a.on_btw("btw-0".into(), Ok("old".into()));
+        assert!(a.btw.as_ref().unwrap().answer.is_none());
+        a.on_btw("btw-1".into(), Ok("parse.rs\n".into()));
+        let b = a.btw.as_ref().unwrap();
+        assert!(b.open && matches!(&b.answer, Some(Ok(t)) if t == "parse.rs"));
+        // Typing while it shows doesn't reach the composer; esc closes it.
+        a.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(a.composer.is_empty());
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        a.overlay = Tween::new(1.0);
+        term.draw(|f| super::super::view::draw(f, &mut a)).unwrap();
+        let screen: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(screen.contains("what file?") && screen.contains("parse.rs"));
+        a.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(a.btw.is_none());
+        // Nothing went into the chat or the running turn.
+        assert_eq!(a.items.len(), n);
         assert!(a.busy && a.queue.is_empty() && a.turns.is_empty());
     }
 

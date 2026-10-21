@@ -93,7 +93,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(activity(app, width, t)), activity_area);
     f.render_widget(Paragraph::new(bottom_lines), bottom_area);
     if let Some((cx, cy)) = cursor {
-        if app.picker.is_none() {
+        if app.picker.is_none() && !app.btw_showing() {
             f.set_cursor_position(Position { x: bottom_area.x + cx, y: bottom_area.y + cy });
         }
     }
@@ -102,6 +102,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(status_lines), status_area);
     completion(f, app, main);
     picker(f, app, area, t);
+    btw(f, app, area, t);
 }
 
 /// Tool calls and thinking are "steps": consecutive steps sit together as one timeline.
@@ -887,19 +888,7 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
     let x = full.x + (full.width.saturating_sub(w)) / 2;
     let y = full.y + (full.height.saturating_sub(h_full)) / 3 + ((1.0 - k) * 2.0).round() as u16;
     let area = Rect { x, y, width: w, height: h.max(3) };
-    // Dim everything behind the modal.
-    let buf = f.buffer_mut();
-    for yy in full.y..full.y + full.height {
-        for xx in full.x..full.x + full.width {
-            if let Some(cell) = buf.cell_mut((xx, yy)) {
-                let base = if matches!(cell.fg, ratatui::style::Color::Rgb(..)) { cell.fg } else { theme::FG() };
-                cell.set_fg(theme::mix(base, theme::VOID(), 0.75 * k));
-                if matches!(cell.bg, ratatui::style::Color::Rgb(..)) {
-                    cell.set_bg(theme::mix(cell.bg, theme::VOID(), 0.75 * k));
-                }
-            }
-        }
-    }
+    dim_behind(f, full, k);
     f.render_widget(Clear, area);
     let block = Frame_::default()
         .borders(Borders::ALL)
@@ -975,6 +964,82 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
     if visible.is_empty() {
         lines.push(Line::from(Span::styled("   no matches", theme::dim())));
     }
+    anim::fade(&mut lines, k);
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Dims everything behind a modal.
+fn dim_behind(f: &mut Frame, full: Rect, k: f32) {
+    let buf = f.buffer_mut();
+    for yy in full.y..full.y + full.height {
+        for xx in full.x..full.x + full.width {
+            if let Some(cell) = buf.cell_mut((xx, yy)) {
+                let base = if matches!(cell.fg, ratatui::style::Color::Rgb(..)) { cell.fg } else { theme::FG() };
+                cell.set_fg(theme::mix(base, theme::VOID(), 0.75 * k));
+                if matches!(cell.bg, ratatui::style::Color::Rgb(..)) {
+                    cell.set_bg(theme::mix(cell.bg, theme::VOID(), 0.75 * k));
+                }
+            }
+        }
+    }
+}
+
+/// The `/btw` modal: the side question and its answer (or a spinner while it's thought about).
+fn btw(f: &mut Frame, app: &mut App, full: Rect, t: Duration) {
+    if !app.btw_showing() {
+        return;
+    }
+    let k = app.overlay.value();
+    let Some(b) = &mut app.btw else { return };
+    let w = full.width.saturating_sub(4).min(90);
+    let iw = w.saturating_sub(4) as usize;
+    let mut body: Vec<Line<'static>> = super::markdown::wrap(
+        vec![Span::styled(b.question.clone(), theme::bold(theme::FG()))],
+        iw,
+        vec![Span::styled("❯ ", theme::fg(theme::VIOLET()))],
+        vec![Span::raw("  ")],
+    );
+    body.push(Line::default());
+    match &b.answer {
+        None => body.push(Line::from(vec![
+            Span::styled(anim::moon_spin(t), anim::spin_style()),
+            Span::styled(format!(" thinking {}", anim::elapsed(b.started.elapsed())), theme::dim()),
+        ])),
+        Some(Ok(a)) => body.extend(super::markdown::render(a, iw)),
+        Some(Err(e)) => body.extend(super::markdown::wrap(vec![Span::styled(e.clone(), theme::fg(theme::RED()))], iw, vec![Span::styled("✗ ", theme::fg(theme::RED()))], vec![Span::raw("  ")])),
+    }
+    let room = full.height.saturating_sub(8).max(3);
+    let rows = (body.len() as u16).min(room);
+    let max_scroll = (body.len() as u16).saturating_sub(rows);
+    b.scroll = b.scroll.min(max_scroll);
+    let scroll = b.scroll;
+    let done = b.answer.is_some();
+    let h_full = (rows + 4).min(full.height);
+    let h = ((h_full as f32) * (0.7 + 0.3 * k)).round() as u16;
+    let x = full.x + (full.width.saturating_sub(w)) / 2;
+    let y = full.y + (full.height.saturating_sub(h_full)) / 3 + ((1.0 - k) * 2.0).round() as u16;
+    let area = Rect { x, y, width: w, height: h.max(3) };
+    dim_behind(f, full, k);
+    f.render_widget(Clear, area);
+    let mut keys = Vec::new();
+    if max_scroll > 0 {
+        keys.extend([Span::styled(" ↑↓", theme::muted()), Span::styled(format!(" scroll {}/{}   ", scroll, max_scroll), theme::dim())]);
+    }
+    if done {
+        keys.extend([Span::styled(" y", theme::muted()), Span::styled(" copy   ", theme::dim())]);
+    }
+    keys.extend([Span::styled("esc", theme::muted()), Span::styled(if done { " close " } else { " hide (opens when ready) " }, theme::dim())]);
+    let block = Frame_::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::fg(theme::FAINT()))
+        .title(Line::from(vec![Span::raw(" "), Span::styled("btw", theme::bold(theme::FG())), Span::styled(" · side question, the agent keeps working ", theme::dim())]))
+        .title_bottom(Line::from(keys).right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    nebula_border(f, area, t, k);
+    let inner = Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: inner.height.saturating_sub(1) };
+    let mut lines: Vec<Line> = body.into_iter().skip(scroll as usize).take(inner.height as usize).collect();
     anim::fade(&mut lines, k);
     f.render_widget(Paragraph::new(lines), inner);
 }
