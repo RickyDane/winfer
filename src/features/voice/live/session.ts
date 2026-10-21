@@ -35,9 +35,28 @@ interface LiveVoiceState {
   tool: string | null;
   error: string | null;
   auth: "chatgpt" | "apikey" | null;
+  /** Microphone level 0–1, for the meter. */
+  level: number;
+  /** Connection health, to tell where audio stops when it does. */
+  diag: Diagnostics;
 }
 
-export const useLiveVoice = create<LiveVoiceState>(() => ({ state: "off", muted: false, lines: [], tool: null, error: null, auth: null }));
+export interface Diagnostics {
+  micLabel: string;
+  /** Audio bytes sent to / received from OpenAI. */
+  sent: number;
+  received: number;
+  events: number;
+  lastEvent: string;
+  /** Why the speaker isn't playing (autoplay blocked), if so. */
+  playback: string | null;
+}
+
+const NO_DIAG: Diagnostics = { micLabel: "", sent: 0, received: 0, events: 0, lastEvent: "", playback: null };
+
+export const useLiveVoice = create<LiveVoiceState>(() => ({ state: "off", muted: false, lines: [], tool: null, error: null, auth: null, level: 0, diag: NO_DIAG }));
+
+const setDiag = (patch: Partial<Diagnostics>) => useLiveVoice.setState((s) => ({ diag: { ...s.diag, ...patch } }));
 
 const MAX_LINES = 12;
 const addLine = (line: LiveLine) => useLiveVoice.setState((s) => ({ lines: [...s.lines, line].slice(-MAX_LINES) }));
@@ -47,6 +66,7 @@ interface Connection {
   dc: RTCDataChannel;
   mic: MediaStream;
   audio: HTMLAudioElement;
+  ctx: AudioContext | null;
   unsubscribe: (() => void)[];
   responding: boolean;
   userSpeaking: boolean;
@@ -56,6 +76,7 @@ interface Connection {
 }
 
 let conn: Connection | null = null;
+let toolsDropped = false;
 
 function send(event: Record<string, unknown>) {
   if (conn?.dc.readyState === "open") conn.dc.send(JSON.stringify(event));
@@ -66,7 +87,7 @@ async function sessionConfig() {
   return {
     type: "realtime",
     instructions: liveInstructions(toolContext()),
-    tools: await voiceTools(),
+    tools: toolsDropped ? [] : await voiceTools(),
     tool_choice: "auto",
     audio: {
       input: {
@@ -151,6 +172,8 @@ function onEvent(raw: string) {
   } catch {
     return;
   }
+  console.debug("[live voice]", e.type, e);
+  setDiag({ events: useLiveVoice.getState().diag.events + 1, lastEvent: String(e.type) });
   switch (e.type) {
     case "input_audio_buffer.speech_started":
       if (conn) conn.userSpeaking = true;
@@ -190,12 +213,19 @@ function onEvent(raw: string) {
       }
       break;
     }
-    case "error":
+    case "error": {
       // Cancelling a response that already ended is harmless.
       if (e.error?.code === "response_cancel_not_active") break;
       console.warn("realtime error", e.error);
-      addLine({ who: "tool", text: e.error?.message ?? "Realtime error" });
+      const param = String(e.error?.param ?? "");
+      addLine({ who: "tool", text: `Error${param ? ` (${param})` : ""}: ${e.error?.message ?? "Realtime error"}` });
+      // A tool OpenAI rejects shouldn't cost the whole session: carry on without tools.
+      if (param.startsWith("session.tools") && !toolsDropped) {
+        toolsDropped = true;
+        void sessionConfig().then((session) => send({ type: "session.update", session: { ...session, tools: [] } }));
+      }
       break;
+    }
   }
 }
 
@@ -207,6 +237,55 @@ async function micConstraints(): Promise<MediaTrackConstraints> {
   const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
   const match = devices.find((d) => d.kind === "audioinput" && d.label && (d.label === wanted || d.label.includes(wanted)));
   return match ? { ...base, deviceId: { exact: match.deviceId } } : base;
+}
+
+/** Mic level meter and send/receive counters, so a silent mic or speaker shows in the HUD. */
+function monitor(c: Connection) {
+  try {
+    c.ctx = new AudioContext();
+    void c.ctx.resume();
+    const analyser = c.ctx.createAnalyser();
+    analyser.fftSize = 512;
+    c.ctx.createMediaStreamSource(c.mic).connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    const meter = window.setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      useLiveVoice.setState({ level: Math.sqrt(sum / buf.length) });
+    }, 100);
+    c.unsubscribe.push(() => clearInterval(meter));
+  } catch (err) {
+    console.warn("live voice meter failed", err);
+  }
+  const stats = window.setInterval(async () => {
+    if (c.closed) return;
+    let sent = 0;
+    let received = 0;
+    (await c.pc.getStats().catch(() => new Map())).forEach((r: { type: string; kind?: string; mediaType?: string; bytesSent?: number; bytesReceived?: number }) => {
+      const audio = (r.kind ?? r.mediaType) === "audio";
+      if (r.type === "outbound-rtp" && audio) sent += r.bytesSent ?? 0;
+      if (r.type === "inbound-rtp" && audio) received += r.bytesReceived ?? 0;
+    });
+    setDiag({ sent, received });
+  }, 1000);
+  c.unsubscribe.push(() => clearInterval(stats));
+}
+
+/** Plays the model's voice; WebKit may give the track without a stream and wants the element in the page. */
+function playRemote(c: Connection, ev: RTCTrackEvent) {
+  c.audio.srcObject = ev.streams[0] ?? new MediaStream([ev.track]);
+  c.audio
+    .play()
+    .then(() => setDiag({ playback: null }))
+    .catch((err) => setDiag({ playback: `Speaker blocked: ${err instanceof Error ? err.message : String(err)}` }));
+}
+
+/** Retries playback from a click (for when autoplay was blocked). */
+export function resumeLiveAudio() {
+  if (!conn) return;
+  void conn.ctx?.resume();
+  conn.audio.play().then(() => setDiag({ playback: null }), () => {});
 }
 
 function watchApp(c: Connection) {
@@ -234,7 +313,8 @@ function watchApp(c: Connection) {
 
 export async function startLive(): Promise<void> {
   if (conn) return;
-  useLiveVoice.setState({ state: "connecting", error: null, lines: [], tool: null, muted: false });
+  useLiveVoice.setState({ state: "connecting", error: null, lines: [], tool: null, muted: false, level: 0, diag: NO_DIAG });
+  toolsDropped = false;
   // The push-to-talk recorder shouldn't hold the mic at the same time.
   if (useVoice.getState().phase === "listening") void invoke("voice_stop").catch(() => {});
   let mic: MediaStream | null = null;
@@ -252,14 +332,21 @@ export async function startLive(): Promise<void> {
       mic.getTracks().forEach((t) => t.stop());
       return;
     }
+    const track = mic.getAudioTracks()[0];
+    if (!track) throw new Error("No microphone found.");
+    setDiag({ micLabel: track.label || "default microphone" });
     pc = new RTCPeerConnection();
     const audio = document.createElement("audio");
     audio.autoplay = true;
-    pc.ontrack = (ev) => (audio.srcObject = ev.streams[0]);
-    mic.getAudioTracks().forEach((t) => pc!.addTrack(t, mic!));
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+    const c: Connection = { pc, dc: null as unknown as RTCDataChannel, mic, audio, ctx: null, unsubscribe: [], responding: false, userSpeaking: false, notes: [], closed: false };
+    pc.ontrack = (ev) => playRemote(c, ev);
+    pc.addTransceiver(track, { direction: "sendrecv", streams: [mic] });
     const dc = pc.createDataChannel("oai-events");
-    const c: Connection = { pc, dc, mic, audio, unsubscribe: [], responding: false, userSpeaking: false, notes: [], closed: false };
+    c.dc = dc;
     conn = c;
+    monitor(c);
     dc.onmessage = (ev) => onEvent(String(ev.data));
     dc.onopen = async () => {
       send({ type: "session.update", session: await sessionConfig() });
@@ -297,6 +384,9 @@ function teardown() {
   c.dc.close();
   c.pc.close();
   c.audio.srcObject = null;
+  c.audio.remove();
+  void c.ctx?.close();
+  useLiveVoice.setState({ level: 0 });
 }
 
 function fail(message: string) {
