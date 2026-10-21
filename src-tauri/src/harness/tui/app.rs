@@ -27,6 +27,8 @@ pub enum Msg {
     Files(Vec<String>),
     Shell { id: String, command: String, output: String, ok: bool },
     Checkpoint(Done),
+    /// A `/btw` side question's answer.
+    Btw { id: String, question: String, answer: Result<String, String> },
 }
 
 /// A user turn, for /undo: its message in the transcript and whether the workspace was
@@ -51,12 +53,19 @@ pub struct Launch {
     pub system: Option<String>,
 }
 
-pub const COMMANDS: [(&str, &str); 24] = [
+const BTW_SYSTEM: &str = "You answer a quick side question from the user about their ongoing coding-agent session, \
+shown below as a transcript (it may still be in progress). Answer only from the transcript, briefly and directly. \
+You can't run tools or change anything; if the transcript doesn't tell, say so.";
+/// How much of the transcript a `/btw` question sees, newest first.
+const BTW_CONTEXT_BYTES: usize = 120_000;
+
+pub const COMMANDS: [(&str, &str); 25] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
     ("/new", "Start a new conversation"),
     ("/resume", "Resume a past session"),
+    ("/btw", "Ask a side question about this session without interrupting the turn"),
     ("/compact", "Summarize the conversation to free context"),
     ("/compaction", "When to trim and auto-compact (% of context)"),
     ("/undo", "Undo the last turn: its messages and file changes"),
@@ -1032,6 +1041,71 @@ impl App {
         });
     }
 
+    /// `/btw <question>`: answered on the side by a separate, tool-less call that sees the
+    /// session so far. The running turn isn't interrupted and the agent never sees it.
+    fn btw(&mut self, question: String) {
+        if question.is_empty() {
+            self.toast("Usage: /btw <question about this session>", NoticeKind::Error);
+            return;
+        }
+        self.shell_seq += 1;
+        let id = format!("btw-{}", self.shell_seq);
+        self.items.push(Item::new(Block::Tool {
+            id: id.clone(),
+            name: "btw".into(),
+            title: question.clone(),
+            output: String::new(),
+            diff: None,
+            status: Status::Running,
+            started: Instant::now(),
+            ended: None,
+        }));
+        self.scroll = 0;
+        let system = BTW_SYSTEM.to_string();
+        let user = format!(
+            "<session cwd=\"{}\" status=\"{}\">\n{}\n</session>\n\nQuestion: {question}",
+            self.cwd.to_string_lossy(),
+            if self.busy { "the agent is still working on the last message" } else { "idle" },
+            self.btw_context(BTW_CONTEXT_BYTES),
+        );
+        let (provider, model) = (self.kind.id(), self.model.clone());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let answer = crate::llm::respond(provider, &model, &system, &user);
+            let _ = tx.send(Msg::Btw { id, question, answer });
+        });
+    }
+
+    /// The transcript as plain text for a `/btw` question, keeping its most recent `max` bytes.
+    fn btw_context(&self, max: usize) -> String {
+        let mut out = String::new();
+        for item in &self.items {
+            match &item.block {
+                Block::User { text } => out.push_str(&format!("[user]\n{text}\n\n")),
+                Block::Assistant { text, .. } => out.push_str(&format!("[assistant]\n{text}\n\n")),
+                Block::Tool { id, name, title, output, diff, .. } if !id.starts_with("btw-") => {
+                    let body = diff.as_deref().unwrap_or(output).trim();
+                    out.push_str(&format!("[tool {name}] {title}\n{}\n\n", tools::clip(body, 1500)));
+                }
+                _ => {}
+            }
+        }
+        if out.len() > max {
+            let start = out.ceil_char_boundary(out.len() - max);
+            out = format!("… [earlier conversation omitted] …\n{}", &out[start..]);
+        }
+        out.trim_end().to_string()
+    }
+
+    pub fn on_btw(&mut self, id: String, question: String, answer: Result<String, String>) {
+        let Some(item) = self.find(|b| matches!(b, Block::Tool { id: i, .. } if *i == id)) else { return };
+        item.block = match answer {
+            Ok(a) => Block::Notice { text: format!("btw: {question}\n\n{}", a.trim()), kind: NoticeKind::Info },
+            Err(e) => Block::Notice { text: format!("btw: {question}\n{e}"), kind: NoticeKind::Error },
+        };
+        item.touch();
+    }
+
     pub fn on_shell(&mut self, id: String, command: String, output: String, ok: bool) {
         if let Some(item) = self.find(|b| matches!(b, Block::Tool { id: i, .. } if *i == id)) {
             if let Block::Tool { output: o, status, ended, .. } = &mut item.block {
@@ -1080,6 +1154,7 @@ impl App {
                     self.send(Cmd::Compact);
                 }
             }
+            "/btw" => self.btw(arg.to_string()),
             "/compaction" | "/autocompact" => self.compaction_command(arg),
             "/undo" | "/revert" => self.undo(),
             "/init" => {
@@ -2405,6 +2480,7 @@ pub fn drain(app: &mut App, rx: &Receiver<Msg>, first: Msg) {
         Msg::Files(f) => app.files = f,
         Msg::Shell { id, command, output, ok } => app.on_shell(id, command, output, ok),
         Msg::Checkpoint(d) => app.on_checkpoint(d),
+        Msg::Btw { id, question, answer } => app.on_btw(id, question, answer),
     };
     handle(app, first);
     while let Ok(m) = rx.try_recv() {
@@ -2424,6 +2500,35 @@ mod tests {
         let mut a = App::blank(tx, &launch);
         a.config = Config::default();
         a
+    }
+
+    #[test]
+    fn btw_sees_the_transcript_and_answers_beside_it() {
+        let mut a = app();
+        a.items.push(Item::new(Block::User { text: "fix the parser".into() }));
+        a.items.push(Item::new(Block::Assistant { id: "m1".into(), text: "Looking at parse.rs".into() }));
+        let tool = |id: &str| Block::Tool {
+            id: id.into(),
+            name: "btw".into(),
+            title: "what file?".into(),
+            output: String::new(),
+            diff: None,
+            status: Status::Running,
+            started: Instant::now(),
+            ended: None,
+        };
+        a.items.push(Item::new(tool("btw-1")));
+        let ctx = a.btw_context(10_000);
+        assert!(ctx.contains("[user]\nfix the parser") && ctx.contains("Looking at parse.rs"));
+        // Earlier side questions aren't part of the session.
+        assert!(!ctx.contains("what file?"));
+        assert!(a.btw_context(20).starts_with("… [earlier conversation omitted]"));
+
+        a.busy = true;
+        a.on_btw("btw-1".into(), "what file?".into(), Ok("parse.rs\n".into()));
+        assert!(matches!(&a.items.last().unwrap().block, Block::Notice { text, kind: NoticeKind::Info } if text == "btw: what file?\n\nparse.rs"));
+        // The running turn is untouched.
+        assert!(a.busy && a.queue.is_empty() && a.turns.is_empty());
     }
 
     #[test]

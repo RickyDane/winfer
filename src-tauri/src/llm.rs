@@ -179,13 +179,26 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     Ok(answer.to_string())
 }
 
+/// One blocking, tool-less answer from `provider` ("claude", "codex" or "chatgpt") with the
+/// user's own login. An empty model uses the provider's default.
+pub fn respond(provider: &str, model: &str, system: &str, user: &str) -> Result<String, String> {
+    match provider {
+        "claude" => claude(model, system, user),
+        "codex" => codex(model, system, user),
+        "chatgpt" => crate::chatgpt::respond(model, system, user),
+        other => Err(format!("unknown LLM provider {other}")),
+    }
+}
+
 #[tauri::command]
 pub async fn llm_compose(req: ComposeRequest) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || match req.provider.as_str() {
-        "claude" => claude(if req.fast { CLAUDE_FAST_MODEL } else { &req.model }, &req.system, &req.user),
-        "codex" => codex(if req.fast { CODEX_FAST_MODEL } else { &req.model }, &req.system, &req.user),
-        "chatgpt" => crate::chatgpt::respond(&req.model, &req.system, &req.user),
-        other => Err(format!("unknown LLM provider {other}")),
+    tauri::async_runtime::spawn_blocking(move || {
+        let model = match (req.fast, req.provider.as_str()) {
+            (true, "claude") => CLAUDE_FAST_MODEL,
+            (true, "codex") => CODEX_FAST_MODEL,
+            _ => &req.model,
+        };
+        respond(&req.provider, model, &req.system, &req.user)
     })
     .await
     .map_err(|e| e.to_string())?
