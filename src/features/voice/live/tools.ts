@@ -23,7 +23,7 @@ export interface RealtimeTool {
 
 type JsonSchema = Record<string, unknown>;
 
-const PANE = { type: ["integer", "string"], description: "Pane number as listed (1, 2, …) or pane id" };
+const PANE = { type: "string", description: "Pane number as listed (1, 2, …) or pane id" };
 
 /** The MCP agent tools, described for voice (no calling pane: "the user's workspace"). */
 const AGENT_TOOLS: RealtimeTool[] = [
@@ -142,7 +142,57 @@ let browserTools: { workspaceId: string; tools: RealtimeTool[] } | null = null;
 let bgTool: RealtimeTool | null = null;
 
 /** The tools for the current app state. */
-export async function voiceTools(): Promise<RealtimeTool[]> {
+const MAX_ENUM = 40;
+const MAX_DESCRIPTION = 300;
+
+/**
+ * Plain JSON schema the realtime model accepts: only type/description/properties/required/
+ * items/enum, a single type, short descriptions and enums. Plugin and Playwright schemas carry
+ * more ($schema, additionalProperties, type unions, huge enums).
+ */
+export function sanitizeSchema(schema: unknown): JsonSchema {
+  if (!schema || typeof schema !== "object") return { type: "string" };
+  const src = schema as Record<string, unknown>;
+  const out: JsonSchema = {};
+  let type = src.type;
+  if (Array.isArray(type)) type = type.find((t) => t !== "null") ?? "string";
+  if (typeof type === "string") out.type = type;
+  else if (src.properties) out.type = "object";
+  else if (Array.isArray(src.enum)) out.type = "string";
+  else out.type = "string";
+  let description = typeof src.description === "string" ? src.description : "";
+  if (Array.isArray(src.enum)) {
+    if (src.enum.length <= MAX_ENUM) out.enum = src.enum;
+    else description = `${description} One of: ${src.enum.slice(0, MAX_ENUM).join(", ")}, …`.trim();
+  }
+  if (description) out.description = description.slice(0, MAX_DESCRIPTION);
+  if (out.type === "object") {
+    const props = (src.properties ?? {}) as Record<string, unknown>;
+    out.properties = Object.fromEntries(Object.entries(props).map(([k, v]) => [k, sanitizeSchema(v)]));
+    if (Array.isArray(src.required)) {
+      const required = src.required.filter((r): r is string => typeof r === "string" && r in props);
+      if (required.length) out.required = required;
+    }
+  }
+  if (out.type === "array") out.items = sanitizeSchema(src.items ?? { type: "string" });
+  return out;
+}
+
+const clean = (t: RealtimeTool): RealtimeTool => ({ ...t, description: t.description.slice(0, MAX_DESCRIPTION), parameters: sanitizeSchema(t.parameters) });
+
+/** How many tools to offer: all, the essentials, or none (when OpenAI fails on the larger sets). */
+export type ToolLevel = "full" | "core" | "none";
+
+const CORE_REGISTRY = new Set(["spawn_panes", "close_pane", "focus_pane", "approve_agent", "interrupt_agent", "switch_workspace", "toggle_browser", "show_overview"]);
+
+export async function voiceTools(level: ToolLevel = "full"): Promise<RealtimeTool[]> {
+  if (level === "none") return [];
+  const all = await allVoiceTools();
+  const tools = level === "core" ? all.filter((t) => AGENT_TOOLS.some((a) => a.name === t.name) || CORE_REGISTRY.has(t.name) || t.name === END_CONVERSATION) : all;
+  return tools.map(clean);
+}
+
+async function allVoiceTools(): Promise<RealtimeTool[]> {
   const ctx = toolContext();
   const registry = allTools()
     .filter((t) => !REPLACED.has(t.id))

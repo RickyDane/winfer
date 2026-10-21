@@ -7,7 +7,7 @@ vi.stubGlobal("localStorage", { getItem: (k: string) => storage.get(k) ?? null, 
 vi.mock("@tauri-apps/plugin-notification", () => ({ isPermissionGranted: vi.fn(async () => false), sendNotification: vi.fn() }));
 vi.mock("@/commands/bus", () => ({ execute: vi.fn() }));
 
-const { registryTool, webTools, runVoiceFunction } = await import("./tools");
+const { registryTool, webTools, runVoiceFunction, sanitizeSchema } = await import("./tools");
 const { TOOLS } = await import("@/tools/registry");
 const bus = await import("@/commands/bus");
 
@@ -44,5 +44,21 @@ describe("live voice tools", () => {
 
   it("asks to load browser tools before using them", async () => {
     expect(await runVoiceFunction("web_click", {}, () => {})).toBe("Call use_browser first.");
+  });
+
+  it("reduces schemas to what the realtime model accepts", () => {
+    const big = Array.from({ length: 60 }, (_, i) => `m${i}`);
+    const out = sanitizeSchema({
+      $schema: "x",
+      type: "object",
+      additionalProperties: false,
+      properties: { pane: { type: ["integer", "string"] }, model: { enum: big }, n: { type: "integer", minimum: 0 } },
+      required: ["pane", "gone"],
+    });
+    expect(out).toEqual({
+      type: "object",
+      properties: { pane: { type: "integer" }, model: { type: "string", description: expect.stringContaining("One of: m0") }, n: { type: "integer" } },
+      required: ["pane"],
+    });
   });
 });

@@ -12,7 +12,7 @@ import { providerName, useWorkspaces, type AgentStatus } from "@/stores/workspac
 import { useBrowser } from "@/features/browser/browser";
 import { useVoice } from "../voice";
 import { liveInstructions } from "./instructions";
-import { END_CONVERSATION, resetVoiceTools, runVoiceFunction, voiceTools } from "./tools";
+import { END_CONVERSATION, resetVoiceTools, runVoiceFunction, voiceTools, type ToolLevel } from "./tools";
 
 const CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 export const DEFAULT_LIVE_MODEL = "gpt-realtime";
@@ -78,7 +78,8 @@ interface Connection {
 }
 
 let conn: Connection | null = null;
-let toolsDropped = false;
+/** Fewer tools after OpenAI failed on the larger set (see the response.done handler). */
+let toolLevel: ToolLevel = "full";
 
 function send(event: Record<string, unknown>) {
   if (conn?.dc.readyState === "open") conn.dc.send(JSON.stringify(event));
@@ -89,7 +90,7 @@ async function sessionConfig() {
   return {
     type: "realtime",
     instructions: liveInstructions(toolContext()),
-    tools: toolsDropped ? [] : await voiceTools(),
+    tools: await voiceTools(toolLevel),
     tool_choice: "auto",
     audio: {
       input: {
@@ -110,6 +111,22 @@ function refreshSession(delay = 600) {
     if (!conn || conn.closed) return;
     send({ type: "session.update", session: await sessionConfig() });
   }, delay);
+}
+
+/** Retries the session with fewer tools; false when there is nothing left to drop. */
+function degrade(): boolean {
+  const next: ToolLevel | null = toolLevel === "full" ? "core" : toolLevel === "core" ? "none" : null;
+  if (!next || !conn) {
+    if (conn) fail("OpenAI keeps failing on this session even without tools. With a ChatGPT sign-in, try an OpenAI API key (Settings → Voice) or another model.");
+    return false;
+  }
+  toolLevel = next;
+  addLine({ who: "tool", text: next === "core" ? "Retrying with fewer tools…" : "Retrying without tools…" });
+  void sessionConfig().then((session) => {
+    send({ type: "session.update", session });
+    send({ type: "response.create", response: { instructions: "Greet the user in a few words and ask what to do." } });
+  });
+  return true;
 }
 
 /** Tells the model about something that happened in winfer; it decides whether to speak. */
@@ -209,8 +226,13 @@ function onEvent(raw: string) {
       if (conn) conn.responding = false;
       const calls = ((e.response?.output ?? []) as { type: string }[]).filter((o): o is FunctionCall => o.type === "function_call");
       if (e.response?.status === "failed") {
-        const message = e.response?.status_details?.error?.message ?? "The response failed.";
-        addLine({ who: "tool", text: message });
+        const error = e.response?.status_details?.error;
+        addLine({ who: "tool", text: error?.message ?? "The response failed." });
+        // OpenAI's own errors here mostly come from a session it can't handle (too many or too
+        // large tools): retry with fewer before giving up.
+        if (error?.type === "server_error" || /server had an error/i.test(error?.message ?? "")) {
+          if (degrade()) break;
+        }
       }
       if (calls.length) void runCalls(calls);
       else {
@@ -226,10 +248,7 @@ function onEvent(raw: string) {
       const param = String(e.error?.param ?? "");
       addLine({ who: "tool", text: `Error${param ? ` (${param})` : ""}: ${e.error?.message ?? "Realtime error"}` });
       // A tool OpenAI rejects shouldn't cost the whole session: carry on without tools.
-      if (param.startsWith("session.tools") && !toolsDropped) {
-        toolsDropped = true;
-        void sessionConfig().then((session) => send({ type: "session.update", session: { ...session, tools: [] } }));
-      }
+      if (param.startsWith("session.tools")) degrade();
       break;
     }
   }
@@ -320,7 +339,7 @@ function watchApp(c: Connection) {
 export async function startLive(): Promise<void> {
   if (conn) return;
   useLiveVoice.setState({ state: "connecting", error: null, lines: [], tool: null, muted: false, level: 0, diag: NO_DIAG });
-  toolsDropped = false;
+  toolLevel = "full";
   // The push-to-talk recorder shouldn't hold the mic at the same time.
   if (useVoice.getState().phase === "listening") void invoke("voice_stop").catch(() => {});
   let mic: MediaStream | null = null;
