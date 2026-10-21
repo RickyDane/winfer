@@ -113,6 +113,10 @@ pub struct Usage {
     pub turn_input: u64,
     /// The part of `turn_input` read from the prompt cache.
     pub turn_cached: u64,
+    /// Estimated tokens of the main agent's text streamed so far this turn. Unlike `turn` it
+    /// only grows as text arrives, never by an exact count landing (which also covers hidden
+    /// reasoning and subagents), so the tok/s rate is taken from it.
+    pub turn_streamed: u64,
 }
 
 /// Counts a turn's output tokens as it runs. Backends report exact counts once per model
@@ -122,11 +126,24 @@ pub struct TurnTokens {
     exact: u64,
     chars: u64,
     shown: u64,
+    /// Every streamed character of the main agent this turn, kept across exact counts.
+    paced: u64,
 }
 
 impl TurnTokens {
     pub fn now(&self) -> u64 {
         self.exact + self.chars / 4
+    }
+
+    /// The main agent's streamed text so far, in estimated tokens (`Usage::turn_streamed`).
+    pub fn streamed_total(&self) -> u64 {
+        self.paced / 4
+    }
+
+    /// Streamed text of a subagent: adds to the count but not to the pace, since subagents
+    /// stream alongside the main agent and each other.
+    pub fn streamed_sub(&mut self, text: &str) -> bool {
+        self.count(text)
     }
 
     /// The backend's exact count for the turn so far; the estimate it covers is dropped.
@@ -138,6 +155,11 @@ impl TurnTokens {
 
     /// Streamed text; true when the count moved enough (~25 tokens) to be worth sending.
     pub fn streamed(&mut self, text: &str) -> bool {
+        self.paced += text.len() as u64;
+        self.count(text)
+    }
+
+    fn count(&mut self, text: &str) -> bool {
         self.chars += text.len() as u64;
         if self.now() < self.shown + 25 {
             return false;
@@ -149,7 +171,9 @@ impl TurnTokens {
 
 /// A turn's output speed in tokens per second, over the time tokens actually streamed in:
 /// gaps between counts longer than `IDLE` (tool runs, waiting on the next request's first
-/// token) don't count, so the rate is the model's, not the turn's.
+/// token) don't count, so the rate is the model's, not the turn's. It's fed the streamed
+/// count (`Usage::turn_streamed`), not `Usage::turn`: an exact count landing at a request's
+/// end adds hidden reasoning (made during a silent gap) in an instant and would spike it.
 #[derive(Debug, Default)]
 pub struct Tps {
     last: Option<(std::time::Instant, u64)>,
@@ -160,7 +184,7 @@ pub struct Tps {
 impl Tps {
     const IDLE: std::time::Duration = std::time::Duration::from_secs(3);
 
-    /// The turn's output count (`Usage::turn`) at `at`.
+    /// The turn's streamed output count (`Usage::turn_streamed`) at `at`.
     pub fn sample(&mut self, at: std::time::Instant, turn: u64) {
         if let Some((t, n)) = self.last {
             let gap = at.saturating_duration_since(t);
@@ -201,6 +225,28 @@ mod tps_tests {
         r.sample(at(12_000), 90);
         r.sample(at(12_500), 115);
         assert_eq!(r.rate(), Some(100.0 / 2.0));
+    }
+
+    #[test]
+    fn exact_counts_dont_move_the_pace() {
+        use super::TurnTokens;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (mut turn, mut r) = (TurnTokens::default(), Tps::default());
+        // 10s of hidden reasoning, then 100 chars (25 tokens) every 250ms: 100 tok/s.
+        r.sample(at(0), turn.streamed_total());
+        for i in 1..=8 {
+            turn.streamed(&"x".repeat(100));
+            r.sample(at(10_000 + i * 250), turn.streamed_total());
+        }
+        // The request ends: its exact count includes 1500 reasoning tokens.
+        turn.exact(1700);
+        r.sample(at(12_100), turn.streamed_total());
+        assert_eq!(turn.now(), 1700);
+        assert_eq!(r.rate(), Some(175.0 / 1.75));
+        // A subagent's text adds to the count, not to the pace.
+        turn.streamed_sub(&"x".repeat(4000));
+        assert_eq!((turn.now(), turn.streamed_total()), (2700, 200));
     }
 }
 

@@ -689,7 +689,7 @@ impl App {
                 let pct = if u.window > 0 { u.context as f32 / u.window as f32 } else { 0.0 };
                 self.ctx_shown.set(pct, 600);
                 if self.busy {
-                    self.tps.sample(Instant::now(), u.turn);
+                    self.tps.sample(Instant::now(), u.turn_streamed);
                 }
                 self.usage = u;
                 self.usage_unsent = true;

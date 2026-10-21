@@ -796,6 +796,12 @@ mockIPC(
         void emit("voice://state", { state: "listening", mode: a.mode });
         void emit("voice://level", 0.05);
         return null;
+      case "realtime_has_api_key":
+        return false;
+      case "realtime_bg_tool":
+        return null;
+      case "realtime_client_secret":
+        throw new Error("Live voice needs the desktop app.");
       case "voice_stop":
         void emit("voice://state", { state: "transcribing", mode: voice.mode });
         setTimeout(() => void emit("voice://transcript", { mode: voice.mode, text: voice.said, ms: 142 }), 150);

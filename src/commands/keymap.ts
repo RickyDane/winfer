@@ -97,6 +97,7 @@ const SPECS: BindingSpec[] = [
     (n): BindingSpec => ({ keys: `Mod+Ctrl+${n}`, win: `Ctrl+Alt+${n}`, title: `Switch to workspace ${n}`, group: "Workspaces", command: { type: "workspace.switch", target: { index: n } } }),
   ),
   { keys: "Mod+K", title: "Command palette", group: "App", command: { type: "ui.palette" } },
+  { keys: "Mod+Alt+V", win: "Ctrl+Shift+Alt+V", title: "Live voice conversation", group: "App", command: { type: "voice.live" } },
   { keys: "Mod+B", title: "Toggle sidebar", group: "App", command: { type: "ui.toggleSidebar" } },
   { keys: "Mod+Shift+B", win: "Ctrl+Shift+Alt+B", title: "Toggle browser", group: "App", command: { type: "ui.toggleBrowser" } },
   { keys: "Ctrl+`", title: "Toggle side terminal", group: "App", command: { type: "ui.sidePanel", panel: "terminal" } },

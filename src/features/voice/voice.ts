@@ -13,7 +13,7 @@ import { toolContext } from "@/features/palette/entries";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { leaves } from "@/features/layout/tree";
 import { logActivity } from "@/stores/activity";
-import { orderByMention, type Decision } from "./decision";
+import { decisionCommands, orderByMention, type Decision } from "./decision";
 import { planWithLlm } from "./planner";
 import { llmEnabled } from "@/features/llm/llm";
 import { refreshChatGpt } from "@/features/llm/chatgpt";
@@ -106,9 +106,7 @@ function describe(d: Decision): string {
 
 function commandsFor(decisions: Decision[], transcript: string): Command[] {
   const ctx = toolContext(useVoice.getState().lastCommands);
-  const commands = decisions.flatMap((d) =>
-    d.tool.toCommands(d.args, ctx).map((c) => (c.type === "pane.spawn" && d.args.worktree === true ? { ...c, worktree: true } : c)),
-  );
+  const commands = decisions.flatMap((d) => decisionCommands(d, ctx));
   return orderByMention(commands, transcript, ctx);
 }
 

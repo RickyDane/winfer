@@ -660,6 +660,15 @@ export const TOOLS: ToolDef[] = [
     palette: () => [{ title: "Keyboard shortcuts", args: {} }],
   },
   {
+    id: "live_voice",
+    title: "Live voice",
+    description: "Start or end a live voice conversation that controls winfer",
+    risk: "safe",
+    params: {},
+    toCommands: () => [{ type: "voice.live" }],
+    palette: () => [{ title: "Live voice: start or end conversation", args: {} }],
+  },
+  {
     id: "send_to_pane",
     title: "Tell an agent",
     description: "Tell an existing agent to do something, or type or insert text into a pane, e.g. tell Claude to run the tests",

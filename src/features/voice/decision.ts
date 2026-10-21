@@ -10,6 +10,11 @@ export interface Decision {
   args: Args;
 }
 
+/** The Command Bus commands one decision runs ("worktree" applies to the panes it spawns). */
+export function decisionCommands(d: Decision, ctx: ToolContext): Command[] {
+  return d.tool.toCommands(d.args, ctx).map((c) => (c.type === "pane.spawn" && d.args.worktree === true ? { ...c, worktree: true } : c));
+}
+
 /** Spawn order follows the order providers were mentioned ("claude, codex and grok"). */
 export function orderByMention(commands: Command[], transcript: string, ctx: ToolContext): Command[] {
   const text = transcript.toLowerCase();

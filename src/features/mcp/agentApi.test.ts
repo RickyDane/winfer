@@ -15,7 +15,7 @@ const storage = new Map<string, string>();
 vi.stubGlobal("localStorage", { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v) });
 vi.mock("@tauri-apps/plugin-notification", () => ({ isPermissionGranted: vi.fn(async () => false), sendNotification: vi.fn() }));
 
-const { runTool } = await import("./agentApi");
+const { runTool, runVoiceTool } = await import("./agentApi");
 const { useWorkspaces } = await import("@/stores/workspaces");
 const terminal = await import("@/features/terminal/xtermRegistry");
 
@@ -70,6 +70,20 @@ describe("agent MCP tools", () => {
     const spawned = ws.panes.at(-1)!;
     expect(spawned).toMatchObject({ provider: "codex", prompt: "write tests", wantsWorktree: true });
     await expect(call("spawn_agent", { provider: "grok" })).rejects.toThrow("Available: claude, codex");
+  });
+});
+
+describe("live voice (no calling pane)", () => {
+  it("lists panes with the focused one and sends to any pane", async () => {
+    expect(await runVoiceTool("list_panes", {})).toBe("Workspace “api” (~/api):\n1. Claude Code · idle · focused\n2. Codex · idle");
+    expect(await runVoiceTool("send_to_pane", { pane: 1, text: "hi" })).toBe("Sent to pane 1 (Claude Code).");
+    expect(terminal.sendText).toHaveBeenCalledWith("p-1", "hi");
+  });
+
+  it("spawns next to the focused pane and can't wait for usage resets", async () => {
+    expect(await runVoiceTool("spawn_agent", { provider: "claude" })).toBe("Started Claude Code as pane 2.");
+    await expect(runVoiceTool("wait_for_usage_reset", {})).rejects.toThrow("Only agent panes");
+    await expect(runVoiceTool("notify_user", { message: "x" })).rejects.toThrow("talks to the user");
   });
 });
 

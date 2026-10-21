@@ -209,13 +209,20 @@ fn resolve() -> Option<HashMap<String, String>> {
     const MARKER: &str = "__WINFER_ENV_START__";
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
 
-    let mut child = Command::new(&shell)
-        .args(["-ilc", &format!("printf '{MARKER}'; env -0")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut cmd = Command::new(&shell);
+    cmd.args(["-ilc", &format!("printf '{MARKER}'; env -0")]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    // An interactive shell turns on job control and takes over the controlling terminal; killed on
+    // the timeout below, it never hands it back and the TUI it ran under can't read keys anymore.
+    // Its own session has no terminal to take.
+    // SAFETY: setsid is async-signal-safe.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().ok()?;
 
     // A broken rc file must not hang app startup.
     let deadline = Instant::now() + Duration::from_secs(5);

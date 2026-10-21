@@ -88,6 +88,23 @@ fn window_title(topic: &str) -> String {
     if clean.is_empty() { "winfer code".into() } else { clean.into() }
 }
 
+/// Takes the terminal back if a child with job control (an interactive shell, say) made itself the
+/// foreground group and died without handing it back: input reads would fail forever otherwise.
+fn reclaim_tty() {
+    #[cfg(unix)]
+    // SAFETY: plain syscalls on stdin; SIGTTOU is ignored around tcsetpgrp so a background caller
+    // isn't stopped by it, then restored.
+    unsafe {
+        let me = libc::getpgrp();
+        let fg = libc::tcgetpgrp(0);
+        if fg > 0 && fg != me {
+            let old = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+            libc::tcsetpgrp(0, me);
+            libc::signal(libc::SIGTTOU, old);
+        }
+    }
+}
+
 pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
     // Raw mode, the alternate screen and a panic hook that restores the terminal; its stdout
     // backend is swapped for one that writes whole frames.
@@ -116,6 +133,7 @@ pub fn run(launch: Launch, mouse: bool) -> std::io::Result<()> {
         // Redraws at most every FRAME for streamed output; keys draw at once.
         const FRAME: Duration = Duration::from_millis(33);
         loop {
+            reclaim_tty();
             draw(&mut terminal, &mut frames, &mut app)?;
             if titled.as_deref() != Some(app.saved.title.as_str()) {
                 titled = Some(app.saved.title.clone());

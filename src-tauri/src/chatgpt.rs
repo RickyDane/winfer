@@ -180,7 +180,7 @@ fn check_id_token(claims: &Value, client_id: &str, nonce: Option<&str>) -> Resul
     Ok(())
 }
 
-fn http() -> ureq::Agent {
+pub(crate) fn http() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(60)))
         .http_status_as_error(false)

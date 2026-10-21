@@ -86,7 +86,7 @@ export function plannerPrompt(transcript: string, ctx: ToolContext, recent: stri
 }
 
 /** Keeps only arguments the tool accepts, with values it allows. */
-function validArgs(tool: ToolDef, raw: Record<string, unknown>, ctx: ToolContext): Args {
+export function validArgs(tool: ToolDef, raw: Record<string, unknown>, ctx: ToolContext): Args {
   const args: Args = {};
   for (const [name, param] of Object.entries(tool.params)) {
     const value = raw[name];

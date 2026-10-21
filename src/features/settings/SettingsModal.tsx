@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
+import { DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -721,6 +722,81 @@ function VoiceSettings() {
           <Toggle label="Confirm risky commands" checked={confirm} onChange={(confirm) => useWorkspaces.getState().setVoiceConfig({ confirm })} />
         </Row>
       </Card>
+      <LiveVoiceSettings />
+    </>
+  );
+}
+
+/** Live voice: a spoken conversation with OpenAI's realtime model that runs winfer's tools. */
+function LiveVoiceSettings() {
+  const signedIn = useChatGpt((s) => s.signedIn);
+  const model = useWorkspaces((s) => s.voiceConfig.liveModel ?? "");
+  const voice = useWorkspaces((s) => s.voiceConfig.liveVoice ?? DEFAULT_LIVE_VOICE);
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [key, setKey] = useState("");
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const set = useWorkspaces.getState().setVoiceConfig;
+
+  useEffect(() => {
+    void invoke<boolean>("realtime_has_api_key").then(setHasKey, () => setHasKey(false));
+  }, []);
+
+  const saveKey = async (value: string | null) => {
+    setResult(null);
+    try {
+      await invoke("realtime_set_api_key", { key: value });
+      setHasKey(Boolean(value));
+      setKey("");
+      setResult({ ok: true, text: value ? "API key saved in the keychain." : "API key removed." });
+    } catch (err) {
+      setResult({ ok: false, text: String(err) });
+    }
+  };
+
+  return (
+    <>
+      <Card
+        title="Live voice"
+        description={`Talk with winfer in a continuous conversation (${keysFor({ type: "voice.live" })} or the wave button in the title bar). OpenAI's realtime model hears you, answers aloud and operates winfer: panes, agents, the browser, files and plugins. Audio goes to OpenAI.`}
+      >
+        <Row label="Account" hint={signedIn ? "Uses your ChatGPT sign-in; falls back to the API key if OpenAI doesn't allow it." : "Sign in with ChatGPT (AI tab) or add an OpenAI API key."}>
+          <span className="text-xs text-fg-muted">{signedIn ? "ChatGPT" : hasKey ? "API key" : "Not set up"}</span>
+        </Row>
+        <Row label="OpenAI API key" hint={hasKey ? "Stored in the keychain." : "Optional with a ChatGPT sign-in."}>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              className={cn(inputClass, "w-48")}
+              value={key}
+              placeholder={hasKey ? "••••••••" : "sk-…"}
+              onChange={(e) => setKey(e.target.value)}
+              spellCheck={false}
+              aria-label="OpenAI API key"
+            />
+            <button disabled={!key.trim()} onClick={() => void saveKey(key)} className={buttonClass}>
+              Save
+            </button>
+            {hasKey && (
+              <button onClick={() => void saveKey(null)} className={buttonClass}>
+                Remove
+              </button>
+            )}
+          </div>
+        </Row>
+        <Row label="Model" hint={`Empty uses ${DEFAULT_LIVE_MODEL}.`}>
+          <input className={cn(inputClass, "w-48")} value={model} placeholder={DEFAULT_LIVE_MODEL} onChange={(e) => set({ liveModel: e.target.value.trim() })} spellCheck={false} />
+        </Row>
+        <Row label="Voice" hint="Applies to the next conversation.">
+          <Select value={voice} onChange={(e) => set({ liveVoice: e.target.value })} className="w-36">
+            {LIVE_VOICES.map((v) => (
+              <option key={v} value={v}>
+                {v[0].toUpperCase() + v.slice(1)}
+              </option>
+            ))}
+          </Select>
+        </Row>
+      </Card>
+      <Result result={result} />
     </>
   );
 }

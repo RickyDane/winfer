@@ -608,6 +608,7 @@ impl Bridge {
                     turn: 0,
                     turn_input: 0,
                     turn_cached: 0,
+                    turn_streamed: 0,
                 };
                 self.counted();
             }
@@ -632,6 +633,7 @@ impl Bridge {
             u.cached += c.cached;
         }
         u.turn = self.turn_tokens.now();
+        u.turn_streamed = self.turn_tokens.streamed_total();
         u.turn_input = u.input.saturating_sub(self.turn_input_base);
         u.turn_cached = u.cached.saturating_sub(self.turn_cached_base);
         self.emit(Ev::Usage(u));

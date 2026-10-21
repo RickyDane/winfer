@@ -26,6 +26,7 @@ mod usage;
 mod usage_history;
 mod vault;
 mod voice;
+mod realtime;
 mod worktree;
 
 use tauri::Manager;
@@ -123,6 +124,7 @@ pub fn run() {
         .manage(browser::BrowserManager::default())
         .manage(android::AndroidManager::default())
         .manage(voice::Voice::new())
+        .manage(realtime::LiveBrowser::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -228,6 +230,13 @@ pub fn run() {
             voice::voice_test_microphone,
             voice::voice_start,
             voice::voice_stop,
+            realtime::realtime_client_secret,
+            realtime::realtime_set_api_key,
+            realtime::realtime_has_api_key,
+            realtime::realtime_browser_tools,
+            realtime::realtime_browser_call,
+            realtime::realtime_bg_tool,
+            realtime::realtime_bg,
             mcp::mcp_respond,
             mobile::mobile_status,
             mobile::mobile_pair_start,
@@ -266,6 +275,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                app.state::<realtime::LiveBrowser>().shutdown();
                 app.state::<browser::BrowserManager>().shutdown();
                 app.state::<android::AndroidManager>().shutdown();
                 voice::shutdown(app);

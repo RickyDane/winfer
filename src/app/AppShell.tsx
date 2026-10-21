@@ -8,7 +8,7 @@ import { SessionsOverview } from "@/features/progress/SessionsOverview";
 import { startProgressTracking } from "@/features/progress/progress";
 import { ReviewInbox } from "@/features/review/ReviewInbox";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Archive, Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
+import { Archive, AudioLines, Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
@@ -19,6 +19,8 @@ import { CommandPalette } from "@/features/palette/CommandPalette";
 import { DiffView } from "@/features/worktree/DiffView";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { VoiceHUD } from "@/features/voice/VoiceHUD";
+import { LiveVoiceHUD } from "@/features/voice/live/LiveVoiceHUD";
+import { toggleLive, useLiveVoice } from "@/features/voice/live/session";
 import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
 import { RaceView } from "@/features/orchestration/RaceView";
 import { RaceResults } from "@/features/orchestration/RaceResults";
@@ -73,6 +75,7 @@ function TitleBar() {
         <UsageMeter />
         <NewPaneMenu />
         <MicButton />
+        <LiveButton />
         <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
           <PanelRight size={15} />
         </button>
@@ -146,6 +149,20 @@ function MicButton() {
     >
       <Mic size={13} />
       <span className={cn(shortcutError && "line-through")}>{keys.command}</span>
+    </button>
+  );
+}
+
+/** Starts or ends the live voice conversation. */
+function LiveButton() {
+  const on = useLiveVoice((s) => s.state !== "off" && s.state !== "error");
+  return (
+    <button
+      onClick={toggleLive}
+      className={cn("rounded-md border px-1.5 py-1 hover:bg-hover hover:text-fg", on ? "border-accent text-accent" : "border-border")}
+      title={`${on ? "End" : "Start"} live voice conversation (${keysFor({ type: "voice.live" })})`}
+    >
+      <AudioLines size={13} />
     </button>
   );
 }
@@ -271,6 +288,7 @@ export function AppShell() {
       <ModelPicker />
       <DragLayer />
       <VoiceHUD />
+      <LiveVoiceHUD />
       <Toaster />
     </div>
   );

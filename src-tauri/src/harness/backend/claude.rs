@@ -335,6 +335,7 @@ impl Bridge {
         l.usage.cached = l.cached + l.turn_cached;
         l.usage.output = l.output + turn;
         l.usage.turn = turn;
+        l.usage.turn_streamed = l.turn.streamed_total();
         l.usage.turn_input = l.turn_input;
         l.usage.turn_cached = l.turn_cached;
         if l.usage.window == 0 {
@@ -580,6 +581,7 @@ impl Bridge {
                     turn: n("output_tokens"),
                     turn_input: n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
                     turn_cached: n("cache_read_input_tokens"),
+                    turn_streamed: l.turn.streamed_total(),
                 };
                 *l = Live { usage: u.clone(), input: l.input, cached: l.cached, output: l.output, ..Default::default() };
                 self.emit(Ev::Usage(u));

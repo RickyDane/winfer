@@ -14,7 +14,7 @@ import { pasteText, readTerminal, sendText, startDetached } from "@/features/ter
 import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 import { setTask } from "@/features/progress/progress";
-import { agentCaller, pluginAgentToolList, runPluginAgentTool } from "@/features/plugins/plugins";
+import { agentCaller, pluginAgentToolList, runPluginAgentTool, type AgentCaller } from "@/features/plugins/plugins";
 import { cancelWake, limitsOf, pendingWake, refreshLimits, scheduleWake, usageReport } from "@/features/usage/agentUsage";
 
 interface Call {
@@ -45,19 +45,33 @@ const describe = (ws: Workspace, pane: Pane) => `pane ${order(ws).indexOf(pane) 
 export async function runTool(call: Call): Promise<string> {
   // Asked by `tools/list` in src-tauri/src/mcp.rs.
   if (call.tool === "__plugin_tools") return JSON.stringify(pluginAgentToolList());
-  const s = useWorkspaces.getState();
-  const ws = s.workspaces.find((w) => w.panes.some((p) => p.id === call.paneId));
+  const ws = useWorkspaces.getState().workspaces.find((w) => w.panes.some((p) => p.id === call.paneId));
   if (!ws) throw new ToolError("The calling pane isn't open in winfer anymore.");
-  const self = ws.panes.find((p) => p.id === call.paneId)!;
-  const a = call.args ?? {};
+  return runWorkspaceTool(ws, ws.panes.find((p) => p.id === call.paneId)!, call.tool, call.args ?? {});
+}
 
-  switch (call.tool) {
+/** Live voice: the agent tools in the workspace the user is looking at, with no calling pane. */
+export function runVoiceTool(tool: string, args: Record<string, unknown>): Promise<string> {
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
+  if (!ws) return Promise.reject(new ToolError("No workspace is open."));
+  return runWorkspaceTool(ws, null, tool, args);
+}
+
+const VOICE = "Live voice";
+const who = (ws: Workspace, self: Pane | null) => (self ? describe(ws, self) : VOICE);
+
+/** `self` is the calling pane, or null for live voice. */
+async function runWorkspaceTool(ws: Workspace, self: Pane | null, tool: string, a: Record<string, unknown>): Promise<string> {
+  const s = useWorkspaces.getState();
+  switch (tool) {
     case "list_panes": {
       const rows = order(ws).map((p, i) => {
         const parts = [`${i + 1}. ${providerName(s.providers, p.provider)}`, p.status];
         if (p.worktree) parts.push(`branch ${p.worktree.branch}`);
         if (p.archived) parts.push("archived");
-        if (p.id === self.id) parts.push("(you)");
+        if (p.id === self?.id) parts.push("(you)");
+        if (!self && p.id === s.focusedPaneId) parts.push("focused");
         return parts.join(" · ");
       });
       return `Workspace “${ws.name}” (${ws.rootDir}):\n${rows.join("\n")}`;
@@ -71,7 +85,7 @@ export async function runTool(call: Call): Promise<string> {
     }
     case "send_to_pane": {
       const pane = resolve(ws, a.pane);
-      if (pane.id === self.id) throw new ToolError("That's your own pane.");
+      if (pane.id === self?.id) throw new ToolError("That's your own pane.");
       const text = String(a.text ?? "");
       if (!text) throw new ToolError("text is empty");
       if (text.includes("\n")) pasteText(pane.id, text);
@@ -80,7 +94,7 @@ export async function runTool(call: Call): Promise<string> {
         sendText(pane.id, "\r");
         setTask(pane.id, text);
       }
-      logActivity(ws.id, `${describe(ws, self)} → ${describe(ws, pane)}: ${text.split("\n")[0].slice(0, 80)}`, self.provider);
+      logActivity(ws.id, `${who(ws, self)} → ${describe(ws, pane)}: ${text.split("\n")[0].slice(0, 80)}`, self?.provider);
       return `Sent to ${describe(ws, pane)}.`;
     }
     case "spawn_agent": {
@@ -93,13 +107,13 @@ export async function runTool(call: Call): Promise<string> {
         workspaceId: ws.id,
         prompt: typeof a.prompt === "string" ? a.prompt : undefined,
         worktree: a.worktree === undefined ? undefined : Boolean(a.worktree),
-        splitFrom: self.id,
+        splitFrom: self?.id ?? s.focusedPaneId ?? undefined,
       });
       const fresh = useWorkspaces.getState().workspaces.find((w) => w.id === ws.id)!;
       const pane = fresh.panes.find((p) => p.id === id)!;
       // Panes in a workspace the user isn't looking at start immediately, off-screen.
       if (ws.id !== useWorkspaces.getState().activeWorkspaceId) startDetached(pane);
-      logActivity(ws.id, `${describe(ws, self)} started ${provider.name}`, self.provider);
+      logActivity(ws.id, `${who(ws, self)} started ${provider.name}`, self?.provider);
       return `Started ${provider.name} as pane ${order(fresh).indexOf(pane) + 1}.`;
     }
     case "open_url": {
@@ -123,39 +137,43 @@ export async function runTool(call: Call): Promise<string> {
       markAgentTab(opened.id, ws.id, Boolean(opened.tookOver));
       if (opened.tookOver) {
         const was = opened.tookOver;
-        logActivity(ws.id, `${describe(ws, self)} took over ${tabLabel(was)} for ${url}`, self.provider);
+        logActivity(ws.id, `${who(ws, self)} took over ${tabLabel(was)} for ${url}`, self?.provider);
         return (
           `Took over the open tab "${tabLabel(was)}" (${was.url}), which already showed this site, and opened ${url} in it. ` +
           `To keep working there, select that tab with your browser tools (list the tabs, then select the one now on ${url}) instead of opening a new tab.`
         );
       }
-      logActivity(ws.id, `${describe(ws, self)} opened ${url}`, self.provider);
+      logActivity(ws.id, `${who(ws, self)} opened ${url}`, self?.provider);
       return `Opened ${url} in a new tab of the browser panel.`;
     }
     case "open_file": {
       const path = String(a.path ?? "").trim();
       if (!path) throw new ToolError("path is empty");
-      const [found] = await resolveFiles(self.cwd, [path]);
-      if (!found) throw new ToolError(`No file at ${path} (relative paths start from ${self.cwd}).`);
+      const [found] = await resolveFiles(self?.cwd ?? ws.rootDir, [path]);
+      if (!found) throw new ToolError(`No file at ${path} (relative paths start from ${self?.cwd ?? ws.rootDir}).`);
       // Takes over the side panel only when the user is looking at this workspace.
       const onScreen = s.view === "workspace" && ws.id === s.activeWorkspaceId;
       openFile(found, { line: typeof a.line === "number" ? a.line : undefined, background: !onScreen });
-      logActivity(ws.id, `${describe(ws, self)} opened ${found}`, self.provider);
+      logActivity(ws.id, `${who(ws, self)} opened ${found}`, self?.provider);
       return onScreen ? `Showing ${found} in the file viewer.` : `Added ${found} to the file viewer (the user is in another workspace).`;
     }
     case "notify_user": {
+      if (!self) throw new ToolError("Live voice talks to the user directly; just say it.");
       reportStatus(self.id, "needs-input", String(a.message ?? "An agent needs you"));
       return "The user has been notified.";
     }
     case "usage_status": {
-      const { provider, note } = await limitsOf(self);
+      // Live voice asks about a pane's agent (its plan), defaulting to the focused pane.
+      const subject = self ?? resolve(ws, a.pane ?? s.focusedPaneId ?? 1);
+      const { provider, note } = await limitsOf(subject);
       await refreshLimits(provider);
       const lines = [note, usageReport(provider)];
-      const wake = pendingWake(self.id);
+      const wake = self && pendingWake(self.id);
       if (wake) lines.push(`You are paused: winfer will wake you at ${new Date(wake.at).toLocaleString()}.`);
       return lines.filter(Boolean).join("\n");
     }
     case "wait_for_usage_reset": {
+      if (!self) throw new ToolError("Only agent panes can wait for a usage reset.");
       if (a.cancel === true) return cancelWake(self.id) ? "Cancelled: winfer won't wake you." : "You had no wake-up scheduled.";
       const { provider } = await limitsOf(self);
       if (a.minutes === undefined) await refreshLimits(provider);
@@ -170,13 +188,23 @@ export async function runTool(call: Call): Promise<string> {
       }
     }
     default: {
-      const caller = agentCaller(self.id)!;
-      const result = await runPluginAgentTool(call.tool, a, caller);
-      if (result === null) throw new ToolError(`Unknown tool ${call.tool}`);
+      const caller = self ? agentCaller(self.id)! : voiceCaller(ws);
+      const result = await runPluginAgentTool(tool, a, caller);
+      if (result === null) throw new ToolError(`Unknown tool ${tool}`);
       return result;
     }
   }
 }
+
+/** Live voice as a plugin tool caller. */
+const voiceCaller = (ws: Workspace): AgentCaller => ({
+  paneId: "voice",
+  workspaceId: ws.id,
+  workspaceName: ws.name,
+  cwd: ws.rootDir,
+  provider: "voice",
+  label: "live voice",
+});
 
 let started = false;
 export function startAgentApi() {

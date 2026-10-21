@@ -555,8 +555,10 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
         // (a subagent's counts too: its tokens add to the totals).
         let streamed = |d: &str| {
             let mut st = shared.state.lock().unwrap();
-            if st.turn.streamed(d) {
+            let moved = if sub.is_none() { st.turn.streamed(d) } else { st.turn.streamed_sub(d) };
+            if moved {
                 st.usage.turn = st.turn.now();
+                st.usage.turn_streamed = st.turn.streamed_total();
                 emit(Ev::Usage(st.usage.clone()));
             }
         };
@@ -602,6 +604,7 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                     let turn = st.usage.output.saturating_sub(st.turn_base);
                     st.turn.exact(turn);
                     st.usage.turn = turn;
+                    st.usage.turn_streamed = st.turn.streamed_total();
                     st.usage.turn_input = st.usage.input.saturating_sub(st.turn_input_base);
                     st.usage.turn_cached = st.usage.cached.saturating_sub(st.turn_cached_base);
                     if sub.is_none() {

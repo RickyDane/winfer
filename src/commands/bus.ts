@@ -97,6 +97,8 @@ export type Command =
   | { type: "ui.sidePanel"; panel: SidePanelTab; show?: boolean }
   | { type: "ui.palette"; query?: string }
   | { type: "ui.cheatSheet" }
+  /** Starts or ends the live voice conversation. */
+  | { type: "voice.live" }
   /** Toggles settings; with a page, opens settings on that page. */
   | { type: "ui.settings"; page?: string }
   | { type: "ui.theme"; theme: string }
@@ -449,6 +451,9 @@ export function execute(cmd: Command): void {
       return s.paletteQuery === null ? s.openPalette(cmd.query) : s.closePalette();
     case "ui.cheatSheet":
       return s.setCheatSheet(!s.cheatSheetOpen);
+    case "voice.live":
+      // Loaded lazily: the session imports the Command Bus.
+      return void import("@/features/voice/live/session").then((m) => m.toggleLive());
     case "ui.settings":
       return cmd.page ? s.setSettings(true, cmd.page) : s.setSettings(!s.settingsOpen);
     case "ui.theme":
