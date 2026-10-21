@@ -48,11 +48,13 @@ export interface Diagnostics {
   received: number;
   events: number;
   lastEvent: string;
+  /** Recent distinct server event types, newest last. */
+  trail: string[];
   /** Why the speaker isn't playing (autoplay blocked), if so. */
   playback: string | null;
 }
 
-const NO_DIAG: Diagnostics = { micLabel: "", sent: 0, received: 0, events: 0, lastEvent: "", playback: null };
+const NO_DIAG: Diagnostics = { micLabel: "", sent: 0, received: 0, events: 0, lastEvent: "", trail: [], playback: null };
 
 export const useLiveVoice = create<LiveVoiceState>(() => ({ state: "off", muted: false, lines: [], tool: null, error: null, auth: null, level: 0, diag: NO_DIAG }));
 
@@ -173,7 +175,11 @@ function onEvent(raw: string) {
     return;
   }
   console.debug("[live voice]", e.type, e);
-  setDiag({ events: useLiveVoice.getState().diag.events + 1, lastEvent: String(e.type) });
+  const { diag } = useLiveVoice.getState();
+  const type = String(e.type);
+  // Audio deltas and rate limits would drown out the events that tell what happened.
+  const noisy = /delta$|rate_limits/.test(type);
+  setDiag({ events: diag.events + 1, lastEvent: type, trail: noisy || diag.trail.at(-1) === type ? diag.trail : [...diag.trail, type].slice(-8) });
   switch (e.type) {
     case "input_audio_buffer.speech_started":
       if (conn) conn.userSpeaking = true;
@@ -350,6 +356,8 @@ export async function startLive(): Promise<void> {
     dc.onmessage = (ev) => onEvent(String(ev.data));
     dc.onopen = async () => {
       send({ type: "session.update", session: await sessionConfig() });
+      // A short greeting: the user knows it's live, and hears whether the speaker works.
+      send({ type: "response.create", response: { instructions: "Greet the user in a few words and ask what to do. Speak in the user's language if known, else English." } });
       setState("listening");
       watchApp(c);
       logActivity(useWorkspaces.getState().activeWorkspaceId, "Live voice started");

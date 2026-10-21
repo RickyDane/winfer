@@ -37,6 +37,7 @@ function Health({ diag, live }: { diag: Diagnostics; live: boolean }) {
       <span className="truncate">
         {diag.micLabel} · ↑ {kb(diag.sent)} · ↓ {kb(diag.received)} · {diag.events} events{diag.lastEvent && ` · ${diag.lastEvent}`}
       </span>
+      {diag.trail.length > 0 && <span className="line-clamp-3 break-all">{diag.trail.join(" › ")}</span>}
       {warnings.map((w) => (
         <button key={w} onClick={resumeLiveAudio} className="text-left text-warning hover:underline">
           {w}
