@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { logActivity, relativeTime } from "@/stores/activity";
 import { toast, updateToast, withToast } from "@/stores/toasts";
 import { defaultProviderId, useWorkspaces, type Workspace } from "@/stores/workspaces";
-import { isStale, lastActivity, listWorktrees, removeWorktree, removeWorktrees, STALE_DAYS, type ExistingWorktree } from "./worktree";
+import { isStale, lastActivity, listWorktrees, removeWorktree, removeWorktrees, STALE_DAYS, worktreeInUse, type ExistingWorktree } from "./worktree";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { openBranchDialog, openInWorktree, worktreeMenu } from "@/features/workspaces/sidebarMenus";
 
@@ -132,13 +132,15 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
     return () => window.clearTimeout(timer);
   }, [refresh, ownWorktrees]);
 
-  const used = new Set(useWorkspaces.getState().workspaces.flatMap((w) => w.panes.flatMap((p) => (p.worktree ? [p.worktree.path] : []))));
+  // Re-render when any pane's folder or worktree changes, in any workspace (one may share the repo).
+  useWorkspaces((s) => s.workspaces.map((w) => w.panes.map((p) => `${p.cwd}\0${p.worktree?.path ?? ""}`).join("\n")).join("\n"));
+  const panes = useWorkspaces.getState().workspaces.flatMap((w) => w.panes);
   // Newest activity first; finished (merged) ones sink to the bottom, ready to clean up.
   // The project folder (main checkout) always comes first; worktrees no pane uses follow.
   const loading = found === null;
   const main = found?.find((w) => w.isMain);
   const free = (found ?? [])
-    .filter((w) => !w.isMain && !used.has(w.info.path))
+    .filter((w) => !w.isMain && !worktreeInUse(w.info, panes, workspace.id))
     .sort((a, b) => Number(a.merged) - Number(b.merged) || (lastActivity(b) ?? 0) - (lastActivity(a) ?? 0));
   const rows = main ? [main, ...free] : free;
   if (!loading && rows.length === 0) return null;

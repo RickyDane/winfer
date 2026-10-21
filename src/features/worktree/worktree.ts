@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { WorktreeInfo } from "@/stores/workspaces";
+import type { Pane, WorktreeInfo } from "@/stores/workspaces";
 
 export interface WorktreeDiff {
   diff: string;
@@ -89,6 +89,34 @@ export interface RemoveFailure {
 /** Removes several worktrees one after another; the ones that couldn't go come back. */
 export const removeWorktrees = (items: { info: WorktreeInfo; deleteBranch: boolean }[]) =>
   invoke<RemoveFailure[]>("worktree_remove_many", { items });
+
+/** Comparable form of a path: forward slashes, no trailing slash, Windows paths case-folded. */
+const normPath = (p: string) => {
+  const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(s) ? s.toLowerCase() : s;
+};
+
+/** Pane fields `worktreeInUse` looks at. */
+type PaneRef = Pick<Pane, "workspaceId" | "cwd" | "worktree">;
+
+/**
+ * Whether a pane already works in `wt`. Git lists real paths (symlinks resolved, `C:/` on
+ * Windows) that need not equal the path a pane keeps, so the branch also counts: in one repo a
+ * branch is checked out in one worktree at most. Panes of `workspaceId` are in the same repo.
+ */
+export function worktreeInUse(wt: WorktreeInfo, panes: PaneRef[], workspaceId: string): boolean {
+  const path = normPath(wt.path);
+  const repo = normPath(wt.repo);
+  const inside = (p: string) => {
+    const n = normPath(p);
+    return n === path || n.startsWith(`${path}/`);
+  };
+  return panes.some((p) =>
+    p.worktree
+      ? inside(p.worktree.path) || (p.worktree.branch === wt.branch && (p.workspaceId === workspaceId || normPath(p.worktree.repo) === repo))
+      : inside(p.cwd),
+  );
+}
 
 /** Worktrees with no activity for this long count as stale. */
 export const STALE_DAYS = 10;
