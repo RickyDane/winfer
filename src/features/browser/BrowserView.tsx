@@ -47,6 +47,9 @@ const MIN_SIZE = 200;
 const MAX_SIZE = 4096;
 /** Room around a sized page for its drag handles. */
 const GUTTER = 16;
+/** A shown tab that sends no frame this long is shown again, up to `BLANK_RETRIES` times in a row. */
+const BLANK_AFTER_MS = 3000;
+const BLANK_RETRIES = 3;
 
 const clamp = (n: number) => Math.round(Math.min(Math.max(n, MIN_SIZE), MAX_SIZE));
 
@@ -64,6 +67,9 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
   /** Why the tab couldn't be shown; bumping `attempt` tries again. */
   const [attachError, setAttachError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  /** Re-attaches in a row that brought no frame; reset by a frame or another tab. */
+  const blankRetries = useRef(0);
+  useEffect(() => void (blankRetries.current = 0), [workspaceId, tabId]);
 
   /** Attaching before the panel is measured would size the page 1×1, and its frames would read as an agent's size. */
   const measured = panel.width > 0 && panel.height > 0;
@@ -109,10 +115,17 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     let decoding = false;
     let pending: ArrayBuffer | null = null;
     const attachId = crypto.randomUUID();
+    let gotFrame = false;
+    let watchdog: number | undefined;
     attached.current = false;
     setAttachError(null);
 
     const draw = async (buf: ArrayBuffer) => {
+      if (!gotFrame) {
+        gotFrame = true;
+        blankRetries.current = 0;
+        clearTimeout(watchdog);
+      }
       if (decoding) {
         pending = buf; // keep only the newest frame
         return;
@@ -145,6 +158,18 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       attached.current = true;
       // The size may have changed (panel opening, an agent) during the attach.
       syncRef.current();
+      // No picture at all means the tab isn't painting for us: show it again, a few times.
+      if (!gotFrame)
+        watchdog = window.setTimeout(() => {
+          if (disposed || gotFrame) return;
+          if (blankRetries.current >= BLANK_RETRIES) {
+            setAttachError("The tab isn't showing anything.");
+            return;
+          }
+          blankRetries.current += 1;
+          logBrowser("warn", `tab ${tabId} sent no frame, showing it again (${blankRetries.current}/${BLANK_RETRIES})`);
+          setAttempt((a) => a + 1);
+        }, BLANK_AFTER_MS);
     };
     void attach().catch((err) => {
       logBrowser("error", `showing tab ${tabId} failed: ${String(err)}`);
@@ -153,6 +178,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
 
     return () => {
       disposed = true;
+      clearTimeout(watchdog);
       attached.current = false;
       void invoke("browser_detach", { workspaceId, attachId });
     };
@@ -305,7 +331,11 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
         {attachError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-panel px-8 text-center text-xs text-fg-subtle">
             <span className="text-danger">Couldn't show this tab: {attachError}</span>
-            <button onClick={() => setAttempt((n) => n + 1)} className="rounded-md bg-panel-raised px-3 py-1.5 font-medium text-fg hover:bg-hover">
+            <button
+              onClick={() => {
+                blankRetries.current = 0;
+                setAttempt((n) => n + 1);
+              }} className="rounded-md bg-panel-raised px-3 py-1.5 font-medium text-fg hover:bg-hover">
               Try again
             </button>
           </div>

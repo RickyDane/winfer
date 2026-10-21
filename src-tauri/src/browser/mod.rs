@@ -46,6 +46,8 @@ struct Screencast {
     session_id: String,
     channel: Channel,
     sizing: Sizing,
+    /// A frame arrived; until then the panel shows nothing (frames only come when the page paints).
+    got_frame: bool,
 }
 
 /// An agent acted on a tab (see `proxy`).
@@ -268,6 +270,7 @@ impl Instance {
                     log::warning!("[{}] session to tab {} detached", self.workspace_id, short(&target));
                     self.attaching.lock().unwrap().remove(&target);
                 }
+                self.screencast_lost(session);
             }
             "Target.targetCrashed" => {
                 log::warning!(
@@ -317,6 +320,7 @@ impl Instance {
                 };
                 let mut screencast = self.screencast.lock().unwrap();
                 if let Some(sc) = screencast.as_mut().filter(|sc| sc.session_id == session) {
+                    sc.got_frame = true;
                     if let Ok(bytes) = base64::engine::general_purpose::STANDARD
                         .decode(event.params["data"].as_str().unwrap_or_default())
                     {
@@ -603,12 +607,37 @@ impl Instance {
         front(&cdp, &target, &session, &self.workspace_id).await;
     }
 
-    fn forget_session(&self, target_id: &str, session: &str) {
+    fn forget_session(self: &Arc<Self>, target_id: &str, session: &str) {
         let mut sessions = self.sessions.lock().unwrap();
         if sessions.get(target_id).is_some_and(|s| s == session) {
             sessions.remove(target_id);
             self.attaching.lock().unwrap().remove(target_id);
         }
+        drop(sessions);
+        self.screencast_lost(session);
+    }
+
+    /// The panel's screencast ran on `session`, which is gone: its frames will never come (and a
+    /// new session's are filtered out), so have the panel show the tab again.
+    fn screencast_lost(self: &Arc<Self>, session: &str) {
+        let lost = {
+            let mut screencast = self.screencast.lock().unwrap();
+            match screencast.as_ref() {
+                Some(sc) if sc.session_id == session => screencast.take(),
+                _ => None,
+            }
+        };
+        let Some(sc) = lost else { return };
+        // A closing tab detaches too; only show it again if it's still open.
+        let instance = self.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            if !instance.tabs.lock().unwrap().iter().any(|t| t.id == sc.target_id) {
+                return;
+            }
+            log::warning!("[{}] screencast of tab {} lost its session, showing it again", instance.workspace_id, short(&sc.target_id));
+            let _ = instance.app.emit("browser://disconnected", instance.workspace_id.clone());
+        });
     }
 }
 
@@ -985,6 +1014,11 @@ pub async fn browser_history(
     let instance = instance(&app, &manager, &workspace_id).await?;
     let what = format!("[{workspace_id}] history {delta} in tab {}", short(&target_id));
     if delta == 0 {
+        // A tab behind another (an agent's) doesn't paint, so its reload would stay blank.
+        let shown = instance.screencast.lock().unwrap().as_ref().is_some_and(|sc| sc.target_id == target_id);
+        if shown {
+            instance.front_shown_tab().await;
+        }
         return log::check(&what, instance.call_target(&target_id, "Page.reload", json!({})).await).map(drop);
     }
     let history = log::check(&what, instance.call_target(&target_id, "Page.getNavigationHistory", json!({})).await)?;
@@ -1079,11 +1113,12 @@ pub async fn browser_attach(
     front(&cdp, &target_id, &session, &workspace_id).await;
     log::check(&what, apply_viewport(&cdp, &target_id, &session, &viewport).await)?;
     *instance.screencast.lock().unwrap() = Some(Screencast {
-        attach_id,
+        attach_id: attach_id.clone(),
         target_id,
         session_id: session.clone(),
         channel: on_frame,
         sizing: Sizing::new(viewport),
+        got_frame: false,
     });
     let result = cdp
         .call(
@@ -1092,7 +1127,26 @@ pub async fn browser_attach(
             Some(&session),
         )
         .await;
-    log::check(&what, result).map(drop)
+    log::check(&what, result)?;
+    // Frames only come when the page paints; a static page that has painted already sends none
+    // and the panel would stay blank. Show a screenshot until the first frame.
+    let instance = instance.clone();
+    tauri::async_runtime::spawn(async move {
+        let shot = cdp
+            .call("Page.captureScreenshot", json!({ "format": "jpeg", "quality": 80 }), Some(&session))
+            .await;
+        let Some(bytes) = shot
+            .ok()
+            .and_then(|r| r["data"].as_str().and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok()))
+        else {
+            return;
+        };
+        let screencast = instance.screencast.lock().unwrap();
+        if let Some(sc) = screencast.as_ref().filter(|sc| sc.attach_id == attach_id && !sc.got_frame) {
+            let _ = sc.channel.send(InvokeResponseBody::Raw(bytes));
+        }
+    });
+    Ok(())
 }
 
 #[tauri::command]
