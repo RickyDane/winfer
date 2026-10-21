@@ -93,8 +93,16 @@ const hasPicture = (c) => c && c.width > 0 && c.height > 0 && !(c.width === 300 
 
 export function activate(api) {
   const settings = load();
-  /** source → { recorder, chunks, startedAt, timer, format, canvas, live } */
+  /**
+   * id → { id, source, owner, name, recorder, chunks, startedAt, timer, format, canvas, live }.
+   * Several recordings run at once: one per owner (the user, or an agent's pane) and source.
+   */
   const active = new Map();
+  let nextId = 1;
+  /** The recordings the user starts from the panel buttons, palette, voice and page. */
+  const USER = { key: "user", label: "" };
+  const find = (source, owner) => [...active.values()].find((e) => e.source === source && e.owner.key === owner.key);
+  const ofSource = (source) => [...active.values()].filter((e) => e.source === source);
   const listeners = new Set();
   const changed = () => listeners.forEach((fn) => fn());
 
@@ -112,13 +120,39 @@ export function activate(api) {
     );
   }
 
-  async function start(source) {
+  /** Starting recordings, so the same owner can't start one source twice while waiting for its canvas. */
+  const starting = new Set();
+
+  async function start(source, owner = USER) {
     if (!SOURCES[source]) throw new Error(`Unknown source “${source}”: use browser or android.`);
-    if (active.has(source)) throw new Error(`Already recording the ${SOURCES[source].title.toLowerCase()}.`);
+    const slot = `${owner.key}:${source}`;
+    const already = () => new Error(`Already recording the ${SOURCES[source].title.toLowerCase()}${owner === USER ? "" : ` for ${owner.label}`}.`);
+    if (find(source, owner) || starting.has(slot)) throw already();
     const format = pickFormat();
     if (!format) throw new Error("This webview can't record video (no MediaRecorder).");
+    starting.add(slot);
+    try {
+      return await begin(source, owner, format);
+    } finally {
+      starting.delete(slot);
+    }
+  }
+
+  /** A file name no other running or saved recording uses (two can start in the same second). */
+  function uniqueName(source, ext, date) {
+    const base = fileName(source, ext, date);
+    const taken = new Set([...[...active.values()].map((e) => e.name), ...settings.recent.map((r) => r.path.split(/[\\/]/).pop())]);
+    // A WebM is saved under its .mp4 name after converting, so check both.
+    const used = (name) => taken.has(name) || taken.has(name.replace(/\.webm$/, ".mp4"));
+    if (!used(base)) return base;
+    for (let n = 2; ; n++) {
+      const name = base.replace(/(\.\w+)$/, `-${n}$1`);
+      if (!used(name)) return name;
+    }
+  }
+
+  async function begin(source, owner, format) {
     const first = await waitForCanvas(source);
-    if (active.has(source)) throw new Error(`Already recording the ${SOURCES[source].title.toLowerCase()}.`);
 
     const size = outputSize(first.width, first.height);
     const canvas = document.createElement("canvas");
@@ -128,7 +162,20 @@ export function activate(api) {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, size.width, size.height);
 
-    const entry = { source, format, canvas, chunks: [], startedAt: Date.now(), live: true, recorder: null, timer: 0 };
+    const startedAt = Date.now();
+    const entry = {
+      id: nextId++,
+      source,
+      owner,
+      name: uniqueName(source, format.ext, new Date(startedAt)),
+      format,
+      canvas,
+      chunks: [],
+      startedAt,
+      live: true,
+      recorder: null,
+      timer: 0,
+    };
     const copy = () => {
       // Found again each tick: the panel remounts its canvas when the tab or device changes.
       const src = findCanvas(source);
@@ -145,16 +192,21 @@ export function activate(api) {
     entry.recorder = new MediaRecorder(stream, { mimeType: format.mime, videoBitsPerSecond: BITRATE });
     entry.recorder.ondataavailable = (e) => e.data.size && entry.chunks.push(e.data);
     entry.recorder.start(1000);
-    active.set(source, entry);
+    active.set(entry.id, entry);
     changed();
     return entry;
   }
 
-  /** Stops a recording and saves it; resolves to the saved file's path. */
-  async function stop(source) {
-    const entry = active.get(source);
-    if (!entry) throw new Error(`Not recording the ${SOURCES[source]?.title.toLowerCase() ?? source}.`);
-    active.delete(source);
+  /** Stops `owner`'s recording of `source` and saves it; resolves to the saved file's path. */
+  async function stop(source, owner = USER) {
+    const entry = find(source, owner);
+    if (!entry) throw new Error(`Not recording the ${SOURCES[source]?.title.toLowerCase() ?? source}${owner === USER ? "" : ` for ${owner.label}`}.`);
+    return finish(entry);
+  }
+
+  /** Stops one recording and saves it; resolves to the saved file's path. */
+  async function finish(entry) {
+    if (!active.delete(entry.id)) throw new Error("That recording already stopped.");
     changed();
     clearInterval(entry.timer);
     await new Promise((resolve) => {
@@ -168,10 +220,9 @@ export function activate(api) {
     const blob = new Blob(entry.chunks, { type });
     if (blob.size === 0) throw new Error("The recording is empty.");
 
-    const name = fileName(source, entry.format.ext, new Date(entry.startedAt));
-    let path = await api.writeFile(join(settings.folder, name), blob);
+    let path = await api.writeFile(join(settings.folder, entry.name), blob);
     path = entry.format.ext === "webm" ? await toMp4(path) : await defragment(path);
-    settings.recent = [{ path, source, at: entry.startedAt, ms }, ...settings.recent].slice(0, 30);
+    settings.recent = [{ path, source: entry.source, at: entry.startedAt, ms }, ...settings.recent].slice(0, 30);
     save(settings);
     changed();
     return path;
@@ -234,31 +285,50 @@ export function activate(api) {
     api.toast(`Deleted ${name}`, "success");
   }
 
-  /** Sources whose recording is starting or stopping, so a double click doesn't do it twice. */
+  /** Recordings starting or stopping from a click, so a double click doesn't do it twice. */
   const busy = new Set();
+  const errorText = (err) => (err instanceof Error ? err.message : String(err));
 
-  async function toggle(source) {
-    if (busy.has(source)) return;
-    busy.add(source);
+  async function guarded(key, work) {
+    if (busy.has(key)) return;
+    busy.add(key);
     try {
-      if (active.has(source)) {
+      await work();
+    } catch (err) {
+      api.toast(errorText(err), "error");
+    } finally {
+      busy.delete(key);
+    }
+  }
+
+  /** Starts or stops the user's own recording of `source`; agents' recordings keep running. */
+  const toggle = (source) =>
+    guarded(`user:${source}`, async () => {
+      if (find(source, USER)) {
         const path = await stop(source);
         api.toast(`Saved ${path.split(/[\\/]/).pop()}`, "success");
       } else {
         await start(source);
         api.toast(`Recording the ${SOURCES[source].title.toLowerCase()}`, "info");
       }
-    } catch (err) {
-      api.toast(err instanceof Error ? err.message : String(err), "error");
-    } finally {
-      busy.delete(source);
-    }
-  }
+    });
+
+  /** Stops one recording (anyone's) and saves it. */
+  const stopEntry = (entry) =>
+    guarded(`id:${entry.id}`, async () => {
+      const path = await finish(entry);
+      api.toast(`Saved ${path.split(/[\\/]/).pop()}`, "success");
+    });
 
   async function stopAll() {
     if (active.size === 0) return api.toast("Nothing is recording");
-    for (const source of [...active.keys()]) await toggle(source);
+    await Promise.all([...active.values()].map(stopEntry));
   }
+
+  /** "Browser", or "Browser · pane 2 (Claude Code)" for an agent's recording. */
+  const entryTitle = (e) => `${SOURCES[e.source].title}${e.owner === USER ? "" : ` · ${e.owner.label}`}`;
+  /** An agent tool caller as a recording owner: recordings belong to the pane that started them. */
+  const agentOwner = (caller) => (caller?.paneId ? { key: `pane:${caller.paneId}`, label: caller.label || caller.paneId } : { key: "agent", label: "an agent" });
 
   const dispose = [];
 
@@ -294,10 +364,10 @@ export function activate(api) {
     api.registerAgentTool({
       name: "recording_start",
       description:
-        "Start recording the browser panel or the Android mirror to an MP4 video, e.g. to demo a feature. Do the steps to show, then call recording_stop.",
+        "Start recording the browser panel or the Android mirror to an MP4 video, e.g. to demo a feature. Do the steps to show, then call recording_stop. Other agents and the user can record at the same time.",
       inputSchema: { type: "object", properties: { source: sourceSchema }, required: ["source"] },
-      async run(args) {
-        const entry = await start(String(args.source));
+      async run(args, caller) {
+        const entry = await start(String(args.source), agentOwner(caller));
         return `Recording the ${SOURCES[entry.source].title.toLowerCase()} (${entry.canvas.width}×${entry.canvas.height}). Call recording_stop when done.`;
       },
     }),
@@ -305,8 +375,8 @@ export function activate(api) {
       name: "recording_stop",
       description: "Stop a recording started with recording_start and save it; returns the video's path.",
       inputSchema: { type: "object", properties: { source: sourceSchema }, required: ["source"] },
-      async run(args) {
-        const path = await stop(String(args.source));
+      async run(args, caller) {
+        const path = await stop(String(args.source), agentOwner(caller));
         api.toast(`Saved ${path.split(/[\\/]/).pop()}`, "success");
         return `Saved the recording to ${path}`;
       },
@@ -317,11 +387,13 @@ export function activate(api) {
 
   /** How a source's button looks: a record dot, or a red stop square with the running time. */
   const look = (source) => {
-    const entry = active.get(source);
+    const entry = find(source, USER);
     const name = SOURCES[source].title.toLowerCase();
+    const others = ofSource(source).length - (entry ? 1 : 0);
+    const note = others ? ` (${others} more recording${others === 1 ? "" : "s"} by agents keep${others === 1 ? "s" : ""} running)` : "";
     return entry
-      ? { title: `Stop recording the ${name} and save it`, icon: "stop", label: duration(Date.now() - entry.startedAt), active: true }
-      : { title: `Record the ${name} to a video`, icon: "record", label: "", active: false };
+      ? { title: `Stop recording the ${name} and save it${note}`, icon: "stop", label: duration(Date.now() - entry.startedAt), active: true }
+      : { title: `Record the ${name} to a video${note}`, icon: "record", label: "", active: false };
   };
   // Older winfer builds have no panel buttons; the palette, the page and agents still work there.
   if (api.registerPanelAction) {
@@ -351,13 +423,13 @@ export function activate(api) {
         const dot = document.createElement("span");
         dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${e.live ? "#ef4444" : "#a3a3a3"}`;
         const label = document.createElement("span");
-        label.textContent = `${SOURCES[e.source].title} ${duration(Date.now() - e.startedAt)}${e.live ? "" : " (hidden)"}`;
+        label.textContent = `${entryTitle(e)} ${duration(Date.now() - e.startedAt)}${e.live ? "" : " (hidden)"}`;
         label.style.fontVariantNumeric = "tabular-nums";
         const button = document.createElement("button");
         button.textContent = "Stop";
         button.className = "wf-button wf-ghost";
         button.style.cssText = "padding:2px 8px;font-size:11px";
-        button.onclick = () => toggle(e.source);
+        button.onclick = () => stopEntry(e);
         item.append(dot, label, button);
         return item;
       }),
@@ -396,7 +468,7 @@ export function activate(api) {
 
       const controls = h("div", "wf-card wf-stack");
       for (const source of Object.keys(SOURCES)) {
-        const entry = active.get(source);
+        const entry = find(source, USER);
         const button = h("button", `wf-button ${entry ? "wf-danger" : "wf-primary"}`, entry ? "Stop and save" : "Start recording");
         button.disabled = !format;
         button.onclick = () => toggle(source);
@@ -406,6 +478,17 @@ export function activate(api) {
               h("strong", "", SOURCES[source].title),
               entry ? h("span", "wf-badge wf-accent", ` ● ${duration(Date.now() - entry.startedAt)}`) : "",
             ]),
+            button,
+          ]),
+        );
+      }
+      // Agents' recordings run alongside the user's; each can be stopped here too.
+      for (const e of [...active.values()].filter((e) => e.owner !== USER)) {
+        const button = h("button", "wf-button wf-danger", "Stop and save");
+        button.onclick = () => stopEntry(e);
+        controls.append(
+          h("div", "wf-row", [
+            h("span", "wf-grow", [h("strong", "", entryTitle(e)), h("span", "wf-badge wf-accent", ` ● ${duration(Date.now() - e.startedAt)}`)]),
             button,
           ]),
         );
@@ -452,7 +535,7 @@ export function activate(api) {
   return () => {
     for (const d of dispose.reverse()) d();
     // Turned off or reloaded mid-recording: save what there is.
-    for (const source of [...active.keys()]) stop(source).catch(() => {});
+    for (const entry of [...active.values()]) finish(entry).catch(() => {});
   };
 }
 

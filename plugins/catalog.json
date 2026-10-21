@@ -52,7 +52,7 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "b35cf8c13314baea79944d0aed50f9f4a1037cb22eeb12b4c8be144a410fc83a"
+          "sha256": "0f7ea2732005fe538058f04452e90cb4e3869c97403e83b31f2d8f49331c7911"
         },
         {
           "path": "plugin.json",
@@ -113,7 +113,7 @@
         },
         {
           "path": "bench/suites.tar.gz",
-          "sha256": "9c01c7e16370ac985ec1945fc62be8f471b6376c1a721685eda019c905120678"
+          "sha256": "e7548630d840089a568ca9e58304ded8bb1e119e571f16a4289fb9921b5048e6"
         },
         {
           "path": "bench/test_run.py",
@@ -187,7 +187,7 @@
     {
       "id": "screen-recorder",
       "name": "Screen Recorder",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "description": "Record the browser panel or the Android mirror and save it as an MP4, with the record button on the panel, from the palette, by voice or by an agent showing off what it built.",
       "author": "winfer",
       "tags": [
@@ -202,11 +202,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "bf0d7dc04ff98d14932a886529137b9a2c73925f96eefd64046d0763a9c9301e"
+          "sha256": "817b570d52b8806814fdb12d68ea33d222a894d499bc6ade22904e8ebbb9af34"
         },
         {
           "path": "plugin.json",
-          "sha256": "922111ee028a1a3668db9cd89fe5d620adb8ebae4b49774bacd71c5bff7d31dd"
+          "sha256": "534a06c2f79988a7e6f8f3195d5df5d79f48c07dd01d8bf78a0cfa38a91c7eab"
         }
       ]
     },
