@@ -768,6 +768,7 @@ fn shell_receipt(tool_id: &str, input: &Value, output: &str) -> Option<TaskEv> {
     });
     Some(TaskEv {
         id: id.into(), tool_id: Some(tool_id.into()), title: Some(title("Bash", input)),
+        description: input["description"].as_str().map(str::to_string).filter(|d| !d.trim().is_empty()),
         status: Some("running".into()), output_file, ..Default::default()
     })
 }
@@ -854,6 +855,7 @@ pub fn title(name: &str, input: &Value) -> String {
         "Task" | "Agent" => s("description"),
         "Skill" => format!("{} {}", s("skill"), s("args")).trim_end().to_string(),
         "TodoWrite" => "update todos".into(),
+        n if n.starts_with("mcp__winfer") && n.ends_with("__bg") => crate::harness::tools::title("bg", input),
         "ExitPlanMode" => "approve the plan and start working".into(),
         "AskUserQuestion" => input["questions"][0]["question"].as_str().unwrap_or("").to_string(),
         "TaskCreate" => s("subject"),

@@ -52,6 +52,8 @@ pub struct TaskEv {
     /// The tool call that started it (an Agent card), if any.
     pub tool_id: Option<String>,
     pub title: Option<String>,
+    /// What a background task is for (winfer's `bg` tasks the agent described).
+    pub description: Option<String>,
     /// Set for subagents (their type, e.g. "general-purpose"); unset for background shells.
     pub agent: Option<String>,
     pub tools: Option<u64>,

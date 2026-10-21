@@ -22,6 +22,10 @@ struct Task {
     /// only they see and control it.
     owner: String,
     cmd: String,
+    /// Short name the agent gave it (empty: none); shown instead of the command.
+    name: String,
+    /// What it's for, in a sentence (empty: none); shown in the task list.
+    description: String,
     child: Child,
     log: PathBuf,
     /// Bytes of the log already returned by `read`.
@@ -39,13 +43,13 @@ struct Task {
 /// What happens to background tasks, for the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Update {
-    /// `tool_id`: the call that started it.
-    Started { id: String, owner: String, tool_id: String, cmd: String, log: PathBuf },
+    /// `tool_id`: the call that started it. `name`/`description`: as the agent gave them (may be empty).
+    Started { id: String, owner: String, tool_id: String, cmd: String, name: String, description: String, log: PathBuf },
     /// Exited on its own; `seen`: a read already showed the agent the exit. `tail`: output the
     /// agent hasn't read.
-    Exited { id: String, owner: String, cmd: String, code: i32, secs: u64, seen: bool, tail: String },
+    Exited { id: String, owner: String, cmd: String, name: String, code: i32, secs: u64, seen: bool, tail: String },
     /// Stopped by the agent, the user (`by_user`) or winfer code exiting.
-    Stopped { id: String, owner: String, cmd: String, by_user: bool },
+    Stopped { id: String, owner: String, cmd: String, name: String, by_user: bool },
 }
 
 type Listener = Arc<dyn Fn(Update) + Send + Sync>;
@@ -68,7 +72,7 @@ fn emit(update: Update) {
 }
 
 /// The `bg` tool's description (winfer code's tool and winfer's MCP server share it).
-pub const DESCRIPTION: &str = "Long-running process (server, watch, loop), not bash &: start→id; read new output (wait ms, until a|b); stop; list. Exits are reported to you.";
+pub const DESCRIPTION: &str = "Long-running process (server, watch, loop), not bash &: start→id (give it a short name + description); read new output (wait ms, until a|b); stop; list. Exits are reported to you.";
 
 /// `bg` as an MCP tool (winfer's MCP server). Claude Code runs an MCP tool alongside others only
 /// when it's marked read-only; without the hint, side-by-side starts (each possibly waiting for
@@ -85,6 +89,8 @@ pub fn mcp_tool(read_only: bool) -> Value {
         "inputSchema": { "type": "object", "properties": {
             "action": { "enum": ["start", "read", "stop", "list"] },
             "cmd": { "type": "string", "description": "start: the shell command" },
+            "name": { "type": "string", "description": "start: short name shown to the user, e.g. \"vite dev server\"" },
+            "description": { "type": "string", "description": "start: what it's for, in a sentence" },
             "id": { "type": "string", "description": "read/stop: the task id start returned" },
             "until": { "type": "string", "description": "read (or start): wait until the output has this text; a|b for either" },
             "wait": { "type": "integer", "description": "read (or start): wait up to this many ms for output (max 290000)" }
@@ -103,32 +109,47 @@ impl Update {
     /// task ended in a way it hasn't seen.
     pub fn task_event(self) -> (super::event::TaskEv, Option<String>) {
         use super::event::TaskEv;
-        let first = |cmd: &str| cmd.lines().next().unwrap_or("").to_string();
         match self {
-            Update::Started { id, tool_id, cmd, log, .. } => (
+            Update::Started { id, tool_id, cmd, name, description, log, .. } => (
                 TaskEv {
                     id,
                     tool_id: Some(tool_id).filter(|t| !t.is_empty()),
-                    title: Some(first(&cmd)),
+                    title: Some(label(&name, &cmd)),
+                    description: Some(description).filter(|d| !d.trim().is_empty()),
                     status: Some("running".into()),
                     output_file: Some(log.to_string_lossy().into_owned()),
                     ..Default::default()
                 },
                 None,
             ),
-            Update::Exited { id, cmd, code, secs, seen, tail, .. } => {
+            Update::Exited { id, cmd, name, code, secs, seen, tail, .. } => {
                 let note = (!seen).then(|| {
                     let out = if tail.trim().is_empty() || tail == "(no new output)" { "No new output.".to_string() } else { format!("Its output since your last read:\n{tail}") };
-                    format!("Background task {id} (`{}`) exited with code {code} after {secs}s. {out}", first(&cmd))
+                    format!("Background task {} exited with code {code} after {secs}s. {out}", mention(&id, &name, &cmd))
                 });
                 let status = if code == 0 { "completed" } else { "failed" };
                 (TaskEv { id, status: Some(status.into()), exit_code: Some(code), ..Default::default() }, note)
             }
-            Update::Stopped { id, cmd, by_user, .. } => {
-                let note = by_user.then(|| format!("The user stopped background task {id} (`{}`).", first(&cmd)));
+            Update::Stopped { id, cmd, name, by_user, .. } => {
+                let note = by_user.then(|| format!("The user stopped background task {}.", mention(&id, &name, &cmd)));
                 (TaskEv { id, status: Some("stopped".into()), ..Default::default() }, note)
             }
         }
+    }
+}
+
+/// What the user sees a task as: its name, else its command's first line.
+pub fn label(name: &str, cmd: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() { cmd.lines().next().unwrap_or("").to_string() } else { name.to_string() }
+}
+
+/// A task in a note: `bg1 "dev server" (`npm run dev`)`, or `bg1 (`npm run dev`)` unnamed.
+pub fn mention(id: &str, name: &str, cmd: &str) -> String {
+    let cmd = cmd.lines().next().unwrap_or("");
+    match name.trim() {
+        "" => format!("{id} (`{cmd}`)"),
+        n => format!("{id} \"{n}\" (`{cmd}`)"),
     }
 }
 
@@ -230,7 +251,7 @@ fn watch() {
                     task.announced = true;
                     let tail = if task.reported { String::new() } else { tail(&strip_ansi(&read_from(&task.log, task.seen)), &[], &task.log) };
                     let secs = at.duration_since(task.started).as_secs();
-                    done.push(Update::Exited { id: id.clone(), owner: task.owner.clone(), cmd: task.cmd.clone(), code, secs, seen: task.reported, tail });
+                    done.push(Update::Exited { id: id.clone(), owner: task.owner.clone(), cmd: task.cmd.clone(), name: task.name.clone(), code, secs, seen: task.reported, tail });
                 }
             }
             for u in done {
@@ -310,9 +331,11 @@ fn start(cmd: &str, cwd: &Path, args: &Value, stop: &AtomicBool, call_id: &str, 
         Ok(c) => c,
         Err(e) => return Outcome::err(format!("couldn't start: {e}")),
     };
-    let task = Task { owner: owner.into(), cmd: cmd.into(), child, log: log.clone(), seen: 0, started: Instant::now(), exit: None, exited_at: None, reported: false, announced: false };
+    let text = |k: &str| args[k].as_str().unwrap_or("").trim().to_string();
+    let (name, description) = (text("name"), text("description"));
+    let task = Task { owner: owner.into(), cmd: cmd.into(), name: name.clone(), description: description.clone(), child, log: log.clone(), seen: 0, started: Instant::now(), exit: None, exited_at: None, reported: false, announced: false };
     tasks().lock().unwrap().insert(id.clone(), task);
-    emit(Update::Started { id: id.clone(), owner: owner.into(), tool_id: call_id.into(), cmd: cmd.into(), log: log.clone() });
+    emit(Update::Started { id: id.clone(), owner: owner.into(), tool_id: call_id.into(), cmd: cmd.into(), name, description, log: log.clone() });
     watch();
     // Waiting for a first marker right away saves a separate read.
     if args["until"].is_string() || args["wait"].is_u64() {
@@ -414,7 +437,7 @@ fn read_from(log: &Path, from: u64) -> String {
 
 fn stop_task(id: &str, by_user: bool) -> Outcome {
     let Some(mut task) = tasks().lock().unwrap().remove(id) else { return Outcome::err(format!("no background task {id}")) };
-    emit(Update::Stopped { id: id.into(), owner: task.owner.clone(), cmd: task.cmd.clone(), by_user });
+    emit(Update::Stopped { id: id.into(), owner: task.owner.clone(), cmd: task.cmd.clone(), name: task.name.clone(), by_user });
     poll(&mut task);
     if task.exit.is_none() {
         super::tools::kill_tree(&mut task.child);
@@ -440,7 +463,8 @@ fn list(owner: &str) -> Outcome {
         .map(|id| {
             let t = all.get_mut(id).unwrap();
             poll(t);
-            format!("{id} {} · {}", state(t), t.cmd.lines().next().unwrap_or(""))
+            let about = if t.description.is_empty() { String::new() } else { format!(" — {}", t.description) };
+            format!("{id} {} · {}{about}", state(t), mention("", &t.name, &t.cmd).trim_start())
         })
         .collect();
     Outcome::ok(lines.join("\n"))
@@ -572,6 +596,18 @@ mod tests {
         assert!(matches!(&events(&user)[1], Update::Stopped { by_user: true, .. }), "{:?}", events(&user));
         call(json!({ "action": "stop", "id": quiet }));
         call(json!({ "action": "stop", "id": read }));
+    }
+
+    #[test]
+    fn names_and_descriptions_label_tasks() {
+        assert_eq!(label("  ", "npm run dev\nmore"), "npm run dev");
+        assert_eq!(label("vite", "npm run dev"), "vite");
+        assert_eq!(mention("bg1", "", "make"), "bg1 (`make`)");
+        assert_eq!(mention("bg1", "build", "make"), "bg1 \"build\" (`make`)");
+        let (ev, _) = Update::Started { id: "bg1".into(), owner: String::new(), tool_id: String::new(), cmd: "npm run dev".into(), name: "vite".into(), description: "Serves the UI".into(), log: "/tmp/l".into() }.task_event();
+        assert_eq!((ev.title.as_deref(), ev.description.as_deref()), (Some("vite"), Some("Serves the UI")));
+        assert_eq!(super::super::tools::title("bg", &json!({ "action": "start", "cmd": "npm run dev", "name": "vite" })), "start vite");
+        assert_eq!(super::super::tools::title("bg", &json!({ "action": "start", "cmd": "npm run dev" })), "start npm run dev");
     }
 
     #[cfg(unix)]

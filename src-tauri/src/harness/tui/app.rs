@@ -110,6 +110,8 @@ pub struct Task {
     pub id: String,
     pub tool_id: Option<String>,
     pub title: String,
+    /// What a background task is for, when the agent said.
+    pub description: String,
     pub agent: bool,
     pub status: Status,
     pub started: Instant,
@@ -1316,6 +1318,7 @@ impl App {
                     id: t.id.clone(),
                     tool_id: None,
                     title: String::new(),
+                    description: String::new(),
                     agent: false,
                     status: Status::Running,
                     started: Instant::now(),
@@ -1335,6 +1338,9 @@ impl App {
         }
         if let Some(title) = t.title {
             task.title = title;
+        }
+        if let Some(d) = t.description {
+            task.description = d;
         }
         task.agent |= t.agent.is_some();
         task.agent |= task.tool_id.as_deref().is_some_and(|id| self.items.iter().any(|i| matches!(&i.block, Block::Tool { id: card, name, .. } if card == id && is_subagent(name))));
@@ -1502,6 +1508,7 @@ impl App {
                     (Status::Ok, None) => format!("done in {took}"),
                     (_, None) => format!("stopped after {took}"),
                 };
+                let detail = if t.description.is_empty() { detail } else { format!("{} · {detail}", t.description) };
                 let title = Some(t.title.trim()).filter(|s| !s.is_empty()).or_else(|| card.map(|(title, _)| title.trim()).filter(|s| !s.is_empty()));
                 let label = title.unwrap_or("(background shell)").to_string();
                 let value = t.tool_id.clone().unwrap_or_else(|| t.id.clone());

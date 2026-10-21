@@ -77,7 +77,7 @@ pub fn definitions() -> Vec<Value> {
         f(
             "bg",
             super::bg::DESCRIPTION,
-            json!({ "action": { "enum": ["start", "read", "stop", "list"] }, "cmd": s, "id": s, "until": s, "wait": n }),
+            json!({ "action": { "enum": ["start", "read", "stop", "list"] }, "cmd": s, "name": s, "description": s, "id": s, "until": s, "wait": n }),
             &["action"],
         ),
         f("grep", "Regex search file contents (i: ignore case).", json!({ "pattern": s, "path": s, "glob": s, "i": b }), &["pattern"]),
@@ -170,7 +170,13 @@ pub fn title(name: &str, args: &Value) -> String {
     let t = match canonical(name) {
         "read" | "write" | "edit" => short_path(&s("path")),
         "bash" => s("cmd"),
-        "bg" => format!("{} {}", s("action"), if args["cmd"].is_string() { s("cmd") } else { s("id") }).trim().to_string(),
+        "bg" => match args["cmd"].as_str() {
+            // A start shows the task's name when the agent gave one.
+            Some(cmd) => format!("{} {}", s("action"), super::bg::label(&s("name"), cmd)),
+            None => format!("{} {}", s("action"), s("id")),
+        }
+        .trim()
+        .to_string(),
         "grep" => format!("{}{}", s("pattern"), args["path"].as_str().map(|p| format!(" in {p}")).unwrap_or_default()),
         "glob" => s("pattern"),
         "fetch" => s("url"),
@@ -722,9 +728,9 @@ mod tests {
     #[test]
     fn tool_definitions_stay_lean() {
         let size = serde_json::to_string(&definitions()).unwrap().len();
-        // ~2.27 KB with bg (~1.87 KB without; was ~3.5 KB), ~2.31 KB with Windows' longer shell
-        // description; most of it is JSON schema boilerplate.
-        assert!(size < 2350, "tool definitions grew to {size} bytes");
+        // ~2.37 KB with bg (its name/description args; ~1.87 KB without; was ~3.5 KB), ~2.41 KB
+        // with Windows' longer shell description; most of it is JSON schema boilerplate.
+        assert!(size < 2450, "tool definitions grew to {size} bytes");
     }
 
     #[test]

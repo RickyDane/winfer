@@ -131,13 +131,12 @@ pub(crate) fn bg_call(call: &Call) -> Reply {
 /// agent is idle (see `bgNotices.ts`).
 pub fn listen_bg(app: AppHandle) {
     crate::harness::bg::listen(move |u| {
-        if let crate::harness::bg::Update::Exited { id, owner, cmd, code, secs, seen: false, tail } = u {
+        if let crate::harness::bg::Update::Exited { id, owner, cmd, name, code, secs, seen: false, tail } = u {
             if owner.is_empty() {
                 return;
             }
-            let cmd = cmd.lines().next().unwrap_or("");
             let out = if tail.trim().is_empty() || tail == "(no new output)" { String::new() } else { format!(" Last output:\n{tail}") };
-            let text = format!("[winfer] Background task {id} (`{cmd}`) exited with code {code} after {secs}s.{out}");
+            let text = format!("[winfer] Background task {} exited with code {code} after {secs}s.{out}", crate::harness::bg::mention(&id, &name, &cmd));
             let _ = app.emit("bg://note", json!({ "paneId": owner, "text": text }));
         }
     });

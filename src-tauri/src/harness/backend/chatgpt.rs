@@ -1314,11 +1314,11 @@ mod tests {
     #[test]
     fn background_tasks_become_tasks_and_unseen_exits_notes() {
         let (shared, rx, dir) = shared(Mode::Ask);
-        on_bg(&shared, bg::Update::Started { id: "bg7".into(), owner: String::new(), tool_id: "c1".into(), cmd: "npm run dev\nmore".into(), log: "/tmp/bg7.log".into() });
-        on_bg(&shared, bg::Update::Exited { id: "bg7".into(), owner: String::new(), cmd: "npm run dev".into(), code: 1, secs: 3, seen: false, tail: "Error: port in use".into() });
-        on_bg(&shared, bg::Update::Exited { id: "bg8".into(), owner: String::new(), cmd: "make".into(), code: 0, secs: 1, seen: true, tail: String::new() });
-        on_bg(&shared, bg::Update::Stopped { id: "bg9".into(), owner: String::new(), cmd: "watch".into(), by_user: true });
-        on_bg(&shared, bg::Update::Stopped { id: "bg10".into(), owner: String::new(), cmd: "watch".into(), by_user: false });
+        on_bg(&shared, bg::Update::Started { id: "bg7".into(), owner: String::new(), tool_id: "c1".into(), cmd: "npm run dev\nmore".into(), name: String::new(), description: String::new(), log: "/tmp/bg7.log".into() });
+        on_bg(&shared, bg::Update::Exited { id: "bg7".into(), owner: String::new(), cmd: "npm run dev".into(), name: String::new(), code: 1, secs: 3, seen: false, tail: "Error: port in use".into() });
+        on_bg(&shared, bg::Update::Exited { id: "bg8".into(), owner: String::new(), cmd: "make".into(), name: String::new(), code: 0, secs: 1, seen: true, tail: String::new() });
+        on_bg(&shared, bg::Update::Stopped { id: "bg9".into(), owner: String::new(), cmd: "watch".into(), name: "watcher".into(), by_user: true });
+        on_bg(&shared, bg::Update::Stopped { id: "bg10".into(), owner: String::new(), cmd: "watch".into(), name: String::new(), by_user: false });
         let tasks: Vec<TaskEv> = rx.try_iter().filter_map(|e| if let Ev::Task(t) = e { Some(t) } else { None }).collect();
         assert_eq!(tasks[0].tool_id.as_deref(), Some("c1"));
         assert_eq!((tasks[0].title.as_deref(), tasks[0].output_file.as_deref(), tasks[0].status.as_deref()), (Some("npm run dev"), Some("/tmp/bg7.log"), Some("running")));
@@ -1328,6 +1328,7 @@ mod tests {
         let notes = shared.notes.lock().unwrap().clone();
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!(notes[0].contains("bg7") && notes[0].contains("code 1") && notes[0].contains("port in use"));
+        assert!(notes[1].contains("bg9 \"watcher\" (`watch`)"), "{notes:?}");
         assert!(notes[1].contains("user stopped") && notes[1].contains("bg9"));
         let _ = std::fs::remove_dir_all(dir);
     }
