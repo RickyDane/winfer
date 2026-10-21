@@ -2380,6 +2380,11 @@ impl App {
     }
 
     fn update_completion(&mut self) {
+        // A recalled history entry gets no menu, so Up/Down keep stepping through history.
+        if self.composer.browsing_history() {
+            self.completion = None;
+            return;
+        }
         let text = &self.composer.text;
         if text.starts_with('/') && !text.contains(' ') && !text.contains('\n') {
             let q = &text[1..];
@@ -2723,6 +2728,22 @@ mod tests {
         assert_eq!(a.config.effort.as_deref(), Some("max"));
         ctrl_r(&mut a);
         assert_eq!(a.config.effort, None);
+    }
+
+    #[test]
+    fn history_steps_past_slash_commands() {
+        let mut a = app();
+        a.config.history = vec!["fix it".into(), "/model".into()];
+        key(&mut a, KeyCode::Up);
+        assert_eq!(a.composer.text, "/model");
+        assert!(a.completion.is_none());
+        key(&mut a, KeyCode::Up);
+        assert_eq!(a.composer.text, "fix it");
+        key(&mut a, KeyCode::Down);
+        assert_eq!(a.composer.text, "/model");
+        // Editing the recalled command brings the menu back.
+        key(&mut a, KeyCode::Backspace);
+        assert!(a.completion.is_some());
     }
 
     #[test]

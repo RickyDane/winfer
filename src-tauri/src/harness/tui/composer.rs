@@ -31,6 +31,11 @@ impl Composer {
         *self = Composer::default();
     }
 
+    /// True while Up/Down is stepping through history (until the text is edited).
+    pub fn browsing_history(&self) -> bool {
+        self.history_pos.is_some()
+    }
+
     pub fn insert(&mut self, s: &str) {
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
@@ -97,6 +102,7 @@ impl Composer {
         if self.cursor == 0 {
             return;
         }
+        self.history_pos = None;
         // A placeholder goes away whole.
         if self.text[..self.cursor].ends_with(']') {
             if let Some(start) = self.text[..self.cursor].rfind('[') {
@@ -115,6 +121,9 @@ impl Composer {
 
     pub fn delete(&mut self) {
         let n = self.next_boundary();
+        if n > self.cursor {
+            self.history_pos = None;
+        }
         self.text.replace_range(self.cursor..n, "");
     }
 
