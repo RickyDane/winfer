@@ -30,6 +30,52 @@ pub struct Tab {
     id: String,
     url: String,
     title: String,
+    /// The page's icon URL, read from the page when it loads ("" until then, or if it has none).
+    favicon: String,
+}
+
+/// Icons fetched so far, by URL: their data URL, or None if there was none to get.
+static FAVICONS: std::sync::LazyLock<Mutex<HashMap<String, Option<String>>>> = std::sync::LazyLock::new(Default::default);
+
+/// Fetches an icon (once per URL) as a data URL; None if it's missing, too big or not an image.
+fn favicon_data_url(url: &str) -> Option<String> {
+    if let Some(known) = FAVICONS.lock().unwrap().get(url) {
+        return known.clone();
+    }
+    let fetched = fetch_favicon(url);
+    if fetched.is_none() {
+        log::info!("no icon at {url}");
+    }
+    FAVICONS.lock().unwrap().insert(url.to_string(), fetched.clone());
+    fetched
+}
+
+fn fetch_favicon(url: &str) -> Option<String> {
+    const MAX_BYTES: u64 = 512 * 1024;
+    if let Some(inline) = url.strip_prefix("data:") {
+        return inline.starts_with("image/").then(|| url.to_string());
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return None;
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
+        .into();
+    let mut res = agent.get(url).header("User-Agent", "winfer").call().ok()?;
+    let mime = res
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v.starts_with("image/"))
+        .or_else(|| url.split('?').next()?.ends_with(".ico").then(|| "image/x-icon".to_string()))?;
+    let bytes = res.body_mut().with_config().limit(MAX_BYTES).read_to_vec().ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,9 +262,10 @@ impl Instance {
                     return;
                 }
                 let id = info["targetId"].as_str().unwrap_or_default().to_string();
-                let tab = Tab {
+                let mut tab = Tab {
                     url: info["url"].as_str().unwrap_or_default().into(),
                     title: info["title"].as_str().unwrap_or_default().into(),
+                    favicon: String::new(),
                     id: id.clone(),
                 };
                 // Attach to every page right away so its console errors are captured
@@ -237,7 +284,11 @@ impl Instance {
                 {
                     let mut tabs = self.tabs.lock().unwrap();
                     match tabs.iter_mut().find(|t| t.id == id) {
-                        Some(existing) => *existing = tab,
+                        Some(existing) => {
+                            // Keep the icon until the next page load reads it again.
+                            tab.favicon = std::mem::take(&mut existing.favicon);
+                            *existing = tab;
+                        }
                         None => tabs.push(tab),
                     }
                 }
@@ -313,6 +364,14 @@ impl Instance {
                 if let Some(target) = target {
                     self.record_console(&target, entry);
                 }
+            }
+            // A page (re)loaded: read its icon, early at DOMContentLoaded and again once scripts ran.
+            "Page.domContentEventFired" | "Page.loadEventFired" => {
+                let Some(session) = event.session_id.clone() else {
+                    return;
+                };
+                let instance = self.clone();
+                tauri::async_runtime::spawn(async move { instance.read_favicon(&session).await });
             }
             "Page.screencastFrame" => {
                 let Some(session) = event.session_id.as_deref() else {
@@ -579,6 +638,59 @@ impl Instance {
             })
             .await?;
         Ok(session.clone())
+    }
+
+    /// Reads the icon of the page behind `session` and, if it changed, updates its tab.
+    async fn read_favicon(self: &Arc<Self>, session: &str) {
+        const SCRIPT: &str = r#"(() => {
+            const pick = document.querySelector('link[rel~="icon" i][href]') ?? document.querySelector('link[rel="apple-touch-icon" i][href]');
+            if (pick) return pick.href;
+            return /^https?:$/.test(location.protocol) ? location.origin + "/favicon.ico" : "";
+        })()"#;
+        let Some(cdp) = self.live_cdp() else {
+            return;
+        };
+        let Some(target) = self
+            .sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, s)| s.as_str() == session)
+            .map(|(t, _)| t.clone())
+        else {
+            return;
+        };
+        let Ok(res) = cdp
+            .call("Runtime.evaluate", json!({ "expression": SCRIPT, "returnByValue": true }), Some(session))
+            .await
+        else {
+            return;
+        };
+        let href = res["result"]["value"].as_str().unwrap_or_default().to_string();
+        // Hand the panel the icon's bytes, so it can check them against its background
+        // (most sites don't allow reading a cross-origin icon's pixels).
+        let favicon = if href.is_empty() {
+            href
+        } else {
+            tauri::async_runtime::spawn_blocking(move || favicon_data_url(&href))
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        };
+        let changed = {
+            let mut tabs = self.tabs.lock().unwrap();
+            match tabs.iter_mut().find(|t| t.id == target) {
+                Some(tab) if tab.favicon != favicon => {
+                    tab.favicon = favicon;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.emit_tabs();
+        }
     }
 
     /// Sends `method` to a tab, attaching once more if the session turned out to be gone.
@@ -850,6 +962,7 @@ pub async fn browser_open(
                     id: id.into(),
                     url: info["url"].as_str().unwrap_or_default().into(),
                     title: info["title"].as_str().unwrap_or_default().into(),
+                    favicon: String::new(),
                 });
             }
         }

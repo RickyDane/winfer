@@ -135,6 +135,8 @@ interface WorkspaceState {
   progressConfig: { enabled?: boolean; intervalSec?: number };
   /** Show what each worktree pane's task has cost so far in its header (opt-in). */
   showPaneCost: boolean;
+  /** Opt-in: the floating glass pane header design. */
+  glassPanes: boolean;
   /** Pinned plugin page tabs show only their icon; the title is in the tooltip. */
   pageTabIconsOnly: boolean;
   /** Pane whose scrollback search bar is open (⌘F). */
@@ -153,6 +155,7 @@ interface WorkspaceState {
   createWorkspace: (name: string, rootDir: string) => string;
   removeWorkspace: (id: string) => void;
   toggleWorkspaceExpanded: (id: string) => void;
+  collapseAllWorkspaces: () => void;
   /** Moves a workspace to `index` in the sidebar order. */
   moveWorkspace: (id: string, index: number) => void;
   /** Moves a pane to `index` within its workspace's sidebar list. */
@@ -209,6 +212,7 @@ interface WorkspaceState {
   setReviewConfig: (config: { autoTests?: boolean; screenshots?: boolean }) => void;
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setShowPaneCost: (show: boolean) => void;
+  setGlassPanes: (on: boolean) => void;
   setPageTabIconsOnly: (iconsOnly: boolean) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { sttModel?: string; readback?: boolean; language?: "en" | "de" | "auto"; confirm?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string }) => void;
@@ -330,6 +334,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   reviewConfig: {},
   progressConfig: {},
   showPaneCost: false,
+  glassPanes: false,
   pageTabIconsOnly: false,
   searchPaneId: null,
   recentSessions: {},
@@ -393,6 +398,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       reviewConfig: ui.review ?? {},
       progressConfig: ui.progress ?? {},
       showPaneCost: ui.showPaneCost ?? false,
+      glassPanes: ui.glassPanes ?? false,
       pageTabIconsOnly: ui.pageTabIconsOnly ?? false,
       recentSessions: ui.recentSessions ?? {},
       paneTasks: ui.paneTasks ?? {},
@@ -431,6 +437,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
     set((s) => ({
       expandedWorkspaces: s.expandedWorkspaces.includes(id) ? s.expandedWorkspaces.filter((w) => w !== id) : [...s.expandedWorkspaces, id],
     })),
+
+  collapseAllWorkspaces: () => set({ expandedWorkspaces: [] }),
 
   moveWorkspace: (id, index) => set((s) => ({ workspaces: moveItem(s.workspaces, id, index) })),
 
@@ -640,6 +648,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setReviewConfig: (config) => set((s) => ({ reviewConfig: { ...s.reviewConfig, ...config } })),
   setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
   setShowPaneCost: (showPaneCost) => set({ showPaneCost }),
+  setGlassPanes: (glassPanes) => set({ glassPanes }),
   setPageTabIconsOnly: (pageTabIconsOnly) => set({ pageTabIconsOnly }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
@@ -705,6 +714,7 @@ interface Snapshot {
     review?: { autoTests?: boolean; screenshots?: boolean };
     progress?: { enabled?: boolean; intervalSec?: number };
     showPaneCost?: boolean;
+    glassPanes?: boolean;
     pageTabIconsOnly?: boolean;
     recentSessions?: Record<string, string>;
     paneTasks?: Record<string, PaneTask>;
@@ -733,7 +743,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, glassPanes: s.glassPanes, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
   };
 }
 

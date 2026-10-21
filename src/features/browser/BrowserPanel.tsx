@@ -10,6 +10,7 @@ import { cn } from "@/lib/cn";
 import { DEFAULT_BROWSER_WIDTH, useWorkspaces } from "@/stores/workspaces";
 import { BrowserView } from "./BrowserView";
 import { ConsoleList } from "./ConsoleList";
+import { backgroundLuminance, blendsIn, iconPixels, INVERT_FILTER } from "./iconContrast";
 import {
   closeTab,
   ensureBrowser,
@@ -159,7 +160,7 @@ export function BrowserPanel() {
                     agentTabs[tab.id]?.adopted && "agent-adopted",
                   )}
                 >
-                  {agentTabs[tab.id] ? <Bot size={12} className="agent-icon shrink-0" /> : <Globe size={12} className="shrink-0" />}
+                  {agentTabs[tab.id] ? <Bot size={12} className="agent-icon shrink-0" /> : <TabIcon favicon={tab.favicon} />}
                   <span className="truncate">{label(tab)}</span>
                   <X
                     size={11}
@@ -350,5 +351,30 @@ export function SidePanel() {
       </div>
       {panel === "device" ? <DevicePanel /> : panel === "terminal" ? <SideTerminal /> : panel === "viewer" ? <ViewerPanel /> : <BrowserPanel />}
     </aside>
+  );
+}
+
+/**
+ * A tab's page icon, or a globe while it has none or it fails to load. An icon that would
+ * blend into the tab bar (GitHub's dark cat on a dark theme) gets its lightness flipped.
+ */
+function TabIcon({ favicon }: { favicon: string }) {
+  const [broken, setBroken] = useState<string | null>(null);
+  const [inverted, setInverted] = useState<string | null>(null);
+  if (!favicon || broken === favicon) return <Globe size={12} className="shrink-0" />;
+  return (
+    <img
+      src={favicon}
+      alt=""
+      draggable={false}
+      onError={() => setBroken(favicon)}
+      onLoad={(e) => {
+        const pixels = iconPixels(e.currentTarget);
+        const bg = backgroundLuminance(e.currentTarget.parentElement);
+        setInverted(pixels && bg !== null && blendsIn(pixels, bg) ? favicon : null);
+      }}
+      style={inverted === favicon ? { filter: INVERT_FILTER } : undefined}
+      className="size-3 shrink-0 object-contain"
+    />
   );
 }

@@ -1,0 +1,96 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Pane header design languages</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#08090b;color:#e8e9ec;font:13px -apple-system,Inter,sans-serif;padding:28px}
+h1{font-size:18px;margin:0 0 4px}p.sub{color:#6b6f78;margin:0 0 26px}
+section{margin-bottom:34px}h2{font-size:14px;margin:0 0 3px}h2 span{color:#7c6cf5;margin-right:6px}.desc{color:#a3a6ae;margin:0 0 4px;max-width:820px}.tok{color:#6b6f78;font:11px ui-monospace,Menlo,monospace;margin:0 0 12px}
+.stage{padding:18px;border-radius:12px;display:flex;gap:14px}
+.pane{flex:1;overflow:hidden;position:relative}.term{height:84px;padding:10px 14px;font:12px ui-monospace,Menlo,monospace;opacity:.6}
+.hd{display:flex;flex-direction:column;gap:5px;padding:9px 12px}.r{display:flex;align-items:center;gap:8px}
+.t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ic{display:inline-grid;place-items:center;flex:none}
+.meta{display:flex;align-items:center;gap:6px}.sp{flex:1}.btns{display:flex;gap:8px}.dot{width:7px;height:7px;border-radius:50%;flex:none}
+
+/* 1 Precision (Linear / Vercel) */
+.l1{background:#0b0b0d}.l1 .pane{background:#111113;border:1px solid #232327;border-radius:8px}
+.l1 .pane.f{border-color:#3b3b42;box-shadow:0 0 0 1px #5e6ad233,0 8px 24px -12px #000}
+.l1 .hd{border-bottom:1px solid #1e1e22}.l1 .n{font:500 11px ui-monospace,Menlo,monospace;color:#5c5c66}
+.l1 .ic{width:16px;height:16px;border-radius:4px;background:#d97757;color:#fff;font-size:10px}
+.l1 .t{font-weight:500;letter-spacing:-.01em}.l1 .meta{font:11px ui-monospace,Menlo,monospace;color:#6e6e78;padding-left:44px}
+.l1 .chip{border:1px solid #26262b;border-radius:4px;padding:0 5px}.l1 .btns{color:#5c5c66}
+.l1 .w{background:#5e6ad2}.l1 .q{background:#f2c94c}
+
+/* 2 Glass (macOS vibrancy) */
+.l2{background:radial-gradient(circle at 20% 0%,#3d2a7a,transparent 55%),radial-gradient(circle at 90% 100%,#0e5a6e,transparent 50%),#0d0e14}
+.l2 .pane{background:#ffffff0d;backdrop-filter:blur(24px) saturate(160%);border:1px solid #ffffff1f;border-radius:16px;box-shadow:inset 0 1px 0 #ffffff26,0 20px 40px -20px #000}
+.l2 .pane.f{background:#ffffff17;border-color:#ffffff40}
+.l2 .hd{padding:12px 14px;background:linear-gradient(#ffffff0f,transparent)}
+.l2 .ic{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#f0956a,#c8553a);color:#fff;font-size:13px;box-shadow:0 2px 8px #c8553a66}
+.l2 .t{font:600 14px -apple-system,sans-serif}.l2 .meta{padding-left:32px;font-size:11px;color:#ffffffa0}
+.l2 .chip{background:#ffffff14;border-radius:999px;padding:1px 8px}.l2 .btns{color:#ffffff80}
+.l2 .tl{display:flex;gap:6px}.l2 .tl i{width:10px;height:10px;border-radius:50%;background:#ffffff26}
+.l2 .pane.f .tl i:nth-child(1){background:#ff5f57}.l2 .pane.f .tl i:nth-child(2){background:#febc2e}.l2 .pane.f .tl i:nth-child(3){background:#28c840}
+.l2 .w{background:#a78bfa;box-shadow:0 0 8px #a78bfa}.l2 .q{background:#fbbf24;box-shadow:0 0 8px #fbbf24}
+
+/* 3 Brutalist terminal */
+.l3{background:#000;font-family:ui-monospace,Menlo,monospace}.l3 .pane{background:#000;border:2px solid #444}
+.l3 .pane.f{border-color:#fff}.l3 .hd{padding:0;gap:0;border-bottom:2px solid #444}.l3 .pane.f .hd{border-color:#fff}
+.l3 .r{padding:7px 10px}.l3 .n{background:#fff;color:#000;font-weight:700;padding:0 6px}.l3 .pane:not(.f) .n{background:#444;color:#000}
+.l3 .t{font:700 12px ui-monospace,Menlo,monospace;text-transform:uppercase;letter-spacing:.06em}
+.l3 .meta{font:11px ui-monospace,Menlo,monospace;gap:0;border-top:1px dashed #444}.l3 .meta span{padding:4px 10px;border-right:1px dashed #444;color:#aaa}
+.l3 .st{font-weight:700;color:#000;padding:0 6px}.l3 .btns{color:#fff}.l3 .ic{display:none}
+
+/* 4 Warm editorial (Notion / paper) */
+.l4{background:#f4f1ea;color:#2b2722}.l4 .pane{background:#fffdf8;border:1px solid #e3ddd0;border-radius:10px;box-shadow:0 1px 2px #0000000d}
+.l4 .pane.f{border-color:#c9b99a;box-shadow:0 0 0 3px #e8dcc4,0 6px 18px -8px #6b532c40}
+.l4 .hd{padding:12px 16px 10px;border-bottom:1px solid #efe9dd}
+.l4 .t{font:600 15px Georgia,"Iowan Old Style",serif;color:#2b2722}.l4 .n{font:italic 13px Georgia,serif;color:#a8977a}
+.l4 .ic{width:20px;height:20px;border-radius:50%;background:#f3e3d6;color:#c2603d;font-size:11px}
+.l4 .meta{padding-left:48px;font-size:11.5px;color:#8a7f6e}.l4 .chip{background:#f3eee3;border-radius:4px;padding:1px 7px}
+.l4 .btns{color:#b3a68e}.l4 .term{color:#5d554a}.l4 .w{background:#c2603d}.l4 .q{background:#d99a20}
+
+/* 5 Neon synth (cyber/retro) */
+.l5{background:linear-gradient(#0a0018,#14002a);font-family:ui-monospace,Menlo,monospace}
+.l5 .pane{background:#0d0220cc;border:1px solid #ff2fd055;border-radius:4px;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px))}
+.l5 .pane.f{border-color:#00f0ff;box-shadow:inset 0 0 24px #00f0ff22}
+.l5 .hd{background:linear-gradient(90deg,#ff2fd022,transparent 70%);border-bottom:1px solid #ff2fd044}
+.l5 .pane.f .hd{background:linear-gradient(90deg,#00f0ff26,transparent 70%);border-color:#00f0ff66}
+.l5 .t{font:700 12px ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:#fff;text-shadow:0 0 8px #00f0ff}
+.l5 .pane:not(.f) .t{text-shadow:0 0 8px #ff2fd0;color:#ffd6f6}
+.l5 .n{color:#00f0ff;font-weight:700}.l5 .ic{color:#ff2fd0;font-size:12px}
+.l5 .meta{padding-left:34px;font-size:10.5px;color:#b18cff;letter-spacing:.05em}.l5 .chip{border:1px solid #b18cff55;padding:0 5px}
+.l5 .bar{height:3px;background:#ffffff10}.l5 .bar i{display:block;height:100%;width:62%;background:linear-gradient(90deg,#ff2fd0,#00f0ff);box-shadow:0 0 10px #00f0ff}
+.l5 .btns{color:#00f0ffaa}.l5 .w{background:#00f0ff;box-shadow:0 0 10px #00f0ff}.l5 .q{background:#ffe600;box-shadow:0 0 10px #ffe600}.l5 .term{color:#d6c8ff}
+</style></head><body>
+<h1>Pane header: 5 design languages</h1>
+<p class="sub">The same two-row header (identity + title + actions / metadata) styled five ways. Left: focused, working. Right: unfocused, needs input.</p>
+
+<section><h2><span>1</span>Precision</h2><p class="desc">Linear/Vercel style: near-black, hairline borders, monospace metadata, one restrained accent. Quiet and dense, with focus shown by a soft ring.</p><p class="tok">bg #111113 · border #232327 · accent #5e6ad2 · radius 8 · Inter 500 / mono 11</p>
+<div class="stage l1">
+ <div class="pane f"><div class="hd"><div class="r"><span class="n">01</span><span class="dot w"></span><span class="ic">✳</span><span class="t">Dark mode for settings</span><div class="btns">⋯ ⤢ ✕</div></div><div class="meta"><span>claude</span><span class="chip">⎇ dark-mode</span><span class="chip">opus</span><span class="sp"></span><span>$0.41 · 62%</span></div></div><div class="term">✻ Writing the ThemeToggle tests… (38s)</div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="n">02</span><span class="dot q"></span><span class="ic">✳</span><span class="t">Migrate billing to Stripe</span><div class="btns">⋯ ⤢ ✕</div></div><div class="meta"><span>claude</span><span class="chip">⎇ stripe-v2</span><span class="sp"></span><span>$1.20 · 48%</span></div></div><div class="term">Do you want to proceed?</div></div>
+</div></section>
+
+<section><h2><span>2</span>Glass</h2><p class="desc">macOS vibrancy: translucent blurred panes over a coloured backdrop, large radii, pill tags, traffic-light dots that light up on the focused pane, glowing status.</p><p class="tok">bg white/8% + blur 24 · border white/12% · radius 16 · SF Pro 600 / pills</p>
+<div class="stage l2">
+ <div class="pane f"><div class="hd"><div class="r"><span class="tl"><i></i><i></i><i></i></span><span class="ic">✳</span><span class="t">Dark mode for settings</span><span class="dot w"></span><div class="btns">⋯</div></div><div class="meta" style="padding-left:58px"><span class="chip">Claude Code</span><span class="chip">⎇ dark-mode</span><span class="sp"></span><span>62% · $0.41</span></div></div><div class="term">✻ Writing the ThemeToggle tests…</div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="tl"><i></i><i></i><i></i></span><span class="ic">✳</span><span class="t">Migrate billing to Stripe</span><span class="dot q"></span><div class="btns">⋯</div></div><div class="meta" style="padding-left:58px"><span class="chip">Claude Code</span><span class="chip">⎇ stripe-v2</span></div></div><div class="term">Do you want to proceed?</div></div>
+</div></section>
+
+<section><h2><span>3</span>Brutalist terminal</h2><p class="desc">All monospace, uppercase and hard 2px borders with no radius. The focused pane is pure white on black. Metadata sits in a ruled table row, and status is a solid label block instead of a dot.</p><p class="tok">bg #000 · border 2px #444 / #fff · radius 0 · mono 700 uppercase</p>
+<div class="stage l3">
+ <div class="pane f"><div class="hd"><div class="r"><span class="n">1</span><span class="t">Dark mode for settings</span><span class="st" style="background:#7cf">WORKING</span><div class="btns">[≡] [□] [×]</div></div><div class="meta"><span>CLAUDE</span><span>⎇ DARK-MODE</span><span>OPUS</span><span>$0.41</span><span>CTX 62%</span></div></div><div class="term">✻ Writing the ThemeToggle tests…</div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="n">2</span><span class="t" style="color:#aaa">Migrate billing to Stripe</span><span class="st" style="background:#fc3">INPUT</span><div class="btns" style="color:#666">[≡] [□] [×]</div></div><div class="meta"><span>CLAUDE</span><span>⎇ STRIPE-V2</span><span>$1.20</span></div></div><div class="term">Do you want to proceed?</div></div>
+</div></section>
+
+<section><h2><span>4</span>Warm editorial</h2><p class="desc">Notion/paper style: a cream light theme, serif titles, italic numerals, soft tan tags and gentle shadows. Calm and readable, made for long sessions.</p><p class="tok">bg #fffdf8 on #f4f1ea · border #e3ddd0 · accent #c2603d · Georgia 600 / Inter 11.5</p>
+<div class="stage l4">
+ <div class="pane f"><div class="hd"><div class="r"><span class="n">i.</span><span class="ic">✳</span><span class="t">Dark mode for settings</span><span class="dot w"></span><div class="btns">⋯ ✕</div></div><div class="meta"><span>Claude Code</span><span class="chip">dark-mode</span><span class="chip">opus</span><span class="sp"></span><span>62% context</span></div></div><div class="term">✻ Writing the ThemeToggle tests…</div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="n">ii.</span><span class="ic">✳</span><span class="t">Migrate billing to Stripe</span><span class="dot q"></span><div class="btns">⋯ ✕</div></div><div class="meta"><span style="color:#b07b10">Waiting for your approval</span><span class="chip">stripe-v2</span></div></div><div class="term">Do you want to proceed?</div></div>
+</div></section>
+
+<section><h2><span>5</span>Neon synth</h2><p class="desc">Cyberpunk/retro style: a deep purple night, cut corners, glowing uppercase titles, cyan for the focused pane and magenta for the rest, with a gradient progress bar.</p><p class="tok">bg #0d0220 · cyan #00f0ff / magenta #ff2fd0 · clipped corners · mono tracking .12em</p>
+<div class="stage l5">
+ <div class="pane f"><div class="hd"><div class="r"><span class="n">01</span><span class="ic">✳</span><span class="t">Dark mode for settings</span><span class="dot w"></span><div class="btns">⋯ ✕</div></div><div class="meta"><span class="chip">CLAUDE</span><span class="chip">⎇ dark-mode</span><span class="sp"></span><span>62%</span></div></div><div class="bar"><i></i></div><div class="term">✻ Writing the ThemeToggle tests…</div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="n" style="color:#ff2fd0">02</span><span class="ic">✳</span><span class="t">Migrate billing to Stripe</span><span class="dot q"></span><div class="btns">⋯ ✕</div></div><div class="meta"><span class="chip">CLAUDE</span><span class="chip">⎇ stripe-v2</span></div></div><div class="bar"><i style="width:72%"></i></div><div class="term">Do you want to proceed?</div></div>
+</div></section>
+</body></html>

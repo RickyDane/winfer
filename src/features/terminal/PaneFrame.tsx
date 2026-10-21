@@ -17,6 +17,7 @@ import { progressTitle, useProgress } from "@/features/progress/progress";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { ContextMeter } from "@/features/usage/UsageMeter";
 import { PaneCost } from "@/features/usage/TaskCostChip";
+import { GlassPaneHeader } from "./GlassPaneHeader";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -56,6 +57,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
   const name = useWorkspaces((s) => providerName(s.providers, pane.provider));
   const label = useWorkspaces((s) => paneLabel(pane, s.providers, progressTitle(progress), progress?.title));
   const [renaming, setRenaming] = useState(false);
+  const glass = useWorkspaces((s) => s.glassPanes);
   const [isNew] = useState(() => !seen.has(pane.id));
   seen.add(pane.id);
 
@@ -64,13 +66,19 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
       data-pane-id={pane.id}
       onMouseDown={onFocus}
       className={cn(
-        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border bg-panel transition-[border-color,opacity] duration-150",
+        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border transition-[border-color,opacity,box-shadow,background-color] duration-150",
+        glass ? "pane-glass" : "rounded-[var(--radius-pane)] bg-panel",
         isNew && "anim-grow",
-        focused ? "border-accent/70" : "border-border",
+        glass ? focused && "pane-glass-focused" : focused ? "border-accent/70" : "border-border",
         beingDragged && "opacity-40",
       )}
     >
       {/* Archived panes aren't tiled, so there's nowhere to drag them. */}
+      {glass ? (
+        <GlassPaneHeader
+          {...{ pane, index, focused, zoomed, onFocus, workspaceName, name, label, renaming, setRenaming, progress, showProgress }}
+        />
+      ) : (
       <header
         onPointerDown={pane.archived ? undefined : (e) => beginDrag(e, pane.id)}
         title={pane.archived ? undefined : "Drag to move this pane"}
@@ -176,13 +184,14 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
           <X size={14} />
         </HeaderButton>
       </header>
+      )}
 
       {searching && <PaneSearch paneId={pane.id} />}
       <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
         <TerminalHost pane={pane} focused={focused} />
       </div>
       {starting && (
-        <div className="anim-fade pointer-events-none absolute inset-x-0 top-8 bottom-0 flex items-center justify-center">
+        <div className={cn("anim-fade pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center", glass ? "top-20" : "top-8")}>
           <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
             <Spinner size={13} className="text-accent" />
             {starting === "worktree" ? "Creating worktree…" : `Starting ${name}…`}

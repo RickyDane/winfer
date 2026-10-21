@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>winfer · side panel overhaul (mock)</title>
+<style>
+  :root {
+    --app: #19191d; --panel: #232327; --raised: #28282d; --hover: #303036; --active: #38383f;
+    --border: #ffffff0d; --border-strong: #ffffff18;
+    --fg: #eeedf1; --muted: #b0adb9; --subtle: #96929f;
+    --accent: #b5a5e8; --accent-soft: #b5a5e819; --success: #8cc8ab; --warning: #dfbc80; --danger: #e79a9f; --claude: #dba78e;
+    --shadow: 0 12px 40px -16px #0005, 0 2px 8px #0002;
+    --selection-shadow: 0 2px 5px #0002, inset 0 1px 0 #ffffff08;
+    --sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+    --r: 16px;
+  }
+  .light {
+    --app: #eeedf0; --panel: #fcfbfd; --raised: #f5f3f7; --hover: #eeebf2; --active: #ffffff;
+    --border: #352c4c0b; --border-strong: #352c4c18; --fg: #343039; --muted: #706978; --subtle: #7b7384;
+    --accent: #7961a8; --accent-soft: #7961a812; --success: #39785f; --warning: #916b2d; --danger: #b45361; --claude: #a36548;
+    --shadow: 0 12px 40px -16px #44325222, 0 2px 8px #44325208;
+    --selection-shadow: 0 2px 6px #4432520c, inset 0 0 0 1px #44325206;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--app); color: var(--fg); font: 13px/1.45 var(--sans); display: flex; flex-direction: column; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  button, .outline a { transition: background-color .16s ease, color .16s ease, box-shadow .16s ease; }
+  button:focus-visible, .outline a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
+  /* ---------- mock chrome (not part of design) ---------- */
+  .mockbar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); color: var(--subtle); font-size: 11px; }
+  .mockbar b { color: var(--muted); font-weight: 600; }
+  .mockbar .sp { flex: 1; }
+  .mockbar button { padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); }
+  .mockbar button:hover { background: var(--hover); color: var(--fg); }
+  .stage { flex: 1; min-height: 0; display: grid; grid-template-columns: 168px minmax(260px, .8fr) minmax(600px, 1.7fr); grid-template-rows: 68px minmax(0, 1fr); grid-template-areas: "nav heading heading" "nav agents panel"; gap: 0 20px; padding: 0 20px 20px 0; }
+  .workspace-nav { grid-area: nav; display: flex; flex-direction: column; gap: 8px; padding: 22px 12px; border-right: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 0 10px 30px; font-size: 17px; font-weight: 650; letter-spacing: -.04em; }
+  .brand-mark { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 17px; }
+  .nav-label { margin: 8px 10px; color: var(--subtle); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+  .workspace-link { display: flex; align-items: center; gap: 9px; padding: 10px; border-radius: 10px; color: var(--muted); font-size: 12px; }
+  .workspace-link.current { background: var(--accent-soft); color: var(--fg); }
+  .workspace-link .dot { background: var(--accent); }
+  .workspace-link small { margin-left: auto; color: var(--subtle); }
+  .nav-bottom { margin-top: auto; padding: 16px 10px 0; color: var(--subtle); font-size: 11px; }
+  .workspace-heading { grid-area: heading; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .workspace-heading h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.025em; }
+  .workspace-heading p { margin: 3px 0 0; font-size: 11px; color: var(--subtle); }
+  .workspace-heading .chip { border: 0; background: var(--panel); }
+  .fake-panes { grid-area: agents; display: grid; grid-template-rows: 1.2fr 1fr; gap: 16px; min-width: 0; min-height: 0; }
+  .fake-pane { border: 1px solid var(--border); border-radius: var(--r); background: var(--panel); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .agent-heading { display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 550; }
+  .agent-avatar { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
+  .agent-heading small { margin-left: auto; color: var(--subtle); font-size: 10px; font-weight: 400; }
+  .agent-feed { flex: 1; padding: 18px 16px; overflow: auto; font-size: 12px; line-height: 1.8; color: var(--muted); }
+  .agent-feed p { margin: 0 0 18px; }
+  .agent-feed .request { background: var(--raised); border-radius: 12px 12px 4px 12px; padding: 12px; color: var(--fg); }
+  .agent-feed .activity { display: flex; align-items: center; gap: 7px; color: var(--claude); font-size: 11px; }
+  .agent-feed code { font: 10.5px/1.8 var(--mono); overflow-wrap: anywhere; }
+  .agent-composer { margin: 0 12px 12px; padding: 11px 12px; border: 1px solid var(--border-strong); border-radius: 11px; color: var(--subtle); font-size: 11px; }
+
+  /* ---------- the panel ---------- */
+  .side { grid-area: panel; min-width: 0; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
+
+  /* switcher: segmented control + panel actions */
+  .switch { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .seg { display: flex; gap: 3px; padding: 4px; background: var(--app); border-radius: 12px; }
+  .seg button { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 9px; color: var(--muted); font-size: 12px; font-weight: 500; position: relative; }
+  .seg button:hover { color: var(--fg); }
+  .seg button[aria-selected="true"] { background: var(--active); color: var(--fg); box-shadow: var(--selection-shadow); }
+  .seg .badge { min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 9.5px; font-weight: 700; display: grid; place-items: center; }
+  .seg .live { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .seg .kbd { font: 10px var(--mono); color: var(--subtle); opacity: 0; transition: opacity .15s; }
+  .seg:hover .kbd { opacity: 1; }
+  .switch .sp { flex: 1; }
+  .ib { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; color: var(--subtle); }
+  .ib:hover { background: var(--hover); color: var(--fg); }
+  .ib.on { color: var(--accent); background: var(--accent-soft); }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.on { display: flex; }
+
+  /* shared: toolbar + status footer */
+  .bar { display: flex; align-items: center; gap: 5px; height: 48px; padding: 0 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .foot { display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 14px; border-top: 1px solid var(--border); font-size: 11px; color: var(--subtle); flex-shrink: 0; background: var(--panel); }
+  .foot .sp { flex: 1; }
+  .foot span { display: flex; align-items: center; gap: 5px; }
+  .foot svg { width: 12px; height: 12px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 8px; border: 1px solid var(--border); color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .chip:hover { background: var(--hover); color: var(--fg); }
+  .chip.accent { border-color: transparent; background: var(--accent-soft); color: var(--accent); }
+
+  /* ---------- BROWSER ---------- */
+  .tabs { display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }
+  .tabs > * { flex-shrink: 0; }
+  .wsgroup { display: flex; align-items: center; gap: 3px; padding-left: 7px; border-left: 2px solid color-mix(in srgb, var(--c) 45%, transparent); margin-right: 6px; }
+  .tab { display: flex; align-items: center; gap: 6px; height: 30px; max-width: 170px; padding: 0 8px 0 10px; border-radius: 9px; color: var(--muted); font-size: 12px; position: relative; }
+  .tab:hover { background: var(--hover); }
+  .tab.on { background: var(--raised); color: var(--fg); box-shadow: var(--selection-shadow); }
+  .tab .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .tab .x { opacity: 0; } .tab:hover .x { opacity: .6; }
+  .tab.agent { color: var(--claude); }
+  .fav { width: 14px; height: 14px; border-radius: 4px; display: grid; place-items: center; font-size: 8px; font-weight: 800; color: #fff; }
+  .omni { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--border); font: 12px var(--sans); color: var(--muted); }
+  .omni > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .omni:focus-within, .omni.focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .omni b { color: var(--fg); font-weight: 400; }
+  .omni .lock { color: var(--success); }
+  .agentbanner { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 8px 10px; border-radius: 10px; font-size: 11.5px; color: var(--claude); background: color-mix(in srgb, var(--claude) 8%, transparent); }
+  .agentbanner button { margin-left: auto; padding: 2px 8px; border-radius: 5px; border: 1px solid #d9775755; color: var(--claude); font-size: 11px; }
+  .page { flex: 1; min-height: 0; background: var(--panel); padding: 16px; display: flex; justify-content: center; overflow: hidden; position: relative; }
+  .page.agentring::before { content: ""; position: absolute; inset: 9px; border-radius: 16px; border: 1px solid color-mix(in srgb, var(--claude) 20%, transparent); pointer-events: none; }
+  @keyframes pulse { 50% { border-color: #d9775722; } }
+  .site { width: 100%; max-width: 560px; border-radius: 12px; overflow: hidden; background: #fbfbfd; color: #1a1a20; box-shadow: var(--shadow); }
+  .site nav { display: flex; gap: 14px; align-items: center; padding: 12px 18px; border-bottom: 1px solid #eee; font-size: 12px; color: #666; }
+  .site nav b { color: #111; margin-right: auto; }
+  .site .hero { padding: 34px 18px 22px; }
+  .site h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.02em; }
+  .site p { margin: 0; color: #666; }
+  .site .cta { margin-top: 14px; display: inline-block; padding: 7px 14px; background: #4f5ff0; color: #fff; border-radius: 7px; font-size: 12px; position: relative; }
+  .cursor { position: absolute; right: -16px; bottom: -14px; width: 18px; height: 18px; color: var(--claude); filter: drop-shadow(0 2px 3px #0005); }
+  .cursor svg { width: 18px; height: 18px; fill: var(--claude); stroke: #fff; stroke-width: 1.2; }
+  .site .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 18px 20px; }
+  .site .cards div { height: 70px; border-radius: 8px; background: #f0f0f5; }
+  .console { flex-shrink: 0; border-top: 1px solid var(--border); font: 11px/1.6 var(--mono); }
+  .console .h { display: flex; align-items: center; gap: 10px; padding: 4px 10px; color: var(--subtle); font-family: var(--sans); }
+  .console .row { padding: 1px 10px 1px 26px; color: var(--muted); }
+  .console .row.err { color: var(--danger); background: #f26d6d0d; }
+  .console .row.warn { color: var(--warning); background: #f5b5440a; }
+
+  /* ---------- ANDROID ---------- */
+  .devwrap { flex: 1; min-height: 0; display: flex; background: radial-gradient(ellipse at 50% 30%, var(--raised), var(--app) 70%); }
+  .devstage { flex: 1; display: grid; place-items: center; padding: 16px; }
+  .phone { width: 236px; height: 486px; border-radius: 34px; padding: 9px; background: linear-gradient(145deg, #2a2a31, #141418); box-shadow: 0 0 0 1px #3a3a44, 0 30px 60px -15px #000c, inset 0 0 0 1px #ffffff10; position: relative; }
+  .screen { width: 100%; height: 100%; border-radius: 26px; overflow: hidden; background: #0e1116; position: relative; display: flex; flex-direction: column; }
+  .punch { position: absolute; top: 9px; left: 50%; width: 9px; height: 9px; margin-left: -4px; border-radius: 50%; background: #000; box-shadow: 0 0 0 1.5px #222; z-index: 2; }
+  .sbar { display: flex; justify-content: space-between; padding: 7px 18px 0; font-size: 10px; color: #cfd3da; }
+  .app-h { padding: 18px 16px 10px; color: #fff; font-size: 18px; font-weight: 600; }
+  .app-card { margin: 0 12px 8px; padding: 10px 12px; border-radius: 14px; background: #1a1f28; color: #c9ced8; font-size: 11px; display: flex; gap: 10px; align-items: center; }
+  .app-card i { width: 28px; height: 28px; border-radius: 9px; flex-shrink: 0; }
+  .fab { position: absolute; right: 14px; bottom: 44px; width: 44px; height: 44px; border-radius: 14px; background: #8ab4ff; display: grid; place-items: center; color: #0e1116; font-size: 22px; }
+  .tap { position: absolute; right: 22px; bottom: 52px; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--claude); animation: tap 1.6s ease-out infinite; }
+  @keyframes tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+  .navpill { position: absolute; bottom: 8px; left: 50%; width: 80px; height: 4px; margin-left: -40px; border-radius: 2px; background: #ffffff88; }
+  .rail { width: 44px; border-left: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; background: var(--panel); }
+  .rail .ib { width: 30px; height: 30px; }
+  .rail hr { width: 20px; border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+  .rec { color: var(--danger) !important; }
+  .devpick { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--app); font-size: 12px; }
+  .devpick small { color: var(--subtle); font: 10.5px var(--mono); }
+  .logcat { height: 92px; flex-shrink: 0; border-top: 1px solid var(--border); font: 10.5px/1.55 var(--mono); overflow: hidden; }
+  .logcat .h { display: flex; gap: 8px; align-items: center; padding: 4px 10px; font: 11px var(--sans); color: var(--subtle); }
+  .logcat .l { padding: 0 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lv { display: inline-block; width: 14px; text-align: center; border-radius: 3px; margin-right: 6px; font-weight: 700; color: #000; }
+  .lv.I { background: #6d7cff; } .lv.W { background: var(--warning); } .lv.E { background: var(--danger); } .lv.D { background: #6b6b74; }
+
+  /* ---------- TERMINAL ---------- */
+  .wspills { display: flex; gap: 4px; flex: 1; overflow: hidden; }
+  .wspill { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 7px; color: var(--muted); font-size: 12px; }
+  .wspill:hover { background: var(--hover); }
+  .wspill.on { background: var(--active); color: var(--fg); box-shadow: var(--selection-shadow); }
+  .wspill .sq { width: 8px; height: 8px; border-radius: 3px; }
+  .crumbs { display: flex; align-items: center; gap: 4px; font: 11.5px var(--mono); color: var(--subtle); flex: 1; min-width: 0; }
+  .crumbs b { color: var(--fg); font-weight: 500; }
+  .crumbs i { font-style: normal; opacity: .5; }
+  .term { flex: 1; min-height: 0; background: var(--app); padding: 16px 14px; font: 12px/1.7 var(--mono); color: var(--fg); overflow: hidden; position: relative; }
+  .light .term { background: #fbfbfc; color: #2a2a31; }
+  .term .p { color: var(--accent); } .term .g { color: var(--success); } .term .y { color: var(--warning); } .term .r { color: var(--danger); } .term .d { color: var(--subtle); }
+  .term .block { margin: 0 -14px 10px; padding: 4px 14px 8px; border-left: 2px solid transparent; }
+  .term .block.ok { border-left-color: #4ade8055; }
+  .term .block.bad { border-left-color: var(--danger); background: #f26d6d08; }
+  .term .meta { float: right; font-size: 10.5px; color: var(--subtle); }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--fg); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .findbar { position: absolute; top: 8px; right: 10px; display: flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 10px; background: var(--raised); border: 1px solid var(--border-strong); box-shadow: var(--shadow); font: 12px var(--sans); color: var(--muted); }
+  .findbar input { background: none; border: 0; outline: 0; color: var(--fg); width: 110px; font: inherit; }
+  .hl { background: #f5b54455; color: #fff; border-radius: 2px; }
+
+  /* ---------- VIEWER ---------- */
+  .ftabs { display: flex; gap: 2px; align-items: center; padding: 0 8px; height: 36px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .ftab { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; color: var(--muted); }
+  .ftab.on { background: var(--active); color: var(--fg); }
+  .ftab .ext { font: 9px var(--mono); padding: 1px 4px; border-radius: 3px; font-weight: 700; }
+  .ftab .mod { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .vbody { flex: 1; min-height: 0; display: flex; }
+  .outline { width: 150px; border-right: 1px solid var(--border); padding: 12px 8px; font-size: 11.5px; color: var(--subtle); flex-shrink: 0; }
+  .outline .h { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 0 8px 6px; }
+  .outline a { display: block; padding: 3px 8px; border-radius: 5px; color: var(--muted); text-decoration: none; }
+  .outline a.on { color: var(--fg); background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+  .outline a.sub { padding-left: 18px; }
+  .doc { flex: 1; overflow: hidden; padding: 22px 28px; position: relative; }
+  .doc h1 { margin: 0 0 4px; font-size: 21px; letter-spacing: -.015em; }
+  .doc .by { color: var(--subtle); font-size: 11.5px; margin-bottom: 18px; display: flex; gap: 8px; align-items: center; }
+  .doc h2 { font-size: 14.5px; margin: 20px 0 8px; }
+  .doc p, .doc li { color: var(--muted); }
+  .doc ul { padding-left: 18px; margin: 6px 0; }
+  .doc code { font: 11.5px var(--mono); background: var(--active); padding: 1px 5px; border-radius: 4px; color: var(--fg); }
+  .doc pre { font: 11.5px/1.55 var(--mono); background: var(--raised); border: 1px solid var(--border); padding: 10px 12px; border-radius: 8px; margin: 10px 0; color: var(--fg); }
+  .commented { background: linear-gradient(transparent 60%, #f5b54430 60%); }
+  .cmt { margin: 8px 0 8px -10px; padding: 8px 10px; border-left: 2px solid var(--warning); background: #f5b5440d; border-radius: 0 8px 8px 0; font-size: 12px; }
+  .cmt .who { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--warning); font-weight: 600; margin-bottom: 2px; }
+  .cmt.agent { border-left-color: var(--claude); background: #d977570d; }
+  .cmt.agent .who { color: var(--claude); }
+  .modes { display: flex; padding: 2px; border-radius: 7px; background: var(--app); border: 1px solid var(--border); }
+  .modes button { padding: 2px 9px; border-radius: 5px; font-size: 11px; color: var(--subtle); }
+  .modes button.on { background: var(--active); color: var(--fg); }
+
+  /* notes */
+  .notes { position: absolute; top: 13px; right: 20px; z-index: 5; width: 290px; font-size: 12px; color: var(--muted); }
+  .notes:not([open]) { width: auto; }
+  .notes summary { width: fit-content; margin-left: auto; cursor: pointer; color: var(--muted); font-size: 11px; }
+  .notes[open] { padding: 14px; top: 0; right: 6px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); max-height: calc(100vh - 24px); overflow: auto; }
+  .notes[open] summary { margin-bottom: 16px; }
+  .notes h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--subtle); margin: 4px 0 8px; }
+  .notes .n { display: none; }
+  .notes .n.on { display: block; }
+  .notes li { margin-bottom: 7px; }
+  .notes ul { padding-left: 16px; margin: 0; }
+  .notes .common { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; }
+  .mockbar { padding-right: 134px; }
+  @media (max-width: 1100px) {
+    html, body { height: auto; min-height: 100%; }
+    .stage { flex: auto; grid-template-columns: 150px minmax(0, 1fr); grid-template-rows: 68px minmax(760px, calc(100vh - 140px)) 420px; grid-template-areas: "nav heading" "nav panel" "nav agents"; row-gap: 16px; }
+    .fake-panes { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); }
+    .mockbar { flex-wrap: wrap; }
+  }
+  @media (max-width: 720px) {
+    .stage { display: flex; flex-direction: column; gap: 16px; padding: 0 12px 16px; }
+    .workspace-nav { display: none; }
+    .workspace-heading { min-height: 64px; }
+    .side { order: 1; min-height: 780px; }
+    .fake-panes { order: 2; min-height: 620px; grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+    .seg { flex: 1; min-width: 0; }
+    .seg button { flex: 1; justify-content: center; padding: 0 6px; font-size: 11px; }
+    .seg .kbd, .switch > .ib, .seg .badge, .seg .live { display: none; }
+    .agentbanner { flex-wrap: wrap; }
+    .bar { overflow-x: auto; }
+    .outline { width: 110px; }
+    .doc { padding: 18px; }
+    .foot { gap: 6px; font-size: 10px; }
+    .mockbar { font-size: 10px; padding-left: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<svg style="display:none">
+  <symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="phone" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/></symbol>
+  <symbol id="term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7 9 3 3-3 3M12 15h5"/></symbol>
+  <symbol id="file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+  <symbol id="left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="reload" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  <symbol id="bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01"/></symbol>
+  <symbol id="mobile" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/></symbol>
+  <symbol id="desk" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="cam" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+  <symbol id="rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></symbol>
+  <symbol id="rot" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></symbol>
+  <symbol id="home" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></symbol>
+  <symbol id="back" viewBox="0 0 24 24"><path d="M15 6 8 12l7 6z"/></symbol>
+  <symbol id="square" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="vol" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM17 9a4 4 0 0 1 0 6"/></symbol>
+  <symbol id="kbd" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/></symbol>
+  <symbol id="split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></symbol>
+  <symbol id="pop" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="cursor" viewBox="0 0 24 24"><path d="M4 3l7 18 2.5-7.5L21 11z"/></symbol>
+  <symbol id="msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-5A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0M12 20h.01"/></symbol>
+</svg>
+
+<div class="mockbar">
+  <b>DESIGN PREVIEW</b> a calmer workspace
+  <span class="sp"></span>
+  keys <code>1–4</code> switch sections
+  <button onclick="document.body.classList.toggle('light')">Toggle light/dark</button>
+</div>
+
+<div class="stage">
+  <nav class="workspace-nav" aria-label="Workspace preview">
+    <div class="brand"><span class="brand-mark">w</span>winfer</div>
+    <div class="nav-label">Workspaces</div>
+    <div class="workspace-link current" aria-current="page"><span class="dot"></span>winfer <small>2</small></div>
+    <div class="workspace-link"><svg><use href="#folder"/></svg>website</div>
+    <div class="workspace-link"><svg><use href="#folder"/></svg>experiments</div>
+    <div class="nav-bottom">Local workspace<br>All changes saved</div>
+  </nav>
+  <header class="workspace-heading">
+    <div><h1>winfer <span style="color:var(--subtle);font-weight:400">/ Voice settings</span></h1><p>A little space to build something good.</p></div>
+    <span class="chip"><span class="dot" style="background:var(--success)"></span>2 agents connected</span>
+  </header>
+  <div class="fake-panes" aria-label="Agent conversation previews">
+    <section class="fake-pane">
+      <header class="agent-heading"><span class="agent-avatar" style="color:var(--claude)">✳</span>Claude <small>Working</small></header>
+      <div class="agent-feed"><p class="request">Make the voice settings feel softer and more polished.</p><p>I’m refining the spacing and controls, then I’ll check the result in the browser.</p><p class="activity"><svg><use href="#globe"/></svg>Previewing voice settings</p></div>
+      <div class="agent-composer">Message Claude…</div>
+    </section>
+    <section class="fake-pane">
+      <header class="agent-heading"><span class="agent-avatar">›_</span>Codex <small>Ready</small></header>
+      <div class="agent-feed"><p>The settings components are ready for review.</p><code>✓ Type checks passed<br>✓ Changes saved<br><span style="color:var(--subtle)">Waiting for your next step.</span></code></div>
+      <div class="agent-composer">Message Codex…</div>
+    </section>
+  </div>
+
+  <section class="side">
+    <!-- ===== Unified switcher ===== -->
+    <div class="switch">
+      <div class="seg" role="tablist">
+        <button data-v="browser" aria-selected="true"><svg><use href="#globe"/></svg>Browser<span class="badge">4</span><span class="kbd">⌘1</span></button>
+        <button data-v="android"><svg><use href="#phone"/></svg>Android<span class="live"></span><span class="kbd">⌘2</span></button>
+        <button data-v="terminal"><svg><use href="#term"/></svg>Terminal<span class="kbd">⌘3</span></button>
+        <button data-v="viewer"><svg><use href="#file"/></svg>Viewer<span class="badge">2</span><span class="kbd">⌘4</span></button>
+      </div>
+      <span class="sp"></span>
+      <button class="ib" title="Split"><svg><use href="#split"/></svg></button>
+      <button class="ib" title="Pop out"><svg><use href="#pop"/></svg></button>
+      <button class="ib" title="Close panel"><svg><use href="#x"/></svg></button>
+    </div>
+
+    <!-- ===== BROWSER ===== -->
+    <div class="view on" id="v-browser">
+      <div class="tabs">
+        <div class="wsgroup" style="--c:#6d7cff">
+          <div class="tab on"><span class="fav" style="background:#4f5ff0">L</span><span class="t">localhost:5173 · winfer</span><svg class="x"><use href="#x"/></svg></div>
+          <div class="tab agent"><svg><use href="#bot"/></svg><span class="t">Settings · agent</span><svg class="x"><use href="#x"/></svg></div>
+        </div>
+        <div class="wsgroup" style="--c:#25a28f">
+          <div class="tab"><span class="fav" style="background:#111">G</span><span class="t">github.com/winfer</span><svg class="x"><use href="#x"/></svg></div>
+          <div class="tab"><span class="fav" style="background:#f38020">C</span><span class="t">Cloudflare dash</span><svg class="x"><use href="#x"/></svg></div>
+        </div>
+        <button class="ib" style="margin-bottom:2px"><svg><use href="#plus"/></svg></button>
+      </div>
+      <div class="bar">
+        <button class="ib"><svg><use href="#left"/></svg></button>
+        <button class="ib"><svg><use href="#right"/></svg></button>
+        <button class="ib"><svg><use href="#reload"/></svg></button>
+        <div class="omni focus"><svg class="lock"><use href="#lock"/></svg><span>http://<b>localhost:5173</b>/settings?tab=voice</span></div>
+        <div class="modes" style="margin-left:4px"><button class="on" title="Desktop"><svg><use href="#desk"/></svg></button><button title="Mobile"><svg><use href="#mobile"/></svg></button></div>
+        <button class="ib"><svg><use href="#more"/></svg></button>
+      </div>
+      <div class="agentbanner"><svg><use href="#bot"/></svg><span><b>claude · pane 2</b> is driving this tab — clicking “Save voice settings”</span><button>Take over</button></div>
+      <div class="page agentring">
+        <div class="site">
+          <nav><b>winfer</b><span>Workspaces</span><span>Voice</span><span>Settings</span></nav>
+          <div class="hero">
+            <h1>Voice settings</h1>
+            <p>Push-to-talk, wake word and transcription model.</p>
+            <span class="cta">Save voice settings<span class="cursor"><svg><use href="#cursor"/></svg></span></span>
+          </div>
+          <div class="cards"><div></div><div></div><div></div></div>
+        </div>
+      </div>
+      <div class="console">
+        <div class="h"><b style="color:var(--fg)">Console</b><span class="chip" style="height:18px;color:var(--danger)">1 error</span><span class="chip" style="height:18px;color:var(--warning)">2 warn</span><span style="margin-left:auto">⌘⇧J</span></div>
+        <div class="row warn">[vite] hmr update /src/features/voice/VoicePanel.tsx</div>
+        <div class="row err">TypeError: Cannot read properties of undefined (reading 'model') · VoicePanel.tsx:88</div>
+      </div>
+      <div class="foot"><span><span class="dot" style="background:var(--success)"></span>200 · 142 ms</span><span>1280 × 800</span><span class="sp"></span><span><svg><use href="#bot"/></svg>agent controlled</span></div>
+    </div>
+
+    <!-- ===== ANDROID ===== -->
+    <div class="view" id="v-android">
+      <div class="bar">
+        <div class="devpick"><span class="dot" style="background:var(--success)"></span>Pixel 9 Pro<small>emulator-5554 · API 35</small><svg style="opacity:.5"><use href="#right" transform="rotate(90 12 12)"/></svg></div>
+        <span class="chip"><svg><use href="#wifi"/></svg>USB</span>
+        <span class="chip accent"><svg><use href="#bot"/></svg>codex tapping</span>
+        <span style="flex:1"></span>
+        <div class="modes"><button class="on">Fit</button><button>1:1</button><button>Frame</button></div>
+      </div>
+      <div class="devwrap">
+        <div class="devstage">
+          <div class="phone">
+            <div class="screen">
+              <div class="punch"></div>
+              <div class="sbar"><span>9:41</span><span>▲ ◼ 87%</span></div>
+              <div class="app-h">Inbox</div>
+              <div class="app-card"><i style="background:#6d7cff"></i><div><b style="color:#fff">Build passed</b><br>nebula · 2m ago</div></div>
+              <div class="app-card"><i style="background:#25a28f"></i><div><b style="color:#fff">New voice note</b><br>“Ship the overhaul”</div></div>
+              <div class="app-card"><i style="background:#d97757"></i><div><b style="color:#fff">Agent finished</b><br>claude · pane 2</div></div>
+              <div class="app-card"><i style="background:#f5b544"></i><div><b style="color:#fff">Needs input</b><br>codex · pane 3</div></div>
+              <div class="fab">+</div><div class="tap"></div>
+              <div class="navpill"></div>
+            </div>
+          </div>
+        </div>
+        <div class="rail">
+          <button class="ib" title="Back"><svg><use href="#back"/></svg></button>
+          <button class="ib" title="Home"><svg><use href="#home"/></svg></button>
+          <button class="ib" title="Recents"><svg><use href="#square"/></svg></button>
+          <hr>
+          <button class="ib" title="Rotate"><svg><use href="#rot"/></svg></button>
+          <button class="ib" title="Volume"><svg><use href="#vol"/></svg></button>
+          <button class="ib on" title="Keyboard input"><svg><use href="#kbd"/></svg></button>
+          <hr>
+          <button class="ib" title="Screenshot"><svg><use href="#cam"/></svg></button>
+          <button class="ib rec" title="Recording"><svg><use href="#rec"/></svg></button>
+        </div>
+      </div>
+      <div class="logcat">
+        <div class="h"><b style="color:var(--fg)">Logcat</b><span class="chip" style="height:18px">dev.winfer.app</span><span class="chip" style="height:18px">≥ Info</span></div>
+        <div class="l"><span class="lv I">I</span>ActivityManager: Start proc 4121:dev.winfer.app/u0a190</div>
+        <div class="l"><span class="lv W">W</span>Choreographer: Skipped 31 frames! The application may be doing too much work</div>
+        <div class="l"><span class="lv E">E</span>VoiceService: AudioRecord init failed (permission RECORD_AUDIO)</div>
+      </div>
+      <div class="foot"><span><span class="dot" style="background:var(--danger)"></span>REC 00:14</span><span>1080 × 2400 · 60 fps</span><span class="sp"></span><span>adb 35.0.2</span></div>
+    </div>
+
+    <!-- ===== TERMINAL ===== -->
+    <div class="view" id="v-terminal">
+      <div class="bar">
+        <div class="wspills">
+          <button class="wspill on"><span class="sq" style="background:#6d7cff"></span>winfer</button>
+          <button class="wspill"><span class="sq" style="background:#25a28f"></span>site</button>
+          <button class="wspill"><span class="sq" style="background:#cf6e4e"></span>infra</button>
+        </div>
+        <button class="ib" title="New shell"><svg><use href="#plus"/></svg></button>
+      </div>
+      <div class="bar" style="height:32px">
+        <div class="crumbs"><svg><use href="#folder"/></svg>~<i>/</i>Coding<i>/</i><b>winfer</b></div>
+        <span class="chip"><svg><use href="#branch"/></svg>main ↑2</span>
+        <button class="ib" title="Find"><svg><use href="#search"/></svg></button>
+        <button class="ib" title="Restart shell"><svg><use href="#reload"/></svg></button>
+      </div>
+      <div class="term">
+        <div class="findbar"><svg><use href="#search"/></svg><input value="error" /><span style="font-size:11px">1/3</span><button class="ib" style="width:22px;height:22px"><svg><use href="#left" transform="rotate(90 12 12)"/></svg></button><button class="ib" style="width:22px;height:22px"><svg><use href="#x"/></svg></button></div>
+        <div class="block ok"><span class="meta">0.4s · 14:02</span><span class="p">❯</span> pnpm typecheck<br><span class="d">tsc --noEmit</span><br><span class="g">✓</span> no errors</div>
+        <div class="block bad"><span class="meta">exit 1 · 6.1s</span><span class="p">❯</span> pnpm test voice<br><span class="r">✗</span> VoicePanel › saves model <span class="d">(38 ms)</span><br>&nbsp;&nbsp;TypeError: Cannot read properties of undefined<br>&nbsp;&nbsp;<span class="d">at</span> <u>src/features/voice/VoicePanel.tsx:88:21</u><br><span class="r">Tests: 1 failed</span>, <span class="g">23 passed</span>, 24 total <span class="hl">error</span></div>
+        <div class="block"><span class="p">❯</span> git status -sb<br><span class="g">## main...origin/main [ahead 2]</span><br><span class="y"> M</span> src/features/voice/VoicePanel.tsx<br><span class="d">??</span> mockups/</div>
+        <div><span class="p">❯</span> <span class="caret"></span></div>
+      </div>
+      <div class="foot"><span>zsh</span><span>120 × 32</span><span class="sp"></span><span><span class="dot" style="background:var(--danger)"></span>last: exit 1</span></div>
+    </div>
+
+    <!-- ===== VIEWER ===== -->
+    <div class="view" id="v-viewer">
+      <div class="ftabs">
+        <div class="ftab on"><span class="ext" style="background:#6d7cff33;color:#8a96ff">MD</span>PLAN.md<span class="mod"></span></div>
+        <div class="ftab"><span class="ext" style="background:#25a28f33;color:#3cc2ad">TSX</span>VoicePanel.tsx</div>
+        <div class="ftab"><span class="ext" style="background:#f5b54433;color:var(--warning)">PNG</span>shot-14-02.png</div>
+        <span style="flex:1"></span>
+        <div class="modes"><button class="on">Rendered</button><button>Source</button><button>Diff</button></div>
+      </div>
+      <div class="bar" style="height:30px">
+        <div class="crumbs"><svg><use href="#folder"/></svg>winfer<i>/</i><b>PLAN.md</b></div>
+        <span class="chip" style="color:var(--warning)"><svg><use href="#msg"/></svg>2 comments</span>
+        <button class="ib" title="Open a file…"><svg><use href="#plus"/></svg></button>
+      </div>
+      <div class="vbody">
+        <nav class="outline">
+          <div class="h">Outline</div>
+          <a>Goal</a><a class="on">Milestones</a><a class="sub">M0 · shell</a><a class="sub on" style="box-shadow:none;background:none;color:var(--fg)">M1 · side panel</a><a class="sub">M2 · voice</a><a>Open questions</a>
+        </nav>
+        <article class="doc">
+          <h1>winfer plan</h1>
+          <div class="by"><span class="dot" style="background:var(--claude)"></span>written by claude · pane 2 · updated 3 min ago</div>
+          <h2>Milestones</h2>
+          <p><b style="color:var(--fg)">M1 · side panel.</b> <span class="commented">Unify Browser, Android, Terminal and Viewer under one switcher</span> with consistent toolbars and status footers.</p>
+          <div class="cmt"><div class="who"><svg><use href="#msg"/></svg>@user</div>Can the switcher show when an agent is using a panel?</div>
+          <div class="cmt agent"><div class="who"><svg><use href="#bot"/></svg>@agent</div>Yes — live dot + badge count on the segment, banner inside the panel.</div>
+          <ul>
+            <li>Agent presence ring on browser &amp; device views</li>
+            <li>Command blocks with exit status in the terminal</li>
+          </ul>
+          <pre>setSidePanel("viewer")  // ⌘4</pre>
+        </article>
+      </div>
+      <div class="foot"><span>Markdown</span><span>142 lines</span><span class="sp"></span><span>follows file edits</span></div>
+    </div>
+  </section>
+
+  <details class="notes">
+    <summary>Design notes</summary>
+    <h3>What changed</h3>
+    <div class="n on" data-n="browser"><ul>
+      <li>Tabs grouped by workspace with a colored rail instead of text labels.</li>
+      <li>Real tab shape; agent-driven tabs tinted in agent color.</li>
+      <li>Omnibox with host emphasis + focus ring; desktop/mobile toggle inline.</li>
+      <li><b>Soft agent banner + quiet ring + ghost cursor</b> when an agent drives the tab, with “Take over”.</li>
+      <li>Collapsible console drawer with error/warn counts.</li>
+    </ul></div>
+    <div class="n" data-n="android"><ul>
+      <li>Device picker chip with serial/API; connection chip.</li>
+      <li>Phone rendered in a bezel frame on a soft spotlight (Fit / 1:1 / Frame).</li>
+      <li>Vertical action rail: nav keys, rotate, volume, keyboard, screenshot, record.</li>
+      <li>Agent taps visualized as ripples.</li>
+      <li>Inline filtered logcat strip.</li>
+    </ul></div>
+    <div class="n" data-n="terminal"><ul>
+      <li>Workspace pills with workspace color.</li>
+      <li>Path breadcrumb + git branch chip.</li>
+      <li>Command blocks: left rail shows success/failure, duration on the right.</li>
+      <li>Floating find bar with match count.</li>
+      <li>Footer: shell, size, last exit code.</li>
+    </ul></div>
+    <div class="n" data-n="viewer"><ul>
+      <li>Multi-file tabs with type badges and modified dot.</li>
+      <li>Rendered / Source / Diff modes.</li>
+      <li>Outline sidebar for markdown.</li>
+      <li><b>@user / @agent comments rendered as threaded callouts</b> instead of raw HTML comments.</li>
+      <li>Author line shows which agent wrote the file.</li>
+    </ul></div>
+    <div class="common"><h3>Shared system</h3><ul>
+      <li>Segmented switcher with icons, live dots, badges, ⌘1–4 hints.</li>
+      <li>Relaxed spacing: 48px toolbar → content → 32px status footer.</li>
+      <li>Same chips, icon buttons and mode toggles everywhere.</li>
+      <li>Warm graphite and lavender palette, subtle borders and soft elevation; coordinated light theme.</li>
+    </ul></div>
+  </details>
+</div>
+
+<script>
+  const btns = document.querySelectorAll(".seg button");
+  function show(v) {
+    btns.forEach(b => b.setAttribute("aria-selected", b.dataset.v === v));
+    document.querySelectorAll(".view").forEach(el => el.classList.toggle("on", el.id === "v-" + v));
+    document.querySelectorAll(".notes .n").forEach(el => el.classList.toggle("on", el.dataset.n === v));
+    history.replaceState(null, "", "#" + v);
+  }
+  btns.forEach(b => b.onclick = () => show(b.dataset.v));
+  addEventListener("keydown", e => { const i = +e.key - 1; if (i >= 0 && i < 4 && e.target.tagName !== "INPUT") show(btns[i].dataset.v); });
+  if (location.hash) show(location.hash.slice(1));
+</script>
+</body>
+</html>

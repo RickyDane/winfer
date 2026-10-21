@@ -3,12 +3,39 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
 import path from "node:path";
+import type { Plugin } from "vite";
+
+/**
+ * Dev only: `/__mock/favicon?url=…` fetches a page icon server-side, like the Tauri backend does,
+ * so the mocked browser (src/dev/mockTauri.ts) shows real icons the panel can read the pixels of.
+ */
+function mockFavicons(): Plugin {
+  return {
+    name: "mock-favicons",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use("/__mock/favicon", async (req, res) => {
+        const url = new URL(req.url ?? "", "http://localhost").searchParams.get("url") ?? "";
+        try {
+          const icon = await fetch(url, { headers: { "User-Agent": "winfer" }, signal: AbortSignal.timeout(10_000) });
+          const type = icon.headers.get("content-type") ?? "";
+          if (!icon.ok || !(type.startsWith("image/") || url.endsWith(".ico"))) throw new Error(`no icon (${icon.status} ${type})`);
+          res.setHeader("Content-Type", type.startsWith("image/") ? type : "image/x-icon");
+          res.end(Buffer.from(await icon.arrayBuffer()));
+        } catch (err) {
+          res.statusCode = 404;
+          res.end(String(err));
+        }
+      });
+    },
+  };
+}
 
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), mockFavicons()],
   test: {
     // Harness Bench task fixtures hold deliberately broken repos for agents to fix; not our tests.
     // mobile/ and relay/ are separate packages with their own vitest setups.

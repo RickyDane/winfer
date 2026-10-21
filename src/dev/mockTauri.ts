@@ -101,7 +101,7 @@ const channels = new Map<string, Channel<ArrayBuffer>>();
 const lines = new Map<string, string>();
 
 // Fake browser: one tab list per workspace, frames rendered on an OffscreenCanvas.
-type MockTab = { id: string; url: string; title: string };
+type MockTab = { id: string; url: string; title: string; favicon: string };
 const browserTabs = new Map<string, MockTab[]>();
 const screencasts = new Map<string, { tabId: string; channel: Channel<ArrayBuffer>; viewport: any }>();
 const inputs: unknown[] = [];
@@ -228,6 +228,11 @@ window.setTimeout(() => {
     },
   });
 }, 2500);
+
+/** Like the backend: a web page's /favicon.ico, fetched by the dev server (vite.config.ts) so it's same-origin. */
+function mockFavicon(url: string) {
+  return /^https?:/.test(url) ? `/__mock/favicon?url=${encodeURIComponent(`${new URL(url).origin}/favicon.ico`)}` : "";
+}
 
 function emitTabs(workspaceId: string) {
   void emit("browser://tabs", { workspaceId, tabs: browserTabs.get(workspaceId) ?? [] });
@@ -692,11 +697,11 @@ mockIPC(
       case "browser_status":
         return { executable: { path: "mock-chrome", source: "system" } };
       case "browser_open": {
-        if (!browserTabs.has(a.workspaceId)) browserTabs.set(a.workspaceId, [{ id: `t-${++tabCounter}`, url: "about:blank", title: "" }]);
+        if (!browserTabs.has(a.workspaceId)) browserTabs.set(a.workspaceId, [{ id: `t-${++tabCounter}`, url: "about:blank", title: "", favicon: "" }]);
         return browserTabs.get(a.workspaceId);
       }
       case "browser_new_tab": {
-        const tab = { id: `t-${++tabCounter}`, url: a.url, title: "" };
+        const tab = { id: `t-${++tabCounter}`, url: a.url, title: "", favicon: mockFavicon(a.url) };
         browserTabs.get(a.workspaceId)!.push(tab);
         emitTabs(a.workspaceId);
         return tab.id;
@@ -709,6 +714,7 @@ mockIPC(
         const tab = browserTabs.get(a.workspaceId)!.find((t) => t.id === a.targetId)!;
         tab.url = a.url;
         tab.title = new URL(a.url).host;
+        tab.favicon = mockFavicon(a.url);
         emitTabs(a.workspaceId);
         // Pretend the page logs an error and a failing API call.
         const entry = (text: string, source: string | null) => ({ level: "error", text, source, timestamp: Date.now() });
@@ -848,7 +854,7 @@ mockIPC(
   voice,
   /** Simulates an agent opening a tab through CDP. */
   agentTab: (workspaceId: string, url: string) => {
-    browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard" });
+    browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard", favicon: "" });
     emitTabs(workspaceId);
   },
   status: (paneId: string, status: string, message?: string) => emit("agent://status", { paneId, status, message }),

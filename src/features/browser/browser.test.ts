@@ -16,7 +16,7 @@ describe("normalizeUrl", () => {
 });
 
 describe("followedTab", () => {
-  const tab = (id: string, url: string) => ({ id, url, title: "" });
+  const tab = (id: string, url: string) => ({ id, url, title: "", favicon: "" });
 
   it("ignores the first listing", () => expect(followedTab(undefined, [tab("a", "https://x.dev")], null)).toBeUndefined());
   it("follows a new tab with a page", () => expect(followedTab([tab("a", "about:blank")], [tab("a", "about:blank"), tab("b", "https://b.dev")], "a")?.id).toBe("b"));
@@ -30,7 +30,7 @@ describe("followedTab", () => {
 });
 
 describe("relatedTab", () => {
-  const tab = (id: string, url: string) => ({ id, url, title: "" });
+  const tab = (id: string, url: string) => ({ id, url, title: "", favicon: "" });
   const tabs = [tab("gh", "https://github.com/winfer/winfer/pull/42"), tab("dev", "http://localhost:5173/settings"), tab("docs", "https://docs.rs/tokio"), tab("blank", "about:blank")];
 
   it("finds the tab on the same site", () => expect(relatedTab(tabs, "https://github.com/winfer/winfer/issues")?.id).toBe("gh"));

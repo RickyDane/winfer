@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import logoUrl from "@/assets/logo.svg";
-import { Activity, Archive, ChevronRight, GitBranch, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Activity, Archive, ChevronRight, ChevronsDownUp, GitBranch, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
 import { progressTitle, useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
@@ -312,7 +312,7 @@ export function SidebarResizer() {
 
 export function Sidebar() {
   const width = useWorkspaces((s) => s.sidebarWidth);
-  const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, moveWorkspace, theme, toggleTheme } = useWorkspaces();
+  const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, collapseAllWorkspaces, moveWorkspace, theme, toggleTheme } = useWorkspaces();
   const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
   const { drag, begin, dropLine } = useSortable(moveWorkspace);
 
@@ -332,9 +332,19 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 pt-2 pb-2 select-none">
         <SectionLabel
           action={
-            <button onClick={() => execute({ type: "workspace.create" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="New workspace">
-              <Plus size={13} />
-            </button>
+            <div className="flex items-center gap-px">
+              <button
+                onClick={collapseAllWorkspaces}
+                disabled={expandedWorkspaces.length === 0}
+                className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
+                title="Collapse all workspaces"
+              >
+                <ChevronsDownUp size={13} />
+              </button>
+              <button onClick={() => execute({ type: "workspace.create" })} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg" title="New workspace">
+                <Plus size={13} />
+              </button>
+            </div>
           }
         >
           Workspaces

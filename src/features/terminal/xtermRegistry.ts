@@ -27,9 +27,9 @@ const MAX_ATLAS_PAGES = 4;
 
 // Recolor every live terminal when the app theme changes; refit them all when zoomed.
 useWorkspaces.subscribe((s, prev) => {
-  if (s.theme !== prev.theme) {
+  if (s.theme !== prev.theme || s.glassPanes !== prev.glassPanes) {
     for (const entry of entries.values()) {
-      entry.term.options.theme = terminalTheme(s.theme);
+      entry.term.options.theme = paneTheme();
       entry.term.options.minimumContrastRatio = terminalMinContrast(s.theme);
     }
   }
@@ -157,6 +157,23 @@ function rootsOf(id: string) {
   return ws?.rootDir ? [ws.rootDir] : [];
 }
 
+/**
+ * The terminal colors. With the glass pane design the background is transparent, so the
+ * frosted pane shows through wherever an agent (Claude Code, Codex, winfer code, a shell)
+ * paints the default background. Cells an app colors explicitly stay opaque.
+ */
+function paneTheme() {
+  const { theme, glassPanes } = useWorkspaces.getState();
+  const t = terminalTheme(theme);
+  return glassPanes ? { ...t, background: "#00000000" } : t;
+}
+
+/** `rgb:rrrr/gggg/bbbb`, the form OSC 10/11 replies use. */
+function oscColor(hex: string) {
+  const h = hex.replace("#", "").slice(0, 6);
+  return `rgb:${[0, 2, 4].map((i) => h.slice(i, i + 2).repeat(2)).join("/")}`;
+}
+
 function create(pane: Pane): Entry {
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace',
@@ -166,7 +183,9 @@ function create(pane: Pane): Entry {
     scrollback: 10_000,
     macOptionIsMeta: true,
     allowProposedApi: true,
-    theme: terminalTheme(useWorkspaces.getState().theme),
+    // Lets the glass design's transparent background through; opaque themes look the same.
+    allowTransparency: true,
+    theme: paneTheme(),
     minimumContrastRatio: terminalMinContrast(useWorkspaces.getState().theme),
     // OSC 8 hyperlinks: files open in the viewer, web links in winfer's browser.
     linkHandler: {
@@ -216,6 +235,14 @@ function create(pane: Pane): Entry {
       }
     }
     if (data.includes("\r")) reportInput(pane.id);
+  });
+
+  // Agents ask for the background color (OSC 11) to derive their palette (winfer code, Codex).
+  // A transparent background would read as black, so answer with the opaque panel color.
+  term.parser.registerOscHandler(11, (data) => {
+    if (data !== "?") return false;
+    writeInput(pane.id, `\x1b]11;${oscColor(terminalTheme(useWorkspaces.getState().theme).background ?? "#000000")}\x1b\\`);
+    return true;
   });
 
   // Terminal notifications: OSC 9 (iTerm2/ConEmu style), OSC 777 (notify;title;body), bell.

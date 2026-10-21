@@ -163,7 +163,7 @@ function EmptyWorkspace() {
 }
 
 export function AppShell() {
-  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view } = useWorkspaces();
+  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view, glassPanes } = useWorkspaces();
   useKeymap();
   useEscapeToClose();
   const pages = usePluginPages();
@@ -212,7 +212,7 @@ export function AppShell() {
   );
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={cn("flex h-full flex-col", glassPanes && "glass-stage")}>
       <TitleBar />
       <main className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {sidebarOpen && (
@@ -226,7 +226,7 @@ export function AppShell() {
             <AgentBar panes={livePanes(workspace)} scope={{ workspace: workspace.name }} />
           )}
           {/* Keyed so switching workspace or view fades the new content in. */}
-          <div key={page ? view : `${view}:${view === "overview" || view === "archive" ? "" : workspace.id}`} className="anim-fade flex min-h-0 min-w-0 flex-1">
+          <div key={page ? view : `${view}:${view === "overview" || view === "archive" ? "" : workspace.id}`} className={cn("anim-fade flex min-h-0 min-w-0 flex-1", glassPanes && "pt-1")}>
             {page ? (
               <PluginPageView page={page} />
             ) : view === "overview" ? (

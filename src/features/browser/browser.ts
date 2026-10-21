@@ -19,6 +19,8 @@ export interface Tab {
   id: string;
   url: string;
   title: string;
+  /** The page's icon URL; "" until it loaded, or if it has none. */
+  favicon: string;
 }
 
 export type Device = "desktop" | "mobile";
@@ -154,18 +156,33 @@ function setTabs(workspaceId: string, tabs: Tab[]) {
   const ws = useWorkspaces.getState();
   // Follow agents in the workspace the panel shows, or the one on screen.
   const watched = workspaceId === shownWorkspaceId() || (ws.view === "workspace" && workspaceId === ws.activeWorkspaceId);
+  const hadTabs = (useBrowser.getState().tabs[workspaceId]?.length ?? 0) > 0;
   useBrowser.setState((s) => {
     const current = s.activeTab[workspaceId];
     const stillOpen = tabs.some((t) => t.id === current);
     const follow = watched ? followedTab(s.tabs[workspaceId], tabs, current) : undefined;
-    // The shown workspace's last tab closed: show another workspace's tab instead of nothing.
-    const other = tabs.length === 0 && s.shown === workspaceId ? Object.keys(s.tabs).find((id) => id !== workspaceId && s.tabs[id].length > 0) : undefined;
     return {
       tabs: { ...s.tabs, [workspaceId]: tabs },
       activeTab: { ...s.activeTab, [workspaceId]: follow?.id ?? (stillOpen ? current! : (tabs.at(-1)?.id ?? null)) },
-      shown: follow ? workspaceId : (other ?? s.shown),
+      shown: follow ? workspaceId : s.shown,
     };
   });
+  // Never leave a browser without tabs: its last one closed, so open a blank one in its place.
+  if (tabs.length === 0 && hadTabs && ws.workspaces.some((w) => w.id === workspaceId)) void reopenBlankTab(workspaceId);
+}
+
+const reopening = new Set<string>();
+async function reopenBlankTab(workspaceId: string) {
+  if (reopening.has(workspaceId)) return;
+  reopening.add(workspaceId);
+  try {
+    const id = await invoke<string>("browser_new_tab", { workspaceId, url: "about:blank" });
+    useBrowser.setState((s) => ({ activeTab: { ...s.activeTab, [workspaceId]: id } }));
+  } catch (err) {
+    flash(`Couldn't open a new tab: ${String(err)}`);
+  } finally {
+    reopening.delete(workspaceId);
+  }
 }
 
 let listening = false;

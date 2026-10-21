@@ -1,0 +1,93 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Glass header iterations</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07080c;color:#eef0f6;font:13px -apple-system,"SF Pro Text",Inter,sans-serif;padding:28px}
+h1{font-size:18px;margin:0 0 4px}p.sub{color:#7a7f8c;margin:0 0 26px;max-width:860px}
+section{margin-bottom:38px}h2{font-size:14px;margin:0 0 3px}h2 span{color:#a78bfa;margin-right:6px}.desc{color:#a3a8b5;margin:0 0 12px;max-width:860px}
+.stage{position:relative;border-radius:14px;padding:16px;display:grid;gap:12px;overflow:hidden;
+ background:radial-gradient(60% 80% at 15% 0%,#4b2fa0aa,transparent 60%),radial-gradient(50% 70% at 95% 100%,#0f6d84aa,transparent 60%),radial-gradient(40% 50% at 60% 40%,#c2508a33,transparent 70%),#0b0c12}
+.stage.calm{background:radial-gradient(70% 90% at 10% 0%,#2a2350,transparent 65%),radial-gradient(60% 80% at 100% 100%,#12303a,transparent 60%),#0b0c11}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1.4fr 1fr .7fr}
+.pane{position:relative;overflow:hidden;border-radius:16px;background:#ffffff0b;border:1px solid #ffffff1a;
+ backdrop-filter:blur(28px) saturate(170%);-webkit-backdrop-filter:blur(28px) saturate(170%);
+ box-shadow:inset 0 1px 0 #ffffff1f,0 24px 48px -24px #000c;transition:.2s}
+.pane.f{background:#ffffff14;border-color:#ffffff38;box-shadow:inset 0 1px 0 #ffffff33,0 0 0 1px var(--tint,#a78bfa)33,0 24px 60px -20px var(--tint,#a78bfa)55}
+.term{height:96px;padding:10px 16px;font:12px ui-monospace,Menlo,monospace;color:#c9cbe0aa;line-height:1.6}
+.hd{display:flex;flex-direction:column;gap:6px;padding:12px 14px 11px;background:linear-gradient(#ffffff10,#ffffff03);border-bottom:1px solid #ffffff12}
+.r{display:flex;align-items:center;gap:10px;min-width:0}.t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;font-size:14px;letter-spacing:-.01em}
+.pane:not(.f) .t{color:#ffffffb8}
+.ic{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:13px;color:#fff;position:relative;
+ background:linear-gradient(135deg,var(--a),var(--b));box-shadow:0 3px 10px -2px var(--b),inset 0 1px 0 #ffffff55}
+.cc{--a:#f4a07a;--b:#c8553a}.cx{--a:#9aa4b8;--b:#3b4256}.sh{--a:#4b5563;--b:#1f2430}.gm{--a:#7fb2ff;--b:#3a6ff0}
+.ic .st{position:absolute;right:-3px;bottom:-3px;width:10px;height:10px;border-radius:50%;border:2px solid #1b1c26}
+.w{background:#a78bfa;box-shadow:0 0 10px #a78bfa}.q{background:#fbbf24;box-shadow:0 0 10px #fbbf24}.d{background:#34d399;box-shadow:0 0 8px #34d399}.i{background:#6b7280}
+@keyframes pu{50%{box-shadow:0 0 2px currentColor;opacity:.6}}.w,.q{animation:pu 1.6s infinite}
+.meta{display:flex;align-items:center;gap:6px;padding-left:36px;font-size:11px;color:#ffffff99;min-width:0}
+.pill{background:#ffffff12;border:1px solid #ffffff10;border-radius:999px;padding:1px 8px;white-space:nowrap;display:inline-flex;gap:4px;align-items:center}
+.pill.url{background:#a78bfa26;color:#d6c8ff;border-color:#a78bfa40}.sp{flex:1}
+.btns{display:flex;gap:2px;opacity:.55;transition:.15s}.pane:hover .btns,.pane.f .btns{opacity:1}
+.btns b{font-weight:400;width:24px;height:24px;display:grid;place-items:center;border-radius:7px;color:#ffffffc0}.btns b:hover{background:#ffffff1a}
+.tl{display:flex;gap:6px}.tl i{width:11px;height:11px;border-radius:50%;background:#ffffff22}
+.pane.f .tl i:nth-child(1){background:#ff5f57}.pane.f .tl i:nth-child(2){background:#febc2e}.pane.f .tl i:nth-child(3){background:#28c840}
+.ring{width:18px;height:18px;border-radius:50%;background:conic-gradient(#c4b5fd calc(var(--p)*1%),#ffffff1a 0);display:grid;place-items:center}.ring::after{content:"";width:12px;height:12px;border-radius:50%;background:#1d1b2b}
+.act{font:11.5px ui-monospace,Menlo,monospace;color:#d6c8ff;display:flex;gap:6px;align-items:center;min-width:0}
+.act .tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dim{color:#ffffff66}
+.prog{position:absolute;left:14px;right:14px;bottom:-1px;height:2px;border-radius:2px;background:#ffffff10;overflow:hidden}.prog i{display:block;height:100%;background:linear-gradient(90deg,#a78bfa,#67e8f9);box-shadow:0 0 8px #a78bfa}
+.need{background:linear-gradient(#fbbf2422,#fbbf2408)!important;border-bottom-color:#fbbf2444!important}
+.pane.needp{border-color:#fbbf2466;box-shadow:inset 0 1px 0 #ffffff1f,0 20px 50px -20px #fbbf2455}
+.btn{font-size:11.5px;font-weight:500;padding:4px 11px;border-radius:999px;background:#ffffff14;border:1px solid #ffffff1c}.btn.p{background:linear-gradient(#fcd34d,#f59e0b);color:#1c1200;border:0;box-shadow:0 4px 14px -4px #f59e0b}
+/* floating header variant */
+.float .hd{margin:8px;border-radius:12px;border:1px solid #ffffff1a;background:#ffffff12;box-shadow:inset 0 1px 0 #ffffff26,0 8px 20px -10px #000}
+.float .pane{background:#ffffff07}
+/* tinted variant */
+.tint .pane{background:linear-gradient(160deg,color-mix(in srgb,var(--tint) 16%,transparent),#ffffff06 45%)}
+.tint .hd{background:linear-gradient(90deg,color-mix(in srgb,var(--tint) 22%,transparent),transparent 70%)}
+</style></head><body>
+<h1>Glass header: iterations</h1>
+<p class="sub">Five refinements of the Glass direction, each one adding to the previous. A–C focus on structure, D adds per-agent colour, and E puts everything together in a realistic 4-pane workspace with a calmer backdrop. Hover a pane to see its buttons.</p>
+
+<section><h2><span>A</span>Clean glass</h2><p class="desc">The window dots are gone, since they're macOS chrome that doesn't do anything here. The status dot now sits on a larger, raised agent icon. Buttons are dimmed until you hover or focus the pane, and context shows as a small ring.</p>
+<div class="stage g2">
+ <div class="pane f"><div class="hd"><div class="r"><span class="ic cc">✳<span class="st w"></span></span><span class="t">Dark mode for settings</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="pill">Claude Code</span><span class="pill">⎇ dark-mode</span><span class="pill">opus</span><span class="sp"></span><span>$0.41</span><span class="ring" style="--p:62" title="62% context"></span></div></div><div class="term">✻ Writing the ThemeToggle tests… (38s)</div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="ic cx">◎<span class="st d"></span></span><span class="t">Fix flaky checkout e2e</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="pill">Codex</span><span class="pill">⎇ checkout-e2e</span><span class="sp"></span><span>$0.18</span><span class="ring" style="--p:38"></span></div></div><div class="term">✓ 20 passed (41.2s)</div></div>
+</div></section>
+
+<section><h2><span>B</span>Live activity</h2><p class="desc">The agent name moves into a tooltip on the icon. The second row now shows what the agent is doing right now, with branch and model as small pills on the right. A glowing progress line runs along the bottom of the header.</p>
+<div class="stage g2">
+ <div class="pane f"><div class="hd" style="position:relative"><div class="r"><span class="ic cc" title="Claude Code">✳<span class="st w"></span></span><span class="t">Dark mode for settings</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="act"><span class="tx">✻ Writing the ThemeToggle tests…</span><span class="dim">38s</span></span><span class="sp"></span><span class="pill">⎇ dark-mode</span><span class="ring" style="--p:62"></span></div><div class="prog"><i style="width:64%"></i></div></div><div class="term"></div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="ic cx" title="Codex">◎<span class="st d"></span></span><span class="t">Fix flaky checkout e2e</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="act" style="color:#86efac"><span class="tx">✓ Done · 20 passed</span><span class="dim">2m ago</span></span><span class="sp"></span><span class="pill">⎇ checkout-e2e</span><span class="ring" style="--p:38"></span></div></div><div class="term"></div></div>
+</div></section>
+
+<section><h2><span>C</span>Floating header</h2><p class="desc">The header becomes its own glass card floating inside the pane, with an 8px inset and its own shadow, so it reads as a control bar above the terminal instead of a title strip. Same content as B.</p>
+<div class="stage g2 float">
+ <div class="pane f"><div class="hd" style="position:relative"><div class="r"><span class="ic cc">✳<span class="st w"></span></span><span class="t">Dark mode for settings</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="act"><span class="tx">✻ Writing the ThemeToggle tests…</span><span class="dim">38s</span></span><span class="sp"></span><span class="pill">⎇ dark-mode</span><span class="ring" style="--p:62"></span></div><div class="prog"><i style="width:64%"></i></div></div><div class="term" style="height:80px"></div></div>
+ <div class="pane"><div class="hd"><div class="r"><span class="ic sh">$_<span class="st i"></span></span><span class="t">Shell</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="act dim"><span class="tx">zsh · ~/code/orbit-web</span></span><span class="sp"></span><span class="pill url">localhost:5173 ↗</span></div></div><div class="term" style="height:80px"></div></div>
+</div></section>
+
+<section><h2><span>D</span>Agent-tinted glass</h2><p class="desc">Each pane's glass takes a faint tint from its agent's colour (Claude orange, Codex slate, Gemini blue), and the focused pane glows in that colour. Panes can be told apart at a glance. Waiting for input switches the header to an amber state with inline actions.</p>
+<div class="stage g2 tint">
+ <div class="pane f" style="--tint:#e07a55"><div class="hd" style="position:relative"><div class="r"><span class="ic cc">✳<span class="st w"></span></span><span class="t">Dark mode for settings</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="act"><span class="tx">✻ Writing the ThemeToggle tests…</span><span class="dim">38s</span></span><span class="sp"></span><span class="pill">⎇ dark-mode</span><span class="ring" style="--p:62"></span></div><div class="prog"><i style="width:64%"></i></div></div><div class="term"></div></div>
+ <div class="pane needp" style="--tint:#4f86f7"><div class="hd need"><div class="r"><span class="ic gm">✦<span class="st q"></span></span><span class="t">Migrate billing to Stripe</span><div class="btns"><b>⋯</b><b>✕</b></div></div>
+  <div class="meta"><span class="act" style="color:#fcd34d"><span class="tx">Run: pnpm prisma migrate dev</span></span><span class="sp"></span><span class="btn">Deny</span><span class="btn p">Approve ⏎</span></div></div><div class="term"></div></div>
+</div></section>
+
+<section><h2><span>E</span>In context: the full workspace</h2><p class="desc">A + B + D in a realistic split over a calmer, darker backdrop (the bright gradient above looks great in screenshots but would tire the eyes). Widths are mixed: a narrow pane drops the second row and keeps only the icon, title and status.</p>
+<div class="stage calm g3 tint" style="grid-template-rows:auto auto">
+ <div class="pane f" style="--tint:#e07a55"><div class="hd" style="position:relative"><div class="r"><span class="ic cc">✳<span class="st w"></span></span><span class="t">Dark mode for settings</span><div class="btns"><b>⋯</b><b>⤢</b><b>＋</b><b>✕</b></div></div>
+  <div class="meta"><span class="act"><span class="tx">✻ Writing the ThemeToggle tests…</span><span class="dim">38s</span></span><span class="sp"></span><span class="pill">⎇ dark-mode</span><span class="ring" style="--p:62"></span></div><div class="prog"><i style="width:64%"></i></div></div>
+  <div class="term" style="height:150px">● Read(src/styles/theme.ts)<br>● Update(src/pages/Settings.tsx)<br>&nbsp;&nbsp;└ 24 additions, 3 removals<br>● Bash(pnpm vitest run theme)<br>&nbsp;&nbsp;└ ✓ 6 passed</div></div>
+ <div class="pane" style="--tint:#8b95ad"><div class="hd"><div class="r"><span class="ic cx">◎<span class="st d"></span></span><span class="t">Fix flaky checkout e2e</span><div class="btns"><b>⋯</b><b>✕</b></div></div>
+  <div class="meta"><span class="act" style="color:#86efac"><span class="tx">✓ 20 passed</span></span><span class="sp"></span><span class="ring" style="--p:38"></span></div></div><div class="term" style="height:150px">• Edited tests/checkout.spec.ts<br>• Ran playwright ×20<br>&nbsp;&nbsp;└ ✓ 20 passed</div></div>
+ <div class="pane" style="--tint:#6b7280"><div class="hd" style="padding:11px 12px"><div class="r"><span class="ic sh" style="width:22px;height:22px;font-size:10px">$_<span class="st i"></span></span><span class="t" style="font-size:13px">Shell</span><div class="btns"><b>⋯</b></div></div></div><div class="term" style="height:170px">➜ pnpm dev<br>VITE ready<br>localhost:5173</div></div>
+ <div class="pane needp" style="--tint:#e07a55;grid-column:1/3"><div class="hd need"><div class="r"><span class="ic cc">✳<span class="st q"></span></span><span class="t">Migrate billing to Stripe PaymentIntents</span><div class="btns"><b>⋯</b><b>⤢</b><b>✕</b></div></div>
+  <div class="meta"><span class="act" style="color:#fcd34d"><span class="tx">Wants to run: pnpm prisma migrate dev</span></span><span class="sp"></span><span class="pill">⎇ stripe-v2</span><span class="btn">Deny</span><span class="btn">Always</span><span class="btn p">Approve ⏎</span></div></div><div class="term" style="height:70px">Do you want to proceed?</div></div>
+ <div class="pane" style="--tint:#4f86f7"><div class="hd" style="padding:11px 12px"><div class="r"><span class="ic gm" style="width:22px;height:22px;font-size:10px">✦<span class="st w"></span></span><span class="t" style="font-size:13px">Docs pass</span><div class="btns"><b>⋯</b></div></div></div><div class="term" style="height:70px">Reading README…</div></div>
+</div></section>
+</body></html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Glass header: state catalog</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#07080c;color:#eef0f6;font:13px -apple-system,"SF Pro Text",Inter,sans-serif}
+.top{position:sticky;top:0;z-index:5;padding:18px 28px 12px;background:#07080ce6;backdrop-filter:blur(12px);border-bottom:1px solid #ffffff10}
+h1{font-size:18px;margin:0 0 4px}.sub{color:#7a7f8c;margin:0 0 12px}
+.tabs{display:flex;gap:6px}.tabs button{font:inherit;color:#c9cbe0;background:#ffffff0d;border:1px solid #ffffff17;border-radius:999px;padding:5px 13px;cursor:pointer}
+.tabs button.on{background:#a78bfa33;border-color:#a78bfa88;color:#fff}
+.vdesc{color:#a3a8b5;margin:10px 0 0;font-size:12px}
+main{padding:22px 28px 60px}
+.grp{margin:4px 0 10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7a7f8c}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px;margin-bottom:26px;padding:16px;border-radius:14px;
+ background:radial-gradient(70% 90% at 10% 0%,#2a2350,transparent 65%),radial-gradient(60% 80% at 100% 100%,#12303a,transparent 60%),#0b0c11}
+.cell{display:flex;flex-direction:column;gap:6px;min-width:0}.lbl{font-size:11.5px;color:#c9cbe0}.lbl em{color:#7a7f8c;font-style:normal}
+.narrowwrap{width:230px}
+/* pane */
+.pane{position:relative;overflow:hidden;border-radius:16px;background:#ffffff0b;border:1px solid #ffffff1a;backdrop-filter:blur(28px) saturate(170%);box-shadow:inset 0 1px 0 #ffffff1f,0 24px 48px -24px #000c}
+.pane.f{background:#ffffff14;border-color:#ffffff38;box-shadow:inset 0 1px 0 #ffffff33,0 0 0 1px color-mix(in srgb,var(--tint) 30%,transparent),0 24px 60px -20px color-mix(in srgb,var(--tint) 40%,transparent)}
+.pane.arch{opacity:.6;border-style:dashed}
+.term{height:46px;padding:8px 16px;font:11.5px ui-monospace,Menlo,monospace;color:#c9cbe0aa;white-space:nowrap;overflow:hidden}
+.hd{position:relative;display:flex;flex-direction:column;gap:6px;padding:11px 14px 10px;background:linear-gradient(#ffffff10,#ffffff03);border-bottom:1px solid #ffffff12}
+.r{display:flex;align-items:center;gap:9px;min-width:0}.t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;font-size:14px;letter-spacing:-.01em}
+.pane:not(.f) .t{color:#ffffffb8}
+.ic{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:12px;color:#fff;position:relative;background:linear-gradient(135deg,var(--a),var(--b));box-shadow:0 3px 10px -2px var(--b),inset 0 1px 0 #ffffff55}
+.ic .st{position:absolute;right:-3px;bottom:-3px;width:10px;height:10px;border-radius:50%;border:2px solid #1b1c26}
+.s-working{background:#a78bfa;box-shadow:0 0 10px #a78bfa}.s-needs{background:#fbbf24;box-shadow:0 0 10px #fbbf24}.s-done{background:#34d399}.s-idle{background:#6b7280}.s-error{background:#f87171;box-shadow:0 0 8px #f87171}.s-starting{background:#67e8f9}.s-paused{background:#fb923c}
+@keyframes pu{50%{opacity:.45}}.s-working,.s-needs,.s-starting{animation:pu 1.6s infinite}
+.num{font:600 10px ui-monospace,Menlo,monospace;color:#ffffff70;min-width:10px}.pane.f .num{color:#d6c8ff}
+.meta{display:flex;align-items:center;gap:6px;padding-left:35px;font-size:11px;color:#ffffff99;min-width:0}
+.pill{background:#ffffff12;border:1px solid #ffffff10;border-radius:999px;padding:1px 8px;white-space:nowrap;display:inline-flex;gap:4px;align-items:center;flex:none;max-width:170px;overflow:hidden;text-overflow:ellipsis}
+.pill.dim{color:#ffffff55;background:transparent;border-style:dashed}
+.pill.wt{background:#2dd4bf1f;border-color:#2dd4bf44;color:#99f6e4}
+.pill.url{background:#a78bfa26;color:#d6c8ff;border-color:#a78bfa45;cursor:pointer}.pill.url:hover{background:#a78bfa40}
+.pill.ws{background:#ffffff1c;color:#fff;font-weight:500}
+.pill.det{border-color:#fb923c55;color:#fdba74}
+.diff{font:11px ui-monospace,Menlo,monospace;flex:none}.diff .a{color:#86efac}.diff .d{color:#fca5a5}
+.sp{flex:1}
+.btns{display:flex;gap:1px;opacity:.55}.pane.f .btns,.pane:hover .btns{opacity:1}
+.btns b{font-weight:400;width:22px;height:22px;display:grid;place-items:center;border-radius:7px;color:#ffffffc0}.btns b:hover{background:#ffffff1a}
+.ring{flex:none;width:18px;height:18px;border-radius:50%;background:conic-gradient(var(--rc) calc(var(--p)*1%),#ffffff1a 0);display:grid;place-items:center}.ring::after{content:"";width:12px;height:12px;border-radius:50%;background:#1d1b2b}
+.ctx{display:inline-flex;gap:5px;align-items:center;flex:none;font:10.5px ui-monospace,Menlo,monospace}
+.act{font:11.5px ui-monospace,Menlo,monospace;color:#d6c8ff;display:flex;gap:6px;align-items:center;min-width:0;flex:0 1 auto}
+.act .tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dim{color:#ffffff66}
+.prog{position:absolute;left:14px;right:14px;bottom:-1px;height:2px;border-radius:2px;background:#ffffff10;overflow:hidden}.prog i{display:block;height:100%;background:linear-gradient(90deg,#a78bfa,#67e8f9);box-shadow:0 0 8px #a78bfa}
+.prog.ind i{width:30%!important;animation:ind 1.4s infinite ease-in-out}@keyframes ind{0%{margin-left:-30%}100%{margin-left:100%}}
+.btn{font-size:11px;font-weight:500;padding:3px 10px;border-radius:999px;background:#ffffff14;border:1px solid #ffffff1c;flex:none}.btn.p{background:linear-gradient(#fcd34d,#f59e0b);color:#1c1200;border:0}.btn.r{background:#f8717126;border-color:#f8717155;color:#fecaca}
+.rename{flex:1;font:600 14px -apple-system,sans-serif;color:#fff;background:#00000040;border:1px solid #a78bfa;border-radius:6px;padding:2px 7px;box-shadow:0 0 0 3px #a78bfa33}
+/* variants */
+.vC .hd,.vF .hd{margin:7px;border-radius:12px;border:1px solid #ffffff1a;background:#ffffff12;box-shadow:inset 0 1px 0 #ffffff26,0 8px 20px -10px #000}.vC .pane,.vF .pane{background:#ffffff07}
+.vD .pane,.vE .pane{background:linear-gradient(160deg,color-mix(in srgb,var(--tint) 16%,transparent),#ffffff06 45%)}
+.vD .hd,.vE .hd{background:linear-gradient(90deg,color-mix(in srgb,var(--tint) 22%,transparent),transparent 70%)}
+.vD .need,.vE .need{background:linear-gradient(#fbbf2422,#fbbf2408)!important;border-bottom-color:#fbbf2444}
+.vD .pane.needp,.vE .pane.needp{border-color:#fbbf2466}
+.vD .errh,.vE .errh{background:linear-gradient(#f871711f,#f8717106)!important;border-bottom-color:#f8717144}
+.vD .pane.errp,.vE .pane.errp{border-color:#f8717166}
+.vF .need{background:linear-gradient(#fbbf2426,#fbbf240c)!important;border-color:#fbbf2455!important}.vF .errh{background:linear-gradient(#f8717122,#f871710a)!important;border-color:#f8717155!important}
+.vF .pane.narrow .meta,.vE .pane.narrow .meta{display:none}.vF .pane.narrow .hd,.vE .pane.narrow .hd{padding:10px 12px}
+.overlay{position:absolute;inset:auto 0 0 0;top:50%;display:grid;place-items:center}.overlay span{font-size:11.5px;color:#d6c8ff;background:#1d1b2bcc;border:1px solid #ffffff1a;border-radius:999px;padding:3px 11px}
+</style></head><body>
+<div class="top"><h1>Glass header: state catalog</h1><div class="sub">Every state a pane can be in, rendered in each Glass iteration. Switch the iteration with the tabs; each state shows focused or unfocused as noted.</div>
+<div class="tabs" id="tabs"></div><div class="vdesc" id="vdesc"></div></div>
+<main id="main"></main>
+<script>
+const AG={cc:{n:"Claude Code",i:"✳",a:"#f4a07a",b:"#c8553a",tint:"#e07a55"},cx:{n:"Codex",i:"◎",a:"#9aa4b8",b:"#3b4256",tint:"#8b95ad"},gm:{n:"Gemini",i:"✦",a:"#7fb2ff",b:"#3a6ff0",tint:"#4f86f7"},sh:{n:"Shell",i:"$_",a:"#4b5563",b:"#1f2430",tint:"#6b7280"}};
+const V={A:"Clean glass: the second row is a row of info pills (agent, git, model, URLs), with cost and context ring on the right.",
+ B:"Live activity: the second row leads with what the agent is doing now. Git, URLs and context are compact on the right.",
+ C:"Floating header: B's content in a glass card inset inside the pane.",
+ D:"Agent-tinted: B + per-agent tint, with amber (needs input) and red (error) header states that show inline actions.",
+ F:"Floating, no activity: C's floating glass card, but the second row holds only pane info (agent, git, model, URLs, cost, context). Needs input and errors still replace it with a short message and actions.",
+ E:"Full: D + width-aware. Narrow panes drop the second row (try the narrow states)."};
+const base={agent:"cc",status:"working",title:"Dark mode for settings",n:1,branch:"main",ctx:34,cost:"$0.41",model:"opus",activity:"✻ Writing the ThemeToggle tests…",secs:"38s"};
+const S=[
+ ["Git & worktree",[
+  ["Main checkout, on a branch",{branch:"main",worktree:false},"plain branch pill, no worktree"],
+  ["Own worktree",{branch:"winfer/dark-mode",worktree:true},"teal worktree pill, “winfer/” prefix stripped"],
+  ["Worktree with uncommitted changes",{branch:"winfer/dark-mode",worktree:true,diff:[24,3]},"diff count opens the change view"],
+  ["Ahead of remote",{branch:"feat/billing",ahead:3},"↑3 unpushed commits"],
+  ["Detached HEAD",{branch:null,detached:"a1b2c3d"},"orange: easy to lose work"],
+  ["Not a git repo",{branch:null,nogit:true,agent:"sh",title:"Shell",status:"idle",activity:"zsh · ~/Downloads",ctx:null,cost:null,model:null},"dashed “no git” pill"],
+  ["Branch name too long",{branch:"winfer/fix-the-really-long-flaky-checkout-e2e-timeout",worktree:true},"pill truncates with ellipsis"]]],
+ ["Dev servers & links",[
+  ["Dev server running",{agent:"sh",title:"pnpm dev",status:"idle",urls:["localhost:5173"],activity:"VITE ready in 312 ms",ctx:null,cost:null,model:null},"click URL → opens in browser panel"],
+  ["Several servers",{agent:"sh",title:"turbo dev",status:"idle",urls:["localhost:3000","localhost:5173","+1"],activity:"3 apps running",ctx:null,cost:null,model:null},"extras fold into +N"],
+  ["Agent started a server",{urls:["localhost:4321"]},"agent pane with URL alongside git"],
+  ["Preview / remote URL",{urls:["orbit-pr-42.pages.dev"],status:"done",activity:"✓ Deployed preview",ctx:52},"also works for deploy previews"]]],
+ ["Context & cost",[
+  ["Fresh session",{ctx:4,cost:"$0.00",activity:"Ready",status:"idle"},"ring almost empty"],
+  ["Context half used",{ctx:55,cost:"$0.88"},"violet ring"],
+  ["Context high",{ctx:82,cost:"$2.10"},"amber ring + % label"],
+  ["Context critical",{ctx:96,cost:"$3.42",activity:"⚠ Auto-compact soon"},"red ring, warning in activity line"],
+  ["Compacting",{ctx:96,activity:"⟳ Compacting conversation…",indet:true},"progress bar shows indeterminate"],
+  ["Model switched",{model:"sonnet",modelHint:true},"model pill highlighted briefly"]]],
+ ["Lifecycle",[
+  ["Starting agent",{status:"starting",activity:"Starting Claude Code…",ctx:null,cost:null,indet:true,overlay:"Starting Claude Code…"},"before the CLI prints anything"],
+  ["Creating worktree",{status:"starting",worktree:true,branch:"winfer/new-feature",activity:"Creating worktree…",ctx:null,cost:null,indet:true,overlay:"Creating worktree…"},""],
+  ["Working with known progress",{progress:64,activity:"✻ Step 4 of 6 · running tests"},"bottom progress line"],
+  ["Needs input / approval",{status:"needs",need:"pnpm prisma migrate dev",title:"Migrate billing to Stripe",branch:"stripe-v2",worktree:true},"amber state, inline actions"],
+  ["Asking a question",{status:"needs",question:"Use PaymentIntents or Checkout?",title:"Migrate billing to Stripe"},"reply jumps to the terminal"],
+  ["Done",{status:"done",activity:"✓ Done · 20 passed",secs:"2m ago",agent:"cx",title:"Fix flaky checkout e2e",branch:"checkout-e2e",worktree:true,diff:[6,2],f:false},"green; diff invites review"],
+  ["Error / exited",{status:"error",err:"Process exited with code 1",f:false},"red state, restart action"],
+  ["Rate-limited",{status:"paused",activity:"⏸ Usage limit · resets 18:40",f:false},"orange, waits for reset"],
+  ["Idle shell",{agent:"sh",title:"Shell",status:"idle",activity:"zsh · ~/code/orbit-web",ctx:null,cost:null,model:null,f:false},""]]],
+ ["Pane modes",[
+  ["Focused",{f:true},"glow + full-strength buttons"],
+  ["Unfocused",{f:false},"dimmed title + buttons"],
+  ["Renaming",{renaming:true},"inline title input"],
+  ["Zoomed",{zoomed:true},"zoom button becomes restore"],
+  ["Archived",{archived:true,f:false},"dashed, Restore replaces actions"],
+  ["In overview (other workspace)",{ws:"orbit-api",f:false},"workspace pill first"],
+  ["Different agents",{agent:"gm",title:"Docs pass",activity:"Reading README.md…",model:"2.5-pro",ctx:21,cost:"$0.07"},"Gemini tint"],
+  ["Very long title",{title:"Migrate the entire billing system from Stripe Charges to PaymentIntents with SCA",f:false},"truncates, full title on hover"],
+  ["Narrow pane",{narrow:true,title:"Fix flaky checkout e2e",agent:"cx"},"E collapses to one row"],
+  ["Narrow + needs input",{narrow:true,status:"needs",need:"rm -rf dist",title:"Cleanup"},"amber still visible when collapsed"]]]
+];
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+const ringC=p=>p>=90?"#f87171":p>=75?"#fbbf24":"#c4b5fd";
+function gitPills(s){let h="";
+ if(s.nogit)h+=`<span class="pill dim">no git</span>`;
+ else if(s.detached)h+=`<span class="pill det" title="Detached HEAD">⎇ ${s.detached} · detached</span>`;
+ else if(s.branch){const b=s.branch.replace(/^winfer\//,"");h+=s.worktree?`<span class="pill wt" title="Own worktree · click to show changes">⧉ ${esc(b)}</span>`:`<span class="pill" title="Main checkout">⎇ ${esc(b)}</span>`;}
+ if(s.ahead)h+=`<span class="diff dim">↑${s.ahead}</span>`;
+ if(s.diff)h+=`<span class="diff" title="Uncommitted changes"><span class="a">+${s.diff[0]}</span> <span class="d">−${s.diff[1]}</span></span>`;
+ return h;}
+const urlPills=s=>(s.urls||[]).map(u=>u.startsWith("+")?`<span class="pill dim">${u}</span>`:`<span class="pill url">${esc(u)} ↗</span>`).join("");
+const ctxEl=(s,label)=>s.ctx==null?"":`<span class="ctx" style="color:${ringC(s.ctx)}" title="${s.ctx}% context">${label||s.ctx>=75?s.ctx+"%":""}<span class="ring" style="--p:${s.ctx};--rc:${ringC(s.ctx)}"></span></span>`;
+function render(v,s){
+ const ag=AG[s.agent],focused=s.f!==false,needs=s.status==="needs",err=s.status==="error";
+ const fancy=v==="D"||v==="E";
+ const icon=`<span class="ic" style="--a:${ag.a};--b:${ag.b}" title="${ag.n}">${ag.i}<span class="st s-${s.status}"></span></span>`;
+ const title=s.renaming?`<input class="rename" value="${esc(s.title)}">`:`<span class="t" title="${esc(s.title)}">${esc(s.title)}</span>`;
+ const btns=s.archived?`<span class="btn">↩ Restore</span>`:`<div class="btns"><b>⋯</b>${s.narrow?"":`<b>▭</b><b>${s.zoomed?"⤡":"⤢"}</b><b>＋</b>`}<b>✕</b></div>`;
+ const ws=s.ws?`<span class="pill ws">${s.ws}</span>`:"";
+ let row2;
+ const showNeedUI=(fancy||v==="F")&&needs, showErrUI=(fancy||v==="F")&&err;
+ if(v==="A"||v==="F"){
+  row2=`${ws}<span class="pill">${ag.n}</span>${gitPills(s)}${s.model?`<span class="pill"${s.modelHint?' style="border-color:#a78bfa;color:#fff"':""}>${s.model}</span>`:""}${urlPills(s)}<span class="sp"></span>${s.cost?`<span>${s.cost}</span>`:""}${ctxEl(s)}`;
+  if(needs) row2=`${ws}<span class="act" style="color:#fcd34d"><span class="tx">${s.need?"Wants to run: "+esc(s.need):"❓ "+esc(s.question)}</span></span><span class="sp"></span>${v==="F"?(s.need?`<span class="btn">Deny</span><span class="btn p">Approve ⏎</span>`:`<span class="btn p">Reply ⏎</span>`):gitPills(s)+ctxEl(s)}`;
+  if(err) row2=`${ws}<span class="act" style="color:#fca5a5"><span class="tx">${s.err}</span></span><span class="sp"></span>${v==="F"?`<span class="btn">Logs</span><span class="btn r">↻ Restart</span>`:gitPills(s)}`;
+ } else {
+  let act;
+  if(needs) act=`<span class="act" style="color:#fcd34d"><span class="tx">${s.need?"Wants to run: "+esc(s.need):"❓ "+esc(s.question)}</span></span>`;
+  else if(err) act=`<span class="act" style="color:#fca5a5"><span class="tx">✕ ${s.err}</span></span>`;
+  else{const c=s.status==="done"?"#86efac":s.status==="paused"?"#fdba74":s.status==="idle"?"#ffffff88":s.status==="starting"?"#a5f3fc":"#d6c8ff";
+   act=`<span class="act" style="color:${c}"><span class="tx">${esc(s.activity)}</span>${s.status==="working"||s.status==="done"?`<span class="dim">${s.secs||""}</span>`:""}</span>`;}
+  let right=`${gitPills(s)}${urlPills(s)}${s.model&&s.modelHint?`<span class="pill" style="border-color:#a78bfa;color:#fff">${s.model}</span>`:""}${ctxEl(s)}`;
+  if(showNeedUI) right=s.need?`<span class="btn">Deny</span><span class="btn p">Approve ⏎</span>`:`<span class="btn p">Reply ⏎</span>`;
+  if(showErrUI) right=`<span class="btn">Logs</span><span class="btn r">↻ Restart</span>`;
+  row2=`${ws}${act}<span class="sp"></span>${right}`;
+ }
+ const prog=s.indet?`<div class="prog ind"><i></i></div>`:s.progress!=null?`<div class="prog"><i style="width:${s.progress}%"></i></div>`:"";
+ const hdCls=["hd",showNeedUI&&"need",showErrUI&&"errh"].filter(Boolean).join(" ");
+ const pCls=["pane",focused&&"f",s.archived&&"arch",showNeedUI&&"needp",showErrUI&&"errp",s.narrow&&"narrow"].filter(Boolean).join(" ");
+ const term=needs?"Do you want to proceed?":err?"Error: Cannot find module 'stripe'":s.status==="starting"?"":"● Update(src/pages/Settings.tsx)";
+ return `<div class="${pCls}" style="--tint:${ag.tint}"><div class="${hdCls}"><div class="r"><span class="num">${s.n}</span>${icon}${title}${(v==="E"||v==="F")&&s.narrow&&s.ctx!=null?ctxEl(s):""}${btns}</div><div class="meta">${row2}</div>${prog}</div><div class="term">${term}</div>${s.overlay?`<div class="overlay"><span>${s.overlay}</span></div>`:""}</div>`;
+}
+function show(v){
+ document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));
+ document.getElementById("vdesc").textContent=V[v];
+ const m=document.getElementById("main");m.className="v"+v;
+ m.innerHTML=S.map(([g,items])=>`<div class="grp">${g}</div><div class="grid">${items.map(([l,o,note])=>{const s={...base,...o};return `<div class="cell"><div class="lbl">${l} <em>${note?"· "+note:""}</em></div><div class="${s.narrow?"narrowwrap":""}">${render(v,s)}</div></div>`}).join("")}</div>`).join("");
+ history.replaceState(null,"","#"+v);
+}
+document.getElementById("tabs").innerHTML=Object.keys(V).map(k=>`<button data-v="${k}">${k} · ${V[k].split(":")[0]}</button>`).join("");
+document.getElementById("tabs").onclick=e=>e.target.dataset.v&&show(e.target.dataset.v);
+show((location.hash.slice(1)||"F"));
+addEventListener("hashchange",()=>V[location.hash.slice(1)]&&show(location.hash.slice(1)));
+</script>
+</body></html>
