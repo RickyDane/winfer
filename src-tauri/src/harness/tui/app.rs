@@ -16,7 +16,7 @@ use super::transcript::{Block, Item, NoticeKind, Status};
 use crate::harness::backend::{self, Handle, Kind, Opts};
 use crate::harness::checkpoint::{self, Done, Job};
 use crate::harness::config::{self, Config};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, Skill, TaskEv, Todo, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Mode, ModelInfo, Skill, TaskEv, Todo, Tps, Usage, UserMsg};
 use crate::harness::session::{self, Entry, Saved};
 use crate::harness::tools;
 
@@ -182,6 +182,8 @@ pub struct App {
     pub alive: bool,
     pub busy: bool,
     pub turn_started: Instant,
+    /// Output speed of the running turn.
+    pub tps: Tps,
     /// The user's turn is still going: its agent turn ended while background tasks ran, so a
     /// turn the backend starts on their reports continues it (same clock) rather than a new one.
     pub turn_open: bool,
@@ -299,6 +301,7 @@ impl App {
             alive: false,
             busy: false,
             turn_started: Instant::now(),
+            tps: Tps::default(),
             turn_open: false,
             verb: VERBS[0],
             approvals: VecDeque::new(),
@@ -685,6 +688,9 @@ impl App {
             Ev::Usage(u) => {
                 let pct = if u.window > 0 { u.context as f32 / u.window as f32 } else { 0.0 };
                 self.ctx_shown.set(pct, 600);
+                if self.busy {
+                    self.tps.sample(Instant::now(), u.turn);
+                }
                 self.usage = u;
                 self.usage_unsent = true;
                 self.flush_usage();
@@ -698,6 +704,7 @@ impl App {
                     if !self.turn_open {
                         self.turn_open = true;
                         self.turn_started = Instant::now();
+                        self.tps = Tps::default();
                         self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
                     }
                 }
@@ -964,6 +971,7 @@ impl App {
         self.busy = true;
         self.turn_open = true;
         self.turn_started = Instant::now();
+        self.tps = Tps::default();
         self.verb = VERBS[rand::random::<u32>() as usize % VERBS.len()];
         // Snapshot the workspace first, so /undo can put back whatever the turn changes.
         match (&self.checkpoints, self.turns.iter().find(|t| !t.sent).map(|t| t.id)) {

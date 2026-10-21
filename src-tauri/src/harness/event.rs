@@ -147,6 +147,63 @@ impl TurnTokens {
     }
 }
 
+/// A turn's output speed in tokens per second, over the time tokens actually streamed in:
+/// gaps between counts longer than `IDLE` (tool runs, waiting on the next request's first
+/// token) don't count, so the rate is the model's, not the turn's.
+#[derive(Debug, Default)]
+pub struct Tps {
+    last: Option<(std::time::Instant, u64)>,
+    tokens: u64,
+    active: std::time::Duration,
+}
+
+impl Tps {
+    const IDLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+    /// The turn's output count (`Usage::turn`) at `at`.
+    pub fn sample(&mut self, at: std::time::Instant, turn: u64) {
+        if let Some((t, n)) = self.last {
+            let gap = at.saturating_duration_since(t);
+            if turn > n && gap <= Self::IDLE {
+                self.tokens += turn - n;
+                self.active += gap;
+            }
+        }
+        self.last = Some((at, turn));
+    }
+
+    /// Tokens per second, once there's enough streaming to tell.
+    pub fn rate(&self) -> Option<f64> {
+        (self.tokens > 0 && self.active >= std::time::Duration::from_millis(500)).then(|| self.tokens as f64 / self.active.as_secs_f64())
+    }
+}
+
+#[cfg(test)]
+mod tps_tests {
+    use super::Tps;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn counts_streaming_time_only() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut r = Tps::default();
+        r.sample(at(0), 0);
+        assert_eq!(r.rate(), None);
+        r.sample(at(500), 25);
+        r.sample(at(1000), 50);
+        assert_eq!(r.rate(), Some(50.0));
+        // A 10s tool run, then the next request streams: the gap isn't counted.
+        r.sample(at(11_000), 75);
+        r.sample(at(11_500), 100);
+        assert_eq!(r.rate(), Some(75.0 / 1.5));
+        // An exact count lower than the estimate just rebases.
+        r.sample(at(12_000), 90);
+        r.sample(at(12_500), 115);
+        assert_eq!(r.rate(), Some(100.0 / 2.0));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Todo {
     pub content: String,
