@@ -366,6 +366,14 @@ impl Bridge {
                     self.emit(Ev::Error(format!("couldn't reach Claude Code: {e}")));
                 }
             }
+            // Claude Code takes a user message that arrives mid-turn into the running turn (at its
+            // next step), so it's written as is: no new turn, no checkpoint of its own.
+            Cmd::Steer(msg) if self.busy => {
+                if let Err(e) = proc.write(&user_message(&msg)) {
+                    self.emit(Ev::Error(format!("couldn't reach Claude Code: {e}")));
+                }
+            }
+            Cmd::Steer(msg) => return self.on_cmd(Cmd::Send(msg), proc),
             Cmd::Interrupt => self.control(proc, json!({ "subtype": "interrupt" })),
             Cmd::Approve(id, decision) => {
                 let Some((input, suggestions)) = self.pending.remove(&id) else { return true };

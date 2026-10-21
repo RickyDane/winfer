@@ -49,11 +49,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .queue
         .iter()
         .take(3)
-        .map(|m| {
+        .enumerate()
+        .map(|(i, m)| {
+            // An empty prompt's enter sends them into the running turn.
+            let label = if i == 0 && app.busy && app.composer.is_empty() { "  queued · enter sends now" } else { "  queued" };
             Line::from(vec![
                 Span::styled("  ↳ ", theme::fg(theme::VIOLET())),
-                Span::styled(truncate(m.text.lines().next().unwrap_or(""), width.saturating_sub(16)), theme::muted()),
-                Span::styled("  queued", theme::dim()),
+                Span::styled(truncate(m.text.lines().next().unwrap_or(""), width.saturating_sub(16 + label.len())), theme::muted()),
+                Span::styled(label, theme::dim()),
             ])
         })
         .collect();
@@ -569,7 +572,7 @@ fn composer_lines(app: &App, width: usize, t: Duration) -> (Vec<Line<'static>>, 
     let prompt = if app.busy { theme::fg(theme::DIM()) } else { theme::bold(theme::nebula(0.45)) };
     let lead = |i: usize| if i == 0 && first == 0 { Span::styled(format!("{}❯ ", pad_str()), prompt) } else { Span::raw(" ".repeat(indent)) };
     if app.composer.is_empty() {
-        let hint = if app.busy { "queue a follow-up…" } else { "ask anything…" };
+        let hint = if app.busy { "steer the agent… (tab queues it for after)" } else { "ask anything…" };
         out.push(Line::from(vec![lead(0), Span::styled(truncate(hint, inner), theme::fg(theme::DIM()))]));
     } else {
         for (i, row) in shown.iter().enumerate() {

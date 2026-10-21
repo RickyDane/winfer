@@ -843,11 +843,21 @@ impl App {
 
     // ---- sending ----
 
+    /// Sends what's in the prompt. While the agent works it goes into the running turn (see
+    /// [`Self::steer`]); an empty prompt then sends the queued messages that way instead.
     pub fn submit(&mut self) {
+        self.submit_as(false);
+    }
+
+    /// `queue`: while the agent works, hold the message for after the turn instead of steering.
+    pub fn submit_as(&mut self, queue: bool) {
         let (text, shown, mut images) = self.composer.take();
         self.completion = None;
         let trimmed = text.trim();
         if trimmed.is_empty() && images.is_empty() {
+            if self.busy && !queue && !self.queue.is_empty() {
+                self.steer_queued();
+            }
             return;
         }
         self.config.push_history(shown.trim());
@@ -875,18 +885,56 @@ impl App {
             full = format!("{}\n\n{full}", std::mem::take(&mut self.shell_context).join("\n\n"));
         }
         self.items.push(Item::new(Block::User { text: shown.trim_end().to_string() }));
-        self.turns.push(Turn { id: self.next_turn, item: self.items.len() - 1, sent: false, checkpoint: false });
-        self.next_turn += 1;
+        // A steering message is part of the running turn, not one of its own.
+        let steer = self.busy && !queue;
+        if !steer {
+            self.turns.push(Turn { id: self.next_turn, item: self.items.len() - 1, sent: false, checkpoint: false });
+            self.next_turn += 1;
+        }
         if self.saved.title.is_empty() {
             self.saved.title = shown.lines().next().unwrap_or("").chars().take(80).collect();
         }
         self.scroll = 0;
         let msg = UserMsg { text: full, images, skill: skill.map(|(name, _)| name) };
-        if self.busy {
+        if steer {
+            self.steer(vec![msg]);
+        } else if self.busy {
             self.queue.push(msg);
         } else {
             self.dispatch(msg);
         }
+    }
+
+    /// Sends messages into the running turn: the model reads them at its next step, after the
+    /// tool calls in flight, instead of once the turn is over.
+    fn steer(&mut self, msgs: Vec<UserMsg>) {
+        let mut msgs = msgs.into_iter();
+        let Some(mut msg) = msgs.next() else { return };
+        for m in msgs {
+            msg.text = format!("{}\n\n{}", msg.text, m.text);
+            msg.images.extend(m.images);
+            msg.skill = None;
+        }
+        // The turn's first message still waits for its checkpoint: they go together.
+        if let Some((_, first)) = &mut self.starting {
+            first.text = format!("{}\n\n{}", first.text, msg.text);
+            first.images.extend(msg.images);
+            return;
+        }
+        self.send(Cmd::Steer(msg));
+    }
+
+    /// Sends the queued messages into the running turn now instead of after it.
+    pub fn steer_queued(&mut self) {
+        if self.queue.is_empty() {
+            return;
+        }
+        // Their turns become part of the running one (only queued turns are unsent while busy,
+        // besides the one waiting for its checkpoint).
+        let starting = self.starting.as_ref().map(|(id, _)| *id);
+        self.turns.retain(|t| t.sent || Some(t.id) == starting);
+        let msgs = std::mem::take(&mut self.queue);
+        self.steer(msgs);
     }
 
     /// `/name args` → (name, args) when `name` is one of the backend's skills and not a built-in
@@ -1212,12 +1260,12 @@ impl App {
             "/init" => {
                 let prompt = "Analyze this codebase and create an AGENTS.md file at the repository root with concise guidance for coding agents: what the project is, how it's laid out, how to build, run, test and lint it, code style and conventions, and anything non-obvious. If one exists, improve it instead.";
                 self.composer.set(prompt);
-                self.submit();
+                self.submit_as(true);
             }
             "/review" => {
                 let prompt = "Review the uncommitted changes in this repository (git diff, including staged). Look for bugs, regressions, missing edge cases and unclear code. Report findings ranked by severity with file:line references. Don't change any files.";
                 self.composer.set(prompt);
-                self.submit();
+                self.submit_as(true);
             }
             "/diff" => self.diff(),
             "/cost" | "/usage" => self.cost(),
@@ -2298,6 +2346,8 @@ impl App {
             }
             KeyCode::BackTab => self.set_mode(self.config.mode.next()),
             KeyCode::Tab if shift => self.set_mode(self.config.mode.next()),
+            // While the agent works: hold the message for after the turn instead of steering.
+            KeyCode::Tab if self.busy && !self.composer.is_empty() => self.submit_as(true),
             KeyCode::Char('o') if ctrl => self.toggle_expanded(),
             KeyCode::Char('p') if ctrl => self.open_palette(),
             KeyCode::Char('t') if ctrl => self.open_models(),
@@ -2679,6 +2729,46 @@ mod tests {
         assert!(!a.busy && a.starting.is_none() && a.turns.len() == 1);
         // Its late answer is ignored.
         a.on_checkpoint(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        assert_eq!(a.turns.len(), 1);
+    }
+
+    #[test]
+    fn enter_steers_the_running_turn_and_tab_queues() {
+        let mut a = app();
+        a.alive = true;
+        a.composer.set("fix the parser");
+        a.submit();
+        assert!(a.busy && a.turns.len() == 1);
+
+        // Enter while it works: into the running turn, shown, no turn of its own.
+        a.composer.set("use the new lexer");
+        key(&mut a, KeyCode::Enter);
+        assert!(a.queue.is_empty() && a.turns.len() == 1);
+        assert!(matches!(&a.items.last().unwrap().block, Block::User { text } if text == "use the new lexer"));
+
+        // Tab holds it for after the turn.
+        a.composer.set("then run the tests");
+        key(&mut a, KeyCode::Tab);
+        a.composer.set("and commit");
+        key(&mut a, KeyCode::Tab);
+        assert_eq!((a.queue.len(), a.turns.len()), (2, 3));
+
+        // Enter on an empty prompt sends the queued ones now; their turns join the running one.
+        key(&mut a, KeyCode::Enter);
+        assert!(a.queue.is_empty() && a.turns.len() == 1 && a.busy);
+    }
+
+    #[test]
+    fn steering_before_the_snapshot_joins_the_first_message() {
+        let mut a = app();
+        a.alive = true;
+        a.checkpoints = Some(checkpoint::Worker::start(PathBuf::from("/nonexistent-winfer-dir"), std::env::temp_dir(), "t".into(), |_| {}));
+        a.composer.set("go");
+        a.submit();
+        a.composer.set("and hurry");
+        a.submit();
+        let (_, msg) = a.starting.as_ref().unwrap();
+        assert_eq!(msg.text, "go\n\nand hurry");
         assert_eq!(a.turns.len(), 1);
     }
 

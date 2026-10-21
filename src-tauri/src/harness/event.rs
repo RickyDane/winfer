@@ -180,6 +180,9 @@ pub struct UserMsg {
 #[derive(Debug)]
 pub enum Cmd {
     Send(UserMsg),
+    /// A message for the running turn: the model gets it at its next step (after the tool calls
+    /// in flight) instead of after the turn. Without a running turn it's a [`Cmd::Send`].
+    Steer(UserMsg),
     Interrupt,
     Approve(String, Decision),
     /// Answers to an approval's questions, one per question in order.

@@ -59,6 +59,8 @@ enum Pending {
     StopShells { ids: Vec<String>, all: bool },
     /// `thread/revert` for /undo; whether to revert the turn's file changes too.
     Revert { files: bool },
+    /// `turn/steer`: the message, to start a turn with if the one it was for already ended.
+    Steer(UserMsg),
     Ignore,
 }
 
@@ -206,6 +208,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         if matches!(kind, Some(Pending::Turn)) {
                             b.emit(Ev::Error(format!("Codex: {message}")));
                             b.emit(Ev::TurnDone);
+                        } else if let Some(Pending::Steer(msg)) = kind {
+                            // The turn ended (or can't be steered) meanwhile: the message gets its own.
+                            b.emit(Ev::TurnStart);
+                            b.start_turn(msg);
                         } else if let Some(Pending::StopShells { ids, all: false }) = kind {
                             // Its process id didn't work: clean the thread's terminals instead.
                             b.clean_shells(ids);
@@ -285,6 +291,19 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         b.queued.push(msg);
                     }
                 }
+                Cmd::Steer(msg) => match (b.thread.clone(), b.turn.clone()) {
+                    (Some(thread), Some(turn)) => {
+                        let input = b.input(&msg);
+                        b.request("turn/steer", json!({ "threadId": thread, "expectedTurnId": turn, "input": input }), Pending::Steer(msg));
+                    }
+                    _ => {
+                        b.emit(Ev::TurnStart);
+                        match b.thread {
+                            Some(_) => b.start_turn(msg),
+                            None => b.queued.push(msg),
+                        }
+                    }
+                },
                 Cmd::Interrupt => {
                     if let (Some(thread), Some(turn)) = (b.thread.clone(), b.turn.clone()) {
                         b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore);
@@ -371,17 +390,7 @@ impl Bridge {
     fn start_turn(&mut self, msg: UserMsg) {
         let Some(thread) = self.thread.clone() else { return };
         self.turns.push(UserTurn::default());
-        // An explicit skill goes as Codex's own skill input (what `$name` does in its TUI), so
-        // the model gets the SKILL.md itself instead of finding and reading it.
-        let (text, skill) = match &msg.skill {
-            Some(name) => (format!("${name} {}", msg.text).trim_end().to_string(), self.skills.get(name).map(|path| json!({ "type": "skill", "name": name, "path": path }))),
-            None => (msg.text.clone(), None),
-        };
-        let mut input = vec![json!({ "type": "text", "text": text, "text_elements": [] })];
-        input.extend(skill);
-        for path in &msg.images {
-            input.push(json!({ "type": "localImage", "path": path }));
-        }
+        let input = self.input(&msg);
         let mut params = json!({
             "threadId": thread,
             "input": input,
@@ -402,6 +411,22 @@ impl Bridge {
             params["effort"] = json!(e);
         }
         self.request("turn/start", params, Pending::Turn);
+    }
+
+    /// A message as Codex's `UserInput` list. An explicit skill goes as Codex's own skill input
+    /// (what `$name` does in its TUI), so the model gets the SKILL.md itself instead of finding
+    /// and reading it.
+    fn input(&self, msg: &UserMsg) -> Vec<Value> {
+        let (text, skill) = match &msg.skill {
+            Some(name) => (format!("${name} {}", msg.text).trim_end().to_string(), self.skills.get(name).map(|path| json!({ "type": "skill", "name": name, "path": path }))),
+            None => (msg.text.clone(), None),
+        };
+        let mut input = vec![json!({ "type": "text", "text": text, "text_elements": [] })];
+        input.extend(skill);
+        for path in &msg.images {
+            input.push(json!({ "type": "localImage", "path": path }));
+        }
+        input
     }
 
     /// Drops the last user turn from the thread (`thread/revert`, which leaves files alone);

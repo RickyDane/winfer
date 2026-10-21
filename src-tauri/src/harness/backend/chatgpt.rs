@@ -118,6 +118,8 @@ struct Shared {
     next_agent: AtomicU64,
     /// Reports of background subagents not yet seen by the main conversation.
     notes: Mutex<Vec<String>>,
+    /// Messages the user sent into the running turn, for its next step.
+    steer: Mutex<Vec<UserMsg>>,
     /// Owner of this backend's `bg` tasks (a backend started after it has its own).
     bg_owner: String,
 }
@@ -191,6 +193,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         agents: Mutex::new(HashMap::new()),
         next_agent: AtomicU64::new(0),
         notes: Mutex::new(Vec::new()),
+        steer: Mutex::new(Vec::new()),
         bg_owner: format!("code-{}", new_id()),
     });
     let _ = events.send(Ev::Session(session));
@@ -238,6 +241,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             if queue.is_empty() && !shared.notes.lock().unwrap().is_empty() {
                 queue.push(Job::Notes);
             }
+            // Steering that came as the turn ended: its own turn.
+            for m in std::mem::take(&mut *shared.steer.lock().unwrap()) {
+                queue.push(Job::Turn(m));
+            }
             if !queue.is_empty() {
                 let job = queue.remove(0);
                 shared.stop.store(false, Ordering::Relaxed);
@@ -264,9 +271,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         let In::Cmd(cmd) = msg else { continue };
         match cmd {
             Cmd::Send(m) => queue.push(Job::Turn(m)),
+            Cmd::Steer(m) if worker.as_ref().is_some_and(|w| !w.is_finished()) => shared.steer.lock().unwrap().push(m),
+            Cmd::Steer(m) => queue.push(Job::Turn(m)),
             Cmd::Compact => queue.push(Job::Compact),
             Cmd::Interrupt => {
                 queue.clear();
+                shared.steer.lock().unwrap().clear();
                 shared.stop.store(true, Ordering::Relaxed);
                 // The UI drops open approvals on interrupt, background subagents' too.
                 let mut decisions = shared.decisions.lock().unwrap();
@@ -666,11 +676,13 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         steps += 1;
         // Reports of background subagents that finished meanwhile.
         let notes = std::mem::take(&mut *shared.notes.lock().unwrap());
+        let steer = take_steer(shared);
         if !notes.is_empty() {
             shared.state.lock().unwrap().items.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": notes.join("\n\n") }] }));
-        } else if msg.is_none() && steps == 1 {
+        } else if msg.is_none() && steps == 1 && steer.is_empty() {
             break;
         }
+        shared.state.lock().unwrap().items.extend(steer);
         if steps > 1 {
             let mut st = shared.state.lock().unwrap();
             if st.cache == Some(false) && trim_stale(&mut st.items, KEEP_RECENT_OUTPUTS) > 0 {
@@ -687,7 +699,9 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         };
         let calls: Vec<Value> = out.iter().filter(|i| i["type"] == "function_call").cloned().collect();
         shared.state.lock().unwrap().items.extend(out);
-        if calls.is_empty() || steps > 200 {
+        // A message the user sent meanwhile gets an answer in this turn, even after a final reply.
+        let steered = !shared.steer.lock().unwrap().is_empty() && !shared.stop.load(Ordering::Relaxed);
+        if (calls.is_empty() && !steered) || steps > 200 {
             break;
         }
         run_calls(shared, &calls, None);
@@ -700,6 +714,11 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         save_items(&shared.session, &st.items);
     }
     emit(Ev::TurnDone);
+}
+
+/// The user's messages for the running turn, as conversation items.
+fn take_steer(shared: &Shared) -> Vec<Value> {
+    std::mem::take(&mut *shared.steer.lock().unwrap()).iter().map(user_item).collect()
 }
 
 /// Runs a response's tool calls for the main conversation or `sub`, and adds their outputs to
@@ -1280,6 +1299,7 @@ mod tests {
             agents: Mutex::new(HashMap::new()),
             next_agent: AtomicU64::new(0),
             notes: Mutex::new(Vec::new()),
+        steer: Mutex::new(Vec::new()),
             bg_owner: String::new(),
         });
         (shared, rx, dir)
