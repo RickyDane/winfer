@@ -356,6 +356,18 @@ impl Instance {
                 return;
             }
             proxy::Activity::Acted(target) => target,
+            // Not throttled: each navigation brings its tab on screen.
+            proxy::Activity::Navigated(target) => {
+                let _ = self.app.emit(
+                    "browser://agent-navigate",
+                    AgentEvent {
+                        workspace_id: self.workspace_id.clone(),
+                        target_id: target.to_string(),
+                        adopted: !self.agent_opened.lock().unwrap().contains(target),
+                    },
+                );
+                return;
+            }
             // Not throttled: the cursor follows every move and click.
             proxy::Activity::Pointer(target, pointer) => {
                 if self.tabs.lock().unwrap().iter().any(|t| t.id == target) {

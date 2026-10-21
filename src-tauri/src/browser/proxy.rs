@@ -21,6 +21,8 @@ pub enum Activity<'a> {
     Opened(&'a str),
     /// It acted on the tab.
     Acted(&'a str),
+    /// It navigated the tab to a page (so the panel shows it).
+    Navigated(&'a str),
     /// It moved, pressed or released the mouse in the tab (so the panel can draw its cursor).
     Pointer(&'a str, Pointer),
 }
@@ -203,6 +205,9 @@ async fn websocket(stream: TcpStream, browser: u16, on_activity: OnActivity) -> 
                     let target = tracker.lock().unwrap().command(text);
                     if let Some(target) = target {
                         on_activity(Activity::Acted(&target));
+                        if text.contains("\"Page.navigate\"") {
+                            on_activity(Activity::Navigated(&target));
+                        }
                         if let Some(pointer) = Pointer::of(text) {
                             on_activity(Activity::Pointer(&target, pointer));
                         }

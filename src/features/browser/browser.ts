@@ -176,6 +176,12 @@ function listenForTabs() {
   void listen<{ workspaceId: string; targetId: string; adopted: boolean }>("browser://agent", ({ payload }) =>
     markAgentTab(payload.targetId, payload.workspaceId, payload.adopted),
   );
+  // An agent navigated a tab: open the panel and show that tab.
+  void listen<{ workspaceId: string; targetId: string }>("browser://agent-navigate", ({ payload }) => {
+    const ws = useWorkspaces.getState();
+    if (!ws.browserOpen) ws.toggleBrowser();
+    selectTab(payload.targetId, payload.workspaceId);
+  });
   void listen<{ targetId: string; width: number; height: number }>("browser://viewport", ({ payload }) => setPageSize(payload.targetId, payload));
   void listen<{ targetId: string; entry: ConsoleEntry }>("browser://console", ({ payload }) =>
     useBrowser.setState((s) => ({ console: { ...s.console, [payload.targetId]: [...(s.console[payload.targetId] ?? []), payload.entry].slice(-200) } })),
