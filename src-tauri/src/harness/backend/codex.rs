@@ -80,6 +80,7 @@ struct Bridge {
     turn: Option<String>,
     queued: Vec<UserMsg>,
     mode: Mode,
+    bg_owner: String,
     model: Option<String>,
     effort: Option<String>,
     /// Whether we put the thread on Codex's fast tier, so a later non-fast model turns it back.
@@ -151,6 +152,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         turn: None,
         queued: Vec::new(),
         mode: opts.mode,
+        bg_owner: opts.bg_owner.clone(),
         model: Some(opts.model.clone()).filter(|m| !m.is_empty()),
         effort: opts.effort.clone(),
         fast: false,
@@ -169,6 +171,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         background: HashSet::new(),
         processes: HashMap::new(),
     };
+    crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": { "experimentalApi": true } }), Pending::Init);
     let mut thread_params = json!({
         "cwd": cwd,
@@ -299,7 +302,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 Cmd::Answer(..) => {}
                 Cmd::SetModel(m) => b.model = Some(m),
                 Cmd::SetEffort(e) => b.effort = e,
-                Cmd::SetMode(m) => b.mode = m,
+                Cmd::SetMode(m) => {
+                    b.mode = m;
+                    crate::harness::bg::set_mode(&b.bg_owner, m);
+                }
                 Cmd::Compact => {
                     if let Some(thread) = b.thread.clone() {
                         b.emit(Ev::TurnStart);
@@ -1218,6 +1224,7 @@ mod tests {
             turn: Some("t0".into()),
             queued: Vec::new(),
             mode: Mode::Ask,
+            bg_owner: String::new(),
             model: None,
             effort: None,
             fast: false,

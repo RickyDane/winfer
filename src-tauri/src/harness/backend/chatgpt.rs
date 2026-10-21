@@ -1018,11 +1018,12 @@ fn over(usage: &Usage, percent: u8) -> bool {
     percent > 0 && usage.window > 0 && usage.context * 100 > usage.window * percent as u64
 }
 
-/// Calls that can run alongside others: read-only tools and subagents.
+/// Calls that can run alongside others: read-only tools, subagents and `bg` (its tasks are
+/// separate processes, and a start waiting for its marker shouldn't hold up the next one).
 fn parallel(call: &Value) -> bool {
     match call["name"].as_str().unwrap_or("") {
         "mcp" => false,
-        "agent" => true,
+        "agent" | "bg" => true,
         name => {
             let args: Value = serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(Value::Null);
             tools::risk(name, &args) == Risk::Read
@@ -1347,7 +1348,7 @@ mod tests {
     #[test]
     fn bg_asks_only_to_start_something() {
         let (shared, rx, dir) = shared(Mode::Ask);
-        assert!(parallel(&call("1", "bg", json!({ "action": "read", "id": "bg1" }))) && !parallel(&call("2", "bg", json!({ "action": "start", "cmd": "x" }))));
+        assert!(parallel(&call("1", "bg", json!({ "action": "read", "id": "bg1" }))) && parallel(&call("2", "bg", json!({ "action": "start", "cmd": "x" }))));
         let out = run_call(&shared, &call("r1", "bg", json!({ "action": "list" })), None);
         assert!(!rx.try_iter().any(|e| matches!(e, Ev::Approval(_))), "{out}");
         let _ = std::fs::remove_dir_all(dir);

@@ -98,6 +98,8 @@ pub struct Opts {
     pub lean: bool,
     /// The skills Claude Code loads in lean mode.
     pub skills: crate::harness::claude_skills::LeanSkills,
+    /// Who the CLI's `bg` tasks belong to (set by [`start`]); the backend tells `bg` its mode.
+    pub bg_owner: String,
 }
 
 /// The system prompt for Claude Code in lean mode: the essentials of its long default (which runs
@@ -162,6 +164,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
             let owner = format!("code-{:016x}", rand::random::<u64>());
             if crate::harness::tools::bg_enabled() {
                 crate::harness::bg::route_mcp(&mut opts.mcp, &owner);
+                opts.bg_owner = owner.clone();
                 let sink = events.clone();
                 let mine = owner.clone();
                 crate::harness::bg::listen(move |u| {

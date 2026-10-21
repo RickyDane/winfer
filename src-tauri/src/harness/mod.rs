@@ -291,6 +291,7 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
             compact_at: cfg.compact_at,
             lean: cfg.lean_bridges && !full_prompt,
             skills: cfg.lean_skills(),
+            bg_owner: String::new(),
         },
         tx,
     );

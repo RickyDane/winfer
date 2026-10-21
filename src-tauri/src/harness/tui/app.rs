@@ -375,6 +375,7 @@ impl App {
             compact_at: self.config.compact_at,
             lean: self.config.lean_bridges && !crate::harness::LEAN_OFF.load(std::sync::atomic::Ordering::Relaxed),
             skills: self.config.lean_skills(),
+            bg_owner: String::new(),
         };
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.alive = true;

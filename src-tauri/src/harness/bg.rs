@@ -70,11 +70,18 @@ fn emit(update: Update) {
 /// The `bg` tool's description (winfer code's tool and winfer's MCP server share it).
 pub const DESCRIPTION: &str = "Long-running process (server, watch, loop), not bash &: start→id; read new output (wait ms, until a|b); stop; list. Exits are reported to you.";
 
-/// `bg` as an MCP tool (winfer's MCP server).
-pub fn mcp_tool() -> Value {
+/// `bg` as an MCP tool (winfer's MCP server). Claude Code runs an MCP tool alongside others only
+/// when it's marked read-only; without the hint, side-by-side starts (each possibly waiting for
+/// its marker) run one after another. `read_only` is for winfer code's own `bg` server, which
+/// guards what the hint gives away: starts still ask (winfer code answers Claude Code's
+/// permission requests by the action, see `claude.rs`) and plan modes refuse them
+/// ([`set_mode`]). Agents the app runs directly get no hint, so Claude Code's plan mode keeps
+/// asking before a start.
+pub fn mcp_tool(read_only: bool) -> Value {
     serde_json::json!({
         "name": "bg",
         "description": DESCRIPTION,
+        "annotations": { "readOnlyHint": read_only },
         "inputSchema": { "type": "object", "properties": {
             "action": { "enum": ["start", "read", "stop", "list"] },
             "cmd": { "type": "string", "description": "start: the shell command" },
@@ -267,7 +274,28 @@ fn owns(id: &str, owner: &str) -> bool {
     tasks().lock().unwrap().get(id).is_some_and(|t| t.owner == owner)
 }
 
+fn read_only_owners() -> &'static Mutex<std::collections::HashSet<String>> {
+    static R: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    R.get_or_init(Mutex::default)
+}
+
+/// Tells `bg` the mode of `owner`'s agent: in plan modes nothing new may start. Claude Code lets
+/// read-only tools through in plan mode without asking, and `bg` is marked read-only (see
+/// [`mcp_tool`]), so the start is refused here instead.
+pub fn set_mode(owner: &str, mode: super::event::Mode) {
+    use super::event::Mode;
+    let mut all = read_only_owners().lock().unwrap();
+    if matches!(mode, Mode::Plan | Mode::YoloPlan) {
+        all.insert(owner.to_string());
+    } else {
+        all.remove(owner);
+    }
+}
+
 fn start(cmd: &str, cwd: &Path, args: &Value, stop: &AtomicBool, call_id: &str, owner: &str) -> Outcome {
+    if read_only_owners().lock().unwrap().contains(owner) {
+        return Outcome::err("plan mode is on: bg can't start anything now. Describe the command in the plan instead.");
+    }
     let id = format!("bg{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let dir = std::env::temp_dir().join(format!("winfer-bg-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
@@ -425,6 +453,7 @@ pub fn stop(id: &str) -> bool {
 
 /// Stops `owner`'s tasks, e.g. when their pane closes.
 pub fn stop_owner(owner: &str) {
+    read_only_owners().lock().unwrap().remove(owner);
     let ids: Vec<String> = tasks().lock().unwrap().iter().filter(|(_, t)| t.owner == owner).map(|(id, _)| id.clone()).collect();
     for id in ids {
         let _ = stop_task(&id, false);
@@ -451,6 +480,23 @@ mod tests {
 
     fn id_of(out: &Outcome) -> String {
         out.output.split_whitespace().nth(1).unwrap().to_string()
+    }
+
+    #[test]
+    fn plan_modes_refuse_starts() {
+        use super::super::event::Mode;
+        let start = || run(&json!({ "action": "start", "cmd": "true" }), &std::env::temp_dir(), &AtomicBool::new(false), "c", "code-plan");
+        set_mode("code-plan", Mode::Plan);
+        let out = start();
+        assert!(!out.ok && out.output.contains("plan mode"), "{}", out.output);
+        set_mode("code-plan", Mode::YoloPlan);
+        assert!(!start().ok);
+        // Reading and listing still work, and leaving plan mode allows starts again.
+        assert!(run(&json!({ "action": "list" }), &std::env::temp_dir(), &AtomicBool::new(false), "c", "code-plan").ok);
+        set_mode("code-plan", Mode::Ask);
+        let out = start();
+        assert!(out.ok, "{}", out.output);
+        stop_owner("code-plan");
     }
 
     #[cfg(unix)]

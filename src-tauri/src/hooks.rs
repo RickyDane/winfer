@@ -500,6 +500,25 @@ mod tests {
         assert!(read.contains("tick") && !read.contains("building"), "{read}");
         let stop = text(&rpc(5, "tools/call", json!({ "name": "bg", "arguments": { "action": "stop", "id": id } })));
         assert!(stop.contains("stopped"), "{stop}");
+        drop(rpc);
+        // Calls sent side by side run side by side: a quick start isn't stuck behind a slow one.
+        for (id, cmd) in [(6, "sleep 3; echo slow-ready; sleep 30"), (7, "echo fast-ready; sleep 30")] {
+            writeln!(stdin, "{}", json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": "bg", "arguments": { "action": "start", "cmd": cmd, "until": "ready" } } })).unwrap();
+        }
+        let begun = std::time::Instant::now();
+        let mut replies = Vec::new();
+        for _ in 0..2 {
+            let mut line = String::new();
+            stdout.read_line(&mut line).unwrap();
+            replies.push((serde_json::from_str::<Value>(&line).unwrap(), begun.elapsed()));
+        }
+        assert_eq!(replies[0].0["id"], 7, "the quick start should answer first");
+        assert!(replies[0].1 < std::time::Duration::from_secs(2), "{:?}", replies[0].1);
+        assert_eq!(replies[1].0["id"], 6);
+        for (reply, _) in &replies {
+            let id = text(reply).split_whitespace().nth(1).unwrap().to_string();
+            crate::harness::bg::stop(&id);
+        }
         drop(stdin);
         let _ = child.wait();
         println!("mcp-stdio bg: ok");

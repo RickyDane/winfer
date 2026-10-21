@@ -99,7 +99,7 @@ fn tools() -> Value {
                 "cancel": { "type": "boolean", "description": "Cancel your pending wake-up instead" }
             } }
         },
-        crate::harness::bg::mcp_tool()
+        crate::harness::bg::mcp_tool(code_bg().is_some())
     ])
 }
 
@@ -225,7 +225,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
         }),
         "ping" => json!({}),
         // Outside the app (winfer code on its own) only winfer code's `bg` works.
-        "tools/list" if env.0.is_empty() => json!({ "tools": if code_bg().is_some() { vec![crate::harness::bg::mcp_tool()] } else { Vec::new() } }),
+        "tools/list" if env.0.is_empty() => json!({ "tools": if code_bg().is_some() { vec![crate::harness::bg::mcp_tool(true)] } else { Vec::new() } }),
         "tools/list" => json!({ "tools": all_tools(env) }),
         "tools/call" if message["params"]["name"] == "bg" && code_bg().is_some() => {
             let cwd = std::env::current_dir().unwrap_or_default();
@@ -270,17 +270,27 @@ pub fn run_stdio() {
         var("WINFER_TOKEN"),
         var("WINFER_PANE_ID"),
     );
-    let hidden = hidden_tools();
-    let stdout = std::io::stdout();
+    let shared = std::sync::Arc::new((env, hidden_tools()));
+    let respond = |message: &Value, shared: &(_, Vec<String>)| {
+        if let Some(mut response) = handle(message, &shared.0) {
+            hide_tools(&mut response, &shared.1);
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{response}");
+            let _ = out.flush();
+        }
+    };
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(mut response) = handle(&message, &env) {
-            hide_tools(&mut response, &hidden);
-            let mut out = stdout.lock();
-            let _ = writeln!(out, "{response}");
-            let _ = out.flush();
+        // Tool calls can take minutes (`bg` waiting for a marker, an approval dialog): each runs
+        // on its own thread so calls the agent makes side by side don't queue behind one another.
+        // Replies carry their request's id, so they may come back in any order.
+        if message["method"] == "tools/call" {
+            let shared = shared.clone();
+            std::thread::spawn(move || respond(&message, &shared));
+        } else {
+            respond(&message, &shared);
         }
     }
 }

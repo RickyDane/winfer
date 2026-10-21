@@ -202,6 +202,7 @@ struct Bridge {
     plan: Plan,
     /// The permission mode as winfer sees it (Claude Code only knows "plan" for yolo-plan).
     mode: Mode,
+    bg_owner: String,
 }
 
 struct Checkpoint {
@@ -298,7 +299,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         outbox: Vec::new(),
         plan: Plan::default(),
         mode: opts.mode,
+        bg_owner: opts.bg_owner.clone(),
     };
+    crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     while let Some(msg) = super::recv(&rx) {
         match msg {
             In::Line(line) => {
@@ -387,6 +390,7 @@ impl Bridge {
             Cmd::SetModel(model) => self.control(proc, json!({ "subtype": "set_model", "model": model })),
             Cmd::SetMode(mode) => {
                 self.mode = mode;
+                crate::harness::bg::set_mode(&self.bg_owner, mode);
                 self.control(proc, json!({ "subtype": "set_permission_mode", "mode": permission_mode(mode) }));
             }
             // Live: Claude Code applies `effortLevel` from flag settings to the running session (as
@@ -466,6 +470,7 @@ impl Bridge {
                     if let Some(m) = v["permissionMode"].as_str().and_then(mode_of) {
                         if permission_mode(m) != permission_mode(self.mode) {
                             self.mode = m;
+                            crate::harness::bg::set_mode(&self.bg_owner, m);
                             self.emit(Ev::Mode(m));
                         }
                     }
@@ -915,6 +920,7 @@ mod tests {
             outbox: Vec::new(),
             plan: Plan::default(),
             mode: Mode::Ask,
+            bg_owner: String::new(),
         };
         (b, rx)
     }
@@ -934,6 +940,7 @@ mod tests {
             compact_at: 85,
             lean,
             skills,
+            bg_owner: String::new(),
         };
         let has = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
         let lean = args(&opts(true, LeanSkills::Only(Vec::new())));
