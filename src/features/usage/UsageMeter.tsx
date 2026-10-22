@@ -446,8 +446,8 @@ const PART_COLORS: Record<string, string> = {
 
 const CONTEXT_CARD_WIDTH = 280;
 
-/** Pane header: how full the agent's context window is, as a short bar and a percentage; hovering shows what fills it. */
-export function ContextMeter({ paneId, provider }: { paneId: string; provider: string }) {
+/** Pane header: how full the agent's context window is, as a short bar (or a ring) and a percentage; hovering shows what fills it. */
+export function ContextMeter({ paneId, provider, ring }: { paneId: string; provider: string; ring?: boolean }) {
   const context = useUsage((s) => s.context[paneId]);
   const [hover, setHover] = useState<{ left: number; top: number } | null>(null);
   // The breakdown and the reading it belongs to.
@@ -484,12 +484,30 @@ export function ContextMeter({ paneId, provider }: { paneId: string; provider: s
 
   return (
     <span ref={anchor} className="flex shrink-0 items-center gap-1" onMouseEnter={enter} onMouseLeave={leave}>
-      <span className="h-1 w-8 overflow-hidden rounded-full bg-hover">
-        <span
-          className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out"
-          style={{ width: `${Math.max(used, 3)}%`, background: contextColor(used) }}
-        />
-      </span>
+      {ring ? (
+        <svg viewBox="0 0 16 16" className="size-3.5 -rotate-90">
+          <circle cx="8" cy="8" r="6" fill="none" strokeWidth="2.5" className="stroke-white/15" />
+          <circle
+            cx="8"
+            cy="8"
+            r="6"
+            fill="none"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            pathLength={100}
+            strokeDasharray={`${Math.max(used, 3)} 100`}
+            className="transition-[stroke-dasharray,stroke] duration-700 ease-out"
+            style={{ stroke: contextColor(used) }}
+          />
+        </svg>
+      ) : (
+        <span className="h-1 w-8 overflow-hidden rounded-full bg-hover">
+          <span
+            className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out"
+            style={{ width: `${Math.max(used, 3)}%`, background: contextColor(used) }}
+          />
+        </span>
+      )}
       <span className="hidden font-mono text-[10px] @[15rem]:inline" style={{ color: used >= 60 ? contextColor(used) : "var(--color-fg-subtle)" }}>
         {Math.round(used)}%
       </span>

@@ -13,6 +13,7 @@ import type { Pane } from "@/stores/workspaces";
 import { StatusDot } from "./StatusDot";
 import { PaneMenu } from "./PaneMenu";
 import { PaneTitleInput } from "./PaneTitleInput";
+import { displayModelName } from "@/lib/modelName";
 
 const stop = (e: React.MouseEvent) => e.stopPropagation();
 
@@ -68,8 +69,27 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
       )}
     >
       {showProgress && progress && (
-        <span title={progressLabel(progress)} className="absolute inset-x-3 -bottom-px overflow-hidden rounded-full">
-          <ProgressBar progress={progress} status={pane.status} className="h-0.5 rounded-none bg-transparent" />
+        <span title={progressLabel(progress)} className="absolute inset-x-0 -bottom-px">
+          {/* Clipped to the header's rounded shape so the bar runs edge to edge along the bottom border. */}
+          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-12 overflow-hidden rounded-b-xl">
+            <ProgressBar progress={progress} status={pane.status} className="absolute inset-x-0 bottom-0 h-0.5 rounded-none bg-transparent" />
+          </span>
+          {/* The percentage rides the end of the fill, so the bar carries its own number. */}
+          {progress.percent != null && (
+            <span
+              className={cn(
+                "absolute top-1/2 -translate-y-1/2 rounded-full border bg-panel px-1 font-mono text-[9px] leading-[13px] transition-[left] duration-700 ease-out",
+                pane.status === "done" || progress.percent === 100
+                  ? "border-success/40 text-success"
+                  : needs
+                    ? "border-warning/40 text-warning"
+                    : "border-accent/40 text-accent",
+              )}
+              style={{ left: `clamp(12px, calc(${Math.max(progress.percent, 2)}% - 16px), calc(100% - 44px))` }}
+            >
+              {progress.percent}%
+            </span>
+          )}
         </span>
       )}
       <div className="flex min-w-0 items-center gap-2.5">
@@ -97,14 +117,23 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
         )}
         {/* Narrow panes keep a single row: the context reading moves up next to the title. */}
         <span className="@[300px]:hidden">
-          <ContextMeter paneId={pane.id} provider={pane.provider} />
+          <ContextMeter paneId={pane.id} provider={pane.provider} ring />
         </span>
         {pane.devUrl && (
-          <button onMouseDown={stop} onClick={() => execute({ type: "browser.open", url: pane.devUrl! })} title={`Open ${pane.devUrl} in the browser panel`} className="shrink-0">
+          <button
+            onMouseDown={stop}
+            onClick={() => execute({ type: "browser.open", url: pane.devUrl! })}
+            aria-label={`Open ${pane.devUrl} in the browser panel`}
+            className="group/launch relative shrink-0"
+          >
             <Pill className="border-accent/30 bg-accent/15 text-[11px] text-accent hover:bg-accent/25">
               Launch
               <ExternalLink size={10} />
             </Pill>
+            {/* The URL itself, shown right away on hover (native titles take a second and are easy to miss). */}
+            <span className="pointer-events-none absolute top-full right-0 z-50 mt-1.5 max-w-80 truncate rounded-md border border-border-strong bg-panel-raised px-2 py-1 font-mono text-[11px] whitespace-nowrap text-fg opacity-0 shadow-lg transition-opacity delay-150 group-hover/launch:opacity-100">
+              {pane.devUrl}
+            </span>
           </button>
         )}
         <div className={cn("flex shrink-0 items-center transition-opacity group-hover/header:opacity-100", focused ? "opacity-100" : "opacity-55")}>
@@ -144,7 +173,7 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
         </div>
       </div>
 
-      <div className="hidden min-w-0 items-center gap-1.5 overflow-hidden pl-[46px] text-[11px] text-fg-muted @[300px]:flex">
+      <div className="hidden min-w-0 items-center gap-1.5 overflow-hidden pl-5 text-[11px] text-fg-muted @[300px]:flex">
         {workspaceName && (
           <Pill className="max-w-32 bg-white/15 font-medium text-fg" title={`Workspace ${workspaceName}`}>
             {workspaceName}
@@ -176,17 +205,16 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
                   onFocus();
                   execute({ type: "ui.overlay", overlay: "model" });
                 }}
-                title="Model · click to change"
+                title={`${pane.model} · click to change`}
               >
-                <Pill className="max-w-28 hover:bg-white/15 hover:text-fg">{pane.model}</Pill>
+                <Pill className="max-w-28 hover:bg-white/15 hover:text-fg">{displayModelName(pane.model)}</Pill>
               </button>
             )}
           </>
         )}
         <span className="flex-1" />
-        {showProgress && progress && <span className="shrink-0 font-mono text-fg-subtle">{progress.percent}%</span>}
         <PaneCost pane={pane} />
-        <ContextMeter paneId={pane.id} provider={pane.provider} />
+        <ContextMeter paneId={pane.id} provider={pane.provider} ring />
       </div>
     </header>
   );

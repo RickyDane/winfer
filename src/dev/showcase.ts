@@ -7,6 +7,13 @@
 
 export const SHOWCASE = new URLSearchParams(location.search).get("showcase");
 
+/** Model each provider's panes report, so the header shows realistic model pills. */
+const SHOWCASE_MODELS: Record<string, string> = {
+  claude: "claude-opus-4-7",
+  codex: "codex/gpt-6.1-sol-fast",
+  opencode: "anthropic/claude-sonnet-4-5-20250929",
+};
+
 /** Scenes that show a plugin page instead of the workspace, keyed by scene. */
 const PAGE_SCENES: Record<string, string> = {
   knowledge: "page:knowledge-base/galaxy",
@@ -183,7 +190,7 @@ export function showcaseState() {
         cwd: p.worktree?.path ?? `${ROOT}/${p.repo}`,
         worktree: p.worktree,
         raceId: null,
-        model: null,
+        model: SHOWCASE_MODELS[p.provider] ?? null,
         agentTitle: p.agentTitle,
       })),
     })),
