@@ -1,5 +1,5 @@
 /**
- * The LLM winfer thinks with (voice planner, prompt writer, progress estimates, review
+ * The LLM winfer thinks with (prompt writer, progress estimates, review
  * summaries): the user's ChatGPT plan through Sign in with ChatGPT, or their Codex or Claude Code
  * CLI run headless with its own login. Without a ChatGPT sign-in, Codex stands in for it.
  */

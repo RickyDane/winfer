@@ -10,9 +10,7 @@ import { toolContext } from "@/features/palette/entries";
 import { pluginAgentToolList } from "@/features/plugins/plugins";
 import { runVoiceTool } from "@/features/mcp/agentApi";
 import { hiddenToolsOf, useWorkspaces } from "@/stores/workspaces";
-import { allTools, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
-import { decisionCommands } from "../decision";
-import { validArgs } from "../planner";
+import { allTools, type Args, type ParamDef, type ToolContext, type ToolDef } from "@/tools/registry";
 
 export interface RealtimeTool {
   type: "function";
@@ -253,13 +251,56 @@ async function dispatch(name: string, args: Record<string, unknown>, onToolsChan
   if (tool) {
     if (destructive(tool) && args.confirmed !== true) return "Not done: ask the user to confirm this first, then call again with confirmed: true.";
     const ctx = toolContext();
-    const commands = decisionCommands({ tool, args: validArgs(tool, args, ctx) }, ctx);
+    const valid = validArgs(tool, args, ctx);
+    // "worktree" applies to the panes spawn_panes starts.
+    const commands = tool.toCommands(valid, ctx).map((c) => (c.type === "pane.spawn" && valid.worktree === true ? { ...c, worktree: true } : c));
     if (commands.length === 0) return "Nothing to do with those arguments.";
     commands.forEach(execute);
     return "Done.";
   }
   // Plugin agent tools (secrets, recorder, task board, …).
   return runVoiceTool(name, args);
+}
+
+/** Keeps only arguments the registry tool accepts, with values it allows. */
+export function validArgs(tool: ToolDef, raw: Record<string, unknown>, ctx: ToolContext): Args {
+  const args: Args = {};
+  for (const [name, param] of Object.entries(tool.params)) {
+    const value = raw[name];
+    switch (param.kind) {
+      case "enum": {
+        const options = Object.keys(param.options(ctx));
+        if (typeof value === "string" && options.includes(value)) args[name] = value;
+        else if (options.length === 1) args[name] = options[0];
+        break;
+      }
+      case "perOption": {
+        const options = Object.keys(param.options(ctx));
+        const given = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+        args[name] = Object.fromEntries(options.map((o) => [o, clampCount(given[o], param.max)]));
+        break;
+      }
+      case "count":
+        if (value !== undefined) args[name] = clampCount(value, param.max);
+        break;
+      case "bool":
+        if (typeof value === "boolean") args[name] = value;
+        break;
+      case "level":
+        if (typeof value === "string" && param.levels.includes(value)) args[name] = value;
+        break;
+      case "span":
+        if (typeof value === "string" && value.trim()) args[name] = value.trim();
+        break;
+    }
+  }
+  if (tool.id === "spawn_panes" && raw.worktree === true) args.worktree = true;
+  return args;
+}
+
+function clampCount(value: unknown, max: number): number {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : 0;
 }
 
 /** Forget loaded browser tools (session ended). */

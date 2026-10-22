@@ -139,11 +139,6 @@ jobs:
 
       - uses: ./.github/actions/sccache
 
-      # The Windows image has Visual Studio 2026, which whisper-rs-sys's CMake build only finds
-      # with CMake 4.2+.
-      - if: runner.os == 'Windows'
-        uses: lukka/get-cmake@v4.4.2
-
       - run: pnpm install --frozen-lockfile
 
       # Developer ID signing + notarization. tauri imports APPLE_CERTIFICATE into a temporary

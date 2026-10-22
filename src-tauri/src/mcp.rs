@@ -278,6 +278,7 @@ pub fn run_stdio() {
             let _ = out.flush();
         }
     };
+    let mut calls = Vec::new();
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
@@ -287,10 +288,15 @@ pub fn run_stdio() {
         // Replies carry their request's id, so they may come back in any order.
         if message["method"] == "tools/call" {
             let shared = shared.clone();
-            std::thread::spawn(move || respond(&message, &shared));
+            calls.push(std::thread::spawn(move || respond(&message, &shared)));
+            calls.retain(|c| !c.is_finished());
         } else {
             respond(&message, &shared);
         }
+    }
+    // Input ended: answer the calls still running before exiting, or their replies are lost.
+    for call in calls {
+        let _ = call.join();
     }
 }
 

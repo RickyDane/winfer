@@ -25,7 +25,6 @@ mod tool_stats;
 mod usage;
 mod usage_history;
 mod vault;
-mod voice;
 mod realtime;
 mod worktree;
 
@@ -123,7 +122,6 @@ pub fn run() {
         .manage(pty::PtyManager::default())
         .manage(browser::BrowserManager::default())
         .manage(android::AndroidManager::default())
-        .manage(voice::Voice::new())
         .manage(realtime::LiveBrowser::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -135,8 +133,6 @@ pub fn run() {
             hooks::start(app.handle().clone(), &data_dir)?;
             mobile::start(app.handle().clone(), &data_dir);
             browser::kill_orphans(app.handle());
-            voice::preload(app.handle());
-            voice::register_shortcuts(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -222,14 +218,6 @@ pub fn run() {
             browser::inspect::browser_console_clear,
             browser::inspect::browser_pick_start,
             browser::inspect::browser_pick_cancel,
-            voice::voice_status,
-            voice::voice_download_model,
-            voice::voice_configure,
-            voice::voice_input_devices,
-            voice::voice_set_shortcuts,
-            voice::voice_test_microphone,
-            voice::voice_start,
-            voice::voice_stop,
             realtime::realtime_client_secret,
             realtime::realtime_set_api_key,
             realtime::realtime_has_api_key,
@@ -278,7 +266,6 @@ pub fn run() {
                 app.state::<realtime::LiveBrowser>().shutdown();
                 app.state::<browser::BrowserManager>().shutdown();
                 app.state::<android::AndroidManager>().shutdown();
-                voice::shutdown(app);
                 harness::bg::stop_all();
             }
         });

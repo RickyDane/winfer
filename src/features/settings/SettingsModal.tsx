@@ -3,8 +3,7 @@ import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Do
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
-import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
-import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
+import { IS_MAC, keysFor } from "@/commands/keymap";
 import { DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { LIVE_ROLE } from "@/features/voice/live/instructions";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
@@ -266,7 +265,7 @@ function EditorSettings() {
 function ShortcutSettings() {
   return (
     <Card title="Keyboard">
-      <Row label="Keyboard shortcuts" hint="See every shortcut and change any of them, including the push-to-talk keys.">
+      <Row label="Keyboard shortcuts" hint="See every shortcut and change any of them.">
         <button onClick={() => useWorkspaces.getState().setCheatSheet(true)} className={buttonClass}>
           <Keyboard size={12} />
           Edit shortcuts
@@ -543,35 +542,59 @@ function ProgressSettings() {
 
 /* Voice */
 
-function Microphone({ selected }: { selected: string | null }) {
-  const level = useVoice((s) => s.level);
-  const [devices, setDevices] = useState<{ devices: string[]; default: string | null } | null>(null);
-  const [testing, setTesting] = useState(false);
+/** Microphone for live voice, from the webview's device list (labels show once access is granted). */
+function Microphone() {
+  const selected = useWorkspaces((s) => s.voiceConfig.inputDevice ?? "");
+  const [devices, setDevices] = useState<string[]>([]);
+  const [level, setLevel] = useState<number | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const load = () => void invoke<{ devices: string[]; default: string | null }>("voice_input_devices").then(setDevices, () => {});
+  const load = () =>
+    void navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((all) => setDevices([...new Set(all.filter((d) => d.kind === "audioinput" && d.label && d.deviceId !== "default").map((d) => d.label))]), () => {});
   useEffect(load, []);
 
+  /** Listens for two seconds and reports how loud it was. */
   const test = async () => {
-    setTesting(true);
     setResult(null);
+    setLevel(0);
     try {
-      const r = await invoke<{ device: string; peak: number }>("voice_test_microphone");
-      setResult(r.peak < 0.005 ? { ok: false, text: `Very quiet on “${r.device}”. Speak up or pick another microphone.` } : { ok: true, text: `Heard you on “${r.device}”.` });
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const match = selected ? all.find((d) => d.kind === "audioinput" && d.label === selected) : undefined;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: match ? { deviceId: { exact: match.deviceId } } : true });
+      load();
+      const ctx = new AudioContext();
+      const analyser = ctx.createAnalyser();
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Float32Array(analyser.fftSize);
+      let peak = 0;
+      const timer = window.setInterval(() => {
+        analyser.getFloatTimeDomainData(buf);
+        const rms = Math.sqrt(buf.reduce((sum, v) => sum + v * v, 0) / buf.length);
+        peak = Math.max(peak, rms);
+        setLevel(rms);
+      }, 50);
+      await new Promise((r) => setTimeout(r, 2000));
+      clearInterval(timer);
+      stream.getTracks().forEach((t) => t.stop());
+      void ctx.close();
+      const name = stream.getAudioTracks()[0]?.label || "the microphone";
+      setResult(peak < 0.005 ? { ok: false, text: `Very quiet on “${name}”. Speak up or pick another microphone.` } : { ok: true, text: `Heard you on “${name}”.` });
     } catch (err) {
       setResult({ ok: false, text: String(err) });
     } finally {
-      setTesting(false);
+      setLevel(null);
     }
   };
 
   // A saved device that isn't connected right now still shows, so the choice isn't lost.
-  const names = devices ? [...devices.devices, ...(selected && !devices.devices.includes(selected) ? [selected] : [])] : selected ? [selected] : [];
+  const names = [...devices, ...(selected && !devices.includes(selected) ? [selected] : [])];
   return (
     <Row
       label="Microphone"
       hint={
-        testing ? (
+        level !== null ? (
           <span className="mt-1.5 block h-1.5 w-40 overflow-hidden rounded-full bg-hover">
             <span className="block h-full bg-success transition-[width] duration-75" style={{ width: `${Math.min(100, level * 1200)}%` }} />
           </span>
@@ -581,149 +604,43 @@ function Microphone({ selected }: { selected: string | null }) {
       }
     >
       <Select
-        value={selected ?? ""}
+        value={selected}
         onFocus={load}
         onChange={(e) => {
           setResult(null);
-          void configureVoice({ inputDevice: e.target.value });
+          useWorkspaces.getState().setVoiceConfig({ inputDevice: e.target.value || undefined });
         }}
         className="w-56"
       >
-        <option value="">System default{devices?.default ? ` (${devices.default})` : ""}</option>
+        <option value="">System default</option>
         {names.map((name) => (
           <option key={name} value={name}>
             {name}
-            {devices && !devices.devices.includes(name) ? " — not connected" : ""}
+            {!devices.includes(name) ? " — not connected" : ""}
           </option>
         ))}
       </Select>
-      <button disabled={testing} onClick={() => void test()} className={cn(buttonClass, "w-24 justify-center")}>
-        {testing && <Spinner size={12} />}
-        {testing ? "Listening…" : "Test"}
+      <button disabled={level !== null} onClick={() => void test()} className={cn(buttonClass, "w-24 justify-center")}>
+        {level !== null && <Spinner size={12} />}
+        {level !== null ? "Listening…" : "Test"}
       </button>
     </Row>
   );
 }
 
 function VoiceSettings() {
-  const status = useVoice((s) => s.status);
   const readback = useWorkspaces((s) => s.voiceConfig.readback ?? false);
-  const confirm = useWorkspaces((s) => s.voiceConfig.confirm ?? false);
-  const shortcuts = useWorkspaces((s) => s.shortcuts);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-
-  useEffect(() => {
-    void refreshVoiceStatus();
-  }, []);
-
-  if (!status)
-    return (
-      <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
-        <Spinner size={12} /> Loading…
-      </div>
-    );
-
-  const download = async (id: string) => {
-    setBusy(id);
-    setResult(null);
-    try {
-      await invoke("voice_download_model", { id });
-    } catch (err) {
-      setResult({ ok: false, text: String(err) });
-    } finally {
-      setBusy(null);
-      void refreshVoiceStatus();
-    }
-  };
-
-  const keys = voiceKeys(shortcuts);
   return (
     <>
-      <div className="flex gap-3 rounded-lg border border-border bg-panel px-3.5 py-3 text-xs leading-relaxed text-fg-muted">
-        <Mic size={14} className="mt-0.5 shrink-0 text-accent" />
-        <p>
-          Hold <kbd className="rounded border border-border-strong bg-panel-raised px-1 font-mono text-[11px] text-fg">{keys.command}</kbd> to give a
-          command, <kbd className="rounded border border-border-strong bg-panel-raised px-1 font-mono text-[11px] text-fg">{keys.dictation}</kbd> to
-          dictate into the focused pane. Speech is recognized on this Mac; audio never leaves your machine.{" "}
-          <button onClick={() => useWorkspaces.getState().setCheatSheet(true)} className="text-accent hover:underline">
-            Change keys
-          </button>
-        </p>
-      </div>
-      {status.shortcutError && <p className="px-1 text-xs text-warning">{status.shortcutError} Use the mic button in the title bar instead.</p>}
-
+      <LiveVoiceSettings />
       <Card title="Input">
-        <Row
-          label="Language"
-          hint={
-            status.language !== "en" &&
-            status.sttModel.endsWith(".en") && (
-              <span className="text-warning">Pick a multilingual model below for {status.language === "de" ? "German" : "other languages"}.</span>
-            )
-          }
-        >
-          <Select value={status.language} onChange={(e) => void configureVoice({ language: e.target.value as "en" | "de" | "auto" })} className="w-36">
-            <option value="en">English</option>
-            <option value="de">Deutsch</option>
-            <option value="auto">Auto-detect</option>
-          </Select>
-        </Row>
-        <Microphone selected={status.inputDevice} />
+        <Microphone />
       </Card>
-
-      <Card title="Speech model" description="Larger models are more accurate and a bit slower.">
-        {status.models.map((m) => {
-          const selected = status.sttModel === m.id;
-          return (
-            <div
-              key={m.id}
-              role={m.installed ? "button" : undefined}
-              onClick={() => m.installed && !selected && void configureVoice({ sttModel: m.id })}
-              className={cn("flex items-center gap-3 px-3.5 py-2.5 transition-colors", m.installed && !selected && "hover:bg-hover")}
-            >
-              <span
-                className={cn(
-                  "grid size-4 shrink-0 place-items-center rounded-full border",
-                  selected ? "border-accent bg-accent" : "border-border-strong",
-                  !m.installed && "opacity-40",
-                )}
-              >
-                {selected && <span className="size-1.5 rounded-full bg-white" />}
-              </span>
-              <span className={cn("flex-1 text-[13px]", m.installed ? "text-fg" : "text-fg-muted")}>{m.label}</span>
-              {m.installed ? (
-                <span className="flex items-center gap-1 text-xs text-fg-subtle">
-                  <Check size={12} className="text-success" /> Installed
-                </span>
-              ) : (
-                <button
-                  disabled={busy !== null}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void download(m.id);
-                  }}
-                  className={buttonClass}
-                >
-                  {busy === m.id ? <Spinner size={12} /> : <Download size={12} />}
-                  {busy === m.id ? "Downloading…" : "Download"}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </Card>
-      <Result result={result} />
-
-      <Card title="Behavior">
+      <Card title="Read aloud">
         <Row label="Speak agent updates aloud" hint="“Codex needs your input”, “Claude Code finished”.">
           <Toggle label="Speak agent updates aloud" checked={readback} onChange={(readback) => useWorkspaces.getState().setVoiceConfig({ readback })} />
         </Row>
-        <Row label="Confirm risky commands" hint="Ask before running voice commands that close, stop or merge things.">
-          <Toggle label="Confirm risky commands" checked={confirm} onChange={(confirm) => useWorkspaces.getState().setVoiceConfig({ confirm })} />
-        </Row>
       </Card>
-      <LiveVoiceSettings />
     </>
   );
 }
@@ -858,7 +775,6 @@ function AiSettings() {
       setResult({ ok: false, text: String(err) });
     } finally {
       setBusy(null);
-      void refreshVoiceStatus();
     }
   };
 
@@ -925,7 +841,7 @@ function AiSettings() {
 
       <Card
         title="LLM"
-        description="Plans every voice command (“we need four features: …”) and turns what you say into a clear prompt for the agent, using its recent output as context. Also used for progress estimates and review summaries."
+        description="Writes progress estimates, review summaries and other short texts in winfer."
       >
         <Row
           label="Provider"
@@ -951,7 +867,7 @@ function AiSettings() {
                 </option>
               );
             })}
-            <option value="off">Off (no voice commands; dictation still works)</option>
+            <option value="off">Off (no progress estimates or review summaries)</option>
           </Select>
         </Row>
         {writer === "chatgpt" && chatgpt.models.length > 0 && (

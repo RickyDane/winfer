@@ -2,12 +2,11 @@
  * Default key bindings. `keys` use "Mod" for ⌘ on macOS; on Windows "Mod" becomes Ctrl+Shift so
  * plain Ctrl keys stay with the terminal. Bindings that would collide on Windows set `win`.
  *
- * Users can rebind any of them (and the push-to-talk keys): overrides live in the store's
+ * Users can rebind any of them: overrides live in the store's
  * `shortcuts`, keyed by binding id, as canonical chords ("Ctrl+Alt+T"); "" switches one off.
  * Numbered families ("Focus pane 1–9") share one override with "#" standing for the digit.
  */
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { execute, type Command, type Direction } from "./bus";
 import { useWorkspaces } from "@/stores/workspaces";
 
@@ -242,32 +241,7 @@ export function keysFor(cmd: Command): string {
   return binding ? formatKeys(binding) : "";
 }
 
-/** Global push-to-talk keys (registered in src-tauri/src/voice/mod.rs), as override ids. */
-export const VOICE_BINDINGS = [
-  { id: "voice-command", title: "Hold to give a voice command", default: "Alt+Space" },
-  { id: "voice-dictation", title: "Hold to dictate into the focused pane", default: "Alt+Shift+Space" },
-] as const;
-
-export function voiceChord(id: (typeof VOICE_BINDINGS)[number]["id"], overrides: Overrides = useWorkspaces.getState().shortcuts): string | null {
-  const override = overrides[id];
-  if (override === "") return null;
-  return override ?? VOICE_BINDINGS.find((v) => v.id === id)!.default;
-}
-
-/** Push-to-talk keys for labels, e.g. { command: "⌥Space", dictation: "⌥⇧Space" }. */
-export function voiceKeys(overrides?: Overrides) {
-  return {
-    command: formatChord(voiceChord("voice-command", overrides)) || "off",
-    dictation: formatChord(voiceChord("voice-dictation", overrides)) || "off",
-  };
-}
-
-/** Sends the push-to-talk keys to the backend (at startup and whenever they change). */
-export function applyVoiceShortcuts(overrides: Overrides = useWorkspaces.getState().shortcuts) {
-  return invoke("voice_set_shortcuts", { command: voiceChord("voice-command", overrides) ?? "", dictation: voiceChord("voice-dictation", overrides) ?? "" });
-}
-
-/** Other shortcuts (and push-to-talk keys) that already use `chord` ("#" = any digit 1–9). */
+/** Other shortcuts that already use `chord` ("#" = any digit 1–9). */
 export function conflicts(id: string, chord: string, overrides: Overrides = useWorkspaces.getState().shortcuts): { id: string; title: string }[] {
   const expand = (c: string) => (c.includes("#") ? DIGITS.map((n) => c.replace("#", String(n))) : [c]);
   const wanted = new Set(expand(chord));
@@ -275,10 +249,6 @@ export function conflicts(id: string, chord: string, overrides: Overrides = useW
   for (const b of BINDINGS) {
     const own = chordFor(b, overrides);
     if (b.id !== id && own && wanted.has(own)) found.set(b.id, b.digit ? b.title.replace(/\d$/, "1–9") : b.title);
-  }
-  for (const v of VOICE_BINDINGS) {
-    const own = voiceChord(v.id, overrides);
-    if (v.id !== id && own && wanted.has(own)) found.set(v.id, v.title);
   }
   return [...found].map(([id, title]) => ({ id, title }));
 }

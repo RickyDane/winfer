@@ -9,14 +9,12 @@ import {
   isCustomized,
   rowChord,
   setRecording,
-  voiceChord,
-  VOICE_BINDINGS,
   type Binding,
 } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { useWorkspaces } from "@/stores/workspaces";
 
-const GROUPS: (Binding["group"] | "Voice")[] = ["Panes", "Layout", "Workspaces", "App", "Voice"];
+const GROUPS: Binding["group"][] = ["Panes", "Layout", "Workspaces", "App"];
 
 interface Row {
   id: string;
@@ -28,7 +26,6 @@ interface Row {
 
 /** One row per binding; numbered bindings ("Focus pane 1…9") collapse into one. */
 function rows(group: (typeof GROUPS)[number], overrides: Record<string, string>): Row[] {
-  if (group === "Voice") return VOICE_BINDINGS.map((v) => ({ id: v.id, title: v.title, chord: voiceChord(v.id, overrides), numbered: false }));
   const seen = new Set<string>();
   return BINDINGS.filter((b) => b.group === group).flatMap((b) => {
     if (seen.has(b.id)) return [];
@@ -144,7 +141,7 @@ export function CheatSheet() {
         <div className="grid grid-cols-2 gap-x-8 gap-y-5 overflow-y-auto p-6">
           {GROUPS.map((group) => (
             <section key={group}>
-              <h2 className="mb-2 text-xs font-medium tracking-wide text-fg-subtle uppercase">{group === "Voice" ? "Voice (works in any app)" : group}</h2>
+              <h2 className="mb-2 text-xs font-medium tracking-wide text-fg-subtle uppercase">{group}</h2>
               {rows(group, shortcuts).map((r) => {
                 const recording = editing?.id === r.id;
                 return (

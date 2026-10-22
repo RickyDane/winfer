@@ -24,10 +24,9 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Drag a pane by its header onto another pane: edges place it beside (left/right/top/bottom), the middle swaps; Esc cancels.
 - [ ] ⌘K palette: type "grid", Enter → grid layout.
 - [ ] ⌘/ → click a shortcut → press new keys → it works right away and survives a restart; a taken chord offers "Use it here instead"; ↺ restores; ⌫ switches it off; "Reset all".
-- [ ] Change the voice keys in the same sheet (Voice section) → holding the new keys records.
 - [ ] Settings → New panes → Default agent (or the ★ in the New menu): ⌘T and "open a new window" start that agent.
 - [ ] ⌘F searches a pane's scrollback (Enter / ⇧Enter to step).
-- [ ] ⌘= / ⌘- / ⌘0 (Ctrl+Shift+= / - / 0 on Windows), ⌘/Ctrl + scroll or pinch over a terminal, or Settings → Terminals → Text size change every terminal's text; agents re-wrap to the new width; the size survives a restart. "Make the terminal text bigger" works by voice.
+- [ ] ⌘= / ⌘- / ⌘0 (Ctrl+Shift+= / - / 0 on Windows), ⌘/Ctrl + scroll or pinch over a terminal, or Settings → Terminals → Text size change every terminal's text; agents re-wrap to the new width; the size survives a restart. "Make the terminal text bigger" works in live voice.
 
 - [ ] Drag the gap left of the browser panel to resize it (double-click resets); the width survives a restart.
 - [ ] Sun/moon button next to the gear switches light/dark mode, terminals included; the choice survives a restart.
@@ -94,27 +93,19 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] OpenCode 2.x pane (status plugin): while you're in another app, it asking permission (e.g. a `bash` command with `"permission": {"bash": "ask"}`) or asking a question (question tool) shows a notification, and finishing a turn shows "OpenCode finished" (subagents finishing don't). Status dot follows working / waiting / done. OpenCode 1.x keeps the output-quiet heuristic.
 - [ ] OpenCode pane: ask it to open a page and click something / take a screenshot (tools `winfer-browser_*`), and to "notify me when you're done" (`winfer_notify_user`); a native notification appears. Works with OpenCode 1.x and 2.x (2.x is started with `--standalone`).
 
-## 6. Voice
-- [ ] Settings (⌘,): base.en speech model shows Installed (download it if not).
-- [ ] Settings → Microphone lists your devices (MacBook Pro Microphone, AirPods…); pick one → Test → "Heard you on …" with a moving meter. "System default" follows macOS.
+## 6. Voice (live)
+- [ ] Settings → Voice → Live voice: paste an OpenAI API key (account with credits) → Save → "Stored in the keychain". Without a key and only a ChatGPT sign-in, starting live voice says a key is needed.
+- [ ] Settings → Voice → Microphone lists your devices after the first Test (macOS asks for microphone access once); Test → "Heard you on …" with a moving meter.
+- [ ] ⌘⌥V (or the wave button in the title bar) → the panel shows Connecting…, then the model greets you aloud; the meter moves when you talk.
+- [ ] "Open two Claude panes and have one write tests for the login" → two panes, one with that prompt; "what is pane 1 doing?" → a spoken summary of its output.
+- [ ] "Tell Codex to also update the changelog" → sent to the Codex pane. "Close all panes" → it asks first and only closes after "yes".
+- [ ] "Open localhost 5173 and click Settings" → the browser panel opens it; the model loads the browser tools once, then clicks.
+- [ ] Let an agent finish while live → the model mentions it. Interrupt it mid-sentence by talking; mute and hang up from the panel; "bye" ends the conversation.
+- [ ] Settings → Voice → System prompt: change it (e.g. "Answer in German") during a conversation → the next answer follows it; Reset to default.
+- [ ] Optional: enable "Speak agent updates aloud" and let an agent finish while you're elsewhere.
 - [ ] Settings → AI → "Continue with ChatGPT" → the browser asks you to sign in, name the agent and allow winfer to use your plan → back in winfer: "Signed in as you@…". Test connection shows a latency. The LLM model picker lists your account's models (gpt-6-luna, gpt-6-sol, …). Sign out → the LLM falls back to the Codex CLI (or Claude Code); signing in again skips the naming step. Declining in the browser → "You declined the sign-in."
 - [ ] Restart winfer → still signed in. After an hour of use the token renews silently (no sign-in prompt).
-- [ ] Hold ⌥Space, say "open two new instances with Claude and Codex", release → two panes open. (First use asks for microphone access.)
-- [ ] "Create a new Claude instance and tell it to create a Flappy Bird clone" → Claude opens with that prompt.
-- [ ] "Type hello world into Claude" → text is typed into Claude's prompt, not sent.
-- [ ] LLM (Settings → AI): ChatGPT once signed in; without a sign-in it's the Codex CLI with its own login, then Claude Code (an option is greyed out until it's available). "tell Claude to make the page nicer" → Claude receives a concrete prompt (shown in the HUD). Pick another ChatGPT model, then switch to Codex (type a model or leave it empty) and to Claude Code (type a model like "haiku") and repeat. Off → voice commands say they need an LLM, dictation still works, progress estimates and review summaries are off.
-- [ ] Every command is planned by the LLM (HUD "Planning…"): "open two codex panes" → two Codex panes; "Open Codex and have it fix the login bug where the session expires too early, then run the auth tests" → one new Codex pane with one prompt; "Tell the Claude pane to stop and write unit tests for the payment service, and ask Codex to answer yes" → stops Claude, sends both messages.
-- [ ] Optional: `PLANNER=claude pnpm eval:planner` (or `PLANNER=codex`, `PLANNER=openai OPENAI_TOKEN=…`, `PLANNER_MODEL=…`) checks the planner.
-- [ ] Several features for one new agent ("Open Claude: create credentials.js with placeholders, implement decide() in openaiDecisions.js and make Luna.vue use it") → one pane per feature, each in its own worktree with a standalone prompt. Same with Codex, OpenCode or no agent named (default agent). One feature with follow-up steps ("fix the login bug, then run the tests") stays in one pane.
-- [ ] Features without "open" ("We need four new features: a plugin system, a graphify plugin, an encrypted secret store and the OpenAI decisions API") → one default-agent pane per feature, each with its prompt, even while other agents are open. "Tell Claude to run the tests" still goes to the open Claude.
-- [ ] After an agent created a page: "Öffne die erstellte Seite im Browser" / "open the page you just made" opens that file; "show me the dev server" opens localhost.
-- [ ] "Close all windows" closes every pane in the workspace.
-- [ ] With several agents open: "Sag allen, sie sollen einen Flappy Bird Klon erstellen, bis auf das letzte Fenster, das soll einen Super Mario Klon erstellen" → each pane gets its own prompt (HUD: "Writing 4 prompts…").
-- [ ] Hold ⌥⇧Space and dictate → text is typed into the focused pane, not sent.
-- [ ] Commands run immediately (no confirmation). Optional: Settings → "Ask before running uncertain or risky voice commands" brings back the confirm prompt.
-- [ ] Settings → Language "Deutsch" + download a multilingual model → "Öffne ein neues Fenster mit Codex" works.
-- [ ] "Open Claude with Opus" / "Switch Claude to Sonnet"; pane header shows the model; pane menu → Change model….
-- [ ] Optional: enable "Speak agent updates" and let an agent finish while you're elsewhere.
+- [ ] LLM (Settings → AI): ChatGPT once signed in; without a sign-in it's the Codex CLI with its own login, then Claude Code (an option is greyed out until it's available). Pick another ChatGPT model, then switch to Codex (type a model or leave it empty) and to Claude Code (type a model like "haiku") and repeat. Off → progress estimates and review summaries are off.
 
 ## 6a. Usage limits
 - [ ] After a Claude Code pane in winfer answers once, a ring with the Claude icon appears in the title bar; your own Claude status line still shows in the pane.

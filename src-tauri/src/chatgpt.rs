@@ -514,12 +514,6 @@ pub struct ChatGptStatus {
     email: Option<String>,
 }
 
-impl ChatGptStatus {
-    pub fn signed_in(&self) -> bool {
-        self.signed_in
-    }
-}
-
 #[tauri::command]
 pub fn chatgpt_status() -> ChatGptStatus {
     let account = load().unwrap_or_default();

@@ -10,7 +10,6 @@ import { toolContext } from "@/features/palette/entries";
 import { logActivity } from "@/stores/activity";
 import { providerName, useWorkspaces, type AgentStatus } from "@/stores/workspaces";
 import { useBrowser } from "@/features/browser/browser";
-import { useVoice } from "../voice";
 import { liveInstructions } from "./instructions";
 import { END_CONVERSATION, resetVoiceTools, runVoiceFunction, voiceTools, type ToolLevel } from "./tools";
 
@@ -367,8 +366,6 @@ export async function startLive(retry?: Attempt): Promise<void> {
   retrying = false;
   // A retry keeps the lines, so the user sees what was tried.
   useLiveVoice.setState((s) => ({ state: "connecting", error: null, lines: retry ? s.lines : [], tool: null, muted: false, level: 0, playback: null }));
-  // The push-to-talk recorder shouldn't hold the mic at the same time.
-  if (useVoice.getState().phase === "listening") void invoke("voice_stop").catch(() => {});
   let mic: MediaStream | null = null;
   let pc: RTCPeerConnection | null = null;
   try {

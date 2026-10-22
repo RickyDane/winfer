@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { BINDINGS, chordFor, conflicts, rowChord, voiceChord } from "./keymap";
+import { BINDINGS, chordFor, conflicts, rowChord } from "./keymap";
 import { useWorkspaces } from "@/stores/workspaces";
 
 const byTitle = (title: string) => BINDINGS.find((b) => b.title === title)!;
@@ -29,11 +29,9 @@ describe("keymap overrides", () => {
     expect(chordFor(newPane)).not.toBeNull();
   });
 
-  it("finds conflicts, including family members and push-to-talk keys", () => {
+  it("finds conflicts, including family members", () => {
     useWorkspaces.getState().setShortcut("focus-pane", "Alt+Shift+Meta+#");
     expect(conflicts("command-palette", "Alt+Shift+Meta+4").map((c) => c.id)).toEqual(["focus-pane"]);
-    expect(conflicts("command-palette", "Alt+Space").map((c) => c.id)).toEqual(["voice-command"]);
     expect(conflicts("focus-pane", "Alt+Shift+Meta+#")).toEqual([]);
-    expect(voiceChord("voice-dictation")).toBe("Alt+Shift+Space");
   });
 });

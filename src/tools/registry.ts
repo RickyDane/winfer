@@ -748,14 +748,6 @@ export const TOOLS: ToolDef[] = [
     toCommands: (args) => (args.recipe ? [{ type: "recipe.load", id: String(args.recipe) }] : [{ type: "ui.overlay", overlay: "recipes" }]),
     palette: () => [...allRecipes().map((r) => ({ title: `Recipe: ${r.name}`, args: { recipe: r.id } })), { title: "Recipes…", args: {} }],
   },
-  {
-    id: "repeat_last",
-    title: "Repeat",
-    description: "Do the previous voice command again",
-    risk: "safe",
-    params: {},
-    toCommands: (_args, ctx) => ctx.lastCommands,
-  },
 ];
 
 /** Built-in tools followed by those from enabled plugins. */

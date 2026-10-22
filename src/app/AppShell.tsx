@@ -8,7 +8,7 @@ import { SessionsOverview } from "@/features/progress/SessionsOverview";
 import { startProgressTracking } from "@/features/progress/progress";
 import { ReviewInbox } from "@/features/review/ReviewInbox";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Archive, AudioLines, Layers, LayoutGrid, Mic, PanelLeft, PanelRight } from "lucide-react";
+import { Archive, AudioLines, Layers, LayoutGrid, PanelLeft, PanelRight } from "lucide-react";
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
@@ -18,7 +18,6 @@ import { CheatSheet } from "@/features/palette/CheatSheet";
 import { CommandPalette } from "@/features/palette/CommandPalette";
 import { DiffView } from "@/features/worktree/DiffView";
 import { SettingsModal } from "@/features/settings/SettingsModal";
-import { VoiceHUD } from "@/features/voice/VoiceHUD";
 import { LiveVoiceHUD } from "@/features/voice/live/LiveVoiceHUD";
 import { toggleLive, useLiveVoice } from "@/features/voice/live/session";
 import { BroadcastBar } from "@/features/orchestration/BroadcastBar";
@@ -37,8 +36,7 @@ import { startUpdateChecks } from "@/features/updates/updater";
 import { startProviderUpdateChecks } from "@/features/providers/updates";
 import { WhatsNew } from "@/features/updates/WhatsNew";
 import { ApprovalDialog } from "@/features/plugins/ApprovalDialog";
-import { startListening, startVoice, stopListening, useVoice } from "@/features/voice/voice";
-import { IS_MAC, keysFor, useKeymap, voiceKeys } from "@/commands/keymap";
+import { IS_MAC, keysFor, useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
 import { startMobileBridge } from "@/features/mobile/mobile";
 import { startAgentApi } from "@/features/mcp/agentApi";
@@ -74,7 +72,6 @@ function TitleBar() {
       <div data-tauri-drag-region className="flex min-w-0 items-center justify-end gap-2">
         <UsageMeter />
         <NewPaneMenu />
-        <MicButton />
         <LiveButton />
         <button onClick={toggleBrowser} className="rounded p-1 hover:bg-hover hover:text-fg" title={`Toggle browser (${keysFor({ type: "ui.toggleBrowser" })})`}>
           <PanelRight size={15} />
@@ -131,28 +128,6 @@ function ViewTabs({ workspace }: { workspace: string }) {
   );
 }
 
-/** Hold to talk (same as holding the push-to-talk keys). */
-function MicButton() {
-  const listening = useVoice((s) => s.phase === "listening");
-  const shortcutError = useVoice((s) => s.status?.shortcutError);
-  const keys = voiceKeys(useWorkspaces((s) => s.shortcuts));
-  return (
-    <button
-      onMouseDown={() => startListening()}
-      onMouseUp={stopListening}
-      onMouseLeave={() => listening && stopListening()}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs hover:bg-hover hover:text-fg",
-        listening ? "border-accent text-accent" : "border-border",
-      )}
-      title={shortcutError ?? `Hold to talk (or hold ${keys.command} anywhere; ${keys.dictation} to dictate)`}
-    >
-      <Mic size={13} />
-      <span className={cn(shortcutError && "line-through")}>{keys.command}</span>
-    </button>
-  );
-}
-
 /** Starts or ends the live voice conversation. */
 function LiveButton() {
   const on = useLiveVoice((s) => s.state !== "off" && s.state !== "error");
@@ -202,7 +177,6 @@ export function AppShell() {
     startStatusTracking();
     startMobileBridge();
     startRunTimes();
-    startVoice();
     startAgentApi();
     startBgNotices();
     startProgressTracking();
@@ -287,7 +261,6 @@ export function AppShell() {
       <RecipesView />
       <ModelPicker />
       <DragLayer />
-      <VoiceHUD />
       <LiveVoiceHUD />
       <Toaster />
     </div>

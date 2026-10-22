@@ -108,9 +108,6 @@ const inputs: unknown[] = [];
 const writes: { paneId: string; data: string }[] = [];
 let picking: { workspaceId: string; targetId: string } | null = null;
 
-// Fake voice: tests set what was "said" and the planner's actions ({ tool, args }); the planner
-// prompts are kept for inspection.
-const voice = { said: "", mode: "command", plan: [] as unknown[], requests: [] as unknown[] };
 let tabCounter = 0;
 let androidStopped = false;
 const androidInputs: unknown[] = [];
@@ -766,23 +763,6 @@ mockIPC(
         return "";
       case "plugin:app|version":
         return SHOWCASE ? pkg.version : "dev";
-      case "voice_status":
-        return {
-          models: [
-            { id: "base.en", file: "ggml-base.en.bin", size: 147964211, label: "Base (English, 148 MB) — fast", installed: true },
-            { id: "small.en", file: "ggml-small.en.bin", size: 487614201, label: "Small (English, 488 MB) — more accurate", installed: false },
-          ],
-          sttModel: "base.en",
-          language: "en",
-          credentials: true,
-          inputDevice: null,
-          shortcutError: null,
-        };
-      case "voice_input_devices":
-        return { devices: ["MacBook Pro Microphone", "AirPods Pro"], default: "MacBook Pro Microphone" };
-      case "voice_test_microphone":
-        return { device: "MacBook Pro Microphone", peak: 0.08 };
-      case "voice_configure":
       case "chatgpt_sign_out":
       case "chatgpt_cancel_sign_in":
         return null;
@@ -791,26 +771,13 @@ mockIPC(
         return { signedIn: true, email: "you@example.com" };
       case "chatgpt_models":
         return ["gpt-6-luna", "gpt-6.1-sol"];
-      case "voice_start":
-        voice.mode = a.mode;
-        void emit("voice://state", { state: "listening", mode: a.mode });
-        void emit("voice://level", 0.05);
-        return null;
       case "realtime_has_api_key":
         return false;
       case "realtime_bg_tool":
         return null;
       case "realtime_client_secret":
         throw new Error("Live voice needs the desktop app.");
-      case "voice_stop":
-        void emit("voice://state", { state: "transcribing", mode: voice.mode });
-        setTimeout(() => void emit("voice://transcript", { mode: voice.mode, text: voice.said, ms: 142 }), 150);
-        return null;
       case "llm_compose":
-        if (String(a.req.system).startsWith("You control winfer")) {
-          voice.requests.push(a.req.user);
-          return new Promise((resolve) => setTimeout(() => resolve(JSON.stringify({ actions: voice.plan })), 200));
-        }
         if (String(a.req.system).startsWith("You estimate"))
           return new Promise((resolve) =>
             setTimeout(() => resolve(JSON.stringify({ percent: 20 + Math.floor(Math.random() * 60), step: "Adding the 403 guard test", title: "Cancelled-tier 403" })), 400),
@@ -857,7 +824,6 @@ mockIPC(
   androidInputs,
   inputs,
   writes,
-  voice,
   /** Simulates an agent opening a tab through CDP. */
   agentTab: (workspaceId: string, url: string) => {
     browserTabs.get(workspaceId)?.push({ id: `t-${++tabCounter}`, url, title: "Dashboard", favicon: "" });

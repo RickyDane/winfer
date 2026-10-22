@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>winfer listens while you hold ⌥Space so you can control agents by voice. Audio is transcribed on this Mac.</string>
+  <string>winfer uses the microphone during a live voice conversation, so you can control winfer and its agents by talking.</string>
 </dict>
 </plist>

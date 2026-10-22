@@ -28,9 +28,6 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: ./.github/actions/sccache
-      # The image has Visual Studio 2026, which whisper-rs-sys's CMake build only finds with
-      # CMake 4.2+.
-      - uses: lukka/get-cmake@v4.4.2
       - run: pnpm install --frozen-lockfile
       # tauri::generate_context! embeds the built frontend.
       - run: pnpm build
