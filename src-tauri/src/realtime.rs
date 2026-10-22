@@ -83,10 +83,12 @@ fn mint(attempts: &[(&'static str, Result<String, String>)], body: &Value, send:
 }
 
 #[tauri::command]
-pub async fn realtime_client_secret(model: String, voice: String) -> Result<ClientSecret, String> {
+/// `auth: "apikey"` skips the ChatGPT sign-in (live voice retries with the key when a
+/// ChatGPT-backed session fails).
+pub async fn realtime_client_secret(model: String, voice: String, auth: Option<String>) -> Result<ClientSecret, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut attempts = Vec::new();
-        if crate::chatgpt::signed_in() {
+        if crate::chatgpt::signed_in() && auth.as_deref() != Some("apikey") {
             attempts.push(("chatgpt", crate::chatgpt::access_token()));
         }
         attempts.push(("apikey", api_key().ok_or_else(String::new)));

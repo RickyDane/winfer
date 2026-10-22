@@ -78,8 +78,22 @@ interface Connection {
 }
 
 let conn: Connection | null = null;
-/** Fewer tools after OpenAI failed on the larger set (see the response.done handler). */
-let toolLevel: ToolLevel = "full";
+/**
+ * What a connection tries. OpenAI can fail a session's first response with a bare "server
+ * error" and then go silent, so each retry is a fresh connection with less: no tools, then no
+ * extras (transcription, VAD, noise reduction), then the API key instead of the ChatGPT sign-in.
+ */
+interface Attempt {
+  tools: ToolLevel;
+  bare: boolean;
+  auth?: "apikey";
+}
+const FIRST: Attempt = { tools: "full", bare: false };
+let attempt: Attempt = FIRST;
+/** Whether a response of this connection has succeeded (then errors aren't the setup's fault). */
+let working = false;
+/** A retry is on its way (the failed response and the error event both ask for one). */
+let retrying = false;
 
 function send(event: Record<string, unknown>) {
   if (conn?.dc.readyState === "open") conn.dc.send(JSON.stringify(event));
@@ -87,10 +101,11 @@ function send(event: Record<string, unknown>) {
 
 async function sessionConfig() {
   const { voiceConfig } = useWorkspaces.getState();
+  if (attempt.bare) return { type: "realtime", instructions: liveInstructions(toolContext()) };
   return {
     type: "realtime",
     instructions: liveInstructions(toolContext()),
-    tools: await voiceTools(toolLevel),
+    tools: await voiceTools(attempt.tools),
     tool_choice: "auto",
     audio: {
       input: {
@@ -113,18 +128,34 @@ function refreshSession(delay = 600) {
   }, delay);
 }
 
-/** Retries the session with fewer tools; false when there is nothing left to drop. */
+/** The next, smaller attempt after a failed one; null when nothing is left to try. */
+async function nextAttempt(a: Attempt, auth: "chatgpt" | "apikey" | null): Promise<Attempt | null> {
+  if (a.tools !== "none") return { ...a, tools: "none" };
+  if (!a.bare) return { ...a, bare: true };
+  if (auth === "chatgpt" && (await invoke<boolean>("realtime_has_api_key").catch(() => false))) return { ...FIRST, auth: "apikey" };
+  return null;
+}
+
+const describeAttempt = (a: Attempt) => (a.auth ? "with your API key" : a.bare ? "with a bare session" : a.tools === "none" ? "without tools" : "with fewer tools");
+
+/** Starts over on a fresh connection with less; false when there is nothing left to try. */
 function degrade(): boolean {
-  const next: ToolLevel | null = toolLevel === "full" ? "core" : toolLevel === "core" ? "none" : null;
-  if (!next || !conn) {
-    if (conn) fail("OpenAI keeps failing on this session even without tools. With a ChatGPT sign-in, try an OpenAI API key (Settings → Voice) or another model.");
-    return false;
-  }
-  toolLevel = next;
-  addLine({ who: "tool", text: next === "core" ? "Retrying with fewer tools…" : "Retrying without tools…" });
-  void sessionConfig().then((session) => {
-    send({ type: "session.update", session });
-    send({ type: "response.create", response: { instructions: "Greet the user in a few words and ask what to do." } });
+  if (retrying) return true;
+  if (!conn || working) return false;
+  retrying = true;
+  const failed = attempt;
+  void nextAttempt(failed, useLiveVoice.getState().auth).then((next) => {
+    if (!next) {
+      const hint =
+        useLiveVoice.getState().auth === "chatgpt"
+          ? "OpenAI fails every live voice session with your ChatGPT sign-in. Add an OpenAI API key in Settings → Voice to use live voice."
+          : "OpenAI fails every live voice session, even a bare one. Try another model in Settings → Voice (e.g. gpt-realtime).";
+      fail(hint);
+      return;
+    }
+    addLine({ who: "tool", text: `Retrying ${describeAttempt(next)}…` });
+    teardown();
+    void startLive(next);
   });
   return true;
 }
@@ -233,6 +264,8 @@ function onEvent(raw: string) {
         if (error?.type === "server_error" || /server had an error/i.test(error?.message ?? "")) {
           if (degrade()) break;
         }
+      } else if (e.response?.status === "completed") {
+        working = true;
       }
       if (calls.length) void runCalls(calls);
       else {
@@ -248,7 +281,7 @@ function onEvent(raw: string) {
       const param = String(e.error?.param ?? "");
       addLine({ who: "tool", text: `Error${param ? ` (${param})` : ""}: ${e.error?.message ?? "Realtime error"}` });
       // A tool OpenAI rejects shouldn't cost the whole session: carry on without tools.
-      if (param.startsWith("session.tools")) degrade();
+      if (param.startsWith("session.tools") || e.error?.type === "server_error") degrade();
       break;
     }
   }
@@ -336,10 +369,13 @@ function watchApp(c: Connection) {
   }).then((un) => (c.closed ? un() : c.unsubscribe.push(un)));
 }
 
-export async function startLive(): Promise<void> {
+export async function startLive(retry?: Attempt): Promise<void> {
   if (conn) return;
-  useLiveVoice.setState({ state: "connecting", error: null, lines: [], tool: null, muted: false, level: 0, diag: NO_DIAG });
-  toolLevel = "full";
+  attempt = retry ?? FIRST;
+  working = false;
+  retrying = false;
+  // A retry keeps the lines, so the user sees what was tried.
+  useLiveVoice.setState((s) => ({ state: "connecting", error: null, lines: retry ? s.lines : [], tool: null, muted: false, level: 0, diag: NO_DIAG }));
   // The push-to-talk recorder shouldn't hold the mic at the same time.
   if (useVoice.getState().phase === "listening") void invoke("voice_stop").catch(() => {});
   let mic: MediaStream | null = null;
@@ -349,6 +385,7 @@ export async function startLive(): Promise<void> {
     const secret = await invoke<{ value: string; auth: "chatgpt" | "apikey" }>("realtime_client_secret", {
       model: voiceConfig.liveModel || DEFAULT_LIVE_MODEL,
       voice: voiceConfig.liveVoice || DEFAULT_LIVE_VOICE,
+      auth: attempt.auth ?? null,
     });
     useLiveVoice.setState({ auth: secret.auth });
     mic = await navigator.mediaDevices.getUserMedia({ audio: await micConstraints() });
@@ -429,6 +466,7 @@ export function stopLive() {
 }
 
 export const toggleLive = () => (conn || useLiveVoice.getState().state === "connecting" ? stopLive() : void startLive());
+
 
 export function setLiveMuted(muted: boolean) {
   conn?.mic.getAudioTracks().forEach((t) => (t.enabled = !muted));
