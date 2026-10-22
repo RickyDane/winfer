@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, TaskEv, TurnTokens, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, TaskEv, TurnTokens, Usage, UserMsg};
 use crate::harness::mcp_client;
 use crate::harness::bg;
 use crate::harness::tools::{self, Risk};
@@ -44,9 +44,10 @@ const SUB_SYSTEM: &str = "You are a winfer code subagent: another agent handed y
 /// Tool steps a subagent gets before it has to report.
 const SUB_STEPS: usize = 100;
 
-/// winfer's tools plus `agent`, which subagents don't get.
+/// winfer's tools plus `agent` and `ask_user`, which subagents don't get.
 pub fn tool_definitions() -> Vec<Value> {
     let mut tools = tools::definitions();
+    tools.push(tools::ask_user_definition());
     tools.push(json!({
         "type": "function",
         "name": "agent",
@@ -113,6 +114,8 @@ struct Shared {
     decisions: Mutex<HashMap<String, Decision>>,
     /// Approval requests still waiting for an answer.
     asking: Mutex<HashSet<String>>,
+    /// Answers to `ask_user` questions, by request id, until the asker takes them.
+    answers: Mutex<HashMap<String, Vec<String>>>,
     /// Stop flags of running subagents, by task id.
     agents: Mutex<HashMap<String, Arc<AtomicBool>>>,
     next_agent: AtomicU64,
@@ -190,6 +193,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         reads: Default::default(),
         decisions: Mutex::new(HashMap::new()),
         asking: Mutex::new(HashSet::new()),
+        answers: Mutex::new(HashMap::new()),
         agents: Mutex::new(HashMap::new()),
         next_agent: AtomicU64::new(0),
         notes: Mutex::new(Vec::new()),
@@ -287,7 +291,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             Cmd::Approve(id, d) => {
                 shared.decisions.lock().unwrap().insert(id, d);
             }
-            Cmd::Answer(..) => {}
+            Cmd::Answer(id, answers) => {
+                shared.answers.lock().unwrap().insert(id, answers);
+            }
             Cmd::SetModel(m) => shared.state.lock().unwrap().model = m,
             Cmd::SetEffort(e) => shared.state.lock().unwrap().effort = e,
             Cmd::SetMode(m) => shared.state.lock().unwrap().mode = m,
@@ -768,6 +774,9 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     if name == "agent" && sub.is_none() {
         return run_agent(shared, &id, &args);
     }
+    if name == tools::ASK_USER && sub.is_none() {
+        return ask_user(shared, &id, &args);
+    }
     let mcp = (name == "mcp").then(|| (args["server"].as_str().unwrap_or("").to_string(), args["tool"].as_str().unwrap_or("").to_string()));
     let (display, title) = match &mcp {
         Some((server, tool)) if tool.is_empty() => (format!("{server} · tools"), String::new()),
@@ -886,6 +895,44 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     }
     card(Ev::ToolEnd { id, ok: outcome.ok, output: outcome.output.clone(), diff: outcome.diff.clone() });
     outcome.output
+}
+
+/// The `ask_user` tool: the questions show as the TUI's picker; the call waits for the answers.
+fn ask_user(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
+    let emit = |e: Ev| {
+        let _ = shared.events.send(e);
+    };
+    let questions = Question::parse_all(args);
+    let title = tools::title(tools::ASK_USER, args);
+    emit(Ev::ToolStart { id: call_id.to_string(), name: display_name(tools::ASK_USER).into(), title: title.clone(), input: args.clone() });
+    if questions.is_empty() {
+        let msg = "ask_user needs at least one question with its options.".to_string();
+        emit(Ev::ToolEnd { id: call_id.to_string(), ok: false, output: msg.clone(), diff: None });
+        return msg;
+    }
+    let approval_id = format!("q-{call_id}");
+    emit(Ev::Approval(Approval { id: approval_id.clone(), tool: "Question".into(), title, questions: questions.clone(), ..Default::default() }));
+    shared.asking.lock().unwrap().insert(approval_id.clone());
+    let answers = loop {
+        if stopped(shared, None) {
+            break None;
+        }
+        if let Some(a) = shared.answers.lock().unwrap().remove(&approval_id) {
+            break Some(a);
+        }
+        // Declining goes through `Approve` (as does an interrupt).
+        if shared.decisions.lock().unwrap().remove(&approval_id).is_some() {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    shared.asking.lock().unwrap().remove(&approval_id);
+    let (ok, output, card) = match answers {
+        Some(a) => (true, tools::ask_user_result(&questions, &a), a.join(" · ")),
+        None => (false, tools::ASK_USER_DECLINED.to_string(), "Dismissed".to_string()),
+    };
+    emit(Ev::ToolEnd { id: call_id.to_string(), ok, output: card, diff: None });
+    output
 }
 
 /// The `agent` tool: a subagent with its own conversation works on the task. In the foreground
@@ -1009,6 +1056,7 @@ fn display_name(name: &str) -> &str {
         "fetch" | "web_fetch" => "Fetch",
         "todo" | "todo_write" => "Todos",
         "agent" => "Agent",
+        tools::ASK_USER => "Question",
         other => other,
     }
 }
@@ -1299,6 +1347,7 @@ mod tests {
             reads: Default::default(),
             decisions: Mutex::new(HashMap::new()),
             asking: Mutex::new(HashSet::new()),
+            answers: Mutex::new(HashMap::new()),
             agents: Mutex::new(HashMap::new()),
             next_agent: AtomicU64::new(0),
             notes: Mutex::new(Vec::new()),
@@ -1393,6 +1442,38 @@ mod tests {
         assert!(shared.state.lock().unwrap().items.is_empty());
         // It reads with its own cache: the main conversation hasn't seen the file.
         assert!(shared.reads.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ask_user_waits_for_the_answers() {
+        let (shared, mut rx, dir) = shared(Mode::Yolo);
+        assert!(tool_definitions().iter().any(|t| t["name"] == "ask_user") && !tools::definitions().iter().any(|t| t["name"] == "ask_user"));
+        let args = json!({ "questions": [{ "header": "DB", "question": "Which database?", "options": [{ "label": "Postgres" }, { "label": "SQLite" }] }] });
+        for answer in [Some("SQLite"), None] {
+            let answering = {
+                let shared = shared.clone();
+                std::thread::spawn(move || {
+                    let a = loop {
+                        if let Ok(Ev::Approval(a)) = rx.recv() {
+                            break a;
+                        }
+                    };
+                    assert_eq!(a.questions[0].options.len(), 2);
+                    match answer {
+                        Some(text) => shared.answers.lock().unwrap().insert(a.id, vec![text.into()]),
+                        None => shared.decisions.lock().unwrap().insert(a.id, Decision::Deny).map(|_| Vec::new()),
+                    };
+                    rx
+                })
+            };
+            let out = run_call(&shared, &call("q1", "ask_user", args.clone()), None);
+            rx = answering.join().unwrap();
+            match answer {
+                Some(_) => assert!(out.contains("\"Which database?\" → \"SQLite\""), "{out}"),
+                None => assert_eq!(out, tools::ASK_USER_DECLINED),
+            }
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

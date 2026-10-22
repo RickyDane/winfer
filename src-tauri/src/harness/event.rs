@@ -88,6 +88,26 @@ pub struct Question {
     pub multi: bool,
 }
 
+impl Question {
+    /// Questions in the shape Claude Code's AskUserQuestion and winfer code's `ask_user` take:
+    /// `{ questions: [{ header, question, options: [{ label, description }], multiSelect }] }`.
+    pub fn parse_all(input: &Value) -> Vec<Question> {
+        let text = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
+        input["questions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|q| Question {
+                header: text(&q["header"]),
+                question: text(&q["question"]),
+                options: q["options"].as_array().into_iter().flatten().map(|o| (text(&o["label"]), text(&o["description"]))).filter(|(l, _)| !l.is_empty()).collect(),
+                multi: q["multiSelect"].as_bool().unwrap_or(false),
+            })
+            .filter(|q| !q.question.is_empty())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Allow,

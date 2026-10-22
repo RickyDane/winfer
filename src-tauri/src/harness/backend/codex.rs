@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
-use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, TurnTokens, Usage, UserMsg};
+use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, Skill, TaskEv, Todo, TurnTokens, Usage, UserMsg};
 
 fn approval_policy(mode: Mode) -> &'static str {
     match mode {
@@ -47,6 +47,34 @@ fn mcp_args(servers: &serde_json::Map<String, Value>) -> Vec<String> {
         }
     }
     args
+}
+
+/// Questions waiting on the user's answers, by approval id.
+enum Ask {
+    /// winfer code's own `ask_user` (a dynamic tool call).
+    Tool { rpc: Value, questions: Vec<Question> },
+    /// Codex's `request_user_input` (plan mode), answered by question id.
+    Input { rpc: Value, ids: Vec<String> },
+}
+
+/// `ask_user` as a Codex dynamic tool.
+fn dynamic_tools() -> Value {
+    use crate::harness::tools;
+    json!([{ "type": "function", "name": tools::ASK_USER, "description": tools::ASK_USER_DESCRIPTION, "inputSchema": tools::ask_user_schema() }])
+}
+
+/// Codex's `request_user_input` questions (`{ id, header, question, options: [{ label, description }] }`).
+fn input_questions(p: &Value) -> (Vec<String>, Vec<Question>) {
+    let text = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
+    p["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|q| {
+            let options = q["options"].as_array().into_iter().flatten().map(|o| (text(&o["label"]), text(&o["description"]))).collect();
+            (text(&q["id"]), Question { header: text(&q["header"]), question: text(&q["question"]), options, multi: false })
+        })
+        .unzip()
 }
 
 enum Pending {
@@ -90,6 +118,8 @@ struct Bridge {
     cwd: String,
     /// Approval requests waiting on the user: our id → (JSON-RPC id, kind).
     approvals: HashMap<String, (Value, &'static str)>,
+    /// Questions waiting on the user.
+    asks: HashMap<String, Ask>,
     /// Diffs of file-change items, for their result card.
     diffs: HashMap<String, String>,
     /// Subagent threads by thread id. Their events arrive on the same stream as the main
@@ -160,6 +190,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         fast: false,
         cwd: cwd.clone(),
         approvals: HashMap::new(),
+        asks: HashMap::new(),
         diffs: HashMap::new(),
         children: HashMap::new(),
         usage: Usage::default(),
@@ -195,6 +226,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     // New threads keep paginated history, which `thread/revert` (/undo) needs.
     let mut start_params = thread_params.clone();
     start_params["historyMode"] = json!("paginated");
+    // winfer code's question tool (Codex's own `request_user_input` only works in its plan mode).
+    start_params["dynamicTools"] = dynamic_tools();
 
     while let Some(msg) = super::recv(&rx) {
         match msg {
@@ -309,6 +342,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore);
                     }
                 }
+                Cmd::Approve(id, _) if b.asks.contains_key(&id) => b.answer(&id, None),
+                Cmd::Answer(id, answers) => b.answer(&id, Some(answers)),
                 Cmd::Approve(id, decision) => {
                     let Some((rpc, _kind)) = b.approvals.remove(&id) else { continue };
                     let decision = match decision {
@@ -318,7 +353,6 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     };
                     let _ = b.proc.write(&json!({ "id": rpc, "result": { "decision": decision } }));
                 }
-                Cmd::Answer(..) => {}
                 Cmd::SetModel(m) => b.model = Some(m),
                 Cmd::SetEffort(e) => b.effort = e,
                 Cmd::SetMode(m) => {
@@ -483,7 +517,57 @@ impl Bridge {
         list
     }
 
+    /// Answers questions (`None`: the user dismissed them).
+    fn answer(&mut self, id: &str, answers: Option<Vec<String>>) {
+        use crate::harness::tools;
+        let Some(ask) = self.asks.remove(id) else { return };
+        let msg = match ask {
+            Ask::Tool { rpc, questions } => {
+                let (ok, text) = match answers {
+                    Some(a) => (true, tools::ask_user_result(&questions, &a)),
+                    None => (false, tools::ASK_USER_DECLINED.to_string()),
+                };
+                json!({ "id": rpc, "result": { "success": ok, "contentItems": [{ "type": "inputText", "text": text }] } })
+            }
+            Ask::Input { rpc, ids } => {
+                let answers: serde_json::Map<String, Value> =
+                    ids.into_iter().zip(answers.unwrap_or_default()).map(|(id, a)| (id, json!({ "answers": [a] }))).collect();
+                json!({ "id": rpc, "result": { "answers": answers } })
+            }
+        };
+        let _ = self.proc.write(&msg);
+    }
+
+    /// Questions for the user: winfer code's `ask_user` and Codex's `request_user_input`.
+    fn on_ask(&mut self, method: &str, id: Value, p: &Value) {
+        use crate::harness::tools;
+        let key = format!("codex-{id}");
+        let (ask, questions) = if method == "item/tool/call" {
+            if p["tool"].as_str() != Some(tools::ASK_USER) {
+                let text = format!("No tool {} here.", p["tool"].as_str().unwrap_or(""));
+                let _ = self.proc.write(&json!({ "id": id, "result": { "success": false, "contentItems": [{ "type": "inputText", "text": text }] } }));
+                return;
+            }
+            let questions = Question::parse_all(&p["arguments"]);
+            (Ask::Tool { rpc: id.clone(), questions: questions.clone() }, questions)
+        } else {
+            let (ids, questions) = input_questions(p);
+            (Ask::Input { rpc: id.clone(), ids }, questions)
+        };
+        if questions.is_empty() {
+            self.asks.insert(key.clone(), ask);
+            return self.answer(&key, None);
+        }
+        let title = questions[0].question.clone();
+        let detail = if p["threadId"].as_str().is_some_and(|t| self.children.contains_key(t)) { "Asked by a subagent.".into() } else { String::new() };
+        self.asks.insert(key.clone(), ask);
+        self.emit(Ev::Approval(Approval { id: key, tool: "Question".into(), title, detail, questions, ..Default::default() }));
+    }
+
     fn on_request(&mut self, method: &str, id: Value, p: &Value) {
+        if matches!(method, "item/tool/call" | "item/tool/requestUserInput") {
+            return self.on_ask(method, id, p);
+        }
         let key = format!("codex-{id}");
         let approval = match method {
             "item/commandExecution/requestApproval" | "execCommandApproval" => {
@@ -528,7 +612,7 @@ impl Bridge {
                 self.emit(Ev::Approval(a));
             }
             None => {
-                // Requests we don't support (user input forms, auth refresh): refuse politely.
+                // Requests we don't support (MCP elicitation, auth refresh): refuse politely.
                 let _ = self.proc.write(&json!({ "id": id, "error": { "code": -32601, "message": format!("winfer code doesn't support {method}") } }));
             }
         }
@@ -752,6 +836,9 @@ impl Bridge {
                 ("Edit".into(), changed_paths(item))
             }
             "mcpToolCall" => (format!("{} · {}", s(item, "server"), s(item, "tool")), first_arg(&item["arguments"])),
+            "dynamicToolCall" if s(item, "tool") == crate::harness::tools::ASK_USER => {
+                ("Question".into(), item["arguments"]["questions"][0]["question"].as_str().unwrap_or("").to_string())
+            }
             "dynamicToolCall" => (s(item, "tool"), first_arg(&item["arguments"])),
             "webSearch" => ("WebSearch".into(), s(item, "query")),
             "collabAgentToolCall" => {
@@ -847,7 +934,12 @@ impl Bridge {
                 }
                 self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: Some(diff).filter(|d| !d.is_empty()) });
             }
-            "mcpToolCall" | "dynamicToolCall" => {
+            "dynamicToolCall" => {
+                let ok = item["success"].as_bool() != Some(false);
+                let output = item["contentItems"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+                self.emit(Ev::ToolEnd { id, ok, output, diff: None });
+            }
+            "mcpToolCall" => {
                 let ok = item["error"].is_null();
                 let output = if ok {
                     item["result"]["content"]
@@ -1238,6 +1330,41 @@ mod tests {
         assert_eq!(model_infos(&json!({ "model": "m", "serviceTiers": [] })).len(), 1);
     }
 
+    #[test]
+    fn questions_go_to_the_picker_and_answers_back() {
+        let (mut b, rx) = bridge();
+        let (me, out) = channel();
+        b.proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let reply = || loop {
+            match out.recv_timeout(Duration::from_secs(5)).unwrap() {
+                In::Line(l) => break serde_json::from_str::<Value>(&l).unwrap(),
+                _ => continue,
+            }
+        };
+        let args = json!({ "questions": [{ "header": "Lib", "question": "Which library?", "options": [{ "label": "A", "description": "a" }, { "label": "B" }] }] });
+        b.on_request("item/tool/call", json!(7), &json!({ "threadId": "main", "turnId": "t0", "callId": "c", "tool": "ask_user", "arguments": args }));
+        let Ok(Ev::Approval(a)) = rx.try_recv() else { panic!("no question") };
+        assert_eq!(a.questions[0].options, [("A".to_string(), "a".to_string()), ("B".to_string(), String::new())]);
+        b.answer(&a.id, Some(vec!["B".into()]));
+        let r = reply();
+        assert_eq!((r["id"].clone(), r["result"]["success"].clone()), (json!(7), json!(true)));
+        assert!(r["result"]["contentItems"][0]["text"].as_str().unwrap().contains("\"Which library?\" → \"B\""));
+
+        // Codex's own request_user_input: answers by question id; dismissing sends none.
+        let p = json!({ "threadId": "main", "turnId": "t0", "itemId": "i", "isBlocking": true, "questions": [{ "id": "q1", "header": "H", "question": "Go?", "options": [{ "label": "Yes", "description": "" }] }] });
+        b.on_request("item/tool/requestUserInput", json!(8), &p);
+        let Ok(Ev::Approval(a)) = rx.try_recv() else { panic!("no question") };
+        b.answer(&a.id, Some(vec!["Yes".into()]));
+        assert_eq!(reply()["result"], json!({ "answers": { "q1": { "answers": ["Yes"] } } }));
+        b.on_request("item/tool/requestUserInput", json!(9), &p);
+        let Ok(Ev::Approval(a)) = rx.try_recv() else { panic!("no question") };
+        b.answer(&a.id, None);
+        assert_eq!(reply()["result"], json!({ "answers": {} }));
+        // Other dynamic tools aren't ours.
+        b.on_request("item/tool/call", json!(10), &json!({ "tool": "nope", "arguments": {} }));
+        assert_eq!(reply()["result"]["success"], json!(false));
+    }
+
     fn bridge() -> (Bridge, Receiver<Ev>) {
         let (events, rx) = channel();
         let (me, _) = channel();
@@ -1257,6 +1384,7 @@ mod tests {
             fast: false,
             cwd: String::new(),
             approvals: HashMap::new(),
+            asks: HashMap::new(),
             diffs: HashMap::new(),
             children: HashMap::new(),
             usage: Usage::default(),

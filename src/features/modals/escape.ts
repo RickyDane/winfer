@@ -5,6 +5,7 @@ import { focusTerminal } from "@/features/terminal/xtermRegistry";
 import { closeReleaseNotes, useUpdates } from "@/features/updates/updater";
 import { useWorkspaces } from "@/stores/workspaces";
 import { answerApproval, useApprovals } from "@/features/plugins/approvals";
+import { dismissQuestions, useQuestions } from "@/features/questions/questions";
 
 const ws = () => useWorkspaces.getState();
 
@@ -12,6 +13,8 @@ const ws = () => useWorkspaces.getState();
 const MODALS: { open: () => boolean; close: () => void }[] = [
   // Escape answers a plugin's question with "no".
   { open: () => useApprovals.getState().queue.length > 0, close: () => answerApproval(useApprovals.getState().queue[0].id, false) },
+  // Escape dismisses an agent's questions unanswered.
+  { open: () => useQuestions.getState().queue.length > 0, close: () => dismissQuestions(useQuestions.getState().queue[0].id) },
   { open: () => !!useRaceResults.getState().raceId, close: closeRaceResults },
   { open: () => !!useUpdates.getState().notesOpen, close: closeReleaseNotes },
   { open: () => ws().paletteQuery !== null, close: () => ws().closePalette() },

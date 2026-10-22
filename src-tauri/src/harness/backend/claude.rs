@@ -121,23 +121,6 @@ pub fn args(opts: &Opts) -> Vec<String> {
     args
 }
 
-/// AskUserQuestion's questions.
-fn questions(input: &Value) -> Vec<Question> {
-    let text = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
-    input["questions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|q| Question {
-            header: text(&q["header"]),
-            question: text(&q["question"]),
-            options: q["options"].as_array().into_iter().flatten().map(|o| (text(&o["label"]), text(&o["description"]))).collect(),
-            multi: q["multiSelect"].as_bool().unwrap_or(false),
-        })
-        .filter(|q| !q.question.is_empty())
-        .collect()
-}
-
 /// AskUserQuestion's input with the user's answers, which it takes as `answers`: question → answer.
 fn answered(mut input: Value, answers: Vec<String>) -> Value {
     let map: serde_json::Map<String, Value> = input["questions"]
@@ -637,7 +620,7 @@ impl Bridge {
                         title: title(name, &input),
                         detail,
                         diff: edit_diff(name, &input),
-                        questions: if name == "AskUserQuestion" { questions(&input) } else { Vec::new() },
+                        questions: if name == "AskUserQuestion" { Question::parse_all(&input) } else { Vec::new() },
                     }));
                 }
             }

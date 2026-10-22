@@ -35,6 +35,7 @@ import { startWakes } from "@/features/usage/agentUsage";
 import { startUpdateChecks } from "@/features/updates/updater";
 import { startProviderUpdateChecks } from "@/features/providers/updates";
 import { WhatsNew } from "@/features/updates/WhatsNew";
+import { QuestionDialog } from "@/features/questions/QuestionDialog";
 import { ApprovalDialog } from "@/features/plugins/ApprovalDialog";
 import { IS_MAC, keysFor, useKeymap } from "@/commands/keymap";
 import { startStatusTracking } from "@/features/status/agentStatus";
@@ -250,6 +251,7 @@ export function AppShell() {
       <SettingsModal />
       <WhatsNew />
       <ApprovalDialog />
+      <QuestionDialog />
       <RaceView />
       <RaceResults />
       <ReviewInbox />

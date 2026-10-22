@@ -96,6 +96,57 @@ pub fn definitions() -> Vec<Value> {
     tools
 }
 
+/// winfer code's question tool, for backends without one the TUI can show (Codex, the ChatGPT
+/// API; Claude Code has AskUserQuestion). The questions show as the TUI's picker, which the
+/// phone answers too.
+pub const ASK_USER: &str = "ask_user";
+
+pub const ASK_USER_DESCRIPTION: &str = "Ask the user 1-4 multiple-choice questions when you are blocked on a decision that is genuinely theirs (requirements, trade-offs, preferences); they can also type their own answer. Returns their answers. Don't ask what you can find out or sensibly decide yourself; put a recommended option first, marked \"(Recommended)\".";
+
+/// JSON schema of `ask_user`'s arguments (the same shape as Claude Code's AskUserQuestion).
+pub fn ask_user_schema() -> Value {
+    let s = json!({ "type": "string" });
+    json!({
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "header": { "type": "string", "description": "Short label, max 12 chars" },
+                        "question": s,
+                        "options": {
+                            "type": "array",
+                            "description": "2-4 choices",
+                            "items": { "type": "object", "properties": { "label": s, "description": s }, "required": ["label"] },
+                        },
+                        "multiSelect": { "type": "boolean" },
+                    },
+                    "required": ["question", "options"],
+                },
+            },
+        },
+        "required": ["questions"],
+    })
+}
+
+/// `ask_user` as a Responses API function tool.
+pub fn ask_user_definition() -> Value {
+    json!({ "type": "function", "name": ASK_USER, "description": ASK_USER_DESCRIPTION, "parameters": ask_user_schema() })
+}
+
+/// The tool result for the user's `answers` (one per question, in order).
+pub fn ask_user_result(questions: &[super::event::Question], answers: &[String]) -> String {
+    let lines: Vec<String> = questions.iter().zip(answers).map(|(q, a)| format!("\"{}\" → \"{}\"", q.question, a)).collect();
+    format!("The user answered:\n{}", lines.join("\n"))
+}
+
+/// What `ask_user` returns when the user dismissed the questions.
+pub const ASK_USER_DECLINED: &str = "The user dismissed the questions without answering. Don't ask again; go on with your best judgement or ask in plain text.";
+
 /// Whether agents get the `bg` tool (`WINFER_CODE_NO_BG=1` turns it off, e.g. to compare).
 pub fn bg_enabled() -> bool {
     std::env::var_os("WINFER_CODE_NO_BG").is_none_or(|v| v.is_empty() || v == "0")
@@ -181,6 +232,7 @@ pub fn title(name: &str, args: &Value) -> String {
         "glob" => s("pattern"),
         "fetch" => s("url"),
         "todo" => "update todos".into(),
+        ASK_USER => args["questions"][0]["question"].as_str().unwrap_or("").to_string(),
         _ => args.as_object().and_then(|o| o.values().find_map(|v| v.as_str().map(str::to_string))).unwrap_or_default(),
     };
     t.lines().next().unwrap_or("").to_string()

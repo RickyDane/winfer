@@ -14,6 +14,7 @@ import { describeRequest, type AgentRequest } from "@/features/status/request";
 import { lastReply } from "@/features/status/replies";
 import { useUsage } from "@/features/usage/usage";
 import { answerApproval, approvalFor, useApprovals } from "@/features/plugins/approvals";
+import { answerQuestion, currentQuestion, dismissQuestions, questionRequest, questionsFor, useQuestions } from "@/features/questions/questions";
 
 /** A pane as the phone sees it. */
 export interface MobilePane {
@@ -105,6 +106,11 @@ export function snapshot(pane: WorkspacePane): MobilePane {
     request: pane.status === "needs-input" ? (requests.get(pane.id) ?? null) : null,
     reply: pane.status === "done" ? cutReply(lastReply(pane.id)) : null,
   };
+  // The agent's `ask_user` questions (its tool call waits on the answers).
+  const asked = questionsFor(pane.id);
+  if (asked) {
+    return { ...base, status: "needs-input", message: currentQuestion(asked).question, updatedAt: asked.askedAt, request: questionRequest(asked), reply: null };
+  }
   // A plugin asking for approval on this agent's behalf (its tool call waits on the answer).
   const approval = approvalFor(pane.id);
   if (!approval) return base;
@@ -157,11 +163,28 @@ async function onRequest(device: string, req: Request) {
     case "send": {
       const text = req.text?.trim();
       if (!text) return reply({ t: "ack", ok: false, error: "Nothing to send." });
+      // A reply to an `ask_user` question answers it.
+      const asked = questionsFor(pane.id);
+      if (asked) {
+        answerQuestion(asked.id, text);
+        logActivity(pane.workspaceId, `Answered from your phone: ${text.slice(0, 80)}`, pane.provider);
+        return reply({ t: "ack", ok: true });
+      }
       execute({ type: "pane.sendText", target, text, submit: true });
       logActivity(pane.workspaceId, `Answered from your phone: ${text.slice(0, 80)}`, pane.provider);
       return reply({ t: "ack", ok: true });
     }
     case "choose": {
+      const asked = questionsFor(pane.id);
+      if (asked) {
+        const q = currentQuestion(asked);
+        const n = req.option ?? 0;
+        // The row after the options is "Type something": its text is the answer.
+        const answer = n >= 1 && n <= q.options.length ? q.options[n - 1].label : n === q.options.length + 1 ? (req.text?.trim() ?? "") : "";
+        if (!answer || !answerQuestion(asked.id, answer)) return reply({ t: "ack", ok: false, error: "That choice is no longer on screen." });
+        logActivity(pane.workspaceId, `Chose "${answer.slice(0, 60)}" from your phone`, pane.provider);
+        return reply({ t: "ack", ok: true });
+      }
       // Typing an option's number picks it in Claude Code's and winfer code's pickers.
       const n = req.option;
       const options = requests.get(pane.id)?.options ?? [];
@@ -179,6 +202,12 @@ async function onRequest(device: string, req: Request) {
     case "approve":
     case "decline":
     case "interrupt": {
+      const asked = questionsFor(pane.id);
+      if (asked && req.t !== "approve") {
+        dismissQuestions(asked.id);
+        logActivity(pane.workspaceId, "Dismissed the agent's questions from your phone", pane.provider);
+        return reply({ t: "ack", ok: true });
+      }
       const approval = approvalFor(pane.id);
       if (!approval) break;
       answerApproval(approval.id, req.t === "approve");
@@ -279,7 +308,7 @@ function scheduleSync() {
     syncTimer = null;
     for (const pane of allPanes()) {
       // A waiting pane goes out (with its push) once its question is read off the screen.
-      if (pane.status === "needs-input" && !requests.has(pane.id) && !approvalFor(pane.id)) continue;
+      if (pane.status === "needs-input" && !requests.has(pane.id) && !approvalFor(pane.id) && !questionsFor(pane.id)) continue;
       const snap = snapshot(pane);
       if (lastSent.get(pane.id) !== signature(snap)) broadcast(pane.id, true);
     }
@@ -315,6 +344,15 @@ export function startMobileBridge() {
     const now = new Set(queue.flatMap((a) => (a.paneId ? [a.paneId] : [])));
     for (const id of new Set([...asking, ...now])) broadcast(id);
     asking = now;
+  });
+
+  // So do agents' questions: each answer shows the next one.
+  let questioned = new Set<string>();
+  useQuestions.subscribe(({ queue }) => {
+    const now = new Set(queue.map((q) => q.paneId));
+    // The next question of a form goes out without another push.
+    for (const id of new Set([...questioned, ...now])) broadcast(id, questioned.has(id) && now.has(id));
+    questioned = now;
   });
 
   const seen = new Map<string, AgentStatus>(allPanes().map((p) => [p.id, p.status]));

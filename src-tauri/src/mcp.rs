@@ -85,6 +85,11 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"] }
         },
         {
+            "name": crate::harness::tools::ASK_USER,
+            "description": format!("{} The question shows in winfer and on the user's phone; the call waits until they answer.", crate::harness::tools::ASK_USER_DESCRIPTION),
+            "inputSchema": crate::harness::tools::ask_user_schema()
+        },
+        {
             "name": "usage_status",
             "description": "How much of your plan's usage limits is left right now: each window (5-hour session, weekly, …) with percent used and left, when it resets, and when it runs out at the current pace. Check it before and during long tasks, e.g. when told to pause if usage runs low.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -157,14 +162,19 @@ pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
             text: "winfer isn't ready".into(),
         };
     }
-    // Long enough for the user to answer an approval dialog a plugin tool shows.
-    let reply = rx.recv_timeout(Duration::from_secs(300)).unwrap_or(Reply {
+    // Long enough for the user to answer an approval dialog a plugin tool shows, or (`ask_user`)
+    // to come back to winfer and answer an agent's questions.
+    let wait = if call.tool == crate::harness::tools::ASK_USER { ASK_WAIT } else { Duration::from_secs(300) };
+    let reply = rx.recv_timeout(wait).unwrap_or(Reply {
         ok: false,
         text: "winfer didn't answer in time".into(),
     });
     pending().lock().unwrap().remove(&call.id);
     reply
 }
+
+/// How long an `ask_user` call waits for the answers.
+const ASK_WAIT: Duration = Duration::from_secs(3600);
 
 #[tauri::command]
 pub fn mcp_respond(id: String, reply: Reply) {
@@ -178,7 +188,7 @@ pub fn mcp_respond(id: String, reply: Reply) {
 
 fn forward(hook: &str, token: &str, call: &Call) -> Reply {
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(330)))
+        .timeout_global(Some(if call.tool == crate::harness::tools::ASK_USER { ASK_WAIT + Duration::from_secs(30) } else { Duration::from_secs(330) }))
         .http_status_as_error(false)
         .build()
         .into();
@@ -492,6 +502,11 @@ pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
                 if !env.is_empty() {
                     args.extend(["-c".into(), format!("mcp_servers.{key}.env={{{env}}}")]);
                 }
+                // winfer's calls can wait on the user (`ask_user`) or a long `bg` read; Codex
+                // gives up on a tool call after a minute by default.
+                if s.name == "winfer" {
+                    args.extend(["-c".into(), format!("mcp_servers.{key}.tool_timeout_sec={}", ASK_WAIT.as_secs() + 60)]);
+                }
                 args
             })
             .collect(),
@@ -673,6 +688,7 @@ mod tests {
                 "open_url",
                 "open_file",
                 "notify_user",
+                "ask_user",
                 "usage_status",
                 "wait_for_usage_reset",
                 "bg"
@@ -739,6 +755,7 @@ mod tests {
         let codex = agent_args("codex", &servers);
         assert!(codex.contains(&r#"mcp_servers.winfer.command="/app/winfer""#.to_string()));
         assert!(codex.contains(&r#"mcp_servers.winfer.env={WINFER_PANE_ID="p-1"}"#.to_string()));
+        assert!(codex.contains(&"mcp_servers.winfer.tool_timeout_sec=3660".to_string()));
         assert!(agent_args("agy", &servers).is_empty());
         assert!(config["mcpServers"]["winfer"].get("alwaysLoad").is_none());
         let cg = [Server { name: CODEGRAPH, command: "/bin/codegraph".into(), args: vec!["serve".into(), "--mcp".into()], env: Vec::new() }];

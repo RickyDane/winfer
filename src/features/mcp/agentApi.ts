@@ -15,6 +15,7 @@ import { providerName, useWorkspaces, type Pane, type Workspace } from "@/stores
 import { logActivity } from "@/stores/activity";
 import { setTask } from "@/features/progress/progress";
 import { agentCaller, pluginAgentToolList, runPluginAgentTool, type AgentCaller } from "@/features/plugins/plugins";
+import { answersText, askQuestions, DISMISSED, dropQuestions, parseQuestions } from "@/features/questions/questions";
 import { cancelWake, limitsOf, pendingWake, refreshLimits, scheduleWake, usageReport } from "@/features/usage/agentUsage";
 
 interface Call {
@@ -57,6 +58,10 @@ export function runVoiceTool(tool: string, args: Record<string, unknown>): Promi
   if (!ws) return Promise.reject(new ToolError("No workspace is open."));
   return runWorkspaceTool(ws, null, tool, args);
 }
+
+/** How long an `ask_user` question waits for the user (the app's own limit is an hour). */
+const ASK_TIMEOUT_MS = 59 * 60_000;
+const findPane = (id: string) => useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === id);
 
 const VOICE = "Live voice";
 const who = (ws: Workspace, self: Pane | null) => (self ? describe(ws, self) : VOICE);
@@ -161,6 +166,19 @@ async function runWorkspaceTool(ws: Workspace, self: Pane | null, tool: string, 
       if (!self) throw new ToolError("Live voice talks to the user directly; just say it.");
       reportStatus(self.id, "needs-input", String(a.message ?? "An agent needs you"));
       return "The user has been notified.";
+    }
+    case "ask_user": {
+      if (!self) throw new ToolError("Live voice talks to the user directly; just ask.");
+      const questions = parseQuestions(a.questions);
+      if (!questions.length) throw new ToolError("questions is empty: give 1-4 questions, each with its options.");
+      if (questions.length > 4) throw new ToolError("Ask at most 4 questions at once.");
+      reportStatus(self.id, "needs-input", questions[0].question);
+      logActivity(ws.id, `${who(ws, self)} asks: ${questions[0].question.slice(0, 80)}`, self.provider);
+      // winfer gives up on a call after an hour (src-tauri/src/mcp.rs); so does the dialog.
+      const timer = setTimeout(() => dropQuestions(self.id), ASK_TIMEOUT_MS);
+      const answers = await askQuestions(self.id, questions).finally(() => clearTimeout(timer));
+      if (findPane(self.id)?.status === "needs-input") reportStatus(self.id, "working");
+      return answers ? answersText(questions, answers) : DISMISSED;
     }
     case "usage_status": {
       // Live voice asks about a pane's agent (its plan), defaulting to the focused pane.

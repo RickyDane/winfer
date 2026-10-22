@@ -422,6 +422,10 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 if codegraph.is_some() {
                     hidden.extend(mcp::CODEGRAPH_COVERS.map(String::from));
                 }
+                // Claude Code asks with its own AskUserQuestion, winfer code with its picker.
+                if matches!(provider.id.as_str(), "claude" | "winfer") {
+                    hidden.push(crate::harness::tools::ASK_USER.into());
+                }
                 mcp::winfer_server(&req.pane_id, &hidden)
                     .into_iter()
                     .chain(codegraph)
