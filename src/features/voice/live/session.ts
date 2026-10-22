@@ -84,10 +84,10 @@ function send(event: Record<string, unknown>) {
 
 async function sessionConfig() {
   const { voiceConfig } = useWorkspaces.getState();
-  if (attempt.bare) return { type: "realtime", instructions: liveInstructions(toolContext()) };
+  if (attempt.bare) return { type: "realtime", instructions: liveInstructions(toolContext(), voiceConfig.livePrompt) };
   return {
     type: "realtime",
-    instructions: liveInstructions(toolContext()),
+    instructions: liveInstructions(toolContext(), voiceConfig.livePrompt),
     tools: await voiceTools(attempt.tools),
     tool_choice: "auto",
     audio: {
@@ -335,7 +335,13 @@ function watchApp(c: Connection) {
   // Panes and workspaces change the tools (pane targets) and the state in the instructions.
   c.unsubscribe.push(
     useWorkspaces.subscribe((s, prev) => {
-      if (s.workspaces !== prev.workspaces || s.activeWorkspaceId !== prev.activeWorkspaceId || s.focusedPaneId !== prev.focusedPaneId) refreshSession();
+      if (
+        s.workspaces !== prev.workspaces ||
+        s.activeWorkspaceId !== prev.activeWorkspaceId ||
+        s.focusedPaneId !== prev.focusedPaneId ||
+        s.voiceConfig.livePrompt !== prev.voiceConfig.livePrompt
+      )
+        refreshSession();
       const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
       const before = new Map(prev.workspaces.flatMap((w) => w.panes.map((p) => [p.id, p.status] as const)));
       ws?.panes.forEach((p, i) => {

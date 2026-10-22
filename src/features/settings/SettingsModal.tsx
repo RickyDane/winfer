@@ -6,6 +6,7 @@ import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defa
 import { IS_MAC, keysFor, voiceKeys } from "@/commands/keymap";
 import { configureVoice, refreshVoiceStatus, useVoice } from "@/features/voice/voice";
 import { DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
+import { LIVE_ROLE } from "@/features/voice/live/instructions";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -727,6 +728,40 @@ function VoiceSettings() {
   );
 }
 
+/** The live voice agent's system prompt; empty or unchanged uses the default. */
+function LivePrompt() {
+  const custom = useWorkspaces((s) => s.voiceConfig.livePrompt);
+  const saved = custom?.trim() || LIVE_ROLE;
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  const save = (text: string | undefined) => useWorkspaces.getState().setVoiceConfig({ livePrompt: text && text.trim() !== LIVE_ROLE ? text.trim() : undefined });
+  return (
+    <Row
+      stacked
+      label="System prompt"
+      hint={
+        <>
+          How the voice agent behaves and talks. winfer adds the current panes, workspaces and browser tabs after it; changes apply right away, also mid-conversation.{" "}
+          {custom && (
+            <button onClick={() => save(undefined)} className="text-accent hover:underline">
+              Reset to default
+            </button>
+          )}
+        </>
+      }
+    >
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => save(draft)}
+        rows={8}
+        aria-label="Live voice system prompt"
+        className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:border-accent"
+      />
+    </Row>
+  );
+}
+
 /** Live voice: a spoken conversation with OpenAI's realtime model that runs winfer's tools. */
 function LiveVoiceSettings() {
   const signedIn = useChatGpt((s) => s.signedIn);
@@ -786,6 +821,7 @@ function LiveVoiceSettings() {
         <Row label="Model" hint={`Empty uses ${DEFAULT_LIVE_MODEL}.`}>
           <input className={cn(inputClass, "w-48")} value={model} placeholder={DEFAULT_LIVE_MODEL} onChange={(e) => set({ liveModel: e.target.value.trim() })} spellCheck={false} />
         </Row>
+        <LivePrompt />
         <Row label="Voice" hint="Applies to the next conversation.">
           <Select value={voice} onChange={(e) => set({ liveVoice: e.target.value })} className="w-36">
             {LIVE_VOICES.map((v) => (

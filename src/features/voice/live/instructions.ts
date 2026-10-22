@@ -33,4 +33,5 @@ export function stateSummary(ctx: ToolContext): string {
   ].join("\n");
 }
 
-export const liveInstructions = (ctx: ToolContext) => `${LIVE_ROLE}\n\n${stateSummary(ctx)}`;
+/** The user's system prompt (Settings → Voice), else the default, followed by winfer's state. */
+export const liveInstructions = (ctx: ToolContext, prompt?: string) => `${prompt?.trim() || LIVE_ROLE}\n\n${stateSummary(ctx)}`;
