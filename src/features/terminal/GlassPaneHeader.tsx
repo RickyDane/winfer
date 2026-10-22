@@ -99,6 +99,14 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
         <span className="@[300px]:hidden">
           <ContextMeter paneId={pane.id} provider={pane.provider} />
         </span>
+        {pane.devUrl && (
+          <button onMouseDown={stop} onClick={() => execute({ type: "browser.open", url: pane.devUrl! })} title={`Open ${pane.devUrl} in the browser panel`} className="shrink-0">
+            <Pill className="border-accent/30 bg-accent/15 text-[11px] text-accent hover:bg-accent/25">
+              Launch
+              <ExternalLink size={10} />
+            </Pill>
+          </button>
+        )}
         <div className={cn("flex shrink-0 items-center transition-opacity group-hover/header:opacity-100", focused ? "opacity-100" : "opacity-55")}>
           <PaneMenu pane={pane} onRename={() => setRenaming(true)} />
           {pane.archived ? (
@@ -171,14 +179,6 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
                 title="Model · click to change"
               >
                 <Pill className="max-w-28 hover:bg-white/15 hover:text-fg">{pane.model}</Pill>
-              </button>
-            )}
-            {pane.devUrl && (
-              <button onMouseDown={stop} onClick={() => execute({ type: "browser.open", url: pane.devUrl! })} title={`Open ${pane.devUrl} in the browser panel`}>
-                <Pill className="border-accent/30 bg-accent/15 text-accent hover:bg-accent/25">
-                  {pane.devUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-                  <ExternalLink size={10} />
-                </Pill>
               </button>
             )}
           </>
