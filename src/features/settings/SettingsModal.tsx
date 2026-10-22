@@ -759,10 +759,10 @@ function LiveVoiceSettings() {
         title="Live voice"
         description={`Talk with winfer in a continuous conversation (${keysFor({ type: "voice.live" })} or the wave button in the title bar). OpenAI's realtime model hears you, answers aloud and operates winfer: panes, agents, the browser, files and plugins. Audio goes to OpenAI.`}
       >
-        <Row label="Account" hint={signedIn ? "Uses your ChatGPT sign-in; falls back to the API key if OpenAI doesn't allow it." : "Sign in with ChatGPT (AI tab) or add an OpenAI API key."}>
-          <span className="text-xs text-fg-muted">{signedIn ? "ChatGPT" : hasKey ? "API key" : "Not set up"}</span>
+        <Row label="Account" hint="OpenAI's live voice API needs an API key; a ChatGPT sign-in isn't accepted for it yet.">
+          <span className={cn("text-xs", hasKey ? "text-fg-muted" : "text-warning")}>{hasKey ? "API key" : signedIn ? "ChatGPT only (not supported yet)" : "Not set up"}</span>
         </Row>
-        <Row label="OpenAI API key" hint={hasKey ? "Stored in the keychain." : "Optional with a ChatGPT sign-in."}>
+        <Row label="OpenAI API key" hint={hasKey ? "Stored in the keychain." : "Create one at platform.openai.com → API keys."}>
           <div className="flex items-center gap-2">
             <input
               type="password"

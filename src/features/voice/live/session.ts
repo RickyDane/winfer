@@ -130,9 +130,10 @@ function refreshSession(delay = 600) {
 
 /** The next, smaller attempt after a failed one; null when nothing is left to try. */
 async function nextAttempt(a: Attempt, auth: "chatgpt" | "apikey" | null): Promise<Attempt | null> {
+  // With the ChatGPT sign-in every response fails, whatever the session holds.
+  if (auth === "chatgpt") return (await invoke<boolean>("realtime_has_api_key").catch(() => false)) ? { ...FIRST, auth: "apikey" } : null;
   if (a.tools !== "none") return { ...a, tools: "none" };
   if (!a.bare) return { ...a, bare: true };
-  if (auth === "chatgpt" && (await invoke<boolean>("realtime_has_api_key").catch(() => false))) return { ...FIRST, auth: "apikey" };
   return null;
 }
 
@@ -148,7 +149,7 @@ function degrade(): boolean {
     if (!next) {
       const hint =
         useLiveVoice.getState().auth === "chatgpt"
-          ? "OpenAI fails every live voice session with your ChatGPT sign-in. Add an OpenAI API key in Settings → Voice to use live voice."
+          ? "OpenAI's live voice API doesn't work with a ChatGPT sign-in yet (it needs API key auth). Add an OpenAI API key in Settings → Voice → Live voice."
           : "OpenAI fails every live voice session, even a bare one. Try another model in Settings → Voice (e.g. gpt-realtime).";
       fail(hint);
       return;
