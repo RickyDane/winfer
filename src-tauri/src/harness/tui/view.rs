@@ -14,6 +14,7 @@ use ratatui::widgets::{Block as Frame_, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::app::App;
+use super::picker::PickKind;
 use super::transcript::{Block, NoticeKind, Status, diff_lines, truncate};
 use super::{anim, theme};
 use crate::harness::event::Mode;
@@ -25,6 +26,7 @@ const MARGIN: u16 = 2;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.poll_shell_output();
+    app.refresh_task_log();
     let area = f.area();
     let now = Instant::now();
     let t = now.duration_since(app.epoch);
@@ -105,6 +107,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(status_lines), status_area);
     completion(f, app, main);
     picker(f, app, area, t);
+    task_log(f, app, area, t);
     btw(f, app, area, t);
 }
 
@@ -906,7 +909,7 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
                 Span::styled(" ↑↓", theme::muted()),
                 Span::styled(" select   ", theme::dim()),
                 Span::styled("enter", theme::muted()),
-                Span::styled(if p.kind.is_live() { " jump   " } else { " choose   " }, theme::dim()),
+                Span::styled(match p.kind { PickKind::Tasks => " output   ", kind if kind.is_live() => " jump   ", _ => " choose   " }, theme::dim()),
             ];
             if p.kind.is_live() {
                 keys.extend([Span::styled("ctrl+x", theme::muted()), Span::styled(" stop   ", theme::dim())]);
@@ -969,6 +972,121 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
     }
     if visible.is_empty() {
         lines.push(Line::from(Span::styled("   no matches", theme::dim())));
+    }
+    anim::fade(&mut lines, k);
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Hard-wraps log text to `width` columns (output keeps its spacing, unlike prose wrapping).
+fn wrap_log(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(4);
+    let mut out = Vec::new();
+    for line in text.trim_end_matches('\n').split('\n') {
+        let line = line.replace('\t', "    ");
+        let mut cur = String::new();
+        let mut w = 0;
+        for c in line.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if w + cw > width {
+                out.push(std::mem::take(&mut cur));
+                w = 0;
+            }
+            cur.push(c);
+            w += cw;
+        }
+        out.push(cur);
+    }
+    out
+}
+
+/// A background task's output, live: a header with its state, then the log's tail, following
+/// new output unless scrolled up.
+fn task_log(f: &mut Frame, app: &mut App, full: Rect, t: Duration) {
+    if app.picker.is_some() {
+        return;
+    }
+    let k = app.overlay.value();
+    let (state, running) = match app.task_log_task() {
+        Some(task) => {
+            let took = anim::elapsed(task.ended.unwrap_or_else(Instant::now).duration_since(task.started));
+            let state = match (task.status, task.exit_code) {
+                (Status::Running, _) => format!("running {took}"),
+                (_, Some(code)) => format!("exit {code} after {took}"),
+                (Status::Ok, None) => format!("done in {took}"),
+                (_, None) => format!("stopped after {took}"),
+            };
+            let desc = Some(task.description.trim()).filter(|d| !d.is_empty()).map(str::to_string);
+            ((state, desc, task.status, task.exit_code), task.status == Status::Running)
+        }
+        None => (("gone".to_string(), None, Status::Failed, None), false),
+    };
+    let Some(log) = &mut app.task_log else { return };
+    let (state, desc, status, code) = state;
+    let w = full.width.saturating_sub(4).min(110);
+    let iw = w.saturating_sub(4) as usize;
+    let body = if log.text.trim().is_empty() { Vec::new() } else { wrap_log(&log.text, iw) };
+    let head = 2 + desc.is_some() as u16;
+    let room = full.height.saturating_sub(6 + head).max(3);
+    let rows = (body.len() as u16).clamp(3, room);
+    let max_scroll = (body.len() as u16).saturating_sub(rows);
+    log.scroll = log.scroll.min(max_scroll);
+    let scroll = log.scroll;
+    let h_full = (rows + head + 3).min(full.height);
+    let h = ((h_full as f32) * (0.7 + 0.3 * k)).round() as u16;
+    let x = full.x + (full.width.saturating_sub(w)) / 2;
+    let y = full.y + (full.height.saturating_sub(h_full)) / 3 + ((1.0 - k) * 2.0).round() as u16;
+    let area = Rect { x, y, width: w, height: h.max(3) };
+    dim_behind(f, full, k);
+    f.render_widget(Clear, area);
+    let mut keys = vec![Span::styled(" ↑↓", theme::muted()), Span::styled(" scroll   ", theme::dim())];
+    if scroll > 0 {
+        keys.extend([Span::styled("f", theme::muted()), Span::styled(" follow   ", theme::dim())]);
+    }
+    if running {
+        keys.extend([Span::styled("ctrl+x", theme::muted()), Span::styled(" stop   ", theme::dim())]);
+    }
+    keys.extend([
+        Span::styled("y", theme::muted()),
+        Span::styled(" copy   ", theme::dim()),
+        Span::styled("enter", theme::muted()),
+        Span::styled(" jump   ", theme::dim()),
+        Span::styled("esc", theme::muted()),
+        Span::styled(" back ", theme::dim()),
+    ]);
+    let block = Frame_::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::fg(theme::FAINT()))
+        .title(Line::from(vec![Span::raw(" "), Span::styled(truncate(&log.title, iw.saturating_sub(4)), theme::bold(theme::FG())), Span::raw(" ")]))
+        .title_bottom(Line::from(keys).right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    nebula_border(f, area, t, k);
+    let inner = Rect { x: inner.x + 1, y: inner.y + 1, width: inner.width.saturating_sub(2), height: inner.height.saturating_sub(1) };
+    let (mark, color) = match (status, code) {
+        (Status::Running, _) => (anim::dots_spin(t).to_string(), theme::GREEN()),
+        (Status::Ok, _) | (_, Some(0)) => ("✓".to_string(), theme::GREEN()),
+        (_, Some(_)) => ("✗".to_string(), theme::RED()),
+        _ => ("■".to_string(), theme::DIM()),
+    };
+    let mut where_ = Vec::new();
+    if scroll > 0 {
+        where_.push(Span::styled(format!("   ↑ {scroll} lines up · paused"), theme::fg(theme::VIOLET())));
+    } else if running {
+        where_.push(Span::styled("   following live", theme::dim()));
+    }
+    let mut lines = vec![Line::from([vec![Span::styled(format!("{mark} "), theme::fg(color)), Span::styled(state, theme::muted())], where_].concat())];
+    if let Some(d) = desc {
+        lines.push(Line::from(Span::styled(truncate(&d, iw), theme::dim())));
+    }
+    lines.push(Line::default());
+    if body.is_empty() {
+        lines.push(Line::from(Span::styled(if running { "no output yet" } else { "no output" }, theme::dim())));
+    } else {
+        let room = inner.height.saturating_sub(lines.len() as u16) as usize;
+        let end = body.len().saturating_sub(scroll as usize);
+        let start = end.saturating_sub(room);
+        lines.extend(body[start..end].iter().map(|l| Line::from(Span::styled(l.clone(), theme::fg(theme::FG())))));
     }
     anim::fade(&mut lines, k);
     f.render_widget(Paragraph::new(lines), inner);

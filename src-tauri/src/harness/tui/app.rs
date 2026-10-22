@@ -1,7 +1,7 @@
 //! App state and input handling for the `winfer code` TUI.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -43,6 +43,52 @@ pub struct Btw {
     /// Lines scrolled down in the answer.
     pub scroll: u16,
     pub started: Instant,
+}
+
+/// A background task's output, opened from the task list (`/tasks`, ctrl+b): its log, re-read
+/// while it shows so it follows the process live.
+pub struct TaskLog {
+    /// The task, as the task list's value (its card id, else its task id).
+    pub value: String,
+    pub title: String,
+    /// The log's tail, without terminal escapes.
+    pub text: String,
+    /// Lines scrolled up from the end; 0 follows new output.
+    pub scroll: u16,
+    /// Last re-read of the log.
+    pub read: Option<Instant>,
+}
+
+/// Bytes of a log the output view shows at most (its tail).
+const TASK_LOG_MAX: u64 = 256 * 1024;
+
+/// The last `max` bytes of a file, starting at a line boundary when cut.
+fn read_tail(path: &Path, max: u64) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let offset = len.saturating_sub(max);
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.take(max).read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(if offset > 0 { text.split_once('\n').map_or(text.as_ref(), |(_, tail)| tail) } else { &text }.to_string())
+}
+
+/// Log text as a terminal would leave it: escapes dropped and a carriage return (progress bars)
+/// overwriting the line it's on.
+fn clean_log(raw: &str) -> String {
+    raw.split('\n')
+        .map(|line| {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let line = line.rsplit('\r').find(|s| !s.is_empty()).unwrap_or("");
+            tools::strip_ansi(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A user turn, for /undo: its message in the transcript and whether the workspace was
@@ -193,6 +239,8 @@ pub struct App {
     pub answering: Answering,
     pub picker: Option<Picker>,
     pub btw: Option<Btw>,
+    /// A background task's output, open over the transcript.
+    pub task_log: Option<TaskLog>,
     pub overlay: Tween,
     pub completion: Option<Completion>,
     pub todos: Vec<Todo>,
@@ -309,6 +357,7 @@ impl App {
             answering: Answering::default(),
             picker: None,
             btw: None,
+            task_log: None,
             overlay: Tween::new(0.0),
             completion: None,
             todos: Vec::new(),
@@ -437,6 +486,7 @@ impl App {
             || self.overlay.moving()
             || self.picker.is_some()
             || self.btw.as_ref().is_some_and(|b| b.open)
+            || self.task_log.is_some()
             || self.ctx_shown.moving()
             || !self.approvals.is_empty()
             || self.toast.as_ref().is_some_and(|t| t.1.elapsed() < Duration::from_millis(4000))
@@ -1211,7 +1261,7 @@ impl App {
 
     /// The `/btw` modal is showing and takes the keys.
     pub fn btw_showing(&self) -> bool {
-        self.picker.is_none() && self.btw.as_ref().is_some_and(|b| b.open)
+        self.picker.is_none() && self.task_log.is_none() && self.btw.as_ref().is_some_and(|b| b.open)
     }
 
     pub fn on_shell(&mut self, id: String, command: String, output: String, ok: bool) {
@@ -1588,28 +1638,13 @@ impl App {
 
     /// Read a bounded tail at most once a second, including one final read on completion.
     pub fn poll_shell_output(&mut self) {
-        use std::io::{Read, Seek, SeekFrom};
         for task in self.tasks.iter_mut().filter(|t| !t.agent && t.output_file.is_some()) {
             if task.polled.is_some_and(|at| if task.status == Status::Running { at.elapsed() < Duration::from_secs(1) } else { task.ended.is_none_or(|end| at >= end) }) {
                 continue;
             }
             task.polled = Some(Instant::now());
             let Some(item) = self.items.iter_mut().find(|i| matches!(&i.block, Block::Tool { id, .. } if task.tool_id.as_deref() == Some(id))) else { continue };
-            let read = || -> std::io::Result<String> {
-                let path = task.output_file.as_ref().unwrap();
-                if !std::fs::metadata(path)?.is_file() {
-                    return Err(std::io::Error::other("not a regular file"));
-                }
-                let mut file = std::fs::File::open(path)?;
-                let len = file.metadata()?.len();
-                let offset = len.saturating_sub(16_384);
-                file.seek(SeekFrom::Start(offset))?;
-                let mut bytes = Vec::new();
-                file.take(16_384).read_to_end(&mut bytes)?;
-                let text = String::from_utf8_lossy(&bytes);
-                Ok(if offset > 0 { text.split_once('\n').map_or(text.as_ref(), |(_, tail)| tail) } else { &text }.to_string())
-            };
-            if let Ok(text) = read() {
+            if let Ok(text) = read_tail(task.output_file.as_ref().unwrap(), 16_384) {
                 if let Block::Tool { output, .. } = &mut item.block {
                     if *output != text {
                         *output = text;
@@ -1737,6 +1772,86 @@ impl App {
         }
     }
 
+    /// The background shell a task list value names (its card id or task id).
+    fn shell_task(&self, value: &str) -> Option<&Task> {
+        self.tasks.iter().find(|t| !t.agent && (t.id == value || t.tool_id.as_deref() == Some(value)))
+    }
+
+    /// Opens the output of the background shell picked in the task list.
+    fn open_task_log(&mut self, value: &str, title: String) {
+        if self.shell_task(value).is_none() {
+            self.toast("Can't find that task.", NoticeKind::Info);
+            return;
+        }
+        self.task_log = Some(TaskLog { value: value.to_string(), title, text: String::new(), scroll: 0, read: None });
+        self.refresh_task_log();
+        self.overlay = Tween::new(0.0);
+        self.overlay.set(1.0, 180);
+    }
+
+    /// Re-reads the open task output (a few times a second while the task runs, once after it
+    /// ends). Without a log file it shows the output its card has.
+    pub fn refresh_task_log(&mut self) {
+        let Some(log) = &self.task_log else { return };
+        let Some(task) = self.shell_task(&log.value) else { return };
+        let running = task.status == Status::Running;
+        if log.read.is_some_and(|at| if running { at.elapsed() < Duration::from_millis(250) } else { task.ended.is_none_or(|end| at >= end + Duration::from_millis(500)) }) {
+            return;
+        }
+        let from_file = task.output_file.as_deref().and_then(|p| read_tail(p, TASK_LOG_MAX).ok());
+        let raw = from_file.or_else(|| {
+            let id = task.tool_id.as_deref()?;
+            self.items.iter().find_map(|i| match &i.block {
+                Block::Tool { id: card, output, .. } if card == id => Some(output.clone()),
+                _ => None,
+            })
+        });
+        let Some(log) = &mut self.task_log else { return };
+        log.read = Some(Instant::now());
+        if let Some(raw) = raw {
+            log.text = clean_log(&raw);
+        }
+    }
+
+    /// The open task output's task, for its header.
+    pub fn task_log_task(&self) -> Option<&Task> {
+        self.task_log.as_ref().and_then(|l| self.shell_task(&l.value))
+    }
+
+    /// Keys while a task's output shows: scroll (0 follows new output), stop, jump to its card,
+    /// copy; esc goes back to the task list.
+    fn task_log_key(&mut self, k: KeyEvent) {
+        let Some(log) = &mut self.task_log else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace => {
+                self.task_log = None;
+                self.open_tasks();
+            }
+            KeyCode::Char('c') if ctrl => self.task_log = None,
+            KeyCode::Char('x') if ctrl => {
+                let value = log.value.clone();
+                self.stop_task(&value);
+            }
+            KeyCode::Enter => {
+                let value = log.value.clone();
+                self.task_log = None;
+                self.jump_to_tool(&value);
+            }
+            KeyCode::Up | KeyCode::Char('k') => log.scroll = log.scroll.saturating_add(1),
+            KeyCode::Down | KeyCode::Char('j') => log.scroll = log.scroll.saturating_sub(1),
+            KeyCode::PageUp => log.scroll = log.scroll.saturating_add(10),
+            KeyCode::PageDown | KeyCode::Char(' ') => log.scroll = log.scroll.saturating_sub(10),
+            KeyCode::Home | KeyCode::Char('g') => log.scroll = u16::MAX,
+            KeyCode::End | KeyCode::Char('G') | KeyCode::Char('f') => log.scroll = 0,
+            KeyCode::Char('y') => {
+                copy(&log.text);
+                self.toast("Copied the output.", NoticeKind::Success);
+            }
+            _ => {}
+        }
+    }
+
     /// Keeps an open subagent or task list live: new entries, progress and elapsed times.
     pub fn refresh_agents(&mut self) {
         let Some(kind) = self.picker.as_ref().map(|p| p.kind).filter(|k| k.is_live()) else { return };
@@ -1786,7 +1901,8 @@ impl App {
                     self.set_compaction(p.kind == PickKind::TrimAt, percent);
                 }
             }
-            PickKind::Agents | PickKind::Tasks => self.jump_to_tool(&item.value),
+            PickKind::Agents => self.jump_to_tool(&item.value),
+            PickKind::Tasks => self.open_task_log(&item.value, item.label.clone()),
             PickKind::Session => {
                 if self.busy {
                     self.send(Cmd::Interrupt);
@@ -2213,6 +2329,11 @@ impl App {
 
         if self.btw_showing() {
             self.btw_key(k);
+            return;
+        }
+
+        if self.task_log.is_some() {
+            self.task_log_key(k);
             return;
         }
 
@@ -3226,6 +3347,36 @@ mod tests {
         // The running shell is listed first; ctrl+x stops it by its task id.
         a.on_term(Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)));
         assert_eq!(a.toast.as_ref().map(|t| t.0.as_str()), Some("Stopping background task…"));
+    }
+
+    #[test]
+    fn a_background_shell_opens_from_its_picker_and_follows_its_log_live() {
+        let mut a = app();
+        let g = a.generation;
+        let path = std::env::temp_dir().join(format!("winfer-bg-{}.output", session::new_id()));
+        std::fs::write(&path, "\x1b[32mstarting\x1b[0m\nprogress 10%\rprogress 50%\n").unwrap();
+        a.on_agent(g, Ev::Task(TaskEv {
+            id: "bg1".into(), title: Some("vite dev server".into()), description: Some("Serves the app".into()), status: Some("running".into()),
+            output_file: Some(path.to_string_lossy().into_owned()), ..Default::default()
+        }));
+        a.open_tasks();
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert!(a.picker.is_none() && a.task_log.is_some());
+        a.overlay = Tween::new(1.0);
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("vite dev server") && s.contains("Serves the app") && s.contains("running") && s.contains("following live"), "{s}");
+        assert!(s.contains("starting") && s.contains("progress 50%") && !s.contains("progress 10%"), "{s}");
+
+        // New output shows on a later read.
+        std::fs::write(&path, "starting\nready on :5173\n").unwrap();
+        a.task_log.as_mut().unwrap().read = None;
+        let s = screen(&mut a, 120, 30);
+        assert!(s.contains("ready on :5173"), "{s}");
+
+        // Esc goes back to the list.
+        a.on_term(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(a.task_log.is_none() && a.picker.as_ref().is_some_and(|p| p.kind == PickKind::Tasks));
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
