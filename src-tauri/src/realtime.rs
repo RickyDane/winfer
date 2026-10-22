@@ -168,6 +168,22 @@ pub async fn realtime_browser_call(app: AppHandle, workspace_id: String, name: S
     .map_err(|e| e.to_string())?
 }
 
+/// Appends a line to live-voice.log in the app data folder: step timings and events, to find
+/// where a conversation stalls.
+#[tauri::command]
+pub async fn live_voice_log(app: AppHandle, line: String) {
+    use std::io::Write;
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let path = dir.join("live-voice.log");
+    // Keep the log small: start over past 1 MB.
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1_000_000) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 /// Owner of live voice's background tasks; their exit notices arrive as `bg://note` for it.
 pub const VOICE_OWNER: &str = "voice";
 

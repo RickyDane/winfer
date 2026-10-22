@@ -16,6 +16,7 @@ import { providerName, useWorkspaces, type AgentStatus } from "@/stores/workspac
 import { useBrowser } from "@/features/browser/browser";
 import { HANDOFF_RULES, liveInstructions } from "./instructions";
 import { chunks, Delegate } from "./delegate";
+import { timed, trace } from "./trace";
 import { END_CONVERSATION, resetVoiceTools, runVoiceFunction, voiceTools, type ToolLevel } from "./tools";
 
 const CALLS_URL = "https://api.openai.com/v1/realtime/calls";
@@ -227,6 +228,7 @@ function onEvent(raw: string) {
   } catch {
     return;
   }
+  if (!/delta$/.test(e.type)) trace(`event ${e.type}`, e.type === "error" || e.response?.status === "failed" ? raw : undefined);
   switch (e.type) {
     case "input_audio_buffer.speech_started":
       if (conn) conn.userSpeaking = true;
@@ -301,7 +303,7 @@ async function micConstraints(): Promise<MediaTrackConstraints> {
   const base: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
   const wanted = useWorkspaces.getState().voiceConfig.inputDevice;
   if (!wanted || !navigator.mediaDevices.enumerateDevices) return base;
-  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const devices = await timed("enumerateDevices", () => navigator.mediaDevices.enumerateDevices()).catch(() => []);
   const match = devices.find((d) => d.kind === "audioinput" && d.label && (d.label === wanted || d.label.includes(wanted)));
   return match ? { ...base, deviceId: { exact: match.deviceId } } : base;
 }
@@ -309,7 +311,9 @@ async function micConstraints(): Promise<MediaTrackConstraints> {
 /** Mic level for the HUD's meter. */
 function monitor(c: Connection) {
   try {
+    trace("new AudioContext…");
     c.ctx = new AudioContext();
+    trace("AudioContext created", c.ctx.state);
     void c.ctx.resume();
     const analyser = c.ctx.createAnalyser();
     analyser.fftSize = 512;
@@ -392,9 +396,13 @@ export async function startLive(retry?: Attempt): Promise<void> {
   let mic: MediaStream | null = null;
   let pc: RTCPeerConnection | null = null;
   try {
-    const kind = retry ? "api" : await pickKind();
+    trace("start", { retry: Boolean(retry), inputDevice: useWorkspaces.getState().voiceConfig.inputDevice ?? null });
+    const kind = retry ? "api" : await timed("pickKind", pickKind);
+    trace("kind", kind);
     useLiveVoice.setState({ auth: kind === "api" ? "apikey" : "chatgpt" });
-    mic = await navigator.mediaDevices.getUserMedia({ audio: await micConstraints() });
+    const constraints = await micConstraints();
+    mic = await timed("getUserMedia", () => navigator.mediaDevices.getUserMedia({ audio: constraints }));
+    trace("mic", mic.getAudioTracks().map((t) => ({ label: t.label, state: t.readyState, muted: t.muted })));
     // Ended while connecting.
     if (useLiveVoice.getState().state !== "connecting") {
       mic.getTracks().forEach((t) => t.stop());
@@ -422,9 +430,13 @@ export async function startLive(retry?: Attempt): Promise<void> {
       notes: [],
       closed: false,
     };
-    pc.ontrack = (ev) => playRemote(c, ev);
+    pc.ontrack = (ev) => {
+      trace("remote track", { kind: ev.track.kind, streams: ev.streams.length });
+      playRemote(c, ev);
+    };
     pc.addTransceiver(track, { direction: "sendrecv", streams: [mic] });
     pc.onconnectionstatechange = () => {
+      trace("connection", pc!.connectionState);
       if (c.closed) return;
       if (pc!.connectionState === "failed" || pc!.connectionState === "closed") fail("The live voice connection dropped.");
     };
@@ -444,14 +456,15 @@ export async function startLive(retry?: Attempt): Promise<void> {
 /** The public realtime API: a client secret on the API key, events over the data channel. */
 async function connectApi(c: Connection) {
   const { voiceConfig } = useWorkspaces.getState();
-  const secret = await invoke<{ value: string }>("realtime_client_secret", {
+  const secret = await timed("client secret", () => invoke<{ value: string }>("realtime_client_secret", {
     model: voiceConfig.liveModel || DEFAULT_LIVE_MODEL,
     voice: voiceConfig.liveVoice || DEFAULT_LIVE_VOICE,
-  });
+  }));
   const dc = c.pc.createDataChannel("oai-events");
   c.dc = dc;
   dc.onmessage = (ev) => onEvent(String(ev.data));
   dc.onopen = async () => {
+    trace("data channel open");
     send({ type: "session.update", session: await sessionConfig() });
     // A short greeting: the user knows it's live, and hears whether the speaker works.
     send({ type: "response.create", response: { instructions: "Greet the user in a few words and ask what to do. Speak in the user's language if known, else English." } });
@@ -461,9 +474,10 @@ async function connectApi(c: Connection) {
   };
   const offer = await c.pc.createOffer();
   await c.pc.setLocalDescription(offer);
-  const res = await fetch(CALLS_URL, { method: "POST", body: offer.sdp, headers: { Authorization: `Bearer ${secret.value}`, "Content-Type": "application/sdp" } });
+  const res = await timed("POST calls", () => fetch(CALLS_URL, { method: "POST", body: offer.sdp, headers: { Authorization: `Bearer ${secret.value}`, "Content-Type": "application/sdp" } }));
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  await c.pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+  const answer = await res.text();
+  await timed("setRemoteDescription", () => c.pc.setRemoteDescription({ type: "answer", sdp: answer }));
 }
 
 /** Resolves once ICE gathering finishes, or after `ms`. */
@@ -499,16 +513,16 @@ async function connectChatgpt(c: Connection) {
   c.unsubscribe.push(unlistenEvent, unlistenClosed, () => void invoke("chatgpt_voice_close").catch(() => {}));
   const offer = await c.pc.createOffer();
   await c.pc.setLocalDescription(offer);
-  await iceGathered(c.pc);
+  await timed("ICE gathering", () => iceGathered(c.pc));
   const instructions = `${liveInstructions(toolContext(), voiceConfig.livePrompt)}\n\n${HANDOFF_RULES}`;
-  const call = await invoke<{ answerSdp: string }>("chatgpt_voice_call", {
+  const call = await timed("chatgpt call", () => invoke<{ answerSdp: string }>("chatgpt_voice_call", {
     sdp: c.pc.localDescription?.sdp ?? offer.sdp ?? "",
     instructions,
     voice: voiceConfig.liveChatgptVoice || DEFAULT_CHATGPT_VOICE,
-  });
+  }));
   if (c.closed) return;
-  await c.pc.setRemoteDescription({ type: "answer", sdp: call.answerSdp });
-  await invoke("chatgpt_voice_join");
+  await timed("setRemoteDescription", () => c.pc.setRemoteDescription({ type: "answer", sdp: call.answerSdp }));
+  await timed("chatgpt join", () => invoke("chatgpt_voice_join"));
   setState("listening");
   watchApp(c);
   logActivity(useWorkspaces.getState().activeWorkspaceId, "Live voice started (ChatGPT plan)");
@@ -522,6 +536,7 @@ function onChatgptEvent(c: Connection, raw: string) {
   } catch {
     return;
   }
+  trace(`chatgpt event ${e.type}`, e.type === "error" || e.type === "delegation.created" ? raw : undefined);
   if (c.closed) return;
   switch (e.type) {
     case "input_transcript.added":
@@ -599,6 +614,7 @@ function teardown() {
 }
 
 function fail(message: string) {
+  trace("fail", message);
   teardown();
   useLiveVoice.setState({ state: "error", error: message, tool: null });
 }

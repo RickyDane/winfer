@@ -6,6 +6,7 @@ import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defa
 import { IS_MAC, keysFor } from "@/commands/keymap";
 import { CHATGPT_VOICES, DEFAULT_CHATGPT_VOICE, DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { LIVE_ROLE } from "@/features/voice/live/instructions";
+import { timed, trace } from "@/features/voice/live/trace";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -560,11 +561,14 @@ function Microphone() {
     setResult(null);
     setLevel(0);
     try {
-      const all = await navigator.mediaDevices.enumerateDevices();
+      trace("mic test", { selected });
+      const all = await timed("enumerateDevices", () => navigator.mediaDevices.enumerateDevices());
       const match = selected ? all.find((d) => d.kind === "audioinput" && d.label === selected) : undefined;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: match ? { deviceId: { exact: match.deviceId } } : true });
+      const stream = await timed("getUserMedia", () => navigator.mediaDevices.getUserMedia({ audio: match ? { deviceId: { exact: match.deviceId } } : true }));
       load();
+      trace("new AudioContext…");
       const ctx = new AudioContext();
+      trace("AudioContext created", ctx.state);
       const analyser = ctx.createAnalyser();
       ctx.createMediaStreamSource(stream).connect(analyser);
       const buf = new Float32Array(analyser.fftSize);
@@ -580,6 +584,7 @@ function Microphone() {
       stream.getTracks().forEach((t) => t.stop());
       void ctx.close();
       const name = stream.getAudioTracks()[0]?.label || "the microphone";
+      trace("mic test peak", peak);
       setResult(peak < 0.005 ? { ok: false, text: `Very quiet on “${name}”. Speak up or pick another microphone.` } : { ok: true, text: `Heard you on “${name}”.` });
     } catch (err) {
       setResult({ ok: false, text: String(err) });

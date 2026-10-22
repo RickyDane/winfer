@@ -775,6 +775,8 @@ mockIPC(
         return false;
       case "chatgpt_voice_ready":
         return false;
+      case "live_voice_log":
+        return null;
       case "realtime_bg_tool":
         return null;
       case "realtime_client_secret":

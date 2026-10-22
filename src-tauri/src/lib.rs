@@ -227,6 +227,7 @@ pub fn run() {
             realtime::realtime_browser_call,
             realtime::realtime_bg_tool,
             realtime::realtime_bg,
+            realtime::live_voice_log,
             chatgpt_voice::chatgpt_voice_call,
             chatgpt_voice::chatgpt_voice_join,
             chatgpt_voice::chatgpt_voice_send,
