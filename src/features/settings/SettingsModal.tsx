@@ -4,7 +4,7 @@ import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
 import { IS_MAC, keysFor } from "@/commands/keymap";
-import { DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
+import { CHATGPT_VOICES, DEFAULT_CHATGPT_VOICE, DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { LIVE_ROLE } from "@/features/voice/live/instructions";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -680,17 +680,23 @@ function LivePrompt() {
 }
 
 /** Live voice: a spoken conversation with OpenAI's realtime model that runs winfer's tools. */
+const titleCase = (v: string) => v[0].toUpperCase() + v.slice(1);
+
 function LiveVoiceSettings() {
   const signedIn = useChatGpt((s) => s.signedIn);
   const model = useWorkspaces((s) => s.voiceConfig.liveModel ?? "");
   const voice = useWorkspaces((s) => s.voiceConfig.liveVoice ?? DEFAULT_LIVE_VOICE);
+  const chatgptVoice = useWorkspaces((s) => s.voiceConfig.liveChatgptVoice ?? DEFAULT_CHATGPT_VOICE);
+  const auth = useWorkspaces((s) => s.voiceConfig.liveAuth ?? "auto");
   const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [codexReady, setCodexReady] = useState<boolean | null>(null);
   const [key, setKey] = useState("");
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const set = useWorkspaces.getState().setVoiceConfig;
 
   useEffect(() => {
     void invoke<boolean>("realtime_has_api_key").then(setHasKey, () => setHasKey(false));
+    void invoke<boolean>("chatgpt_voice_ready").then(setCodexReady, () => setCodexReady(false));
   }, []);
 
   const saveKey = async (value: string | null) => {
@@ -705,14 +711,41 @@ function LiveVoiceSettings() {
     }
   };
 
+  // What a conversation would use with the current choice.
+  const uses = auth === "apikey" ? "api" : auth === "chatgpt" ? "chatgpt" : hasKey ? "api" : codexReady ? "chatgpt" : null;
+  const status =
+    uses === "api"
+      ? hasKey
+        ? "OpenAI API key"
+        : "OpenAI API key (none saved)"
+      : uses === "chatgpt"
+        ? codexReady
+          ? "ChatGPT plan (Codex login)"
+          : "ChatGPT plan (Codex isn't logged in)"
+        : "Not set up";
+  const ok = (uses === "api" && hasKey) || (uses === "chatgpt" && codexReady);
+
   return (
     <>
       <Card
         title="Live voice"
-        description={`Talk with winfer in a continuous conversation (${keysFor({ type: "voice.live" })} or the wave button in the title bar). OpenAI's realtime model hears you, answers aloud and operates winfer: panes, agents, the browser, files and plugins. Audio goes to OpenAI.`}
+        description={`Talk with winfer in a continuous conversation (${keysFor({ type: "voice.live" })} or the wave button in the title bar). An OpenAI voice model hears you, answers aloud and operates winfer: panes, agents, the browser, files and plugins. Audio goes to OpenAI.`}
       >
-        <Row label="Account" hint="OpenAI's live voice API needs an API key; a ChatGPT sign-in isn't accepted for it yet.">
-          <span className={cn("text-xs", hasKey ? "text-fg-muted" : "text-warning")}>{hasKey ? "API key" : signedIn ? "ChatGPT only (not supported yet)" : "Not set up"}</span>
+        <Row
+          label="Connection"
+          hint={
+            <>
+              <span className={ok ? undefined : "text-warning"}>Uses: {status}.</span> An API key runs OpenAI's realtime model, which operates winfer directly (fastest; billed to the API
+              account). The ChatGPT plan runs its voice model on the Codex CLI's login (`codex login`){signedIn ? " and your ChatGPT sign-in" : ""}; it hands each request to a model that runs winfer's
+              tools, so actions take a few seconds longer.
+            </>
+          }
+        >
+          <Select value={auth} onChange={(e) => set({ liveAuth: e.target.value as "auto" | "apikey" | "chatgpt" })} className="w-56">
+            <option value="auto">Automatic (API key, else ChatGPT)</option>
+            <option value="apikey">OpenAI API key</option>
+            <option value="chatgpt">ChatGPT plan</option>
+          </Select>
         </Row>
         <Row label="OpenAI API key" hint={hasKey ? "Stored in the keychain." : "Create one at platform.openai.com → API keys."}>
           <div className="flex items-center gap-2">
@@ -735,18 +768,27 @@ function LiveVoiceSettings() {
             )}
           </div>
         </Row>
-        <Row label="Model" hint={`Empty uses ${DEFAULT_LIVE_MODEL}.`}>
+        <Row label="Model (API key)" hint={`Empty uses ${DEFAULT_LIVE_MODEL}. The ChatGPT plan always uses its own voice model.`}>
           <input className={cn(inputClass, "w-48")} value={model} placeholder={DEFAULT_LIVE_MODEL} onChange={(e) => set({ liveModel: e.target.value.trim() })} spellCheck={false} />
         </Row>
         <LivePrompt />
-        <Row label="Voice" hint="Applies to the next conversation.">
-          <Select value={voice} onChange={(e) => set({ liveVoice: e.target.value })} className="w-36">
-            {LIVE_VOICES.map((v) => (
-              <option key={v} value={v}>
-                {v[0].toUpperCase() + v.slice(1)}
-              </option>
-            ))}
-          </Select>
+        <Row label="Voice" hint="API key · ChatGPT plan. Applies to the next conversation.">
+          <div className="flex items-center gap-2">
+            <Select value={voice} onChange={(e) => set({ liveVoice: e.target.value })} className="w-32" aria-label="Voice with an API key">
+              {LIVE_VOICES.map((v) => (
+                <option key={v} value={v}>
+                  {titleCase(v)}
+                </option>
+              ))}
+            </Select>
+            <Select value={chatgptVoice} onChange={(e) => set({ liveChatgptVoice: e.target.value })} className="w-32" aria-label="Voice on the ChatGPT plan">
+              {CHATGPT_VOICES.map((v) => (
+                <option key={v} value={v}>
+                  {titleCase(v)}
+                </option>
+              ))}
+            </Select>
+          </div>
         </Row>
       </Card>
       <Result result={result} />

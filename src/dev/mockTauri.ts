@@ -773,6 +773,8 @@ mockIPC(
         return ["gpt-6-luna", "gpt-6.1-sol"];
       case "realtime_has_api_key":
         return false;
+      case "chatgpt_voice_ready":
+        return false;
       case "realtime_bg_tool":
         return null;
       case "realtime_client_secret":

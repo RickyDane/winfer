@@ -26,6 +26,7 @@ mod usage;
 mod usage_history;
 mod vault;
 mod realtime;
+mod chatgpt_voice;
 mod worktree;
 
 use tauri::Manager;
@@ -123,6 +124,7 @@ pub fn run() {
         .manage(browser::BrowserManager::default())
         .manage(android::AndroidManager::default())
         .manage(realtime::LiveBrowser::default())
+        .manage(chatgpt_voice::ChatgptVoice::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -225,6 +227,12 @@ pub fn run() {
             realtime::realtime_browser_call,
             realtime::realtime_bg_tool,
             realtime::realtime_bg,
+            chatgpt_voice::chatgpt_voice_call,
+            chatgpt_voice::chatgpt_voice_join,
+            chatgpt_voice::chatgpt_voice_send,
+            chatgpt_voice::chatgpt_voice_close,
+            chatgpt_voice::chatgpt_tool_turn,
+            chatgpt_voice::chatgpt_voice_ready,
             mcp::mcp_respond,
             mobile::mobile_status,
             mobile::mobile_pair_start,

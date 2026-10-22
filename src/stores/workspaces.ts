@@ -148,7 +148,7 @@ interface WorkspaceState {
   /** The LLM's title per agent session id (persisted), so a resumed session keeps its title. */
   sessionTitles: Record<string, string>;
   /** Voice model choices, persisted and pushed to the backend on launch. */
-  voiceConfig: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string };
+  voiceConfig: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string; liveAuth?: "auto" | "apikey" | "chatgpt"; liveChatgptVoice?: string };
   hydrate: () => Promise<void>;
   loadProviders: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
@@ -215,7 +215,7 @@ interface WorkspaceState {
   setGlassPanes: (on: boolean) => void;
   setPageTabIconsOnly: (iconsOnly: boolean) => void;
   setSearchPane: (id: string | null) => void;
-  setVoiceConfig: (config: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string }) => void;
+  setVoiceConfig: (config: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string; liveAuth?: "auto" | "apikey" | "chatgpt"; liveChatgptVoice?: string }) => void;
   toggleSidebar: () => void;
   toggleBrowser: () => void;
 }
@@ -691,7 +691,7 @@ interface Snapshot {
     sidebarOpen?: boolean;
     expandedWorkspaces?: string[];
     browserOpen?: boolean;
-    voice?: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string };
+    voice?: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string; liveAuth?: "auto" | "apikey" | "chatgpt"; liveChatgptVoice?: string };
     recipes?: Recipe[];
     agentModels?: Record<ProviderId, string>;
     autoApprove?: ProviderId[];

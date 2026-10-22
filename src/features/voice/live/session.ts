@@ -1,7 +1,11 @@
 /**
- * Live voice: a continuous spoken conversation with OpenAI's realtime model over WebRTC. The
- * model hears the mic, talks back, and runs winfer's tools (tools.ts) through the data channel.
- * Its client secret comes from src-tauri/src/realtime.rs.
+ * Live voice: a continuous spoken conversation with an OpenAI voice model over WebRTC, which
+ * operates winfer. Two ways to connect:
+ * - "api": the public realtime API on the user's OpenAI API key (src-tauri/src/realtime.rs). The
+ *   model calls winfer's tools (tools.ts) itself, through the data channel.
+ * - "chatgpt": the ChatGPT plan's voice model, as the Codex app runs it
+ *   (src-tauri/src/chatgpt_voice.rs). It can't call tools: it hands requests over, and a
+ *   tool-calling model on the plan runs them (delegate.ts) and answers for it to speak.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -10,13 +14,21 @@ import { toolContext } from "@/features/palette/entries";
 import { logActivity } from "@/stores/activity";
 import { providerName, useWorkspaces, type AgentStatus } from "@/stores/workspaces";
 import { useBrowser } from "@/features/browser/browser";
-import { liveInstructions } from "./instructions";
+import { HANDOFF_RULES, liveInstructions } from "./instructions";
+import { chunks, Delegate } from "./delegate";
 import { END_CONVERSATION, resetVoiceTools, runVoiceFunction, voiceTools, type ToolLevel } from "./tools";
 
 const CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 export const DEFAULT_LIVE_MODEL = "gpt-realtime";
 export const DEFAULT_LIVE_VOICE = "marin";
 export const LIVE_VOICES = ["marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"];
+/** Voices of the ChatGPT plan's voice model. */
+export const CHATGPT_VOICES = ["cove", "juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol"];
+export const DEFAULT_CHATGPT_VOICE = "cove";
+/** How long to collect ICE candidates before sending the offer (the ChatGPT call doesn't trickle). */
+const ICE_GATHER_MS = 1500;
+
+export type LiveAuth = "auto" | "apikey" | "chatgpt";
 
 export type LiveState = "off" | "connecting" | "listening" | "thinking" | "speaking" | "error";
 
@@ -46,8 +58,14 @@ const MAX_LINES = 12;
 const addLine = (line: LiveLine) => useLiveVoice.setState((s) => ({ lines: [...s.lines, line].slice(-MAX_LINES) }));
 
 interface Connection {
+  kind: "api" | "chatgpt";
   pc: RTCPeerConnection;
-  dc: RTCDataChannel;
+  /** The API's event channel; the ChatGPT call's events come over winfer's control socket. */
+  dc: RTCDataChannel | null;
+  /** Runs handed-over requests (ChatGPT call). */
+  delegate: Delegate | null;
+  /** What the voice and the user have said in the current turns (ChatGPT call). */
+  said: { user: string; assistant: string };
   mic: MediaStream;
   audio: HTMLAudioElement;
   ctx: AudioContext | null;
@@ -61,14 +79,13 @@ interface Connection {
 
 let conn: Connection | null = null;
 /**
- * What a connection tries. OpenAI can fail a session's first response with a bare "server
+ * What an API connection tries. OpenAI can fail a session's first response with a bare "server
  * error" and then go silent, so each retry is a fresh connection with less: no tools, then no
- * extras (transcription, VAD, noise reduction), then the API key instead of the ChatGPT sign-in.
+ * extras (transcription, VAD, noise reduction).
  */
 interface Attempt {
   tools: ToolLevel;
   bare: boolean;
-  auth?: "apikey";
 }
 const FIRST: Attempt = { tools: "full", bare: false };
 let attempt: Attempt = FIRST;
@@ -78,7 +95,7 @@ let working = false;
 let retrying = false;
 
 function send(event: Record<string, unknown>) {
-  if (conn?.dc.readyState === "open") conn.dc.send(JSON.stringify(event));
+  if (conn?.dc?.readyState === "open") conn.dc.send(JSON.stringify(event));
 }
 
 async function sessionConfig() {
@@ -105,7 +122,8 @@ let updateTimer: number | undefined;
 function refreshSession(delay = 600) {
   clearTimeout(updateTimer);
   updateTimer = window.setTimeout(async () => {
-    if (!conn || conn.closed) return;
+    // A ChatGPT call keeps the session it started with; the delegate sees fresh state per request.
+    if (!conn || conn.closed || conn.kind !== "api") return;
     send({ type: "session.update", session: await sessionConfig() });
   }, delay);
 }
@@ -120,41 +138,36 @@ export function fatalMessage(error: { type?: string; code?: string; message?: st
 }
 
 /** The next, smaller attempt after a failed one; null when nothing is left to try. */
-async function nextAttempt(a: Attempt, auth: "chatgpt" | "apikey" | null): Promise<Attempt | null> {
-  // With the ChatGPT sign-in every response fails, whatever the session holds.
-  if (auth === "chatgpt") return (await invoke<boolean>("realtime_has_api_key").catch(() => false)) ? { ...FIRST, auth: "apikey" } : null;
+function nextAttempt(a: Attempt): Attempt | null {
   if (a.tools !== "none") return { ...a, tools: "none" };
   if (!a.bare) return { ...a, bare: true };
   return null;
 }
 
-const describeAttempt = (a: Attempt) => (a.auth ? "with your API key" : a.bare ? "with a bare session" : a.tools === "none" ? "without tools" : "with fewer tools");
+const describeAttempt = (a: Attempt) => (a.bare ? "with a bare session" : "without tools");
 
 /** Starts over on a fresh connection with less; false when there is nothing left to try. */
 function degrade(): boolean {
   if (retrying) return true;
-  if (!conn || working) return false;
+  if (!conn || working || conn.kind !== "api") return false;
   retrying = true;
-  const failed = attempt;
-  void nextAttempt(failed, useLiveVoice.getState().auth).then((next) => {
-    if (!next) {
-      const hint =
-        useLiveVoice.getState().auth === "chatgpt"
-          ? "OpenAI's live voice API doesn't work with a ChatGPT sign-in yet (it needs API key auth). Add an OpenAI API key in Settings → Voice → Live voice."
-          : "OpenAI fails every live voice session, even a bare one. Most often the API account has no credits left (platform.openai.com → Settings → Billing; separate from a ChatGPT plan). Otherwise try another model in Settings → Voice.";
-      fail(hint);
-      return;
-    }
-    addLine({ who: "tool", text: `Retrying ${describeAttempt(next)}…` });
-    teardown();
-    void startLive(next);
-  });
+  const next = nextAttempt(attempt);
+  if (!next) {
+    fail(
+      "OpenAI fails every live voice session, even a bare one. Most often the API account has no credits left (platform.openai.com → Settings → Billing; separate from a ChatGPT plan). Otherwise try another model in Settings → Voice.",
+    );
+    return true;
+  }
+  addLine({ who: "tool", text: `Retrying ${describeAttempt(next)}…` });
+  teardown();
+  void startLive(next);
   return true;
 }
 
 /** Tells the model about something that happened in winfer; it decides whether to speak. */
 function note(text: string) {
-  if (!conn) return;
+  // A ChatGPT call only speaks answers to handed-over requests.
+  if (!conn || conn.kind !== "api") return;
   conn.notes.push(text);
   flushNotes();
 }
@@ -359,6 +372,16 @@ function watchApp(c: Connection) {
   }).then((un) => (c.closed ? un() : c.unsubscribe.push(un)));
 }
 
+/** Which connection to use: the API key when there is one (or chosen), else the ChatGPT plan. */
+async function pickKind(): Promise<"api" | "chatgpt"> {
+  const choice = useWorkspaces.getState().voiceConfig.liveAuth ?? "auto";
+  if (choice === "apikey") return "api";
+  if (choice === "chatgpt") return "chatgpt";
+  if (await invoke<boolean>("realtime_has_api_key").catch(() => false)) return "api";
+  if (await invoke<boolean>("chatgpt_voice_ready").catch(() => false)) return "chatgpt";
+  throw new Error("Live voice needs an OpenAI API key (Settings → Voice → Live voice) or the Codex CLI's ChatGPT login (`codex login`).");
+}
+
 export async function startLive(retry?: Attempt): Promise<void> {
   if (conn) return;
   attempt = retry ?? FIRST;
@@ -369,13 +392,8 @@ export async function startLive(retry?: Attempt): Promise<void> {
   let mic: MediaStream | null = null;
   let pc: RTCPeerConnection | null = null;
   try {
-    const { voiceConfig } = useWorkspaces.getState();
-    const secret = await invoke<{ value: string; auth: "chatgpt" | "apikey" }>("realtime_client_secret", {
-      model: voiceConfig.liveModel || DEFAULT_LIVE_MODEL,
-      voice: voiceConfig.liveVoice || DEFAULT_LIVE_VOICE,
-      auth: attempt.auth ?? null,
-    });
-    useLiveVoice.setState({ auth: secret.auth });
+    const kind = retry ? "api" : await pickKind();
+    useLiveVoice.setState({ auth: kind === "api" ? "apikey" : "chatgpt" });
     mic = await navigator.mediaDevices.getUserMedia({ audio: await micConstraints() });
     // Ended while connecting.
     if (useLiveVoice.getState().state !== "connecting") {
@@ -389,31 +407,31 @@ export async function startLive(retry?: Attempt): Promise<void> {
     audio.autoplay = true;
     audio.style.display = "none";
     document.body.appendChild(audio);
-    const c: Connection = { pc, dc: null as unknown as RTCDataChannel, mic, audio, ctx: null, unsubscribe: [], responding: false, userSpeaking: false, notes: [], closed: false };
+    const c: Connection = {
+      kind,
+      pc,
+      dc: null,
+      delegate: null,
+      said: { user: "", assistant: "" },
+      mic,
+      audio,
+      ctx: null,
+      unsubscribe: [],
+      responding: false,
+      userSpeaking: false,
+      notes: [],
+      closed: false,
+    };
     pc.ontrack = (ev) => playRemote(c, ev);
     pc.addTransceiver(track, { direction: "sendrecv", streams: [mic] });
-    const dc = pc.createDataChannel("oai-events");
-    c.dc = dc;
-    conn = c;
-    monitor(c);
-    dc.onmessage = (ev) => onEvent(String(ev.data));
-    dc.onopen = async () => {
-      send({ type: "session.update", session: await sessionConfig() });
-      // A short greeting: the user knows it's live, and hears whether the speaker works.
-      send({ type: "response.create", response: { instructions: "Greet the user in a few words and ask what to do. Speak in the user's language if known, else English." } });
-      setState("listening");
-      watchApp(c);
-      logActivity(useWorkspaces.getState().activeWorkspaceId, "Live voice started");
-    };
     pc.onconnectionstatechange = () => {
       if (c.closed) return;
       if (pc!.connectionState === "failed" || pc!.connectionState === "closed") fail("The live voice connection dropped.");
     };
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const res = await fetch(CALLS_URL, { method: "POST", body: offer.sdp, headers: { Authorization: `Bearer ${secret.value}`, "Content-Type": "application/sdp" } });
-    if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+    conn = c;
+    monitor(c);
+    if (kind === "api") await connectApi(c);
+    else await connectChatgpt(c);
   } catch (err) {
     if (!conn) {
       mic?.getTracks().forEach((t) => t.stop());
@@ -421,6 +439,146 @@ export async function startLive(retry?: Attempt): Promise<void> {
     }
     fail(err instanceof Error ? err.message : String(err));
   }
+}
+
+/** The public realtime API: a client secret on the API key, events over the data channel. */
+async function connectApi(c: Connection) {
+  const { voiceConfig } = useWorkspaces.getState();
+  const secret = await invoke<{ value: string }>("realtime_client_secret", {
+    model: voiceConfig.liveModel || DEFAULT_LIVE_MODEL,
+    voice: voiceConfig.liveVoice || DEFAULT_LIVE_VOICE,
+  });
+  const dc = c.pc.createDataChannel("oai-events");
+  c.dc = dc;
+  dc.onmessage = (ev) => onEvent(String(ev.data));
+  dc.onopen = async () => {
+    send({ type: "session.update", session: await sessionConfig() });
+    // A short greeting: the user knows it's live, and hears whether the speaker works.
+    send({ type: "response.create", response: { instructions: "Greet the user in a few words and ask what to do. Speak in the user's language if known, else English." } });
+    setState("listening");
+    watchApp(c);
+    logActivity(useWorkspaces.getState().activeWorkspaceId, "Live voice started");
+  };
+  const offer = await c.pc.createOffer();
+  await c.pc.setLocalDescription(offer);
+  const res = await fetch(CALLS_URL, { method: "POST", body: offer.sdp, headers: { Authorization: `Bearer ${secret.value}`, "Content-Type": "application/sdp" } });
+  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  await c.pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+}
+
+/** Resolves once ICE gathering finishes, or after `ms`. */
+function iceGathered(pc: RTCPeerConnection, ms = ICE_GATHER_MS): Promise<void> {
+  if (pc.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      pc.removeEventListener("icegatheringstatechange", check);
+      resolve();
+    };
+    const check = () => pc.iceGatheringState === "complete" && done();
+    const timer = window.setTimeout(done, ms);
+    pc.addEventListener("icegatheringstatechange", check);
+  });
+}
+
+/** The ChatGPT plan: winfer creates the call and relays its control socket. */
+async function connectChatgpt(c: Connection) {
+  const { voiceConfig } = useWorkspaces.getState();
+  c.delegate = new Delegate({
+    onTool: (tool) => useLiveVoice.setState({ tool }),
+    onResult: (name, args, output) => {
+      addLine({ who: "tool", text: `${name}${output.startsWith("Error") ? ` — ${output.slice(0, 120)}` : ""}` });
+      logActivity(useWorkspaces.getState().activeWorkspaceId, `Live voice: ${name} ${summarizeArgs(args)}`.trim());
+    },
+  });
+  // Listening first, so the session's first events aren't missed.
+  const unlistenEvent = await listen<string>("chatgpt-voice://event", ({ payload }) => onChatgptEvent(c, payload));
+  const unlistenClosed = await listen<string>("chatgpt-voice://closed", ({ payload }) => {
+    if (!c.closed) fail(`The live voice call ended${payload && payload !== "closed" ? ` (${payload})` : ""}.`);
+  });
+  c.unsubscribe.push(unlistenEvent, unlistenClosed, () => void invoke("chatgpt_voice_close").catch(() => {}));
+  const offer = await c.pc.createOffer();
+  await c.pc.setLocalDescription(offer);
+  await iceGathered(c.pc);
+  const instructions = `${liveInstructions(toolContext(), voiceConfig.livePrompt)}\n\n${HANDOFF_RULES}`;
+  const call = await invoke<{ answerSdp: string }>("chatgpt_voice_call", {
+    sdp: c.pc.localDescription?.sdp ?? offer.sdp ?? "",
+    instructions,
+    voice: voiceConfig.liveChatgptVoice || DEFAULT_CHATGPT_VOICE,
+  });
+  if (c.closed) return;
+  await c.pc.setRemoteDescription({ type: "answer", sdp: call.answerSdp });
+  await invoke("chatgpt_voice_join");
+  setState("listening");
+  watchApp(c);
+  logActivity(useWorkspaces.getState().activeWorkspaceId, "Live voice started (ChatGPT plan)");
+}
+
+/** A control-socket event of the ChatGPT call. */
+function onChatgptEvent(c: Connection, raw: string) {
+  let e: Record<string, any>;
+  try {
+    e = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (c.closed) return;
+  switch (e.type) {
+    case "input_transcript.added":
+      c.said.user += e.item?.text ?? "";
+      setState("listening");
+      break;
+    case "output_transcript.added":
+      c.said.assistant += e.item?.text ?? "";
+      setState("speaking");
+      break;
+    case "turn.done": {
+      const role = e.turn?.role;
+      if (role === "user") {
+        const text = String(e.turn?.transcript || c.said.user).trim();
+        if (text) addLine({ who: "user", text });
+        c.said.user = "";
+        setState("thinking");
+      } else if (role === "assistant") {
+        const text = c.said.assistant.trim();
+        if (text) addLine({ who: "assistant", text });
+        c.said.assistant = "";
+        setState("listening");
+      }
+      break;
+    }
+    case "delegation.created": {
+      const item = e.item ?? {};
+      if (item.type !== "delegation" || item.target !== "client" || !item.id) break;
+      const request = ((item.content ?? []) as { type: string; text?: string }[])
+        .filter((p) => p.type === "input_text")
+        .map((p) => p.text ?? "")
+        .join("")
+        .trim();
+      void handOff(c, String(item.id), request || useLiveVoice.getState().lines.filter((l) => l.who === "user").at(-1)?.text || "");
+      break;
+    }
+    case "error":
+      addLine({ who: "tool", text: `Error: ${e.message ?? e.error?.message ?? "live voice error"}` });
+      break;
+  }
+}
+
+/** Runs a handed-over request and gives the voice the answer to speak. */
+async function handOff(c: Connection, id: string, request: string) {
+  setState("thinking");
+  let answer: { text: string; end: boolean };
+  try {
+    answer = await c.delegate!.run(request);
+  } catch (err) {
+    answer = { text: `That didn't work: ${err instanceof Error ? err.message : String(err)}`, end: false };
+  }
+  if (c.closed) return;
+  for (const text of chunks(answer.text)) {
+    await invoke("chatgpt_voice_send", { message: { type: "delegation.context.append", delegation_item_id: id, content: [{ type: "input_text", text }] } }).catch(() => {});
+  }
+  // Let the goodbye play first.
+  if (answer.end) window.setTimeout(stopLive, 4000);
 }
 
 function teardown() {
@@ -432,7 +590,7 @@ function teardown() {
   c.closed = true;
   c.unsubscribe.forEach((u) => u());
   c.mic.getTracks().forEach((t) => t.stop());
-  c.dc.close();
+  c.dc?.close();
   c.pc.close();
   c.audio.srcObject = null;
   c.audio.remove();

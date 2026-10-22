@@ -82,19 +82,12 @@ fn mint(attempts: &[(&'static str, Result<String, String>)], body: &Value, send:
     Err(errors.join(" "))
 }
 
+/// A client secret for the public realtime API, on the user's OpenAI API key. (That API
+/// doesn't accept a ChatGPT sign-in; a ChatGPT plan uses chatgpt_voice.rs instead.)
 #[tauri::command]
-/// `auth: "apikey"` skips the ChatGPT sign-in (live voice retries with the key when a
-/// ChatGPT-backed session fails).
-pub async fn realtime_client_secret(model: String, voice: String, auth: Option<String>) -> Result<ClientSecret, String> {
+pub async fn realtime_client_secret(model: String, voice: String) -> Result<ClientSecret, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        // The API key first: OpenAI mints sessions for a ChatGPT sign-in but fails their
-        // responses (the public realtime API still needs API key auth), so the sign-in is only
-        // tried without a key, in case OpenAI starts allowing it.
-        let mut attempts = vec![("apikey", api_key().ok_or_else(String::new))];
-        if crate::chatgpt::signed_in() && auth.as_deref() != Some("apikey") {
-            attempts.push(("chatgpt", crate::chatgpt::access_token()));
-        }
-        let attempts: Vec<_> = attempts.into_iter().filter(|(_, t)| !matches!(t, Err(e) if e.is_empty())).collect();
+        let attempts: Vec<_> = api_key().map(|k| ("apikey", Ok(k))).into_iter().collect();
         mint(&attempts, &secret_body(&model, &voice), request)
     })
     .await

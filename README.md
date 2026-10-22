@@ -87,8 +87,8 @@ research and discipline (staying in scope, exact formats, ignoring planted instr
 - **Android mirroring.** See and control a phone or emulator over adb, next to the browser.
 - **Live voice.** Press <kbd>⌘ ⌥ V</kbd> and talk with winfer: "open two Claude panes and ask
   them to fix the login bug", "what is Codex doing?", "open the dev server and click Settings".
-  OpenAI's realtime model answers aloud and drives panes, agents, the browser, files and plugins
-  (needs an OpenAI API key).
+  An OpenAI voice model answers aloud and drives panes, agents, the browser, files and plugins —
+  on an OpenAI API key, or on your ChatGPT plan through the Codex CLI's login.
 - **Worktrees without the bookkeeping.** Existing worktrees and branches show up in the sidebar
   with their age and whether they're merged; start an agent on any branch.
 - **A terminal tab** next to the browser for quick commands, and plain shell panes anywhere.
