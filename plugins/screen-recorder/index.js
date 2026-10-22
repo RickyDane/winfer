@@ -87,7 +87,11 @@ function save(settings) {
   }
 }
 
-const findCanvas = (source) => document.querySelector(`canvas[data-winfer-capture="${source}"]`);
+const findCanvas = (source) => {
+  const selector = `canvas[data-winfer-capture="${source}"]`;
+  // The browser may be undocked into a window of its own.
+  return document.querySelector(selector) ?? window.winferBrowserWindow?.document.querySelector(selector) ?? null;
+};
 /** A canvas still at its default 300×150 hasn't drawn anything yet. */
 const hasPicture = (c) => c && c.width > 0 && c.height > 0 && !(c.width === 300 && c.height === 150);
 

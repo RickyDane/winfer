@@ -3,13 +3,16 @@ import { DevicePanel } from "@/features/android/DevicePanel";
 import { ViewerPanel } from "@/features/viewer/ViewerPanel";
 import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
-import { ArrowLeft, ArrowRight, Bot, Crosshair, Download, FileText, Globe, Monitor, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { AppWindow, ArrowLeft, ArrowRight, Bot, Crosshair, Download, FileText, Globe, Monitor, PanelRight, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { DEFAULT_BROWSER_WIDTH, useWorkspaces } from "@/stores/workspaces";
 import { BrowserView } from "./BrowserView";
 import { ConsoleList } from "./ConsoleList";
+import { dockBrowser, focusUndocked, undockBrowser, useUndock } from "./undock";
+import { viewOf } from "./view";
 import { backgroundLuminance, blendsIn, iconPixels, INVERT_FILTER } from "./iconContrast";
 import {
   closeTab,
@@ -97,11 +100,15 @@ export function BrowserPanel() {
   // An agent working in a tab that isn't on screen: offer to show it.
   const agentElsewhere = agentHere ? undefined : tabs.find((t) => agentTabs[t.id]);
 
+  const root = useRef<HTMLDivElement>(null);
+  const undocked = useUndock((s) => s.win !== null);
+
   useEffect(() => {
     if (!picking) return;
+    const view = viewOf(root.current);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && void togglePick();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    view.addEventListener("keydown", onKey);
+    return () => view.removeEventListener("keydown", onKey);
   }, [picking]);
 
   const [address, setAddress] = useState("");
@@ -121,13 +128,14 @@ export function BrowserPanel() {
 
   useEffect(() => {
     if (focusUrlBar) {
+      focusUndocked();
       urlInput.current?.focus();
       urlInput.current?.select();
     }
   }, [focusUrlBar]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={root} className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {groups.map(({ workspace, tabs }, i) => (
@@ -266,6 +274,15 @@ export function BrowserPanel() {
         <IconButton title={device === "mobile" ? "Desktop view" : "Mobile view"} onClick={() => setDevice("toggle")}>
           {device === "mobile" ? <Smartphone size={14} /> : <Monitor size={14} />}
         </IconButton>
+        {undocked ? (
+          <IconButton title={`Dock the browser back into the side panel (${keysFor({ type: "browser.undock" })})`} onClick={dockBrowser}>
+            <PanelRight size={14} />
+          </IconButton>
+        ) : (
+          <IconButton title={`Undock the browser into its own window (${keysFor({ type: "browser.undock" })})`} onClick={() => void undockBrowser()}>
+            <AppWindow size={14} />
+          </IconButton>
+        )}
       </div>
       {picking && <div className="shrink-0 bg-accent-soft px-3 py-1 text-[11px] text-accent">Click an element to send it to the agent · Esc to cancel</div>}
       {notice && <div className="shrink-0 bg-success/10 px-3 py-1 text-[11px] text-success">{notice}</div>}
@@ -331,6 +348,7 @@ export function SidePanel() {
   const width = useWorkspaces((s) => s.browserWidth);
   const panel = useWorkspaces((s) => s.sidePanel);
   const setPanel = useWorkspaces((s) => s.setSidePanel);
+  const undocked = useUndock((s) => s.win !== null);
   const tab = (active: boolean) =>
     cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
@@ -349,9 +367,33 @@ export function SidePanel() {
           <FileText size={12} /> Viewer
         </button>
       </div>
-      {panel === "device" ? <DevicePanel /> : panel === "terminal" ? <SideTerminal /> : panel === "viewer" ? <ViewerPanel /> : <BrowserPanel />}
+      {panel === "device" ? <DevicePanel /> : panel === "terminal" ? <SideTerminal /> : panel === "viewer" ? <ViewerPanel /> : undocked ? <UndockedNotice /> : <BrowserPanel />}
     </aside>
   );
+}
+
+/** Stands in for the browser in the side panel while it has a window of its own. */
+function UndockedNotice() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-xs text-fg-subtle">
+      <AppWindow size={20} />
+      <span>The browser is in its own window.</span>
+      <div className="flex gap-2">
+        <button onClick={() => focusUndocked()} className="rounded-md bg-panel-raised px-3 py-1.5 font-medium text-fg hover:bg-hover">
+          Show window
+        </button>
+        <button onClick={dockBrowser} className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 font-medium text-on-accent hover:opacity-90">
+          <PanelRight size={13} /> Dock it back
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The browser panel rendered into its undocked window, while there is one. Mounted once by the app shell. */
+export function UndockedBrowser() {
+  const target = useUndock((s) => s.root);
+  return target ? createPortal(<BrowserPanel />, target) : null;
 }
 
 /**

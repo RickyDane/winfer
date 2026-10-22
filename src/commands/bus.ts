@@ -91,6 +91,8 @@ export type Command =
   /** Element picker: click an element in the page to paste its details into the agent. */
   | { type: "browser.pick" }
   | { type: "browser.sendConsole" }
+  /** Moves the browser into its own window, or back into the side panel. */
+  | { type: "browser.undock" }
   | { type: "ui.toggleSidebar" }
   | { type: "ui.toggleBrowser" }
   /** Shows that tab of the side panel, or hides the panel if it's already showing it (unless `show`, which never hides). */
@@ -440,6 +442,9 @@ export function execute(cmd: Command): void {
       return;
     case "browser.sendConsole":
       return browser.sendConsoleToAgent();
+    case "browser.undock":
+      // Lazily: undock.ts imports the keymap, which imports this bus.
+      return void import("@/features/browser/undock").then((m) => m.toggleUndock());
     case "ui.toggleSidebar":
       return s.toggleSidebar();
     case "ui.toggleBrowser":

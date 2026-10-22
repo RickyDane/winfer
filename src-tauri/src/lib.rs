@@ -22,6 +22,7 @@ mod pty;
 mod review;
 mod store;
 mod tool_stats;
+mod undock;
 mod usage;
 mod usage_history;
 mod vault;
@@ -135,6 +136,7 @@ pub fn run() {
             hooks::start(app.handle().clone(), &data_dir)?;
             mobile::start(app.handle().clone(), &data_dir);
             browser::kill_orphans(app.handle());
+            undock::create_main_window(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { AgentCursor } from "./AgentCursor";
 import { logBrowser, setPageSize, type Device, type PageSize } from "./browser";
+import { viewOf } from "./view";
 
 const MOBILE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
 
@@ -81,7 +82,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
   const target = (): Viewport => ({
     width: Math.max(1, Math.round(page.width)),
     height: Math.max(1, Math.round(page.height)),
-    deviceScaleFactor: device === "mobile" ? MOBILE.deviceScaleFactor : window.devicePixelRatio || 1,
+    deviceScaleFactor: device === "mobile" ? MOBILE.deviceScaleFactor : viewOf(box.current).devicePixelRatio || 1,
     mobile: device === "mobile",
   });
   const targetRef = useRef(target);
@@ -94,7 +95,8 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       setPanel((p) => (p.width === Math.round(r.width) && p.height === Math.round(r.height) ? p : { width: Math.round(r.width), height: Math.round(r.height) }));
     };
     measure();
-    const observer = new ResizeObserver(measure);
+    // From the element's own window, so it keeps firing when the browser is undocked.
+    const observer = new (viewOf(el).ResizeObserver)(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -211,16 +213,18 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
         width: axes.x ? clamp(start.width + (2 * (ev.clientX - start.x)) / start.scale) : start.width,
         height: axes.y ? clamp(start.height + (2 * (ev.clientY - start.y)) / start.scale) : start.height,
       });
+    const view = viewOf(e.currentTarget);
+    const body = view.document.body;
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-      document.body.classList.remove("resizing");
+      view.removeEventListener("pointermove", move);
+      view.removeEventListener("pointerup", up);
+      body.style.cursor = "";
+      body.classList.remove("resizing");
     };
-    document.body.style.cursor = axes.x && axes.y ? "nwse-resize" : axes.x ? "ew-resize" : "ns-resize";
-    document.body.classList.add("resizing");
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    body.style.cursor = axes.x && axes.y ? "nwse-resize" : axes.x ? "ew-resize" : "ns-resize";
+    body.classList.add("resizing");
+    view.addEventListener("pointermove", move);
+    view.addEventListener("pointerup", up);
   };
 
   // --- input ---------------------------------------------------------------------------------
@@ -249,9 +253,10 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
 
   let moveFrame = 0;
   const onMove = (e: React.MouseEvent) => {
-    cancelAnimationFrame(moveFrame);
+    const view = viewOf(box.current);
+    view.cancelAnimationFrame(moveFrame);
     const ev = { clientX: e.clientX, clientY: e.clientY, buttons: e.buttons, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey };
-    moveFrame = requestAnimationFrame(() =>
+    moveFrame = view.requestAnimationFrame(() =>
       send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point(ev), button: ev.buttons & 1 ? "left" : "none", buttons: ev.buttons, modifiers: modifiers(ev) }),
     );
   };
@@ -272,7 +277,8 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
         if (down && k === "c") {
           e.preventDefault();
           void invoke<string>("browser_selection", { workspaceId, targetId: tabId }).then((text) => {
-            if (text) void navigator.clipboard.writeText(text);
+            // The focused window's clipboard: the main one refuses while unfocused.
+            if (text) void viewOf(el).navigator.clipboard.writeText(text);
           });
         } else if (down && (k === "a" || k === "z" || k === "x")) {
           e.preventDefault();

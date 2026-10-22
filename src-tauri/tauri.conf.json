@@ -13,6 +13,8 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
+        "backgroundThrottling": "disabled",
         "title": "winfer",
         "width": 1440,
         "height": 900,

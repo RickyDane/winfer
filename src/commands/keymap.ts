@@ -102,6 +102,7 @@ const SPECS: BindingSpec[] = [
   { keys: "Ctrl+`", title: "Toggle side terminal", group: "App", command: { type: "ui.sidePanel", panel: "terminal" } },
   { keys: "Mod+Shift+C", win: "Ctrl+Shift+Alt+C", title: "Pick element for agent", group: "App", command: { type: "browser.pick" } },
   { keys: "Mod+L", title: "Browser address bar", group: "App", command: { type: "browser.focusUrl" } },
+  { keys: "Mod+Shift+U", win: "Ctrl+Shift+Alt+U", title: "Undock / dock browser", group: "App", command: { type: "browser.undock" } },
   { keys: "Mod+,", title: "Settings", group: "App", command: { type: "ui.settings" } },
   { keys: "Mod+/", title: "Keyboard shortcuts", group: "App", command: { type: "ui.cheatSheet" } },
 ];
@@ -263,18 +264,20 @@ export function setRecording(on: boolean) {
 /** Installs the global shortcut handler. Runs in capture phase so terminals never see app chords. */
 export function useKeymap() {
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (recording) return;
-      const chord = eventChord(e);
-      const binding = chord && byChord().get(chord);
-      if (!binding) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.repeat && !binding.repeat) return;
-      const cmd = typeof binding.command === "function" ? binding.command() : binding.command;
-      if (cmd) execute(cmd);
-    };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keydown", handleShortcut, { capture: true });
+    return () => window.removeEventListener("keydown", handleShortcut, { capture: true });
   }, []);
+}
+
+/** Runs the app command bound to a key press. Also installed on the undocked browser window. */
+export function handleShortcut(e: KeyboardEvent) {
+  if (recording) return;
+  const chord = eventChord(e);
+  const binding = chord && byChord().get(chord);
+  if (!binding) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.repeat && !binding.repeat) return;
+  const cmd = typeof binding.command === "function" ? binding.command() : binding.command;
+  if (cmd) execute(cmd);
 }

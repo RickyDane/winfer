@@ -12,7 +12,7 @@ import { Archive, AudioLines, Layers, LayoutGrid, PanelLeft, PanelRight } from "
 import { useEffect } from "react";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
-import { BrowserResizer, SidePanel } from "@/features/browser/BrowserPanel";
+import { BrowserResizer, SidePanel, UndockedBrowser } from "@/features/browser/BrowserPanel";
 import { NewPaneMenu } from "@/features/panes/NewPaneMenu";
 import { CheatSheet } from "@/features/palette/CheatSheet";
 import { CommandPalette } from "@/features/palette/CommandPalette";
@@ -245,6 +245,7 @@ export function AppShell() {
           </>
         )}
       </main>
+      <UndockedBrowser />
       <CommandPalette />
       <CheatSheet />
       <DiffView />
