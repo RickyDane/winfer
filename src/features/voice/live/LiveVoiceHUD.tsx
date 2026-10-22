@@ -1,7 +1,7 @@
 import { AudioLines, CircleAlert, Mic, MicOff, PhoneOff, Wrench, X } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { cn } from "@/lib/cn";
-import { resumeLiveAudio, setLiveMuted, startLive, stopLive, useLiveVoice, type Diagnostics, type LiveState } from "./session";
+import { resumeLiveAudio, setLiveMuted, startLive, stopLive, useLiveVoice, type LiveState } from "./session";
 
 const LABEL: Record<LiveState, string> = {
   off: "",
@@ -11,8 +11,6 @@ const LABEL: Record<LiveState, string> = {
   speaking: "Speaking",
   error: "Live voice stopped",
 };
-
-const kb = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} kB`);
 
 /** Mic level bars. */
 function Meter({ level }: { level: number }) {
@@ -26,30 +24,9 @@ function Meter({ level }: { level: number }) {
   );
 }
 
-/** Where audio stops, when it does: mic, upload, download, playback. */
-function Health({ diag, live }: { diag: Diagnostics; live: boolean }) {
-  if (!live) return null;
-  const warnings: string[] = [];
-  if (diag.playback) warnings.push(diag.playback);
-  if (diag.events > 0 && diag.sent === 0) warnings.push("No audio is reaching OpenAI.");
-  return (
-    <div className="flex flex-col gap-0.5 font-mono text-[10.5px] text-fg-subtle">
-      <span className="truncate">
-        {diag.micLabel} · ↑ {kb(diag.sent)} · ↓ {kb(diag.received)} · {diag.events} events{diag.lastEvent && ` · ${diag.lastEvent}`}
-      </span>
-      {diag.trail.length > 0 && <span className="line-clamp-3 break-all">{diag.trail.join(" › ")}</span>}
-      {warnings.map((w) => (
-        <button key={w} onClick={resumeLiveAudio} className="text-left text-warning hover:underline">
-          {w}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /** The live conversation: state, recent lines, the running tool, mute and hang-up. */
 export function LiveVoiceHUD() {
-  const { state, muted, lines, tool, error, auth, level, diag } = useLiveVoice();
+  const { state, muted, lines, tool, error, auth, level, playback } = useLiveVoice();
   if (state === "off") return null;
   const recent = lines.slice(-4);
 
@@ -94,7 +71,11 @@ export function LiveVoiceHUD() {
           </div>
         </div>
         {error && <div className="text-xs text-fg-muted">{error}</div>}
-        <Health diag={diag} live={state !== "error" && state !== "connecting"} />
+        {playback && state !== "error" && (
+          <button onClick={resumeLiveAudio} className="text-left text-xs text-warning hover:underline">
+            {playback}
+          </button>
+        )}
         {tool && (
           <div className="flex items-center gap-1.5 text-xs text-fg-muted">
             <Wrench size={12} /> <span className="font-mono">{tool}</span>

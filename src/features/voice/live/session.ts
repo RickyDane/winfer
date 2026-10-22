@@ -37,28 +37,11 @@ interface LiveVoiceState {
   auth: "chatgpt" | "apikey" | null;
   /** Microphone level 0–1, for the meter. */
   level: number;
-  /** Connection health, to tell where audio stops when it does. */
-  diag: Diagnostics;
-}
-
-export interface Diagnostics {
-  micLabel: string;
-  /** Audio bytes sent to / received from OpenAI. */
-  sent: number;
-  received: number;
-  events: number;
-  lastEvent: string;
-  /** Recent distinct server event types, newest last. */
-  trail: string[];
-  /** Why the speaker isn't playing (autoplay blocked), if so. */
+  /** Why the model's voice isn't playing (autoplay blocked), if so. */
   playback: string | null;
 }
 
-const NO_DIAG: Diagnostics = { micLabel: "", sent: 0, received: 0, events: 0, lastEvent: "", trail: [], playback: null };
-
-export const useLiveVoice = create<LiveVoiceState>(() => ({ state: "off", muted: false, lines: [], tool: null, error: null, auth: null, level: 0, diag: NO_DIAG }));
-
-const setDiag = (patch: Partial<Diagnostics>) => useLiveVoice.setState((s) => ({ diag: { ...s.diag, ...patch } }));
+export const useLiveVoice = create<LiveVoiceState>(() => ({ state: "off", muted: false, lines: [], tool: null, error: null, auth: null, level: 0, playback: null }));
 
 const MAX_LINES = 12;
 const addLine = (line: LiveLine) => useLiveVoice.setState((s) => ({ lines: [...s.lines, line].slice(-MAX_LINES) }));
@@ -232,12 +215,6 @@ function onEvent(raw: string) {
   } catch {
     return;
   }
-  console.debug("[live voice]", e.type, e);
-  const { diag } = useLiveVoice.getState();
-  const type = String(e.type);
-  // Audio deltas and rate limits would drown out the events that tell what happened.
-  const noisy = /delta$|rate_limits/.test(type);
-  setDiag({ events: diag.events + 1, lastEvent: type, trail: noisy || diag.trail.at(-1) === type ? diag.trail : [...diag.trail, type].slice(-8) });
   switch (e.type) {
     case "input_audio_buffer.speech_started":
       if (conn) conn.userSpeaking = true;
@@ -317,7 +294,7 @@ async function micConstraints(): Promise<MediaTrackConstraints> {
   return match ? { ...base, deviceId: { exact: match.deviceId } } : base;
 }
 
-/** Mic level meter and send/receive counters, so a silent mic or speaker shows in the HUD. */
+/** Mic level for the HUD's meter. */
 function monitor(c: Connection) {
   try {
     c.ctx = new AudioContext();
@@ -336,18 +313,6 @@ function monitor(c: Connection) {
   } catch (err) {
     console.warn("live voice meter failed", err);
   }
-  const stats = window.setInterval(async () => {
-    if (c.closed) return;
-    let sent = 0;
-    let received = 0;
-    (await c.pc.getStats().catch(() => new Map())).forEach((r: { type: string; kind?: string; mediaType?: string; bytesSent?: number; bytesReceived?: number }) => {
-      const audio = (r.kind ?? r.mediaType) === "audio";
-      if (r.type === "outbound-rtp" && audio) sent += r.bytesSent ?? 0;
-      if (r.type === "inbound-rtp" && audio) received += r.bytesReceived ?? 0;
-    });
-    setDiag({ sent, received });
-  }, 1000);
-  c.unsubscribe.push(() => clearInterval(stats));
 }
 
 /** Plays the model's voice; WebKit may give the track without a stream and wants the element in the page. */
@@ -355,15 +320,15 @@ function playRemote(c: Connection, ev: RTCTrackEvent) {
   c.audio.srcObject = ev.streams[0] ?? new MediaStream([ev.track]);
   c.audio
     .play()
-    .then(() => setDiag({ playback: null }))
-    .catch((err) => setDiag({ playback: `Speaker blocked: ${err instanceof Error ? err.message : String(err)}` }));
+    .then(() => useLiveVoice.setState({ playback: null }))
+    .catch((err) => useLiveVoice.setState({ playback: `Speaker blocked (${err instanceof Error ? err.message : String(err)}). Click to play.` }));
 }
 
 /** Retries playback from a click (for when autoplay was blocked). */
 export function resumeLiveAudio() {
   if (!conn) return;
   void conn.ctx?.resume();
-  conn.audio.play().then(() => setDiag({ playback: null }), () => {});
+  conn.audio.play().then(() => useLiveVoice.setState({ playback: null }), () => {});
 }
 
 function watchApp(c: Connection) {
@@ -395,7 +360,7 @@ export async function startLive(retry?: Attempt): Promise<void> {
   working = false;
   retrying = false;
   // A retry keeps the lines, so the user sees what was tried.
-  useLiveVoice.setState((s) => ({ state: "connecting", error: null, lines: retry ? s.lines : [], tool: null, muted: false, level: 0, diag: NO_DIAG }));
+  useLiveVoice.setState((s) => ({ state: "connecting", error: null, lines: retry ? s.lines : [], tool: null, muted: false, level: 0, playback: null }));
   // The push-to-talk recorder shouldn't hold the mic at the same time.
   if (useVoice.getState().phase === "listening") void invoke("voice_stop").catch(() => {});
   let mic: MediaStream | null = null;
@@ -416,7 +381,6 @@ export async function startLive(retry?: Attempt): Promise<void> {
     }
     const track = mic.getAudioTracks()[0];
     if (!track) throw new Error("No microphone found.");
-    setDiag({ micLabel: track.label || "default microphone" });
     pc = new RTCPeerConnection();
     const audio = document.createElement("audio");
     audio.autoplay = true;
