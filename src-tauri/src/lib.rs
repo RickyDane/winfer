@@ -62,7 +62,7 @@ pub fn run_hook(args: &[String]) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// Release builds abort on panic with no console to print to (especially on Windows), so the
+/// Release builds have no console to print a panic to (especially on Windows), so the
 /// message goes to `crash.log` in the app data folder for bug reports.
 fn log_panics() {
     let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app")) else {
@@ -171,6 +171,9 @@ pub fn run() {
             vault::vault_reveal,
             vault::vault_exec,
             browser::browser_fill_secret,
+            undock::browser_window_close,
+            undock::browser_window_focus,
+            undock::browser_window_theme,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

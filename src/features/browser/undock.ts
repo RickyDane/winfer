@@ -6,13 +6,12 @@
  * with a React portal: same stores, same Tauri channels, nothing to sync. This module owns the
  * window: its styles (mirrored from the main window), shortcuts and closing.
  */
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { handleShortcut } from "@/commands/keymap";
 import { useWorkspaces } from "@/stores/workspaces";
 
-/** Must match LABEL in src-tauri/src/undock.rs. */
-const LABEL = "browser";
 /** Must match UNDOCK_URL in src-tauri/src/undock.rs. */
 const UNDOCK_URL = "about:blank#winfer-browser";
 const ROOT_ID = "winfer-undocked";
@@ -47,7 +46,7 @@ function mirrorStyles(target: Document): () => void {
     for (const { name, value } of [...from.attributes]) to.setAttribute(name, value);
     // The native title bar follows the theme too.
     const mode = from.dataset.mode;
-    if (mode === "light" || mode === "dark") void nativeWindow().then((w) => w?.setTheme(mode).catch(() => {}));
+    if (mode === "light" || mode === "dark") void invoke("browser_window_theme", { mode }).catch(() => {});
   };
   copyHead();
   copyAttrs();
@@ -101,16 +100,21 @@ export function undockBrowser(): boolean {
   };
   mount();
 
-  const onMainUnload = () => win.close();
-  window.addEventListener("beforeunload", onMainUnload);
-  // The native close button gives no reliable event to the opener: watch for it.
+  const close = () => {
+    // WebKit ignores window.close() on a native window: the backend closes it.
+    void invoke("browser_window_close").catch(() => {});
+    if (!win.closed) win.close();
+  };
+  window.addEventListener("beforeunload", close);
+  // Closing by the window's own button: the backend says so (browser://undocked-closed), and
+  // `closed` turns true where window.close() works (the plain-browser dev mode).
   const poll = window.setInterval(() => (win.closed ? dockBrowser() : mount()), 150);
 
   cleanup = () => {
     window.clearInterval(poll);
-    window.removeEventListener("beforeunload", onMainUnload);
+    window.removeEventListener("beforeunload", close);
     stopMirror();
-    if (!win.closed) win.close();
+    close();
   };
   // The screen-recorder plugin looks for the browser canvas here when it isn't in the main window.
   (window as unknown as { winferBrowserWindow?: Window }).winferBrowserWindow = win;
@@ -140,13 +144,13 @@ export function focusUndocked(): boolean {
   return true;
 }
 
-/** `window.focus()` from the opener doesn't raise a native window; Tauri's API does. */
-const nativeWindow = () => WebviewWindow.getByLabel(LABEL).catch(() => null);
-
+/** `window.focus()` from the opener doesn't raise a native window; the backend does. */
 function raise() {
-  void nativeWindow().then(async (w) => {
-    if (!w) return;
-    await w.unminimize().catch(() => {});
-    await w.setFocus().catch(() => {});
-  });
+  void invoke("browser_window_focus").catch(() => {});
+}
+
+if ("__TAURI_INTERNALS__" in window) {
+  void listen("browser://undocked-closed", () => dockBrowser());
+  // A window left over from before the main window reloaded has nothing in it anymore.
+  void invoke("browser_window_close").catch(() => {});
 }

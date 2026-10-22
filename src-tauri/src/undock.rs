@@ -3,16 +3,29 @@
 //! returned window with a React portal. The new window shares the main webview's configuration
 //! (same web process, same origin), so it is one app with two windows: no state to sync.
 //!
-//! The undocked window's place and size are kept here (WebKit's `screenX` and `window.open`
-//! coordinates aren't reliable), so it reopens where it was, say on the second screen.
+//! Sharing the configuration means wry's `ipc` message handler is already registered on it;
+//! wry catches the Objective-C exception that re-adding it throws, which needs the release
+//! profile to unwind (Cargo.toml) — with `panic = "abort"` that exception kills the app.
+//!
+//! WebKit's `window.close()` doesn't close a native window, so the frontend closes and focuses
+//! it through the commands here. Its place and size are kept here too (WebKit's `screenX` and
+//! `window.open` coordinates aren't reliable), so it reopens where it was, say on another screen.
 
-use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
 
-/// The undocked browser window's label.
-pub const LABEL: &str = "browser";
+/// Undocked browser windows are labelled `browser-<n>`: a fresh label each time, so an old one
+/// still closing (or left over from a reload of the main window) never blocks a new one.
+const PREFIX: &str = "browser-";
 /// The URL the frontend opens for it; any other `window.open` is refused, as before.
 #[cfg(desktop)]
 const UNDOCK_URL: &str = "about:blank#winfer-browser";
+/// The label of the window the frontend is using right now.
+static CURRENT: Mutex<Option<String>> = Mutex::new(None);
+
+fn undocked(app: &AppHandle) -> Vec<WebviewWindow> {
+    app.webview_windows().into_iter().filter(|(label, _)| label.starts_with(PREFIX)).map(|(_, w)| w).collect()
+}
 
 /// Builds the main window from the first window in tauri.conf.json (which has `create: false`).
 pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
@@ -27,9 +40,11 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             if url.as_str() != UNDOCK_URL {
                 return NewWindowResponse::Deny;
             }
-            if let Some(existing) = handle.get_webview_window(LABEL) {
-                let _ = existing.set_focus();
-                return NewWindowResponse::Deny;
+            // The frontend only asks when it has no window: any still open is stale, and its
+            // closing mustn't read as the new one closing.
+            *CURRENT.lock().unwrap() = None;
+            for old in undocked(&handle) {
+                let _ = old.destroy();
             }
             match open_browser_window(&handle, url, features) {
                 Ok(window) => NewWindowResponse::Create { window },
@@ -45,8 +60,8 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let handle = app.clone();
     main.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
-            if let Some(browser) = handle.get_webview_window(LABEL) {
-                let _ = browser.close();
+            for window in undocked(&handle) {
+                let _ = window.destroy();
             }
         }
     });
@@ -55,8 +70,11 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 
 #[cfg(desktop)]
 fn open_browser_window(app: &AppHandle, url: tauri::Url, features: tauri::webview::NewWindowFeatures) -> tauri::Result<WebviewWindow> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+    let label = format!("{PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let saved = bounds::load(app);
-    let mut builder = WebviewWindowBuilder::new(app, LABEL, tauri::WebviewUrl::External(url))
+    let mut builder = WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(url))
         // Shares the opener's webview configuration, which makes the window scriptable from it.
         .window_features(features)
         .title("winfer browser")
@@ -71,14 +89,53 @@ fn open_browser_window(app: &AppHandle, url: tauri::Url, features: tauri::webvie
     if matches!(window.current_monitor(), Ok(None)) {
         let _ = window.center();
     }
+    *CURRENT.lock().unwrap() = Some(label.clone());
     let tracked = window.clone();
     let handle = app.clone();
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => bounds::remember(&tracked),
-        tauri::WindowEvent::Destroyed => bounds::save(&handle),
+        tauri::WindowEvent::Destroyed => {
+            bounds::save(&handle);
+            let mut current = CURRENT.lock().unwrap();
+            if current.as_deref() == Some(label.as_str()) {
+                *current = None;
+                // Closed by its own close button (or docked): the panel goes back to the side.
+                let _ = handle.emit("browser://undocked-closed", ());
+            }
+        }
         _ => {}
     });
     Ok(window)
+}
+
+/// Closes the undocked browser window(s): docking, or leftovers after the main window reloaded.
+#[tauri::command]
+pub fn browser_window_close(app: AppHandle) {
+    *CURRENT.lock().unwrap() = None;
+    for window in undocked(&app) {
+        let _ = window.destroy();
+    }
+}
+
+/// Brings the undocked browser window to the front.
+#[tauri::command]
+pub fn browser_window_focus(app: AppHandle) {
+    for window in undocked(&app) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Matches the window's title bar to the app theme ("light" or "dark").
+#[tauri::command]
+pub fn browser_window_theme(app: AppHandle, mode: String) {
+    let theme = match mode.as_str() {
+        "light" => tauri::Theme::Light,
+        _ => tauri::Theme::Dark,
+    };
+    for window in undocked(&app) {
+        let _ = window.set_theme(Some(theme));
+    }
 }
 
 #[cfg(desktop)]

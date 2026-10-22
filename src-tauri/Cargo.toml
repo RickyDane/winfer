@@ -54,7 +54,9 @@ unicode-width = "0.2.2"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Not "abort": wry catches Objective-C exceptions with objc2, which must unwind through Rust
+# frames. With abort, one caught exception (the undocked browser window throws one) kills the app.
+panic = "unwind"
 strip = true
 
 [target."cfg(unix)".dependencies]
