@@ -128,6 +128,15 @@ function refreshSession(delay = 600) {
   }, delay);
 }
 
+/** OpenAI errors no retry can fix (billing, auth): the message to stop with, else null. */
+export function fatalMessage(error: { type?: string; code?: string; message?: string } | undefined): string | null {
+  const code = `${error?.type ?? ""} ${error?.code ?? ""}`;
+  if (/insufficient_quota|credit_balance|billing/.test(code))
+    return "Your OpenAI API account has no credits left. Add credits at platform.openai.com → Settings → Billing (separate from a ChatGPT plan).";
+  if (/invalid_api_key|authentication/.test(code)) return "OpenAI rejected the API key. Check it in Settings → Voice → Live voice.";
+  return null;
+}
+
 /** The next, smaller attempt after a failed one; null when nothing is left to try. */
 async function nextAttempt(a: Attempt, auth: "chatgpt" | "apikey" | null): Promise<Attempt | null> {
   // With the ChatGPT sign-in every response fails, whatever the session holds.
@@ -150,7 +159,7 @@ function degrade(): boolean {
       const hint =
         useLiveVoice.getState().auth === "chatgpt"
           ? "OpenAI's live voice API doesn't work with a ChatGPT sign-in yet (it needs API key auth). Add an OpenAI API key in Settings → Voice → Live voice."
-          : "OpenAI fails every live voice session, even a bare one. Try another model in Settings → Voice (e.g. gpt-realtime).";
+          : "OpenAI fails every live voice session, even a bare one. Most often the API account has no credits left (platform.openai.com → Settings → Billing; separate from a ChatGPT plan). Otherwise try another model in Settings → Voice.";
       fail(hint);
       return;
     }
@@ -260,6 +269,11 @@ function onEvent(raw: string) {
       if (e.response?.status === "failed") {
         const error = e.response?.status_details?.error;
         addLine({ who: "tool", text: error?.message ?? "The response failed." });
+        const fatal = fatalMessage(error);
+        if (fatal) {
+          fail(fatal);
+          break;
+        }
         // OpenAI's own errors here mostly come from a session it can't handle (too many or too
         // large tools): retry with fewer before giving up.
         if (error?.type === "server_error" || /server had an error/i.test(error?.message ?? "")) {
@@ -279,6 +293,11 @@ function onEvent(raw: string) {
       // Cancelling a response that already ended is harmless.
       if (e.error?.code === "response_cancel_not_active") break;
       console.warn("realtime error", e.error);
+      const fatal = fatalMessage(e.error);
+      if (fatal) {
+        fail(fatal);
+        break;
+      }
       const param = String(e.error?.param ?? "");
       addLine({ who: "tool", text: `Error${param ? ` (${param})` : ""}: ${e.error?.message ?? "Realtime error"}` });
       // A tool OpenAI rejects shouldn't cost the whole session: carry on without tools.
