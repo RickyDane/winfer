@@ -1,0 +1,1141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>winfer code · TUI design overhaul</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: radial-gradient(1200px 600px at 50% -10%, #1b1b2a, #07070a 60%); color: #ddd; font: 13px/1.5 Inter, system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 22px 16px 40px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sub { color: #8a8a99; margin-bottom: 16px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 10px; }
+  .bar button { font: 500 12.5px Inter; color: #aaa; background: #15151c; border: 1px solid #262633; border-radius: 10px; padding: 7px 12px; cursor: pointer; display: flex; gap: 8px; align-items: center; transition: all .2s cubic-bezier(.34,1.56,.64,1); }
+  .bar button:hover { color: #fff; transform: translateY(-1px); }
+  .bar button.on { color: #fff; background: #23233a; border-color: #4a4a6a; }
+  .bar .sw { width: 14px; height: 14px; border-radius: 4px; }
+  .bar .n { font: 10px "JetBrains Mono"; opacity: .5; }
+  .desc { max-width: 900px; text-align: center; color: #b9b9c6; min-height: 40px; margin: 4px 0 14px; }
+  .desc b { color: #fff; }
+  .win { border-radius: 12px; overflow: hidden; box-shadow: 0 30px 80px -20px #000, 0 0 0 1px #ffffff14; }
+  .chrome { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: #1a1a20; color: #888; font: 12px Inter; }
+  .chrome i { width: 12px; height: 12px; border-radius: 50%; display: block; background: #ff5f57; }
+  .chrome i:nth-child(2) { background: #febc2e; } .chrome i:nth-child(3) { background: #28c840; }
+  .chrome span { flex: 1; text-align: center; margin-right: 56px; }
+  canvas { display: block; }
+  .scenes button { font-size: 12px; padding: 5px 10px; }
+  .foot { color: #666; font-size: 12px; margin-top: 14px; }
+  .kbd { font: 11px "JetBrains Mono"; border: 1px solid #333; border-radius: 4px; padding: 0 4px; color: #aaa; }
+</style>
+</head>
+<body>
+<h1>winfer code — Nebula family</h1>
+<div class="sub">Rendered on a real 104×34 character grid (cells, box-drawing, block elements, 24-bit color), so every frame is buildable in ratatui.</div>
+<div class="bar" id="dirs"></div>
+<div class="desc" id="desc"></div>
+<div class="bar scenes" id="scenes"></div>
+<div class="win"><div class="chrome"><i></i><i></i><i></i><span>winfer code — ~/Coding/winfer</span></div><canvas id="cv"></canvas></div>
+<div class="foot"><span class="kbd">↑</span><span class="kbd">↓</span> style · <span class="kbd">←</span><span class="kbd">→</span> scene · <span class="kbd">space</span> autoplay · <span class="kbd">r</span> replay entry animation · Current design for comparison: <a href="tui-current/index.html" style="color:#9aa">tui-current</a></div>
+
+<script>
+/* ═════════════════════════ grid engine ═════════════════════════ */
+const W = 104, H = 34;
+const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const toHex = (a) => "#" + a.map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+const mix = (a, b, k) => { k = Math.max(0, Math.min(1, k)); const A = hex(a), B = hex(b); return toHex(A.map((v, i) => v + (B[i] - v) * k)); };
+const grad = (st, k) => { k = Math.max(0, Math.min(1, k)); const s = k * (st.length - 1), i = Math.min(st.length - 2, Math.floor(s)); return mix(st[i], st[i + 1], s - i); };
+const cyc = (st, k) => grad([...st, st[0]], ((k % 1) + 1) % 1);
+const ease = (x) => 1 - Math.pow(1 - Math.max(0, Math.min(1, x)), 3);
+const len = (s) => [...s].length;
+const BOXES = { round: "╭╮╰╯─│", sharp: "┌┐└┘─│", double: "╔╗╚╝═║", heavy: "┏┓┗┛━┃" };
+
+class Scr {
+  constructor(bg, fg) { this.bg = bg; this.fg = fg; this.clip = null; this.c = Array.from({ length: H }, () => Array.from({ length: W }, () => ({ ch: " ", fg, bg, b: 0, i: 0 }))); }
+  cell(x, y) { if (y < 0 || y >= H || x < 0 || x >= W) return null; if (this.clip && (y < this.clip[0] || y >= this.clip[1])) return null; return this.c[y][x]; }
+  put(x, y, s = "", st = {}) {
+    for (const ch of s) { const c = this.cell(x, y); if (c) { c.ch = ch; c.fg = typeof st.fg === "function" ? st.fg(x) : st.fg || this.fg; if (st.bg) c.bg = st.bg; c.b = st.b ? 1 : 0; c.i = st.i ? 1 : 0; } x++; }
+    return x;
+  }
+  right(xEnd, y, segs) { const total = segs.reduce((n, [s]) => n + len(s), 0); let x = xEnd - total; for (const [s, st] of segs) x = this.put(x, y, s, st); return xEnd - total; }
+  segs(x, y, segs) { for (const [s, st] of segs) x = this.put(x, y, s, st); return x; }
+  fill(x, y, w, h, bg) { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) { const c = this.cell(i, j); if (c) { c.bg = bg; c.ch = " "; } } }
+  tint(x, y, w, h, bg) { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) { const c = this.cell(i, j); if (c) c.bg = bg; } }
+  box(x, y, w, h, { set = "round", col, bg, title, titleSt } = {}) {
+    const [tl, tr, bl, br, hz, vt] = [...BOXES[set]]; const n = 2 * (w + h) - 4; const cf = typeof col === "function" ? col : () => col;
+    if (bg) this.fill(x, y, w, h, bg);
+    const p = (cx, cy, ch, i) => this.put(cx, cy, ch, { fg: cf(i, n), bg });
+    for (let i = 0; i < w; i++) p(x + i, y, i === 0 ? tl : i === w - 1 ? tr : hz, i);
+    for (let j = 1; j < h - 1; j++) { p(x + w - 1, y + j, vt, w - 1 + j); p(x, y + j, vt, n - j); }
+    for (let i = 0; i < w; i++) p(x + w - 1 - i, y + h - 1, i === 0 ? br : i === w - 1 ? bl : hz, w + h - 2 + i);
+    if (title) this.segs(x + 2, y, typeof title === "string" ? [[title, { ...titleSt, bg }]] : title);
+  }
+  dim(k, to) { for (const r of this.c) for (const c of r) { c.fg = mix(c.fg, to, k); c.bg = mix(c.bg, to, k); } }
+}
+
+function wrap(text, w) {
+  const out = []; let line = "";
+  for (const word of text.split(" ")) {
+    const wl = word.replace(/`/g, "").length, ll = line.replace(/`/g, "").length;
+    if (ll && ll + 1 + wl > w) { out.push(line); line = word; } else line = ll ? line + " " + word : word;
+  }
+  if (line || !out.length) out.push(line);
+  return out;
+}
+/** Puts text where `code` spans get codeSt; fade(i) lets the last chars "ink in". */
+function rich(S, x, y, s, st, codeSt, fadeFn, idx0 = 0) {
+  let code = false, i = idx0;
+  for (const ch of s) {
+    if (ch === "`") { code = !code; continue; }
+    const base = code ? codeSt : st;
+    x = S.put(x, y, ch, fadeFn ? { ...base, fg: fadeFn(i, base.fg) } : base); i++;
+  }
+  return [x, i];
+}
+const vis = (s) => s.replace(/`/g, "");
+function prefixVisible(s, n) { let out = "", k = 0; for (const ch of s) { if (ch !== "`") { if (k >= n) break; k++; } out += ch; } return out; }
+const smoothBar = (w, p) => { const f = Math.max(0, Math.min(1, p)) * w; const full = Math.floor(f); const part = " ▏▎▍▌▋▊▉"[Math.floor((f - full) * 8)]; return "█".repeat(full) + (full < w ? part : "") + " ".repeat(Math.max(0, w - full - 1)); };
+function rng(seed) { return () => ((seed = (seed * 16807) % 2147483647) / 2147483647); }
+
+/* ═════════════════════════ shared content ═════════════════════════ */
+const USER = "formatBytes prints NaN for files over 1 TB, can you fix it and add tests?";
+const ANSWER = "Fixed. `formatBytes` now walks a unit table, so anything past 1 TB prints as `TB` instead of `NaN`. Added 3 test cases for TB values, and the whole `src/lib` suite passes.";
+const READ = ["export function formatBytes(n: number) {", '  if (n < 1024) return n + " B";'];
+const DIFF = [[10, " ", "export function formatBytes(n: number) {"], [11, "-", '  if (n < 1024) return n + " B";'], [11, "+", "  if (n < 1024) return `${n} B`;"], [12, "+", '  const units = ["KB", "MB", "GB", "TB"];'], [13, "+", "  let i = -1;"], [14, " ", "  do {"]];
+const BASH = ["✓ src/lib/format.test.ts (15 tests) 4ms", "✓ src/lib/path.test.ts (30 tests) 9ms", "", "Test Files  2 passed (2)", "     Tests  45 passed (45)"];
+const TODOS = [["done", "Reproduce the NaN"], ["done", "Rewrite the unit loop"], ["run", "Add TB test cases"], ["todo", "Run the full suite"]];
+const MODELS = [["claude", "opus-4-5", "high", "Claude Code"], ["claude", "sonnet-4-5", "medium", "Claude Code"], ["codex", "gpt-5.5", "medium", "Codex"], ["chatgpt", "gpt-5.5-mini", "low", "ChatGPT"], ["opencode", "qwen3-coder", "—", "OpenCode"], ["claude", "haiku-4-5", "low", "Claude Code"]];
+const LOGO = ["█ █ █ █ █▀▄ █▀▀ █▀▀ █▀▄", "▀▄▀▄▀ █ █ █ █▀  ██▄ █▀▄"];
+
+/** What's on screen at time t of a scene, independent of the visual style. */
+function model(scene, t) {
+  const m = { scene, t, items: [], busy: false, elapsed: 0, typed: "", approval: false, picker: null, welcome: scene === "welcome" };
+  if (scene === "welcome") { m.typed = t > 2.2 ? "fix the NaN in formatBytes".slice(0, Math.floor((t - 2.2) * 14)) : ""; return m; }
+  const T = scene === "working" ? t % 17 : scene === "picker" ? 3.2 : 0;
+  m.items.push({ k: "user", text: USER });
+  m.items.push({ k: "think", secs: 4 });
+  m.items.push({ k: "tool", name: "read", target: "src/lib/format.ts", status: "ok", meta: "+4 lines", time: "0.1s", out: READ });
+  if (scene === "approval") { m.approval = true; m.busy = true; m.elapsed = 6 + t; return m; }
+  m.items.push({ k: "tool", name: "edit", target: "src/lib/format.ts", status: "ok", add: 3, del: 1, time: "1.0s", diff: DIFF });
+  const bashDone = T > 4.6;
+  m.items.push({ k: "tool", name: "bash", target: "pnpm vitest run src/lib", status: bashDone ? "ok" : "run", meta: bashDone ? "45 passed" : "", time: bashDone ? "4.6s" : T.toFixed(1) + "s", out: BASH.slice(0, bashDone ? 5 : Math.floor(T / 0.85)) });
+  m.items.push({ k: "tool", name: "grep", target: '"formatBytes" in vendor', status: "fail", meta: "no matches", time: "0.1s" });
+  m.items.push({ k: "agents", list: [["explore", "Find other byte formatters", Math.min(1, 0.45 + T * 0.06)], ["review", "Check edge cases", Math.min(1, 0.15 + T * 0.07)]] });
+  if (T > 5.2) { const n = Math.floor((T - 5.2) * 48); m.items.push({ k: "answer", text: prefixVisible(ANSWER, n), done: n >= vis(ANSWER).length, n }); }
+  m.busy = !(T > 10);
+  m.elapsed = 8 + T;
+  m.typed = T > 11 ? "now run the e2e suite too".slice(0, Math.floor((T - 11) * 13)) : "";
+  if (scene === "picker") { m.picker = { t, sel: Math.floor(t / 1.1) % MODELS.length, query: "o".slice(0, Math.floor(t * 4)) }; m.busy = true; }
+  return m;
+}
+
+/* ═════════════════════════ NEBULA (parametrized: original + 5 revisions) ═════════════════════════ */
+const PN0 = { bg: "#0d0d13", panel: "#16161f", panel2: "#1d1d29", fg: "#ececf2", muted: "#9d9db4", dim: "#5d5d72", faint: "#2b2b38", blue: "#6d8bff", violet: "#a77bff", pink: "#ff6fb5", green: "#5ad8a2", red: "#ff6b7a", yellow: "#ffc566", add: "#11302a", del: "#36151f", claude: "#e0805d" };
+let PN = PN0, NG = [PN0.blue, PN0.violet, PN0.pink], NV = {};
+const NEB_BASE = { user: "bar", steps: "rail", answer: "plain", composer: "box", status: "pill", working: "comet", tiles: "box", sidebar: false, header: false, stars: false, quiet: false };
+const NEB_VARIANTS = [
+  { id: "nebula", name: "Nebula v1", tag: "original", sw: "linear-gradient(135deg,#6d8bff,#a77bff,#ff6fb5)", pal: {}, v: {},
+    desc: "<b>Nebula v1</b>, the one you picked, kept as the reference. It has the gradient timeline line, the light sweep over a running tool's name, the streak along the working line, the rounded input box with a moving gradient border, and the half-block status pill." },
+  { id: "aurora", name: "Aurora", tag: "rev 1", sw: "linear-gradient(135deg,#3ee0c5,#5aa8ff,#b07bff)", pal: { bg: "#0a0f12", panel: "#111a1f", panel2: "#172329", faint: "#22303a", muted: "#93a9b4", dim: "#557079", blue: "#3ee0c5", violet: "#5aa8ff", pink: "#b07bff", add: "#0e2e2a", del: "#331822" }, v: { user: "gradbar", steps: "group", composer: "glow", status: "multi", working: "wave" },
+    desc: "<b>Aurora</b>: cooler teal → blue → violet colours. Your message sits on a gradient bar that fades out to the right. All tool steps are grouped in one rounded “steps” frame with a total time. A waveform of block characters ripples along the working line, and the status line is split into separate pills (model, mode, context, cost, branch)." },
+  { id: "orbit", name: "Orbit", tag: "rev 2", sw: "conic-gradient(#6d8bff,#a77bff,#ff6fb5,#6d8bff)", pal: {}, v: { sidebar: true },
+    desc: "<b>Orbit</b>: Nebula plus a live side panel on wide terminals. It shows rounded cards for <i>plan</i> (spinning icon on the active step), <i>agents</i> (orbiting spinners and gradient bars), <i>context</i> and <i>session</i> (cost, time, diff size). Sub-agents move out of the conversation into the panel, so the conversation stays focused on the conversation." },
+  { id: "quiet", name: "Quiet", tag: "rev 3", sw: "linear-gradient(135deg,#8a9bff,#b59cff)", pal: { violet: "#b59cff", pink: "#e59ad0", blue: "#8a9bff", muted: "#8f8fa6", faint: "#25252f" }, v: { user: "chevron", composer: "line", status: "plain", working: "dots", tiles: "none", quiet: true },
+    desc: "<b>Quiet</b>: the same palette, used sparingly. No boxes. Read and shell output collapse to “+N lines” (diffs still show), the input is a ❯ over a gradient underline that grows as you type, the working line shows three breathing dots, and the status line is plain text. Colour appears only where something is happening." },
+  { id: "cards", name: "Cards", tag: "rev 4", sw: "linear-gradient(135deg,#1d1d29,#a77bff)", pal: {}, v: { user: "bubble", steps: "cards", answer: "card", composer: "soft", tiles: "soft" },
+    desc: "<b>Cards</b>: a soft, chat-like layout. Your messages are right-aligned rounded bubbles, each tool is a coloured label chip with its output in a small frame, and the reply is a tinted card with a gradient edge. The input is a filled pad with rounded-looking ends (▄▀ half-block rows) instead of a border." },
+  { id: "supernova", name: "Supernova", tag: "rev 5", sw: "linear-gradient(135deg,#7b6bff,#ff5fa2,#ffb35c)", pal: { bg: "#0e0a14", panel: "#1a1222", panel2: "#24182e", faint: "#33243d", muted: "#b29fc0", dim: "#6c5a78", blue: "#7b6bff", violet: "#ff5fa2", pink: "#ffb35c", add: "#14302a", del: "#3a1424" }, v: { header: true, stars: true, user: "gradbar", status: "multi", working: "nova" },
+    desc: "<b>Supernova</b>: the most animated. Violet → pink → orange colours, a faint starfield that keeps drifting behind the conversation, and a header with a gradient wordmark and session title over a shimmering line. Step markers pulse, and the working line gets a heavier ━ streak with a long gradient tail." },
+];
+function setNeb(vr) { PN = { ...PN0, ...vr.pal }; NG = [PN.blue, PN.violet, PN.pink]; NV = { ...NEB_BASE, ...vr.v }; }
+
+function drawRows(S, rows, y0, y1) { const vis = rows.slice(Math.max(0, rows.length - (y1 - y0))); S.clip = [y0, y1]; vis.forEach((f, i) => f(S, y0 + i)); S.clip = null; }
+
+function nebStars(S, t, k, yMax = H) {
+  const P = PN, r = rng(11);
+  for (let i = 0; i < 60; i++) { const x0 = r() * W, y = Math.floor(r() * yMax), ph = r() * 6, sp = 0.5 + r() * 1.5, dr = 0.3 + r() * 0.8, ch = "·˙✧"[Math.floor(r() * 3)]; const x = Math.floor((x0 + t * dr) % W); const c = S.cell(x, y); if (c && c.ch === " ") S.put(x, y, ch, { fg: mix(c.bg, mix(P.blue, P.pink, r()), k * (0.3 + 0.7 * (0.5 + 0.5 * Math.sin(t * sp + ph)))), bg: c.bg }); }
+}
+function nebula(S, m, t) {
+  const V = NV;
+  if (m.welcome) return nebWelcome(S, m, t);
+  let y0 = 0;
+  if (V.header) { nebHeader(S, t); y0 = 2; }
+  nebStatus(S, H - 1, t);
+  let top;
+  if (m.approval) { top = H - 2 - 12; nebApproval(S, top, 12, t); }
+  else { top = H - 5; nebComposer(S, top, m, t); }
+  if (m.busy && !m.approval) { nebWorking(S, top - 1, m, t); top--; }
+  let RW = W;
+  if (V.sidebar) RW = W - 31;
+  drawRows(S, nebRows(m, t, RW), y0, top);
+  if (V.sidebar) { S.fill(RW, y0, W - RW, top - 1 - y0, PN.bg); nebSidebar(S, RW, y0, top - 1, m, t); }
+  if (V.stars) nebStars(S, t, 0.35, top - 1);
+  if (m.picker) nebPicker(S, m.picker, t);
+}
+function nebHeader(S, t) {
+  const P = PN;
+  let x = S.put(2, 0, "✦ ", { fg: cyc(NG, t * 0.3) });
+  [..."winfer code"].forEach((ch, i) => (x = S.put(x, 0, ch, { fg: cyc(NG, i / 16 - t * 0.25), b: 1 })));
+  S.segs(x + 2, 0, [["·", { fg: P.faint }], ["  fix formatBytes NaN", { fg: P.muted }]]);
+  S.right(W - 2, 0, [["session ", { fg: P.dim }], ["1", { fg: P.fg }], ["/2", { fg: P.dim }], ["  00:24", { fg: P.muted }]]);
+  for (let k = 0; k < W; k++) S.put(k, 1, "─", { fg: mix(P.faint, cyc(NG, k / W - t * 0.15), 0.35 + 0.25 * Math.sin(k * 0.15 - t * 3)) });
+}
+function nebRows(m, t, RW) {
+  const P = PN, V = NV, rows = [], R = (f) => rows.push(f), blank = () => R(() => {});
+  const rail = (S, y) => S.put(3, y, "│", { fg: P.faint });
+  const steps = []; // rows for the current run of steps, flushed by flushSteps
+  const toolSecs = 9.8;
+  const flushSteps = () => {
+    if (!steps.length) return;
+    if (V.steps === "group") {
+      const n = m.items.filter((i) => i.k === "tool").length, all = steps.length + 2;
+      const col = (j) => mix(P.faint, cyc(NG, j / all - t * 0.12), 0.55);
+      R((S, y) => { S.put(1, y, "╭", { fg: col(0) }); for (let k = 2; k < RW - 2; k++) S.put(k, y, "─", { fg: col(0) }); S.put(RW - 2, y, "╮", { fg: col(0) }); S.segs(3, y, [[" ✧ ", { fg: cyc(NG, t * 0.3) }], [`${n} steps`, { fg: P.fg, b: 1 }], [` · ${toolSecs}s `, { fg: P.dim }]]); S.right(RW - 4, y, [[" ctrl+o collapse ", { fg: P.dim }]]); });
+      steps.forEach((f, j) => R((S, y) => { f(S, y); S.put(1, y, "│", { fg: col(j + 1) }); S.put(RW - 2, y, "│", { fg: col(j + 1) }); }));
+      R((S, y) => { S.put(1, y, "╰", { fg: col(all - 1) }); for (let k = 2; k < RW - 2; k++) S.put(k, y, "─", { fg: col(all - 1) }); S.put(RW - 2, y, "╯", { fg: col(all - 1) }); });
+    } else steps.forEach((f) => R(f));
+    steps.length = 0;
+  };
+  const S_ = (f) => steps.push(f);
+  const framed = (inner) => {
+    if (V.steps !== "cards" || !inner.length) return inner.forEach((f) => S_(f));
+    S_((S, y) => { S.put(5, y, "╭" + "─".repeat(RW - 11) + "╮", { fg: P.faint }); });
+    inner.forEach((f) => S_((S, y) => { f(S, y); S.put(5, y, "│", { fg: P.faint }); S.put(RW - 5, y, "│", { fg: P.faint }); }));
+    S_((S, y) => { S.put(5, y, "╰" + "─".repeat(RW - 11) + "╯", { fg: P.faint }); });
+  };
+  const cx = V.steps === "cards" ? 7 : 6; // child content x
+  m.items.forEach((it, idx) => {
+    if (it.k !== "tool" && it.k !== "think") flushSteps();
+    if (it.k === "user") {
+      blank();
+      if (V.user === "bubble") {
+        const lines = wrap(it.text, 56), w = Math.max(...lines.map(len)) + 4, x = RW - 3 - w;
+        R((S, y) => S.right(RW - 4, y, [["you · 12:41", { fg: P.dim }]]));
+        R((S, y) => { S.put(x, y, "╭" + "─".repeat(w - 2) + "╮", { fg: P.violet }); });
+        lines.forEach((l) => R((S, y) => { S.fill(x + 1, y, w - 2, 1, P.panel2); S.put(x, y, "│", { fg: P.violet }); S.put(x + w - 1, y, "│", { fg: P.violet }); S.put(x + 2, y, l, { fg: P.fg, bg: P.panel2, b: 1 }); }));
+        R((S, y) => { S.put(x, y, "╰" + "─".repeat(w - 2) + "╯", { fg: P.violet }); });
+      } else if (V.user === "gradbar") {
+        wrap(it.text, RW - 17).forEach((l, li) => R((S, y) => { const span = RW - 5; for (let k = 0; k < span; k++) S.tint(2 + k, y, 1, 1, mix(mix(P.bg, cyc(NG, 0.1 + t * 0.03), 0.28), P.bg, Math.pow(k / span, 0.7))); S.put(2, y, "▌", { fg: cyc(NG, t * 0.1) }); if (!li) S.put(4, y, "❯", { fg: P.fg, b: 1 }); S.put(6, y, l, { fg: P.fg, b: 1 }); if (!li) S.right(RW - 4, y, [["12:41", { fg: P.dim }]]); }));
+      } else if (V.user === "chevron") {
+        wrap(it.text, RW - 10).forEach((l, li) => R((S, y) => { if (!li) S.put(3, y, "❯", { fg: cyc(NG, t * 0.2), b: 1 }); S.put(5, y, l, { fg: P.fg, b: 1 }); }));
+      } else {
+        wrap(it.text, RW - 17).forEach((l, li) => R((S, y) => { S.tint(2, y, RW - 4, 1, P.panel); S.put(2, y, "▌", { fg: P.violet, bg: P.panel }); if (!li) S.put(4, y, "❯", { fg: P.violet, b: 1, bg: P.panel }); S.put(6, y, l, { fg: P.fg, b: 1, bg: P.panel }); if (!li) S.right(RW - 4, y, [["12:41", { fg: P.dim, bg: P.panel }]]); }));
+      }
+      blank();
+    } else if (it.k === "think") {
+      S_((S, y) => { S.put(3, y, "✧", { fg: P.dim }); S.segs(5, y, [["thought for 4s", { fg: P.dim, i: 1 }], ["  ctrl+o", { fg: P.faint }]]); });
+    } else if (it.k === "tool") {
+      const glyph = { read: "◇", edit: "✎", bash: "❯", grep: "⌕" }[it.name];
+      const run = it.status === "run";
+      S_((S, y) => {
+        const pulse = V.stars ? 0.55 + 0.45 * Math.sin(t * 3 + idx) : 1;
+        const nodeCol = it.status === "fail" ? P.red : run ? cyc(NG, t * 0.8) : mix(P.bg, cyc(NG, idx * 0.13), pulse);
+        let tx;
+        if (V.steps === "cards") {
+          const chipBg = run ? mix(P.panel2, cyc(NG, t * 0.5), 0.35) : it.status === "fail" ? mix(P.panel2, P.red, 0.25) : P.panel2;
+          S.put(3, y, "▐", { fg: chipBg }); const ex = S.put(4, y, ` ${run ? "◐◓◑◒"[Math.floor(t * 8) % 4] : glyph} ${it.name} `, { fg: it.status === "fail" ? P.red : run ? P.fg : nodeCol, bg: chipBg, b: 1 }); S.put(ex, y, "▌", { fg: chipBg });
+          tx = ex + 2;
+        } else {
+          S.put(3, y, run ? "◐◓◑◒"[Math.floor(t * 8) % 4] : it.status === "fail" ? "◌" : "◆", { fg: nodeCol });
+          S.put(5, y, glyph, { fg: P.muted }); S.put(7, y, it.name.padEnd(6), { fg: P.muted }); tx = 13;
+        }
+        const tl = len(it.target);
+        S.put(tx, y, it.target, { b: 1, fg: run ? (x) => mix(P.muted, P.fg, Math.exp(-((x - tx - ((t * 28) % (tl + 24)) + 6) ** 2) / 14)) : P.fg });
+        const meta = V.quiet && it.out && it.name !== "bash" ? `+${it.out.length + 2} lines · ` : "";
+        if (it.status === "fail") S.right(RW - 3, y, [[it.meta, { fg: P.red }], [" · " + it.time, { fg: P.dim }]]);
+        else if (it.add != null) S.right(RW - 3, y, [["+" + it.add, { fg: P.green }], [" −" + it.del, { fg: P.red }], [" · " + it.time, { fg: P.dim }]]);
+        else if (run) S.right(RW - 3, y, [[it.time, { fg: P.violet }]]);
+        else S.right(RW - 3, y, [[(it.meta ? it.meta + " · " : V.quiet ? meta : it.out ? "+4 lines · " : "") + it.time, { fg: P.dim }]]);
+      });
+      const inner = [];
+      const out = V.quiet ? (run ? (it.out || []).slice(-1) : []) : it.out || [];
+      out.forEach((l) => inner.push((S, y) => { if (V.steps !== "cards") rail(S, y); S.put(cx, y, l, { fg: l.startsWith("✓") ? P.green : P.dim }); }));
+      (it.diff || []).forEach(([n, sgn, code]) => inner.push((S, y) => {
+        if (V.steps !== "cards") rail(S, y); const bg = sgn === "+" ? P.add : sgn === "-" ? P.del : null, x2 = V.steps === "cards" ? RW - 6 : RW - 3;
+        if (bg) S.tint(cx, y, x2 - cx, 1, bg);
+        S.put(cx, y, String(n).padStart(3), { fg: P.dim, bg }); S.put(cx + 4, y, sgn, { fg: sgn === "+" ? P.green : sgn === "-" ? P.red : P.dim, bg, b: 1 }); S.put(cx + 6, y, code, { fg: sgn === " " ? P.muted : P.fg, bg });
+      }));
+      framed(inner);
+    } else if (it.k === "agents") {
+      if (V.sidebar) return;
+      R((S, y) => { S.put(3, y, "◈", { fg: P.violet }); S.segs(5, y, [["2 agents", { fg: P.fg, b: 1 }], ["  running in parallel", { fg: P.dim }]]); });
+      it.list.forEach(([name, task, p], i) => R((S, y) => {
+        S.put(3, y, i === it.list.length - 1 ? "╰" : "├", { fg: P.faint }); S.put(5, y, name.padEnd(9), { fg: P.muted }); S.put(14, y, task, { fg: P.dim });
+        const bw = 18, bx = RW - 3 - bw - 5, f = Math.round(p * bw);
+        for (let k = 0; k < bw; k++) S.put(bx + k, y, "━", { fg: k < f ? grad(NG, k / bw) : P.faint });
+        S.right(RW - 3, y, [[String(Math.round(p * 100)).padStart(3) + "%", { fg: P.muted }]]);
+      }));
+    } else if (it.k === "answer") {
+      blank();
+      const card = V.answer === "card", tw = RW - (card ? 14 : 10);
+      const lines = wrap(it.text, tw); const total = vis(it.text).length;
+      if (card) R((S, y) => { S.segs(3, y, [["✦ ", { fg: cyc(NG, t * 0.3) }], ["claude", { fg: P.fg, b: 1 }], ["  opus-4-5", { fg: P.dim }]]); });
+      lines.forEach((l, li) => R((S, y) => {
+        const bg = card ? P.panel : undefined;
+        if (card) { S.tint(3, y, RW - 6, 1, P.panel); S.put(3, y, "▌", { fg: cyc(NG, li / 8 - t * 0.2), bg }); }
+        else if (li === 0) S.put(3, y, "✦", { fg: cyc(NG, t * 0.3) });
+        const start = lines.slice(0, li).reduce((n, s) => n + vis(s).length + 1, 0);
+        const [x] = rich(S, card ? 6 : 5, y, l, { fg: P.fg, bg }, { fg: P.violet, b: 1, bg }, it.done ? null : (i, f) => mix(P.pink, f, (total - i) / 10), start);
+        if (!it.done && li === lines.length - 1) S.put(x, y, "▍", { fg: P.pink, bg });
+      }));
+    }
+  });
+  flushSteps();
+  return rows;
+}
+function nebSidebar(S, x0, y0, y1, m, t) {
+  const P = PN, x = x0 + 1, w = W - x - 2;
+  let y = y0 + 1;
+  const card = (title, h, body) => { if (y + h > y1) return; S.box(x, y, w, h, { set: "round", col: (i, n) => mix(P.faint, cyc(NG, i / n - t * 0.08), 0.35) }); S.segs(x + 2, y, [[" " + title + " ", { fg: P.muted, b: 1 }]]); body(y + 1); y += h; };
+  card("plan", TODOS.length + 2, (yy) => TODOS.forEach(([st, l], i) => S.segs(x + 2, yy + i, [[st === "done" ? "✓ " : st === "run" ? "◐◓◑◒"[Math.floor(t * 6) % 4] + " " : "○ ", { fg: st === "done" ? P.green : st === "run" ? cyc(NG, t * 0.5) : P.dim }], [l, { fg: st === "done" ? P.dim : st === "run" ? P.fg : P.muted, b: st === "run" }]])));
+  const ag = (m.items.find((i) => i.k === "agents") || { list: [["explore", "", 0.45], ["review", "", 0.15]] }).list;
+  card("agents", ag.length * 2 + 2, (yy) => ag.forEach(([n, task, p], i) => {
+    S.segs(x + 2, yy + i * 2, [["◜◝◞◟"[(Math.floor(t * 8) + i * 2) % 4] + " ", { fg: cyc(NG, t * 0.4 + i * 0.3) }], [n, { fg: P.fg }]]); S.right(x + w - 2, yy + i * 2, [[Math.round(p * 100) + "%", { fg: P.muted }]]);
+    const bw = w - 6; for (let k = 0; k < bw; k++) S.put(x + 4 + k, yy + i * 2 + 1, "━", { fg: k < Math.round(p * bw) ? grad(NG, k / bw) : P.faint });
+  }));
+  card("context", 4, (yy) => { const bw = w - 4; for (let k = 0; k < bw; k++) S.put(x + 2 + k, yy, k < Math.round(0.23 * bw) ? "▰" : "▱", { fg: k < Math.round(0.23 * bw) ? grad(NG, k / (0.23 * bw)) : P.faint }); S.segs(x + 2, yy + 1, [["23%", { fg: P.fg, b: 1 }], ["  46k / 200k tokens", { fg: P.dim }]]); });
+  card("session", 5, (yy) => { [["cost", "$0.42"], ["time", Math.floor(m.elapsed) + "s"], ["diff", "+48 −12"]].forEach(([k, v], i) => { S.put(x + 2, yy + i, k.padEnd(7), { fg: P.dim }); S.put(x + 9, yy + i, v, { fg: k === "diff" ? P.green : P.fg }); }); });
+}
+function nebWorking(S, y, m, t) {
+  const P = PN, V = NV;
+  S.put(3, y, "✦✧⋆✧"[Math.floor(t * 6) % 4], { fg: cyc(NG, t * 0.5) });
+  const word = m.items.some((i) => i.status === "run") ? "Running tests" : "Thinking";
+  let x = 5; [...word].forEach((ch, i) => (x = S.put(x, y, ch, { fg: cyc(NG, i / 14 - t * 0.6), b: 1 })));
+  if (V.working === "dots") { x = S.put(x, y, " ", {}); for (let i = 0; i < 3; i++) x = S.put(x, y, "● ", { fg: mix(P.faint, cyc(NG, i / 3), 0.5 + 0.5 * Math.sin(t * 4 - i * 0.9)) }); S.put(x + 1, y, `${Math.floor(m.elapsed)}s · esc to interrupt`, { fg: P.dim }); return; }
+  x = S.put(x, y, `  ${Math.floor(m.elapsed)}s · ↓ 2.1k tokens · esc to interrupt  `, { fg: P.dim });
+  const span = W - 3 - x;
+  if (V.working === "wave") { for (let k = 0; k < span; k++) { const h = 0.5 + 0.5 * Math.sin(k * 0.32 - t * 6) * Math.sin(k * 0.07 + t); S.put(x + k, y, EIGHTHS[Math.max(0, Math.min(7, Math.floor(h * 6)))], { fg: mix(P.faint, cyc(NG, k / span - t * 0.2), 0.7) }); } return; }
+  const nova = V.working === "nova", tail = nova ? 40 : 24, head = (t * (nova ? 55 : 45)) % (span + tail + 6);
+  for (let k = 0; k < span; k++) { const d = head - k; const a = d >= 0 && d < tail ? 1 - d / tail : 0; S.put(x + k, y, nova ? (a > 0 ? "━" : "─") : "─", { fg: mix(P.faint, cyc(NG, k / span + t * 0.2 + (nova ? d / tail : 0)), a) }); }
+}
+function nebComposer(S, y, m, t) {
+  const P = PN, V = NV;
+  const blinkOn = Math.floor(t * 1.8) % 2 === 0;
+  const hints = [[" / ", { fg: P.muted }], ["commands  ", { fg: P.dim }], ["@ ", { fg: P.muted }], ["files  ", { fg: P.dim }], ["! ", { fg: P.muted }], ["shell ", { fg: P.dim }]];
+  if (V.composer === "line") {
+    S.put(3, y, "❯", { fg: cyc(NG, t * 0.2), b: 1 });
+    const x = m.typed ? S.put(5, y, m.typed, { fg: P.fg }) : 5;
+    if (!m.typed) S.put(6, y, "ask anything…", { fg: P.dim });
+    if (blinkOn) S.tint(x, y, 1, 1, P.fg);
+    S.right(W - 3, y, [["⇧⇥ ", { fg: P.dim }], ["ask", { fg: P.muted }]]);
+    const lit = Math.max(10, len(m.typed) + 6), span = W - 6;
+    for (let k = 0; k < span; k++) S.put(3 + k, y + 1, "─", { fg: k < lit ? mix(P.faint, cyc(NG, k / lit - t * 0.2), 1 - k / lit * 0.5) : P.faint });
+    S.right(W - 3, y + 2, hints);
+    return;
+  }
+  if (V.composer === "soft") {
+    for (let k = 2; k < W - 2; k++) { S.put(k, y, "▄", { fg: P.panel }); S.put(k, y + 2, "▀", { fg: P.panel }); }
+    S.fill(2, y + 1, W - 4, 1, P.panel);
+    S.put(4, y + 1, "❯", { fg: cyc(NG, t * 0.2), b: 1, bg: P.panel });
+    const x = m.typed ? S.put(6, y + 1, m.typed, { fg: P.fg, bg: P.panel }) : 6;
+    if (!m.typed) S.put(7, y + 1, "ask anything…", { fg: P.dim, bg: P.panel });
+    if (blinkOn) S.tint(x, y + 1, 1, 1, P.fg);
+    S.right(W - 4, y + 1, [["@ ", { fg: P.muted, bg: P.panel }], ["files  ", { fg: P.dim, bg: P.panel }], ["/ ", { fg: P.muted, bg: P.panel }], ["cmds  ", { fg: P.dim, bg: P.panel }], ["▐", { fg: P.panel2, bg: P.panel }], [" ask ", { fg: P.yellow, bg: P.panel2 }], ["▌", { fg: P.panel2, bg: P.panel }]]);
+    return;
+  }
+  const glow = V.composer === "glow";
+  S.box(2, y, W - 4, 3, { set: "round", bg: glow ? P.panel : undefined, col: (i, n) => mix(P.faint, cyc(NG, i / n - t * 0.12), glow ? 1 : 0.75) });
+  S.segs(4, y, [[" ask ", { fg: P.muted, bg: glow ? P.panel : undefined }]]);
+  S.right(W - 5, y, [[" ⇧⇥ ", { fg: P.dim }], ["ask", { fg: P.yellow }], [" ", {}]]);
+  S.put(4, y + 1, "❯", { fg: glow ? cyc(NG, t * 0.3) : P.violet, b: 1 });
+  const x = m.typed ? S.put(6, y + 1, m.typed, { fg: P.fg }) : 6;
+  if (!m.typed) S.put(7, y + 1, "ask anything…", { fg: P.dim });
+  if (blinkOn) S.tint(x, y + 1, 1, 1, P.fg);
+  S.right(W - 5, y + 2, hints);
+}
+function nebPill(S, x, y, text, bg, fg, b) { S.put(x, y, "▐", { fg: bg }); x = S.put(x + 1, y, text, { fg, bg, b }); S.put(x, y, "▌", { fg: bg }); return x + 2; }
+function nebStatus(S, y, t) {
+  const P = PN, V = NV;
+  if (V.status === "plain") {
+    S.segs(3, y, [["● ", { fg: P.claude }], ["Claude Code", { fg: P.muted }], [" · opus-4-5 · high · ask", { fg: P.dim }]]);
+    S.right(W - 3, y, [["23%", { fg: P.muted }], [" ctx · ", { fg: P.dim }], ["$0.42", { fg: P.muted }], [" · ⎇ ", { fg: P.dim }], ["main", { fg: P.muted }]]);
+    return;
+  }
+  if (V.status === "multi") {
+    let x = nebPill(S, 2, y, " Claude Code ", P.claude, "#1b0f0a", 1);
+    x = nebPill(S, x, y, " opus-4-5 · high ", P.panel2, P.fg);
+    nebPill(S, x, y, " ask ", mix(P.panel2, P.yellow, 0.25), P.yellow, 1);
+    const bw = 8, pillW = bw + 6; let rx = W - 3;
+    rx -= len(" ⎇ main ") + 2; nebPill(S, rx, y, " ⎇ main ", P.panel2, P.muted);
+    rx -= len(" $0.42 ") + 3; nebPill(S, rx, y, " $0.42 ", P.panel2, P.fg);
+    rx -= pillW + 3; nebPill(S, rx, y, " ".repeat(pillW), P.panel2, P.fg);
+    for (let k = 0; k < bw; k++) S.put(rx + 2 + k, y, k < 2 ? "▰" : "▱", { fg: k < 2 ? grad(NG, k / 2) : P.faint, bg: P.panel2 });
+    S.put(rx + 3 + bw, y, "23%", { fg: P.fg, bg: P.panel2, b: 1 });
+    return;
+  }
+  nebPill(S, 2, y, " Claude Code ", P.claude, "#1b0f0a", 1);
+  S.put(18, y, "opus-4-5 · high", { fg: P.muted });
+  const x = S.right(W - 3, y, [["  ⎇ ", { fg: P.dim }], ["main", { fg: P.muted }]]);
+  const x2 = S.right(x, y, [["$0.42", { fg: P.muted }]]);
+  const x3 = S.right(x2 - 3, y, [[" 23%", { fg: P.fg }]]);
+  for (let k = 0; k < 10; k++) S.put(x3 - 10 + k, y, k < 3 ? "▰" : "▱", { fg: k < 3 ? grad(NG, k / 3) : P.faint });
+  S.put(x3 - 15, y, "ctx", { fg: P.dim });
+}
+function nebApproval(S, y0, h, t) {
+  const P = PN, off = Math.round((1 - ease(t / 0.45)) * h), y = y0 + off; S.clip = [y0, H - 1];
+  const pulse = 0.65 + 0.35 * Math.sin(t * 3);
+  S.box(2, y, W - 4, h, { set: "round", bg: NV.composer === "soft" ? P.panel : P.bg, col: (i, n) => mix(P.faint, cyc([P.yellow, P.pink, P.yellow], i / n - t * 0.25), pulse) });
+  const bg = NV.composer === "soft" ? P.panel : P.bg;
+  S.segs(4, y, [[" ◆ Allow ", { fg: P.fg, b: 1, bg }], ["Edit", { fg: P.yellow, b: 1, bg }], ["? ", { fg: P.fg, b: 1, bg }]]);
+  S.put(5, y + 1, "src/lib/format.ts", { fg: P.fg, b: 1, bg }); S.put(24, y + 1, "replace 2 lines, add 2", { fg: P.dim, bg });
+  DIFF.forEach(([n, sgn, code], i) => { const yy = y + 3 + i, b2 = sgn === "+" ? P.add : sgn === "-" ? P.del : bg; S.tint(5, yy, W - 10, 1, b2); S.put(5, yy, String(n).padStart(3), { fg: P.dim, bg: b2 }); S.put(9, yy, sgn, { fg: sgn === "+" ? P.green : P.red, bg: b2, b: 1 }); S.put(11, yy, code, { fg: P.fg, bg: b2 }); });
+  const by = y + h - 2; let x = nebPill(S, 5, by, " y  yes ", P.yellow, "#221804", 1);
+  x = S.segs(x + 2, by, [["a", { fg: P.yellow, b: 1, bg }], ["  yes, don't ask again this session", { fg: P.muted, bg }]]);
+  S.segs(x + 4, by, [["n", { fg: P.yellow, b: 1, bg }], ["  no, tell it what to do", { fg: P.muted, bg }]]);
+  S.clip = null;
+}
+function nebPicker(S, pk, t) {
+  const P = PN, e = ease(pk.t / 0.3); S.dim(0.55 * e, P.bg);
+  const w = 64, h = 14, x = (W - w) >> 1, cy = 9 + (h >> 1), hh = Math.max(3, Math.round(h * e)), y = cy - (hh >> 1);
+  S.box(x, y, w, hh, { set: "round", bg: P.panel, col: (i, n) => cyc(NG, i / n - t * 0.15) });
+  S.segs(x + 2, y, [[" ✦ switch model ", { fg: P.fg, b: 1, bg: P.panel }]]);
+  if (hh < h) return;
+  S.put(x + 2, y + 1, "❯", { fg: P.violet, bg: P.panel, b: 1 }); const qx = S.put(x + 4, y + 1, pk.query, { fg: P.fg, bg: P.panel }); S.tint(qx, y + 1, 1, 1, P.fg);
+  S.put(x + 1, y + 2, "─".repeat(w - 2), { fg: P.faint, bg: P.panel });
+  MODELS.forEach(([prov, name, eff, label], i) => {
+    const yy = y + 3 + i, sel = i === pk.sel, bg = sel ? P.panel2 : P.panel;
+    S.tint(x + 1, yy, w - 2, 1, bg);
+    if (sel) S.put(x + 1, yy, "▌", { fg: cyc(NG, t * 0.4), bg });
+    const dot = { claude: P.claude, codex: P.blue, chatgpt: P.green, opencode: P.yellow }[prov];
+    S.put(x + 3, yy, "●", { fg: dot, bg }); S.put(x + 5, yy, prov + "/" + name, { fg: sel ? P.fg : P.muted, b: sel, bg });
+    S.right(x + w - 3, yy, [[label + " · " + eff, { fg: P.dim, bg }]]);
+  });
+  S.put(x + 2, y + h - 2, "↑↓ move   enter select   tab effort   esc close", { fg: P.dim, bg: P.panel });
+}
+function nebWelcome(S, m, t) {
+  const P = PN, V = NV, r = rng(7);
+  for (let k = 0; k < (V.quiet ? 25 : 70); k++) { const x = Math.floor(r() * W), y = Math.floor(r() * 26), ph = r() * 6, sp = 0.6 + r() * 1.6, ch = "·˙✧✦"[Math.floor(r() * 4)]; S.put(x, y, ch, { fg: mix(P.bg, mix(P.blue, P.pink, r()), (0.25 + 0.75 * (0.5 + 0.5 * Math.sin(t * sp + ph))) * ease(t / 1.2) * 0.7) }); }
+  const lx = (W - len(LOGO[0])) >> 1;
+  LOGO.forEach((l, j) => [...l].forEach((ch, i) => S.put(lx + i, 8 + j, ch, { fg: mix(P.bg, cyc(NG, i / 46 - t * 0.12), ease(t / 0.9 - i * 0.01)) })));
+  const cen = (y, segs, a = 1) => { const n = segs.reduce((q, [s]) => q + len(s), 0); S.segs((W - n) >> 1, y, segs.map(([s, st]) => [s, { ...st, fg: mix(P.bg, st.fg, a), bg: st.bg && mix(P.bg, st.bg, a) }])); };
+  cen(11, [["winfer code", { fg: P.fg, b: 1 }], ["  v0.2.0", { fg: P.dim }]], ease(t / 1.2 - 0.3));
+  cen(13, [["● ", { fg: P.claude }], ["Claude Code", { fg: P.fg }], ["  opus-4-5 · high · ask", { fg: P.muted }]], ease(t / 1.2 - 0.45));
+  cen(14, [["~/Coding/winfer", { fg: P.dim }], ["  ⎇ main", { fg: P.muted }]], ease(t / 1.2 - 0.55));
+  const tiles = [["/", "commands", "slash commands"], ["@", "files", "attach context"], ["!", "shell", "run a command"], ["⇧⇥", "mode", "ask · auto · plan"]];
+  if (V.tiles === "none") cen(18, [["/ ", { fg: P.muted }], ["commands    ", { fg: P.dim }], ["@ ", { fg: P.muted }], ["files    ", { fg: P.dim }], ["! ", { fg: P.muted }], ["shell    ", { fg: P.dim }], ["⇧⇥ ", { fg: P.muted }], ["mode", { fg: P.dim }]], ease((t - 1) / 0.8));
+  else {
+    const tw = 22, gap = 2, tx0 = (W - (tw * 4 + gap * 3)) >> 1;
+    tiles.forEach(([k, a, b], i) => {
+      const e = ease((t - 0.9 - i * 0.12) / 0.5); if (e <= 0) return; const ty = 18 + Math.round((1 - e) * 2), tx = tx0 + i * (tw + gap);
+      if (V.tiles === "soft") { const pb = mix(P.bg, P.panel, e); S.put(tx, ty, "▄".repeat(tw), { fg: pb }); S.fill(tx, ty + 1, tw, 2, pb); S.put(tx, ty + 3, "▀".repeat(tw), { fg: pb }); S.segs(tx + 2, ty + 1, [[k, { fg: mix(P.bg, cyc(NG, i / 4), e), b: 1, bg: pb }], ["  " + a, { fg: mix(P.bg, P.fg, e), bg: pb }]]); S.put(tx + 2, ty + 2, b, { fg: mix(P.bg, P.dim, e), bg: pb }); return; }
+      S.box(tx, ty, tw, 4, { set: "round", col: mix(P.bg, P.faint, e), bg: P.bg });
+      S.segs(tx + 2, ty + 1, [[k, { fg: mix(P.bg, cyc(NG, i / 4), e), b: 1 }], ["  " + a, { fg: mix(P.bg, P.fg, e) }]]);
+      S.put(tx + 2, ty + 2, b, { fg: mix(P.bg, P.dim, e) });
+    });
+  }
+  nebComposer(S, H - 5, m, t); nebStatus(S, H - 1, t);
+}
+
+/* ═════════════════════════ NEW STYLES built on Nebula ═════════════════════════ */
+const glyphOf = (n) => ({ read: "◇", edit: "✎", bash: "❯", grep: "⌕" })[n] || "◆";
+function nodesOf(m) {
+  const ns = [];
+  for (const it of m.items) {
+    if (it.k === "think") ns.push({ l: "think", st: "ok", time: "4.0s", dur: 4 });
+    if (it.k === "tool") ns.push({ l: it.name, st: it.status === "run" ? "run" : it.status === "fail" ? "fail" : "ok", time: it.time, dur: parseFloat(it.time), it });
+    if (it.k === "agents") ns.push({ l: "agents", st: it.list.every((a) => a[2] >= 1) ? "ok" : "bg", time: it.list.map((a) => Math.round(a[2] * 100) + "%").join("·"), it });
+  }
+  const ans = m.items.find((i) => i.k === "answer");
+  ns.push({ l: "answer", st: !ans ? "todo" : ans.done ? "ok" : "run", time: ans ? (ans.done ? "done" : "…") : "", it: ans });
+  return ns;
+}
+function shimmerWord(S, x, y, word, t, b = 1) { [...word].forEach((ch, i) => (x = S.put(x, y, ch, { fg: cyc(NG, i / 14 - t * 0.6), b }))); return x; }
+function stepMeta(it) { return it.status === "fail" ? [[it.meta, { fg: PN.red }]] : it.add != null ? [["+" + it.add, { fg: PN.green }], [" −" + it.del, { fg: PN.red }]] : it.status === "run" ? [[it.time, { fg: PN.violet }]] : [[(it.meta || "+4 lines"), { fg: PN.dim }]]; }
+function dotLine(S, x0, y0, x1, y1, k, col) { const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0) * 2); for (let s = 0; s <= n * k; s += 2) { const x = Math.round(x0 + ((x1 - x0) * s) / n), y = Math.round(y0 + ((y1 - y0) * s) / n); const c = S.cell(x, y); if (c && c.ch === " ") S.put(x, y, "·", { fg: col(s / n) }); } }
+
+/* ── Constellation: steps are stars on a track; the active one gets the stage ── */
+function constellation(S, m, t) {
+  const P = PN;
+  if (m.welcome) return conWelcome(S, m, t);
+  nebStatus(S, H - 1, t);
+  let top;
+  if (m.approval) { top = H - 14; nebApproval(S, top, 12, t); } else { top = H - 5; nebComposer(S, top, m, t); }
+  if (m.busy && !m.approval) { nebWorking(S, top - 1, m, t); top--; }
+  const ns = nodesOf(m), n = ns.length, xs = ns.map((_, i) => 6 + Math.round((i * (W - 12)) / Math.max(1, n - 1)));
+  const ai = ns.findIndex((d) => d.st === "run");
+  for (let i = 0; i < n - 1; i++) {
+    const lit = ns[i + 1].st !== "todo";
+    for (let x = xs[i] + 1; x < xs[i + 1]; x++) S.put(x, 1, "─", { fg: lit ? mix(P.faint, cyc(NG, x / W), 0.55) : P.faint });
+    if (i + 1 === ai) { const span = xs[i + 1] - xs[i] - 1, hx = xs[i] + 1 + ((t * 14) % span); for (let k = 0; k < 6; k++) { const x = Math.floor(hx - k); if (x > xs[i]) S.put(x, 1, "━", { fg: mix(P.faint, cyc(NG, x / W + t * 0.3), 1 - k / 6) }); } }
+  }
+  ns.forEach((d, i) => {
+    const x = xs[i], act = d.st === "run", col = d.st === "fail" ? P.red : d.st === "todo" ? P.faint : act ? mix(P.fg, cyc(NG, t * 0.5), 0.5) : cyc(NG, x / W);
+    S.put(x, 1, d.st === "todo" ? "○" : act ? "✦✧"[Math.floor(t * 4) % 2] : d.st === "bg" ? "◈" : d.st === "fail" ? "✧" : "✦", { fg: col, b: act });
+    if (act) { const a = 0.5 + 0.5 * Math.sin(t * 5); S.put(x - 1, 1, "·", { fg: mix(P.bg, cyc(NG, t), a) }); S.put(x + 1, 1, "·", { fg: mix(P.bg, cyc(NG, t), a) }); S.put(x, 0, "˙", { fg: mix(P.bg, P.muted, a) }); }
+    const lx = x - (len(d.l) >> 1);
+    S.put(lx, 2, d.l, { fg: act ? P.fg : d.st === "todo" ? P.dim : d.st === "fail" ? P.red : P.muted, b: act });
+    S.put(x - (len(d.time) >> 1), 3, d.time, { fg: act ? P.violet : P.dim });
+  });
+  const user = m.items.find((i) => i.k === "user");
+  S.put(3, 5, "❯", { fg: cyc(NG, t * 0.2), b: 1 }); S.put(5, 5, user.text, { fg: P.fg, b: 1 });
+  const done = m.items.filter((i) => i.k === "tool" && i.status !== "run");
+  let x = S.put(3, 7, "behind you  ", { fg: P.dim });
+  done.forEach((it) => { x = S.put(x, 7, glyphOf(it.name) + " ", { fg: it.status === "fail" ? P.red : P.muted }); x = S.put(x, 7, it.name === "edit" ? `edit +${it.add} −${it.del}` : `${it.name} ${it.target.split("/").pop()}`, { fg: P.dim }); x = S.put(x, 7, "   ", {}); });
+  S.right(W - 3, 7, [["←→ ", { fg: P.muted }], ["revisit a star", { fg: P.dim }]]);
+  const act = ns[ai >= 0 ? ai : n - 1], fy = 9, fh = top - fy - 1;
+  if (fh < 4) return;
+  const it = act.it || m.items.filter((i) => i.k === "tool").pop();
+  const title = !it ? "waiting" : it.k === "answer" ? "✦ answer" : `${glyphOf(it.name)} ${it.name} · ${it.target}`;
+  S.box(2, fy, W - 4, fh, { set: "round", col: (i, nn) => mix(P.faint, cyc(NG, i / nn - t * 0.1), 0.6) });
+  S.segs(4, fy, [[" " + title + " ", { fg: P.fg, b: 1 }]]);
+  if (it && it.k === "tool") S.right(W - 5, fy, [[" " + it.time + " ", { fg: P.violet }]]);
+  const body = [];
+  if (it && it.k === "answer") wrap(it.text, W - 12).forEach((l) => body.push([l, "ans"]));
+  else if (it && it.out) it.out.forEach((l) => body.push([l, "out"]));
+  else if (it && it.diff) it.diff.forEach((d) => body.push([d, "diff"]));
+  body.slice(-(fh - 2)).forEach(([l, k], i) => {
+    const y = fy + 1 + i;
+    if (k === "ans") { const [ex] = rich(S, 5, y, l, { fg: P.fg }, { fg: P.violet, b: 1 }); if (i === body.length - 1 && !it.done) S.put(ex, y, "▍", { fg: P.pink }); }
+    else if (k === "out") { S.put(5, y, String(i + 1).padStart(3), { fg: P.faint }); S.put(10, y, l, { fg: l.startsWith("✓") ? P.green : P.muted }); }
+  });
+  if (m.picker) nebPicker(S, m.picker, t);
+}
+function conWelcome(S, m, t) {
+  const P = PN, pts = [[14, 4], [27, 9], [41, 5], [52, 11], [64, 6], [78, 10], [90, 4]];
+  for (let i = 0; i < pts.length - 1; i++) { const k = Math.max(0, Math.min(1, (t - i * 0.25) / 0.4)); if (k > 0) dotLine(S, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], k, (q) => mix(P.faint, cyc(NG, (i + q) / pts.length), 0.6)); }
+  pts.forEach(([x, y], i) => { if (t > i * 0.25) S.put(x, y, "✦", { fg: mix(P.bg, cyc(NG, i / pts.length), 0.55 + 0.45 * Math.sin(t * 2 + i)), b: 1 }); });
+  const lx = (W - len(LOGO[0])) >> 1;
+  LOGO.forEach((l, j) => [...l].forEach((ch, i) => S.put(lx + i, 15 + j, ch, { fg: mix(P.bg, cyc(NG, i / 46 - t * 0.12), ease(t / 1.2 - 0.6)) })));
+  const s = "every step is a star · ←→ to revisit"; S.put((W - len(s)) >> 1, 18, s, { fg: mix(P.bg, P.dim, ease(t - 1.4)) });
+  nebComposer(S, H - 5, m, t); nebStatus(S, H - 1, t);
+}
+
+/* ── Eclipse: Nebula for light terminals, centered column with cards ── */
+const ECX = 12, ECW = 80;
+function cardWrap(rows, inner, x, w, { col, bg, title }) {
+  rows.push((S, y) => { S.put(x, y, "╭" + "─".repeat(w - 2) + "╮", { fg: col }); if (title) S.segs(x + 2, y, title); });
+  inner.forEach((f) => rows.push((S, y) => { S.fill(x + 1, y, w - 2, 1, bg); S.put(x, y, "│", { fg: col }); S.put(x + w - 1, y, "│", { fg: col }); f(S, y); }));
+  rows.push((S, y) => S.put(x, y, "╰" + "─".repeat(w - 2) + "╯", { fg: col }));
+}
+function eclipse(S, m, t) {
+  const P = PN;
+  if (m.welcome) { nebWelcome(S, m, t); return; }
+  S.put(ECX, 0, "◐◓◑◒"[Math.floor(t * 2) % 4], { fg: P.violet, b: 1 }); S.put(ECX + 2, 0, "winfer code", { fg: P.fg, b: 1 });
+  S.right(ECX + ECW, 0, [["opus-4-5", { fg: P.muted }], [" · ", { fg: P.dim }], ["ask", { fg: P.yellow, b: 1 }]]);
+  for (let k = 0; k < ECW; k++) S.put(ECX + k, 1, "─", { fg: mix(P.faint, cyc(NG, k / ECW - t * 0.1), 0.45) });
+  S.segs(ECX, H - 1, [["Claude Code", { fg: P.muted }], [" · high · ", { fg: P.dim }], ["23%", { fg: P.fg, b: 1 }], [" context · $0.42 · ⎇ main", { fg: P.dim }]]);
+  let top;
+  if (m.approval) { top = H - 14; nebApproval(S, top, 12, t); }
+  else {
+    top = H - 5;
+    S.box(ECX, top, ECW, 3, { set: "round", bg: "#ffffff", col: (i, n) => cyc(NG, i / n - t * 0.12) });
+    S.put(ECX + 2, top + 1, "❯", { fg: P.violet, b: 1, bg: "#ffffff" });
+    const x = m.typed ? S.put(ECX + 4, top + 1, m.typed, { fg: P.fg, bg: "#ffffff" }) : ECX + 4;
+    if (!m.typed) S.put(ECX + 5, top + 1, "ask anything…", { fg: P.dim, bg: "#ffffff" });
+    if (Math.floor(t * 1.8) % 2 === 0) S.tint(x, top + 1, 1, 1, P.violet);
+    S.right(ECX + ECW - 2, top + 1, [["@ files  / cmds", { fg: P.dim, bg: "#ffffff" }]]);
+  }
+  if (m.busy && !m.approval) { S.put(ECX, top - 1, "◐◓◑◒"[Math.floor(t * 8) % 4], { fg: P.violet }); const x = shimmerWord(S, ECX + 2, top - 1, m.items.some((i) => i.status === "run") ? "Running tests" : "Thinking", t); S.put(x, top - 1, `  ${Math.floor(m.elapsed)}s · esc to interrupt`, { fg: P.dim }); top--; }
+  const rows = [], blank = () => rows.push(() => {});
+  for (const it of m.items) {
+    if (it.k === "user") { blank(); wrap(it.text, ECW - 4).forEach((l) => rows.push((S, y) => { S.put(ECX, y, "▍", { fg: P.violet }); S.put(ECX + 2, y, l, { fg: P.fg, b: 1 }); })); blank(); }
+  }
+  const tools = m.items.filter((i) => i.k === "tool"), inner = [];
+  inner.push((S, y) => S.segs(ECX + 2, y, [["✧ ", { fg: P.violet, bg: P.panel }], ["thought for 4s", { fg: P.dim, i: 1, bg: P.panel }]]));
+  tools.forEach((it) => {
+    inner.push((S, y) => { const run = it.status === "run"; S.put(ECX + 2, y, run ? "◐◓◑◒"[Math.floor(t * 8) % 4] : it.status === "fail" ? "✕" : "✓", { fg: run ? P.violet : it.status === "fail" ? P.red : P.green, bg: P.panel, b: 1 }); S.put(ECX + 4, y, it.name.padEnd(6), { fg: P.muted, bg: P.panel }); S.put(ECX + 10, y, it.target, { fg: P.fg, b: 1, bg: P.panel }); S.right(ECX + ECW - 3, y, stepMeta(it).map(([s, st]) => [s, { ...st, bg: P.panel }])); });
+    (it.diff || []).forEach(([n, sgn, code]) => inner.push((S, y) => { const bg = sgn === "+" ? P.add : sgn === "-" ? P.del : P.panel; S.tint(ECX + 4, y, ECW - 8, 1, bg); S.put(ECX + 4, y, String(n).padStart(3) + " " + sgn + " " + code, { fg: sgn === "+" ? P.green : sgn === "-" ? P.red : P.muted, bg }); }));
+    if (it.name === "bash") (it.out || []).filter(Boolean).slice(-3).forEach((l) => inner.push((S, y) => S.put(ECX + 4, y, l, { fg: l.startsWith("✓") ? P.green : P.muted, bg: P.panel })));
+  });
+  cardWrap(rows, inner, ECX, ECW, { col: P.faint, bg: P.panel, title: [[" steps ", { fg: P.muted, b: 1 }], [`${tools.length} tools · 9.8s `, { fg: P.dim }]] });
+  const ag = m.items.find((i) => i.k === "agents");
+  if (ag) rows.push((S, y) => { let x = S.put(ECX + 1, y, "◈ ", { fg: P.violet }); ag.list.forEach(([n, , p]) => { x = S.put(x, y, n + " ", { fg: P.muted }); for (let k = 0; k < 10; k++) S.put(x + k, y, "━", { fg: k < Math.round(p * 10) ? grad(NG, k / 10) : P.faint }); x = S.put(x + 10, y, ` ${Math.round(p * 100)}%   `, { fg: P.dim }); }); });
+  const ans = m.items.find((i) => i.k === "answer");
+  if (ans) { blank(); const lines = wrap(ans.text, ECW - 2); lines.forEach((l, li) => rows.push((S, y) => { const [x] = rich(S, ECX + 1, y, l, { fg: P.fg }, { fg: P.violet, bg: P.panel2, b: 1 }); if (!ans.done && li === lines.length - 1) S.put(x, y, "▍", { fg: P.pink }); })); }
+  drawRows(S, rows, 2, top);
+  if (m.picker) nebPicker(S, m.picker, t);
+}
+
+/* ── Pulsar: conversation left, live inspector right, pulsing divider ── */
+const PL = 58;
+function pulsar(S, m, t) {
+  const P = PN;
+  if (m.welcome) return nebWelcome(S, m, t);
+  nebStatus(S, H - 1, t);
+  let top;
+  if (m.approval) { top = H - 14; } else { top = H - 5; nebComposer(S, top, m, t); }
+  if (m.busy && !m.approval) { nebWorking(S, top - 1, m, t); top--; }
+  const tools = m.items.filter((i) => i.k === "tool");
+  const sel = tools.find((i) => i.status === "run") || (m.items.some((i) => i.k === "answer") ? tools.find((i) => i.name === "edit") : tools[tools.length - 1]);
+  const rows = [], blank = () => rows.push(() => {});
+  for (const it of m.items) {
+    if (it.k === "user") { blank(); wrap(it.text, PL - 8).forEach((l, li) => rows.push((S, y) => { S.tint(1, y, PL - 2, 1, P.panel); S.put(1, y, "▌", { fg: P.violet, bg: P.panel }); if (!li) S.put(3, y, "❯", { fg: P.violet, b: 1, bg: P.panel }); S.put(5, y, l, { fg: P.fg, b: 1, bg: P.panel }); })); blank(); }
+    if (it.k === "think") rows.push((S, y) => S.segs(3, y, [["✧ ", { fg: P.dim }], ["thought for 4s", { fg: P.dim, i: 1 }]]));
+    if (it.k === "tool") rows.push((S, y) => {
+      const isSel = it === sel, run = it.status === "run";
+      if (isSel) { S.tint(1, y, PL - 2, 1, P.panel2); S.put(1, y, "▶", { fg: cyc(NG, t * 0.4), bg: P.panel2 }); }
+      const bg = isSel ? P.panel2 : undefined;
+      S.put(3, y, run ? "◐◓◑◒"[Math.floor(t * 8) % 4] : it.status === "fail" ? "◌" : "◆", { fg: it.status === "fail" ? P.red : cyc(NG, run ? t : 0.2), bg });
+      S.put(5, y, it.name.padEnd(5), { fg: P.muted, bg }); S.put(11, y, it.target.length > 30 ? "…" + it.target.slice(-29) : it.target, { fg: P.fg, b: isSel, bg });
+      S.right(PL - 2, y, stepMeta(it).map(([s, st]) => [s, { ...st, bg }]));
+    });
+    if (it.k === "agents") it.list.forEach(([n, , p]) => rows.push((S, y) => { S.put(3, y, "◈", { fg: P.violet }); S.put(5, y, n, { fg: P.muted }); for (let k = 0; k < 16; k++) S.put(PL - 23 + k, y, "━", { fg: k < Math.round(p * 16) ? grad(NG, k / 16) : P.faint }); S.right(PL - 2, y, [[Math.round(p * 100) + "%", { fg: P.muted }]]); }));
+    if (it.k === "answer") { blank(); const lines = wrap(it.text, PL - 7); lines.forEach((l, li) => rows.push((S, y) => { if (!li) S.put(3, y, "✦", { fg: cyc(NG, t * 0.3) }); const [x] = rich(S, 5, y, l, { fg: P.fg }, { fg: P.violet, b: 1 }); if (!it.done && li === lines.length - 1) S.put(x, y, "▍", { fg: P.pink }); })); }
+  }
+  drawRows(S, rows, 0, top);
+  const beam = (t * 14) % (top + 12);
+  for (let y = 0; y < top; y++) S.put(PL, y, "│", { fg: mix(P.faint, cyc(NG, y / H - t * 0.2), Math.max(0.15, 1 - Math.abs(y - beam) / 5)) });
+  const ix = PL + 2, iw = W - ix - 2;
+  let x = ix;
+  for (const tab of ["output", "diff", "info"]) { const on = sel && ((tab === "diff") === !!sel.diff) && tab !== "info"; x = on ? nebPill(S, x, 0, " " + tab + " ", P.panel2, P.fg, 1) : S.put(x + 1, 0, tab, { fg: P.dim }) + 2; }
+  if (sel) {
+    S.segs(ix, 2, [[glyphOf(sel.name) + " ", { fg: cyc(NG, t * 0.3) }], [sel.name + "  ", { fg: P.muted }], [sel.target, { fg: P.fg, b: 1 }]]);
+    S.right(W - 2, 2, [[sel.time, { fg: sel.status === "run" ? P.violet : P.dim }]]);
+    S.put(ix, 3, "─".repeat(iw), { fg: P.faint });
+    const lines = sel.diff ? sel.diff.map(([n, sgn, code]) => ({ n, sgn, code })) : (sel.out || READ).map((l, i) => ({ n: i + 1, sgn: " ", code: l }));
+    lines.forEach(({ n, sgn, code }, i) => { const y = 4 + i; if (y >= top - 1) return; const bg = sgn === "+" ? P.add : sgn === "-" ? P.del : null; if (bg) S.tint(ix, y, iw - 1, 1, bg); S.put(ix, y, String(n).padStart(3), { fg: P.dim, bg }); S.put(ix + 4, y, sgn, { fg: sgn === "+" ? P.green : P.red, bg, b: 1 }); S.put(ix + 6, y, code.slice(0, iw - 8), { fg: code.startsWith("✓") ? P.green : sgn === " " ? P.muted : P.fg, bg }); });
+    if (sel.status === "run" && Math.floor(t * 2) % 2) S.put(ix + 6, 4 + lines.length, "▍", { fg: P.pink });
+    const th = Math.max(2, Math.round((top - 5) * 0.4)), ty = 4 + Math.round(((top - 5 - th) * (sel.status === "run" ? (t % 5) / 5 : 0)));
+    for (let y = 4; y < top - 1; y++) S.put(W - 2, y, y >= ty && y < ty + th ? "┃" : "│", { fg: y >= ty && y < ty + th ? cyc(NG, y / H) : P.faint });
+  }
+  if (m.approval) nebApproval(S, H - 14, 12, t);
+  if (m.picker) nebPicker(S, m.picker, t);
+}
+
+/* ── Event Horizon: focus mode, history falls away, floating composer ── */
+function horizonComposer(S, y, m, t, w = 84) {
+  const P = PN, x = (W - w) >> 1, h = 5;
+  for (let i = x + 2; i < x + w - 2; i++) { const e = Math.sin(((i - x) / w) * Math.PI); S.put(i, y + h, "▀", { fg: mix(P.bg, cyc(NG, i / W - t * 0.1), e * (0.16 + 0.05 * Math.sin(t * 2))) }); }
+  S.box(x, y, w, h, { set: "round", bg: P.panel, col: (i, n) => cyc(NG, i / n - t * 0.12) });
+  S.put(x + 3, y + 1, "❯", { fg: cyc(NG, t * 0.3), b: 1, bg: P.panel });
+  const cx = m.typed ? S.put(x + 5, y + 1, m.typed, { fg: P.fg, bg: P.panel }) : x + 5;
+  if (!m.typed) S.put(x + 6, y + 1, "ask anything…", { fg: P.dim, bg: P.panel });
+  if (Math.floor(t * 1.8) % 2 === 0) S.tint(cx, y + 1, 1, 1, P.fg);
+  S.segs(x + 3, y + 3, [["@ ", { fg: P.muted, bg: P.panel }], ["files   ", { fg: P.dim, bg: P.panel }], ["/ ", { fg: P.muted, bg: P.panel }], ["commands   ", { fg: P.dim, bg: P.panel }], ["! ", { fg: P.muted, bg: P.panel }], ["shell", { fg: P.dim, bg: P.panel }]]);
+  nebPill(S, x + w - 12, y + 3, " ⇧⇥ ask ", P.panel2, P.yellow, 1);
+}
+function horizon(S, m, t) {
+  const P = PN;
+  const cen = (y, segs) => { const n = segs.reduce((q, [s]) => q + len(s), 0); S.segs((W - n) >> 1, y, segs); };
+  if (m.welcome) {
+    const lx = (W - len(LOGO[0])) >> 1;
+    LOGO.forEach((l, j) => [...l].forEach((ch, i) => S.put(lx + i, 6 + j, ch, { fg: mix(P.bg, cyc(NG, i / 46 - t * 0.12), ease(t / 0.9 - i * 0.01)) })));
+    cen(9, [["winfer code", { fg: mix(P.bg, P.fg, ease(t - 0.4)), b: 1 }]]);
+    for (let x = 0; x < W; x++) { const e = Math.sin((x / W) * Math.PI); S.put(x, 15, "─", { fg: mix(P.bg, cyc(NG, x / W - t * 0.1), e * ease(t / 1.5)) }); S.tint(x, 14, 1, 1, mix(P.bg, P.violet, e * 0.05)); S.tint(x, 16, 1, 1, mix(P.bg, P.violet, e * 0.05)); }
+    horizonComposer(S, 18, m, t);
+    cen(25, [["claude code · opus-4-5 · high · ~/Coding/winfer ⎇ main", { fg: P.dim }]]);
+    return;
+  }
+  let x = S.put(2, 0, "✦ ", { fg: cyc(NG, t * 0.3) }); S.put(x, 0, "winfer", { fg: P.dim });
+  let rx = W - 2 - len(" ⎇ main ") - 2; nebPill(S, rx, 0, " ⎇ main ", P.panel2, P.muted);
+  rx -= len(" $0.42 ") + 3; nebPill(S, rx, 0, " $0.42 ", P.panel2, P.fg);
+  rx -= len(" 23% ctx ") + 3; nebPill(S, rx, 0, " 23% ctx ", P.panel2, P.fg);
+  rx -= len(" opus-4-5 ") + 3; nebPill(S, rx, 0, " opus-4-5 ", P.claude, "#1b0f0a", 1);
+  cen(H - 1, [["esc ", { fg: P.muted }], ["interrupt   ", { fg: P.dim }], ["⇧⇥ ", { fg: P.muted }], ["mode   ", { fg: P.dim }], ["^P ", { fg: P.muted }], ["model   ", { fg: P.dim }], ["^O ", { fg: P.muted }], ["history", { fg: P.dim }]]);
+  let top;
+  if (m.approval) { top = H - 15; nebApproval(S, top, 12, t); }
+  else { top = H - 8; horizonComposer(S, top, m, t); top -= 1; }
+  if (m.busy && !m.approval) {
+    const word = m.items.some((i) => i.status === "run") ? "Running tests" : "Thinking", tail = `  ${Math.floor(m.elapsed)}s · esc to interrupt`, n = 2 + len(word) + len(tail), sx = (W - n) >> 1;
+    S.put(sx, top - 1, "◜◝◞◟"[Math.floor(t * 8) % 4], { fg: cyc(NG, t) }); const ex = shimmerWord(S, sx + 2, top - 1, word, t); S.put(ex, top - 1, tail, { fg: P.dim }); top -= 2;
+  }
+  const rows = [], blank = () => rows.push(() => {}), X = 8, CW2 = W - 16;
+  for (const it of m.items) {
+    if (it.k === "user") { blank(); wrap(it.text, CW2).forEach((l, li) => rows.push((S, y) => { if (!li) S.put(X - 2, y, "❯", { fg: cyc(NG, t * 0.2), b: 1 }); S.put(X, y, l, { fg: P.fg, b: 1 }); })); blank(); }
+  }
+  const chips = [[" ✧ thought 4s ", "ok"]];
+  m.items.filter((i) => i.k === "tool").forEach((it) => chips.push([` ${it.status === "run" ? "◐◓◑◒"[Math.floor(t * 8) % 4] : glyphOf(it.name)} ${it.name} ${it.name === "edit" ? `+${it.add} −${it.del}` : it.name === "bash" ? (it.status === "run" ? it.time : "✓ 45") : it.target.split("/").pop().replace(/"/g, "")} `, it.status]));
+  const ag = m.items.find((i) => i.k === "agents"); if (ag) chips.push([` ◈ 2 agents ${ag.list.map((a) => Math.round(a[2] * 100) + "%").join(" · ")} `, "ok"]);
+  const lines = [[]]; let lw = 0; chips.forEach((c) => { const l = len(c[0]) + 3; if (lw + l > CW2) { lines.push([]); lw = 0; } lines[lines.length - 1].push(c); lw += l; });
+  lines.forEach((ln) => rows.push((S, y) => { let x = X; ln.forEach(([s, st]) => { const bg = st === "run" ? mix(P.panel2, cyc(NG, t * 0.5), 0.3) : st === "fail" ? mix(P.panel2, P.red, 0.2) : P.panel2; x = nebPill(S, x, y, s, bg, st === "fail" ? P.red : st === "run" ? P.fg : P.muted, st === "run"); }); }));
+  const run = m.items.find((i) => i.status === "run");
+  if (run) (run.out || []).filter(Boolean).slice(-2).forEach((l) => rows.push((S, y) => { S.put(X + 1, y, "╎", { fg: P.faint }); S.put(X + 3, y, l, { fg: P.dim }); }));
+  const ans = m.items.find((i) => i.k === "answer");
+  if (ans) { blank(); const al = wrap(ans.text, CW2); al.forEach((l, li) => rows.push((S, y) => { if (!li) S.put(X - 2, y, "✦", { fg: cyc(NG, t * 0.3) }); const [x] = rich(S, X, y, l, { fg: P.fg }, { fg: P.violet, b: 1 }, ans.done ? null : (i, f) => mix(P.pink, f, (vis(ans.text).length - i) / 10)); if (!ans.done && li === al.length - 1) S.put(x, y, "▍", { fg: P.pink }); })); }
+  const region = top - 2, overflow = rows.length > region;
+  while (rows.length < region) rows.unshift(() => {});
+  drawRows(S, rows, 2, top);
+  const fadeN = overflow ? 6 : 0;
+  for (let y = 2; y < 2 + fadeN; y++) { const k = 1 - (y - 2) / fadeN; for (let x = 0; x < W; x++) { const c = S.c[y][x]; c.fg = mix(c.fg, P.bg, k * 0.8); c.bg = mix(c.bg, P.bg, k * 0.8); } }
+  if (m.picker) nebPicker(S, m.picker, t);
+}
+
+/* ── Quasar: dense power-user view with time & cost gutters ── */
+function quasar(S, m, t) {
+  const P = PN, RG = W - 17;
+  if (m.welcome) return nebWelcome(S, m, t);
+  const ns = nodesOf(m), doneN = ns.filter((d) => d.st === "ok" || d.st === "fail").length, prog = m.busy ? doneN / ns.length : 1;
+  const pw = Math.round(prog * W);
+  for (let x = 0; x < W; x++) S.put(x, 0, x < pw ? "━" : "─", { fg: x < pw ? cyc(NG, x / W - t * 0.1) : P.faint });
+  if (m.busy) S.put(Math.min(W - 1, pw), 0, "✦✧"[Math.floor(t * 6) % 2], { fg: P.fg, b: 1 });
+  const seg = (x, y, parts) => S.segs(x, y, parts);
+  let sx = seg(1, H - 1, [["claude/opus-4-5 ", { fg: P.claude, b: 1 }], ["high", { fg: P.muted }]]);
+  for (const part of [[["ctx ", { fg: P.dim }], ["23% ", { fg: P.fg }], ["▰▰▱▱▱▱", { fg: P.violet }]], [["$0.42", { fg: P.fg }]], [["↓2.1k ↑840", { fg: P.muted }]], [[Math.floor(m.elapsed || 0) + "s", { fg: P.muted }]], [["⎇ main ", { fg: P.muted }], ["+48", { fg: P.green }], [" −12", { fg: P.red }]]]) { sx = S.put(sx + 1, H - 1, "│", { fg: P.faint }) + 1; sx = seg(sx, H - 1, part); }
+  if (m.busy) S.right(W - 1, H - 1, [["● ", { fg: cyc(NG, t) }], ["working", { fg: P.muted }]]);
+  let top;
+  if (m.approval) { top = H - 14; nebApproval(S, top, 12, t); }
+  else {
+    top = H - 4;
+    let x = S.put(1, top, "plan ", { fg: P.dim });
+    TODOS.forEach(([st, l], i) => { if (i) x = S.put(x, top, " › ", { fg: P.faint }); x = S.segs(x, top, [[st === "done" ? "✓ " : st === "run" ? "◐◓◑◒"[Math.floor(t * 6) % 4] + " " : "○ ", { fg: st === "done" ? P.green : st === "run" ? cyc(NG, t) : P.dim }], [l, { fg: st === "run" ? P.fg : P.dim, b: st === "run" }]]); });
+    for (let k = 0; k < W; k++) S.put(k, top + 1, "─", { fg: mix(P.faint, cyc(NG, k / W - t * 0.15), 0.4) });
+    S.put(1, top + 2, "❯", { fg: P.violet, b: 1 });
+    const cx = m.typed ? S.put(3, top + 2, m.typed, { fg: P.fg }) : 3;
+    if (!m.typed) S.put(4, top + 2, "ask · @file · /cmd · !shell", { fg: P.dim });
+    if (Math.floor(t * 1.8) % 2 === 0) S.tint(cx, top + 2, 1, 1, P.fg);
+    const ex = S.right(W - 2, top + 2, [["▐", { fg: P.panel2 }], [" opus · high ", { fg: P.muted, bg: P.panel2 }], ["▌", { fg: P.panel2 }]]);
+    S.right(ex - 1, top + 2, [["▐", { fg: P.panel2 }], [" ask ", { fg: P.yellow, bg: P.panel2, b: 1 }], ["▌", { fg: P.panel2 }]]);
+  }
+  const rows = [];
+  const row = (gut, gutSt, f, bar) => rows.push((S, y) => {
+    if (gut) S.right(8, y, [[gut, gutSt || { fg: P.dim }]]);
+    S.put(9, y, "│", { fg: P.faint }); S.put(RG, y, "│", { fg: P.faint });
+    f && f(S, y);
+    if (bar) { const [p, tok, run] = bar; for (let k = 0; k < 8; k++) S.put(RG + 2 + k, y, "━", { fg: k < Math.max(1, Math.round(p * 8)) ? (run ? cyc(NG, k / 8 - t) : grad(NG, k / 8)) : P.faint }); S.right(W - 1, y, [[tok, { fg: P.dim }]]); }
+  });
+  for (const it of m.items) {
+    if (it.k === "user") { row("", null); wrap(it.text, RG - 14).forEach((l, i) => row(i ? "" : "12:41", null, (S, y) => { if (!i) S.put(11, y, "❯", { fg: P.violet, b: 1 }); S.put(13, y, l, { fg: P.fg, b: 1 }); })); row("", null); }
+    if (it.k === "think") row("+4.0s", null, (S, y) => S.put(11, y, "✧ thought", { fg: P.dim, i: 1 }), [0.8, "1.1k"]);
+    if (it.k === "tool") {
+      const run = it.status === "run", d = parseFloat(it.time);
+      row(run ? "◐◓◑◒"[Math.floor(t * 8) % 4] + " " + it.time : "+" + it.time, run ? { fg: P.violet } : null, (S, y) => { S.put(11, y, glyphOf(it.name), { fg: it.status === "fail" ? P.red : cyc(NG, d / 5) }); S.put(13, y, it.name.padEnd(6), { fg: P.muted }); S.put(19, y, it.target, { fg: P.fg, b: 1 }); S.right(RG - 2, y, stepMeta(it)); }, [Math.min(1, d / 5), { read: "320", edit: "610", bash: "1.4k", grep: "90" }[it.name], run]);
+      (it.diff || []).forEach(([n, sgn, code]) => row("", null, (S, y) => { const bg = sgn === "+" ? P.add : sgn === "-" ? P.del : null; if (bg) S.tint(13, y, RG - 15, 1, bg); S.put(13, y, String(n).padStart(3) + " " + sgn + " " + code, { fg: sgn === "+" ? P.green : sgn === "-" ? P.red : P.muted, bg }); }));
+      if (it.name === "bash") (it.out || []).filter((l) => l.startsWith("✓") || l.includes("Tests")).forEach((l) => row("", null, (S, y) => S.put(13, y, l.trim(), { fg: l.startsWith("✓") ? P.green : P.muted })));
+    }
+    if (it.k === "agents") it.list.forEach(([n, task, p]) => row("bg", { fg: P.violet }, (S, y) => S.segs(11, y, [["◈ ", { fg: P.violet }], [n.padEnd(9), { fg: P.muted }], [task, { fg: P.dim }]]), [p, Math.round(p * 100) + "%", p < 1]));
+    if (it.k === "answer") { row("", null); const al = wrap(it.text, RG - 14); al.forEach((l, i) => row(i ? "" : "reply", { fg: P.violet }, (S, y) => { if (!i) S.put(11, y, "✦", { fg: cyc(NG, t * 0.3) }); const [x] = rich(S, 13, y, l, { fg: P.fg }, { fg: P.violet, b: 1 }); if (!it.done && i === al.length - 1) S.put(x, y, "▍", { fg: P.pink }); })); }
+  }
+  drawRows(S, rows, 1, top);
+  if (m.picker) nebPicker(S, m.picker, t);
+}
+
+const NEW_STYLES = [
+  { id: "constellation", name: "Constellation", tag: "style", sw: "radial-gradient(circle,#fff 10%,#a77bff 30%,#0d0d13 70%)", pal: { bg: "#0a0a12" }, fn: constellation,
+    desc: "<b>Constellation</b>: steps become stars on a track along the top, joined by lines, with a light travelling toward the active star. The active step gets the stage: a large framed view of its live output, or of the reply as it streams. Finished steps line up as a one-line “behind you” trail; ←→ revisits any star." },
+  { id: "eclipse", name: "Eclipse", tag: "style", sw: "linear-gradient(135deg,#f5f3fb 50%,#8a4bf0 50%)", pal: { bg: "#f5f3fb", panel: "#ebe7f7", panel2: "#ddd5f3", fg: "#1d1a2b", muted: "#5e5878", dim: "#9a94b3", faint: "#d3cce6", blue: "#4a5cf0", violet: "#8a4bf0", pink: "#e0408f", green: "#1f9d6b", red: "#d6405a", yellow: "#b77b06", add: "#d9f1e4", del: "#f7dbe1", claude: "#c9603b" }, fn: eclipse,
+    desc: "<b>Eclipse</b>: Nebula for light terminals. A centered 80-column reading width, a header with an icon cycling through moon phases (◐◓◑◒) over a gradient hairline, and all steps inside one soft lavender card. Code words in the reply get small tinted labels, and the input is a white field with a moving gradient border." },
+  { id: "pulsar", name: "Pulsar", tag: "style", sw: "linear-gradient(90deg,#16161f 55%,#a77bff 55%,#a77bff 60%,#1d1d29 60%)", pal: {}, fn: pulsar,
+    desc: "<b>Pulsar</b>: a split view. The conversation stays compact on the left, one line per tool, with a ▶ marker following the active step. On the right, a live inspector shows that tool's full output or diff with line numbers, tabs and a gradient scrollbar. A light pulse runs down the divider while the agent works." },
+  { id: "horizon", name: "Event Horizon", tag: "style", sw: "linear-gradient(180deg,#0d0d13 40%,#a77bff 50%,#0d0d13 60%)", pal: {}, fn: horizon,
+    desc: "<b>Event Horizon</b>: a focus mode. Older history fades into the background toward the top, and steps flow as a wrapping row of pill-shaped labels. The input floats as a large glowing card in the lower middle. Model, context, cost and branch sit as pills in the top-right corner. On the welcome screen the input rests on a glowing horizon line." },
+  { id: "quasar", name: "Quasar", tag: "style", sw: "linear-gradient(90deg,#6d8bff,#ff6fb5 70%,#2b2b38 70%)", pal: {}, fn: quasar,
+    desc: "<b>Quasar</b>: a dense layout for power users. A progress line across the top fills as the turn advances. A left column shows each step's timing, and a right column shows a duration bar and token count. The plan sits in one line above the input (✓ › ✓ › ◐ › ○). The status line packs in model, context, cost, tokens, time and diff size." },
+];
+
+/* ═════════════════════════ direction 2 · BLOCKS ═════════════════════════ */
+const PB = { bg: "#0f1115", bar: "#181b22", panel: "#151820", panel2: "#1c2029", fg: "#e9ebf1", muted: "#8f97a8", dim: "#566070", faint: "#262b36", accent: "#4fb3ff", claude: "#e5845e", green: "#5fd38d", red: "#ff6464", yellow: "#f2c14e", violet: "#b48cff", add: "#123224", del: "#3a181b", code: "#22324a" };
+
+function blocks(S, m, t) {
+  const P = PB;
+  blkTop(S, t);
+  blkKeys(S, H - 1, m, t);
+  if (m.welcome) return blkWelcome(S, m, t);
+  let top;
+  if (m.approval) { top = H - 2 - 12; blkApproval(S, top, 12, t); }
+  else { top = H - 4; blkInput(S, top, m, t); }
+  if (m.busy && !m.approval) { blkProgress(S, top - 1, m, t); top--; }
+  drawRows(S, blkRows(m, t), 2, top - 1);
+  if (m.picker) blkPicker(S, m.picker, t);
+}
+function blkTop(S, t) {
+  const P = PB; S.fill(0, 0, W, 1, P.bar);
+  S.put(0, 0, " ◼ winfer code ", { fg: P.bg, bg: P.accent, b: 1 });
+  S.put(16, 0, " 1 format fix ", { fg: P.fg, bg: P.bg, b: 1 }); S.put(30, 0, " 2 e2e suite ", { fg: P.muted, bg: P.bar }); S.put(44, 0, " + ", { fg: P.dim, bg: P.bar });
+  S.right(W - 1, 0, [["⎇ ", { fg: P.dim, bg: P.bar }], ["main", { fg: P.muted, bg: P.bar }], ["  ~/Coding/winfer ", { fg: P.dim, bg: P.bar }]]);
+}
+function blkHead(rows, label, col, right) {
+  const P = PB;
+  rows.push((S, y) => { S.tint(1, y, W - 2, 1, P.panel2); S.put(1, y, "▌", { fg: col, bg: P.panel2 }); S.put(3, y, label, { fg: col, b: 1, bg: P.panel2 }); if (right) S.right(W - 3, y, right.map(([s, st]) => [s, { ...st, bg: P.panel2 }])); });
+}
+function blkBody(rows, col, f) { const P = PB; rows.push((S, y) => { S.tint(1, y, W - 2, 1, P.panel); S.put(1, y, "▌", { fg: mix(col, P.panel, 0.55), bg: P.panel }); f(S, y); }); }
+function blkRows(m, t) {
+  const P = PB, rows = [], blank = () => rows.push(() => {});
+  const bg = { bg: P.panel };
+  for (const it of m.items) {
+    if (it.k === "user") {
+      blkHead(rows, "you", P.accent, [["12:41:02", { fg: P.dim }]]);
+      blkBody(rows, P.accent, (S, y) => S.put(3, y, it.text, { fg: P.fg, ...bg }));
+      blank();
+    } else if (it.k === "think") {
+      const tools = m.items.filter((i) => i.k === "tool");
+      blkHead(rows, "steps", P.muted, [[`${tools.length} tools · thought 4s`, { fg: P.dim }]]);
+      blkBody(rows, P.muted, (S, y) => S.segs(3, y, [["   TOOL    TARGET".padEnd(50), { fg: P.dim, ...bg }], ["RESULT", { fg: P.dim, ...bg }]]) && S.right(W - 4, y, [["TIME", { fg: P.dim, ...bg }]]));
+    } else if (it.k === "tool") {
+      blkBody(rows, P.muted, (S, y) => {
+        const run = it.status === "run";
+        S.put(3, y, run ? "▖▘▝▗"[Math.floor(t * 8) % 4] : it.status === "fail" ? "✗" : "✓", { fg: run ? P.accent : it.status === "fail" ? P.red : P.green, b: 1, ...bg });
+        S.put(6, y, it.name.padEnd(8), { fg: P.muted, ...bg }); S.put(14, y, it.target, { fg: P.fg, ...bg });
+        if (run) { const bw = 16, head = Math.floor(t * 14) % (bw + 4); for (let k = 0; k < bw; k++) S.put(53 + k, y, k >= head - 4 && k < head ? "▰" : "▱", { fg: k >= head - 4 && k < head ? P.accent : P.faint, ...bg }); }
+        else if (it.add != null) S.segs(53, y, [["+" + it.add, { fg: P.green, ...bg }], [" −" + it.del, { fg: P.red, ...bg }]]);
+        else S.put(53, y, it.meta, { fg: it.status === "fail" ? P.red : P.muted, ...bg });
+        S.right(W - 4, y, [[it.time, { fg: run ? P.accent : P.dim, ...bg }]]);
+      });
+      if (it.name === "bash") (it.out || []).filter(Boolean).forEach((l) => blkBody(rows, P.muted, (S, y) => S.segs(6, y, [["┆ ", { fg: P.faint, ...bg }], [l, { fg: l.startsWith("✓") ? P.green : P.dim, ...bg }]])));
+      (it.diff || []).forEach(([n, sgn, code]) => blkBody(rows, P.muted, (S, y) => { const b = sgn === "+" ? P.add : sgn === "-" ? P.del : P.panel; S.tint(6, y, W - 10, 1, b); S.put(6, y, String(n).padStart(4) + " " + sgn + " " + code, { fg: sgn === " " ? P.muted : P.fg, bg: b }); }));
+    } else if (it.k === "agents") {
+      blank();
+      blkHead(rows, "agents", P.violet, [["2 running", { fg: P.dim }]]);
+      it.list.forEach(([name, task, p]) => blkBody(rows, P.violet, (S, y) => { S.put(3, y, name.padEnd(10), { fg: P.fg, ...bg }); S.put(13, y, task, { fg: P.muted, ...bg }); for (let k = 0; k < 20; k++) S.put(W - 30 + k, y, "━", { fg: k < Math.round(p * 20) ? mix(P.violet, P.accent, k / 20) : P.faint, ...bg }); S.right(W - 4, y, [[Math.round(p * 100) + "%", { fg: P.muted, ...bg }]]); }));
+    } else if (it.k === "answer") {
+      blank();
+      blkHead(rows, "claude", P.claude, [["opus-4-5 · " + (it.done ? "done" : "streaming"), { fg: P.dim }]]);
+      const total = vis(it.text).length;
+      wrap(it.text, W - 10).forEach((l, li, all) => blkBody(rows, P.claude, (S, y) => {
+        const start = all.slice(0, li).reduce((n, s) => n + vis(s).length + 1, 0);
+        const [x] = rich(S, 3, y, l, { fg: P.fg, ...bg }, { fg: P.accent, bg: P.code }, null, start);
+        if (!it.done && li === all.length - 1 && Math.floor(t * 3) % 2 === 0) S.put(x, y, "█", { fg: P.claude, ...bg });
+      }));
+    }
+  }
+  return rows;
+}
+function blkProgress(S, y, m, t) {
+  const P = PB; const run = m.items.some((i) => i.status === "run");
+  S.put(1, y, "▖▘▝▗"[Math.floor(t * 8) % 4], { fg: P.accent, b: 1 });
+  const x = S.segs(3, y, [[run ? "running tests" : "thinking", { fg: P.fg, b: 1 }], [`  ${Math.floor(m.elapsed)}s  `, { fg: P.dim }]]);
+  const bw = W - 4 - x - 18, pos = (Math.sin(t * 1.6) * 0.5 + 0.5) * (bw - 10);
+  for (let k = 0; k < bw; k++) { const on = k >= pos && k < pos + 10; S.put(x + k, y, on ? "━" : "─", { fg: on ? mix(P.accent, P.violet, (k - pos) / 10) : P.faint }); }
+  S.right(W - 2, y, [["↓ 2.1k tok", { fg: P.dim }]]);
+}
+function blkInput(S, y, m, t) {
+  const P = PB;
+  S.fill(1, y, W - 2, 3, P.panel);
+  S.tint(1, y, W - 2, 1, P.panel2); S.put(1, y, "▌", { fg: P.accent, bg: P.panel2 }); S.put(3, y, "prompt", { fg: P.accent, b: 1, bg: P.panel2 });
+  S.right(W - 3, y, [[" ASK ", { fg: P.bg, bg: P.yellow, b: 1 }]]);
+  S.put(1, y + 1, "▌", { fg: P.accent, bg: P.panel }); S.put(3, y + 1, "›", { fg: P.accent, b: 1, bg: P.panel });
+  const x = m.typed ? S.put(5, y + 1, m.typed, { fg: P.fg, bg: P.panel }) : 5;
+  if (!m.typed) S.put(6, y + 1, "Ask, or type / for commands", { fg: P.dim, bg: P.panel });
+  if (Math.floor(t * 1.8) % 2 === 0) S.tint(x, y + 1, 1, 1, P.accent);
+  S.put(1, y + 2, "▌", { fg: P.accent, bg: P.panel }); S.put(3, y + 2, "@ files · / commands · ! shell · ↑ history", { fg: P.dim, bg: P.panel });
+}
+function blkKeys(S, y, m, t) {
+  const P = PB; S.fill(0, y, W, 1, P.bar); let x = 1;
+  for (const [k, l] of [["esc", "interrupt"], ["^O", "thinking"], ["⇧⇥", "mode"], ["^P", "model"], ["^T", "tasks"]]) { x = S.put(x, y, " " + k + " ", { fg: P.bg, bg: P.muted, b: 1 }); x = S.put(x, y, " " + l + "  ", { fg: P.muted, bg: P.bar }); }
+  const xe = S.right(W - 1, y, [[" $0.42 ", { fg: P.muted, bg: P.bar }]]);
+  const xb = S.right(xe, y, [[" 23% ", { fg: P.fg, bg: P.bar }]]);
+  S.put(xb - 10, y, smoothBar(10, 0.23), { fg: P.accent, bg: P.faint }); S.put(xb - 14, y, "ctx", { fg: P.dim, bg: P.bar });
+}
+function blkApproval(S, y0, h, t) {
+  const P = PB, off = Math.round((1 - ease(t / 0.4)) * h), y = y0 + off, bg = mix(P.panel, P.yellow, 0.05); S.clip = [y0, H - 1];
+  S.fill(1, y, W - 2, h, bg);
+  S.fill(1, y, W - 2, 1, P.yellow); S.put(2, y, (Math.floor(t * 2) % 2 ? "▲" : "△") + " APPROVAL REQUIRED", { fg: "#1d1503", bg: P.yellow, b: 1 }); S.right(W - 3, y, [["edit · src/lib/format.ts", { fg: "#3b2c08", bg: P.yellow }]]);
+  for (let j = 1; j < h; j++) S.put(1, y + j, "▌", { fg: P.yellow, bg });
+  S.put(3, y + 1, "Claude wants to replace 2 lines and add 2 in src/lib/format.ts", { fg: P.muted, bg });
+  DIFF.forEach(([n, sgn, code], i) => { const b = sgn === "+" ? P.add : sgn === "-" ? P.del : bg; S.tint(3, y + 3 + i, W - 7, 1, b); S.put(3, y + 3 + i, String(n).padStart(4) + " " + sgn + " " + code, { fg: sgn === " " ? P.muted : P.fg, bg: b }); });
+  let x = 3; const by = y + h - 2;
+  for (const [k, l, c] of [["Y", "Yes", P.green], ["A", "Always this session", P.accent], ["N", "No, tell it what to do", P.red]]) { x = S.put(x, by, " " + k + " ", { fg: P.bg, bg: c, b: 1 }); x = S.put(x, by, " " + l + "    ", { fg: P.fg, bg }); }
+  S.clip = null;
+}
+function blkPicker(S, pk, t) {
+  const P = PB, e = ease(pk.t / 0.2); S.dim(0.5 * e, P.bg);
+  const w = 66, h = 13, x = (W - w) >> 1, y = 9 + Math.round((1 - e) * 3);
+  S.box(x, y, w, h, { set: "sharp", col: P.accent, bg: P.panel });
+  S.fill(x + 1, y + 1, w - 2, 1, P.accent); S.put(x + 2, y + 1, "MODELS", { fg: P.bg, bg: P.accent, b: 1 }); S.right(x + w - 3, y + 1, [["6 available", { fg: P.bg, bg: P.accent }]]);
+  const qx = S.put(x + 2, y + 2, "› " + pk.query, { fg: P.fg, bg: P.panel }); S.tint(qx, y + 2, 1, 1, P.accent);
+  MODELS.forEach(([prov, name, eff, label], i) => {
+    const yy = y + 4 + i, sel = i === pk.sel, b = sel ? P.accent : P.panel, f = sel ? P.bg : P.fg;
+    S.tint(x + 1, yy, w - 2, 1, b);
+    S.put(x + 2, yy, prov.padEnd(10), { fg: sel ? P.bg : P.muted, bg: b }); S.put(x + 12, yy, name.padEnd(16), { fg: f, bg: b, b: sel }); S.put(x + 30, yy, label.padEnd(14), { fg: sel ? P.bg : P.dim, bg: b });
+    S.right(x + w - 3, yy, [[eff, { fg: sel ? P.bg : P.muted, bg: b }]]);
+  });
+}
+function blkWelcome(S, m, t) {
+  const P = PB, w = 72, x = (W - w) >> 1, e = (d) => ease((t - d) / 0.4);
+  const rows = [];
+  blkHead(rows, "new session", P.accent, [["claude/opus-4-5 · ask", { fg: P.dim }]]);
+  for (let i = 0; i < 4; i++) blkBody(rows, P.accent, () => {});
+  rows.forEach((f, i) => { if (e(i * 0.05) > 0) f(S, 3 + i); });
+  LOGO.forEach((l, j) => S.put(4, 5 + j, l, { fg: mix(P.panel, P.accent, e(0.2)), bg: P.panel }));
+  S.put(32, 5, "winfer code v0.2.0", { fg: mix(P.panel, P.fg, e(0.3)), b: 1, bg: P.panel }); S.put(32, 6, "~/Coding/winfer · ⎇ main · 3 MCP servers", { fg: mix(P.panel, P.muted, e(0.35)), bg: P.panel });
+  const r2 = []; blkHead(r2, "recent sessions", P.violet, [["↑↓ open", { fg: P.dim }]]);
+  [["Fix relay reconnect", "codex/gpt-5.5", "12m"], ["Voice HUD latency", "claude/opus-4-5", "1h"], ["Updater changelog", "claude/sonnet-4-5", "3h"]].forEach(([a, b, c]) => blkBody(r2, P.violet, (S, y) => { S.put(3, y, a, { fg: P.fg, bg: P.panel }); S.put(40, y, b, { fg: P.muted, bg: P.panel }); S.right(W - 4, y, [[c + " ago", { fg: P.dim, bg: P.panel }]]); }));
+  r2.forEach((f, i) => { if (e(0.4 + i * 0.06) > 0) f(S, 10 + i); });
+  const r3 = []; blkHead(r3, "tips", P.green, []);
+  [["/init", "write a CLAUDE.md for this repo"], ["@", "attach files, folders or URLs"], ["^P", "switch model mid-conversation"]].forEach(([k, l]) => blkBody(r3, P.green, (S, y) => { S.put(3, y, " " + k + " ", { fg: P.bg, bg: P.muted, b: 1 }); S.put(4 + len(k) + 2, y, l, { fg: P.muted, bg: P.panel }); }));
+  r3.forEach((f, i) => { if (e(0.7 + i * 0.06) > 0) f(S, 16 + i); });
+  blkInput(S, H - 4, m, t);
+}
+
+/* ═════════════════════════ direction 3 · ZEN ═════════════════════════ */
+const PZ = { bg: "#121211", fg: "#dedad2", muted: "#8f8b83", dim: "#56534e", faint: "#2c2b29", accent: "#9fd6a9", red: "#e48c80", yellow: "#e5c47e", add: "#1a2a1e", del: "#2f1d1b" };
+const ZX = 14, ZW = 76;
+
+function zen(S, m, t) {
+  const P = PZ;
+  if (m.welcome) return zenWelcome(S, m, t);
+  let top = H - 4;
+  zenComposer(S, top, m, t);
+  if (m.busy && !m.approval) { zenWorking(S, top - 2, m, t); top -= 2; }
+  const rows = zenRows(m, t);
+  if (m.approval) zenApprovalRows(rows, t);
+  drawRows(S, rows, 1, top - 1);
+  if (m.picker) zenPicker(S, m.picker, t);
+}
+function zenRows(m, t) {
+  const P = PZ, rows = [], R = (f) => rows.push(f), blank = () => R(() => {});
+  const tools = m.items.filter((i) => i.k === "tool");
+  for (const it of m.items) {
+    if (it.k === "user") { blank(); wrap(it.text, ZW).forEach((l, i) => R((S, y) => { if (!i) S.put(ZX - 2, y, "›", { fg: P.accent, b: 1 }); S.put(ZX, y, l, { fg: P.fg, b: 1 }); })); blank(); }
+    if (it.k === "think") {
+      const parts = [["thought 4s", 0]];
+      tools.forEach((tl) => parts.push([tl.status === "run" ? `running ${tl.target.split(" ").slice(0, 2).join(" ")} ${"⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(t * 12) % 10]}` : tl.name === "edit" ? `edited format.ts +${tl.add} −${tl.del}` : tl.name === "bash" ? "ran vitest ✓ 45" : tl.status === "fail" ? "grep vendor ✗" : `read ${tl.target.split("/").pop()}`, tl.status === "run" ? 2 : tl.status === "fail" ? 3 : 0]));
+      const lines = [[]]; let w = 0;
+      parts.forEach((p) => { const l = len(p[0]) + 3; if (w + l > ZW) { lines.push([]); w = 0; } lines[lines.length - 1].push(p); w += l; });
+      lines.forEach((ln) => R((S, y) => { let x = ZX; ln.forEach(([s, k], i) => { if (i || x > ZX) x = S.put(x, y, i ? " · " : "", { fg: P.faint }); x = S.put(x, y, s, { fg: k === 2 ? P.fg : k === 3 ? P.red : P.dim }); }); }));
+      const run = tools.find((x) => x.status === "run");
+      if (run) (run.out || []).slice(-3).forEach((l) => R((S, y) => { S.put(ZX, y, "╎", { fg: P.faint }); S.put(ZX + 2, y, l, { fg: P.dim }); }));
+    }
+    if (it.k === "agents") R((S, y) => S.segs(ZX, y, [["2 helpers", { fg: P.dim }], [" · ", { fg: P.faint }], [`exploring ${Math.round(it.list[0][2] * 100)}%`, { fg: P.dim }], [" · ", { fg: P.faint }], [`reviewing ${Math.round(it.list[1][2] * 100)}%`, { fg: P.dim }]]));
+    if (it.k === "answer") {
+      blank(); const total = vis(it.text).length; const lines = wrap(it.text, ZW);
+      lines.forEach((l, li) => R((S, y) => { const start = lines.slice(0, li).reduce((n, s) => n + vis(s).length + 1, 0); rich(S, ZX, y, l, { fg: P.fg }, { fg: P.accent }, it.done ? null : (i, f) => mix(P.bg, f, (total - i) / 14), start); }));
+    }
+  }
+  return rows;
+}
+function zenApprovalRows(rows, t) {
+  const P = PZ, a = (d) => ease((t - d) / 0.6), bar = (S, y, d) => S.put(ZX - 3, y, "▎", { fg: mix(P.bg, P.yellow, a(d) * (0.55 + 0.45 * Math.sin(t * 2.5))) });
+  rows.push(() => {});
+  rows.push((S, y) => { bar(S, y, 0); S.segs(ZX, y, [["edit ", { fg: mix(P.bg, P.yellow, a(0)) }], ["src/lib/format.ts", { fg: mix(P.bg, P.fg, a(0)), b: 1 }], ["?", { fg: mix(P.bg, P.fg, a(0)) }]]); });
+  rows.push((S, y) => bar(S, y, 0));
+  DIFF.forEach(([n, sgn, code], i) => rows.push((S, y) => { const d = 0.1 + i * 0.05; bar(S, y, d); const bg = sgn === "+" ? mix(P.bg, P.add, a(d)) : sgn === "-" ? mix(P.bg, P.del, a(d)) : null; if (bg) S.tint(ZX, y, ZW, 1, bg); S.put(ZX, y, sgn + " " + code, { fg: mix(P.bg, sgn === " " ? P.dim : sgn === "+" ? P.accent : P.red, a(d)), bg }); }));
+  rows.push((S, y) => bar(S, y, 0.4));
+  rows.push((S, y) => { bar(S, y, 0.45); let x = ZX; for (const [k, l] of [["y", "yes"], ["a", "always"], ["n", "no, say why"]]) x = S.segs(x, y, [[k, { fg: mix(P.bg, P.yellow, a(0.45)), b: 1 }], ["  " + l + "        ", { fg: mix(P.bg, P.muted, a(0.45)) }]]); });
+}
+function zenWorking(S, y, m, t) {
+  const P = PZ; const dots = ".".repeat(Math.floor(t * 2.5) % 4);
+  S.segs(ZX - 2, y, [["⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(t * 12) % 10], { fg: P.accent }], [" thinking" + dots.padEnd(3), { fg: mix(P.muted, P.fg, 0.5 + 0.5 * Math.sin(t * 2)) }], [`   ${Math.floor(m.elapsed)}s`, { fg: P.dim }]]);
+}
+function zenComposer(S, y, m, t) {
+  const P = PZ;
+  S.put(ZX - 2, y, "›", { fg: P.accent, b: 1 });
+  const x = m.typed ? S.put(ZX, y, m.typed, { fg: P.fg }) : ZX;
+  if (!m.typed) S.put(ZX + 1, y, "say what you want built", { fg: P.dim });
+  if (Math.floor(t * 1.6) % 2 === 0) S.put(x, y, "▏", { fg: P.accent });
+  const fill = Math.min(ZW, len(m.typed) + 1);
+  for (let k = 0; k < ZW; k++) S.put(ZX + k, y + 1, "─", { fg: k < fill ? mix(P.faint, P.accent, 0.6) : P.faint });
+  S.right(ZX + ZW, y + 2, [["opus", { fg: P.dim }], [" · ", { fg: P.faint }], ["ask", { fg: P.dim }], [" · ", { fg: P.faint }], ["23%", { fg: P.dim }], [" · ", { fg: P.faint }], ["$0.42", { fg: P.dim }], [" · ", { fg: P.faint }], ["main", { fg: P.dim }]]);
+}
+function zenPicker(S, pk, t) {
+  const P = PZ, e = ease(pk.t / 0.35); S.dim(0.8 * e, P.bg);
+  const x = (W - 40) >> 1, y = 10;
+  S.put(x, y, "switch model", { fg: mix(P.bg, P.dim, e) });
+  S.segs(x, y + 1, [[pk.query, { fg: P.accent }], ["▏", { fg: P.accent }]]);
+  MODELS.forEach(([prov, name, eff], i) => { const a = ease((pk.t - 0.05 - i * 0.04) / 0.3), sel = i === pk.sel; S.segs(x - 2, y + 3 + i, [[sel ? "› " : "  ", { fg: P.accent }], [prov + "/" + name, { fg: mix(P.bg, sel ? P.fg : P.muted, a), b: sel }]]); S.right(x + 40, y + 3 + i, [[eff, { fg: mix(P.bg, P.dim, a) }]]); });
+}
+function zenWelcome(S, m, t) {
+  const P = PZ, word = "w i n f e r";
+  const b = 0.5 + 0.5 * Math.sin(t * 1.3);
+  S.put((W - len(word)) >> 1, 12, word, { fg: mix(P.bg, mix(P.dim, P.accent, b), ease(t / 1.4)), b: 1 });
+  const q = "what are we building today?".slice(0, Math.max(0, Math.floor((t - 0.8) * 24)));
+  S.put((W - 27) >> 1, 14, q, { fg: P.muted });
+  const tips = "/ commands     @ files     ! shell     ⇧⇥ mode";
+  S.put((W - len(tips)) >> 1, 17, tips, { fg: mix(P.bg, P.dim, ease((t - 1.8) / 1)) });
+  zenComposer(S, H - 4, m, t);
+}
+
+/* ═════════════════════════ direction 4 · HUD ═════════════════════════ */
+const PH = { bg: "#0b0906", stripe: "#0f0c08", panel: "#15100a", fg: "#ffcf7a", bright: "#ffe7b8", muted: "#b78c46", dim: "#6e5329", faint: "#2e2313", green: "#a2e86f", red: "#ff5d4a", cyan: "#66d9ff", add: "#16260f", del: "#2e120c" };
+const SBX = W - 32;
+
+function hud(S, m, t) {
+  const P = PH;
+  for (let y = 1; y < H - 1; y += 2) S.tint(1, y, W - 2, 1, P.stripe);
+  S.box(0, 0, W, H, { set: "double", col: P.dim });
+  S.segs(3, 0, [["╡", { fg: P.dim }], [" WINFER·CODE ", { fg: P.bright, b: 1 }], ["v0.2.0 ", { fg: P.muted }], ["╞", { fg: P.dim }]]);
+  S.right(W - 3, 0, [["╡ ", { fg: P.dim }], ["● ", { fg: Math.floor(t * 1.5) % 2 ? P.green : P.faint }], ["LINK ", { fg: P.muted }], ["12:41:" + String(8 + Math.floor(t) % 50).padStart(2, "0") + " ", { fg: P.fg }], ["╞", { fg: P.dim }]]);
+  if (m.welcome) return hudBoot(S, m, t);
+  for (let y = 1; y < H - 1; y++) S.put(SBX, y, "║", { fg: P.dim });
+  S.put(SBX, 0, "╦", { fg: P.dim }); S.put(SBX, H - 1, "╩", { fg: P.dim });
+  hudSide(S, m, t);
+  S.put(0, H - 5, "╟", { fg: P.dim }); S.put(1, H - 5, "─".repeat(SBX - 1), { fg: P.faint }); S.put(SBX, H - 5, "╢", { fg: P.dim });
+  hudInput(S, H - 4, m, t);
+  drawRows(S, hudRows(m, t), 2, H - 6);
+  if (m.approval) hudModal(S, t, "▲ AUTHORIZATION REQUIRED ▲", hudApproval);
+  if (m.picker) hudModal(S, m.picker.t, "SELECT MODEL", (S, x, y, w, h) => hudPick(S, x, y, w, m.picker));
+}
+function hudRows(m, t) {
+  const P = PH, rows = [], R = (f) => rows.push(f);
+  let sec = 2;
+  const ts = () => { const s = "12:41:" + String(sec).padStart(2, "0"); sec += 2; return s; };
+  const line = (stamp, tag, tagSt, f) => R((S, y) => { if (stamp) S.put(2, y, stamp, { fg: P.dim }); S.put(11, y, "│", { fg: P.faint }); if (tag) S.put(13, y, tag, tagSt); f && f(S, y); });
+  const cw = SBX - 21;
+  for (const it of m.items) {
+    if (it.k === "user") wrap(it.text, cw).forEach((l, i) => line(i ? "" : ts(), i ? "" : " USR ", { fg: P.bg, bg: P.fg, b: 1 }, (S, y) => S.put(19, y, l, { fg: P.bright, b: 1 })));
+    if (it.k === "think") line(ts(), " SYS ", { fg: P.muted, bg: P.faint }, (S, y) => S.put(19, y, "reasoning · 4.0s", { fg: P.dim }));
+    if (it.k === "tool") {
+      const tag = { read: "READ", edit: "EDIT", bash: "EXEC", grep: "GREP" }[it.name];
+      line(ts(), " " + tag + " ", { fg: P.fg, bg: P.panel, b: 1 }, (S, y) => {
+        const run = it.status === "run";
+        const ex = S.put(19, y, it.target, { fg: P.fg });
+        const res = run ? `${"◢◣◤◥"[Math.floor(t * 8) % 4]} ${it.time}` : it.status === "fail" ? "FAIL" : it.add != null ? `+${it.add}/−${it.del}` : it.name === "bash" ? "OK 45/45" : "+4L";
+        const rx = SBX - 3 - len(res);
+        S.put(ex + 1, y, "·".repeat(Math.max(0, rx - ex - 2)), { fg: P.faint });
+        S.put(rx, y, res, { fg: run ? P.cyan : it.status === "fail" ? P.red : P.green, b: 1 });
+      });
+      (it.diff || []).forEach(([n, sgn, code]) => line("", "", {}, (S, y) => { const bg = sgn === "+" ? P.add : sgn === "-" ? P.del : null; if (bg) S.tint(13, y, SBX - 15, 1, bg); S.put(13, y, String(n).padStart(3) + " " + sgn + " " + code, { fg: sgn === "+" ? P.green : sgn === "-" ? P.red : P.muted, bg }); }));
+      if (it.name === "bash") (it.out || []).filter(Boolean).forEach((l) => line("", "", {}, (S, y) => S.put(19, y, l, { fg: l.startsWith("✓") ? P.green : P.dim })));
+    }
+    if (it.k === "agents") line(ts(), " SUB ", { fg: P.bg, bg: P.cyan, b: 1 }, (S, y) => S.put(19, y, "2 sub-agents dispatched → see AGENTS", { fg: P.cyan }));
+    if (it.k === "answer") wrap(it.text, cw).forEach((l, i, all) => line(i ? "" : ts(), i ? "" : " AI  ", { fg: P.bg, bg: P.green, b: 1 }, (S, y) => { const [x] = rich(S, 19, y, l, { fg: P.fg }, { fg: P.cyan, b: 1 }); if (!it.done && i === all.length - 1) S.put(x, y, "█", { fg: P.fg }); }));
+  }
+  return rows;
+}
+function hudSide(S, m, t) {
+  const P = PH, x = SBX + 2, w = W - x - 2;
+  const head = (y, s) => { S.put(x, y, "▸ " + s, { fg: P.bright, b: 1 }); S.put(x + len(s) + 3, y, "─".repeat(w - len(s) - 3), { fg: P.faint }); };
+  head(2, "PLAN");
+  TODOS.forEach(([st, l], i) => S.segs(x, 3 + i, [[st === "done" ? "[■] " : st === "run" ? (Math.floor(t * 2) % 2 ? "[▶] " : "[▷] ") : "[ ] ", { fg: st === "done" ? P.green : st === "run" ? P.fg : P.dim }], [l, { fg: st === "done" ? P.muted : st === "run" ? P.fg : P.dim }]]));
+  head(8, "AGENTS");
+  const ag = (m.items.find((i) => i.k === "agents") || { list: [["explore", "", 0.4], ["review", "", 0.2]] }).list;
+  ag.forEach(([n, , p], i) => { S.put(x, 9 + i, n.padEnd(8), { fg: P.muted }); for (let k = 0; k < 14; k++) S.put(x + 8 + k, 9 + i, k < Math.round(p * 14) ? "▰" : "▱", { fg: k < Math.round(p * 14) ? P.cyan : P.faint }); S.right(x + w, 9 + i, [[Math.round(p * 100) + "%", { fg: P.fg }]]); });
+  head(12, "CONTEXT");
+  const cw = w, f = 0.23 + Math.sin(t * 0.3) * 0.01;
+  for (let k = 0; k < cw; k++) S.put(x + k, 13, k / cw < f ? "█" : "░", { fg: k / cw < f ? grad([P.green, P.fg, P.red], k / cw) : P.faint });
+  S.segs(x, 14, [["23%", { fg: P.bright, b: 1 }], ["  46.2k / 200k tok", { fg: P.dim }]]);
+  head(16, "THROUGHPUT");
+  const sp = "▁▂▃▄▅▆▇█";
+  for (let k = 0; k < cw; k++) { const v = 0.5 + 0.3 * Math.sin((k + t * 6) * 0.5) + 0.2 * Math.sin((k + t * 6) * 1.7); S.put(x + k, 17, sp[Math.max(0, Math.min(7, Math.floor(v * 8)))], { fg: mix(P.dim, P.fg, k / cw) }); }
+  S.segs(x, 18, [[(1.6 + 0.4 * Math.sin(t)).toFixed(1) + "k", { fg: P.bright, b: 1 }], [" tok/s", { fg: P.dim }]]);
+  head(20, "SESSION");
+  [["MODEL", "claude/opus-4-5"], ["MODE", "ask"], ["COST", "$0.42"], ["BRANCH", "main"], ["MCP", "3 servers"]].forEach(([k, v], i) => S.segs(x, 21 + i, [[k.padEnd(8), { fg: P.dim }], [v, { fg: P.fg }]]));
+  head(27, "STATUS");
+  S.segs(x, 28, [[m.busy ? "● WORKING " : "● IDLE ", { fg: m.busy ? (Math.floor(t * 3) % 2 ? P.cyan : P.dim) : P.green, b: 1 }], [m.busy ? Math.floor(m.elapsed) + "s" : "", { fg: P.muted }]]);
+}
+function hudInput(S, y, m, t) {
+  const P = PH;
+  S.put(2, y, "▶", { fg: P.fg, b: 1 });
+  const x = m.typed ? S.put(4, y, m.typed.toUpperCase(), { fg: P.bright }) : 4;
+  if (!m.typed) S.put(5, y, "AWAITING INPUT", { fg: P.dim });
+  if (Math.floor(t * 2) % 2 === 0) S.put(x, y, "█", { fg: P.fg });
+  S.right(SBX - 2, y, [["[", { fg: P.dim }], ["ASK", { fg: P.fg, b: 1 }], ["]", { fg: P.dim }]]);
+  let hx = 2; for (const [k, l] of [["F1", "HELP"], ["F2", "MODEL"], ["F3", "TASKS"], ["ESC", "HALT"], ["⇧⇥", "MODE"]]) hx = S.segs(hx, y + 2, [[k, { fg: P.bg, bg: P.muted, b: 1 }], [" " + l + "   ", { fg: P.dim }]]);
+}
+function hudModal(S, tt, title, body) {
+  const P = PH; S.dim(0.45 * ease(tt / 0.2), P.bg);
+  const W2 = 72, H2 = 14, cx = W >> 1, cy = 15;
+  const ew = ease(tt / 0.18), eh = ease((tt - 0.15) / 0.2);
+  const w = Math.max(4, Math.round(W2 * ew)), h = Math.max(1, Math.round(H2 * eh)), x = cx - (w >> 1), y = cy - (h >> 1);
+  if (h < 3) { S.put(x, cy, "═".repeat(w), { fg: P.bright }); return; }
+  S.box(x, y, w, h, { set: "double", col: P.fg, bg: P.panel });
+  const blink = Math.floor(tt * 2.5) % 2;
+  S.put(x + ((w - len(title) - 2) >> 1), y, " " + title + " ", { fg: blink ? P.red : P.fg, bg: P.panel, b: 1 });
+  if (h === H2) body(S, x, y, w, h);
+}
+function hudApproval(S, x, y, w, h) {
+  const P = PH;
+  S.segs(x + 3, y + 2, [["REQUEST  ", { fg: P.dim, bg: P.panel }], ["EDIT ", { fg: P.bright, b: 1, bg: P.panel }], ["src/lib/format.ts", { fg: P.fg, bg: P.panel }]]);
+  DIFF.forEach(([n, sgn, code], i) => { const bg = sgn === "+" ? P.add : sgn === "-" ? P.del : P.panel; S.tint(x + 3, y + 4 + i, w - 6, 1, bg); S.put(x + 3, y + 4 + i, String(n).padStart(3) + " " + sgn + " " + code, { fg: sgn === "+" ? P.green : sgn === "-" ? P.red : P.muted, bg }); });
+  let bx = x + 3;
+  for (const [k, l, c] of [["Y", "APPROVE", P.green], ["A", "ALWAYS", P.cyan], ["N", "DENY", P.red]]) bx = S.segs(bx, y + h - 2, [["[" + k + "]", { fg: P.bg, bg: c, b: 1 }], [" " + l + "     ", { fg: c, bg: P.panel, b: 1 }]]);
+}
+function hudPick(S, x, y, w, pk) {
+  const P = PH;
+  S.segs(x + 3, y + 2, [["QUERY ▶ ", { fg: P.dim, bg: P.panel }], [pk.query.toUpperCase(), { fg: P.bright, bg: P.panel }], ["█", { fg: P.fg, bg: P.panel }]]);
+  MODELS.forEach(([prov, name, eff, label], i) => { const sel = i === pk.sel, bg = sel ? P.fg : P.panel; S.tint(x + 2, y + 4 + i, w - 4, 1, bg); S.segs(x + 3, y + 4 + i, [[(sel ? "▶ " : "  ") + (prov + "/" + name).toUpperCase().padEnd(26), { fg: sel ? P.bg : P.fg, bg, b: sel }], [label.toUpperCase().padEnd(14), { fg: sel ? P.bg : P.dim, bg }], [eff.toUpperCase(), { fg: sel ? P.bg : P.muted, bg }]]); });
+}
+function hudBoot(S, m, t) {
+  const P = PH;
+  const lines = [["BOOT", "harness core", "OK"], ["LINK", "claude/opus-4-5", "OK"], ["LINK", "codex/gpt-5.5", "OK"], ["MCP ", "winfer · context7 · browser", "OK"], ["GIT ", "main · clean", "OK"], ["CTX ", "CLAUDE.md · 3 skills", "OK"]];
+  lines.forEach(([a, b, c], i) => {
+    const tt = t - i * 0.28; if (tt < 0) return;
+    const full = `${a}  ${b} `.padEnd(46, ".") + " ";
+    const n = Math.floor(tt * 90); S.put(8, 4 + i, full.slice(0, n), { fg: P.muted });
+    if (n > full.length) S.put(8 + full.length, 4 + i, c, { fg: P.green, b: 1 });
+  });
+  const tl = t - 2; if (tl > 0) LOGO.forEach((l, j) => [...l].forEach((ch, i) => { if (i < tl * 40) S.put((W - len(LOGO[0])) >> 1, 13 + j, "", {}) || S.put(((W - len(LOGO[0])) >> 1) + i, 13 + j, ch, { fg: i > tl * 40 - 3 ? P.bright : P.fg }); }));
+  if (t > 2.6) S.put((W - 30) >> 1, 16, "MULTI-AGENT CODING HARNESS  //", { fg: P.dim });
+  if (t > 3) { const sy = 19 + (Math.floor(t * 20) % 4); }
+  S.put(0, H - 5, "╟", { fg: P.dim }); S.put(1, H - 5, "─".repeat(W - 2), { fg: P.faint }); S.put(W - 1, H - 5, "╢", { fg: P.dim });
+  hudInput(S, H - 4, m, t);
+  // scanning beam during boot
+  if (t < 2.4) { const by = 1 + Math.floor((t / 2.4) * (H - 7)); S.tint(1, by, W - 2, 1, mix(P.bg, P.fg, 0.12)); }
+}
+
+/* ═════════════════════════ canvas renderer ═════════════════════════ */
+const LINES = { "─": "lr1", "│": "ud1", "┌": "rd1", "┐": "ld1", "└": "ur1", "┘": "ul1", "├": "udr1", "┤": "udl1", "┬": "lrd1", "┴": "lru1", "┼": "udlr1", "━": "lr2", "┃": "ud2", "┏": "rd2", "┓": "ld2", "┗": "ur2", "┛": "ul2", "═": "lr3", "║": "ud3", "╔": "rd3", "╗": "ld3", "╚": "ur3", "╝": "ul3", "╦": "lrd3", "╩": "lru3", "╟": "ud3r1", "╢": "ud3l1" };
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const FS = 14, CH = 19; let CW = 8.4, dpr = Math.max(1, window.devicePixelRatio || 1);
+function sizeCanvas() { ctx.font = `${FS}px "JetBrains Mono"`; CW = Math.ceil(ctx.measureText("M").width * 100) / 100; cv.width = Math.ceil(W * CW * dpr); cv.height = H * CH * dpr; cv.style.width = W * CW + "px"; cv.style.height = H * CH + "px"; }
+function lineGlyph(spec, x, y, col) {
+  const cx = x + CW / 2, cy = y + CH / 2; ctx.fillStyle = col;
+  const parts = spec.match(/[udlr]+\d/g);
+  for (const p of parts) {
+    const wgt = +p.slice(-1), dirs = p.slice(0, -1);
+    for (const d of dirs) {
+      const seg = (off) => { const th = wgt === 2 ? 2 : 1; if (d === "l") ctx.fillRect(x, cy + off - th / 2, CW / 2 + th / 2, th); if (d === "r") ctx.fillRect(cx - th / 2, cy + off - th / 2, CW / 2 + th / 2 + 0.5, th); if (d === "u") ctx.fillRect(cx + off - th / 2, y, th, CH / 2 + th / 2); if (d === "d") ctx.fillRect(cx + off - th / 2, cy - th / 2, th, CH / 2 + th / 2 + 0.5); };
+      if (wgt === 3) { seg(-1.5); seg(1.5); } else seg(0);
+    }
+  }
+}
+function roundCorner(ch, x, y, col) {
+  const cx = x + CW / 2, cy = y + CH / 2, r = Math.min(CW, CH) / 2; ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath();
+  if (ch === "╭") { ctx.moveTo(cx, y + CH); ctx.lineTo(cx, cy + r); ctx.arcTo(cx, cy, cx + r, cy, r); ctx.lineTo(x + CW, cy); }
+  if (ch === "╮") { ctx.moveTo(x, cy); ctx.lineTo(cx - r, cy); ctx.arcTo(cx, cy, cx, cy + r, r); ctx.lineTo(cx, y + CH); }
+  if (ch === "╰") { ctx.moveTo(cx, y); ctx.lineTo(cx, cy - r); ctx.arcTo(cx, cy, cx + r, cy, r); ctx.lineTo(x + CW, cy); }
+  if (ch === "╯") { ctx.moveTo(x, cy); ctx.lineTo(cx - r, cy); ctx.arcTo(cx, cy, cx, cy - r, r); ctx.lineTo(cx, y); }
+  ctx.stroke();
+}
+const EIGHTHS = "▁▂▃▄▅▆▇█", LEFTS = "▏▎▍▌▋▊▉";
+function paint(S) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.textBaseline = "middle";
+  ctx.fillStyle = S.bg; ctx.fillRect(0, 0, W * CW, H * CH);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = S.c[y][x]; if (c.bg !== S.bg) { ctx.fillStyle = c.bg; ctx.fillRect(Math.floor(x * CW), y * CH, Math.ceil(CW) + 0.5, CH); } }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const c = S.c[y][x], ch = c.ch; if (ch === " ") continue;
+    const px = x * CW, py = y * CH;
+    if (LINES[ch]) { lineGlyph(LINES[ch], px, py, c.fg); continue; }
+    if ("╭╮╰╯".includes(ch)) { roundCorner(ch, px + 0.5, py + 0.5, c.fg); continue; }
+    ctx.fillStyle = c.fg;
+    const e = EIGHTHS.indexOf(ch); if (e >= 0) { const hh = CH * (e + 1) / 8; ctx.fillRect(px, py + CH - hh, CW + 0.5, hh); continue; }
+    const l = LEFTS.indexOf(ch); if (l >= 0) { ctx.fillRect(px, py, CW * (l + 1) / 8, CH); continue; }
+    if (ch === "▀") { ctx.fillRect(px, py, CW + 0.5, CH / 2); continue; }
+    if (ch === "▐") { ctx.fillRect(px + CW / 2, py, CW / 2 + 0.5, CH); continue; }
+    if (ch === "▕") { ctx.fillRect(px + CW * 7 / 8, py, CW / 8, CH); continue; }
+    if (ch === "░") { ctx.globalAlpha = 0.28; ctx.fillRect(px, py, CW + 0.5, CH); ctx.globalAlpha = 1; continue; }
+    ctx.font = `${c.i ? "italic " : ""}${c.b ? "700 " : ""}${FS}px "JetBrains Mono"`;
+    ctx.fillText(ch, px, py + CH / 2 + 1);
+  }
+}
+
+/* ═════════════════════════ app ═════════════════════════ */
+const DIRS = [
+  ...NEB_VARIANTS.map((vr) => ({ ...vr, group: "Nebula revisions", fn: (S, m, t) => nebula(S, m, t), get pal() { return { ...PN0, ...vr.pal }; }, setup: () => setNeb(vr) })),
+  ...NEW_STYLES.map((st) => ({ ...st, group: "New styles from Nebula", get pal() { return { ...PN0, ...st.pal }; }, setup: () => setNeb({ pal: st.pal, v: {} }) })),
+];
+const OTHER_DIRS = [
+  { id: "blocks", name: "Blocks", sw: "#4fb3ff", fn: blocks, pal: PB, desc: "<b>Blocks</b> — Warp-style turns. Every turn is a tinted block with a colored edge bar and a header, and tool calls form a table (tool · target · result · time) with a moving ▰▱ progress bar. Adds a session tab bar on top and an htop-style key bar at the bottom. Approvals are a yellow ‘APPROVAL REQUIRED’ block with colored key caps." },
+  { id: "zen", name: "Zen", sw: "#9fd6a9", fn: zen, pal: PZ, desc: "<b>Zen</b> — no chrome. A centered 76-column reading width, and steps collapse into a single breadcrumb (‘read · edited +3 −1 · ran vitest ✓’) where only the live step lights up. Streamed text ‘inks in’ (the newest characters fade from the background), and the input is just a › over a hairline. Approvals fade in inline with a breathing side bar." },
+  { id: "hud", name: "HUD", sw: "#ffb300", fn: hud, pal: PH, desc: "<b>HUD</b> — mission-control cockpit in amber phosphor. Double-line frame, a timestamped log with USR / EXEC / AI tags, and a live side rail with plan, agent gauges, a context meter, a scrolling throughput sparkline and session info. Starts with a boot sequence; modals open like a CRT (a line first, then the full height)." },
+];
+const SCENES = [["welcome", "Welcome"], ["working", "Working (streaming)"], ["approval", "Approval"], ["picker", "Model picker"]];
+let dir = 0, scene = 1, t0 = performance.now(), auto = false, autoT = performance.now();
+const dirsEl = document.getElementById("dirs"), scEl = document.getElementById("scenes");
+DIRS.forEach((d, i) => { if (!i || DIRS[i - 1].group !== d.group) { const h = document.createElement("div"); h.style.cssText = "flex-basis:100%;text-align:center;font:600 10.5px Inter;letter-spacing:.12em;text-transform:uppercase;color:#666;margin-top:4px"; h.textContent = d.group; dirsEl.appendChild(h); } const b = document.createElement("button"); b.innerHTML = `<span class="sw" style="background:${d.sw}"></span>${d.name}<span class="n">${d.tag && d.tag !== "style" ? d.tag : ""}</span>`; b.onclick = () => setDir(i); dirsEl.appendChild(b); });
+SCENES.forEach(([id, label], i) => { const b = document.createElement("button"); b.textContent = label; b.onclick = () => setScene(i); scEl.appendChild(b); });
+const autoBtn = document.createElement("button"); autoBtn.textContent = "▶ Autoplay"; autoBtn.onclick = () => toggleAuto(); scEl.appendChild(autoBtn);
+function sync() {
+  [...dirsEl.querySelectorAll("button")].forEach((b, i) => b.classList.toggle("on", i === dir));
+  [...scEl.children].forEach((b, i) => b.classList.toggle("on", i === scene || (i === SCENES.length && auto)));
+  document.getElementById("desc").innerHTML = DIRS[dir].desc;
+  history.replaceState(null, "", `#${DIRS[dir].id}/${SCENES[scene][0]}`);
+}
+function setDir(i) { dir = i; t0 = performance.now(); sync(); }
+function setScene(i) { scene = (i + SCENES.length) % SCENES.length; t0 = performance.now(); autoT = performance.now(); sync(); }
+function toggleAuto() { auto = !auto; autoT = performance.now(); sync(); }
+addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); setDir((dir + 1) % DIRS.length); }
+  if (e.key === "ArrowUp") { e.preventDefault(); setDir((dir + DIRS.length - 1) % DIRS.length); }
+  if (e.key === "ArrowRight") setScene(scene + 1);
+  if (e.key === "ArrowLeft") setScene(scene - 1);
+  if (e.key === " ") { e.preventDefault(); toggleAuto(); }
+  if (e.key === "r") t0 = performance.now();
+});
+const [hd, hs] = location.hash.slice(1).split("/");
+if (hd) { const i = DIRS.findIndex((d) => d.id === hd); if (i >= 0) dir = i; }
+if (hs) { const i = SCENES.findIndex((s) => s[0] === hs); if (i >= 0) scene = i; }
+
+let last = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (now - last < 33) return; last = now;
+  if (auto && now - autoT > (scene === 1 ? 15000 : 6000)) setScene(scene + 1);
+  const t = Math.max(0, (now - t0) / 1000), d = DIRS[dir];
+  if (d.setup) d.setup();
+  const S = new Scr(d.pal.bg, d.pal.fg);
+  d.fn(S, model(SCENES[scene][0], t), t);
+  paint(S);
+}
+document.fonts.load(`${FS}px "JetBrains Mono"`).then(() => document.fonts.load(`700 ${FS}px "JetBrains Mono"`)).finally(() => { sizeCanvas(); sync(); requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
