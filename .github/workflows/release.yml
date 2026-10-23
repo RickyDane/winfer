@@ -1,6 +1,6 @@
 name: release
 
-# Builds macOS and Windows bundles for a tag and publishes them as a GitHub release. The tag is
+# Builds macOS, Windows and Linux bundles for a tag and publishes them as a GitHub release. The tag is
 # the version (stamped into the app here, so the files in the repo don't need bumping) and picks
 # the channel:
 #   nebula    v0.1.102-57  every push to main (nebula.yml); a pre-release, published to the
@@ -91,6 +91,8 @@ jobs:
             target: x86_64-apple-darwin
           - platform: avrea-windows-2025-8-vcpu
             target: x86_64-pc-windows-msvc
+          - platform: avrea-ubuntu-latest-8-vcpu
+            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
     # Rust goes through sccache on Avrea's WebDAV cache. actions/cache (what rust-cache used) is
     # scoped to the ref that saved it, so a cache saved under one tag was never visible to the
@@ -138,6 +140,13 @@ jobs:
           targets: ${{ matrix.target }}
 
       - uses: ./.github/actions/sccache
+
+      # WebKitGTK and friends for the webview; the bundler builds .deb, .rpm and .AppImage.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential file patchelf
 
       - run: pnpm install --frozen-lockfile
 
@@ -197,7 +206,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs the updater bundles (.app.tar.gz, -setup.exe, .msi) with the key whose public
+          # Signs the updater bundles (.app.tar.gz, -setup.exe, .msi, .AppImage, .deb, .rpm) with the key whose public
           # half is plugins.updater.pubkey in tauri.conf.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -250,9 +259,12 @@ jobs:
               *.app.tar.gz.sig) add darwin-x86_64 "$f" ;;
               *-setup.exe.sig) add windows-x86_64-nsis "$f"; add windows-x86_64 "$f" ;;
               *.msi.sig) add windows-x86_64-msi "$f" ;;
+              *.AppImage.sig) add linux-x86_64-appimage "$f"; add linux-x86_64 "$f" ;;
+              *.deb.sig) add linux-x86_64-deb "$f" ;;
+              *.rpm.sig) add linux-x86_64-rpm "$f" ;;
             esac
           done
-          for k in darwin-aarch64 darwin-x86_64 windows-x86_64; do
+          for k in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64; do
             jq -e --arg k "$k" 'has($k)' <<<"$platforms" >/dev/null || { echo "::error::No signed bundle for $k"; exit 1; }
           done
           cd ..

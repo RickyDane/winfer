@@ -2,7 +2,8 @@
 //! question with Approve / Decline (or, for open questions on macOS, a reply field).
 //!
 //! Tauri's notification plugin has no actions on desktop, so this uses the platform APIs:
-//! NSUserNotification on macOS (mac-notification-sys) and toasts on Windows.
+//! NSUserNotification on macOS (mac-notification-sys), toasts on Windows and libnotify's
+//! `notify-send` on Linux.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -109,7 +110,30 @@ fn show(app: &AppHandle, n: &ActionNotification) -> Option<(&'static str, Option
         .map(|action| (action, None))
 }
 
+/// Linux: libnotify's `notify-send` with actions; it waits for the user and prints the chosen
+/// action's key. Without it (or on older libnotify), a plain notification through Tauri's plugin.
 #[cfg(not(any(target_os = "macos", windows)))]
-fn show(_: &AppHandle, _: &ActionNotification) -> Option<(&'static str, Option<String>)> {
-    None
+fn show(app: &AppHandle, n: &ActionNotification) -> Option<(&'static str, Option<String>)> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new("notify-send");
+    cmd.args(["--app-name=winfer", "--wait", "-A", "default=Open"]);
+    if n.kind == "approval" {
+        cmd.args(["-A", "approve=Approve", "-A", "decline=Decline"]);
+    }
+    cmd.arg("--").arg(&n.title).arg(&n.body);
+    match cmd.stdin(Stdio::null()).stderr(Stdio::null()).output() {
+        Ok(out) if out.status.success() => match String::from_utf8_lossy(&out.stdout).trim() {
+            "approve" => Some(("approve", None)),
+            "decline" => Some(("decline", None)),
+            "default" => Some(("open", None)),
+            _ => None,
+        },
+        _ => {
+            use tauri_plugin_notification::NotificationExt;
+            if let Err(err) = app.notification().builder().title(&n.title).body(&n.body).show() {
+                eprintln!("notification failed: {err}");
+            }
+            None
+        }
+    }
 }

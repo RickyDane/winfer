@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/RickyDane/winfer/releases/latest">Download for macOS and Windows</a>
+  <a href="https://github.com/RickyDane/winfer/releases/latest">Download for macOS, Windows and Linux</a>
 </p>
 
 ![winfer: four agents working on one project, with the app they're building in the browser panel](docs/screenshots/hero.png)
@@ -100,8 +100,8 @@ research and discipline (staying in scope, exact formats, ignoring planted instr
 
 ## Install
 
-Download the latest `.dmg` (macOS 11+, Apple Silicon and Intel) or the `.exe` / `.msi` installer (Windows 10+)
-from [Releases](https://github.com/RickyDane/winfer/releases/latest). winfer starts the agent CLIs
+Download the latest `.dmg` (macOS 11+, Apple Silicon and Intel), the `.exe` / `.msi` installer (Windows 10+)
+or the `.AppImage` / `.deb` / `.rpm` (Linux x86_64) from [Releases](https://github.com/RickyDane/winfer/releases/latest). winfer starts the agent CLIs
 you already have installed (`claude`, `codex`, `opencode`, …) — install and log in to them first.
 
 **Nebula channel** — every change on `main` is built right away as a pre-release (`vX.Y.Z-N`) on
