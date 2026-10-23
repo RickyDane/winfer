@@ -42,6 +42,8 @@ struct Serve {
     busy: bool,
     /// Approvals waiting for an answer, oldest first.
     pending: Vec<String>,
+    /// Background tasks' output files, for `task_log`.
+    task_files: HashMap<String, String>,
 }
 
 fn out(v: &Value) {
@@ -201,6 +203,11 @@ impl Serve {
                 self.save();
             }
             Ev::Mode(mode) => self.mode = mode,
+            Ev::Task(t) => {
+                if let Some(f) = t.output_file {
+                    self.task_files.insert(t.id, f);
+                }
+            }
             Ev::TextDelta { id, text } => match self.assistant.get(&id) {
                 Some(&i) => self.saved.transcript[i].text.push_str(&text),
                 None => {
@@ -242,7 +249,7 @@ impl Serve {
             }
             // The TUI sends these as the next message; so does the web UI's session.
             Ev::BgNote(note) => {
-                let cmd = UserMsg { text: note, images: Vec::new(), skill: None };
+                let cmd = UserMsg { text: format!("[winfer] {note}"), images: Vec::new(), skill: None };
                 self.send(if self.busy { Cmd::Steer(cmd) } else { Cmd::Send(cmd) });
             }
             Ev::Exited(_) => {
@@ -359,6 +366,17 @@ impl Serve {
                 self.ready();
             }
             "diff" => self.diff(),
+            // The tail of a background task's output, like the TUI's task view (the web UI asks
+            // a few times a second while it's open and the task runs).
+            "task_log" => {
+                let id = s("id");
+                let text = self
+                    .task_files
+                    .get(&id)
+                    .and_then(|f| super::tui::app::read_tail(std::path::Path::new(f), super::tui::app::TASK_LOG_MAX).ok())
+                    .map(|raw| super::tui::app::clean_log(&raw));
+                out(&json!({ "type": "task_log", "id": id, "text": text, "file": self.task_files.get(&id) }));
+            }
             "btw" => self.btw(s("id"), s("question")),
             "export" => {
                 let path = self.cwd.join(format!("winfer-session-{}.md", self.saved.id));
@@ -455,6 +473,7 @@ pub fn run(launch: Launch) -> i32 {
         assistant: HashMap::new(),
         busy: false,
         pending: Vec::new(),
+        task_files: HashMap::new(),
     };
     app.fresh_session();
 

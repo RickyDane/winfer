@@ -37,6 +37,9 @@ export interface TaskEv {
   tools?: number | null;
   last?: string | null;
   status?: "running" | "done" | "failed" | "stopped" | null;
+  /** File receiving a background shell's output (read with `task_log`). */
+  output_file?: string | null;
+  exit_code?: number | null;
 }
 
 export interface Usage {
@@ -93,6 +96,7 @@ export type Ev =
     }
   | { type: "sessions"; sessions: SessionInfo[] }
   | { type: "btw"; id: string; answer?: string; error?: string }
+  | { type: "task_log"; id: string; text: string | null; file?: string | null }
   | { type: "models"; models: ModelInfo[] }
   | { type: "restore"; transcript: { role: string; text: string; state?: string | null }[] }
   | { type: "user"; text: string }
@@ -140,6 +144,7 @@ export type Cmd =
   | { type: "btw"; id: string; question: string }
   | { type: "export"; markdown: string }
   | { type: "sessions" }
+  | { type: "task_log"; id: string }
   | { type: "resume"; id: string };
 
 /** Where events come from and commands go: the mock below, or a socket to `winfer code --serve`. */
@@ -173,7 +178,8 @@ export const COMMANDS: [string, string][] = [
   ["/cost", "Token usage, context breakdown and cost"],
   ["/copy", "Copy the last reply"],
   ["/export", "Save the conversation as Markdown"],
-  ["/agents", "Subagents and background tasks"],
+  ["/agents", "Subagents and background tasks (ctrl+g)"],
+  ["/tasks", "Background shells and their output (ctrl+b)"],
   ["/mcp", "MCP servers in use"],
   ["/status", "Session, model and directory"],
   ["/login", "How to sign in to each backend"],

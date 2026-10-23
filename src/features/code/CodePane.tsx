@@ -23,6 +23,7 @@ function PlanStrip() {
   const send = useCode((s) => s.send);
   const [open, setOpen] = useState(true);
   const asking = useCode((s) => s.approvals.length > 0);
+  const openLog = useCode((s) => s.openTaskLog);
   const running = Object.values(taskMap).filter((t) => t.status === "running");
   const show = useCodeWeb((s) => s.showPlan);
   if (!show || (!todos.length && !running.length)) return null;
@@ -62,14 +63,21 @@ function PlanStrip() {
         </>
       )}
       {running.map((t) => (
-        <div key={t.id} className="cw-task running">
+        <div key={t.id} className="cw-task running clickable" onClick={() => openLog(t.id)} title="Show its output">
           {t.agent ? <Bot size={14} /> : <SquareTerminal size={14} />}
           <b>{t.title}</b>
           <small>
             {t.agent ? `${t.agent} · ${t.tools ?? 0} tools` : "background shell"}
             {t.last ? ` · ${t.last}` : ""}
           </small>
-          <button className="cw-icon-btn sm" title="Stop" onClick={() => send({ type: "stop_task", id: t.id })}>
+          <button
+            className="cw-icon-btn sm"
+            title="Stop"
+            onClick={(e) => {
+              e.stopPropagation();
+              send({ type: "stop_task", id: t.id });
+            }}
+          >
             <Square size={10} fill="currentColor" />
           </button>
         </div>

@@ -95,6 +95,11 @@ export function Composer({ focused }: { focused: boolean }) {
         send({ type: "interrupt" });
         return;
       }
+      if (e.ctrlKey && (e.key === "b" || e.key === "g")) {
+        e.preventDefault();
+        store.getState().setSheet("agents");
+        return;
+      }
       if (e.key === "Tab" && e.shiftKey) {
         e.preventDefault();
         const i = MODES.findIndex((m) => m.id === mode);

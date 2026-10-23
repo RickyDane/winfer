@@ -397,7 +397,7 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
                 "options": q.options.iter().map(|(label, description)| json!({ "label": label, "description": description })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         }),
-        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "description": t.description, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status }),
+        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "description": t.description, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status, "output_file": t.output_file, "exit_code": t.exit_code }),
         Ev::Todos(t) => json!({ "type": "todos", "todos": t }),
         Ev::Skills(s) => json!({ "type": "skills", "skills": s.iter().map(|k| &k.name).collect::<Vec<_>>() }),
         Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost, "turn": u.turn, "turn_input": u.turn_input, "turn_cached": u.turn_cached, "turn_streamed": u.turn_streamed }),

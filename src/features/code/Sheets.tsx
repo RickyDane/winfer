@@ -17,11 +17,14 @@ import {
   Zap,
   Check,
   Star,
+  ChevronLeft,
+  ChevronRight,
+  SquareTerminal,
   ShieldCheck,
 } from "lucide-react";
 import clsx from "clsx";
 import { useCode, type Sheet } from "./store";
-import { COMMANDS, MODES } from "./protocol";
+import { COMMANDS, MODES, type TaskEv } from "./protocol";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { useCodeWeb } from "./styles";
@@ -171,7 +174,7 @@ function CompactionSheet() {
   );
   return (
     <Frame title="Compaction" icon={<Shrink size={15} />} wide>
-      {row("Micro-compact", "Trims old tool output once context reaches this share (ChatGPT backend).", trimAt, "trim")}
+      {row("Micro-compact", "Trims old tool output once context reaches this share. Claude Code and Codex restart briefly between turns to apply it.", trimAt, "trim")}
       {row("Full compact", "Summarizes the conversation once context reaches this share.", compactAt, "compact")}
     </Frame>
   );
@@ -202,30 +205,119 @@ function StatusSheet() {
   );
 }
 
-function AgentsSheet() {
-  const tasks = Object.values(useCode((s) => s.tasks));
+function TaskRow({ t }: { t: TaskEv }) {
   const send = useCode((s) => s.send);
+  const open = useCode((s) => s.openTaskLog);
+  const status = t.status ?? "running";
+  return (
+    <div className={clsx("cw-task-row", status)}>
+      <span className="dot" />
+      <button className="cw-task-open" onClick={() => open(t.id)} title="Show its output">
+        <b>{t.title ?? t.id}</b>
+        <small>
+          {t.agent ? `${t.agent} · ${t.tools ?? 0} tools` : "background shell"} · {status}
+          {t.exit_code != null && status !== "running" ? ` · exit ${t.exit_code}` : ""}
+          {t.last ? ` · ${t.last}` : ""}
+        </small>
+        {t.description && <p>{t.description}</p>}
+      </button>
+      {status === "running" && (
+        <button className="cw-btn small" onClick={() => send({ type: "stop_task", id: t.id })}>
+          <Square size={10} fill="currentColor" /> Stop
+        </button>
+      )}
+      <ChevronRight size={14} className="cw-task-chev" />
+    </div>
+  );
+}
+
+/** `/agents` and `/tasks`: running first, then finished, newest first; click one for its output. */
+function AgentsSheet() {
+  const all = Object.values(useCode((s) => s.tasks)).reverse();
+  const order = (list: TaskEv[]) => [...list.filter((t) => (t.status ?? "running") === "running"), ...list.filter((t) => (t.status ?? "running") !== "running")];
+  const shells = order(all.filter((t) => !t.agent));
+  const agents = order(all.filter((t) => t.agent));
   return (
     <Frame title="Agents & background tasks" icon={<Bot size={15} />} wide>
-      {tasks.length === 0 && <p className="cw-empty">No subagents or background shells in this session yet.</p>}
-      {tasks.map((t) => (
-        <div key={t.id} className={clsx("cw-task-row", t.status ?? "running")}>
+      {all.length === 0 && <p className="cw-empty">No subagents or background shells in this session yet.</p>}
+      {shells.length > 0 && (
+        <section>
+          <div className="cw-sheet-label">Background shells · ctrl+b</div>
+          {shells.map((t) => (
+            <TaskRow key={t.id} t={t} />
+          ))}
+        </section>
+      )}
+      {agents.length > 0 && (
+        <section>
+          <div className="cw-sheet-label">Subagents · ctrl+g</div>
+          {agents.map((t) => (
+            <TaskRow key={t.id} t={t} />
+          ))}
+        </section>
+      )}
+    </Frame>
+  );
+}
+
+/** One background task's output, like the TUI's task view: live tail while it runs. */
+function TaskLogSheet() {
+  const id = useCode((s) => s.logTask);
+  const task = useCode((s) => (id ? s.tasks[id] : undefined));
+  const log = useCode((s) => s.taskLog);
+  const items = useCode((s) => s.items);
+  const send = useCode((s) => s.send);
+  const setSheet = useCode((s) => s.setSheet);
+  const running = (task?.status ?? "running") === "running";
+  const pre = useRef<HTMLPreElement>(null);
+  const follow = useRef(true);
+  useEffect(() => {
+    if (!id) return;
+    send({ type: "task_log", id });
+    if (!running) return;
+    const t = setInterval(() => send({ type: "task_log", id }), 400);
+    return () => clearInterval(t);
+  }, [id, running, send]);
+  // Without a log file (subagents), the output its card has.
+  const card = task?.tool_id ? items.find((i) => i.kind === "tool" && i.key === task.tool_id) : undefined;
+  const text = log?.text ?? (card && card.kind === "tool" ? card.output : null) ?? "";
+  useEffect(() => {
+    if (follow.current && pre.current) pre.current.scrollTop = pre.current.scrollHeight;
+  }, [text]);
+  if (!id || !task) return null;
+  const status = task.status ?? "running";
+  return (
+    <Frame title={task.title ?? id} icon={task.agent ? <Bot size={15} /> : <SquareTerminal size={15} />} wide>
+      <div className="cw-log-head">
+        <span className={clsx("cw-log-status", status)}>
           <span className="dot" />
-          <div>
-            <b>{t.title ?? t.id}</b>
-            <small>
-              {t.agent ? `${t.agent} · ${t.tools ?? 0} tools` : "background shell"} · {t.status ?? "running"}
-              {t.last ? ` · ${t.last}` : ""}
-            </small>
-            {t.description && <p>{t.description}</p>}
-          </div>
-          {(t.status ?? "running") === "running" && (
-            <button className="cw-btn small" onClick={() => send({ type: "stop_task", id: t.id })}>
-              <Square size={10} fill="currentColor" /> Stop
-            </button>
-          )}
-        </div>
-      ))}
+          {status}
+          {task.exit_code != null && status !== "running" ? ` · exit ${task.exit_code}` : ""}
+        </span>
+        <span className="dim">{task.agent ? `${task.agent} · ${task.tools ?? 0} tools` : "background shell"}</span>
+        <span className="grow" />
+        <button className="cw-btn small" onClick={() => setSheet("agents")}>
+          <ChevronLeft size={12} /> All tasks
+        </button>
+        {status === "running" && (
+          <button className="cw-btn small" onClick={() => send({ type: "stop_task", id })}>
+            <Square size={10} fill="currentColor" /> Stop
+          </button>
+        )}
+      </div>
+      {task.description && <p className="cw-log-desc">{task.description}</p>}
+      <pre
+        ref={pre}
+        className="cw-log"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+      >
+        {text || (task.agent ? (task.last ? `Working… last step: ${task.last}` : "No output yet.") : running ? "Waiting for output…" : "No output.")}
+        {running && <span className="cw-log-caret" />}
+      </pre>
+      {log?.file && <small className="cw-log-file">{log.file}</small>}
     </Frame>
   );
 }
@@ -537,6 +629,7 @@ export function Sheets({ onCommand }: { onCommand: (c: string) => void }) {
     compaction: <CompactionSheet />,
     status: <StatusSheet />,
     agents: <AgentsSheet />,
+    tasklog: <TaskLogSheet />,
     sessions: <SessionsSheet />,
     btw: <BtwSheet />,
     help: <HelpSheet onCommand={onCommand} />,

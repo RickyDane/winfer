@@ -1238,7 +1238,7 @@ function HarnessSettings() {
       </Card>
 
       <Card title="Context compaction" description="When a conversation fills the model's context window, these keep it going and save tokens.">
-        <Row label="Micro-compact at" hint="Trims old tool output and file contents from earlier turns (ChatGPT account).">
+        <Row label="Micro-compact at" hint="Trims old tool output and file contents from earlier turns. Claude Code and Codex are briefly restarted between turns to apply it.">
           {percent(settings.trimAt, (trimAt) => void save({ trimAt }), "Micro-compact at")}
         </Row>
         <Row

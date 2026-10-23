@@ -128,6 +128,12 @@ export class MockTransport implements Transport {
         this.usage();
         this.emit({ type: "notice", text: "Compacted conversation · 41k → 6k tokens" });
         break;
+      case "task_log": {
+        const id = cmd.id;
+        const lines = this.devLog.slice(0, Math.min(this.devLog.length, 4 + Math.floor((Date.now() - this.devStart) / 900)));
+        this.emit({ type: "task_log", id, text: id === "bg-dev" ? lines.join("\n") : null, file: id === "bg-dev" ? "/tmp/winfer-bg/bg-dev.log" : null });
+        break;
+      }
       case "sessions":
         setTimeout(
           () =>
@@ -191,6 +197,23 @@ export class MockTransport implements Transport {
   }
 
   private stopped = new Set<string>();
+  private devStart = Date.now();
+  private devLog = [
+    "> winfer@0.1.105 dev",
+    "> vite",
+    "",
+    "  VITE v8.3.4  ready in 312 ms",
+    "",
+    "  ➜  Local:   http://localhost:5173/",
+    "  ➜  Network: use --host to expose",
+    "",
+    "10:41:02 PM [vite] hmr update /src/lib/retry.ts",
+    "10:41:02 PM [vite] hmr update /src/api/client.ts",
+    "10:41:09 PM [vite] page reload src/main.tsx",
+    "10:41:15 PM [vite] hmr update /src/features/updates/poll.ts",
+    "10:41:21 PM [vite] ✓ 1342 modules transformed.",
+    "10:41:28 PM [vite] hmr update /src/api/usage.ts",
+  ];
 
   /** The background agent works on after the turn, then reports, which starts a short turn. */
   private async backgroundAgent() {
@@ -355,7 +378,8 @@ export class MockTransport implements Transport {
       if (t === 1) {
         // A background shell: the dev server keeps running after the turn.
         e({ type: "tool_start", id: id("dev"), name: "Bash", title: "pnpm dev (background)", input: { command: "pnpm dev", run_in_background: true } });
-        e({ type: "task", id: "bg-dev", tool_id: id("dev"), title: "pnpm dev", description: "Vite dev server to try the change", tools: null, status: "running", last: "starting…" });
+        this.devStart = Date.now();
+        e({ type: "task", id: "bg-dev", tool_id: id("dev"), output_file: "/tmp/winfer-bg/bg-dev.log", title: "pnpm dev", description: "Vite dev server to try the change", tools: null, status: "running", last: "starting…" });
         await this.step(600);
         e({ type: "tool_end", id: id("dev"), ok: true, output: "Running in the background (task bg-dev)" });
         e({ type: "task", id: "bg-dev", last: "VITE v8.3.4 ready · http://localhost:5173/" });

@@ -10,7 +10,7 @@ export interface Attachment {
   name: string;
 }
 
-export type Sheet = "usage" | "status" | "help" | "mcp" | "login" | "agents" | "sessions" | "btw" | "compaction" | "model" | "effort" | "mode";
+export type Sheet = "tasklog" | "usage" | "status" | "help" | "mcp" | "login" | "agents" | "sessions" | "btw" | "compaction" | "model" | "effort" | "mode";
 
 export interface Btw {
   id: string;
@@ -55,6 +55,10 @@ export interface CodeState {
   /** Tokens streamed in the running turn when it started / now, and when, for tok/s. */
   rate: { tokens: number; at: number; start: number; startAt: number } | null;
   setSheet(sheet: Sheet | null): void;
+  /** The background task whose output is open, and the latest tail of it. */
+  logTask: string | null;
+  taskLog: { id: string; text: string | null; file?: string | null } | null;
+  openTaskLog(id: string): void;
   mode: Mode;
   effort: string;
   items: Item[];
@@ -98,6 +102,12 @@ export const createCodeStore = () =>
   sheet: null,
   rate: null,
   setSheet: (sheet) => set({ sheet }),
+  logTask: null,
+  taskLog: null,
+  openTaskLog: (id) => {
+    set({ logTask: id, taskLog: null, sheet: "tasklog" });
+    get().send({ type: "task_log", id });
+  },
   mode: "ask",
   effort: "high",
   items: [],
@@ -260,6 +270,8 @@ export const createCodeStore = () =>
           };
         case "sessions":
           return { sessions: ev.sessions };
+        case "task_log":
+          return ev.id === s.logTask ? { taskLog: { id: ev.id, text: ev.text, file: ev.file } } : {};
         case "btw":
           return { btw: s.btw.map((b) => (b.id === ev.id ? { ...b, answer: ev.answer, error: ev.error } : b)) };
         case "models":

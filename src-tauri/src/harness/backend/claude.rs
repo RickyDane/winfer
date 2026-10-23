@@ -7,6 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use serde_json::{Value, json};
 
+use super::microcompact::{self, Format};
 use super::{In, LineProcess, Opts};
 use crate::harness::claude_skills::{self, LeanSkills};
 use crate::harness::diff;
@@ -186,6 +187,15 @@ struct Bridge {
     /// The permission mode as winfer sees it (Claude Code only knows "plan" for yolo-plan).
     mode: Mode,
     bg_owner: String,
+    /// Claude Code's session, to resume after a micro-compact.
+    session: Option<String>,
+    /// Context fill (%) that triggers trimming / full compaction; 0 = off.
+    trim_at: u8,
+    compact_at: u8,
+    /// Background tasks still running (a restart would end them).
+    running: std::collections::HashSet<String>,
+    /// A turn just finished: time to see whether to micro-compact.
+    settled: bool,
 }
 
 struct Checkpoint {
@@ -249,17 +259,20 @@ fn rewind_conversation(uuid: &str) -> Value {
     json!({ "subtype": "rewind_conversation", "target_message_uuid": uuid, "interrupt_if_running": false })
 }
 
+const ENV: &[(&str, &str)] = &[
+    ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
+    // Headless Claude Code has no plan tool unless asked for one (TaskCreate/TaskUpdate).
+    ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "true"),
+    // MCP tools load directly with their descriptions, not deferred behind ToolSearch.
+    ("ENABLE_TOOL_SEARCH", "false"),
+];
+
 /// Tools whose changes Claude Code's file checkpoints cover.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
-    let mut proc = match LineProcess::spawn("claude", &args(&opts), &[
-        ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
-        // Headless Claude Code has no plan tool unless asked for one (TaskCreate/TaskUpdate).
-        ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "true"),
-        // MCP tools load directly with their descriptions, not deferred behind ToolSearch.
-        ("ENABLE_TOOL_SEARCH", "false"),
-    ], &opts.cwd, me) {
+    let mut opts = opts;
+    let mut proc = match LineProcess::spawn("claude", &args(&opts), ENV, &opts.cwd, me.clone()) {
         Ok(p) => p,
         Err(e) => {
             let _ = events.send(Ev::Exited(e));
@@ -283,8 +296,15 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         plan: Plan::default(),
         mode: opts.mode,
         bg_owner: opts.bg_owner.clone(),
+        session: None,
+        trim_at: opts.trim_at,
+        compact_at: opts.compact_at,
+        running: Default::default(),
+        settled: false,
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
+    // Exits of processes replaced by a micro-compact that ended late.
+    let mut stale_exits = 0;
     while let Some(msg) = super::recv(&rx) {
         match msg {
             In::Line(line) => {
@@ -294,19 +314,63 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 for out in std::mem::take(&mut b.outbox) {
                     let _ = proc.write(&out);
                 }
+                if let Some(path) = b.micro_compact_file() {
+                    match micro_compact(&mut b, &mut proc, &mut opts, &path, &rx, &me) {
+                        Ok((held, ended)) => {
+                            stale_exits += usize::from(!ended);
+                            for cmd in held {
+                                if !b.on_cmd(cmd, &mut proc) {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart after trimming its context: {e}")));
+                            return;
+                        }
+                    }
+                }
             }
+            In::Closed if stale_exits > 0 => stale_exits -= 1,
             In::Closed => {
                 let reason = proc.exit_reason();
                 let _ = b.events.send(Ev::Exited(format!("Claude Code stopped: {reason}")));
                 return;
             }
             In::Cmd(cmd) => {
+                // A restart starts Claude Code with the session's current settings.
+                match &cmd {
+                    Cmd::SetModel(m) => opts.model = m.clone(),
+                    Cmd::SetEffort(e) => opts.effort = e.clone(),
+                    _ => {}
+                }
                 if !b.on_cmd(cmd, &mut proc) {
                     return;
                 }
             }
         }
     }
+}
+
+/// Micro-compacts the session: stops Claude Code, trims old tool output in its session file and
+/// resumes the session in a new process. Returns the commands that came meanwhile, and whether
+/// the old process's output ended (else its exit arrives later).
+fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: &std::path::Path, rx: &Receiver<In>, me: &Sender<In>) -> Result<(Vec<Cmd>, bool), String> {
+    let _ = proc.child.kill();
+    let _ = proc.child.wait();
+    let mut held = Vec::new();
+    let ended = super::drain_closed(rx, &mut held);
+    let saved = microcompact::trim_file(path, Format::Claude, 1, true).unwrap_or(0);
+    opts.resume = b.session.clone();
+    opts.mode = b.mode;
+    *proc = LineProcess::spawn("claude", &args(opts), ENV, &opts.cwd, me.clone())?;
+    let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
+    if saved > 0 {
+        b.live.usage.context = b.live.usage.context.saturating_sub(saved as u64 / 4);
+        b.emit(Ev::Usage(b.live.usage.clone()));
+        b.emit(Ev::Notice(format!("Micro-compacted: trimmed {} KB of old tool output.", saved / 1024)));
+    }
+    Ok((held, ended))
 }
 
 impl Bridge {
@@ -330,6 +394,35 @@ impl Bridge {
 
     fn emit(&self, ev: Ev) {
         let _ = self.events.send(ev);
+    }
+
+    fn task(&mut self, t: TaskEv) {
+        match t.status.as_deref() {
+            Some("running") => {
+                self.running.insert(t.id.clone());
+            }
+            Some(_) => {
+                self.running.remove(&t.id);
+            }
+            None => {}
+        }
+        self.emit(Ev::Task(t));
+    }
+
+    /// The session file, when it's time to micro-compact: the context is past `trim_at`, the
+    /// session is idle with nothing a restart would cut short, and trimming saves enough.
+    fn micro_compact_file(&mut self) -> Option<std::path::PathBuf> {
+        if !std::mem::take(&mut self.settled)
+            || self.busy
+            || !self.pending.is_empty()
+            || self.undoing.is_some()
+            || !self.running.is_empty()
+            || !microcompact::due(&self.live.usage, self.trim_at, self.compact_at)
+        {
+            return None;
+        }
+        let path = microcompact::claude_transcript(self.session.as_deref()?)?;
+        (microcompact::trim_file(&path, Format::Claude, microcompact::MIN_SAVING, false).ok()? > 0).then_some(path)
     }
 
     fn control(&mut self, proc: &mut LineProcess, request: Value) {
@@ -396,7 +489,10 @@ impl Bridge {
                 self.emit(Ev::TurnStart);
                 let _ = proc.write(&user_message(&UserMsg { text: "/compact".into(), images: Vec::new(), skill: None }));
             }
-            Cmd::SetCompaction { .. } => {}
+            Cmd::SetCompaction { trim, compact } => {
+                self.trim_at = trim;
+                self.compact_at = compact;
+            }
             Cmd::Undo { files } => {
                 if self.busy || self.undoing.is_some() {
                     self.emit(Ev::Undone(Err("Wait for the turn to finish (or press Esc) before /undo.".into())));
@@ -447,6 +543,7 @@ impl Bridge {
             "system" => match v["subtype"].as_str() {
                 Some("init") => {
                     if let Some(s) = v["session_id"].as_str() {
+                        self.session = Some(s.to_string());
                         self.emit(Ev::Session(s.to_string()));
                     }
                     if let Some(m) = v["model"].as_str() {
@@ -469,7 +566,7 @@ impl Bridge {
                 }
                 Some("task_started" | "task_progress" | "task_updated" | "task_notification") => {
                     if let Some(t) = task_event(v) {
-                        self.emit(Ev::Task(t));
+                        self.task(t);
                     }
                 }
                 _ => {}
@@ -516,7 +613,7 @@ impl Bridge {
             }
             "user" => {
                 if let Some(t) = shell_notification(&content_text(&v["message"]["content"])) {
-                    self.emit(Ev::Task(t));
+                    self.task(t);
                 }
                 for block in v["message"]["content"].as_array().into_iter().flatten() {
                     if block["type"] != "tool_result" {
@@ -528,7 +625,7 @@ impl Bridge {
                     let call = self.calls.remove(&id);
                     if let Some(c) = call.as_ref().filter(|c| ok && c.name == "Bash") {
                         if let Some(t) = shell_receipt(&id, &c.input, &output) {
-                            self.emit(Ev::Task(t));
+                            self.task(t);
                         }
                     }
                     if let Some(c) = call.as_ref().filter(|c| ok && c.name == "TaskCreate") {
@@ -573,6 +670,7 @@ impl Bridge {
                     self.emit(Ev::Error(text.to_string()));
                 }
                 self.busy = false;
+                self.settled = true;
                 self.blocks.clear();
                 self.finalized.clear();
                 self.emit(Ev::TurnDone);
@@ -916,6 +1014,11 @@ mod tests {
             plan: Plan::default(),
             mode: Mode::Ask,
             bg_owner: String::new(),
+            session: None,
+            trim_at: 0,
+            compact_at: 0,
+            running: Default::default(),
+            settled: false,
         };
         (b, rx)
     }

@@ -1903,6 +1903,110 @@ button.cw-foot-item.active {
   font-size: 12px;
 }
 
+/* ——— Background task output ——— */
+.cw-sheet-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  margin: 2px 0 4px;
+}
+.cw-task-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+.cw-task-open:hover b {
+  color: var(--accent);
+}
+.cw-task-chev {
+  color: var(--dim);
+  margin-top: 4px;
+  flex: none;
+}
+.cw-plan .cw-task.clickable,
+.cw-chip.clickable {
+  cursor: pointer;
+}
+.cw-plan .cw-task.clickable:hover b {
+  color: var(--accent);
+}
+.cw-chip.clickable:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.cw-log-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+.cw-log-head .dim {
+  color: var(--dim);
+}
+.cw-log-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.cw-log-status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.cw-log-status.running .dot {
+  background: var(--accent);
+  animation: cw-breathe 1.4s ease-in-out infinite;
+}
+.cw-log-status.done .dot {
+  background: var(--ok);
+}
+.cw-log-status.failed .dot,
+.cw-log-status.stopped .dot {
+  background: var(--del);
+}
+.cw-log-desc {
+  margin: -6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cw-log {
+  margin: 0;
+  height: min(420px, calc(100cqh - 230px));
+  min-height: 120px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--term-bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cw-log-caret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--accent);
+  animation: cw-blink 1s steps(1) infinite;
+}
+.cw-log-file {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
 /* ——— Compact layout ——— */
 .cw-pane.compact .cw-transcript {
   gap: 0;

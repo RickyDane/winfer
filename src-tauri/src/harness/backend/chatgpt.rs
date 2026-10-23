@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::microcompact::over;
 use super::{In, Opts};
 use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, TaskEv, TurnTokens, Usage, UserMsg};
 use crate::harness::mcp_client;
@@ -1081,11 +1082,6 @@ fn prefix_hash(body: &Value) -> String {
     }
     let digest = Sha256::digest(b.to_string().as_bytes());
     hex::encode(&digest[..6])
-}
-
-/// Whether the context is past `percent` of the window (0 = never).
-fn over(usage: &Usage, percent: u8) -> bool {
-    percent > 0 && usage.window > 0 && usage.context * 100 > usage.window * percent as u64
 }
 
 /// Calls that can run alongside others: read-only tools, subagents and `bg` (its tasks are

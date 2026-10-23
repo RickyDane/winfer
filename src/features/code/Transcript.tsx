@@ -103,6 +103,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   useTicker(running);
   const Icon = TOOL_ICONS[item.name] ?? Wrench;
   const task = useCode((s) => Object.values(s.tasks).find((t) => t.tool_id === item.key));
+  const openLog = useCode((s) => s.openTaskLog);
   const outRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
@@ -119,7 +120,14 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
         <span className="cw-tool-name">{item.name}</span>
         <span className="cw-tool-title">{item.title}</span>
         {task && (
-          <span className="cw-chip">
+          <span
+            className="cw-chip clickable"
+            title="Show its output"
+            onClick={(e) => {
+              e.stopPropagation();
+              openLog(task.id);
+            }}
+          >
             {task.agent ? `${task.agent} · ${task.tools ?? 0} tools` : "background"}
             {task.status === "running" ? (task.last ? ` · ${task.last}` : " · running") : ` · ${task.status}`}
           </span>

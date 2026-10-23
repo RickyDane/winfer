@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::microcompact::{self, Format};
 use super::{In, LineProcess, Opts};
 use crate::harness::event::{Approval, Cmd, Decision, Ev, Events, Mode, ModelInfo, Question, Skill, TaskEv, Todo, TurnTokens, Usage, UserMsg};
 
@@ -188,6 +189,11 @@ struct Bridge {
     background: HashSet<String>,
     /// Running commands' PTY process ids (item id → process id), to stop background shells.
     processes: HashMap<String, String>,
+    /// Context fill (%) that triggers trimming / full compaction; 0 = off.
+    trim_at: u8,
+    compact_at: u8,
+    /// A turn just finished: time to see whether to micro-compact.
+    settled: bool,
 }
 
 #[derive(Default)]
@@ -211,7 +217,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         args.extend(crate::pty::codex_output_cap());
         args.extend(crate::pty::lean_codex_args(config.lean_codex_prompt));
     }
-    let proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me) {
+    let proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
         Ok(p) => p,
         Err(e) => {
             let _ = events.send(Ev::Exited(e));
@@ -247,9 +253,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         commands: HashMap::new(),
         background: HashSet::new(),
         processes: HashMap::new(),
+        trim_at: opts.trim_at,
+        compact_at: opts.compact_at,
+        settled: false,
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
-    b.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": { "experimentalApi": true } }), Pending::Init);
+    b.initialize();
     let mut thread_params = json!({
         "cwd": cwd,
         "approvalPolicy": approval_policy(opts.mode),
@@ -266,7 +275,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     if let Some(system) = &opts.system {
         thread_params["developerInstructions"] = json!(system);
     }
-    let resume = opts.resume.clone();
+    let mut resume = opts.resume.clone();
+    // Exits of processes replaced by a micro-compact that ended late.
+    let mut stale_exits = 0;
     // New threads keep paginated history, which `thread/revert` (/undo) needs.
     let mut start_params = thread_params.clone();
     start_params["historyMode"] = json!("paginated");
@@ -353,7 +364,36 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         None => b.on_notification(method, &v["params"]),
                     }
                 }
+                if let Some((thread, path)) = b.micro_compact_file() {
+                    // Stop Codex, trim the rollout, and resume the thread in a new app-server;
+                    // what's sent meanwhile waits for the thread (`queued`).
+                    let _ = b.proc.child.kill();
+                    let _ = b.proc.child.wait();
+                    let mut held = Vec::new();
+                    stale_exits += usize::from(!super::drain_closed(&rx, &mut held));
+                    let saved = microcompact::trim_file(&path, Format::Codex, 1, true).unwrap_or(0);
+                    b.proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            b.emit(Ev::Exited(format!("Codex didn't restart after trimming its context: {e}")));
+                            return;
+                        }
+                    };
+                    b.pending.clear();
+                    b.thread = None;
+                    resume = Some(thread);
+                    b.initialize();
+                    if saved > 0 {
+                        b.usage.context = b.usage.context.saturating_sub(saved as u64 / 4);
+                        b.emit_usage();
+                        b.emit(Ev::Notice(format!("Micro-compacted: trimmed {} KB of old tool output.", saved / 1024)));
+                    }
+                    for cmd in held {
+                        let _ = me.send(In::Cmd(cmd));
+                    }
+                }
             }
+            In::Closed if stale_exits > 0 => stale_exits -= 1,
             In::Closed => {
                 let reason = b.proc.exit_reason();
                 b.emit(Ev::Exited(format!("Codex stopped: {reason}")));
@@ -409,7 +449,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         b.request("thread/compact/start", json!({ "threadId": thread }), Pending::Ignore);
                     }
                 }
-                Cmd::SetCompaction { .. } => {}
+                Cmd::SetCompaction { trim, compact } => {
+                    b.trim_at = trim;
+                    b.compact_at = compact;
+                }
                 Cmd::Undo { files } => b.undo(files),
                 Cmd::StopTask(id) if b.background.contains(&id) => b.stop_shell(id),
                 Cmd::StopTask(id) if crate::harness::bg::stop(&id) => {}
@@ -426,6 +469,31 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
 }
 
 impl Bridge {
+    fn initialize(&mut self) {
+        self.request("initialize", json!({ "clientInfo": { "name": "winfer", "title": "winfer code", "version": env!("CARGO_PKG_VERSION") }, "capabilities": { "experimentalApi": true } }), Pending::Init);
+    }
+
+    /// The thread and its rollout, when it's time to micro-compact: the context is past
+    /// `trim_at`, the thread is idle with nothing a restart would cut short (approvals, background
+    /// terminals, subagents, requests in flight), and trimming saves enough.
+    fn micro_compact_file(&mut self) -> Option<(String, std::path::PathBuf)> {
+        if !std::mem::take(&mut self.settled)
+            || self.turn.is_some()
+            || !self.queued.is_empty()
+            || !self.approvals.is_empty()
+            || !self.asks.is_empty()
+            || !self.background.is_empty()
+            || self.children.values().any(|c| c.turn.is_some())
+            || self.pending.values().any(|p| !matches!(p, Pending::Skills | Pending::Ignore))
+            || !microcompact::due(&self.usage, self.trim_at, self.compact_at)
+        {
+            return None;
+        }
+        let thread = self.thread.clone()?;
+        let path = microcompact::codex_rollout(&thread)?;
+        (microcompact::trim_file(&path, Format::Codex, microcompact::MIN_SAVING, false).ok()? > 0).then_some((thread, path))
+    }
+
     fn emit(&self, ev: Ev) {
         let _ = self.events.send(ev);
     }
@@ -701,6 +769,7 @@ impl Bridge {
                     self.task(TaskEv { id: id.clone(), tool_id: Some(id.clone()), title: Some(title), status: Some("running".into()), ..Default::default() });
                     self.background.insert(id);
                 }
+                self.settled = true;
                 self.emit(Ev::TurnDone);
             }
             "error" => {
@@ -1473,6 +1542,9 @@ mod tests {
             commands: HashMap::new(),
             background: HashSet::new(),
             processes: HashMap::new(),
+            trim_at: 0,
+            compact_at: 0,
+            settled: false,
         };
         (b, rx)
     }

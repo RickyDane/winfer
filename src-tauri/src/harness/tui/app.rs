@@ -60,10 +60,10 @@ pub struct TaskLog {
 }
 
 /// Bytes of a log the output view shows at most (its tail).
-const TASK_LOG_MAX: u64 = 256 * 1024;
+pub(crate) const TASK_LOG_MAX: u64 = 256 * 1024;
 
 /// The last `max` bytes of a file, starting at a line boundary when cut.
-fn read_tail(path: &Path, max: u64) -> std::io::Result<String> {
+pub(crate) fn read_tail(path: &Path, max: u64) -> std::io::Result<String> {
     use std::io::{Read, Seek, SeekFrom};
     if !std::fs::metadata(path)?.is_file() {
         return Err(std::io::Error::other("not a regular file"));
@@ -80,7 +80,7 @@ fn read_tail(path: &Path, max: u64) -> std::io::Result<String> {
 
 /// Log text as a terminal would leave it: escapes dropped and a carriage return (progress bars)
 /// overwriting the line it's on.
-fn clean_log(raw: &str) -> String {
+pub(crate) fn clean_log(raw: &str) -> String {
     raw.split('\n')
         .map(|line| {
             let line = line.strip_suffix('\r').unwrap_or(line);
@@ -1459,7 +1459,7 @@ impl App {
     fn open_compaction(&mut self) {
         let pct = |p: u8| if p == 0 { "off".to_string() } else { format!("at {p}% of context") };
         let items = vec![
-            PickItem::new("Micro-compact", format!("{} · trims old tool output (ChatGPT)", pct(self.config.trim_at)), "trim"),
+            PickItem::new("Micro-compact", format!("{} · trims old tool output", pct(self.config.trim_at)), "trim"),
             PickItem::new("Full compact", format!("{} · summarizes the conversation", pct(self.config.compact_at)), "full"),
         ];
         self.open(Picker::new(PickKind::Compaction, "Compaction", items));

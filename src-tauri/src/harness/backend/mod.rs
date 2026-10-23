@@ -4,6 +4,7 @@
 pub mod chatgpt;
 pub mod claude;
 pub mod codex;
+pub mod microcompact;
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -285,6 +286,21 @@ pub fn all_models() -> Vec<ModelInfo> {
     };
     all.sort_by_key(order);
     all
+}
+
+/// After killing a CLI for a restart: waits (briefly) for its output to end, holding on to the
+/// commands that come meanwhile. Returns false if it didn't end in time, so its late
+/// [`In::Closed`] is to be ignored.
+pub fn drain_closed(rx: &Receiver<In>, held: &mut Vec<Cmd>) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())) {
+            Ok(In::Closed) => return true,
+            Ok(In::Cmd(cmd)) => held.push(cmd),
+            Ok(In::Line(_)) => {}
+            Err(_) => return false,
+        }
+    }
 }
 
 /// Waits for the next message, giving up once the receiver closes.
