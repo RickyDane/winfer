@@ -90,6 +90,7 @@ export class MockTransport implements Transport {
       mcp: ["winfer", "context7", "codegraph"],
     });
     onEvent({ type: "models", models: MOCK_MODELS });
+    onEvent({ type: "model", model: "claude-opus-5-5" });
     onEvent({ type: "skills", skills: ["review", "simplify", "run", "security-review", "dataviz"] });
     this.usage();
     return () => {
@@ -122,6 +123,7 @@ export class MockTransport implements Transport {
         break;
       case "set_model":
         this.emit({ type: "model", model: cmd.model });
+        if (cmd.model.startsWith("claude/")) this.emit({ type: "model", model: `claude-${cmd.model.slice(7)}-5-5` });
         break;
       case "compact":
         this.ctx = 6_200;

@@ -2,6 +2,9 @@ import { GitBranch } from "lucide-react";
 import logoUrl from "@/assets/logo.svg";
 import { useCode, type Sheet } from "./store";
 import { MODES } from "./protocol";
+import { useCodeWeb } from "./styles";
+import { backendOf, modelName } from "./names";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
 
 const STARS = Array.from({ length: 34 }, (_, i) => {
   // Deterministic scatter, so the field doesn't jump on re-render.
@@ -11,9 +14,9 @@ const STARS = Array.from({ length: 34 }, (_, i) => {
 
 /** What a fresh session shows: the logo, who's answering and where, and the main keys. */
 export function Welcome() {
-  const { model, models, effort, mode, cwd, branch, setSheet, setDraft } = useCode();
-  const label = models.find((m) => m.spec === model)?.label ?? model;
-  const backend = model.split("/")[0];
+  const { model, actualModel, effort, mode, cwd, branch, setSheet, setDraft } = useCode();
+  const resolved = useCodeWeb((s) => s.resolvedModels);
+  const label = model ? modelName(model, resolved, actualModel) : "";
   const m = MODES.find((x) => x.id === mode);
   const home = cwd?.replace(/^\/(Users|home)\/[^/]+/, "~");
   const tiles: { k: string; label: string; what: string; run: () => void }[] = [
@@ -43,7 +46,7 @@ export function Welcome() {
           winfer <span>code</span>
         </h1>
         <p className="cw-who">
-          <span className={`cw-dot b-${backend}`} />
+          <ProviderIcon provider={backendOf(model)?.logo ?? "winfer"} size={14} />
           {label || "Starting…"}
           {effort && effort !== "default" && <span className="dim"> · {effort}</span>}
           {m && <span className={`cw-mode-tag mode-${mode}`}>{m.label}</span>}

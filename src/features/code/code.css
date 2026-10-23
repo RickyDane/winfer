@@ -1030,49 +1030,74 @@
 .cw-pane .cw-transcript {
   gap: 2px;
 }
+/* The rail is a 1px line centered on each step's icon, drawn in segments that stop short of
+   the icon, so it never shows through or beside it (glass panes included). */
 .cw-pane .cw-tool,
 .cw-pane .cw-reason {
+  position: relative;
   border: 0;
   background: none;
   border-radius: 0;
-  margin-left: 9px;
-  padding-left: 14px;
-  border-left: 1px solid var(--border);
+  margin-left: 11px;
+  padding-left: 18px;
   box-shadow: none;
   overflow: visible;
 }
-/* A step still running ends the rail: the line comes down to its icon, not past it. */
-.cw-pane .cw-tool.running {
-  border-left-color: transparent;
-}
-.cw-pane .cw-tool.running::before {
+.cw-pane .cw-tool::after,
+.cw-pane .cw-reason::after {
   content: "";
   position: absolute;
-  left: -1px;
+  left: -0.5px;
   top: 0;
-  right: auto;
+  bottom: -2px;
   width: 1px;
-  height: 6px;
-  background: var(--border);
-  animation: none;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--border), var(--border)) 0 0 / 1px var(--gap-top) no-repeat,
+    linear-gradient(var(--border), var(--border)) 0 var(--gap-bottom) / 1px calc(100% - var(--gap-bottom)) no-repeat;
+}
+.cw-pane .cw-tool {
+  --gap-top: 3px;
+  --gap-bottom: 27px;
+}
+.cw-pane .cw-reason {
+  --gap-top: 5px;
+  --gap-bottom: 21px;
+}
+/* A step still running ends the rail: the line comes down to its icon, not past it. */
+.cw-pane .cw-tool.running::after {
+  background: linear-gradient(var(--border), var(--border)) 0 0 / 1px var(--gap-top) no-repeat;
+}
+.cw-pane .cw-tool.running::before {
+  display: none;
 }
 .cw-pane .cw-tool-head {
   padding: 4px 4px 4px 0;
   border-radius: 6px;
 }
 .cw-pane .cw-tool-icon {
-  position: relative;
-  left: -27px;
-  margin-right: -26px;
+  position: absolute;
+  left: -11px;
+  top: 4px;
   width: 22px;
   height: 22px;
+  margin: 0;
   border-radius: 50%;
-  background: var(--bg);
+  background: transparent;
   border: 1px solid var(--border);
 }
 .cw-pane .cw-tool.running .cw-tool-icon {
   border-color: var(--accent);
   color: var(--accent);
+}
+.cw-pane .cw-reason-head {
+  position: static;
+  padding-left: 0;
+}
+.cw-pane .cw-reason-head > svg:first-child {
+  position: absolute;
+  left: -7px;
+  top: 6px;
 }
 .cw-pane .cw-tool-out,
 .cw-pane .cw-diff {
@@ -1704,6 +1729,8 @@ button.cw-foot-item.active {
   position: relative;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
   gap: 2px;
   padding: 3px;
   border-radius: 9px;
@@ -1787,9 +1814,26 @@ button.cw-foot-item.active {
 .cw-model-pop .cw-model-list {
   gap: 1px;
 }
-.cw-model-pop .cw-model-list {
-  height: min(264px, calc(100cqh - 150px));
+.cw-model-pop .cw-model-list,
+.cw-model-pop .cw-tabs {
+  height: min(300px, calc(100cqh - 150px));
   max-height: none;
+}
+
+.cw-model-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin-bottom: 4px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--color-panel);
+  outline: none;
+  font-size: 12.5px;
+}
+.cw-model-search:focus {
+  border-color: var(--accent);
 }
 
 /* ——— Effort bars ——— */
@@ -1857,6 +1901,20 @@ button.cw-foot-item.active {
 }
 .cw-model-pick b {
   font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cw-model-tag {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .cw-model-pick small {
   color: var(--dim);
@@ -2005,6 +2063,62 @@ button.cw-foot-item.active {
   font-size: 11px;
   color: var(--dim);
   overflow-wrap: anywhere;
+}
+
+/* ——— Image preview ——— */
+.cw-thumb img,
+.cw-user-images img {
+  cursor: zoom-in;
+}
+.cw-user-images img {
+  transition: transform 0.2s var(--ease), border-color 0.2s;
+}
+.cw-user-images img:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+.cw-lightbox {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 28px 28px 64px;
+  background: color-mix(in srgb, var(--color-app) 82%, transparent);
+  backdrop-filter: blur(6px);
+  animation: cw-fade 0.18s both;
+  cursor: zoom-out;
+}
+.cw-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px -18px rgb(0 0 0 / 0.7);
+  cursor: default;
+  animation: cw-zoom 0.28s var(--spring) both;
+}
+@keyframes cw-zoom {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+.cw-lightbox-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-panel-raised);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: default;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ——— Compact layout ——— */

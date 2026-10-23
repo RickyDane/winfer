@@ -1,10 +1,14 @@
-//! The three backends behind `winfer code`. Each runs on its own thread and owns its process
+//! The backends behind `winfer code`. Each runs on its own thread and owns its process
 //! or HTTP stream; the TUI talks to it through a [`Handle`].
 
+pub mod agy;
 pub mod chatgpt;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod microcompact;
+pub mod opencode;
+pub mod pi;
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -21,6 +25,13 @@ pub enum Kind {
     ChatGpt,
     Claude,
     Codex,
+    /// Google Antigravity's CLI (`agy`).
+    Agy,
+    /// Cursor's CLI (`cursor-agent`).
+    Cursor,
+    OpenCode,
+    /// The pi coding agent (`pi`).
+    Pi,
 }
 
 impl Kind {
@@ -29,6 +40,10 @@ impl Kind {
             Kind::ChatGpt => "chatgpt",
             Kind::Claude => "claude",
             Kind::Codex => "codex",
+            Kind::Agy => "agy",
+            Kind::Cursor => "cursor",
+            Kind::OpenCode => "opencode",
+            Kind::Pi => "pi",
         }
     }
     pub fn label(self) -> &'static str {
@@ -36,6 +51,10 @@ impl Kind {
             Kind::ChatGpt => "ChatGPT",
             Kind::Claude => "Claude Code",
             Kind::Codex => "Codex",
+            Kind::Agy => "Antigravity",
+            Kind::Cursor => "Cursor",
+            Kind::OpenCode => "OpenCode",
+            Kind::Pi => "Pi",
         }
     }
     pub fn from_id(id: &str) -> Option<Kind> {
@@ -43,6 +62,10 @@ impl Kind {
             "chatgpt" | "openai" => Some(Kind::ChatGpt),
             "claude" | "anthropic" => Some(Kind::Claude),
             "codex" => Some(Kind::Codex),
+            "agy" | "antigravity" => Some(Kind::Agy),
+            "cursor" | "cursor-agent" => Some(Kind::Cursor),
+            "opencode" => Some(Kind::OpenCode),
+            "pi" => Some(Kind::Pi),
             _ => None,
         }
     }
@@ -159,7 +182,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
     let me = tx.clone();
     std::thread::spawn(move || match kind {
         Kind::ChatGpt => chatgpt::run(opts, rx, events),
-        Kind::Claude | Kind::Codex => {
+        _ => {
             // The CLIs reach `bg` through winfer's MCP server; send those calls here, so the
             // tasks show in winfer code's task list and end with this backend.
             let owner = format!("code-{:016x}", rand::random::<u64>());
@@ -181,6 +204,10 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
             }
             match kind {
                 Kind::Claude => claude::run(opts, rx, me, events),
+                Kind::Agy => agy::run(opts, rx, me, events),
+                Kind::Cursor => cursor::run(opts, rx, me, events),
+                Kind::OpenCode => opencode::run(opts, rx, me, events),
+                Kind::Pi => pi::run(opts, rx, me, events),
                 _ => codex::run(opts, rx, me, events),
             }
             crate::harness::bg::stop_owner(&owner);
@@ -267,22 +294,26 @@ impl Drop for LineProcess {
 
 /// Every model the picker offers, from all backends that are available (slow: run off-thread).
 pub fn all_models() -> Vec<ModelInfo> {
+    // Each backend lists its own (asking its CLI, so some take seconds); one that isn't
+    // installed lists nothing, so it doesn't show in the picker.
+    let listers: [fn() -> Vec<ModelInfo>; 7] = [chatgpt::models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models];
     let (tx, rx) = channel::<Vec<ModelInfo>>();
-    let a = tx.clone();
-    std::thread::spawn(move || {
-        let _ = a.send(chatgpt::models());
-    });
-    let b = tx.clone();
-    std::thread::spawn(move || {
-        let _ = b.send(codex::models());
-    });
-    let _ = tx.send(claude::models());
+    for list in listers {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(list());
+        });
+    }
     drop(tx);
     let mut all: Vec<ModelInfo> = rx.iter().flatten().collect();
     let order = |m: &ModelInfo| match m.spec.split('/').next() {
         Some("chatgpt") => 0,
         Some("claude") => 1,
-        _ => 2,
+        Some("codex") => 2,
+        Some("agy") => 3,
+        Some("cursor") => 4,
+        Some("opencode") => 5,
+        _ => 6,
     };
     all.sort_by_key(order);
     all

@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { useContext } from "react";
 import { CodeStoreContext, useCode } from "./store";
 import { runCommand } from "./commands";
-import { useRate } from "./Sheets";
+import { fmt, useRate } from "./Sheets";
 import { useCodeWeb } from "./styles";
 import { COMMANDS, MODES } from "./protocol";
 import { DiffView } from "./Transcript";
@@ -44,9 +44,7 @@ function Approvals() {
   );
 }
 
-function fmtTokens(n: number) {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-}
+const fmtTokens = fmt;
 
 export function Composer({ focused }: { focused: boolean }) {
   const { busy, mode, send, submit, usage, turnStarted, approvals, sheet } = useCode();
@@ -200,7 +198,11 @@ export function Composer({ focused }: { focused: boolean }) {
           <div className="cw-attachments">
             {attachments.map((a) => (
               <div key={a.id} className="cw-thumb" title={a.name}>
-                <img src={a.url} alt={a.name} />
+                <img
+                  src={a.url}
+                  alt={a.name}
+                  onClick={() => store.getState().setPreview({ images: attachments.map((x) => x.url), index: attachments.indexOf(a) })}
+                />
                 <button onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))} title="Remove">
                   <X size={11} />
                 </button>

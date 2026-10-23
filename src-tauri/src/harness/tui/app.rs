@@ -574,6 +574,7 @@ impl App {
             Kind::Claude => crate::usage::claude_transcript(&session, &self.saved.cwd),
             Kind::Codex => crate::usage::codex_log(Some(&session), &self.saved.cwd).filter(|p| p.to_string_lossy().contains(&session)),
             Kind::ChatGpt => Some(backend::chatgpt::session_path(&session)),
+            _ => None,
         }?;
         let path = path.to_string_lossy().into_owned();
         self.usage_source = Some((session, path.clone()));
@@ -1374,10 +1375,10 @@ impl App {
             .models
             .iter()
             .map(|m| {
-                let group = match m.spec.split('/').next() {
-                    Some("chatgpt") => "ChatGPT account",
-                    Some("claude") => "Claude Code",
-                    _ => "Codex",
+                let group = match m.spec.split('/').next().and_then(Kind::from_id) {
+                    Some(Kind::ChatGpt) => "ChatGPT account",
+                    Some(k) => k.label(),
+                    None => "Codex",
                 };
                 PickItem::new(m.label.clone(), m.detail.clone(), m.spec.clone()).group(group).current(m.spec == current)
             })

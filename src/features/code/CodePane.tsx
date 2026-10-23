@@ -10,6 +10,8 @@ import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
 import { CODE_WEB_DEMO, useCodeWeb } from "./styles";
 import { ModelPicker, Sheets } from "./Sheets";
+import { backendOf, modelName } from "./names";
+import { Lightbox } from "./Lightbox";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
@@ -152,7 +154,7 @@ function ModelMenu({ label, model }: { label: string; model: string }) {
   return (
     <div className="cw-menu" ref={ref}>
       <button className={clsx("cw-foot-item", open && "active")} onClick={() => setSheet(open ? null : "model")} title="Model (/model)">
-        <ProviderIcon provider={model.startsWith("claude") ? "claude" : model.startsWith("chatgpt") ? "openai" : "codex"} size={12} />
+        <ProviderIcon provider={backendOf(model)?.logo ?? "winfer"} size={12} />
         {label}
       </button>
       {open && (
@@ -169,12 +171,12 @@ const EFFORTS = ["max", "xhigh", "high", "medium", "low", "minimal", "default"];
 
 /** The TUI's bottom status line: mode, model, effort, context, branch. */
 function Footer({ pane }: { pane: Pane }) {
-  const { mode, model, models, effort, usage, send, setSheet } = useCode();
+  const { mode, model, actualModel, effort, usage, send, setSheet } = useCode();
   const prefs = useCodeWeb();
   const pct = usage.window ? usage.context / usage.window : 0;
   const m = MODES.find((x) => x.id === mode) ?? MODES[0];
   const cycle = () => send({ type: "set_mode", mode: MODES[(MODES.indexOf(m) + 1) % MODES.length].id });
-  const modelLabel = models.find((x) => x.spec === model)?.label ?? (model || "…");
+  const modelLabel = model ? modelName(model, prefs.resolvedModels, actualModel) : "…";
   return (
     <div className="cw-foot">
       <button className={clsx("cw-foot-item mode", `mode-${mode}`)} onClick={cycle} title={`${m.hint} · shift+tab`}>
@@ -275,6 +277,7 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
           <Composer focused={focused} />
           <Footer pane={pane} />
         </div>
+        <Lightbox />
         <Sheets
           onCommand={(c) => {
             store.getState().setSheet(null);

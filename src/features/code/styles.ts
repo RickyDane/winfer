@@ -21,6 +21,8 @@ export interface CodeWebPrefs {
   compact: boolean;
   /** Models starred in the model picker (`backend/model` specs), in the order they were added. */
   favoriteModels: string[];
+  /** What model aliases last resolved to (`claude/opus` → `claude-opus-5-5`), for versioned names. */
+  resolvedModels: Record<string, string>;
 }
 
 interface CodeWebSettings extends CodeWebPrefs {
@@ -39,6 +41,7 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   expandShell: true,
   compact: false,
   favoriteModels: [],
+  resolvedModels: {},
 };
 
 export const useCodeWeb = create<CodeWebSettings>()(

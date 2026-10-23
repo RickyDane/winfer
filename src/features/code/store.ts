@@ -40,6 +40,8 @@ export type Item =
 export interface CodeState {
   session?: string;
   model: string;
+  /** The model actually answering, when the backend resolved an alias. */
+  actualModel: string | null;
   models: ModelInfo[];
   cwd?: string;
   backendSession?: string | null;
@@ -55,6 +57,9 @@ export interface CodeState {
   /** Tokens streamed in the running turn when it started / now, and when, for tok/s. */
   rate: { tokens: number; at: number; start: number; startAt: number } | null;
   setSheet(sheet: Sheet | null): void;
+  /** Images open in the full-size preview, and which one shows. */
+  preview: { images: string[]; index: number } | null;
+  setPreview(preview: { images: string[]; index: number } | null): void;
   /** The background task whose output is open, and the latest tail of it. */
   logTask: string | null;
   taskLog: { id: string; text: string | null; file?: string | null } | null;
@@ -82,6 +87,8 @@ export interface CodeState {
   attach(t: Transport): () => void;
 }
 
+import { isSpec, rememberResolved } from "./names";
+
 let seq = 0;
 function findLastIndex<T>(a: T[], f: (x: T) => boolean) {
   for (let i = a.length - 1; i >= 0; i--) if (f(a[i])) return i;
@@ -93,6 +100,7 @@ const key = () => `k${++seq}`;
 export const createCodeStore = () =>
   createStore<CodeState>((set, get) => ({
   model: "",
+  actualModel: null,
   models: [],
   trimAt: 0,
   compactAt: 0,
@@ -102,6 +110,8 @@ export const createCodeStore = () =>
   sheet: null,
   rate: null,
   setSheet: (sheet) => set({ sheet }),
+  preview: null,
+  setPreview: (preview) => set({ preview }),
   logTask: null,
   taskLog: null,
   openTaskLog: (id) => {
@@ -125,7 +135,7 @@ export const createCodeStore = () =>
 
   send(cmd) {
     if (cmd.type === "set_mode") set({ mode: cmd.mode });
-    if (cmd.type === "set_model") set({ model: cmd.model });
+    if (cmd.type === "set_model") set({ model: cmd.model, actualModel: null });
     if (cmd.type === "set_effort") set({ effort: cmd.effort ?? "default" });
     if (cmd.type === "undo" || cmd.type === "new") set({ approvals: [] });
     if (cmd.type === "btw") set((s) => ({ btw: [...s.btw, { id: cmd.id, question: cmd.question }], sheet: "btw" }));
@@ -168,8 +178,11 @@ export const createCodeStore = () =>
         case "session":
           return { backendSession: ev.id };
         case "model":
-          // Backends report the bare model; keep the `backend/model` spec.
-          return { model: ev.model.includes("/") || !s.model.includes("/") ? ev.model : `${s.model.split("/")[0]}/${ev.model}` };
+          // `--serve` reports a switch as the `backend/model` spec; backends report the model
+          // actually answering (an alias resolved: claude/opus → claude-opus-5-5).
+          if (isSpec(ev.model)) return { model: ev.model, actualModel: null };
+          if (s.model) rememberResolved(s.model, ev.model);
+          return { actualModel: ev.model };
         case "mode":
           return { mode: ev.mode };
         case "text_delta": {
@@ -259,6 +272,7 @@ export const createCodeStore = () =>
             backendSession: ev.backend_session,
             title: ev.title,
             model: ev.model,
+            actualModel: ev.model === s.model ? s.actualModel : null,
             mode: ev.mode,
             effort: ev.effort ?? "default",
             cwd: ev.cwd,

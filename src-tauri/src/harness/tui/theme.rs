@@ -163,6 +163,10 @@ pub fn backend(kind: Kind) -> Color {
         Kind::ChatGpt => p.chatgpt,
         Kind::Claude => p.claude,
         Kind::Codex => p.blue,
+        Kind::Agy => p.blue,
+        Kind::Cursor => p.violet,
+        Kind::OpenCode => p.yellow,
+        Kind::Pi => p.green,
     }
 }
 

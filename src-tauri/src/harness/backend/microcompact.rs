@@ -259,6 +259,79 @@ mod tests {
         assert_eq!(v[6]["payload"]["output"][0]["text"].as_str().unwrap().len(), 5000);
     }
 
+    /// Runs a real CLI through a micro-compact (costs a few cents):
+    /// `cargo test --lib microcompact::tests::live -- --ignored --nocapture`
+    fn live(kind: super::super::Kind, model: &str) {
+        use crate::harness::event::{Cmd, Ev, Mode, UserMsg};
+        let dir = std::env::temp_dir().join(format!("winfer-mc-live-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (n, name) in ["a.txt", "b.txt", "c.txt"].iter().enumerate() {
+            let mut text: String = (0..150).map(|i| format!("{name} line {i}: lorem ipsum dolor sit amet consectetur adipiscing elit\n")).collect();
+            if n == 2 {
+                text.push_str("The last line says ORANGE-GIRAFFE-77.\n");
+            }
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let opts = super::super::Opts {
+            cwd: dir.clone(),
+            model: model.into(),
+            effort: None,
+            mode: Mode::Yolo,
+            resume: None,
+            system: None,
+            mcp: Default::default(),
+            allowed_commands: Vec::new(),
+            trim_at: 1,
+            compact_at: 0,
+            lean: true,
+            skills: crate::harness::claude_skills::LeanSkills::Only(Vec::new()),
+            bg_owner: String::new(),
+        };
+        let h = super::super::start(kind, opts, tx);
+        let wait = |until: &dyn Fn(&Ev) -> bool| -> Vec<Ev> {
+            let mut seen = Vec::new();
+            while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_secs(240)) {
+                if let Ev::Exited(e) = &ev {
+                    panic!("exited: {e}");
+                }
+                let done = until(&ev);
+                seen.push(ev);
+                if done {
+                    return seen;
+                }
+            }
+            panic!("timed out; saw {seen:?}");
+        };
+        let turn = |text: &str| -> String {
+            h.send(Cmd::Send(UserMsg { text: text.into(), images: Vec::new(), skill: None }));
+            let evs = wait(&|e| matches!(e, Ev::TurnDone));
+            evs.iter().filter_map(|e| if let Ev::Text { text, .. } = e { Some(text.clone()) } else { None }).collect::<Vec<_>>().join("\n")
+        };
+        turn("Show me the full contents of a.txt, b.txt and c.txt: one tool call per file (read the whole file, or cat it). Then reply only OK, without repeating them.");
+        turn("Reply only OK.");
+        turn("Reply only OK.");
+        // The third turn pushed the first out of the two kept whole.
+        let evs = wait(&|e| matches!(e, Ev::Notice(n) if n.starts_with("Micro-compacted")));
+        eprintln!("{:?}", evs.last());
+        let answer = turn("Without using any tools: 1) which files did you read earlier? 2) what exactly does the last line of c.txt say? If you can't see it in our conversation, answer 2) with UNKNOWN.");
+        eprintln!("{answer}");
+        assert!(answer.contains("c.txt") && answer.contains("UNKNOWN") && !answer.contains("ORANGE"), "{answer}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore]
+    fn live_claude() {
+        live(super::super::Kind::Claude, "haiku");
+    }
+
+    #[test]
+    #[ignore]
+    fn live_codex() {
+        live(super::super::Kind::Codex, "");
+    }
+
     #[test]
     fn small_savings_leave_the_file_alone() {
         let dir = std::env::temp_dir().join(format!("winfer-mc-{}", rand::random::<u64>()));

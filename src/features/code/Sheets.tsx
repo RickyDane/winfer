@@ -28,8 +28,15 @@ import { COMMANDS, MODES, type TaskEv } from "./protocol";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { useCodeWeb } from "./styles";
+import { BACKENDS, modelName, modelTags } from "./names";
 
-export const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+/** Token counts: 950 · 12.3k · 184k · 2.76M. */
+export function fmt(n: number) {
+  const trim = (x: string) => x.replace(/\.0+$/, "");
+  if (n >= 1_000_000) return `${trim((n / 1_000_000).toFixed(n >= 10_000_000 ? 1 : 2))}M`;
+  if (n >= 1000) return `${trim((n / 1000).toFixed(n >= 100_000 ? 0 : 1))}k`;
+  return String(n);
+}
 
 function ago(secs: number) {
   const d = Date.now() / 1000 - secs;
@@ -185,7 +192,7 @@ function StatusSheet() {
   const rows: [string, ReactNode][] = [
     ["Session", <code key="s">{s.session ?? "…"}</code>],
     ["Backend session", <code key="b">{s.backendSession ?? "not started"}</code>],
-    ["Model", s.models.find((m) => m.spec === s.model)?.label ?? s.model],
+    ["Model", `${modelName(s.model, useCodeWeb.getState().resolvedModels, s.actualModel)} (${s.actualModel ?? s.model})`],
     ["Mode", MODES.find((m) => m.id === s.mode)?.label ?? s.mode],
     ["Effort", s.effort],
     ["Directory", <code key="d">{s.cwd ?? "—"}</code>],
@@ -388,17 +395,13 @@ function BtwSheet() {
   );
 }
 
-const BACKENDS: { id: string; label: string; logo: string }[] = [
-  { id: "chatgpt", label: "ChatGPT", logo: "openai" },
-  { id: "claude", label: "Claude", logo: "claude" },
-  { id: "codex", label: "Codex", logo: "codex" },
-];
 
 /** `/model`: a tab per backend (with its logo), its models below. Opens from the status line. */
 const logoFor = (spec: string) => BACKENDS.find((b) => spec.startsWith(b.id + "/"))?.logo ?? "codex";
 
 export function ModelPicker() {
-  const { models, model, send, setSheet } = useCode();
+  const { models, model, actualModel, send, setSheet } = useCode();
+  const resolved = useCodeWeb((s) => s.resolvedModels);
   const favorites = useCodeWeb((s) => s.favoriteModels);
   const setPrefs = useCodeWeb((s) => s.set);
   const toggleFavorite = (spec: string) =>
@@ -415,7 +418,10 @@ export function ModelPicker() {
     const el = tabs.current?.querySelector<HTMLElement>(`[data-tab="${active}"]`);
     if (el) setGlider({ top: el.offsetTop, height: el.offsetHeight });
   }, [active, backends.length]);
-  const list = active === "favorites" ? favModels : models.filter((m) => m.spec.startsWith(active + "/"));
+  const [query, setQuery] = useState("");
+  const all = active === "favorites" ? favModels : models.filter((m) => m.spec.startsWith(active + "/"));
+  const q = query.trim().toLowerCase();
+  const list = q ? all.filter((m) => `${m.label} ${m.spec} ${m.detail}`.toLowerCase().includes(q)) : all;
   return (
     <div className="cw-model-picker">
       {backends.length === 0 ? (
@@ -443,6 +449,10 @@ export function ModelPicker() {
             ))}
           </div>
           <div className="cw-list cw-model-list" key={active}>
+            {all.length > 10 && (
+              <input className="cw-model-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${all.length} models…`} autoFocus />
+            )}
+            {q && list.length === 0 && <p className="cw-empty cw-fav-empty">No models match.</p>}
             {active === "favorites" && list.length === 0 && (
               <p className="cw-empty cw-fav-empty">
                 No favorites yet. Star a model on its provider's tab to keep it here.
@@ -461,7 +471,14 @@ export function ModelPicker() {
                   >
                     {active === "favorites" && <ProviderIcon provider={logoFor(m.spec)} size={13} />}
                     <span>
-                      <b>{m.label}</b>
+                      <b>
+                        {modelName(m.spec, resolved, m.spec === model ? actualModel : null)}
+                        {modelTags(m.spec, m.label).map((t) => (
+                          <em key={t} className="cw-model-tag">
+                            {t}
+                          </em>
+                        ))}
+                      </b>
                       {m.detail && <small>{m.detail}</small>}
                     </span>
                   </button>

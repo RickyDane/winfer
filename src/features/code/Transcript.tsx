@@ -118,7 +118,9 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
           <Icon size={14} />
         </span>
         <span className="cw-tool-name">{item.name}</span>
-        <span className="cw-tool-title">{item.title}</span>
+        <span className="cw-tool-title" title={String((item.input as { command?: string } | null)?.command ?? item.title)}>
+          {item.title}
+        </span>
         {task && (
           <span
             className="cw-chip clickable"
@@ -148,7 +150,6 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
           <DiffView diff={item.diff} />
         ) : (
           <pre ref={outRef} className={clsx("cw-tool-out", isShell && "shell")}>
-            {isShell && <span className="cw-prompt">$ {String((item.input as { command?: string })?.command ?? item.title)}</span>}
             {item.output}
           </pre>
         )}
@@ -178,6 +179,7 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
 export function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
+  const setPreview = useCode((s) => s.setPreview);
   const fresh = !busy && !items.some((i) => i.kind === "user" || i.kind === "text" || i.kind === "tool");
   const end = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -207,7 +209,7 @@ export function Transcript({ dark }: { dark: boolean }) {
                     {it.images && (
                       <div className="cw-user-images">
                         {it.images.map((u, i) => (
-                          <img key={i} src={u} alt="" />
+                          <img key={i} src={u} alt="" onClick={() => setPreview({ images: it.images!, index: i })} title="Preview" />
                         ))}
                       </div>
                     )}

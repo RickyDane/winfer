@@ -198,5 +198,9 @@ export const MOCK_MODELS: ModelInfo[] = [
   { spec: "claude/haiku", label: "Claude Haiku", detail: "Claude Code · fastest" },
   { spec: "chatgpt/gpt-6-luna", label: "GPT-6 Luna", detail: "ChatGPT account" },
   { spec: "chatgpt/gpt-6.1-sol", label: "GPT-6.1 Sol", detail: "ChatGPT account" },
-  { spec: "codex/gpt-6.1-sol", label: "Codex · GPT-6.1 Sol", detail: "Codex" },
+  { spec: "codex/gpt-6.1-sol", label: "GPT-6.1-Sol", detail: "Codex · Latest workhorse model" },
+  { spec: "cursor/sonnet-4.5", label: "Sonnet 4.5", detail: "Cursor" },
+  { spec: "opencode/anthropic/claude-sonnet-4-5", label: "anthropic/claude-sonnet-4-5", detail: "OpenCode · anthropic" },
+  { spec: "pi/openai/gpt-6.1-sol", label: "openai/gpt-6.1-sol", detail: "Pi · openai" },
+  { spec: "codex/gpt-6.1-sol-fast", label: "GPT-6.1-Sol (Fast)", detail: "Codex · 2x speed, increased usage" },
 ];
