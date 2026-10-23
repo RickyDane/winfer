@@ -107,14 +107,21 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
     let t = now.duration_since(epoch);
     match block {
         Block::User { text } => {
-            let style = theme::bold(theme::FG());
+            // A raised panel row with a violet edge: "▌ ❯ your message".
+            let panel = theme::PANEL();
+            let style = theme::bold(theme::FG()).bg(panel);
+            let edge = || Span::styled("▌", theme::fg(theme::VIOLET()).bg(panel));
             let mut out = Vec::new();
             for (i, line) in text.lines().enumerate() {
-                let first = if i == 0 { vec![Span::styled("❯ ", theme::bold(theme::nebula(0.45)))] } else { vec![Span::raw("  ")] };
-                out.extend(wrap(vec![Span::styled(line.to_string(), style)], width, first, vec![Span::raw("  ")]));
+                let first = if i == 0 { vec![edge(), Span::styled(" ❯ ", theme::bold(theme::VIOLET()).bg(panel))] } else { vec![edge(), Span::styled("   ", style)] };
+                out.extend(wrap(vec![Span::styled(line.to_string(), style)], width.saturating_sub(1), first, vec![edge(), Span::styled("   ", style)]));
             }
             if out.is_empty() {
-                out.push(Line::from(Span::styled("❯", theme::bold(theme::nebula(0.45)))));
+                out.push(Line::from(vec![edge(), Span::styled(" ❯", theme::bold(theme::VIOLET()).bg(panel))]));
+            }
+            for l in &mut out {
+                let w = l.width();
+                l.spans.push(Span::styled(" ".repeat(width.saturating_sub(w)), Style::default().bg(panel)));
             }
             out
         }
@@ -169,10 +176,13 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let took = ended.unwrap_or(now).duration_since(*started);
             // A finished dot flashes bright and settles into its color.
             let settle = ended.map(|e| (now.saturating_duration_since(e).as_secs_f32() / SETTLE.as_secs_f32()).min(1.0)).unwrap_or(1.0);
+            // Timeline node: a spinning moon while running, then a ◆ that flashes bright and
+            // settles into its spot on the nebula gradient (each step a little further along).
+            let hue = started.saturating_duration_since(epoch).as_secs_f32() * 0.08;
             let (dot, dot_style) = match status {
-                Status::Running => (anim::dots_spin(t), anim::spin_style()),
-                Status::Ok => ("●", theme::bold(theme::mix(theme::GREEN(), theme::MUTED(), anim::ease_out(settle)))),
-                Status::Failed => ("○", theme::bold(theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle)))),
+                Status::Running => (anim::moon_spin(t), theme::bold(theme::nebula(t.as_secs_f32() * 0.8))),
+                Status::Ok => ("◆", theme::fg(theme::mix(theme::FG(), theme::nebula(hue), anim::ease_out(settle)))),
+                Status::Failed => ("◌", theme::bold(theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle)))),
             };
             let (label, kind) = tool_kind(name);
             let mut head = vec![Span::styled(format!("{dot} "), dot_style)];
@@ -207,7 +217,12 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             if !title.is_empty() {
                 let room = width.saturating_sub(lw + rw + 3);
                 head.push(Span::raw(" "));
-                head.push(Span::styled(truncate(title, room), theme::fg(theme::FG())));
+                let title = truncate(title, room);
+                if *status == Status::Running {
+                    head.extend(anim::sweep(&title, t, theme::MUTED(), theme::FG(), theme::bold(theme::FG())));
+                } else {
+                    head.push(Span::styled(title, theme::bold(theme::FG())));
+                }
             }
             if rw > 0 {
                 let used: usize = head.iter().map(|s| s.content.width()).sum();

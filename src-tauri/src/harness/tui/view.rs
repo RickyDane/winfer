@@ -36,13 +36,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Bottom-up layout.
     let agents = agents_line(app, width, t);
     let status_h = 1 + u16::from(agents.is_some());
-    let (bottom_lines, cursor) = match app.approvals.front() {
+    let (mut bottom_lines, cursor) = match app.approvals.front() {
         None => composer_lines(app, width, t),
         Some(a) if !a.questions.is_empty() => (question_lines(app, width, t), None),
         Some(_) => (approval_lines(app, width, t), None),
     };
+    // The row right above the prompt: the working line while the agent works, else the
+    // activity line (approval waiting, toasts). A toast during work gets a row of its own.
+    let act = activity(app, width, t);
+    let working = app.working() && app.approvals.is_empty();
+    let (top_row, extra) = if working { (working_rule(app, width, t), (act.width() > 0).then_some(act)) } else { (act, None) };
+    bottom_lines.insert(0, top_row);
+    let cursor = cursor.map(|(x, y)| (x, y + 1));
     let bottom_h = (bottom_lines.len() as u16).min(area.height.saturating_sub(4));
-    let activity_h = 1u16;
+    let activity_h = u16::from(extra.is_some());
     // The plan goes in a right sidebar when there's room (and it's on); else above the prompt.
     let sidebar_w = sidebar_width(app, area.width);
     let todo_lines = if sidebar_w.is_some() { Vec::new() } else { todo_lines(app, width, t) };
@@ -95,7 +102,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     f.render_widget(Paragraph::new(todo_lines), todo_area);
     f.render_widget(Paragraph::new(queue_lines), queue_area);
-    f.render_widget(Paragraph::new(activity(app, width, t)), activity_area);
+    f.render_widget(Paragraph::new(extra.unwrap_or_default()), activity_area);
     f.render_widget(Paragraph::new(bottom_lines), bottom_area);
     if let Some((cx, cy)) = cursor {
         if app.picker.is_none() && !app.btw_showing() {
@@ -259,20 +266,35 @@ fn welcome(f: &mut Frame, app: &App, area: Rect, t: Duration) {
     lines.push(Line::from(whereat).centered());
     lines.push(Line::default());
     lines.push(Line::default());
-    // Key hints, wrapped onto as many centered rows as the width needs.
-    let mut row: Vec<Span<'static>> = Vec::new();
-    for (k, d) in [("/", "commands"), ("@", "files"), ("!", "shell"), ("ctrl+t", "model"), ("⇧tab", "mode")] {
-        let hint = theme::key_hint(k, d);
-        let w: usize = row.iter().chain(hint.iter()).map(|s| s.content.width()).sum::<usize>() + 4;
-        if !row.is_empty() && w + 4 > area.width as usize {
-            lines.push(Line::from(std::mem::take(&mut row)).centered());
+    // Key tiles when there's room: five small rounded cards.
+    const TILES: [(&str, &str, &str); 5] = [("/", "commands", "slash commands"), ("@", "files", "attach context"), ("!", "shell", "run a command"), ("ctrl+t", "model", "switch model"), ("⇧tab", "mode", "cycle modes")];
+    const TILE_W: usize = 18;
+    if area.width as usize >= TILES.len() * (TILE_W + 2) + 2 {
+        let edge = || theme::fg(theme::FAINT());
+        let mut rows: [Vec<Span<'static>>; 4] = Default::default();
+        for (i, (k, label, what)) in TILES.iter().enumerate() {
+            if i > 0 {
+                for r in &mut rows {
+                    r.push(Span::raw("  "));
+                }
+            }
+            let iw = TILE_W - 4;
+            rows[0].push(Span::styled(format!("╭{}╮", "─".repeat(TILE_W - 2)), edge()));
+            let top = format!("{k}  {label}");
+            rows[1].extend([
+                Span::styled("│ ", edge()),
+                Span::styled(k.to_string(), theme::bold(theme::nebula(i as f32 / (TILES.len() as f32 * 1.5)))),
+                Span::styled(format!("  {label}"), theme::fg(theme::FG())),
+                Span::raw(" ".repeat(iw.saturating_sub(top.width()))),
+                Span::styled(" │", edge()),
+            ]);
+            rows[2].extend([Span::styled("│ ", edge()), Span::styled(format!("{what:<iw$}"), theme::dim()), Span::styled(" │", edge())]);
+            rows[3].push(Span::styled(format!("╰{}╯", "─".repeat(TILE_W - 2)), edge()));
         }
-        if !row.is_empty() {
-            row.push(Span::raw("    "));
-        }
-        row.extend(hint);
+        lines.extend(rows.into_iter().map(|r| Line::from(r).centered()));
+    } else {
+        welcome_hints(&mut lines, area.width as usize);
     }
-    lines.push(Line::from(row).centered());
 
     // Everything drifts up and fades in on launch.
     let k = (t.as_secs_f32() / 0.9).min(1.0);
@@ -295,6 +317,23 @@ fn welcome(f: &mut Frame, app: &App, area: Rect, t: Duration) {
     }
     let room = (area.y + area.height).saturating_sub(y);
     f.render_widget(Paragraph::new(lines), Rect { x: area.x, y, width: area.width, height: h.min(room) });
+}
+
+/// The welcome screen's key hints on narrow terminals, wrapped onto centered rows.
+fn welcome_hints(lines: &mut Vec<Line<'static>>, width: usize) {
+    let mut row: Vec<Span<'static>> = Vec::new();
+    for (k, d) in [("/", "commands"), ("@", "files"), ("!", "shell"), ("ctrl+t", "model"), ("⇧tab", "mode")] {
+        let hint = theme::key_hint(k, d);
+        let w: usize = row.iter().chain(hint.iter()).map(|s| s.content.width()).sum::<usize>() + 4;
+        if !row.is_empty() && w + 4 > width {
+            lines.push(Line::from(std::mem::take(&mut row)).centered());
+        }
+        if !row.is_empty() {
+            row.push(Span::raw("    "));
+        }
+        row.extend(hint);
+    }
+    lines.push(Line::from(row).centered());
 }
 
 fn mode_color(mode: Mode) -> Option<ratatui::style::Color> {
@@ -455,8 +494,7 @@ fn activity(app: &App, width: usize, t: Duration) -> Line<'static> {
         ]);
     }
     if app.busy {
-        // The working status sits on the prompt's rule (see `working_rule`); this row stays
-        // empty so it doesn't read as part of the last action above.
+        // The working status has its own row above the prompt (see `working_rule`).
         return Line::default();
     }
     if let Some((text, at, kind)) = &app.toast {
@@ -478,15 +516,7 @@ fn activity(app: &App, width: usize, t: Duration) -> Line<'static> {
     if app.quit_armed.is_some_and(|q| q.elapsed() < Duration::from_millis(1500)) {
         return Line::from(vec![Span::raw(pad), Span::styled("press ctrl+c again to exit", theme::fg(theme::YELLOW()))]);
     }
-    if !app.composer.is_empty() || app.items.is_empty() {
-        return Line::default();
-    }
-    let mut hint = Vec::new();
-    for (k, d) in [("/", "commands"), ("@", "files"), ("!", "shell"), ("⇧tab", "mode")] {
-        hint.push(Span::styled(k.to_string(), theme::dim()));
-        hint.push(Span::styled(format!(" {d}   "), theme::dim()));
-    }
-    with_right(vec![], hint, width)
+    Line::default()
 }
 
 fn pad_str() -> String {
@@ -566,30 +596,108 @@ fn working_rule(app: &App, width: usize, t: Duration) -> Line<'static> {
     Line::from(out)
 }
 
-/// The prompt: a hairline (a comet runs along it while working) and the input rows.
+/// Border cells of a frame, colored by `color(i, n)`: cell `i` of `n`, clockwise from the
+/// top-left corner.
+type FrameColor<'a> = &'a dyn Fn(usize, usize) -> ratatui::style::Color;
+
+/// `content` in a rounded frame across the width (less the margins), one space of padding
+/// inside. `title` is set into the top border on the left, `top_right` and `bottom_right`
+/// into the borders on the right; labels that don't fit are dropped.
+fn framed(content: Vec<Line<'static>>, width: usize, color: FrameColor, title: Vec<Span<'static>>, top_right: Vec<Span<'static>>, bottom_right: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    let m = MARGIN as usize;
+    let bw = width.saturating_sub(m * 2).max(8);
+    let h = content.len() + 2;
+    let n = 2 * (bw + h) - 4;
+    let inner = bw - 4;
+    let cell = |s: &'static str, i: usize| Span::styled(s, theme::fg(color(i, n)));
+    let sw = |s: &[Span]| s.iter().map(|s| s.content.width()).sum::<usize>();
+    let border = |top: bool, left: Vec<Span<'static>>, right: Vec<Span<'static>>| {
+        let idx = |x: usize| if top { x } else { bw + h - 2 + (bw - 1 - x) };
+        let (lw, rw) = (sw(&left), sw(&right));
+        let show_left = lw > 0 && 2 + lw < bw - 1;
+        let after_left = if show_left { 2 + lw } else { 1 };
+        let show_right = rw > 0 && after_left + 1 + rw + 2 <= bw;
+        let mut spans = vec![Span::raw(pad_str()), cell(if top { "╭" } else { "╰" }, idx(0))];
+        if show_left {
+            spans.push(cell("─", idx(1)));
+            spans.extend(left);
+        }
+        let right_start = if show_right { bw - 2 - rw } else { bw - 1 };
+        for x in after_left..right_start {
+            spans.push(cell("─", idx(x)));
+        }
+        if show_right {
+            spans.extend(right);
+            spans.push(cell("─", idx(bw - 2)));
+        }
+        spans.push(cell(if top { "╮" } else { "╯" }, idx(bw - 1)));
+        Line::from(spans)
+    };
+    let mut out = vec![border(true, title, top_right)];
+    for (j, line) in content.into_iter().enumerate() {
+        let r = j + 1;
+        let w = line.width();
+        let mut spans = vec![Span::raw(pad_str()), cell("│", n - r), Span::raw(" ")];
+        spans.extend(line.spans);
+        spans.push(Span::raw(" ".repeat(inner.saturating_sub(w) + 1)));
+        spans.push(cell("│", bw - 1 + r));
+        out.push(Line::from(spans));
+    }
+    out.push(border(false, Vec::new(), bottom_right));
+    out
+}
+
+/// Width inside a frame (see `framed`).
+fn frame_inner(width: usize) -> usize {
+    width.saturating_sub(MARGIN as usize * 2).max(8) - 4
+}
+
+/// Triangle wave over 0..1, for gradients that loop without a seam.
+fn tri(x: f32) -> f32 {
+    1.0 - (2.0 * x.rem_euclid(1.0) - 1.0).abs()
+}
+
+/// The prompt: the input rows in a rounded frame with a nebula gradient border (it flows while
+/// the agent works), the mode set into the top border and key hints into the bottom one.
 fn composer_lines(app: &App, width: usize, t: Duration) -> (Vec<Line<'static>>, Option<(u16, u16)>) {
-    let indent = MARGIN as usize + 2;
-    let inner = width.saturating_sub(indent + MARGIN as usize).max(4);
+    let inner = frame_inner(width).saturating_sub(2).max(4);
     let (rows, (cr, cc)) = app.composer.layout(inner);
     let max_rows = 10;
     let first = cr.saturating_sub(max_rows - 1);
     let shown: Vec<&String> = rows.iter().skip(first).take(max_rows).collect();
-    let mut out = vec![if app.working() { working_rule(app, width, t) } else { Line::from(anim::comet(width, t, false)) }];
-    let prompt = if app.busy { theme::fg(theme::DIM()) } else { theme::bold(theme::nebula(0.45)) };
-    let lead = |i: usize| if i == 0 && first == 0 { Span::styled(format!("{}❯ ", pad_str()), prompt) } else { Span::raw(" ".repeat(indent)) };
+    let prompt = if app.busy { theme::fg(theme::DIM()) } else { theme::bold(theme::VIOLET()) };
+    let lead = |i: usize| if i == 0 && first == 0 { Span::styled("❯ ", prompt) } else { Span::raw("  ") };
+    let mut content = Vec::new();
     if app.composer.is_empty() {
         let hint = if app.busy { "steer the agent… (tab queues it for after)" } else { "ask anything…" };
-        out.push(Line::from(vec![lead(0), Span::styled(truncate(hint, inner), theme::fg(theme::DIM()))]));
+        content.push(Line::from(vec![lead(0), Span::styled(truncate(hint, inner), theme::fg(theme::DIM()))]));
     } else {
         for (i, row) in shown.iter().enumerate() {
             let style = if row.starts_with('/') && i == 0 && first == 0 { theme::bold(theme::VIOLET()) } else { theme::fg(theme::FG()) };
             let mut spans = vec![lead(i)];
             spans.extend(highlight_tags(row, style));
-            out.push(Line::from(spans));
+            content.push(Line::from(spans));
         }
     }
+    let flow = if app.working() { t.as_secs_f32() * 0.12 } else { 0.0 };
+    let color = move |i: usize, n: usize| theme::mix(theme::FAINT(), theme::nebula(i as f32 / n as f32 - flow), 0.75);
+    let mode = app.config.mode.label().to_string();
+    let mode_style = mode_color(app.config.mode).map(theme::bold).unwrap_or_else(theme::muted);
+    let title = vec![Span::raw(" "), Span::styled(mode, mode_style), Span::raw(" ")];
+    let mut top_right = vec![Span::raw(" ")];
+    top_right.extend(theme::key_hint("⇧tab", "mode"));
+    top_right.push(Span::raw(" "));
+    let mut bottom_right = vec![Span::raw(" ")];
+    for (i, (k, d)) in [("/", "commands"), ("@", "files"), ("!", "shell")].into_iter().enumerate() {
+        if i > 0 {
+            bottom_right.push(Span::raw("  "));
+        }
+        bottom_right.extend(theme::key_hint(k, d));
+    }
+    bottom_right.push(Span::raw(" "));
+    let mut out = framed(content, width, &color, title, top_right, bottom_right);
     out.push(Line::default());
-    let cursor = (indent as u16 + cc as u16, 1 + (cr - first) as u16);
+    let cursor = (MARGIN + 4 + cc as u16, 1 + (cr - first) as u16);
     (out, Some(cursor))
 }
 
@@ -619,65 +727,60 @@ fn approval_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     let a = app.approvals.front().unwrap();
     let k = anim::pulse(t, 1600);
     let amber = theme::mix(theme::mix(theme::YELLOW(), theme::FAINT(), 0.5), theme::YELLOW(), k);
-    let pad = pad_str();
-    let body = " ".repeat(MARGIN as usize + 2);
-    let inner = width.saturating_sub(MARGIN as usize * 2 + 2);
-    let mut out = vec![Line::from(Span::styled("─".repeat(width), theme::fg(theme::mix(theme::FAINT(), theme::YELLOW(), 0.2 + 0.35 * k))))];
-    out.push(Line::from(vec![
-        Span::raw(pad),
+    let inner = frame_inner(width);
+    let mut content = Vec::new();
+    for line in a.title.lines().take(6) {
+        content.push(Line::from(Span::styled(truncate(line, inner), theme::bold(theme::FG()))));
+    }
+    if !a.detail.is_empty() && a.detail != a.title {
+        content.push(Line::from(Span::styled(truncate(&a.detail, inner), theme::dim())));
+    }
+    if let Some(d) = &a.diff {
+        content.push(Line::default());
+        let lines = diff_lines(d, inner);
+        let max = if app.expanded { 40 } else { 12 };
+        let total = lines.len();
+        content.extend(lines.into_iter().take(max));
+        if total > max {
+            content.push(Line::from(Span::styled(format!("{} more lines · ctrl+o", total - max), theme::dim())));
+        }
+    }
+    content.push(Line::default());
+    let options = ["yes", "yes, don't ask again this session", "no, tell it what to do"];
+    let keys = ["y", "a", "n"];
+    // The choice is a pill: "▐ y  yes ▌"; the others are a key and a label.
+    let option = |i: usize| -> Vec<Span<'static>> {
+        let (o, key) = (options[i], keys[i]);
+        if i == app.approval_choice {
+            let y = theme::YELLOW();
+            vec![Span::styled("▐", theme::fg(y)), Span::styled(format!(" {key}  {o} "), theme::bold(theme::VOID()).bg(y)), Span::styled("▌", theme::fg(y))]
+        } else {
+            vec![Span::raw(" "), Span::styled(key.to_string(), theme::bold(theme::YELLOW())), Span::styled(format!("  {o} "), theme::muted()), Span::raw(" ")]
+        }
+    };
+    let mut row = Vec::new();
+    for i in 0..options.len() {
+        if i > 0 {
+            row.push(Span::raw("  "));
+        }
+        row.extend(option(i));
+    }
+    if row.iter().map(|s| s.content.width()).sum::<usize>() > inner {
+        // Narrow terminals: one option per line.
+        content.extend((0..options.len()).map(|i| Line::from(option(i))));
+    } else {
+        content.push(Line::from(row));
+    }
+    let flow = t.as_secs_f32() * 0.25;
+    let color = move |i: usize, n: usize| theme::mix(theme::FAINT(), theme::mix(theme::YELLOW(), theme::PINK(), tri(i as f32 / n as f32 - flow)), 0.45 + 0.55 * k);
+    let title = vec![
+        Span::raw(" "),
         Span::styled("◆ ", theme::bold(amber)),
         Span::styled("Allow ", theme::bold(theme::FG())),
         Span::styled(a.tool.clone(), theme::bold(theme::YELLOW())),
-        Span::styled("?", theme::bold(theme::FG())),
-    ]));
-    for line in a.title.lines().take(6) {
-        out.push(Line::from(vec![Span::raw(body.clone()), Span::styled(truncate(line, inner), theme::fg(theme::FG()))]));
-    }
-    if !a.detail.is_empty() && a.detail != a.title {
-        out.push(Line::from(vec![Span::raw(body.clone()), Span::styled(truncate(&a.detail, inner), theme::dim())]));
-    }
-    if let Some(d) = &a.diff {
-        let lines = diff_lines(d, inner.saturating_sub(3));
-        let max = if app.expanded { 40 } else { 12 };
-        let total = lines.len();
-        for l in lines.into_iter().take(max) {
-            let mut spans = vec![Span::raw(body.clone()), Span::styled("│  ", theme::fg(theme::FAINT()))];
-            spans.extend(l.spans);
-            out.push(Line::from(spans));
-        }
-        if total > max {
-            out.push(Line::from(vec![Span::raw(body.clone()), Span::styled(format!("╰  {} more lines · ctrl+o", total - max), theme::dim())]));
-        }
-    }
-    out.push(Line::default());
-    let options = ["yes", "yes, don't ask again this session", "no, tell it what to do"];
-    let keys = ["y", "a", "n"];
-    let mut spans = vec![Span::raw(body.clone())];
-    for (i, (o, key)) in options.iter().zip(keys).enumerate() {
-        let selected = i == app.approval_choice;
-        if selected {
-            spans.push(Span::styled("❯ ", theme::bold(theme::nebula(t.as_secs_f32() * 0.3))));
-            spans.push(Span::styled(o.to_string(), theme::bold(theme::FG())));
-        } else {
-            spans.push(Span::styled(format!("{key} "), theme::fg(theme::DIM())));
-            spans.push(Span::styled(o.to_string(), theme::muted()));
-        }
-        spans.push(Span::raw("     "));
-    }
-    let w: usize = spans.iter().map(|s| s.content.width()).sum();
-    if w > width {
-        // Narrow terminals: one option per line.
-        for (i, (o, key)) in options.iter().zip(keys).enumerate() {
-            let selected = i == app.approval_choice;
-            out.push(Line::from(vec![
-                Span::raw(body.clone()),
-                Span::styled(if selected { "❯ ".to_string() } else { format!("{key} ") }, if selected { theme::bold(theme::VIOLET()) } else { theme::fg(theme::DIM()) }),
-                Span::styled(o.to_string(), if selected { theme::bold(theme::FG()) } else { theme::muted() }),
-            ]));
-        }
-    } else {
-        out.push(Line::from(spans));
-    }
+        Span::styled("? ", theme::bold(theme::FG())),
+    ];
+    let mut out = framed(content, width, &color, title, Vec::new(), Vec::new());
     out.push(Line::default());
     out
 }
@@ -689,17 +792,16 @@ fn question_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     let q = &a.questions[i];
     let k = anim::pulse(t, 1600);
     let amber = theme::mix(theme::mix(theme::YELLOW(), theme::FAINT(), 0.5), theme::YELLOW(), k);
-    let body = " ".repeat(MARGIN as usize + 2);
-    let inner = width.saturating_sub(MARGIN as usize * 2 + 2);
-    let mut out = vec![Line::from(Span::styled("─".repeat(width), theme::fg(theme::mix(theme::FAINT(), theme::YELLOW(), 0.2 + 0.35 * k))))];
-    let mut head = vec![Span::raw(pad_str()), Span::styled("◆ ", theme::bold(amber))];
+    let body = String::new();
+    let inner = frame_inner(width);
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut head = vec![Span::raw(" "), Span::styled("◆ ", theme::bold(amber))];
     head.push(Span::styled(if q.header.is_empty() { "Question".to_string() } else { q.header.clone() }, theme::bold(theme::YELLOW())));
     if a.questions.len() > 1 {
         head.push(Span::styled(format!("  {}/{}", i + 1, a.questions.len()), theme::dim()));
     }
-    out.push(Line::from(head));
-    let indent = vec![Span::raw(body.clone())];
-    out.extend(super::markdown::wrap(vec![Span::styled(q.question.clone(), theme::bold(theme::FG()))], width.saturating_sub(MARGIN as usize), indent.clone(), indent));
+    head.push(Span::raw(" "));
+    out.extend(super::markdown::wrap(vec![Span::styled(q.question.clone(), theme::bold(theme::FG()))], inner, Vec::new(), Vec::new()));
     out.push(Line::default());
     let row = |selected: bool, mark: String, label: String, label_style: Style, extra: Vec<Span<'static>>| {
         let mut spans = vec![
@@ -736,9 +838,10 @@ fn question_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     };
     let caret = if typing { vec![Span::styled("▏", theme::bold(theme::VIOLET()))] } else { Vec::new() };
     out.push(Line::from(row(typing, "✎  ".into(), label, style, caret)));
-    out.push(Line::default());
     let hint = if q.multi { "↑↓ move · space tick · enter confirm · esc decline" } else { "↑↓ move · enter choose · esc decline" };
-    out.push(Line::from(vec![Span::raw(body), Span::styled(hint, theme::dim())]));
+    let flow = t.as_secs_f32() * 0.25;
+    let color = move |i: usize, n: usize| theme::mix(theme::FAINT(), theme::mix(theme::YELLOW(), theme::PINK(), tri(i as f32 / n as f32 - flow)), 0.45 + 0.55 * k);
+    let mut out = framed(out, width, &color, head, Vec::new(), vec![Span::styled(format!(" {hint} "), theme::dim())]);
     out.push(Line::default());
     out
 }
@@ -746,12 +849,14 @@ fn question_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
 fn status(app: &App, width: usize) -> Line<'static> {
     let accent = theme::backend(app.kind);
     let model = if !app.actual_model.is_empty() { app.actual_model.clone() } else if !app.model.is_empty() { app.model.clone() } else { "default".into() };
-    let dot = if app.alive { theme::fg(accent) } else { theme::fg(theme::DIM()) };
+    // The provider as a half-block pill: "▐ Claude Code ▌" (greyed while the backend is down).
+    let pill = if app.alive { accent } else { theme::DIM() };
     let mut left = vec![
         Span::raw(pad_str()),
-        Span::styled(if app.alive { "● " } else { "○ " }, dot),
-        Span::styled(app.kind.label().to_string(), theme::fg(theme::MUTED())),
-        Span::styled(format!("  {model}"), theme::dim()),
+        Span::styled("▐", theme::fg(pill)),
+        Span::styled(format!(" {} ", app.kind.label()), theme::bold(theme::VOID()).bg(pill)),
+        Span::styled("▌", theme::fg(pill)),
+        Span::styled(format!(" {model}"), theme::muted()),
     ];
     if let Some(e) = &app.config.effort {
         left.push(Span::styled(format!(" · {e}"), theme::dim()));
@@ -769,14 +874,17 @@ fn status(app: &App, width: usize) -> Line<'static> {
     }
     let pct = app.ctx_shown.value();
     if app.usage.window > 0 && pct > 0.0 {
-        let color = if pct > 0.85 { theme::RED() } else if pct > 0.6 { theme::YELLOW() } else { theme::MUTED() };
-        right.push(Span::styled(format!("{} ", theme::moon(pct)), theme::fg(color)));
+        // "ctx ▰▰▱▱▱▱▱▱▱▱ 23%": the filled part on the gradient, warning colors when it's full.
+        let warn = if pct > 0.85 { Some(theme::RED()) } else if pct > 0.6 { Some(theme::YELLOW()) } else { None };
+        right.push(Span::styled("ctx ", theme::dim()));
+        const BAR: usize = 10;
+        let filled = ((pct * BAR as f32).round() as usize).clamp(1, BAR);
+        for i in 0..BAR {
+            let c = if i >= filled { theme::FAINT() } else { warn.unwrap_or_else(|| theme::nebula(i as f32 / (BAR as f32 * 1.5))) };
+            right.push(Span::styled(if i < filled { "▰" } else { "▱" }, theme::fg(c)));
+        }
         let label = if pct < 0.01 { "<1%".to_string() } else { format!("{:.0}%", pct * 100.0) };
-        right.push(Span::styled(label, theme::fg(color)));
-        right.push(Span::styled(" ctx", theme::dim()));
-    }
-    if let Some(c) = app.usage.cost {
-        right.push(Span::styled(format!("   ${c:.2}"), theme::dim()));
+        right.push(Span::styled(format!(" {label}"), theme::fg(warn.unwrap_or_else(theme::FG))));
     }
     let dir = crate::harness::tools::short_path(&app.cwd.to_string_lossy());
     let dir = dir.rsplit('/').next().unwrap_or(&dir).to_string();
@@ -789,7 +897,7 @@ fn status(app: &App, width: usize) -> Line<'static> {
     let rw: usize = right.iter().map(|s| s.content.width()).sum();
     if lw + rw + 1 > width {
         // Narrow: drop the directory and branch first.
-        right.retain(|s| !s.content.contains('⎇') && !s.content.starts_with("   ") || s.content.contains('$'));
+        right.retain(|s| !s.content.contains('⎇') && !s.content.starts_with("   "));
     }
     let rw: usize = right.iter().map(|s| s.content.width()).sum();
     let mut spans = left;
@@ -962,13 +1070,21 @@ fn picker(f: &mut Frame, app: &App, full: Rect, t: Duration) {
         let label = truncate(&it.label, label_w);
         let gap = " ".repeat(label_w.saturating_sub(label.width()));
         let detail = truncate(&it.detail, iw.saturating_sub(label_w + 9));
-        lines.push(Line::from(vec![
-            Span::styled(if sel { " ❯ " } else { "   " }, theme::bold(theme::nebula(0.45 + t.as_secs_f32() * 0.1))),
+        let mut row = Line::from(vec![
+            Span::styled(if sel { "▌  " } else { "   " }, theme::bold(theme::nebula(0.45 + t.as_secs_f32() * 0.1))),
             Span::styled(label, if sel { theme::bold(theme::FG()) } else { theme::muted() }),
             Span::raw(gap),
             Span::styled(if it.current { "  ●  " } else { "     " }, theme::fg(theme::GREEN())),
             Span::styled(detail, if sel { theme::muted() } else { theme::dim() }),
-        ]));
+        ]);
+        if sel {
+            let w = row.width();
+            row.spans.push(Span::raw(" ".repeat(iw.saturating_sub(w))));
+            for s in &mut row.spans {
+                s.style = s.style.bg(theme::PANEL());
+            }
+        }
+        lines.push(row);
     }
     if visible.is_empty() {
         lines.push(Line::from(Span::styled("   no matches", theme::dim())));

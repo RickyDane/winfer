@@ -118,6 +118,22 @@ pub fn nebula_shimmer(text: &str, t: Duration, base: Color) -> Vec<Span<'static>
         .collect()
 }
 
+/// `base`-colored text with a soft light sweeping across it toward `hi` (a running tool's
+/// target). Colors snap to `theme::STEPS`, like every animated color.
+pub fn sweep(text: &str, t: Duration, base: Color, hi: Color, style: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let span = chars.len() as f32 + 24.0;
+    let pos = (t.as_secs_f32() * 28.0) % span - 6.0;
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let d = i as f32 - pos;
+            Span::styled(c.to_string(), style.fg(theme::mix(base, hi, (-(d * d) / 14.0).exp())))
+        })
+        .collect()
+}
+
 /// A hairline `width` wide. With `moving`, a comet with a nebula tail travels along it;
 /// otherwise it glows faintly from the left and fades out.
 pub fn comet(width: usize, t: Duration, moving: bool) -> Vec<Span<'static>> {

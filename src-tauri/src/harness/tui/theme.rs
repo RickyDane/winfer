@@ -23,6 +23,8 @@ pub struct Palette {
     pub dim: Color,
     pub faint: Color,
     pub void: Color,
+    /// A raised surface just off the background (your messages, selected rows).
+    pub panel: Color,
     pub blue: Color,
     pub violet: Color,
     pub pink: Color,
@@ -88,6 +90,7 @@ impl Palette {
             dim: grey(0.5, 3.0),
             faint: grey(0.24, 1.45),
             void: rgb(bg),
+            panel: rgb(blend(bg, fg, if light { 0.05 } else { 0.06 })),
             blue: accent((0x6f, 0xb6, 0xff), (0x1f, 0x6c, 0xd0)),
             violet,
             pink: accent((0xff, 0x7a, 0xc6), (0xc0, 0x2d, 0x7c)),
@@ -119,6 +122,9 @@ pub fn FAINT() -> Color {
 /// The background: what things fade from and to.
 pub fn VOID() -> Color {
     pal().void
+}
+pub fn PANEL() -> Color {
+    pal().panel
 }
 pub fn BLUE() -> Color {
     pal().blue
@@ -196,12 +202,6 @@ pub fn nebula(x: f32) -> Color {
 /// A key hint: the key in muted, its meaning dim.
 pub fn key_hint(k: &str, what: &str) -> [Span<'static>; 2] {
     [Span::styled(k.to_string(), fg(MUTED())), Span::styled(format!(" {what}"), fg(DIM()))]
-}
-
-/// Moon phase for a fraction 0..=1: ○ ◔ ◑ ◕ ●.
-pub fn moon(p: f32) -> &'static str {
-    const M: [&str; 5] = ["○", "◔", "◑", "◕", "●"];
-    M[((p.clamp(0.0, 1.0) * 4.0).round() as usize).min(4)]
 }
 
 /// Blend of two RGB colors, `t` snapped to `STEPS` (see there).
