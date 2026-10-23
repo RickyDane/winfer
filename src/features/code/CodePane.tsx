@@ -3,12 +3,14 @@ import { Bot, SquareTerminal, ChevronDown, CircleCheck, CircleDashed, GitBranch,
 import clsx from "clsx";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { themeById } from "@/features/theme/themes";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { CodeStoreContext, createCodeStore, useCode } from "./store";
 import { Transcript, Collapse } from "./Transcript";
 import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
 import { CODE_WEB_DEMO, useCodeWeb } from "./styles";
-import { Sheets } from "./Sheets";
+import { ModelPicker, Sheets } from "./Sheets";
+import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
 import { MODES } from "./protocol";
@@ -76,11 +78,13 @@ function PlanStrip() {
   );
 }
 
-function Menu({ label, value, items, onPick, children }: { label: string; value: string; items: { id: string; label: string; hint?: string }[]; onPick: (id: string) => void; children: React.ReactNode }) {
+function Menu({ label, value, items, onPick, children }: { label: string; value: string; items: { id: string; label: string; hint?: string; icon?: React.ReactNode }[]; onPick: (id: string) => void; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    // A long list that has to scroll opens on the current choice.
+    ref.current?.querySelector(".cw-pop-item.sel")?.scrollIntoView({ block: "nearest" });
     const off = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     window.addEventListener("mousedown", off);
     return () => window.removeEventListener("mousedown", off);
@@ -103,8 +107,20 @@ function Menu({ label, value, items, onPick, children }: { label: string; value:
                   setOpen(false);
                 }}
               >
-                <span>{i.label}</span>
-                {i.hint && <small>{i.hint}</small>}
+                {i.icon ? (
+                  <span className="cw-pop-row">
+                    {i.icon}
+                    <span>
+                      {i.label}
+                      {i.hint && <small>{i.hint}</small>}
+                    </span>
+                  </span>
+                ) : (
+                  <>
+                    <span>{i.label}</span>
+                    {i.hint && <small>{i.hint}</small>}
+                  </>
+                )}
               </button>
             ))}
           </div>
@@ -114,7 +130,34 @@ function Menu({ label, value, items, onPick, children }: { label: string; value:
   );
 }
 
-const EFFORTS = ["default", "low", "medium", "high", "xhigh", "max"];
+/** The model picker, anchored to the status line (also what `/model` opens). */
+function ModelMenu({ label, model }: { label: string; model: string }) {
+  const open = useCode((s) => s.sheet === "model");
+  const setSheet = useCode((s) => s.setSheet);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setSheet(null);
+    window.addEventListener("mousedown", off);
+    return () => window.removeEventListener("mousedown", off);
+  }, [open, setSheet]);
+  return (
+    <div className="cw-menu" ref={ref}>
+      <button className={clsx("cw-foot-item", open && "active")} onClick={() => setSheet(open ? null : "model")} title="Model (/model)">
+        <ProviderIcon provider={model.startsWith("claude") ? "claude" : model.startsWith("chatgpt") ? "openai" : "codex"} size={12} />
+        {label}
+      </button>
+      {open && (
+        <div className="cw-pop cw-model-pop">
+          <ModelPicker />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Highest first, so the lowest level sits at the bottom, next to the status line. */
+const EFFORTS = ["max", "xhigh", "high", "medium", "low", "minimal", "default"];
 
 /** The TUI's bottom status line: mode, model, effort, context, branch. */
 function Footer({ pane }: { pane: Pane }) {
@@ -129,21 +172,15 @@ function Footer({ pane }: { pane: Pane }) {
       <button className={clsx("cw-foot-item mode", `mode-${mode}`)} onClick={cycle} title={`${m.hint} · shift+tab`}>
         {m.label}
       </button>
-      <Menu
-        label="Model"
-        value={model}
-        items={models.map((x) => ({ id: x.spec, label: x.label, hint: x.detail }))}
-        onPick={(spec) => send({ type: "set_model", model: spec })}
-      >
-        {modelLabel}
-      </Menu>
+      <ModelMenu label={modelLabel} model={model} />
       <Menu
         label="Reasoning effort"
         value={effort}
-        items={EFFORTS.map((e) => ({ id: e, label: e[0].toUpperCase() + e.slice(1) }))}
+        items={EFFORTS.map((e) => ({ id: e, label: EFFORT_LABELS[e] ?? e, hint: EFFORT_HINTS[e], icon: <EffortIcon effort={e} size={16} /> }))}
         onPick={(e) => send({ type: "set_effort", effort: e === "default" ? null : e })}
       >
-        <span className="dim">{effort}</span>
+        <EffortIcon effort={effort} size={12} />
+        <span className="dim">{EFFORT_LABELS[effort] ?? effort}</span>
       </Menu>
       <span className="grow" />
       {pane.worktree && (
@@ -200,7 +237,7 @@ function storeFor(pane: Pane) {
       // The browser preview: a scripted session.
       s.getState().attach(new MockTransport());
       const prompt = pane.prompt ?? "Add exponential backoff to retry() and make it cancellable";
-      setTimeout(() => s!.getState().submit(prompt), 700 + Math.random() * 900);
+      setTimeout(() => s!.getState().submit(prompt), 3500);
     } else {
       s.getState().attach(new PtyTransport(pane));
     }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ShieldCheck, Square } from "lucide-react";
+import { ArrowUp, ShieldCheck, Square, X } from "lucide-react";
 import clsx from "clsx";
 import { useContext } from "react";
 import { CodeStoreContext, useCode } from "./store";
@@ -53,7 +53,21 @@ export function Composer({ focused }: { focused: boolean }) {
   const store = useContext(CodeStoreContext)!;
   const rate = useRate();
   const showRate = useCodeWeb((s) => s.showRate);
-  const [text, setText] = useState("");
+  const text = useCode((s) => s.draft);
+  const setText = useCode((s) => s.setDraft);
+  const attachments = useCode((s) => s.attachments);
+  const setAttachments = useCode((s) => s.setAttachments);
+  const [dragging, setDragging] = useState(false);
+
+  /** Pasted or dropped images become attachments (shown as thumbnails until sent). */
+  const addFiles = (files: File[]) => {
+    for (const f of files.filter((f) => f.type.startsWith("image/"))) {
+      const reader = new FileReader();
+      reader.onload = () =>
+        setAttachments((a) => [...a, { id: `${Date.now()}-${Math.random()}`, url: String(reader.result), mime: f.type, name: f.name || "pasted image" }]);
+      reader.readAsDataURL(f);
+    }
+  };
   const [sel, setSel] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
   const [, tick] = useState(0);
@@ -87,7 +101,7 @@ export function Composer({ focused }: { focused: boolean }) {
         send({ type: "set_mode", mode: MODES[(i + 1) % MODES.length].id });
         return;
       }
-      if (!a || text || e.metaKey || e.ctrlKey) return;
+      if (!a || text || e.metaKey || e.ctrlKey || e.altKey) return;
       const d = { y: "allow", a: "always", n: "deny" }[e.key.toLowerCase()] as "allow" | "always" | "deny" | undefined;
       if (d) {
         e.preventDefault();
@@ -106,8 +120,9 @@ export function Composer({ focused }: { focused: boolean }) {
   }, [text]);
 
   const go = () => {
-    if (!runCommand(text, store)) submit(text);
+    if (attachments.length || !runCommand(text, store)) submit(text, attachments);
     setText("");
+    setAttachments(() => []);
   };
 
   const elapsed = turnStarted ? (Date.now() - turnStarted) / 1000 : 0;
@@ -121,7 +136,16 @@ export function Composer({ focused }: { focused: boolean }) {
         <span className="sep">·</span>
         <span>{elapsed.toFixed(0)}s</span>
         <span className="sep">·</span>
-        <span>↓ {fmtTokens(usage.turn ?? Math.max(0, usage.output - startOut.current))} tokens</span>
+        {!!usage.turn_input && (
+          <>
+            <span title={usage.turn_cached ? `${fmtTokens(usage.turn_cached)} of them from the prompt cache` : undefined}>
+              ↑ {fmtTokens(usage.turn_input)} in
+              {!!usage.turn_cached && <span className="dim"> ({Math.round((usage.turn_cached / usage.turn_input) * 100)}% cached)</span>}
+            </span>
+            <span className="sep">·</span>
+          </>
+        )}
+        <span>↓ {fmtTokens(usage.turn ?? Math.max(0, usage.output - startOut.current))} out</span>
         {showRate && rate != null && (
           <>
             <span className="sep">·</span>
@@ -133,7 +157,22 @@ export function Composer({ focused }: { focused: boolean }) {
           <kbd>esc</kbd> to interrupt
         </span>
       </div>
-      <div className={clsx("cw-composer", busy && "busy")}>
+      <div
+        className={clsx("cw-composer", busy && "busy", dragging && "dragging")}
+        onDragOver={(e) => {
+          if (![...e.dataTransfer.items].some((i) => i.type.startsWith("image/"))) return;
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          setDragging(false);
+          const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+          if (!files.length) return;
+          e.preventDefault();
+          addFiles(files);
+        }}
+      >
         {cmds.length > 0 && (
           <div className="cw-slash">
             {cmds.map(([c, d], i) => (
@@ -152,8 +191,27 @@ export function Composer({ focused }: { focused: boolean }) {
             ))}
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="cw-attachments">
+            {attachments.map((a) => (
+              <div key={a.id} className="cw-thumb" title={a.name}>
+                <img src={a.url} alt={a.name} />
+                <button onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))} title="Remove">
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={ta}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+            if (files.length) {
+              e.preventDefault();
+              addFiles(files);
+            }
+          }}
           value={text}
           rows={1}
           placeholder={busy ? "Steer the agent — it reads this at its next step…" : "Ask winfer code…"}
@@ -176,15 +234,15 @@ export function Composer({ focused }: { focused: boolean }) {
         />
         <div className="cw-composer-bar">
           <span className="cw-hint">
-            <kbd>/</kbd> commands <kbd>⇧⇥</kbd> mode <kbd>esc</kbd> interrupt
+            <kbd>/</kbd> commands <kbd>⇧⇥</kbd> mode
           </span>
           <span className="grow" />
-          {busy && !text ? (
+          {busy && !text && !attachments.length ? (
             <button className="cw-send stop" onClick={() => send({ type: "interrupt" })} title="Interrupt (esc)">
               <Square size={13} fill="currentColor" />
             </button>
           ) : (
-            <button className="cw-send" disabled={!text.trim()} onClick={go} title="Send (enter)">
+            <button className="cw-send" disabled={!text.trim() && !attachments.length} onClick={go} title="Send (enter)">
               <ArrowUp size={16} />
             </button>
           )}

@@ -39,6 +39,7 @@ export const fetchModels = (id: ProviderId) => invoke<ModelInfo[]>("providers_mo
 export const PROVIDER_COLORS: Record<string, string> = {
   claude: "var(--color-claude)",
   codex: "var(--color-fg)",
+  openai: "var(--color-fg)",
   agy: "#4f8cff",
   grok: "var(--color-fg-muted)",
   opencode: "#f5b544",

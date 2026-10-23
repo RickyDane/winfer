@@ -2,6 +2,14 @@ import { createContext, useContext } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { Approval, Cmd, Ev, Mode, ModelInfo, SessionInfo, TaskEv, Todo, Transport, Usage } from "./protocol";
 
+export interface Attachment {
+  id: string;
+  /** `data:` URL, for the thumbnail. */
+  url: string;
+  mime: string;
+  name: string;
+}
+
 export type Sheet = "usage" | "status" | "help" | "mcp" | "login" | "agents" | "sessions" | "btw" | "compaction" | "model" | "effort" | "mode";
 
 export interface Btw {
@@ -12,7 +20,7 @@ export interface Btw {
 }
 
 export type Item =
-  | { kind: "user"; key: string; text: string; at: number }
+  | { kind: "user"; key: string; text: string; at: number; images?: string[] }
   | { kind: "text"; key: string; text: string; streaming: boolean }
   | { kind: "reasoning"; key: string; text: string; streaming: boolean; started: number; ended?: number }
   | {
@@ -61,7 +69,12 @@ export interface CodeState {
   transport?: Transport;
   apply(ev: Ev): void;
   send(cmd: Cmd): void;
-  submit(text: string): void;
+  submit(text: string, images?: Attachment[]): void;
+  /** The composer's unsent text and images: kept here so they survive the pane remounting. */
+  draft: string;
+  attachments: Attachment[];
+  setDraft(draft: string): void;
+  setAttachments(fn: (a: Attachment[]) => Attachment[]): void;
   attach(t: Transport): () => void;
 }
 
@@ -113,11 +126,18 @@ export const createCodeStore = () =>
     get().transport?.send(cmd);
   },
 
-  submit(text) {
+  draft: "",
+  attachments: [],
+  setDraft: (draft) => set({ draft }),
+  setAttachments: (fn) => set((s) => ({ attachments: fn(s.attachments) })),
+
+  submit(text, attachments = []) {
     const t = text.trim();
-    if (!t) return;
-    set((s) => ({ items: [...s.items, { kind: "user", key: key(), text: t, at: Date.now() }] }));
-    get().send({ type: get().busy ? "steer" : "send", text: t });
+    if (!t && !attachments.length) return;
+    const urls = attachments.map((a) => a.url);
+    set((s) => ({ items: [...s.items, { kind: "user", key: key(), text: t, at: Date.now(), images: urls.length ? urls : undefined }] }));
+    const images = attachments.map((a) => ({ mime: a.mime, data: a.url.slice(a.url.indexOf(",") + 1) }));
+    get().send({ type: get().busy ? "steer" : "send", text: t, ...(images.length ? { images } : {}) });
   },
 
   apply(ev) {
@@ -214,7 +234,7 @@ export const createCodeStore = () =>
         case "error":
           return { items: [...items, { kind: "notice", key: key(), text: ev.text, tone: "error" }] };
         case "turn_start":
-          return { busy: true, turnStarted: Date.now(), rate: null };
+          return { busy: true, turnStarted: Date.now(), rate: null, usage: { ...s.usage, turn: 0, turn_input: 0, turn_cached: 0, turn_streamed: 0 } };
         case "turn_done":
           return {
             busy: false,
@@ -249,7 +269,7 @@ export const createCodeStore = () =>
         case "answered":
           return { approvals: s.approvals.filter((a) => a.id !== ev.id) };
         case "cleared":
-          return { items: [], approvals: [], tasks: {}, todos: [], busy: false };
+          return { items: [], approvals: [], tasks: {}, todos: [], busy: false, usage: { ...s.usage, context: 0, input: 0, cached: 0, output: 0, cost: null, turn: 0 }, rate: null };
         case "restore": {
           const restored: Item[] = ev.transcript.map((e): Item => {
             if (e.role === "user") return { kind: "user", key: key(), text: e.text, at: 0 };

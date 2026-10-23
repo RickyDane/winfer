@@ -299,11 +299,13 @@ impl Serve {
         }
         let Ok(v) = serde_json::from_str::<Value>(json_part) else { return };
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
-        let msg = |text: String| UserMsg { text, images: Vec::new(), skill: v.get("skill").and_then(Value::as_str).map(String::from) };
+        let images = save_images(&v);
+        let msg = |text: String| UserMsg { text, images: images.clone(), skill: v.get("skill").and_then(Value::as_str).map(String::from) };
         match s("type").as_str() {
             "send" | "steer" => {
                 let text = s("text");
-                self.user_message(&text);
+                let n = images.len();
+                self.user_message(&if n == 0 { text.clone() } else { format!("{text}{}[{n} image{}]", if text.is_empty() { "" } else { " " }, if n == 1 { "" } else { "s" }) });
                 let steer = s("type") == "steer" && self.busy;
                 self.send(if steer { Cmd::Steer(msg(text)) } else { Cmd::Send(msg(text)) });
             }
@@ -401,6 +403,31 @@ impl Serve {
             _ => {}
         }
     }
+}
+
+/// Images the web UI pasted (base64 in the command) as files, where the TUI keeps its pasted
+/// ones: `<temp>/winfer-code/paste-<millis>-<n>.<ext>`. Backends take image paths.
+fn save_images(v: &Value) -> Vec<PathBuf> {
+    use base64::Engine;
+    let Some(list) = v.get("images").and_then(Value::as_array) else { return Vec::new() };
+    let dir = std::env::temp_dir().join("winfer-code");
+    let _ = std::fs::create_dir_all(&dir);
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    list.iter()
+        .enumerate()
+        .filter_map(|(i, img)| {
+            let data = base64::engine::general_purpose::STANDARD.decode(img.get("data")?.as_str()?).ok()?;
+            let ext = match img.get("mime").and_then(Value::as_str).unwrap_or("image/png") {
+                "image/jpeg" | "image/jpg" => "jpg",
+                "image/gif" => "gif",
+                "image/webp" => "webp",
+                _ => "png",
+            };
+            let path = dir.join(format!("paste-{ms}-{i}.{ext}"));
+            std::fs::write(&path, data).ok()?;
+            Some(path)
+        })
+        .collect()
 }
 
 /// Raw mode on the PTY: no echo of our own input, and no canonical-mode line limit.

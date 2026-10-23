@@ -400,7 +400,7 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "description": t.description, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status }),
         Ev::Todos(t) => json!({ "type": "todos", "todos": t }),
         Ev::Skills(s) => json!({ "type": "skills", "skills": s.iter().map(|k| &k.name).collect::<Vec<_>>() }),
-        Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost, "turn": u.turn, "turn_streamed": u.turn_streamed }),
+        Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost, "turn": u.turn, "turn_input": u.turn_input, "turn_cached": u.turn_cached, "turn_streamed": u.turn_streamed }),
         Ev::Notice(n) => json!({ "type": "notice", "text": n }),
         Ev::Error(e) => json!({ "type": "error", "text": e }),
         Ev::TurnStart => json!({ "type": "turn_start" }),

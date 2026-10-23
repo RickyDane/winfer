@@ -18,6 +18,7 @@ import {
 import clsx from "clsx";
 import { useCode, type Item } from "./store";
 import { Markdown } from "./Markdown";
+import { Welcome } from "./Welcome";
 import { useCodeWeb } from "./styles";
 
 const TOOL_ICONS: Record<string, typeof Bot> = {
@@ -169,6 +170,7 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
 export function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
+  const fresh = !busy && !items.some((i) => i.kind === "user" || i.kind === "text" || i.kind === "tool");
   const end = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -186,13 +188,23 @@ export function Transcript({ dark }: { dark: boolean }) {
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}
     >
+      {fresh && <Welcome />}
       <div className="cw-transcript">
         {items.map((it) => {
           switch (it.kind) {
             case "user":
               return (
                 <div key={it.key} className="cw-user cw-enter">
-                  <div className="cw-user-bubble">{it.text}</div>
+                  <div className="cw-user-bubble">
+                    {it.images && (
+                      <div className="cw-user-images">
+                        {it.images.map((u, i) => (
+                          <img key={i} src={u} alt="" />
+                        ))}
+                      </div>
+                    )}
+                    {it.text}
+                  </div>
                 </div>
               );
             case "text":

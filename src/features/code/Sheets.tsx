@@ -15,11 +15,16 @@ import {
   Shrink,
   X,
   Zap,
+  Check,
+  Star,
   ShieldCheck,
 } from "lucide-react";
 import clsx from "clsx";
 import { useCode, type Sheet } from "./store";
 import { COMMANDS, MODES } from "./protocol";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
+import { useCodeWeb } from "./styles";
 
 export const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
@@ -291,13 +296,109 @@ function BtwSheet() {
   );
 }
 
+const BACKENDS: { id: string; label: string; logo: string }[] = [
+  { id: "chatgpt", label: "ChatGPT", logo: "openai" },
+  { id: "claude", label: "Claude", logo: "claude" },
+  { id: "codex", label: "Codex", logo: "codex" },
+];
+
+/** `/model`: a tab per backend (with its logo), its models below. Opens from the status line. */
+const logoFor = (spec: string) => BACKENDS.find((b) => spec.startsWith(b.id + "/"))?.logo ?? "codex";
+
+export function ModelPicker() {
+  const { models, model, send, setSheet } = useCode();
+  const favorites = useCodeWeb((s) => s.favoriteModels);
+  const setPrefs = useCodeWeb((s) => s.set);
+  const toggleFavorite = (spec: string) =>
+    setPrefs({ favoriteModels: favorites.includes(spec) ? favorites.filter((f) => f !== spec) : [...favorites, spec] });
+  const current = model.split("/")[0];
+  const backends = BACKENDS.filter((b) => models.some((m) => m.spec.startsWith(b.id + "/")));
+  const favModels = favorites.map((f) => models.find((m) => m.spec === f)).filter((m): m is (typeof models)[number] => !!m);
+  // Opens on Favorites when the current model is one of them, else on its backend.
+  const [tab, setTab] = useState(() => (favorites.includes(model) ? "favorites" : current));
+  const active = tab === "favorites" || backends.some((b) => b.id === tab) ? tab : (backends[0]?.id ?? current);
+  const tabs = useRef<HTMLDivElement>(null);
+  const [glider, setGlider] = useState<{ top: number; height: number } | null>(null);
+  useEffect(() => {
+    const el = tabs.current?.querySelector<HTMLElement>(`[data-tab="${active}"]`);
+    if (el) setGlider({ top: el.offsetTop, height: el.offsetHeight });
+  }, [active, backends.length]);
+  const list = active === "favorites" ? favModels : models.filter((m) => m.spec.startsWith(active + "/"));
+  return (
+    <div className="cw-model-picker">
+      {backends.length === 0 ? (
+        <p className="cw-empty">Loading models…</p>
+      ) : (
+        <>
+          <div className="cw-tabs" ref={tabs} role="tablist">
+            {glider && <span className="cw-tab-glider" style={glider} />}
+            <button
+              data-tab="favorites"
+              role="tab"
+              aria-selected={active === "favorites"}
+              title="Favorites"
+              aria-label="Favorites"
+              className={clsx("cw-tab fav", active === "favorites" && "sel")}
+              onClick={() => setTab("favorites")}
+            >
+              <Star size={15} fill={favorites.length ? "currentColor" : "none"} />
+            </button>
+            <span className="cw-tabs-sep" />
+            {backends.map((b) => (
+              <button key={b.id} data-tab={b.id} role="tab" aria-selected={b.id === active} title={b.label} aria-label={b.label} className={clsx("cw-tab", b.id === active && "sel")} onClick={() => setTab(b.id)}>
+                <ProviderIcon provider={b.logo} size={16} />
+              </button>
+            ))}
+          </div>
+          <div className="cw-list cw-model-list" key={active}>
+            {active === "favorites" && list.length === 0 && (
+              <p className="cw-empty cw-fav-empty">
+                No favorites yet. Star a model on its provider's tab to keep it here.
+              </p>
+            )}
+            {list.map((m) => {
+              const fav = favorites.includes(m.spec);
+              return (
+                <div key={m.spec} className={clsx("cw-list-item model", m.spec === model && "sel")}>
+                  <button
+                    className="cw-model-pick"
+                    onClick={() => {
+                      send({ type: "set_model", model: m.spec });
+                      setSheet(null);
+                    }}
+                  >
+                    {active === "favorites" && <ProviderIcon provider={logoFor(m.spec)} size={13} />}
+                    <span>
+                      <b>{m.label}</b>
+                      {m.detail && <small>{m.detail}</small>}
+                    </span>
+                  </button>
+                  {m.spec === model && <Check size={14} className="cw-check" />}
+                  <button
+                    className={clsx("cw-star", fav && "on")}
+                    title={fav ? "Remove from favorites" : "Add to favorites"}
+                    aria-pressed={fav}
+                    onClick={() => toggleFavorite(m.spec)}
+                  >
+                    <Star size={13} fill={fav ? "currentColor" : "none"} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ListSheet({ kind }: { kind: "model" | "effort" | "mode" }) {
   const { models, model, effort, mode, send, setSheet } = useCode();
   const items =
     kind === "model"
       ? models.map((m) => ({ id: m.spec, label: m.label, hint: m.detail }))
       : kind === "effort"
-        ? ["default", "minimal", "low", "medium", "high", "xhigh", "max"].map((e) => ({ id: e, label: e[0].toUpperCase() + e.slice(1), hint: "" }))
+        ? ["max", "xhigh", "high", "medium", "low", "minimal", "default"].map((e) => ({ id: e, label: EFFORT_LABELS[e] ?? e, hint: EFFORT_HINTS[e] }))
         : MODES.map((m) => ({ id: m.id, label: m.label, hint: m.hint }));
   const value = kind === "model" ? model : kind === "effort" ? effort : mode;
   const icon = kind === "model" ? <Sparkles size={15} /> : kind === "effort" ? <Zap size={15} /> : <ShieldCheck size={15} />;
@@ -316,8 +417,20 @@ function ListSheet({ kind }: { kind: "model" | "effort" | "mode" }) {
               setSheet(null);
             }}
           >
-            <b>{i.label}</b>
-            {i.hint && <small>{i.hint}</small>}
+            {kind === "effort" ? (
+              <span className="cw-pop-row">
+                <EffortIcon effort={i.id} size={16} />
+                <span>
+                  <b>{i.label}</b>
+                  {i.hint && <small>{i.hint}</small>}
+                </span>
+              </span>
+            ) : (
+              <>
+                <b>{i.label}</b>
+                {i.hint && <small>{i.hint}</small>}
+              </>
+            )}
           </button>
         ))}
       </div>
@@ -429,7 +542,8 @@ export function Sheets({ onCommand }: { onCommand: (c: string) => void }) {
     help: <HelpSheet onCommand={onCommand} />,
     mcp: <McpSheet />,
     login: <LoginSheet />,
-    model: <ListSheet kind="model" />,
+    // Opens as a popover from the status line (see CodePane's Footer).
+    model: null,
     effort: <ListSheet kind="effort" />,
     mode: <ListSheet kind="mode" />,
   };

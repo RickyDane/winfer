@@ -731,6 +731,9 @@
   height: 22px;
   opacity: 1;
 }
+.cw-status .dim {
+  color: var(--dim);
+}
 .cw-status .hint {
   color: var(--dim);
   font-size: 11.5px;
@@ -1017,8 +1020,9 @@
 .cw-pane .cw-composer.busy::before {
   background: conic-gradient(from var(--angle, 0deg), transparent 0 70%, var(--accent), transparent 95%);
 }
+/* Clockwise with the bright edge leading and the tail fading behind it. */
 .cw-pane .cw-orb {
-  background: conic-gradient(var(--accent), transparent 70%);
+  background: conic-gradient(transparent 30%, var(--accent));
   box-shadow: none;
 }
 
@@ -1261,7 +1265,7 @@ button.cw-foot-item.active {
   margin-left: 0;
 }
 .cw-pop-list {
-  max-height: 300px;
+  max-height: min(440px, calc(100cqh - 150px));
   overflow-y: auto;
 }
 .cw-foot .cw-pop {
@@ -1695,6 +1699,210 @@ button.cw-foot-item.active {
   color: var(--warn);
 }
 
+/* ——— Model picker: a tab per backend ——— */
+.cw-tabs {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  align-self: stretch;
+}
+.cw-tab {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  color: var(--muted);
+  opacity: 0.55;
+  filter: grayscale(0.6);
+  transition: opacity 0.2s, filter 0.2s, transform 0.2s var(--spring);
+}
+.cw-tab:hover {
+  opacity: 0.85;
+}
+.cw-tab.sel {
+  opacity: 1;
+  filter: none;
+  transform: scale(1.06);
+}
+.cw-tab:hover {
+  color: var(--fg);
+}
+.cw-tab.sel {
+  color: var(--fg);
+}
+.cw-tab small {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 10.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.cw-tab-glider {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  border-radius: 7px;
+  background: var(--color-panel);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25), inset 0 0 0 1px var(--border);
+  transition: top 0.3s var(--ease), height 0.3s var(--ease);
+}
+.cw-model-list {
+  animation: cw-fade 0.25s both;
+  max-height: min(320px, 50cqh);
+  overflow-y: auto;
+}
+.cw-pop.cw-model-pop {
+  padding: 10px;
+}
+.cw-model-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.cw-model-picker > .cw-empty {
+  grid-column: 1 / -1;
+}
+/* Sized to its content: icon tabs plus the longest model name. */
+/* A fixed size, so switching tabs never moves the popup; long lists scroll. */
+.cw-pop.cw-model-pop {
+  width: min(340px, calc(100cqw - 24px));
+  min-width: 0;
+}
+.cw-model-pop .cw-model-pick {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  line-height: 1.35;
+}
+.cw-model-pop .cw-model-pick small {
+  font-size: 11px;
+}
+.cw-model-pop .cw-model-list {
+  gap: 1px;
+}
+.cw-model-pop .cw-model-list {
+  height: min(264px, calc(100cqh - 150px));
+  max-height: none;
+}
+
+/* ——— Effort bars ——— */
+.cw-effort rect {
+  transition: fill 0.25s, opacity 0.25s;
+}
+.cw-effort .on {
+  fill: var(--accent);
+}
+.cw-effort .off {
+  fill: color-mix(in srgb, var(--fg) 18%, transparent);
+}
+.cw-effort .dash {
+  fill: none;
+  stroke: color-mix(in srgb, var(--fg) 35%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 1.5 1.5;
+}
+.cw-effort.max .on {
+  fill: var(--warn);
+}
+.cw-effort.max {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--warn) 55%, transparent));
+}
+.cw-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cw-pop-row > span {
+  display: flex;
+  flex-direction: column;
+}
+.cw-list-item.model {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.cw-list-item.model > span {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.cw-list-item.model .cw-check {
+  color: var(--accent);
+  flex: none;
+}
+.cw-list-item.model {
+  padding: 0 6px 0 0;
+}
+.cw-model-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 0 7px 10px;
+  text-align: left;
+}
+.cw-model-pick > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cw-model-pick b {
+  font-weight: 500;
+}
+.cw-model-pick small {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.cw-star {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 6px;
+  color: var(--dim);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, transform 0.2s var(--spring);
+}
+.cw-list-item.model:hover .cw-star,
+.cw-star.on,
+.cw-star:focus-visible {
+  opacity: 1;
+}
+.cw-star:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.cw-star.on {
+  color: var(--warn);
+}
+.cw-star:active {
+  transform: scale(0.8);
+}
+.cw-tab.fav.sel,
+.cw-tab.fav:hover {
+  color: var(--warn);
+}
+.cw-tabs-sep {
+  height: 1px;
+  margin: 2px 6px;
+  background: var(--border);
+}
+.cw-fav-empty {
+  padding: 8px 10px;
+  max-width: 220px;
+  font-size: 12px;
+}
+
 /* ——— Compact layout ——— */
 .cw-pane.compact .cw-transcript {
   gap: 0;
@@ -1712,6 +1920,236 @@ button.cw-foot-item.active {
 }
 .cw-pane.compact .cw-user {
   margin: 10px 0 4px;
+}
+
+/* ——— Welcome: a fresh session ——— */
+.cw-scroll {
+  position: relative;
+}
+.cw-welcome {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+.cw-welcome-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px;
+  pointer-events: auto;
+  animation: cw-rise 0.9s var(--ease) both;
+}
+.cw-stars i {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--fg);
+  opacity: 0;
+  animation: cw-twinkle ease-in-out infinite;
+}
+@keyframes cw-twinkle {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.cw-logo-wrap {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  margin-bottom: 16px;
+  animation: cw-float 6s ease-in-out infinite;
+}
+.cw-logo-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -22px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent), transparent 68%);
+  filter: blur(6px);
+  animation: cw-breathe 4s ease-in-out infinite;
+}
+.cw-welcome-logo {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 10px 24px rgb(0 0 0 / 0.35));
+}
+@keyframes cw-float {
+  50% {
+    transform: translateY(-6px);
+  }
+}
+.cw-welcome h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+.cw-welcome h1 span {
+  color: var(--accent);
+}
+.cw-who {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--fg);
+}
+.cw-who .dim {
+  color: var(--dim);
+  margin-left: -4px;
+}
+.cw-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.cw-dot.b-claude {
+  background: var(--color-claude);
+}
+.cw-dot.b-chatgpt {
+  background: var(--ok);
+}
+.cw-dot.b-codex {
+  background: var(--fg);
+}
+.cw-mode-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+  color: var(--mode-c, var(--accent));
+  background: color-mix(in srgb, var(--mode-c, var(--accent)) 13%, transparent);
+}
+.cw-mode-tag.mode-auto-edit {
+  --mode-c: var(--ok);
+}
+.cw-mode-tag.mode-plan,
+.cw-mode-tag.mode-yolo-plan {
+  --mode-c: var(--g3);
+}
+.cw-mode-tag.mode-yolo {
+  --mode-c: var(--del);
+}
+.cw-where {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.cw-where svg {
+  margin-left: 8px;
+}
+.cw-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 26px;
+  max-width: 720px;
+}
+.cw-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 104px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--fg);
+  animation: cw-rise 0.6s var(--ease) both;
+  transition: border-color 0.2s, transform 0.2s var(--ease), background 0.2s;
+}
+.cw-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  transform: translateY(-2px);
+}
+.cw-tile b {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 3px;
+}
+.cw-tile small {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+/* ——— Images: composer thumbnails, drop target, in your messages ——— */
+.cw-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+.cw-thumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  animation: cw-pop 0.3s var(--spring);
+}
+.cw-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cw-thumb button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.65);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.cw-thumb:hover button {
+  opacity: 1;
+}
+.cw-composer.dragging {
+  border-color: var(--accent);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 6%, var(--composer-bg, var(--surface-2)));
+}
+label.cw-icon-btn {
+  cursor: pointer;
+}
+.cw-user-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.cw-user-images img {
+  max-width: 220px;
+  max-height: 160px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {

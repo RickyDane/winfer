@@ -46,7 +46,11 @@ export interface Usage {
   cached: number;
   output: number;
   cost?: number | null;
+  /** Output tokens of the running (or last) turn. */
   turn?: number;
+  /** Input tokens of the running (or last) turn, summed over its requests, and the cached part. */
+  turn_input?: number;
+  turn_cached?: number;
   turn_streamed?: number;
 }
 
@@ -96,6 +100,12 @@ export type Ev =
   /** An approval answered outside the web UI (the app's approve button, its broadcast bar). */
   | { type: "answered"; id: string };
 
+/** A pasted or dropped image: base64 without the `data:` prefix. */
+export interface ImageData {
+  mime: string;
+  data: string;
+}
+
 export interface SessionInfo {
   id: string;
   title: string;
@@ -113,8 +123,8 @@ export interface ModelInfo {
 }
 
 export type Cmd =
-  | { type: "send"; text: string }
-  | { type: "steer"; text: string }
+  | { type: "send"; text: string; images?: ImageData[] }
+  | { type: "steer"; text: string; images?: ImageData[] }
   | { type: "interrupt" }
   | { type: "approve"; id: string; decision: Decision }
   | { type: "answer"; id: string; answers: string[] }
@@ -179,6 +189,8 @@ export const REVIEW_PROMPT =
 export const MOCK_MODELS: ModelInfo[] = [
   { spec: "claude/opus", label: "Claude Opus", detail: "Claude Code" },
   { spec: "claude/sonnet", label: "Claude Sonnet", detail: "Claude Code" },
+  { spec: "claude/haiku", label: "Claude Haiku", detail: "Claude Code · fastest" },
+  { spec: "chatgpt/gpt-6-luna", label: "GPT-6 Luna", detail: "ChatGPT account" },
   { spec: "chatgpt/gpt-6.1-sol", label: "GPT-6.1 Sol", detail: "ChatGPT account" },
   { spec: "codex/gpt-6.1-sol", label: "Codex · GPT-6.1 Sol", detail: "Codex" },
 ];

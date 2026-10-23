@@ -92,7 +92,6 @@ export class MockTransport implements Transport {
     onEvent({ type: "models", models: MOCK_MODELS });
     onEvent({ type: "skills", skills: ["review", "simplify", "run", "security-review", "dataviz"] });
     this.usage();
-    this.history();
     return () => {
       this.emit = () => {};
     };
@@ -184,20 +183,10 @@ export class MockTransport implements Transport {
       cached: this.ctx * 2,
       output: this.out,
       turn: this.out - 2_100,
+      turn_input: this.ctx * 2,
+      turn_cached: Math.round(this.ctx * 1.4),
       turn_streamed: this.out - 2_100,
       cost: +(this.ctx * 0.000004 + this.out * 0.00002).toFixed(3),
-    });
-  }
-
-  /** A finished earlier turn, so the transcript isn't empty on load. */
-  private history() {
-    const e = this.emit;
-    e({ type: "tool_start", id: "h1", name: "Glob", title: "src/lib/**/*.ts", input: { pattern: "src/lib/**/*.ts" } });
-    e({ type: "tool_end", id: "h1", ok: true, output: "src/lib/retry.ts\nsrc/lib/ipc.ts\nsrc/lib/format.ts\nsrc/lib/paths.ts" });
-    e({
-      type: "text",
-      id: "h2",
-      text: "This is a **Tauri + React** app. The network layer lives in `src/api/`, with a small `retry()` helper in `src/lib/retry.ts` that both the model list and the usage poller use.",
     });
   }
 

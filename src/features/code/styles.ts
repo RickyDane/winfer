@@ -19,6 +19,8 @@ export interface CodeWebPrefs {
   expandShell: boolean;
   /** Tighter spacing in the transcript. */
   compact: boolean;
+  /** Models starred in the model picker (`backend/model` specs), in the order they were added. */
+  favoriteModels: string[];
 }
 
 interface CodeWebSettings extends CodeWebPrefs {
@@ -36,6 +38,7 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   expandThinking: false,
   expandShell: true,
   compact: false,
+  favoriteModels: [],
 };
 
 export const useCodeWeb = create<CodeWebSettings>()(
