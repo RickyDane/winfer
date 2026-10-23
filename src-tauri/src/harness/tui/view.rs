@@ -659,7 +659,7 @@ fn tri(x: f32) -> f32 {
 }
 
 /// The prompt: the input rows in a rounded frame with a nebula gradient border (it flows while
-/// the agent works), the mode set into the top border and key hints into the bottom one.
+/// the agent works), key hints set into the bottom border.
 fn composer_lines(app: &App, width: usize, t: Duration) -> (Vec<Line<'static>>, Option<(u16, u16)>) {
     let inner = frame_inner(width).saturating_sub(2).max(4);
     let (rows, (cr, cc)) = app.composer.layout(inner);
@@ -682,21 +682,16 @@ fn composer_lines(app: &App, width: usize, t: Duration) -> (Vec<Line<'static>>, 
     }
     let flow = if app.working() { t.as_secs_f32() * 0.12 } else { 0.0 };
     let color = move |i: usize, n: usize| theme::mix(theme::FAINT(), theme::nebula(i as f32 / n as f32 - flow), 0.75);
-    let mode = app.config.mode.label().to_string();
-    let mode_style = mode_color(app.config.mode).map(theme::bold).unwrap_or_else(theme::muted);
-    let title = vec![Span::raw(" "), Span::styled(mode, mode_style), Span::raw(" ")];
-    let mut top_right = vec![Span::raw(" ")];
-    top_right.extend(theme::key_hint("⇧tab", "mode"));
-    top_right.push(Span::raw(" "));
+    // The mode shows in the status line only; the frame carries just the key hints.
     let mut bottom_right = vec![Span::raw(" ")];
-    for (i, (k, d)) in [("/", "commands"), ("@", "files"), ("!", "shell")].into_iter().enumerate() {
+    for (i, (k, d)) in [("/", "commands"), ("@", "files"), ("!", "shell"), ("⇧tab", "mode")].into_iter().enumerate() {
         if i > 0 {
             bottom_right.push(Span::raw("  "));
         }
         bottom_right.extend(theme::key_hint(k, d));
     }
     bottom_right.push(Span::raw(" "));
-    let mut out = framed(content, width, &color, title, top_right, bottom_right);
+    let mut out = framed(content, width, &color, Vec::new(), Vec::new(), bottom_right);
     out.push(Line::default());
     let cursor = (MARGIN + 4 + cc as u16, 1 + (cr - first) as u16);
     (out, Some(cursor))

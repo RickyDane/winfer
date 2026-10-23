@@ -18,10 +18,13 @@ fn approval_policy(mode: Mode) -> &'static str {
     }
 }
 
+/// Ask mode runs in the read-only sandbox too, like Codex's own "ask before changes": every
+/// edit and every command that writes then needs the user's approval. (A workspace-write
+/// sandbox lets Codex change the workspace unasked, whatever the approval policy says.)
 fn sandbox(mode: Mode) -> &'static str {
     match mode {
         Mode::Yolo => "danger-full-access",
-        Mode::Plan | Mode::YoloPlan => "read-only",
+        Mode::Ask | Mode::Plan | Mode::YoloPlan => "read-only",
         _ => "workspace-write",
     }
 }
@@ -29,7 +32,7 @@ fn sandbox(mode: Mode) -> &'static str {
 fn sandbox_policy(mode: Mode, cwd: &str) -> Value {
     match mode {
         Mode::Yolo => json!({ "type": "dangerFullAccess" }),
-        Mode::Plan | Mode::YoloPlan => json!({ "type": "readOnly", "networkAccess": false }),
+        Mode::Ask | Mode::Plan | Mode::YoloPlan => json!({ "type": "readOnly", "networkAccess": false }),
         _ => json!({ "type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false }),
     }
 }
@@ -57,10 +60,51 @@ enum Ask {
     Input { rpc: Value, ids: Vec<String> },
 }
 
-/// `ask_user` as a Codex dynamic tool.
+/// winfer code's plan tool for Codex, whose app-server has none: `update_plan`, named and
+/// shaped like the plan tool GPT models know. Its steps become the TUI's plan.
+const UPDATE_PLAN: &str = "update_plan";
+
+fn update_plan_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "explanation": { "type": "string" },
+            "plan": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": { "step": { "type": "string" }, "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] } },
+                    "required": ["step", "status"],
+                },
+            },
+        },
+        "required": ["plan"],
+    })
+}
+
+/// `update_plan` arguments as todos.
+fn plan_todos(args: &Value) -> Vec<Todo> {
+    args["plan"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|step| Todo { content: step["step"].as_str().unwrap_or("").to_string(), status: step["status"].as_str().unwrap_or("pending").to_string() })
+        .filter(|t| !t.content.is_empty())
+        .collect()
+}
+
+/// winfer code's dynamic tools for Codex: `ask_user` and `update_plan`.
 fn dynamic_tools() -> Value {
     use crate::harness::tools;
-    json!([{ "type": "function", "name": tools::ASK_USER, "description": tools::ASK_USER_DESCRIPTION, "inputSchema": tools::ask_user_schema() }])
+    json!([
+        { "type": "function", "name": tools::ASK_USER, "description": tools::ASK_USER_DESCRIPTION, "inputSchema": tools::ask_user_schema() },
+        {
+            "type": "function",
+            "name": UPDATE_PLAN,
+            "description": "Keep a short plan for multi-step work: send the whole list of steps each time, with at most one in_progress, and mark steps completed as you finish them. The user sees it live.",
+            "inputSchema": update_plan_schema(),
+        },
+    ])
 }
 
 /// Codex's `request_user_input` questions (`{ id, header, question, options: [{ label, description }] }`).
@@ -543,6 +587,18 @@ impl Bridge {
         use crate::harness::tools;
         let key = format!("codex-{id}");
         let (ask, questions) = if method == "item/tool/call" {
+            if p["tool"].as_str() == Some(UPDATE_PLAN) {
+                // Only the main thread's plan shows; a subagent's steps would replace it.
+                let main = p["threadId"].as_str().is_none_or(|t| !self.children.contains_key(t));
+                let todos = plan_todos(&p["arguments"]);
+                let ok = !todos.is_empty();
+                if ok && main {
+                    self.emit(Ev::Todos(todos));
+                }
+                let text = if ok { "Plan updated." } else { "The plan needs at least one step." };
+                let _ = self.proc.write(&json!({ "id": id, "result": { "success": ok, "contentItems": [{ "type": "inputText", "text": text }] } }));
+                return;
+            }
             if p["tool"].as_str() != Some(tools::ASK_USER) {
                 let text = format!("No tool {} here.", p["tool"].as_str().unwrap_or(""));
                 let _ = self.proc.write(&json!({ "id": id, "result": { "success": false, "contentItems": [{ "type": "inputText", "text": text }] } }));
@@ -839,6 +895,8 @@ impl Bridge {
             "dynamicToolCall" if s(item, "tool") == crate::harness::tools::ASK_USER => {
                 ("Question".into(), item["arguments"]["questions"][0]["question"].as_str().unwrap_or("").to_string())
             }
+            // The plan shows as the TUI's plan, not as a card ("Todos" cards are skipped).
+            "dynamicToolCall" if s(item, "tool") == UPDATE_PLAN => ("Todos".into(), "update plan".into()),
             "dynamicToolCall" => (s(item, "tool"), first_arg(&item["arguments"])),
             "webSearch" => ("WebSearch".into(), s(item, "query")),
             "collabAgentToolCall" => {
@@ -1221,6 +1279,24 @@ fn model_infos(m: &Value) -> Vec<ModelInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_plan_becomes_todos() {
+        let args = json!({ "plan": [{ "step": "Read the code", "status": "completed" }, { "step": "Fix it", "status": "in_progress" }, { "step": "", "status": "pending" }] });
+        let todos = plan_todos(&args);
+        assert_eq!(todos.len(), 2);
+        assert_eq!((todos[1].content.as_str(), todos[1].status.as_str()), ("Fix it", "in_progress"));
+        assert!(dynamic_tools().as_array().unwrap().iter().any(|t| t["name"] == UPDATE_PLAN));
+    }
+
+    #[test]
+    fn ask_mode_asks_before_edits() {
+        // Read-only sandbox + on-request: Codex has to ask for every write.
+        assert_eq!((sandbox(Mode::Ask), approval_policy(Mode::Ask)), ("read-only", "on-request"));
+        assert_eq!(sandbox_policy(Mode::Ask, "/w")["type"], "readOnly");
+        assert_eq!(sandbox(Mode::AutoEdit), "workspace-write");
+        assert_eq!(approval_policy(Mode::Yolo), "never");
+    }
 
     #[test]
     fn skill_file_reads_become_skill_cards() {
