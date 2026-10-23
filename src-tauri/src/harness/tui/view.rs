@@ -248,7 +248,7 @@ fn welcome(f: &mut Frame, app: &App, area: Rect, t: Duration) {
     lines.push(Line::from(vec![Span::styled("winfer code", theme::fg(theme::MUTED())), Span::styled(format!("  v{}", env!("CARGO_PKG_VERSION")), theme::fg(theme::DIM()))]).centered());
     lines.push(Line::default());
     lines.push(Line::default());
-    let model = if app.actual_model.is_empty() { app.model.clone() } else { app.actual_model.clone() };
+    let model = friendly_model(if app.actual_model.is_empty() { &app.model } else { &app.actual_model });
     let mut who = vec![Span::styled("● ", theme::fg(accent)), Span::styled(app.kind.label(), theme::fg(theme::FG()))];
     if !model.is_empty() {
         who.push(Span::styled(format!("  {model}"), theme::muted()));
@@ -842,9 +842,65 @@ fn question_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     out
 }
 
+/// A model as people say it, the way winfer's pane headers show it (`src/lib/modelName.ts`):
+/// no provider, speed, effort or date suffixes. `codex/gpt-6.1-sol-fast` → `GPT 6.1 Sol`,
+/// `claude-opus-4-7` → `Opus 4.7`, `claude-3-5-haiku` → `Haiku 3.5`.
+pub fn friendly_model(model: &str) -> String {
+    const SUFFIXES: [&str; 10] = ["fast", "minimal", "low", "medium", "high", "xhigh", "max", "latest", "preview", "thinking"];
+    let base = &model[model.rfind('/').map_or(0, |i| i + 1)..];
+    // Drop bracketed tags: opus[1m] → opus.
+    let mut clean = String::new();
+    let mut in_tag = false;
+    for c in base.chars() {
+        match c {
+            '[' => in_tag = true,
+            ']' if in_tag => in_tag = false,
+            c if !in_tag => clean.push(c),
+            _ => {}
+        }
+    }
+    let digit_start = |t: &str| t.starts_with(|c: char| c.is_ascii_digit());
+    let mut tokens: Vec<&str> = clean.split(|c: char| c == '-' || c == '_' || c.is_whitespace()).filter(|t| !t.is_empty()).collect();
+    while tokens.len() > 1 {
+        let last = tokens[tokens.len() - 1];
+        if SUFFIXES.contains(&last.to_ascii_lowercase().as_str()) || last.len() >= 6 && last.bytes().all(|b| b.is_ascii_digit()) {
+            tokens.pop();
+        } else {
+            break;
+        }
+    }
+    // Claude models go by their family name: claude-opus-4-7 → Opus 4.7, claude-3-5-haiku → Haiku 3.5.
+    if tokens.first().is_some_and(|t| t.eq_ignore_ascii_case("claude")) && tokens[1..].iter().any(|t| !digit_start(t)) {
+        tokens.remove(0);
+        if let Some(name) = tokens.iter().position(|t| !digit_start(t)).filter(|&i| i > 0) {
+            let t = tokens.remove(name);
+            tokens.insert(0, t);
+        }
+    }
+    let mut words: Vec<String> = Vec::new();
+    for t in tokens {
+        let version = |w: &str| !w.is_empty() && w.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        match words.last_mut() {
+            // Version parts split by dashes (opus-4-7) become dotted (4.7).
+            Some(prev) if t.bytes().all(|b| b.is_ascii_digit()) && version(prev) => {
+                prev.push('.');
+                prev.push_str(t);
+            }
+            _ if t.eq_ignore_ascii_case("gpt") || t.eq_ignore_ascii_case("glm") => words.push(t.to_ascii_uppercase()),
+            _ => {
+                let mut cs = t.chars();
+                let first = cs.next().unwrap_or(' ');
+                let o_series = first == 'o' && cs.clone().next().is_some_and(|c| c.is_ascii_digit());
+                words.push(if first.is_ascii_lowercase() && !o_series { first.to_ascii_uppercase().to_string() + cs.as_str() } else { t.to_string() });
+            }
+        }
+    }
+    if words.is_empty() { model.to_string() } else { words.join(" ") }
+}
+
 fn status(app: &App, width: usize) -> Line<'static> {
     let accent = theme::backend(app.kind);
-    let model = if !app.actual_model.is_empty() { app.actual_model.clone() } else if !app.model.is_empty() { app.model.clone() } else { "default".into() };
+    let model = if !app.actual_model.is_empty() { friendly_model(&app.actual_model) } else if !app.model.is_empty() { friendly_model(&app.model) } else { "default".into() };
     // The provider as a half-block pill: "▐ Claude Code ▌" (greyed while the backend is down).
     let pill = if app.alive { accent } else { theme::DIM() };
     let mut left = vec![
@@ -1302,6 +1358,37 @@ fn nebula_border(f: &mut Frame, area: Rect, t: Duration, k: f32) {
                 let base = theme::mix(theme::FAINT(), theme::nebula(i as f32 / n), 0.35 * k);
                 cell.set_fg(theme::mix(base, theme::nebula(i as f32 / n + 0.2), tail * k));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_name_tests {
+    use super::friendly_model;
+
+    /// The same cases as the pane headers' `src/lib/modelName.test.ts`.
+    #[test]
+    fn friendly_model_names() {
+        for (input, want) in [
+            ("codex/gpt-6.1-sol-fast", "GPT 6.1 Sol"),
+            ("openai/gpt-6.1-sol", "GPT 6.1 Sol"),
+            ("gpt-6.1-sol", "GPT 6.1 Sol"),
+            ("claude-opus-4-7", "Opus 4.7"),
+            ("claude-sonnet-4-5-20250929", "Sonnet 4.5"),
+            ("opus", "Opus"),
+            ("opus[1m]", "Opus"),
+            ("claude-opus-4-6-thinking", "Opus 4.6"),
+            ("claude-3-5-haiku", "Haiku 3.5"),
+            ("gemini-3.8-flash-high", "Gemini 3.8 Flash"),
+            ("chatgpt/gpt-5.5-mini", "GPT 5.5 Mini"),
+            ("anthropic/claude-sonnet-4-5-20250929", "Sonnet 4.5"),
+            ("xai/grok-4", "Grok 4"),
+            ("o3", "o3"),
+            ("openrouter/moonshotai/kimi-k2", "Kimi K2"),
+            ("claude-10", "Claude 10"),
+            ("fast", "Fast"),
+        ] {
+            assert_eq!(friendly_model(input), want, "{input}");
         }
     }
 }
