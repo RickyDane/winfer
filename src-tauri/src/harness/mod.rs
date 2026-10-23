@@ -12,6 +12,7 @@ pub mod config;
 pub mod diff;
 pub mod event;
 pub mod mcp_client;
+pub mod serve;
 pub mod session;
 pub mod tools;
 pub mod tui;
@@ -201,6 +202,7 @@ pub fn run(args: &[String]) {
     let mut launch = tui::app::Launch { model: String::new(), resume: None, cont: false, prompt: None, mode: None, system: None };
     let mut print = false;
     let mut json = false;
+    let mut serve = false;
     let mut mouse = true;
     let mut full_prompt = false;
     let mut effort = None;
@@ -213,6 +215,7 @@ pub fn run(args: &[String]) {
             "-c" | "--continue" => launch.cont = true,
             "-p" | "--print" => print = true,
             "--json" => json = true,
+            "--serve" => serve = true,
             "--yolo" => launch.mode = Some(Mode::Yolo),
             "--mode" => launch.mode = it.next().and_then(|m| serde_json::from_value(serde_json::json!(m)).ok()),
             "--effort" => effort = it.next().cloned(),
@@ -246,6 +249,11 @@ pub fn run(args: &[String]) {
         let mut c = config::Config::load();
         c.effort = Some(e).filter(|e| e != "default");
         c.save();
+    }
+    if serve {
+        let code = serve::run(launch);
+        bg::stop_all();
+        std::process::exit(code);
     }
     if print {
         let code = headless(launch, json, full_prompt);
@@ -370,7 +378,7 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
     code
 }
 
-fn event_json(ev: &Ev) -> serde_json::Value {
+pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
     use serde_json::json;
     match ev {
         Ev::Session(s) => json!({ "type": "session", "id": s }),
@@ -382,11 +390,17 @@ fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::ToolStart { id, name, title, input } => json!({ "type": "tool_start", "id": id, "name": name, "title": title, "input": input }),
         Ev::ToolOutput { id, chunk } => json!({ "type": "tool_output", "id": id, "chunk": chunk }),
         Ev::ToolEnd { id, ok, output, diff } => json!({ "type": "tool_end", "id": id, "ok": ok, "output": output, "diff": diff }),
-        Ev::Approval(a) => json!({ "type": "approval", "id": a.id, "tool": a.tool, "title": a.title }),
-        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status }),
+        Ev::Approval(a) => json!({
+            "type": "approval", "id": a.id, "tool": a.tool, "title": a.title, "detail": a.detail, "diff": a.diff,
+            "questions": a.questions.iter().map(|q| json!({
+                "header": q.header, "question": q.question, "multi": q.multi,
+                "options": q.options.iter().map(|(label, description)| json!({ "label": label, "description": description })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        }),
+        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "description": t.description, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status }),
         Ev::Todos(t) => json!({ "type": "todos", "todos": t }),
         Ev::Skills(s) => json!({ "type": "skills", "skills": s.iter().map(|k| &k.name).collect::<Vec<_>>() }),
-        Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost }),
+        Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost, "turn": u.turn, "turn_streamed": u.turn_streamed }),
         Ev::Notice(n) => json!({ "type": "notice", "text": n }),
         Ev::Error(e) => json!({ "type": "error", "text": e }),
         Ev::TurnStart => json!({ "type": "turn_start" }),

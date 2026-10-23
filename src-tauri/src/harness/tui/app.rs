@@ -113,11 +113,11 @@ pub struct Launch {
     pub system: Option<String>,
 }
 
-const BTW_SYSTEM: &str = "You answer a quick side question from the user about their ongoing coding-agent session, \
+pub(crate) const BTW_SYSTEM: &str = "You answer a quick side question from the user about their ongoing coding-agent session, \
 shown below as a transcript (it may still be in progress). Answer only from the transcript, briefly and directly. \
 You can't run tools or change anything; if the transcript doesn't tell, say so.";
 /// How much of the transcript a `/btw` question sees, newest first.
-const BTW_CONTEXT_BYTES: usize = 120_000;
+pub(crate) const BTW_CONTEXT_BYTES: usize = 120_000;
 
 pub const COMMANDS: [(&str, &str); 25] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
@@ -2626,7 +2626,7 @@ fn undone_text(paths: &[String]) -> String {
     }
 }
 
-fn git_branch(cwd: &std::path::Path) -> Option<String> {
+pub(crate) fn git_branch(cwd: &std::path::Path) -> Option<String> {
     std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(cwd)

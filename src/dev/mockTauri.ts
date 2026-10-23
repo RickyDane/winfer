@@ -6,6 +6,7 @@ import type { Channel } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import pkg from "../../package.json";
+import { CODE_WEB_DEMO, seedCodeWeb } from "./codeWeb";
 import { drawApp, SHOWCASE, seedShowcase, showcaseState, stageScene, transcript } from "./showcase";
 import { KB_DEMO, knowledgeBaseExec, knowledgeBaseFile } from "./knowledgeBase";
 import { XP_DEMO, crossProjectExec, seedCrossProject } from "./crossProject";
@@ -73,6 +74,8 @@ if (XP_DEMO) {
   installMockPlugin("cross-project");
   seedCrossProject();
 }
+// `?codeweb` opens five winfer code panes, one per web UI look (see ./codeWeb.ts).
+if (CODE_WEB_DEMO) void seedCodeWeb();
 // `?bench` starts with winfer bench and a fake runner (see ./harnessBench.ts); so does showcase mode.
 if (BENCH_DEMO || SHOWCASE) installMockPlugin("harness-bench");
 // Fake keychain: the vault keeps values here.

@@ -1,0 +1,64 @@
+import { memo, useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Check, Copy } from "lucide-react";
+
+let highlighter: Promise<typeof import("shiki")> | undefined;
+
+function CodeBlock({ code, lang, dark }: { code: string; lang: string; dark: boolean }) {
+  const [html, setHtml] = useState<string>();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    let live = true;
+    highlighter ??= import("shiki");
+    highlighter
+      .then((s) => s.codeToHtml(code, { lang: lang || "text", theme: dark ? "github-dark-default" : "github-light-default" }))
+      .then((h) => live && setHtml(h))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [code, lang, dark]);
+  return (
+    <div className="cw-code">
+      <div className="cw-code-head">
+        <span>{lang || "text"}</span>
+        <button
+          className="cw-icon-btn"
+          onClick={() => {
+            void navigator.clipboard.writeText(code);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          title="Copy"
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      </div>
+      {html ? <div className="cw-code-body" dangerouslySetInnerHTML={{ __html: html }} /> : <pre className="cw-code-body"><code>{code}</code></pre>}
+    </div>
+  );
+}
+
+export const Markdown = memo(function Markdown({ text, dark }: { text: string; dark: boolean }) {
+  return (
+    <div className="cw-md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({ className, children }) {
+            const m = /language-(\w+)/.exec(className ?? "");
+            const src = String(children ?? "");
+            if (!m && !src.includes("\n")) return <code className="cw-inline">{children}</code>;
+            return <CodeBlock code={src.replace(/\n$/, "")} lang={m?.[1] ?? ""} dark={dark} />;
+          },
+          pre({ children }) {
+            return <>{children}</>;
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+});

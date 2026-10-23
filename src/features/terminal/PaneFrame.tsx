@@ -11,6 +11,8 @@ import { PaneTitleInput } from "./PaneTitleInput";
 import { PaneSearch } from "./PaneSearch";
 import { beginDrag, useDrag } from "@/features/layout/drag";
 import { TerminalHost } from "./TerminalHost";
+import { CodePane } from "@/features/code/CodePane";
+import { paneUsesWeb } from "@/features/code/styles";
 import { useStarting } from "./xtermRegistry";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { progressTitle, useProgress } from "@/features/progress/progress";
@@ -187,9 +189,15 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
       )}
 
       {searching && <PaneSearch paneId={pane.id} />}
-      <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
-        <TerminalHost pane={pane} focused={focused} />
-      </div>
+      {pane.provider === "winfer" && paneUsesWeb(pane.id) ? (
+        <div className="min-h-0 flex-1">
+          <CodePane pane={pane} focused={focused} />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
+          <TerminalHost pane={pane} focused={focused} />
+        </div>
+      )}
       {starting && (
         <div className={cn("anim-fade pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center", glass ? "top-20" : "top-8")}>
           <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">

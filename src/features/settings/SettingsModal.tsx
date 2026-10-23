@@ -19,6 +19,7 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
+import { useCodeWeb } from "@/features/code/styles";
 import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
 import {
   copyFile,
@@ -997,6 +998,7 @@ function HarnessSettings() {
   const setAutoApprove = useWorkspaces((s) => s.setAutoApprove);
   const leanCodex = useWorkspaces((s) => s.leanCodex);
   const setLeanCodex = useWorkspaces((s) => s.setLeanCodex);
+  const codeWeb = useCodeWeb();
 
   useEffect(() => {
     void invoke<HarnessSettings>("harness_settings").then((s) => {
@@ -1070,6 +1072,34 @@ function HarnessSettings() {
           </>
         }
       >
+        <Row label="Web UI" hint="New winfer code panes show a web interface (timeline of tool calls, inline diffs and approvals) instead of the terminal UI. Same sessions, settings and hooks; open panes keep what they started with.">
+          <Toggle label="Web UI" checked={codeWeb.web} onChange={(web) => codeWeb.set({ web })} />
+        </Row>
+        {codeWeb.web && (
+          <>
+            <Row label="Context meter" hint="How full the context window is, in the status line. Click it for the breakdown (also /cost).">
+              <Toggle label="Context meter" checked={codeWeb.showContext} onChange={(showContext) => codeWeb.set({ showContext })} />
+            </Row>
+            <Row label="Cost" hint="The session's cost in the status line, when the backend reports one (API pricing; your plan may cover it).">
+              <Toggle label="Cost" checked={codeWeb.showCost} onChange={(showCost) => codeWeb.set({ showCost })} />
+            </Row>
+            <Row label="Tokens per second" hint="Streaming speed next to the working indicator.">
+              <Toggle label="Tokens per second" checked={codeWeb.showRate} onChange={(showRate) => codeWeb.set({ showRate })} />
+            </Row>
+            <Row label="Plan above the composer" hint="The agent's todo list and running subagents.">
+              <Toggle label="Plan above the composer" checked={codeWeb.showPlan} onChange={(showPlan) => codeWeb.set({ showPlan })} />
+            </Row>
+            <Row label="Show thinking" hint="Keep the model's reasoning open once it's done.">
+              <Toggle label="Show thinking" checked={codeWeb.expandThinking} onChange={(expandThinking) => codeWeb.set({ expandThinking })} />
+            </Row>
+            <Row label="Live shell output" hint="Open a command's output while it runs.">
+              <Toggle label="Live shell output" checked={codeWeb.expandShell} onChange={(expandShell) => codeWeb.set({ expandShell })} />
+            </Row>
+            <Row label="Compact layout" hint="Tighter spacing in the transcript.">
+              <Toggle label="Compact layout" checked={codeWeb.compact} onChange={(compact) => codeWeb.set({ compact })} />
+            </Row>
+          </>
+        )}
         <Row label="Model" hint="Automatic uses your ChatGPT account when signed in (Settings → AI), else Claude Code or Codex.">
           {models === null && <Spinner size={13} className="text-fg-subtle" />}
           <Select value={settings.model} onChange={(e) => void save({ model: e.target.value })} className="w-64">

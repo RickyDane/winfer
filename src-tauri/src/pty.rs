@@ -157,6 +157,9 @@ pub struct SpawnRequest {
     /// MCP tools to leave out of the agent's tool list (Settings → Agent tools).
     #[serde(default)]
     hidden_tools: Vec<String>,
+    /// winfer code panes shown as the web UI: run `winfer code --serve` (JSON lines) instead of the TUI.
+    #[serde(default)]
+    serve: bool,
     cols: u16,
     rows: u16,
 }
@@ -439,6 +442,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             let opencode_v2 = provider.id == "opencode" && providers::opencode_v2(&launcher);
             // OpenCode 1 has no `--auto`; its config allows everything instead (see agent_env).
             let config_approve = req.auto_approve && provider.id == "opencode" && !opencode_v2;
+            if req.serve && provider.id == "winfer" {
+                provider.args.push("--serve".into());
+            }
             if req.auto_approve && !config_approve {
                 let extra = std::mem::take(&mut provider.auto_approve_args);
                 provider.args.extend(extra);
@@ -787,6 +793,7 @@ mod tests {
             plain: false,
             lean: false,
             hidden_tools: Vec::new(),
+            serve: false,
             cols: 80,
             rows: 24,
         };
@@ -890,6 +897,7 @@ mod tests {
             plain: false,
             lean: false,
             hidden_tools: Vec::new(),
+            serve: false,
             cols: 80,
             rows: 24,
         };
@@ -989,6 +997,7 @@ mod tests {
             plain: false,
             lean: false,
             hidden_tools: Vec::new(),
+            serve: false,
             cols: 80,
             rows: 24,
         };
