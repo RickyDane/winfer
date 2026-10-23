@@ -46,8 +46,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let act = activity(app, width, t);
     let working = app.working() && app.approvals.is_empty();
     let (top_row, extra) = if working { (working_rule(app, width, t), (act.width() > 0).then_some(act)) } else { (act, None) };
-    bottom_lines.insert(0, top_row);
-    let cursor = cursor.map(|(x, y)| (x, y + 1));
+    // A blank row keeps the prompt clear of the conversation (and the plan and queue) above.
+    bottom_lines.splice(0..0, [Line::default(), top_row]);
+    let cursor = cursor.map(|(x, y)| (x, y + 2));
     let bottom_h = (bottom_lines.len() as u16).min(area.height.saturating_sub(4));
     let activity_h = u16::from(extra.is_some());
     // The plan goes in a right sidebar when there's room (and it's on); else above the prompt.
