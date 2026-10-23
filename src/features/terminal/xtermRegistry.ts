@@ -208,6 +208,9 @@ function create(pane: Pane): Entry {
   // the app, not the PTY. Returning false skips xterm only; the browser still fires copy/paste events.
   term.attachCustomKeyEventHandler((e) => {
     if ((IS_MAC ? e.metaKey : e.ctrlKey && e.shiftKey) || isAppChord(e)) return false;
+    // Ctrl+V pastes like Ctrl+Shift+V: the browser's paste event carries text; an image-only
+    // clipboard is forwarded to the agent as a raw Ctrl+V below so it reads the image itself.
+    if (!IS_MAC && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.code === "KeyV") return false;
     // Option is Meta in panes, except for the characters a keyboard layout types with it
     // (Option+L is "@" on German layouts): type those.
     const typed = IS_MAC ? optionTypedChar(e) : null;
@@ -299,7 +302,16 @@ function create(pane: Pane): Entry {
     "paste",
     (e) => {
       const text = e.clipboardData?.getData("text/plain");
-      if (!text || !/[\r\n]/.test(text.trimEnd()) || term.modes.bracketedPasteMode || pane.provider === "shell") return;
+      if (!text) {
+        // No text (e.g. a screenshot): agents paste images on Ctrl+V by reading the clipboard.
+        if (!IS_MAC && pane.provider !== "shell" && entries.get(pane.id)?.spawned) {
+          e.preventDefault();
+          e.stopPropagation();
+          writeInput(pane.id, "\x16");
+        }
+        return;
+      }
+      if (!/[\r\n]/.test(text.trimEnd()) || term.modes.bracketedPasteMode || pane.provider === "shell") return;
       e.preventDefault();
       e.stopPropagation();
       pasteText(pane.id, text.replace(/\x1b\[20[01]~/g, "").replace(/\r?\n/g, "\r"));
