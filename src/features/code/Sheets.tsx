@@ -25,6 +25,7 @@ import {
 import clsx from "clsx";
 import { useCode, type Sheet } from "./store";
 import { COMMANDS, MODES, type TaskEv } from "./protocol";
+import { ModeIcon } from "./ModeIcon";
 import type { ContextPart } from "@/features/usage/usage";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
@@ -623,9 +624,9 @@ function ListSheet({ kind }: { kind: "model" | "effort" | "mode" }) {
               setSheet(null);
             }}
           >
-            {kind === "effort" ? (
+            {kind !== "model" ? (
               <span className="cw-pop-row">
-                <EffortIcon effort={i.id} size={16} />
+                {kind === "effort" ? <EffortIcon effort={i.id} size={16} /> : <ModeIcon mode={i.id} size={16} />}
                 <span>
                   <b>{i.label}</b>
                   {i.hint && <small>{i.hint}</small>}

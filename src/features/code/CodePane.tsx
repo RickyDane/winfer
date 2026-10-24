@@ -25,6 +25,7 @@ import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./Effort
 import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
 import { MODES } from "./protocol";
+import { ModeIcon } from "./ModeIcon";
 import { BgTasks, bgVisible } from "./BgTasks";
 import { loadPlanSidebar, usePlanSidebar } from "./planSidebar";
 import "./code.css";
@@ -235,11 +236,17 @@ function Footer({ pane }: { pane: Pane }) {
         title={`${m.hint} · shift+tab to cycle`}
         className={clsx("mode", `mode-${mode}`)}
         value={mode}
-        items={MODES.map((x) => ({ id: x.id, label: x.label, hint: x.hint }))}
+        items={MODES.map((x) => ({
+          id: x.id,
+          label: x.label,
+          hint: x.hint,
+          icon: <ModeIcon mode={x.id} size={16} />,
+        }))}
         onPick={(id) =>
           send({ type: "set_mode", mode: id as (typeof MODES)[number]["id"] })
         }
       >
+        <ModeIcon mode={mode} size={12} />
         {m.label}
       </Menu>
       <ModelMenu label={modelLabel} model={model} />
