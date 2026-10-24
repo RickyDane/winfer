@@ -9,6 +9,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type MouseEvent,
   type ReactNode,
@@ -95,8 +96,9 @@ const stop = (e: MouseEvent) => {
 /** `text` with its URLs and existing file paths as links. */
 export function Linkify({ text }: { text: string }) {
   const paneId = useContext(LinkPaneContext);
-  const pieces = split(text);
-  const paths = pieces.filter((p) => p.path).map((p) => p.path!);
+  // Scanning for paths takes milliseconds on a long tool output: once per text.
+  const pieces = useMemo(() => split(text), [text]);
+  const paths = useMemo(() => pieces.filter((p) => p.path).map((p) => p.path!), [pieces]);
   const key = paths.join("\0");
   const [found, setFound] = useState<Record<string, string | null>>({});
 

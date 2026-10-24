@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   Bot,
@@ -49,7 +49,11 @@ function useTicker(on: boolean) {
 
 const secs = elapsed;
 
-/** Animated open/close via a grid-rows transition, so content height animates without measuring. */
+/**
+ * Animated open/close via a grid-rows transition, so content height animates without measuring.
+ * The content mounts the first time it opens (a long session's collapsed tool output would
+ * otherwise all sit in the DOM) and stays mounted, so closing still animates.
+ */
 export function Collapse({
   open,
   children,
@@ -57,22 +61,26 @@ export function Collapse({
   open: boolean;
   children: ReactNode;
 }) {
+  const [mounted, setMounted] = useState(open);
+  if (open && !mounted) setMounted(true);
   return (
     <div className={clsx("cw-collapse", open && "open")}>
-      <div>{children}</div>
+      <div>{mounted && children}</div>
     </div>
   );
 }
 
-export function DiffView({ diff, max }: { diff: string; max?: number }) {
+type DiffRow = {
+  t: "add" | "del" | "ctx" | "hunk";
+  o?: number;
+  n?: number;
+  text: string;
+};
+
+function diffRows(diff: string): DiffRow[] {
   let oldN = 0;
   let newN = 0;
-  const rows: {
-    t: "add" | "del" | "ctx" | "hunk";
-    o?: number;
-    n?: number;
-    text: string;
-  }[] = [];
+  const rows: DiffRow[] = [];
   for (const line of diff.split("\n")) {
     if (line.startsWith("---") || line.startsWith("+++")) continue;
     const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
@@ -86,6 +94,11 @@ export function DiffView({ diff, max }: { diff: string; max?: number }) {
       rows.push({ t: "del", o: oldN++, text: line.slice(1) });
     else rows.push({ t: "ctx", o: oldN++, n: newN++, text: line.slice(1) });
   }
+  return rows;
+}
+
+export const DiffView = memo(function DiffView({ diff, max }: { diff: string; max?: number }) {
+  const rows = useMemo(() => diffRows(diff), [diff]);
   const shown = max ? rows.slice(0, max) : rows;
   return (
     <div className="cw-diff">
@@ -108,7 +121,7 @@ export function DiffView({ diff, max }: { diff: string; max?: number }) {
       )}
     </div>
   );
-}
+});
 
 function diffStat(diff: string) {
   let a = 0;
@@ -155,7 +168,9 @@ function NoticeText({ text }: { text: string }) {
   );
 }
 
-function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
+// Rows are memoized on their item: items are immutable and a streamed token replaces only the
+// item it belongs to, so the rest of a long transcript doesn't re-render on every token.
+const ToolCard = memo(function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const running = item.ok === undefined;
   const isShell = item.name === "Bash";
   const [open, setOpen] = useState<boolean | null>(null);
@@ -168,10 +183,11 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   );
   const openLog = useCode((s) => s.openTaskLog);
   const outRef = useRef<HTMLPreElement>(null);
+  // Also on opening: the output only mounts then.
   useEffect(() => {
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
-  }, [item.output]);
-  const stat = item.diff ? diffStat(item.diff) : null;
+  }, [item.output, expanded]);
+  const stat = useMemo(() => (item.diff ? diffStat(item.diff) : null), [item.diff]);
   const command = (item.input as { command?: string } | null)?.command;
   const hasBody = !!item.output || !!item.diff || !!command;
 
@@ -251,9 +267,9 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
       </Collapse>
     </div>
   );
-}
+});
 
-function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
+const Reasoning = memo(function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
   const [open, setOpen] = useState(useCodeWeb.getState().expandThinking);
   useTicker(item.streaming);
   const took = secs((item.ended ?? Date.now()) - item.started);
@@ -273,7 +289,7 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
       </Collapse>
     </div>
   );
-}
+});
 
 /** "Worked 12s" / "Worked 3m 05s" / "Worked 1h 02m". */
 function fmtWorked(ms: number) {
@@ -284,6 +300,49 @@ function fmtWorked(ms: number) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `Worked ${h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(sec)}s` : `${sec}s`}`;
 }
+
+const UserRow = memo(function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
+  const setPreview = useCode((s) => s.setPreview);
+  return (
+    <div className="cw-user cw-enter">
+      <div className="cw-user-bubble">
+        {item.images && (
+          <div className="cw-user-images">
+            {item.images.map((u, i) => (
+              <img
+                key={i}
+                src={u}
+                alt=""
+                onClick={() => setPreview({ images: item.images!, index: i })}
+                title="Preview"
+              />
+            ))}
+          </div>
+        )}
+        <Linkify text={item.text} />
+      </div>
+      {item.text && <CopyMessage text={item.text} />}
+    </div>
+  );
+});
+
+const TextRow = memo(function TextRow({ item, dark }: { item: Extract<Item, { kind: "text" }>; dark: boolean }) {
+  return (
+    <div className={clsx("cw-assistant cw-enter", item.streaming && "streaming")}>
+      <Markdown text={item.text} dark={dark} streaming={item.streaming} />
+      {!item.streaming && item.text && <CopyMessage text={item.text} />}
+    </div>
+  );
+});
+
+const NoticeRow = memo(function NoticeRow({ item }: { item: Extract<Item, { kind: "notice" }> }) {
+  return (
+    <div className={clsx("cw-notice cw-enter", item.tone)}>
+      {item.tone === "error" ? <TriangleAlert size={13} /> : <Info size={13} />}
+      <NoticeText text={item.text} />
+    </div>
+  );
+});
 
 /** No turn has run yet: the welcome screen is showing. */
 export function useFresh() {
@@ -299,7 +358,6 @@ export function useFresh() {
 export function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
-  const setPreview = useCode((s) => s.setPreview);
   const fresh = useFresh();
   const end = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -368,42 +426,9 @@ export function Transcript({ dark }: { dark: boolean }) {
         {items.map((it) => {
           switch (it.kind) {
             case "user":
-              return (
-                <div key={it.key} className="cw-user cw-enter">
-                  <div className="cw-user-bubble">
-                    {it.images && (
-                      <div className="cw-user-images">
-                        {it.images.map((u, i) => (
-                          <img
-                            key={i}
-                            src={u}
-                            alt=""
-                            onClick={() =>
-                              setPreview({ images: it.images!, index: i })
-                            }
-                            title="Preview"
-                          />
-                        ))}
-                      </div>
-                    )}
-                    <Linkify text={it.text} />
-                  </div>
-                  {it.text && <CopyMessage text={it.text} />}
-                </div>
-              );
+              return <UserRow key={it.key} item={it} />;
             case "text":
-              return (
-                <div
-                  key={it.key}
-                  className={clsx(
-                    "cw-assistant cw-enter",
-                    it.streaming && "streaming",
-                  )}
-                >
-                  <Markdown text={it.text} dark={dark} />
-                  {!it.streaming && it.text && <CopyMessage text={it.text} />}
-                </div>
-              );
+              return <TextRow key={it.key} item={it} dark={dark} />;
             case "reasoning":
               return <Reasoning key={it.key} item={it} />;
             case "tool":
@@ -415,19 +440,7 @@ export function Transcript({ dark }: { dark: boolean }) {
                 </div>
               );
             case "notice":
-              return (
-                <div
-                  key={it.key}
-                  className={clsx("cw-notice cw-enter", it.tone)}
-                >
-                  {it.tone === "error" ? (
-                    <TriangleAlert size={13} />
-                  ) : (
-                    <Info size={13} />
-                  )}
-                  <NoticeText text={it.text} />
-                </div>
-              );
+              return <NoticeRow key={it.key} item={it} />;
           }
         })}
         {busy && items.at(-1)?.kind === "user" && (
