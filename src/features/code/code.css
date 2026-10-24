@@ -1184,7 +1184,7 @@
 .cw-pane .cw-tool-out,
 .cw-pane .cw-diff {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   margin: 2px 0 8px;
 }
 .cw-pane .cw-reason-body {
