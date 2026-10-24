@@ -13,6 +13,7 @@ import clsx from "clsx";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { themeById } from "@/features/theme/themes";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { nameFromHistory, setTask } from "@/features/progress/progress";
 import { CodeStoreContext, createCodeStore, useCode } from "./store";
 import { Transcript, Collapse, useFresh } from "./Transcript";
 import { LinkPaneContext } from "./Links";
@@ -391,8 +392,28 @@ function storeFor(pane: Pane) {
     } else {
       s.getState().attach(new PtyTransport(pane));
     }
+    trackTitle(pane.id, s);
   }
   return s;
+}
+
+/**
+ * Names the pane like a terminal agent's: each message the user sends (typed, the start prompt,
+ * or sent from elsewhere) becomes its task, and the first one gets an LLM title for the header.
+ * A resumed session without a saved title is named from its first restored message.
+ */
+function trackTitle(paneId: string, store: ReturnType<typeof createCodeStore>) {
+  store.subscribe((st, prev) => {
+    if (st.items === prev.items) return;
+    const appended = st.items.length > prev.items.length && st.items[prev.items.length - 1] === prev.items.at(-1);
+    // Undo and /clear shrink the list: nothing new was said.
+    const added = appended ? st.items.slice(prev.items.length) : st.items;
+    const users = added.filter((i) => i.kind === "user");
+    const live = appended && users.filter((i) => i.at > 0).at(-1);
+    if (live) return setTask(paneId, live.text);
+    const restored = users.find((i) => i.at === 0 && i.text.trim());
+    if (restored) nameFromHistory(paneId, restored.text);
+  });
 }
 
 /** winfer code as a web UI: what a winfer pane shows instead of the terminal TUI. */

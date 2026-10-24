@@ -105,6 +105,17 @@ export function setTask(paneId: string, text: string) {
   if (!get(paneId).title && !naming.has(paneId)) void nameSession(paneId, task);
 }
 
+/**
+ * A resumed session whose title wasn't saved: named from its first message, without restarting
+ * its progress (it isn't working on anything yet).
+ */
+export function nameFromHistory(paneId: string, message: string) {
+  const p = get(paneId);
+  if (p.title || naming.has(paneId)) return;
+  if (!p.task) patch(paneId, { task: message.trim() });
+  void nameSession(paneId, message);
+}
+
 const NAMING = [
   "You name a coding agent's session for a list of sessions, like a short issue title.",
   "Given the user's first message to the agent, reply with a title of 2 to 6 words summarizing the goal of the work,",
