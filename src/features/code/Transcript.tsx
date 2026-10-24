@@ -255,7 +255,9 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
 /** "Worked 12s" / "Worked 3m 05s" / "Worked 1h 02m". */
 function fmtWorked(ms: number) {
   const t = Math.max(1, Math.round(ms / 1000));
-  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  const h = Math.floor(t / 3600),
+    m = Math.floor((t % 3600) / 60),
+    sec = t % 60;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `Worked ${h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(sec)}s` : `${sec}s`}`;
 }
@@ -319,12 +321,21 @@ export function Transcript({ dark }: { dark: boolean }) {
     <div
       className="cw-scroll"
       ref={scroller}
+      onWheel={(e) => {
+        // Unstick on intent, before a streaming resize can snap back down.
+        if (e.deltaY < 0 && stick.current) {
+          stick.current = false;
+          setAway(true);
+        }
+      }}
       onScroll={(e) => {
         const el = e.currentTarget;
-        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        // Only an upward scroll by the user unsticks; programmatic scrolls go down.
-        if (atBottom) stick.current = true;
-        else if (el.scrollTop < lastTop.current) stick.current = false;
+        const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+        // Any upward move away from the bottom unsticks (programmatic scrolls go
+        // down; content shrinking only clamps us, leaving dist ~0). Checked
+        // before the near-bottom zone so a small scroll-up isn't re-stuck.
+        if (el.scrollTop < lastTop.current && dist > 2) stick.current = false;
+        else if (dist < 80) stick.current = true;
         lastTop.current = el.scrollTop;
         setAway(!stick.current);
       }}

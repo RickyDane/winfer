@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { Linkify, linkifyChildren, MarkdownLink } from "./Links";
@@ -63,6 +63,45 @@ function CodeBlock({
   );
 }
 
+const remarkPlugins = [remarkGfm];
+
+// Built once per theme: a fresh `components` object each render would hand
+// react-markdown new component types, remounting every code block on each
+// streamed token (losing its highlight and making the transcript jump).
+function makeComponents(dark: boolean): Components {
+  return {
+    code({ className, children }) {
+      const m = /language-(\w+)/.exec(className ?? "");
+      const src = String(children ?? "");
+      if (!m && !src.includes("\n"))
+        return (
+          <code className="cw-inline">
+            <Linkify text={src} />
+          </code>
+        );
+      return (
+        <CodeBlock
+          code={src.replace(/\n$/, "")}
+          lang={m?.[1] ?? ""}
+          dark={dark}
+        />
+      );
+    },
+    pre({ children }) {
+      return <>{children}</>;
+    },
+    a: ({ href, children }) => (
+      <MarkdownLink href={href}>{children}</MarkdownLink>
+    ),
+    p: ({ children }) => <p>{linkifyChildren(children)}</p>,
+    li: ({ children }) => <li>{linkifyChildren(children)}</li>,
+    td: ({ children }) => <td>{linkifyChildren(children)}</td>,
+    th: ({ children }) => <th>{linkifyChildren(children)}</th>,
+  };
+}
+const componentsLight = makeComponents(false);
+const componentsDark = makeComponents(true);
+
 export const Markdown = memo(function Markdown({
   text,
   dark,
@@ -73,36 +112,8 @@ export const Markdown = memo(function Markdown({
   return (
     <div className="cw-md">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code({ className, children }) {
-            const m = /language-(\w+)/.exec(className ?? "");
-            const src = String(children ?? "");
-            if (!m && !src.includes("\n"))
-              return (
-                <code className="cw-inline">
-                  <Linkify text={src} />
-                </code>
-              );
-            return (
-              <CodeBlock
-                code={src.replace(/\n$/, "")}
-                lang={m?.[1] ?? ""}
-                dark={dark}
-              />
-            );
-          },
-          pre({ children }) {
-            return <>{children}</>;
-          },
-          a: ({ href, children }) => (
-            <MarkdownLink href={href}>{children}</MarkdownLink>
-          ),
-          p: ({ children }) => <p>{linkifyChildren(children)}</p>,
-          li: ({ children }) => <li>{linkifyChildren(children)}</li>,
-          td: ({ children }) => <td>{linkifyChildren(children)}</td>,
-          th: ({ children }) => <th>{linkifyChildren(children)}</th>,
-        }}
+        remarkPlugins={remarkPlugins}
+        components={dark ? componentsDark : componentsLight}
       >
         {text}
       </ReactMarkdown>
