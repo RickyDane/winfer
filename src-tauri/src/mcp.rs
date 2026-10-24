@@ -104,6 +104,22 @@ fn tools() -> Value {
                 "cancel": { "type": "boolean", "description": "Cancel your pending wake-up instead" }
             } }
         },
+        {
+            "name": "list_chats",
+            "description": "List the user's saved winfer code chats (past conversations with agents in winfer code), newest first: id, when, model, folder and title. Use it with read_chat when the user refers to earlier chats, e.g. \"look at our last chats and …\".",
+            "inputSchema": { "type": "object", "properties": {
+                "all": { "type": "boolean", "description": "Chats from every folder, not only your working directory and the folders inside it" },
+                "limit": { "type": "integer", "description": "How many (default 20, max 100)" }
+            } }
+        },
+        {
+            "name": "read_chat",
+            "description": "Read a saved winfer code chat's transcript (user and assistant messages; tool calls shortened). Long chats keep their newest messages.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "string", "description": "Chat id from list_chats, or \"latest\" for the newest chat in your working directory" },
+                "tools": { "type": "boolean", "description": "Include tool calls (default true)" }
+            }, "required": ["id"] }
+        },
         crate::harness::bg::mcp_tool(code_bg().is_some())
     ])
 }
@@ -132,6 +148,21 @@ pub(crate) fn bg_call(call: &Call) -> Reply {
     Reply { ok: out.ok, text: out.output }
 }
 
+/// `list_chats` / `read_chat`: saved winfer code chats, read from disk here.
+fn chat_call(call: &Call) -> Option<Reply> {
+    use crate::harness::session;
+    let cwd = call.cwd.clone().unwrap_or_default();
+    let a = &call.args;
+    match call.tool.as_str() {
+        "list_chats" => Some(Reply { ok: true, text: session::chats_text(&cwd, a["all"].as_bool().unwrap_or(false), a["limit"].as_u64().unwrap_or(20) as usize) }),
+        "read_chat" => Some(match session::chat_text(a["id"].as_str().unwrap_or_default(), &cwd, a["tools"].as_bool().unwrap_or(true)) {
+            Ok(text) => Reply { ok: true, text },
+            Err(text) => Reply { ok: false, text },
+        }),
+        _ => None,
+    }
+}
+
 /// Exit notices for `bg` tasks of pane agents: the webview types them into the pane once the
 /// agent is idle (see `bgNotices.ts`).
 pub fn listen_bg(app: AppHandle) {
@@ -151,6 +182,9 @@ pub fn listen_bg(app: AppHandle) {
 pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
     if call.tool == "bg" {
         return bg_call(&call);
+    }
+    if let Some(reply) = chat_call(&call) {
+        return reply;
     }
     call.id = format!("{:016x}", rand::random::<u64>());
     let (tx, rx) = mpsc::channel();
@@ -230,7 +264,7 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "winfer", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets. The browser is shared with the user: before opening a page, list its open tabs and, when one already shows related content (the same site, dev server or page), select it and work there instead of opening another tab; open a new tab for unrelated content rather than navigating a tab the user has open away. To click, type in or fill page elements, take a browser_snapshot and use browser_click, browser_type or browser_fill_form with its element refs instead of querying the DOM in browser_evaluate; if you must click from browser_evaluate, check the element exists first and return a clear message when it doesn't. Run dev servers, watchers, loops and other long-running commands with bg instead of backgrounding them in your shell (&, nohup, run_in_background, a kept-open terminal session): wait on them with bg read until (not sleep loops) and stop them when done; winfer tells you in this pane when one exits."
+            "instructions": "You are running inside winfer, a workspace of terminal panes with other coding agents. Use these tools to coordinate with them and to show things to the user. list_chats and read_chat give you the user's earlier winfer code chats, for when they refer to past conversations. usage_status tells you exactly how much of your plan's usage is left; wait_for_usage_reset pauses you until it resets. The browser is shared with the user: before opening a page, list its open tabs and, when one already shows related content (the same site, dev server or page), select it and work there instead of opening another tab; open a new tab for unrelated content rather than navigating a tab the user has open away. To click, type in or fill page elements, take a browser_snapshot and use browser_click, browser_type or browser_fill_form with its element refs instead of querying the DOM in browser_evaluate; if you must click from browser_evaluate, check the element exists first and return a clear message when it doesn't. Run dev servers, watchers, loops and other long-running commands with bg instead of backgrounding them in your shell (&, nohup, run_in_background, a kept-open terminal session): wait on them with bg read until (not sleep loops) and stop them when done; winfer tells you in this pane when one exits."
         }),
         "ping" => json!({}),
         // Outside the app (winfer code on its own) only winfer code's `bg` works.
@@ -691,6 +725,8 @@ mod tests {
                 "ask_user",
                 "usage_status",
                 "wait_for_usage_reset",
+                "list_chats",
+                "read_chat",
                 "bg"
             ]
         );
