@@ -282,6 +282,18 @@
   letter-spacing: -0.01em;
   margin: 18px 0 8px;
 }
+/* URLs and file paths: open in winfer's browser / viewer, like the TUI's terminal links. */
+.cw-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.cw-link:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
 .cw-inline {
   font-family: var(--font-mono);
   font-size: 0.86em;
@@ -720,6 +732,49 @@
 .cw-approval-actions .cw-btn {
   white-space: nowrap;
   padding: 5px 11px;
+}
+.cw-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 14px 10px;
+}
+.cw-question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cw-question-option:hover {
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+}
+.cw-question-option.on {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.cw-question-option span {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.cw-question-option small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.cw-question-own {
+  padding: 7px 10px;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
 }
 
 .cw-status {
@@ -1203,33 +1258,61 @@
   gap: 4px;
   font-size: 12.5px;
 }
-.cw-plan .cw-task {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  font-size: 12.5px;
-  border-top: 1px solid var(--border);
-}
-.cw-plan .cw-task:first-child {
-  border-top: 0;
-}
-.cw-plan .cw-task > svg {
-  color: var(--accent);
-  animation: cw-breathe 1.6s ease-in-out infinite;
-}
+/* Background tasks (BgTasks.tsx) — the compact activity timeline below the plan. */
 @keyframes cw-breathe {
   50% {
     opacity: 0.45;
   }
 }
-.cw-plan .cw-task small {
-  flex: 1;
-  min-width: 0;
+.cw-bg-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.cw-bg-actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+.cw-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--del) 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--del) 8%, transparent);
+  color: var(--del);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.1s var(--ease);
+}
+.cw-stop-btn:hover {
+  background: color-mix(in srgb, var(--del) 18%, transparent);
+  border-color: var(--del);
+}
+.cw-stop-btn:active {
+  transform: scale(0.93);
+}
+.cw-stop-btn.busy {
+  cursor: default;
+  opacity: 0.85;
+  animation: cw-ping-soft 1s var(--ease) infinite alternate;
+}
+.cw-stop-btn .cw-spinner {
+  width: 11px;
+  height: 11px;
+  border-color: color-mix(in srgb, var(--del) 25%, transparent);
+  border-top-color: var(--del);
+}
+@keyframes cw-ping-soft {
+  to {
+    background: color-mix(in srgb, var(--del) 22%, transparent);
+  }
 }
 .cw-icon-btn.sm {
   width: 22px;
@@ -1995,12 +2078,8 @@ button.cw-foot-item.active {
   margin-top: 4px;
   flex: none;
 }
-.cw-plan .cw-task.clickable,
 .cw-chip.clickable {
   cursor: pointer;
-}
-.cw-plan .cw-task.clickable:hover b {
-  color: var(--accent);
 }
 .cw-chip.clickable:hover {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
@@ -2388,4 +2467,205 @@ label.cw-icon-btn {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+.cw-jump-wrap {
+  position: sticky;
+  bottom: 12px;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+}
+.cw-jump {
+  pointer-events: auto;
+  position: absolute;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, var(--bg, #111));
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  cursor: pointer;
+  animation: cw-jump-in 0.18s var(--ease, ease-out);
+}
+.cw-jump:hover {
+  background: color-mix(in srgb, var(--fg) 14%, var(--bg, #111));
+}
+@keyframes cw-jump-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* ═══ Background tasks: compact activity timeline ═══ */
+.cw-plan:not(:has(*)) {
+  display: none;
+}
+.cw-plan > * + .cw-bgl {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.cw-tlf-row {
+  --tint: var(--accent);
+}
+.cw-tlf-row.shell {
+  --tint: var(--ok);
+}
+@keyframes cw-bgc-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes cw-bgl-pulse {
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tint) 18%, transparent);
+  }
+}
+
+.cw-bgl.compact {
+  padding: 3px 2px;
+}
+.cw-tlf-row {
+  padding: 3px 5px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cw-tlf-row:hover {
+  background: color-mix(in srgb, var(--tint) 6%, transparent);
+}
+.cw-tlf-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 22px;
+  font-size: 12px;
+}
+.cw-tlf-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+}
+.cw-tlf-top b {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.cw-tlf-kind {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10.5px;
+  color: var(--tint);
+  opacity: 0.85;
+}
+.cw-tlf-line {
+  flex: 1;
+  min-width: 0;
+  margin-left: 2px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-tlf-top .cw-bg-time {
+  margin-left: auto;
+  font-size: 10.5px;
+}
+.cw-tlf-top .cw-icon-btn.sm {
+  width: 18px;
+  height: 18px;
+}
+/* The time sits on the far right; on hover the stop button slides in and pushes it left. */
+.cw-tlf-row .cw-bg-actions {
+  max-width: 0;
+  margin-left: -6px;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 0.2s var(--ease), margin-left 0.2s var(--ease), opacity 0.15s var(--ease);
+}
+.cw-tlf-row:hover .cw-bg-actions,
+.cw-tlf-row .cw-bg-actions:has(.busy) {
+  max-width: 90px;
+  margin-left: 0;
+  opacity: 1;
+}
+.cw-tlf-top .cw-stop-btn {
+  height: 20px;
+  gap: 4px;
+  padding: 0 7px 0 5px;
+  white-space: nowrap;
+}
+.cw-tlf-top .cw-stop-btn svg {
+  width: 11px;
+  height: 11px;
+}
+.cw-tlf-top .cw-stop-btn .cw-spinner {
+  width: 9px;
+  height: 9px;
+}
+.cw-tlf-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 1px 0 0 7px;
+  padding-left: 15px;
+}
+.cw-tlf-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -3px;
+  width: 9px;
+  height: 11px;
+  border-left: 1px solid color-mix(in srgb, var(--tint) 40%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--tint) 40%, transparent);
+  border-bottom-left-radius: 5px;
+}
+.cw-tlf-step {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  color: var(--dim);
+  animation: cw-bgc-in 0.25s var(--ease);
+}
+.cw-tlf-step.cur {
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 16%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tint) 45%, transparent);
+  animation: cw-bgl-pulse 1.4s ease-in-out infinite;
+}
+.cw-tlf-cur {
+  min-width: 0;
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

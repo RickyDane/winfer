@@ -1,19 +1,127 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ShieldCheck, Square, X } from "lucide-react";
+import { ArrowUp, MessageCircleQuestion, ShieldCheck, Square, X } from "lucide-react";
 import clsx from "clsx";
 import { useContext } from "react";
 import { CodeStoreContext, useCode } from "./store";
 import { runCommand } from "./commands";
 import { fmt, useRate } from "./Sheets";
 import { useCodeWeb } from "./styles";
-import { COMMANDS, MODES } from "./protocol";
+import { COMMANDS, MODES, type Approval } from "./protocol";
 import { DiffView } from "./Transcript";
+
+/** An approval with questions (Claude Code's AskUserQuestion): pick an option per question (or
+ *  type one), then the answers go back as `answer`; declining goes through `approve` deny. */
+function Questions({ a, more }: { a: Approval; more: number }) {
+  const send = useCode((s) => s.send);
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState<string[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [own, setOwn] = useState("");
+  const q = a.questions[step];
+  const decline = () => send({ type: "approve", id: a.id, decision: "deny" });
+  const commit = (answer: string) => {
+    const next = [...answers, answer];
+    setPicked([]);
+    setOwn("");
+    if (step + 1 < a.questions.length) {
+      setAnswers(next);
+      setStep(step + 1);
+    } else send({ type: "answer", id: a.id, answers: next });
+  };
+  const pick = (label: string) => {
+    if (!q.multi) return commit(label);
+    setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
+  };
+  const multiAnswer = [...picked, own.trim()].filter(Boolean).join(", ");
+
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        decline();
+        return;
+      }
+      const n = Number(e.key);
+      if (n >= 1 && n <= q.options.length) {
+        e.preventDefault();
+        pick(q.options[n - 1].label);
+      }
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  });
+
+  return (
+    <div className="cw-approval" key={a.id}>
+      <div className="cw-approval-head">
+        <MessageCircleQuestion size={16} />
+        <div>
+          <b>{q.question}</b>
+          <small>
+            {q.header}
+            {a.questions.length > 1 && ` · ${step + 1}/${a.questions.length}`}
+            {q.multi && " · pick any"}
+          </small>
+        </div>
+        {more > 0 && <span className="cw-chip">+{more} more</span>}
+      </div>
+      <div className="cw-question-options">
+        {q.options.map((o, i) => (
+          <button
+            key={o.label}
+            className={clsx("cw-question-option", picked.includes(o.label) && "on")}
+            onClick={() => pick(o.label)}
+          >
+            <kbd>{i + 1}</kbd>
+            <span>
+              <b>{o.label}</b>
+              {o.description && <small>{o.description}</small>}
+            </span>
+          </button>
+        ))}
+        <input
+          className="cw-question-own"
+          placeholder="Type something…"
+          value={own}
+          onChange={(e) => setOwn(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              decline();
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              const v = q.multi ? multiAnswer : own.trim();
+              if (v) commit(v);
+            }
+          }}
+        />
+      </div>
+      <div className="cw-approval-actions">
+        {(q.multi || own.trim()) && (
+          <button
+            className="cw-btn primary"
+            disabled={!(q.multi ? multiAnswer : own.trim())}
+            onClick={() => commit(q.multi ? multiAnswer : own.trim())}
+          >
+            {step + 1 < a.questions.length ? "Next" : "Submit"}
+          </button>
+        )}
+        <button className="cw-btn ghost danger" onClick={decline}>
+          Decline <kbd>Esc</kbd>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function Approvals() {
   const approvals = useCode((s) => s.approvals);
   const send = useCode((s) => s.send);
   const a = approvals[0];
   if (!a) return null;
+  if (a.questions?.length) return <Questions key={a.id} a={a} more={approvals.length - 1} />;
   return (
     <div className="cw-approval" key={a.id}>
       <div className="cw-approval-head">
@@ -104,7 +212,7 @@ export function Composer({ focused }: { focused: boolean }) {
         send({ type: "set_mode", mode: MODES[(i + 1) % MODES.length].id });
         return;
       }
-      if (!a || text || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!a || a.questions?.length || text || e.metaKey || e.ctrlKey || e.altKey) return;
       const d = { y: "allow", a: "always", n: "deny" }[e.key.toLowerCase()] as "allow" | "always" | "deny" | undefined;
       if (d) {
         e.preventDefault();
@@ -115,12 +223,28 @@ export function Composer({ focused }: { focused: boolean }) {
     return () => window.removeEventListener("keydown", on);
   }, [focused, sheet, approvals, text, busy, mode, send]);
 
-  useEffect(() => {
+  const fit = () => {
     const el = ta.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 220) + "px";
-  }, [text]);
+  };
+  useEffect(fit, [text]);
+  // A resumed session can mount while the pane is still hidden/narrow, so the
+  // placeholder wraps and the first measurement sticks. Re-fit on width changes.
+  useEffect(() => {
+    const el = ta.current;
+    if (!el) return;
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === w) return;
+      w = el.clientWidth;
+      fit();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const go = () => {
     if (attachments.length || !runCommand(text, store)) submit(text, attachments);
