@@ -2895,3 +2895,19 @@ label.cw-icon-btn {
   height: auto;
   max-height: min(280px, calc(100cqh - 190px));
 }
+
+/* A model's capability tier in the pickers: feather (fast), scales (balanced), brain (most capable). */
+.cw-tier {
+  display: inline-flex;
+  flex: none;
+  color: var(--dim);
+}
+.cw-tier-fast {
+  color: var(--ok);
+}
+.cw-tier-balanced {
+  color: var(--accent);
+}
+.cw-tier-frontier {
+  color: var(--warn);
+}

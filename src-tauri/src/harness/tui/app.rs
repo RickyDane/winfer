@@ -1392,7 +1392,8 @@ impl App {
                     Some(k) => k.label(),
                     None => "Codex",
                 };
-                PickItem::new(m.label.clone(), m.detail.clone(), m.spec.clone()).group(group).current(m.spec == current)
+                let tier = super::view::ModelTier::of(&m.spec, &m.detail).glyph();
+                PickItem::new(format!("{tier} {}", m.label), m.detail.clone(), m.spec.clone()).group(group).current(m.spec == current)
             })
             .collect();
         if items.is_empty() {
@@ -1415,7 +1416,8 @@ impl App {
         let mut items = vec![PickItem::new("Same as main model", "subagents inherit the model you orchestrate with", "").current(cur.is_empty())];
         items.extend(self.models.iter().filter_map(|m| {
             let id = m.spec.strip_prefix(&prefix)?;
-            Some(PickItem::new(m.label.clone(), m.detail.clone(), id).current(id == cur))
+            let tier = super::view::ModelTier::of(&m.spec, &m.detail).glyph();
+            Some(PickItem::new(format!("{tier} {}", m.label), m.detail.clone(), id).current(id == cur))
         }));
         let mut p = Picker::new(PickKind::SubModel, "Subagent model", items);
         p.loading = self.models.is_empty();

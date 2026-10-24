@@ -30,6 +30,7 @@ import type { ContextPart } from "@/features/usage/usage";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
 import { useCodeWeb } from "./styles";
+import { ModelTierIcon } from "./ModelTierIcon";
 import { PART_COLORS } from "@/features/usage/contextParts";
 import { BACKENDS, baseSpec, fastSpec, isFast, modelName, modelTags } from "./names";
 
@@ -568,6 +569,7 @@ export function ModelPicker() {
                     }}
                   >
                     {active === "favorites" && <ProviderIcon provider={logoFor(m.spec)} size={13} />}
+                    <ModelTierIcon spec={m.spec} detail={m.detail} />
                     <span>
                       <b>
                         {modelName(m.spec, resolved, m.spec === picked ? actualModel : null)}
@@ -633,6 +635,7 @@ export function SubagentPicker() {
         {rows.map((m) => (
           <div key={m.spec} className={clsx("cw-list-item model", m.spec === spec && "sel")}>
             <button className="cw-model-pick" onClick={() => pick(id(m.spec))}>
+              <ModelTierIcon spec={m.spec} detail={m.detail} />
               <span>
                 <b>{modelName(m.spec, resolved)}</b>
                 {m.detail && <small>{m.detail}</small>}

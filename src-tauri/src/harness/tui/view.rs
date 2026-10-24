@@ -842,6 +842,43 @@ fn question_lines(app: &App, width: usize, t: Duration) -> Vec<Line<'static>> {
     out
 }
 
+/// What a model is for, from its name and the backend's description (as `modelTier` in the web
+/// UI's names.ts): small fast models, everyday ones, and the most capable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelTier {
+    Fast,
+    Balanced,
+    Frontier,
+}
+
+impl ModelTier {
+    pub fn of(spec: &str, detail: &str) -> Self {
+        const FAST: [&str; 11] = ["haiku", "mini", "nano", "flash", "lite", "small", "spark", "instant", "fast", "fastest", "cheap"];
+        const FRONTIER: [&str; 10] = ["fable", "opus", "pro", "max", "ultra", "capable", "frontier", "flagship", "complex", "hardest"];
+        let words = |t: &str| t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect::<Vec<_>>();
+        let model = spec.split_once('/').map_or(spec, |(_, m)| m);
+        let model = model.strip_suffix("-fast").unwrap_or(model);
+        for w in [words(model), words(detail)] {
+            if w.iter().any(|w| FAST.contains(&w.as_str())) {
+                return ModelTier::Fast;
+            }
+            if w.iter().any(|w| FRONTIER.contains(&w.as_str())) {
+                return ModelTier::Frontier;
+            }
+        }
+        ModelTier::Balanced
+    }
+
+    /// One cell wide, for the pickers: ↯ fast, ◇ balanced, ◆ most capable.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            ModelTier::Fast => "↯",
+            ModelTier::Balanced => "◇",
+            ModelTier::Frontier => "◆",
+        }
+    }
+}
+
 /// A model as people say it, the way winfer's pane headers show it (`src/lib/modelName.ts`):
 /// no provider, speed, effort or date suffixes. `codex/gpt-6.1-sol-fast` → `GPT 6.1 Sol`,
 /// `claude-opus-4-7` → `Opus 4.7`, `claude-3-5-haiku` → `Haiku 3.5`.
@@ -1370,6 +1407,18 @@ fn nebula_border(f: &mut Frame, area: Rect, t: Duration, k: f32) {
 #[cfg(test)]
 mod model_name_tests {
     use super::friendly_model;
+
+    /// The same cases as the web UI's `modelTier` tests (src/features/code/names.test.ts).
+    #[test]
+    fn model_tiers() {
+        use super::ModelTier::*;
+        let t = super::ModelTier::of;
+        assert_eq!([t("claude/haiku", ""), t("claude/sonnet", ""), t("claude/opus", ""), t("codex/gpt-6-mini", "")], [Fast, Balanced, Frontier, Fast]);
+        assert_eq!(t("codex/gpt-6.1-pro-fast", ""), Frontier);
+        assert_eq!(t("codex/gpt-6.1-sol", "Codex · Frontier agentic coding model"), Frontier);
+        assert_eq!(t("claude/haiku", "most capable"), Fast);
+        assert_eq!(t("chatgpt/gpt-6.1-sol", "ChatGPT account · winfer tools"), Balanced);
+    }
 
     /// The same cases as the pane headers' `src/lib/modelName.test.ts`.
     #[test]

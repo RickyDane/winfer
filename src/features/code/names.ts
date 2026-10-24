@@ -48,3 +48,20 @@ export const fastSpec = (spec: string, models: { spec: string }[]) => {
   const f = baseSpec(spec) + FAST;
   return models.some((m) => m.spec === f) ? f : null;
 };
+
+/** What a model is for, from its name and the backend's description of it (see `model_tier` in
+ * tui/view.rs, which the TUI uses): small fast models, everyday ones, and the most capable. */
+export type ModelTier = "fast" | "balanced" | "frontier";
+
+const FAST_RE = /\b(haiku|mini|nano|flash|lite|small|spark|instant|fast|fastest|cheap)\b/;
+const FRONTIER_RE = /\b(fable|opus|pro|max|ultra|most capable|frontier|flagship|complex|deep|hardest)\b/;
+
+export function modelTier(spec: string, detail = ""): ModelTier {
+  const name = baseSpec(spec).split("/").slice(1).join(" ").replace(/[-_.:[\]]/g, " ").toLowerCase();
+  if (FAST_RE.test(name)) return "fast";
+  if (FRONTIER_RE.test(name)) return "frontier";
+  const d = detail.toLowerCase();
+  if (FAST_RE.test(d)) return "fast";
+  if (FRONTIER_RE.test(d)) return "frontier";
+  return "balanced";
+}
