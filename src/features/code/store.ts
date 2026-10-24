@@ -35,7 +35,9 @@ export type Item =
       started: number;
       ended?: number;
     }
-  | { kind: "notice"; key: string; text: string; tone: "info" | "error" };
+  | { kind: "notice"; key: string; text: string; tone: "info" | "error" }
+  /** Total time the agent worked since the last user message, shown under its last response. */
+  | { kind: "worked"; key: string; ms: number };
 
 export interface CodeState {
   session?: string;
@@ -258,12 +260,24 @@ export const createCodeStore = () =>
           return { items: [...items, { kind: "notice", key: key(), text: ev.text, tone: "error" }] };
         case "turn_start":
           return { busy: true, turnStarted: Date.now(), rate: null, usage: { ...s.usage, turn: 0, turn_input: 0, turn_cached: 0, turn_streamed: 0 } };
-        case "turn_done":
+        case "turn_done": {
+          const closed = closeReasoning(items).map((i) => (i.kind === "text" && i.streaming ? { ...i, streaming: false } : i));
+          // Follow-up turns without a new user message (queued steers, background
+          // task wake-ups) add up into one total under the latest response.
+          const lastUser = findLastIndex(closed, (i) => i.kind === "user");
+          let ms = s.turnStarted ? Date.now() - s.turnStarted : 0;
+          const kept = closed.filter((i, idx) => {
+            if (i.kind !== "worked" || idx < lastUser) return true;
+            ms += i.ms;
+            return false;
+          });
+          const worked = kept.slice(lastUser + 1).some((i) => i.kind === "text" || i.kind === "tool" || i.kind === "reasoning");
           return {
             busy: false,
             approvals: [],
-            items: closeReasoning(items).map((i) => (i.kind === "text" && i.streaming ? { ...i, streaming: false } : i)),
+            items: worked && ms > 0 ? [...kept, { kind: "worked", key: key(), ms }] : kept,
           };
+        }
         case "exited":
           return { busy: false, exited: ev.text };
         case "ready":

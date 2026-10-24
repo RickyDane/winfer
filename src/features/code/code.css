@@ -667,6 +667,22 @@
 .cw-notice-text.open {
   -webkit-line-clamp: unset;
 }
+.cw-worked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--dim);
+  font-size: calc(11.5px * var(--cw-text, 1));
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.cw-worked::before,
+.cw-worked::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
 .cw-notice.error {
   color: var(--del);
   border-color: color-mix(in srgb, var(--del) 40%, transparent);

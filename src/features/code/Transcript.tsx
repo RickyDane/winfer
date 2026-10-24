@@ -251,6 +251,14 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
   );
 }
 
+/** "Worked 12s" / "Worked 3m 05s" / "Worked 1h 02m". */
+function fmtWorked(ms: number) {
+  const t = Math.max(1, Math.round(ms / 1000));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `Worked ${h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(sec)}s` : `${sec}s`}`;
+}
+
 /** No turn has run yet: the welcome screen is showing. */
 export function useFresh() {
   return useCode(
@@ -363,6 +371,12 @@ export function Transcript({ dark }: { dark: boolean }) {
               return <Reasoning key={it.key} item={it} />;
             case "tool":
               return <ToolCard key={it.key} item={it} />;
+            case "worked":
+              return (
+                <div key={it.key} className="cw-worked cw-enter">
+                  <span>{fmtWorked(it.ms)}</span>
+                </div>
+              );
             case "notice":
               return (
                 <div
