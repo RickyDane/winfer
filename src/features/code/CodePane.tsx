@@ -405,6 +405,7 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
   const dark = useWorkspaces((s) => themeById(s.theme).mode) !== "light";
   const glass = useWorkspaces((s) => s.glassPanes);
   const compact = useCodeWeb((s) => s.compact);
+  const userStyle = useCodeWeb((s) => s.userStyle);
   const textScale = useCodeWeb((s) => s.textScale);
   const root = useRef<HTMLDivElement>(null);
 
@@ -440,6 +441,7 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
             !dark && "light",
             glass && "glass",
             compact && "compact",
+            `user-${userStyle}`,
           )}
           style={{ colorScheme: dark ? "dark" : "light", "--cw-text": textScale } as CSSProperties}
         >

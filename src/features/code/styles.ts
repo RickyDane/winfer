@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+/** Your messages: a right-aligned accent bubble, a full-width prompt band, or the plain rule. */
+export type UserStyle = "bubble" | "band" | "rule";
+
 /** How winfer code's web UI looks and what it shows (Settings → winfer code). */
 export interface CodeWebPrefs {
   /** winfer code panes show the web UI (`winfer code --serve`) instead of the terminal TUI. */
@@ -19,6 +22,8 @@ export interface CodeWebPrefs {
   expandShell: boolean;
   /** Tighter spacing in the transcript. */
   compact: boolean;
+  /** How your own messages stand out in the transcript. */
+  userStyle: UserStyle;
   /** Text size multiplier (1 = default); only text scales, not spacing. */
   textScale: number;
   /** Models starred in the model picker (`backend/model` specs), in the order they were added. */
@@ -42,6 +47,7 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   expandThinking: false,
   expandShell: false,
   compact: false,
+  userStyle: "bubble",
   textScale: 1,
   favoriteModels: [],
   resolvedModels: {},

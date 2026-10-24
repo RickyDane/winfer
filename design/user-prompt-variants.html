@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>winfer code — user prompt variants</title>
+<style>
+  :root {
+    --app: #0b0b0d; --panel: #121215; --raised: #17171b; --hover: #1d1d22;
+    --border: #26262c; --border-strong: #33333b; --fg: #e6e6ea; --muted: #9a9aa3;
+    --accent: #6d7cff; --ok: #4ade80;
+    --font: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--app); color: var(--fg); font: 13.5px/1.55 var(--font); padding: 28px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .card-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--raised); }
+  .card-head b { font-size: 13px; }
+  .card-head span { color: var(--muted); font-size: 12px; }
+  .tag { margin-left: auto; font: 11px var(--mono); color: var(--accent); }
+  .t { padding: 6px 22px 18px; display: flex; flex-direction: column; gap: 2px; }
+
+  /* shared transcript bits */
+  .a { padding: 8px 0 6px; }
+  .a p { margin: 0 0 6px; }
+  .tool { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; padding: 3px 0; }
+  .tool i { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); display: inline-block; }
+  .tool code { font-family: var(--mono); color: var(--fg); opacity: .8; font-size: 12px; }
+  code.inl { font-family: var(--mono); font-size: 12px; background: var(--hover); padding: 1px 5px; border-radius: 4px; }
+
+  .u { white-space: pre-wrap; }
+
+  /* 0 — current: full-width rule + bold text */
+  .v0 .u { margin: 18px 0 8px; border-top: 1px solid var(--border); padding-top: 12px; font-weight: 600; }
+
+  /* 1 — Accent bar: tinted block with a left accent stripe */
+  .v1 .u {
+    margin: 18px 0 8px; padding: 10px 14px;
+    background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+    border-left: 3px solid var(--accent); border-radius: 4px 8px 8px 4px;
+    font-weight: 500;
+  }
+
+  /* 2 — Card with "You" label: raised surface, small header, subtle shadow */
+  .v2 .u {
+    margin: 20px 0 10px; padding: 9px 14px 11px;
+    background: var(--raised); border: 1px solid var(--border-strong); border-radius: 10px;
+    box-shadow: 0 1px 0 rgb(255 255 255 / .03) inset, 0 8px 24px -12px rgb(0 0 0 / .6);
+  }
+  .v2 .u::before {
+    content: "You"; display: block; margin-bottom: 3px;
+    font: 600 10.5px var(--font); letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
+  }
+
+  /* 3 — Right-aligned accent bubble (chat-app style) */
+  .v3 .uw { display: flex; justify-content: flex-end; margin: 16px 0 8px; }
+  .v3 .u {
+    max-width: 80%; padding: 9px 14px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 30%, var(--raised)), color-mix(in srgb, var(--accent) 20%, var(--raised)));
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    border-radius: 14px 14px 4px 14px; color: #f1f2ff;
+  }
+
+  /* 4 — Prompt line: terminal-style chevron, mono-tinted gutter, full width */
+  .v4 .u {
+    position: relative; margin: 18px -22px 8px; padding: 11px 22px 11px 44px;
+    background: color-mix(in srgb, var(--fg) 4%, transparent);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    font-weight: 500;
+  }
+  .v4 .u::before {
+    content: "›"; position: absolute; left: 24px; top: 8px;
+    font: 700 17px var(--mono); color: var(--accent);
+  }
+
+  /* 5 — Glow outline: gradient border ring, sticky-feeling header */
+  .v5 .u {
+    margin: 18px 0 10px; padding: 10px 14px; border-radius: 10px;
+    background:
+      linear-gradient(var(--panel), var(--panel)) padding-box,
+      linear-gradient(120deg, var(--accent), color-mix(in srgb, var(--accent) 30%, #c06dff) 50%, var(--border-strong)) border-box;
+    border: 1px solid transparent;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 7%, transparent);
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+<h1>User prompt — 5 redesign options</h1>
+<p class="sub">winfer code web UI (pane / timeline mode). "Current" for reference; each option uses the same transcript.</p>
+<div class="grid" id="grid"></div>
+
+<template id="tx">
+  <div class="uw"><div class="u">Add a retry with exponential backoff to the transport reconnect, and cap it at 30s.</div></div>
+  <div class="a"><p>I'll look at the reconnect logic in <code class="inl">transport.ts</code> first.</p></div>
+  <div class="tool"><i></i>Read <code>src/features/code/transport.ts</code></div>
+  <div class="tool"><i></i>Edit <code>transport.ts</code> <span style="color:var(--ok)">+18</span> <span style="color:#f87171">−4</span></div>
+  <div class="a"><p>Reconnect now backs off 0.5s → 1s → 2s … capped at 30s, and resets on a successful open.</p></div>
+  <div class="uw"><div class="u">Nice. Also add a test for the cap.</div></div>
+  <div class="a"><p>Adding a vitest case with fake timers.</p></div>
+  <div class="tool"><i></i>Write <code>transport.test.ts</code></div>
+</template>
+
+<script>
+  const variants = [
+    ["v0", "Current", "Full-width rule, bold text", ""],
+    ["v1", "1 · Accent bar", "Tinted block with left accent stripe", "subtle"],
+    ["v2", "2 · \"You\" card", "Raised card with a small accent label", "clear"],
+    ["v3", "3 · Accent bubble", "Right-aligned chat bubble in accent tint", "loud"],
+    ["v4", "4 · Prompt band", "Full-bleed band with terminal chevron", "terminal-ish"],
+    ["v5", "5 · Glow outline", "Gradient border ring + soft halo", "premium"],
+  ];
+  const grid = document.getElementById("grid"), tx = document.getElementById("tx");
+  for (const [cls, name, desc, tag] of variants) {
+    const c = document.createElement("div");
+    c.className = "card " + cls;
+    c.innerHTML = `<div class="card-head"><b>${name}</b><span>${desc}</span><span class="tag">${tag}</span></div><div class="t"></div>`;
+    c.querySelector(".t").append(tx.content.cloneNode(true));
+    grid.append(c);
+  }
+</script>
+</body>
+</html>

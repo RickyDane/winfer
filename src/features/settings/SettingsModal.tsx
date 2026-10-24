@@ -20,7 +20,7 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
-import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb } from "@/features/code/styles";
+import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb, type UserStyle } from "@/features/code/styles";
 import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
 import {
   copyFile,
@@ -1101,6 +1101,17 @@ function HarnessSettings() {
             </Row>
             <Row label="Live shell output" hint="Open a command's output while it runs.">
               <Toggle label="Live shell output" checked={codeWeb.expandShell} onChange={(expandShell) => codeWeb.set({ expandShell })} />
+            </Row>
+            <Row label="Your messages" hint="How your prompts stand out in the transcript.">
+              <Select
+                aria-label="Your messages"
+                value={codeWeb.userStyle}
+                onChange={(e) => codeWeb.set({ userStyle: e.target.value as UserStyle })}
+              >
+                <option value="bubble">Accent bubble</option>
+                <option value="band">Prompt band</option>
+                <option value="rule">Plain rule</option>
+              </Select>
             </Row>
             <Row label="Compact layout" hint="Tighter spacing in the transcript.">
               <Toggle label="Compact layout" checked={codeWeb.compact} onChange={(compact) => codeWeb.set({ compact })} />
