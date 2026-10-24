@@ -866,10 +866,10 @@ impl BrowserManager {
 
 /// Kills browsers left behind by a previous run that didn't exit cleanly (crash, force quit).
 /// They'd otherwise keep running and hold the profile lock, so the next launch would fail.
-/// Waits for them to go, so it only blocks startup when there are orphans.
+/// Runs in the background: startup doesn't wait for it, browser launches do.
 pub fn kill_orphans(app: &AppHandle) {
     if let Ok(dir) = data_dir(app) {
-        chrome::reclaim_all(&dir.join("browser-profiles"));
+        chrome::reclaim_all_in_background(dir.join("browser-profiles"));
     }
 }
 

@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -178,6 +179,8 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
 /// used to retry on the same port, so the CDP URL agents already got stays valid.
 pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, String> {
     std::fs::create_dir_all(profile_dir).map_err(|e| e.to_string())?;
+    // The startup sweep would end this browser as an orphan if it ran after the launch.
+    wait_startup_reclaim();
     reclaim(profile_dir);
     let mut cmd = Command::new(&exe.path);
     cmd.arg(format!("--remote-debugging-port={port}"))
@@ -243,8 +246,7 @@ pub fn terminate(child: &mut Child, port: u16) {
 fn reclaim(profile_dir: &Path) {
     close_running(profile_dir);
     #[cfg(unix)]
-    {
-        holders::end(|dir| dir == profile_dir);
+    if holders::end(|dir| dir == profile_dir).is_empty() {
         holders::clear_lock(profile_dir);
     }
     #[cfg(windows)]
@@ -254,23 +256,48 @@ fn reclaim(profile_dir: &Path) {
 /// Ends browsers left on any profile in `profiles_dir` by a run that didn't exit cleanly and
 /// clears their locks. Waits until they're gone, so launches right after don't race them.
 pub fn reclaim_all(profiles_dir: &Path) {
+    // One process listing for all profiles: one per profile took ~50 ms each.
     #[cfg(unix)]
-    holders::end(|dir| dir.parent() == Some(profiles_dir));
+    let busy = holders::end(|dir| dir.parent() == Some(profiles_dir));
     if let Ok(entries) = std::fs::read_dir(profiles_dir) {
         for entry in entries.flatten() {
             #[cfg(unix)]
-            holders::clear_lock(&entry.path());
+            if !busy.contains(&entry.path()) {
+                holders::clear_lock(&entry.path());
+            }
             #[cfg(windows)]
             job::end_holders(&entry.path());
         }
     }
 }
 
+/// Whether the startup sweep (`reclaim_all_in_background`) hasn't started, runs, or is done.
+static STARTUP_RECLAIM: Mutex<Option<bool>> = Mutex::new(None);
+static STARTUP_RECLAIMED: Condvar = Condvar::new();
+
+/// `reclaim_all` off the calling thread, so the app's window doesn't wait for it; browser
+/// launches do (see `spawn`).
+pub fn reclaim_all_in_background(profiles_dir: PathBuf) {
+    *STARTUP_RECLAIM.lock().unwrap() = Some(false);
+    std::thread::spawn(move || {
+        reclaim_all(&profiles_dir);
+        *STARTUP_RECLAIM.lock().unwrap() = Some(true);
+        STARTUP_RECLAIMED.notify_all();
+    });
+}
+
+fn wait_startup_reclaim() {
+    let state = STARTUP_RECLAIM.lock().unwrap();
+    // Bounded: ending a hung browser takes 5 s at most.
+    let _ = STARTUP_RECLAIMED.wait_timeout_while(state, Duration::from_secs(15), |s| *s == Some(false));
+}
+
 /// Browser processes found by their `--user-data-dir`, so ones from earlier runs (which winfer
 /// no longer holds a handle to) are found too.
 #[cfg(unix)]
 mod holders {
-    use std::path::Path;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -284,7 +311,8 @@ mod holders {
         Some(Path::new(value.strip_suffix(" about:blank").unwrap_or(value)))
     }
 
-    fn pids(on: &impl Fn(&Path) -> bool) -> Vec<i32> {
+    /// Browser processes on a profile `on` accepts: pid and profile.
+    fn holders(on: &impl Fn(&Path) -> bool) -> Vec<(i32, PathBuf)> {
         let Ok(out) = Command::new("ps").args(["-axww", "-o", "pid=,command="]).output() else {
             return Vec::new();
         };
@@ -292,12 +320,15 @@ mod holders {
             .lines()
             .filter_map(|line| {
                 let (pid, command) = line.trim_start().split_once(' ')?;
-                profile_of(command)
-                    .filter(|dir| on(dir))
-                    .and_then(|_| pid.parse().ok())
+                let dir = profile_of(command).filter(|dir| on(dir))?;
+                Some((pid.parse().ok()?, dir.to_path_buf()))
             })
-            .filter(|&pid| pid != std::process::id() as i32)
+            .filter(|&(pid, _)| pid != std::process::id() as i32)
             .collect()
+    }
+
+    fn pids(on: &impl Fn(&Path) -> bool) -> Vec<i32> {
+        holders(on).into_iter().map(|(pid, _)| pid).collect()
     }
 
     fn signal_until_gone(on: &impl Fn(&Path) -> bool, signal: i32, wait: Duration) -> bool {
@@ -316,22 +347,22 @@ mod holders {
         }
     }
 
-    /// SIGTERM, then SIGKILL for browsers that hang. Returns at once when none run.
-    pub fn end(on: impl Fn(&Path) -> bool) {
-        if pids(&on).is_empty() {
-            return;
+    /// SIGTERM, then SIGKILL for browsers that hang. Returns at once when none run. Returns the
+    /// profiles a browser still runs on: none, unless one survived SIGKILL.
+    pub fn end(on: impl Fn(&Path) -> bool) -> HashSet<PathBuf> {
+        if holders(&on).is_empty()
+            || signal_until_gone(&on, libc::SIGTERM, Duration::from_secs(3))
+            || signal_until_gone(&on, libc::SIGKILL, Duration::from_secs(2))
+        {
+            return HashSet::new();
         }
-        if !signal_until_gone(&on, libc::SIGTERM, Duration::from_secs(3)) {
-            signal_until_gone(&on, libc::SIGKILL, Duration::from_secs(2));
-        }
+        holders(&on).into_iter().map(|(_, dir)| dir).collect()
     }
 
-    /// Removes the singleton lock of a profile no browser runs on. Chrome treats a lock naming a
-    /// live process as in use, and after a crash that pid may belong to anything by now.
+    /// Removes a profile's singleton lock; only for a profile no browser runs on (see `end`).
+    /// Chrome treats a lock naming a live process as in use, and after a crash that pid may
+    /// belong to anything by now.
     pub fn clear_lock(profile_dir: &Path) {
-        if !pids(&|dir: &Path| dir == profile_dir).is_empty() {
-            return;
-        }
         for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
             let _ = std::fs::remove_file(profile_dir.join(name));
         }
@@ -724,5 +755,27 @@ mod tests {
             "the hung browser still runs"
         );
         wait_ws_url(second.port, Duration::from_secs(45)).unwrap();
+    }
+
+    /// The startup sweep ends orphans on any profile and clears every profile's stale lock.
+    #[cfg(unix)]
+    #[test]
+    fn startup_sweep_ends_orphans_and_clears_locks() {
+        let tmp = std::env::temp_dir().join(format!("winfer-chrome-{:x}", rand::random::<u32>()));
+        let Some(exe) = find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let profiles = tmp.join("profiles");
+        let orphan = launch(&exe, &profiles.join("ws-1")).unwrap();
+        let mut orphan = ChromeGuard(orphan.child);
+        let stale = profiles.join("ws-2");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("SingletonLock"), "").unwrap();
+
+        reclaim_all_in_background(profiles.clone());
+        wait_startup_reclaim();
+        assert!(orphan.0.try_wait().unwrap().is_some(), "the orphan still runs");
+        assert!(!stale.join("SingletonLock").exists(), "the stale lock is still there");
     }
 }
