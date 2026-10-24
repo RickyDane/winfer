@@ -118,14 +118,6 @@ function diffStat(diff: string) {
   return { a, d };
 }
 
-/** Keep hover tooltips small: long commands (heredocs, scripts) would cover the pane. */
-function clip(s: string, maxLines = 3, maxChars = 160): string {
-  const lines = s.split("\n");
-  let out = lines.slice(0, maxLines).join("\n");
-  if (out.length > maxChars) out = out.slice(0, maxChars);
-  return out.length < s.length ? `${out.trimEnd()}…` : out;
-}
-
 function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const running = item.ok === undefined;
   const isShell = item.name === "Bash";
@@ -143,7 +135,8 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
   }, [item.output]);
   const stat = item.diff ? diffStat(item.diff) : null;
-  const hasBody = !!item.output || !!item.diff;
+  const command = (item.input as { command?: string } | null)?.command;
+  const hasBody = !!item.output || !!item.diff || !!command;
 
   return (
     <div
@@ -161,15 +154,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
           <Icon size={14} />
         </span>
         <span className="cw-tool-name">{item.name}</span>
-        <span
-          className="cw-tool-title"
-          title={clip(
-            String(
-              (item.input as { command?: string } | null)?.command ??
-                item.title,
-            ),
-          )}
-        >
+        <span className="cw-tool-title">
           <Linkify text={item.title} />
         </span>
         {task && (
@@ -222,6 +207,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
           <DiffView diff={item.diff} />
         ) : (
           <pre ref={outRef} className={clsx("cw-tool-out", isShell && "shell")}>
+            {command && <span className="cw-prompt">$ {command}</span>}
             <Linkify text={item.output} />
           </pre>
         )}
