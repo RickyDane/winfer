@@ -379,9 +379,9 @@ export class MockTransport implements Transport {
 
       if (t === 1) {
         // A background shell: the dev server keeps running after the turn.
-        e({ type: "tool_start", id: id("dev"), name: "Bash", title: "pnpm dev (background)", input: { command: "pnpm dev", run_in_background: true } });
+        e({ type: "tool_start", id: id("dev"), name: "Bash", title: "Vite dev server", input: { command: "pnpm dev", description: "Vite dev server", run_in_background: true } });
         this.devStart = Date.now();
-        e({ type: "task", id: "bg-dev", tool_id: id("dev"), output_file: "/tmp/winfer-bg/bg-dev.log", title: "pnpm dev", description: "Vite dev server to try the change", tools: null, status: "running", last: "starting…" });
+        e({ type: "task", id: "bg-dev", tool_id: id("dev"), output_file: "/tmp/winfer-bg/bg-dev.log", title: "Vite dev server", description: "Vite dev server to try the change", tools: null, status: "running", last: "starting…" });
         await this.step(600);
         e({ type: "tool_end", id: id("dev"), ok: true, output: "Running in the background (task bg-dev)" });
         e({ type: "task", id: "bg-dev", last: "VITE v8.3.4 ready · http://localhost:5173/" });

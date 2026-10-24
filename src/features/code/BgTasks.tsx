@@ -109,7 +109,7 @@ export function BgTasks({ tasks, openLog, stop }: BgProps) {
             key={t.id}
             className={clsx("cw-tlf-row", t.agent ? "agent" : "shell")}
             onClick={() => openLog(t.id)}
-            title="Show its output"
+            title={t.description ? `${t.description}\nClick to show its output` : "Show its output"}
           >
             <div className="cw-tlf-top">
               <span className="cw-tlf-icon">

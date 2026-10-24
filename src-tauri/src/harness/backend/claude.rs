@@ -166,6 +166,9 @@ struct Live {
 struct Bridge {
     events: Events,
     calls: HashMap<String, Call>,
+    /// Background Bash calls' own descriptions by tool id, to name their tasks with instead of
+    /// the command Claude Code reports.
+    shell_names: HashMap<String, String>,
     /// Pending permission requests: request id → (input, suggested rules).
     pending: HashMap<String, (Value, Value)>,
     /// Ids and kinds ("text", "thinking", "tool_use") of the streamed message's blocks, by index.
@@ -285,6 +288,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut b = Bridge {
         events,
         calls: HashMap::new(),
+        shell_names: HashMap::new(),
         pending: HashMap::new(),
         blocks: HashMap::new(),
         finalized: Default::default(),
@@ -398,7 +402,10 @@ impl Bridge {
         let _ = self.events.send(ev);
     }
 
-    fn task(&mut self, t: TaskEv) {
+    fn task(&mut self, mut t: TaskEv) {
+        if let Some(name) = t.tool_id.as_ref().filter(|_| t.agent.is_none()).and_then(|id| self.shell_names.get(id)) {
+            t.title = Some(name.clone());
+        }
         match t.status.as_deref() {
             Some("running") => {
                 self.running.insert(t.id.clone());
@@ -607,6 +614,9 @@ impl Bridge {
                                 }
                             }
                             self.emit(Ev::ToolStart { id: tool_id.clone(), name: display_name(&name), title: title(&name, &input), input: input.clone() });
+                            if let Some(d) = background_shell_name(&name, &input) {
+                                self.shell_names.insert(tool_id.clone(), d);
+                            }
                             self.calls.insert(tool_id, Call { name, input });
                         }
                         _ => {}
@@ -935,11 +945,21 @@ fn display_name(name: &str) -> String {
     }
 }
 
+/// A background Bash call's name: the `description` the agent gave it, else a short form of
+/// its command (never the whole command line).
+fn background_shell_name(name: &str, input: &Value) -> Option<String> {
+    if name != "Bash" || input["run_in_background"].as_bool() != Some(true) {
+        return None;
+    }
+    let d = input["description"].as_str().map(str::trim).filter(|d| !d.is_empty());
+    Some(d.map_or_else(|| crate::harness::bg::short_command(input["command"].as_str().unwrap_or("")), str::to_string))
+}
+
 /// A one-line summary of a tool call for its card.
 pub fn title(name: &str, input: &Value) -> String {
     let s = |k: &str| input[k].as_str().unwrap_or("").to_string();
     let t = match name {
-        "Bash" => s("command"),
+        "Bash" => background_shell_name(name, input).unwrap_or_else(|| s("command")),
         "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => crate::harness::tools::short_path(&s("file_path")),
         "Grep" => format!("{} {}", s("pattern"), s("path")),
         "Glob" => s("pattern"),
@@ -1003,6 +1023,7 @@ mod tests {
         let b = Bridge {
             events: tx,
             calls: HashMap::new(),
+            shell_names: HashMap::new(),
             pending: HashMap::new(),
             blocks: HashMap::new(),
             finalized: Default::default(),
@@ -1182,6 +1203,18 @@ mod tests {
         assert_eq!(b.checkpoints.len(), 1);
         let id = new_uuid();
         assert_eq!((id.len(), &id[14..15]), (36, "4"));
+    }
+
+    #[test]
+    fn background_bash_tasks_use_the_agents_name() {
+        let (mut b, rx) = bridge();
+        b.on_line(&json!({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cd src-tauri && cargo test --lib | head","description":"Run harness tests","run_in_background":true}}]}}));
+        b.on_line(&json!({"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"t1","description":"cd src-tauri && cargo test --lib | head"}));
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(e, Ev::ToolStart { title, .. } if title == "Run harness tests")));
+        assert!(events.iter().any(|e| matches!(e, Ev::Task(t) if t.title.as_deref() == Some("Run harness tests"))));
+        assert_eq!(background_shell_name("Bash", &json!({"command":"cd x && pnpm dev","run_in_background":true})).as_deref(), Some("pnpm dev"));
+        assert_eq!(background_shell_name("Bash", &json!({"command":"ls","description":"List"})), None);
     }
 
     #[test]

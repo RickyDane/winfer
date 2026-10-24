@@ -72,7 +72,7 @@ fn emit(update: Update) {
 }
 
 /// The `bg` tool's description (winfer code's tool and winfer's MCP server share it).
-pub const DESCRIPTION: &str = "Long-running process (server, watch, loop), not bash &: start→id (give it a short name + description); read new output (wait ms, until a|b); stop; list. Exits are reported to you.";
+pub const DESCRIPTION: &str = "Long-running process (server, watch, loop), not bash &: start→id (always give it a short name + description of your own, not the command); read new output (wait ms, until a|b); stop; list. Exits are reported to you.";
 
 /// `bg` as an MCP tool (winfer's MCP server). Claude Code runs an MCP tool alongside others only
 /// when it's marked read-only; without the hint, side-by-side starts (each possibly waiting for
@@ -89,8 +89,8 @@ pub fn mcp_tool(read_only: bool) -> Value {
         "inputSchema": { "type": "object", "properties": {
             "action": { "enum": ["start", "read", "stop", "list"] },
             "cmd": { "type": "string", "description": "start: the shell command" },
-            "name": { "type": "string", "description": "start: short name shown to the user, e.g. \"vite dev server\"" },
-            "description": { "type": "string", "description": "start: what it's for, in a sentence" },
+            "name": { "type": "string", "description": "start: always give one: a 2-5 word name shown to the user, e.g. \"vite dev server\" (not the command)" },
+            "description": { "type": "string", "description": "start: always give one: what it's for, in a sentence (not the command)" },
             "id": { "type": "string", "description": "read/stop: the task id start returned" },
             "until": { "type": "string", "description": "read (or start): wait until the output has this text; a|b for either" },
             "wait": { "type": "integer", "description": "read (or start): wait up to this many ms for output (max 290000)" }
@@ -141,7 +141,17 @@ impl Update {
 /// What the user sees a task as: its name, else its command's first line.
 pub fn label(name: &str, cmd: &str) -> String {
     let name = name.trim();
-    if name.is_empty() { cmd.lines().next().unwrap_or("").to_string() } else { name.to_string() }
+    if name.is_empty() { short_command(cmd) } else { name.to_string() }
+}
+
+/// A short stand-in name for an unnamed command: its first real step's program and first
+/// couple of words (`cd x && cargo test --lib harness | head` → `cargo test --lib`).
+pub fn short_command(cmd: &str) -> String {
+    let line = cmd.lines().next().unwrap_or("");
+    let steps = line.split("&&").flat_map(|s| s.split(';')).map(|s| s.split('|').next().unwrap_or("").trim());
+    let step = steps.clone().find(|s| !s.is_empty() && !s.starts_with("cd ") && *s != "cd").or_else(|| steps.clone().find(|s| !s.is_empty())).unwrap_or("");
+    let words: Vec<&str> = step.split_whitespace().filter(|w| !w.contains('=') || w.starts_with('-')).take(3).collect();
+    words.join(" ")
 }
 
 /// A task in a note: `bg1 "dev server" (`npm run dev`)`, or `bg1 (`npm run dev`)` unnamed.
@@ -495,6 +505,13 @@ pub fn stop_all() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unnamed_commands_get_short_names() {
+        assert_eq!(super::short_command("cd src-tauri && cargo test --lib harness 2>&1 | head"), "cargo test --lib");
+        assert_eq!(super::short_command("RUST_LOG=debug pnpm dev"), "pnpm dev");
+        assert_eq!(super::short_command("gh run watch 123"), "gh run watch");
+    }
+
     use super::*;
     use serde_json::json;
 
