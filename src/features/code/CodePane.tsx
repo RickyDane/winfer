@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  Bot,
   ChevronDown,
   CircleCheck,
   CircleDashed,
   GitBranch,
   ListTodo,
   LoaderCircle,
+  Workflow,
   Zap,
 } from "lucide-react";
 import clsx from "clsx";
@@ -224,7 +224,7 @@ function SubagentMenu({ model }: { model: string }) {
         onClick={() => setSheet(open ? null : "subagent-model")}
         title={label ? `Subagents run on ${label}${subEffort ? ` · ${subEffort}` : ""} (/subagent-model)` : "Subagents run on the main model (/subagent-model)"}
       >
-        <Bot size={12} />
+        <Workflow size={12} />
         {label ?? "same"}
       </button>
       {open && (
