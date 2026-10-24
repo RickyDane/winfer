@@ -60,7 +60,8 @@ fn mode_of(mode: &str) -> Option<Mode> {
 /// tools/list gives them, instead of only their names to be looked up first (see `run`'s
 /// ENABLE_TOOL_SEARCH, which covers the non-lean mode too).
 /// ExitPlanMode is how plan mode hands its plan over for approval; without it the agent can't leave plan mode.
-const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ExitPlanMode";
+/// WebSearch and WebFetch let the agent look things up online without driving the browser panel.
+const LEAN_TOOLS: &str = "Bash,Read,Edit,Write,Grep,Glob,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Agent,AskUserQuestion,ExitPlanMode,WebSearch,WebFetch";
 
 pub fn args(opts: &Opts) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -1103,6 +1104,7 @@ mod tests {
     fn follows_claude_codes_own_mode_changes() {
         assert!(LEAN_TOOLS.split(',').any(|t| t == "ExitPlanMode"));
         assert!(!LEAN_TOOLS.split(',').any(|t| t == "ToolSearch"));
+        assert!(["WebSearch", "WebFetch"].iter().all(|w| LEAN_TOOLS.split(',').any(|t| t == *w)));
         let (mut b, rx) = bridge();
         b.mode = Mode::Plan;
         b.on_line(&json!({ "type": "system", "subtype": "status", "status": null, "permissionMode": "default" }));
