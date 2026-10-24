@@ -90,6 +90,13 @@ export const useCodeWeb = create<CodeWebSettings>()(
 /** The `?codeweb` browser preview: web UI panes driven by a scripted session. */
 export const CODE_WEB_DEMO = typeof location !== "undefined" && new URLSearchParams(location.search).has("codeweb");
 
+/** `?codeweb&compare`: one demo pane per user-message style, side by side. */
+export const COMPARE_USER_STYLES = CODE_WEB_DEMO && new URLSearchParams(location.search).has("compare");
+export const COMPARE_ORDER: UserStyle[] = ["bubble", "band"];
+const compared = new Map<string, UserStyle>();
+export const setCompareUserStyle = (paneId: string, style: UserStyle) => void compared.set(paneId, style);
+export const compareUserStyle = (paneId: string) => compared.get(paneId);
+
 /** Whether winfer code panes show the web UI instead of the terminal TUI. */
 export const webCodeEnabled = () => CODE_WEB_DEMO || useCodeWeb.getState().web;
 
