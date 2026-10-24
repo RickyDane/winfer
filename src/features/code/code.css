@@ -2242,6 +2242,27 @@ button.cw-foot-item.active {
   overflow: hidden;
   pointer-events: none;
 }
+/* Fresh session: welcome + composer sit together in the pane's center;
+   the stars still span the whole pane. */
+.cw-pane:has(> .cw-scroll > .cw-welcome) {
+  justify-content: center;
+}
+.cw-pane:has(> .cw-scroll > .cw-welcome) > .cw-scroll {
+  flex: 0 0 auto;
+  position: static;
+  overflow: visible;
+}
+.cw-pane:has(> .cw-scroll > .cw-welcome) .cw-welcome {
+  position: static;
+  overflow: visible;
+}
+.cw-pane:has(> .cw-scroll > .cw-welcome) .cw-stars {
+  position: absolute;
+  inset: 0;
+}
+.cw-pane:has(> .cw-scroll > .cw-welcome) > .cw-dock {
+  position: relative;
+}
 .cw-welcome-inner {
   position: relative;
   display: flex;
