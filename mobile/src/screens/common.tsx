@@ -37,7 +37,9 @@ const PATHS = {
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z M9 12l2 2 4-4",
   laptop: "M5 6h14v9H5zM3 18h18",
   link: "M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1",
-  question: "M9.2 9a3 3 0 015.6 1c0 2-3 2.5-3 4.5M12 18h.01",
+  question: "M12 21a9 9 0 100-18 9 9 0 000 18zM9.2 9a3 3 0 015.6 1c0 2-3 2.5-3 4.5M12 18h.01",
+  folder: "M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z",
+  minus: "M6 12h12",
   hand: "M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4.5a1.5 1.5 0 013 0V12M14 11.5V6a1.5 1.5 0 013 0v8a7 7 0 01-7 7h-.5A6.5 6.5 0 013 14.5V12a1.5 1.5 0 013 0v2",
 } as const;
 export type IconName = keyof typeof PATHS;
@@ -50,18 +52,19 @@ export function Icon({ name, size = 20, className }: { name: IconName; size?: nu
   );
 }
 
-type Brand = { name: string; tile: string; fg: string };
+/** `mark`: the logo's color on the neutral avatar tile. */
+type Brand = { name: string; mark: string };
 const PROVIDERS: Record<string, Brand> = {
-  claude: { name: "Claude Code", tile: "#d97757", fg: "#fff" },
-  codex: { name: "Codex", tile: "#f4f4f6", fg: "#0b0b0d" },
-  opencode: { name: "OpenCode", tile: "#1c1c22", fg: "#f5b544" },
-  winfer: { name: "winfer code", tile: "#6d7cff", fg: "#fff" },
-  pi: { name: "pi", tile: "#7ee787", fg: "#08210d" },
-  agy: { name: "Antigravity", tile: "#4f8cff", fg: "#fff" },
-  grok: { name: "Grok", tile: "#1c1c22", fg: "#f4f4f6" },
-  cursor: { name: "Cursor", tile: "#1c1c22", fg: "#c9c9ff" },
+  claude: { name: "Claude Code", mark: "#d97757" },
+  codex: { name: "Codex", mark: "#e6e6ea" },
+  opencode: { name: "OpenCode", mark: "#f5b544" },
+  winfer: { name: "winfer code", mark: "#6d7cff" },
+  pi: { name: "pi", mark: "#7ee787" },
+  agy: { name: "Antigravity", mark: "#4f8cff" },
+  grok: { name: "Grok", mark: "#e6e6ea" },
+  cursor: { name: "Cursor", mark: "#c9c9ff" },
 };
-export const providerInfo = (p: string | null): Brand | null => (p ? (PROVIDERS[p] ?? { name: p, tile: "#3a3a44", fg: "#fff" }) : null);
+export const providerInfo = (p: string | null): Brand | null => (p ? (PROVIDERS[p] ?? { name: p, mark: "#9a9aa3" }) : null);
 
 export function ProviderMark({ provider, size = 20 }: { provider: string | null; size?: number }) {
   const d = provider ? PROVIDER_LOGOS[provider] : undefined;
@@ -73,29 +76,15 @@ export function ProviderMark({ provider, size = 20 }: { provider: string | null;
   );
 }
 
+/** A neutral tile with the agent's mark; a dot in the corner says what it's doing. */
 export function Avatar({ pane, small, morph }: { pane: Pane; small?: boolean; morph?: boolean }) {
   const info = providerInfo(pane.provider);
-  const style = { "--c": info?.tile ?? "#3a3a44", color: info?.fg ?? "#fff", viewTransitionName: morph ? vtName("av", pane.id) : undefined } as CSSProperties;
+  const style = { color: info?.mark, viewTransitionName: morph ? vtName("av", pane.id) : undefined } as CSSProperties;
   return (
     <span className="avatar" data-small={small || undefined} data-status={pane.status} style={style} aria-hidden>
-      <ProviderMark provider={pane.provider} size={small ? 15 : 22} />
-      <span className="halo" />
-      {(pane.status === "done" || pane.status === "error") && (
-        <span className="badge">
-          <Icon name={pane.status === "done" ? "check" : "x"} size={10} />
-        </span>
-      )}
+      <ProviderMark provider={pane.provider} size={small ? 13 : 17} />
+      {pane.status !== "idle" && <span className="avatar-dot" />}
     </span>
-  );
-}
-
-export function Aurora({ mood }: { mood?: "needs" | "error" | "calm" }) {
-  return (
-    <div className="aurora" data-mood={mood} aria-hidden>
-      <i />
-      <i />
-      <i />
-    </div>
   );
 }
 

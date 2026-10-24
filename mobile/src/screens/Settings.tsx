@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { b64uDecode } from "../b64";
 import type { DesktopClient } from "../client";
 import { go, haptic, isIOS, isStandalone, useClient } from "../hooks";
 import { activePairing, loadPairings, removePairing, setActive } from "../pairing";
-import { Aurora, Icon } from "./common";
-import { useCollapse } from "./widgets";
+import { Icon } from "./common";
 
 type PushState = "unsupported" | "ios-browser" | "denied" | "off" | "on" | "busy";
 
@@ -22,9 +21,6 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
   const [push, setPush] = useState<PushState>("busy");
   const [err, setErr] = useState<string | null>(null);
   const [, bump] = useState(0);
-  const screen = useRef<HTMLDivElement>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-  const onScroll = useCollapse(scroller, screen, 50);
   const pairings = loadPairings();
   const active = activePairing();
 
@@ -93,16 +89,17 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
             : "Alerts when an agent finishes, errors, or needs your input — even with this app closed. Sent only while you're away from your computer: winfer isn't the focused window, or hasn't been touched for an hour.";
 
   return (
-    <div className="screen" ref={screen}>
-      <Aurora />
-      <header className="topbar">
-        <div className="topbar-title">Settings</div>
+    <div className="screen">
+      <header className="bar">
+        <div className="bar-title">
+          <b>Settings</b>
+          <span>{state.welcome ? `${state.welcome.desktop} · winfer ${state.welcome.version}` : "This phone"}</span>
+        </div>
       </header>
-      <div className="scroll" ref={scroller} onScroll={onScroll}>
+      <div className="scroll tabbed">
         <main className="settings">
-          <h1 className="large-title">Settings</h1>
 
-          <section className="group" style={{ "--i": 0 } as CSSProperties}>
+          <section className="group">
             <h2>Notifications</h2>
             <div className="group-card">
               <div className="row">
@@ -131,7 +128,7 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
             {err && <div className="inline-error">{err}</div>}
           </section>
 
-          <section className="group" style={{ "--i": 1 } as CSSProperties}>
+          <section className="group">
             <h2>Desktops</h2>
             <div className="group-card">
               {pairings.map((p) => {
@@ -154,7 +151,7 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
                       <b>{isActive && state.welcome ? state.welcome.desktop : p.name}</b>
                       <span>Paired {new Date(p.createdAt).toLocaleDateString()}</span>
                     </span>
-                    {isActive && <Icon name="check" className="check" />}
+                    {isActive && <Icon name="check" size={18} className="check" />}
                   </button>
                 );
               })}
@@ -165,28 +162,30 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
                 <span className="row-main">
                   <b>Pair another desktop</b>
                 </span>
-                <Icon name="right" size={16} />
+                <Icon name="right" size={16} className="chev" />
               </button>
             </div>
             {mock && <p className="group-foot">Mock mode: using a fake desktop.</p>}
           </section>
 
           {active && (
-            <section className="group" style={{ "--i": 2 } as CSSProperties}>
+            <section className="group">
               <div className="group-card">
                 <button className="row row-danger" onClick={() => unpair(active.deviceId)}>
-                  Unpair {state.welcome?.desktop ?? active.name}
+                  <span className="row-icon">
+                    <Icon name="x" />
+                  </span>
+                  <span className="row-main">
+                    <b>Unpair {state.welcome?.desktop ?? active.name}</b>
+                  </span>
                 </button>
               </div>
             </section>
           )}
 
-          <section className="group" style={{ "--i": 3 } as CSSProperties}>
-            <div className="secure" style={{ marginTop: 0, padding: "0 6px" }}>
-              <Icon name="shield" size={14} /> End-to-end encrypted · the relay only sees ciphertext
-              {state.welcome ? ` · winfer ${state.welcome.version}` : ""}
-            </div>
-          </section>
+          <div className="secure">
+            <Icon name="shield" size={14} /> End-to-end encrypted · the relay only sees ciphertext
+          </div>
         </main>
       </div>
     </div>

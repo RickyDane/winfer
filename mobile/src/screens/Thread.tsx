@@ -2,9 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import type { DesktopClient } from "../client";
 import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
-import { Avatar, ConnNotice, Icon, providerInfo, toolIcon, toolText } from "./common";
+import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText } from "./common";
 import { Markdown } from "./Markdown";
-import { SlideToConfirm } from "./widgets";
 
 type Block = { kind: "msg"; msg: Message } | { kind: "tools"; msgs: Message[] };
 
@@ -32,46 +31,57 @@ function toolState(m: Message, active: boolean): ToolState {
   return m.state ?? "unknown";
 }
 
-function Tools({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: boolean; legacyLive: boolean; fresh: boolean }) {
+/** Runs longer than this fold their earlier steps behind one row. */
+const FOLD = 5;
+
+function Steps({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: boolean; legacyLive: boolean; fresh: boolean }) {
   // Sessions that don't report states: the last call of the last group runs while the agent works.
   const states = msgs.map((m, i) => (m.state ? toolState(m, active) : legacyLive && i === msgs.length - 1 ? "running" : "unknown"));
-  const running = states.includes("running");
-  const failed = states.includes("failed");
-  const [open, setOpen] = useState(running);
-  useEffect(() => setOpen(running), [running]);
-  const names = [...new Set(msgs.map((m) => m.tool ?? "tool"))];
+  const [all, setAll] = useState(false);
+  // Fold by count, not by state, so a run doesn't jump when its last step finishes.
+  const hidden = !all && msgs.length > FOLD + 1 ? msgs.length - FOLD : 0;
+  const names = [...new Set(msgs.slice(0, hidden).map((m) => m.tool ?? "tool"))];
   return (
-    <div className={`tools${fresh ? " fresh" : ""}`} data-open={open} data-running={running || undefined}>
-      <button className="tools-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        {running ? <span className="mini-spin" aria-hidden /> : <Icon name={failed ? "x" : "check"} size={15} className={failed ? "tone-fail" : undefined} />}
-        <span className="names">
-          {msgs.length} {msgs.length === 1 ? "step" : "steps"} · {names.slice(0, 3).join(", ")}
-          {names.length > 3 ? "…" : ""}
-        </span>
-        <Icon name="chevron" size={16} className="chev" />
-      </button>
-      <div className="tools-body">
-        <div>
-          <ol className="tl">
-            {msgs.map((m, i) => (
-              <li key={m.id} className={states[i]}>
-                <span className="tl-node">
-                  <Icon name={toolIcon(m.tool)} />
-                  {(states[i] === "done" || states[i] === "failed") && (
-                    <span className="tl-badge">
-                      <Icon name={states[i] === "done" ? "check" : "x"} size={8} />
-                    </span>
-                  )}
-                </span>
-                <span className="tl-name">{m.tool ?? "tool"}</span>
-                <span className="tl-text">{toolText(m.tool, m.text)}</span>
-                {m.background && <span className="tl-bg">{states[i] === "running" ? "background" : "bg"}</span>}
-              </li>
-            ))}
-          </ol>
-        </div>
-      </div>
+    <div className={`steps${fresh ? " fresh" : ""}`}>
+      {hidden > 0 && (
+        <button className="step more" onClick={() => (haptic(5), setAll(true))}>
+          <span className="step-icon">
+            <Icon name="chevron" size={12} />
+          </span>
+          <span className="step-name">{hidden} earlier steps</span>
+          <span className="step-arg">{names.slice(0, 3).join(", ")}</span>
+        </button>
+      )}
+      {msgs.slice(hidden).map((m, i) => (
+        <Step key={m.id} m={m} state={states[hidden + i]} />
+      ))}
     </div>
+  );
+}
+
+/** One tool call on the rail; tapping it unclamps the argument. */
+function Step({ m, state }: { m: Message; state: ToolState }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button className="step" data-state={state} data-open={open} aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className="step-icon">
+        <Icon name={toolIcon(m.tool)} size={12} />
+      </span>
+      <span className="step-name">{m.tool ?? "Tool"}</span>
+      <span className="step-arg">{toolText(m.tool, m.text)}</span>
+      {m.background && <span className="step-tag">bg</span>}
+      <span className="step-status" aria-label={state}>
+        {state === "running" ? (
+          <span className="spinner" />
+        ) : state === "done" ? (
+          <Icon name="check" size={14} />
+        ) : state === "failed" ? (
+          <Icon name="x" size={14} />
+        ) : state === "stopped" ? (
+          <Icon name="minus" size={14} />
+        ) : null}
+      </span>
+    </button>
   );
 }
 
@@ -81,33 +91,22 @@ const clock = (ms: number) => {
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}:${String(s % 60).padStart(2, "0")}`;
 };
 
-/** In the chat, below the last message: what the agent is doing right now. */
-function Activity({ pane, current, thinking }: { pane: Pane; current: Message | null; thinking: boolean }) {
+/** Above the composer while the agent works: an orb, "Working", the time and the call in flight. */
+function StatusLine({ pane, current, thinking }: { pane: Pane; current: Message | null; thinking: boolean }) {
   useTick(1000);
+  const what = current ? `${current.tool ?? "Tool"} ${toolText(current.tool, current.text)}` : pane.message;
   return (
-    <div className="msg assistant activity" role="status">
-      <Avatar pane={pane} small />
-      <div className="activity-card">
-        <span className="wave" aria-hidden>
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className="activity-text">
-          {current ? (
-            <>
-              <b>{current.tool ?? "Tool"}</b> {toolText(current.tool, current.text)}
-            </>
-          ) : thinking ? (
-            "Thinking…"
-          ) : (
-            pane.message
-          )}
-        </span>
-        <span className="activity-clock">{clock(Date.now() - (current?.ts ?? pane.updatedAt))}</span>
-      </div>
+    <div className="status-line" role="status">
+      <span className="orb" aria-hidden />
+      <span className="shimmer">{thinking ? "Thinking" : "Working"}</span>
+      <span className="sep">·</span>
+      <span className="num">{clock(Date.now() - (current?.ts ?? pane.updatedAt))}</span>
+      {what && (
+        <>
+          <span className="sep">·</span>
+          <span className="status-what">{what}</span>
+        </>
+      )}
     </div>
   );
 }
@@ -116,23 +115,19 @@ function Activity({ pane, current, thinking }: { pane: Pane; current: Message | 
 function Background({ items }: { items: Message[] }) {
   useTick(1000);
   return (
-    <div className="bg-tray" role="status">
+    <div className="bg-box" role="status">
       <div className="bg-head">
-        <span className="mini-spin" aria-hidden />
+        <span className="spinner" aria-hidden />
         <b>Background</b>
         <span>{items.length} running</span>
       </div>
       <ul>
         {items.map((m) => (
           <li key={m.id}>
-            <span className="tl-node">
-              <Icon name={toolIcon(m.tool)} />
-            </span>
-            <span className="bg-text">
-              <b>{m.tool ?? "Task"}</b>
-              <span>{toolText(m.tool, m.text)}</span>
-            </span>
-            {m.ts && <span className="activity-clock">{clock(Date.now() - m.ts)}</span>}
+            <Icon name={toolIcon(m.tool)} size={13} />
+            <b>{m.tool ?? "Task"}</b>
+            <span className="bg-text">{toolText(m.tool, m.text)}</span>
+            {m.ts && <span className="num">{clock(Date.now() - m.ts)}</span>}
           </li>
         ))}
       </ul>
@@ -271,21 +266,23 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const quick = !draft && !req && pane?.status === "done" ? QUICK_DONE : !draft && req?.kind === "question" && !options.length ? QUICK_Q : null;
   const mode = working && !draft.trim() ? "stop" : draft.trim() ? "send" : "idle";
 
+  const hint = typing !== null ? "Sent as your own answer" : working ? "Steers the agent at its next step" : req?.kind === "question" ? "Or answer in your own words" : "Typed into the agent on your desktop";
+
   return (
     <div className="screen">
-      <header className="thread-head">
+      <header className="bar">
         <button className="icon-btn" aria-label="Back" onClick={() => go("/")}>
           <Icon name="back" />
         </button>
         {pane && <Avatar pane={pane} small morph />}
-        <div className="thread-title">
+        <div className="bar-title">
           <b style={{ viewTransitionName: vtName("tt", paneId) } as CSSProperties}>{pane?.title ?? "Agent"}</b>
           <span>{pane ? [pane.workspace, info?.name].filter(Boolean).join(" · ") : state.panes.length ? "This agent's pane was closed" : "Loading…"}</span>
         </div>
       </header>
 
       <div
-        className="scroll thread-scroll"
+        className="scroll"
         ref={scroller}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -293,59 +290,56 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
           if (stick.current) setUnseen(false);
         }}
       >
-        <div className="messages">
+        <div className="transcript">
           <ConnNotice state={state} onRetry={() => client.reconnect()} />
           {!thread && ready && (
-            <div className="thinking" aria-label="Loading">
-              <i />
-              <i />
-              <i />
+            <div className="loading" aria-label="Loading">
+              <span className="spinner" /> Loading the thread…
             </div>
           )}
           {thread && messages.length === 0 && pane?.reply && (
-            <div className="msg assistant">
-              <Avatar pane={pane} small />
-              <div className="bubble">
-                <Markdown text={pane.reply} />
-              </div>
+            <div className="turn-assistant">
+              <Markdown text={pane.reply} />
             </div>
           )}
           {thread && messages.length === 0 && !pane?.reply && (
             <div className="empty">
-              <div className="orbit-art">
-                <i />
-                <i />
+              <span className="empty-mark">
                 <img src="./icons/logo.svg" alt="" />
-              </div>
+              </span>
               <h3>A fresh start</h3>
               <p className="sub">Send a message and it's typed into the agent on your desktop.</p>
             </div>
           )}
           {all.map((b, i) => {
             if (b.kind === "tools")
-              return <Tools key={`t-${b.msgs[0].id}`} msgs={b.msgs} active={active} legacyLive={working && i === all.length - 1} fresh={isFresh(b.msgs[0].id)} />;
+              return <Steps key={`t-${b.msgs[0].id}`} msgs={b.msgs} active={active} legacyLive={working && i === all.length - 1} fresh={isFresh(b.msgs[0].id)} />;
             const m = b.msg;
             const fresh = isFresh(m.id) ? " fresh" : "";
             if (m.role === "user")
               return (
-                <div key={m.id} className={`msg user${fresh}`}>
-                  <div className="bubble">
-                    <p>{m.text}</p>
-                    {m.ts && <span className="msg-time">{ago(m.ts)}</span>}
-                  </div>
+                <div key={m.id} className={`turn-user${fresh}`}>
+                  <p>{m.text}</p>
+                  {m.ts && <span className="time">{ago(m.ts)}</span>}
                 </div>
               );
-            const prev = all[i - 1];
-            const head = !prev || prev.kind !== "msg" || prev.msg.role !== "assistant";
             return (
-              <div key={m.id} className={`msg assistant${fresh}`}>
-                {pane && head ? <Avatar pane={{ ...pane, status: "idle" }} small /> : <span style={{ width: 28, flex: "none" }} />}
-                <div className="bubble">{screen ? <pre className="screen-text">{m.text}</pre> : <Markdown text={m.text} />}</div>
+              <div key={m.id} className={`turn-assistant${fresh}`}>
+                {screen ? <pre className="screen-text">{m.text}</pre> : <Markdown text={m.text} />}
               </div>
             );
           })}
+          {working && thinking && (
+            <div className="steps">
+              <div className="step reason">
+                <span className="step-icon">
+                  <Icon name="sparkle" size={12} />
+                </span>
+                <span className="shimmer">Thinking</span>
+              </div>
+            </div>
+          )}
           {pane && background.length > 0 && <Background items={background} />}
-          {pane && working && <Activity pane={pane} current={current} thinking={thinking} />}
           {pane && !working && (pane.status === "done" || pane.status === "error") && messages.length > 0 && <EndMark pane={pane} />}
         </div>
       </div>
@@ -361,63 +355,77 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
             }}
           >
-            <Icon name="down" size={18} />
-            <span className="dot" />
+            <Icon name="down" size={16} />
           </button>
         )}
         {req?.kind === "approval" && (
-          <div className="sheet" key={`a-${req.text}`}>
-            <div className="sheet-label">
-              <Icon name="shield" size={14} /> Permission request
+          <div className="request" key={`a-${req.text}`}>
+            <div className="request-head">
+              <Icon name="shield" size={18} />
+              <div>
+                <b>Permission request</b>
+                <small>{info?.name ?? "The agent"} wants to run this</small>
+              </div>
             </div>
             <pre className="request-code">{req.text}</pre>
-            <div className="sheet-row">
-              <SlideToConfirm label="Slide to approve" doneLabel="Approved" disabled={!ready} onConfirm={() => act("approve")} />
-              <button className="btn" style={{ height: 54, borderRadius: 999 }} disabled={!ready || !!busy} onClick={() => void act("decline").catch(() => {})} aria-label="Decline">
-                <Icon name="x" />
-              </button>
-            </div>
-            {extra.length > 0 && (
-              <div className="alt-options">
-                {extra.map((o) => (
-                  <button key={o.n} className="alt-option" data-picked={picked === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
+            {extra.length > 1 && (
+              <div className="options">
+                {extra.slice(1).map((o) => (
+                  <button key={o.n} className="option" data-picked={picked === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
                     <span className="opt-n">{o.n}</span>
-                    {o.label}
+                    <span className="opt-body">
+                      <b>{o.label}</b>
+                    </span>
+                    {picked === o.n && <span className="spinner" />}
                   </button>
                 ))}
               </div>
             )}
+            <div className="actions">
+              <button className="btn primary" disabled={!ready || !!busy || picked !== null} onClick={() => void act("approve").catch(() => {})}>
+                {busy === "approve" ? <span className="spinner" /> : <Icon name="check" size={15} />} Approve
+              </button>
+              {extra[0] && (
+                <button className="btn" disabled={!ready || !!busy || picked !== null} onClick={() => void choose(extra[0])}>
+                  {picked === extra[0].n && <span className="spinner" />}
+                  <span className="btn-text">{extra[0].label}</span>
+                </button>
+              )}
+              <button className="btn ghost danger" disabled={!ready || !!busy || picked !== null} onClick={() => void act("decline").catch(() => {})}>
+                Deny
+              </button>
+            </div>
           </div>
         )}
         {req?.kind === "question" && (
-          <div className="sheet question" key={`q-${req.text}`}>
-            <div className="sheet-label">
-              <Icon name="question" size={14} /> {info?.name ?? "The agent"} asks
+          <div className="request" key={`q-${req.text}`}>
+            <div className="request-head">
+              <Icon name="question" size={18} />
+              <div>
+                <b>{req.text}</b>
+                <small>{info?.name ?? "The agent"} asks</small>
+              </div>
             </div>
-            <p className="request-q">{req.text}</p>
             {options.length > 0 && (
               <div className="options" data-busy={picked !== null}>
-                {options.filter((o) => !isFreeText(o)).map((o, i) => (
-                  <button
-                    key={o.n}
-                    className="option"
-                    style={{ "--i": i } as CSSProperties}
-                    data-picked={picked === o.n || typing === o.n}
-                    data-free={isFreeText(o) || undefined}
-                    disabled={!ready || (picked !== null && picked !== o.n)}
-                    onClick={() => void choose(o)}
-                  >
-                    <span className="opt-n">{isFreeText(o) ? <Icon name="pencil" size={13} /> : o.n}</span>
+                {options.filter((o) => !isFreeText(o)).map((o) => (
+                  <button key={o.n} className="option" data-picked={picked === o.n} disabled={!ready || (picked !== null && picked !== o.n)} onClick={() => void choose(o)}>
+                    <span className="opt-n">{o.n}</span>
                     <span className="opt-body">
                       <b>{o.label}</b>
-                      {o.detail && <span>{o.detail}</span>}
+                      {o.detail && <small>{o.detail}</small>}
                     </span>
-                    <span className="opt-go">{picked === o.n ? <span className="opt-spin" /> : <Icon name={isFreeText(o) ? "pencil" : "right"} size={16} />}</span>
+                    {picked === o.n && <span className="spinner" />}
                   </button>
                 ))}
                 {options.filter(isFreeText).map((o) => (
-                  <button key={o.n} className="option-free" data-picked={typing === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
-                    <Icon name="pencil" size={13} /> {typing === o.n ? "Type your answer below" : "Or type your own answer"}
+                  <button key={o.n} className="option free" data-picked={typing === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
+                    <span className="opt-n">
+                      <Icon name="pencil" size={11} />
+                    </span>
+                    <span className="opt-body">
+                      <b>{typing === o.n ? "Type your answer below" : "Or type your own answer"}</b>
+                    </span>
                   </button>
                 ))}
               </div>
@@ -427,11 +435,10 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
         {err && <div className="inline-error">{err}</div>}
         {quick && ready && (
           <div className="chips">
-            {quick.map((q, n) => (
+            {quick.map((q) => (
               <button
                 key={q}
                 className="chip"
-                style={{ "--i": n } as CSSProperties}
                 onClick={() => {
                   setDraft(q);
                   haptic(5);
@@ -443,7 +450,8 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             ))}
           </div>
         )}
-        <div className="composer">
+        {pane && working && <StatusLine pane={pane} current={current} thinking={thinking} />}
+        <div className="composer" data-busy={working || undefined}>
           <textarea
             ref={input}
             rows={1}
@@ -459,17 +467,38 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void act("send").catch(() => {});
             }}
           />
-          <button
-            className="send"
-            data-mode={mode}
-            aria-label={mode === "stop" ? "Interrupt" : "Send"}
-            disabled={!ready || !!busy || mode === "idle"}
-            onClick={() => void act(mode === "stop" ? "interrupt" : "send").catch(() => {})}
-          >
-            <Icon name="send" className="i-send" />
-            <Icon name="stop" className="i-stop" />
-          </button>
+          <div className="composer-bar">
+            <span className="hint">{hint}</span>
+            <button
+              className="send"
+              data-mode={mode}
+              aria-label={mode === "stop" ? "Interrupt" : "Send"}
+              disabled={!ready || !!busy || mode === "idle"}
+              onClick={() => void act(mode === "stop" ? "interrupt" : "send").catch(() => {})}
+            >
+              <Icon name={mode === "stop" ? "stop" : "send"} size={mode === "stop" ? 18 : 16} />
+            </button>
+          </div>
         </div>
+        {pane && (
+          <div className="foot">
+            <span className="foot-item mode" data-status={pane.status}>
+              {STATUS_LABEL[pane.status]}
+            </span>
+            {info && (
+              <span className="foot-item prov" style={{ color: info.mark }}>
+                <ProviderMark provider={pane.provider} size={12} />
+                <span>{info.name}</span>
+              </span>
+            )}
+            <span className="foot-item dim">
+              <Icon name="folder" size={12} />
+              <span>{pane.workspace}</span>
+            </span>
+            <span className="grow" />
+            <span className="foot-item dim">{ago(pane.updatedAt)}</span>
+          </div>
+        )}
       </footer>
     </div>
   );

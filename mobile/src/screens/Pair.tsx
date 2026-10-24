@@ -1,7 +1,7 @@
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { go, isIOS, isStandalone } from "../hooks";
 import { addPairing, parsePairPayload } from "../pairing";
-import { Aurora, Icon } from "./common";
+import { Icon } from "./common";
 
 export function Pair({ error, canCancel, onPaired }: { error: string | null; canCancel: boolean; onPaired: () => void }) {
   const [link, setLink] = useState("");
@@ -19,24 +19,21 @@ export function Pair({ error, canCancel, onPaired }: { error: string | null; can
 
   return (
     <div className="screen">
-      <Aurora />
       <div className="scroll">
         <main className="pair">
-          <div className="pair-logo" aria-hidden>
-            <i />
-            <i />
+          <span className="empty-mark" aria-hidden>
             <img src="./icons/logo.svg" alt="" />
-          </div>
+          </span>
           <h1>Your agents, in your pocket</h1>
           <p className="lead">Get pinged the moment an agent finishes or needs you — then answer, approve or steer it from here.</p>
-          <ol className="steps">
-            <li style={{ "--i": 0 } as CSSProperties}>
+          <ol className="pair-steps">
+            <li>
               <span className="n">1</span>
               <span>
                 On your computer open winfer → <b>Settings → Mobile</b> → <b>Pair phone</b>.
               </span>
             </li>
-            <li style={{ "--i": 1 } as CSSProperties}>
+            <li>
               <span className="n">2</span>
               <span>Scan the QR code with your camera — or paste the link below.</span>
             </li>
@@ -60,7 +57,7 @@ export function Pair({ error, canCancel, onPaired }: { error: string | null; can
               </button>
             )}
           </div>
-          {err && <div className="inline-error" style={{ marginTop: 12 }}>{err}</div>}
+          {err && <div className="inline-error">{err}</div>}
           {iosBrowser && (
             <div className="tip">
               <b>iPhone tip:</b> notifications only work from the Home Screen app. Tap <b>Share</b> → <b>Add to Home Screen</b>, then open winfer from there and pair.

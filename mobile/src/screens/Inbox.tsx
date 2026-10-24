@@ -3,8 +3,8 @@ import { useCallback, useMemo, useRef, useState, type CSSProperties } from "reac
 import type { DesktopClient } from "../client";
 import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, sortPanes, type AgentStatus, type Pane, type RequestOption } from "../protocol";
-import { Aurora, Avatar, ConnNotice, Icon, STATUS_LABEL, linkState, providerInfo } from "./common";
-import { Segmented, StatusRing, SwipeCard, useCollapse, useFlip, usePullToRefresh } from "./widgets";
+import { Avatar, ConnNotice, Icon, STATUS_LABEL, linkState, providerInfo } from "./common";
+import { Segmented, SwipeCard, useFlip, usePullToRefresh } from "./widgets";
 
 type Filter = "all" | "needs" | "working" | "done";
 const MATCH: Record<Filter, (p: Pane) => boolean> = {
@@ -20,20 +20,22 @@ const GROUPS: { title: string; statuses: AgentStatus[] }[] = [
   { title: "Idle", statuses: ["idle"] },
 ];
 
-function headline(counts: Record<AgentStatus, number>, total: number) {
-  const needs = counts["needs-input"];
-  if (needs) return <>{needs === 1 ? "An agent" : `${needs} agents`} <em>{needs === 1 ? "needs" : "need"} you</em></>;
-  if (counts.error) return <>{counts.error === 1 ? "An agent" : `${counts.error} agents`} <em>hit an error</em></>;
-  if (counts.working) return <>{counts.working === 1 ? "One agent" : `${counts.working} agents`} <em className="calm">at work</em></>;
-  if (total) return <>All quiet. <em className="calm">Nothing waiting.</em></>;
-  return <>No agents <em className="calm">yet</em></>;
+/** One muted line under the title: what needs you first, then the rest. */
+function summary(counts: Record<AgentStatus, number>, total: number): string {
+  if (!total) return "No agents yet";
+  const parts = [
+    counts["needs-input"] && `${counts["needs-input"]} ${counts["needs-input"] === 1 ? "needs" : "need"} you`,
+    counts.error && `${counts.error} ${counts.error === 1 ? "error" : "errors"}`,
+    counts.working && `${counts.working} working`,
+  ].filter(Boolean);
+  return [...parts, `${total} ${total === 1 ? "agent" : "agents"}`].join(" · ");
 }
 
-function preview(p: Pane): { text: string; mono: boolean } | null {
-  if (p.request?.kind === "approval") return { text: p.request.text.split("\n")[0], mono: true };
-  if (p.request) return { text: p.request.text, mono: false };
+function preview(p: Pane): string | null {
+  if (p.request?.kind === "approval") return p.request.text.split("\n")[0];
+  if (p.request) return p.request.text;
   const text = p.status === "done" ? (p.reply ?? p.message) : p.message;
-  return text ? { text: text.replace(/[#*`_>]/g, "").trim(), mono: false } : null;
+  return text ? text.replace(/[#*`_>]/g, "").trim() : null;
 }
 
 export function Inbox({ client }: { client: DesktopClient }) {
@@ -54,10 +56,8 @@ export function Inbox({ client }: { client: DesktopClient }) {
     void client.request({ t: "pane.close", paneId: p.id }).catch(() => {});
   };
   const scroller = useRef<HTMLDivElement>(null);
-  const screen = useRef<HTMLDivElement>(null);
   const ptr = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const onScroll = useCollapse(scroller, screen, 70);
 
   const panes = sortPanes(state.panes);
   const counts = useMemo(() => {
@@ -94,16 +94,19 @@ export function Inbox({ client }: { client: DesktopClient }) {
   const card = (p: Pane) => {
     const pv = preview(p);
     const approval = p.request?.kind === "approval";
+    const question = p.request?.kind === "question" ? p.request : null;
+    const picks = question?.options?.filter((o) => !isFreeText(o)) ?? [];
     const info = providerInfo(p.provider);
     return (
       <SwipeCard
         key={p.id}
         index={i++}
         status={p.status}
+        className={p.request ? "request" : undefined}
         onTap={() => open(p)}
         onLongPress={() => openMenu(p)}
         right={approval ? { label: "Approve", icon: "check", run: () => act(p, "approve") } : undefined}
-        left={approval ? { label: "Decline", icon: "x", run: () => act(p, "decline") } : p.status === "working" ? { label: "Interrupt", icon: "stop", run: () => act(p, "interrupt") } : undefined}
+        left={approval ? { label: "Deny", icon: "x", run: () => act(p, "decline") } : p.status === "working" ? { label: "Interrupt", icon: "stop", run: () => act(p, "interrupt") } : undefined}
       >
         <div className="card-row">
           <Avatar pane={p} morph />
@@ -116,71 +119,83 @@ export function Inbox({ client }: { client: DesktopClient }) {
             </div>
             <div className="card-meta">
               <span className="status-text" data-status={p.status}>
+                {p.status === "working" && <span className="orb" aria-hidden />}
                 {STATUS_LABEL[p.status]}
               </span>
-              <span className="sep">•</span>
+              <span className="sep">·</span>
               <span className="ws">{p.workspace}</span>
               {info && (
                 <>
-                  <span className="sep">•</span>
+                  <span className="sep">·</span>
                   <span className="prov">{info.name}</span>
                 </>
               )}
             </div>
+            {pv && !approval && <p className="preview">{pv}</p>}
           </div>
         </div>
-        {pv && <p className={`preview${pv.mono ? " mono" : ""}`}>{pv.text}</p>}
+        {approval && <pre className="request-code">{p.request?.text}</pre>}
         {approval && (
-          <div className="card-actions">
-            <button className="btn sm approve" onClick={() => act(p, "approve")}>
-              <Icon name="check" size={16} /> Approve
+          <div className="actions">
+            <button className="btn primary" onClick={() => act(p, "approve")}>
+              <Icon name="check" size={15} /> Approve
             </button>
-            <button className="btn sm" onClick={() => act(p, "decline")}>
-              Decline
+            <button className="btn" onClick={() => open(p)}>
+              Open
             </button>
-            <span className="hint">
-              swipe <Icon name="right" size={12} />
-            </span>
+            <button className="btn ghost danger" onClick={() => act(p, "decline")}>
+              Deny
+            </button>
           </div>
         )}
-        {p.request?.kind === "question" && !!p.request.options?.length && (
-          <div className="card-options">
-            {p.request.options
-              .filter((o) => !isFreeText(o))
-              .slice(0, 3)
-              .map((o) => (
-                <button key={o.n} className="card-option" onClick={() => choose(p, o)}>
-                  <span className="opt-n">{o.n}</span>
-                  {o.label}
-                </button>
-              ))}
-            {p.request.options.filter((o) => !isFreeText(o)).length > 3 && <span className="hint">+{p.request.options.filter((o) => !isFreeText(o)).length - 3} more</span>}
+        {picks.length > 0 && (
+          <div className="options compact">
+            {picks.slice(0, 3).map((o) => (
+              <button key={o.n} className="option" onClick={() => choose(p, o)}>
+                <span className="opt-n">{o.n}</span>
+                <span className="opt-body">
+                  <b>{o.label}</b>
+                </span>
+              </button>
+            ))}
+            {picks.length > 3 && <span className="more">+{picks.length - 3} more in the thread</span>}
           </div>
         )}
-        {p.status === "working" && <div className="progress" />}
       </SwipeCard>
     );
   };
 
+  /** Requests stand alone as cards; everything else sits in one bordered list. */
+  const group = (items: Pane[]) => {
+    const cards = items.every((p) => p.status === "needs-input" || p.status === "error");
+    return (
+      <div className="group-list" data-kind={cards ? "cards" : "rows"}>
+        {items.map(card)}
+      </div>
+    );
+  };
+
   return (
-    <div className="screen" ref={screen}>
-      <Aurora mood={counts["needs-input"] ? "needs" : counts.error ? "error" : "calm"} />
-      <header className="topbar">
-        <div className="topbar-title">{desktop}</div>
+    <div className="screen">
+      <header className="bar">
+        <span className="live-dot" data-state={link} aria-hidden />
+        <div className="bar-title">
+          <b>{desktop}</b>
+          <span>{link === "online" ? "Connected" : link === "away" ? "Desktop offline" : link === "offline" ? "Offline" : "Connecting…"}</span>
+        </div>
+        {canStart && (
+          <button className="btn primary sm" disabled={link !== "online"} onClick={startNew}>
+            <Icon name="plus" size={15} /> New
+          </button>
+        )}
       </header>
       <div className="ptr" ref={ptr} aria-hidden>
-        <Icon name="refresh" size={18} />
+        <Icon name="refresh" size={16} />
       </div>
-      <div className="scroll" ref={scroller} onScroll={onScroll}>
+      <div className="scroll tabbed" ref={scroller}>
         <section className="hero">
-          <div className="hero-text">
-            <div className="eyebrow">
-              <span className="live-dot" data-state={link} />
-              <span>{link === "online" ? desktop : link === "away" ? `${desktop} · offline` : "Connecting…"}</span>
-            </div>
-            <h1 className="headline">{headline(counts, state.panes.length)}</h1>
-          </div>
-          <StatusRing counts={counts} total={state.panes.length} label={counts["needs-input"] ? "waiting" : "agents"} />
+          <h1>Agents</h1>
+          <p>{summary(counts, state.panes.length)}</p>
         </section>
         <div className="filters">
           <Segmented<Filter>
@@ -195,57 +210,55 @@ export function Inbox({ client }: { client: DesktopClient }) {
           />
         </div>
         <ConnNotice state={state} onRetry={() => client.reconnect()} />
-        {canStart && (
-          <div className="new-cta">
-            <button className="btn primary block" disabled={link !== "online"} onClick={startNew}>
-              <Icon name="plus" size={18} /> New session
-            </button>
-          </div>
-        )}
         <div className="list" ref={list}>
           {filter === "all"
             ? GROUPS.map((g) => {
                 const items = shown.filter((p) => g.statuses.includes(p.status));
                 if (!items.length) return null;
-                return [
-                  <div key={`g-${g.title}`} className="group-label" data-flip>
-                    {g.title}
-                  </div>,
-                  ...items.map(card),
-                ];
+                return (
+                  <section key={g.title} className="list-group">
+                    <h2 className="label" data-flip>
+                      {g.title}
+                      <span>{items.length}</span>
+                    </h2>
+                    {group(items)}
+                  </section>
+                );
               })
-            : shown.map(card)}
+            : shown.length > 0 && group(shown)}
           {link === "online" && shown.length === 0 && (
             <div className="empty">
-              <div className="orbit-art">
-                <i />
-                <i />
+              <span className="empty-mark">
                 <img src="./icons/logo.svg" alt="" />
-              </div>
+              </span>
               <h3>{state.panes.length ? "Nothing here" : "No agents running"}</h3>
-              <p className="sub">{state.panes.length ? "Try another filter." : canStart ? "Start one above or in winfer; it appears live." : "Start one in winfer and it appears here, live."}</p>
+              <p className="sub">{state.panes.length ? "Try another filter." : canStart ? "Start one with New, or in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
         </div>
       </div>
       {menu &&
         createPortal(
-          <div className="menu-backdrop" onClick={() => setMenu(null)}>
-            <div className="menu-sheet" role="menu" onClick={(e) => e.stopPropagation()}>
-              <div className="menu-group">
-                <div className="menu-head">
-                  {menu.title} · {menu.workspace}
+          <div className="sheet-wrap" onClick={() => setMenu(null)}>
+            <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
+              <header>
+                <Avatar pane={menu} small />
+                <div className="sheet-title">
+                  <b>{menu.title}</b>
+                  <span>
+                    {menu.workspace} · {STATUS_LABEL[menu.status]}
+                  </span>
                 </div>
+                <button className="icon-btn" aria-label="Close" onClick={() => setMenu(null)}>
+                  <Icon name="x" size={18} />
+                </button>
+              </header>
+              <div className="sheet-body">
                 <button className="menu-item" role="menuitem" onClick={() => (setMenu(null), open(menu))}>
-                  Open
+                  <Icon name="right" size={17} /> Open thread
                 </button>
                 <button className="menu-item danger" role="menuitem" disabled={link !== "online"} onClick={() => closeSession(menu)}>
-                  <Icon name="x" size={18} /> {confirm ? "Stop the agent and close?" : "Close session"}
-                </button>
-              </div>
-              <div className="menu-group">
-                <button className="menu-item" onClick={() => setMenu(null)}>
-                  Cancel
+                  <Icon name="x" size={17} /> {confirm ? "Stop the agent and close?" : "Close session"}
                 </button>
               </div>
             </div>

@@ -1,66 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { haptic } from "../hooks";
 import type { AgentStatus } from "../protocol";
 import { Icon, type IconName } from "./common";
 
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/* ---------- Status ring: one arc per status, sized by count ---------- */
-const RING_ORDER: AgentStatus[] = ["needs-input", "working", "error", "done", "idle"];
-export function StatusRing({ counts, total, label }: { counts: Record<AgentStatus, number>; total: number; label: string }) {
-  const r = 36;
-  const c = 2 * Math.PI * r;
-  const gap = total > 1 ? 7 : 0;
-  let offset = 0;
-  const hot = counts["needs-input"] > 0;
-  return (
-    <div className="ring" data-hot={hot} role="img" aria-label={`${total} agents`}>
-      <svg viewBox="0 0 84 84">
-        <circle className="track" cx="42" cy="42" r={r} />
-        {RING_ORDER.map((s) => {
-          const n = counts[s];
-          const len = total ? (n / total) * c : 0;
-          const seg = Math.max(0, len - gap);
-          const el = (
-            <circle key={s} className={`seg-${s}`} cx="42" cy="42" r={r} strokeDasharray={`${seg} ${c}`} strokeDashoffset={-offset} style={{ opacity: n ? 1 : 0 }} />
-          );
-          offset += len;
-          return el;
-        })}
-      </svg>
-      <div className="ring-center">
-        <b>{hot ? counts["needs-input"] : total}</b>
-        <small>{label}</small>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Segmented control with a sliding thumb ---------- */
+/* ---------- Segmented filter: flat tabs, the active one outlined ---------- */
 export function Segmented<T extends string>({ options, value, onChange }: { options: { value: T; label: string; count?: number; hot?: boolean }[]; value: T; onChange: (v: T) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [thumb, setThumb] = useState<CSSProperties>({ opacity: 0 });
-  const counts = options.map((o) => o.count ?? 0).join();
-  useLayoutEffect(() => {
-    const root = ref.current;
-    if (!root) return;
-    const place = () => {
-      const el = root.querySelector<HTMLElement>(`[data-v="${value}"]`);
-      if (el) setThumb({ left: el.offsetLeft, width: el.offsetWidth });
-    };
-    place();
-    // Counts appearing change button widths; so do fonts loading and rotation.
-    const ro = new ResizeObserver(place);
-    root.querySelectorAll("button").forEach((b) => ro.observe(b));
-    return () => ro.disconnect();
-  }, [value, options.length, counts]);
   return (
-    <div className="seg" ref={ref} role="group">
-      <span className="seg-thumb" style={thumb} />
+    <div className="seg" role="group">
       {options.map((o) => (
         <button
           key={o.value}
-          data-v={o.value}
           aria-pressed={o.value === value}
           onClick={() => {
             haptic(5);
@@ -78,7 +29,7 @@ export function Segmented<T extends string>({ options, value, onChange }: { opti
 /* ---------- Swipeable card: right = primary action, left = secondary ---------- */
 type SwipeAction = { label: string; icon: IconName; run: () => void };
 const ARM = 96;
-export function SwipeCard({ right, left, onTap, onLongPress, children, status, index }: { right?: SwipeAction; left?: SwipeAction; onTap: () => void; onLongPress?: () => void; children: ReactNode; status: AgentStatus; index: number }) {
+export function SwipeCard({ right, left, onTap, onLongPress, children, status, index, className }: { right?: SwipeAction; left?: SwipeAction; onTap: () => void; onLongPress?: () => void; children: ReactNode; status: AgentStatus; index: number; className?: string }) {
   const card = useRef<HTMLDivElement>(null);
   // Holding still on the card for a moment opens its menu instead of the thread.
   const hold = useRef<{ timer: number; fired: boolean } | null>(null);
@@ -124,7 +75,7 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
       )}
       <div
         ref={card}
-        className="card"
+        className={className ? `card ${className}` : "card"}
         role="button"
         tabIndex={0}
         data-status={status}
@@ -224,71 +175,6 @@ export function SwipeCard({ right, left, onTap, onLongPress, children, status, i
   );
 }
 
-/* ---------- Slide to confirm ---------- */
-export function SlideToConfirm({ label, doneLabel, disabled, onConfirm }: { label: string; doneLabel: string; disabled?: boolean; onConfirm: () => Promise<void> | void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x0: number; max: number; p: number } | null>(null);
-  const [state, setState] = useState<"idle" | "drag" | "done">("idle");
-  const set = (p: number) => ref.current?.style.setProperty("--p", String(p));
-
-  return (
-    <div
-      ref={ref}
-      className="slider"
-      data-snap={state !== "drag"}
-      data-done={state === "done"}
-      aria-disabled={disabled}
-      onPointerDown={(e) => {
-        if (disabled || state === "done") return;
-        const thumb = (e.target as HTMLElement).closest(".slider-thumb");
-        if (!thumb) return;
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { x0: e.clientX, max: e.currentTarget.offsetWidth - 54, p: 0 };
-        setState("drag");
-        haptic(6);
-      }}
-      onPointerMove={(e) => {
-        const d = drag.current;
-        if (!d) return;
-        const p = Math.max(0, Math.min(1, (e.clientX - d.x0) / d.max));
-        if (p > 0.92 && d.p <= 0.92) haptic(14);
-        d.p = p;
-        set(p);
-      }}
-      onPointerUp={async () => {
-        const d = drag.current;
-        drag.current = null;
-        if (!d) return;
-        if (d.p > 0.92) {
-          set(1);
-          setState("done");
-          haptic([10, 40, 18]);
-          try {
-            await onConfirm();
-          } catch {
-            set(0);
-            setState("idle");
-          }
-        } else {
-          set(0);
-          setState("idle");
-        }
-      }}
-      onPointerCancel={() => {
-        drag.current = null;
-        set(0);
-        setState("idle");
-      }}
-    >
-      <div className="slider-fill" />
-      <div className="slider-label">{state === "done" ? doneLabel : label}</div>
-      <div className="slider-thumb" role="button" aria-label={label} tabIndex={0} onKeyDown={(e) => e.key === "Enter" && !disabled && (set(1), setState("done"), void onConfirm())}>
-        <Icon name={state === "done" ? "check" : "right"} size={20} />
-      </div>
-    </div>
-  );
-}
-
 /* ---------- Pull to refresh (touch only; iOS standalone has none) ---------- */
 export function usePullToRefresh(scroller: RefObject<HTMLElement | null>, indicator: RefObject<HTMLElement | null>, refresh: () => Promise<unknown>) {
   useEffect(() => {
@@ -373,16 +259,4 @@ export function useFlip(container: RefObject<HTMLElement | null>, key: string) {
     }
     prev.current = next;
   }, [container, key]);
-}
-
-/** Collapse progress (0 → 1) of a large title as `scroller` scrolls `distance` px. */
-export function useCollapse(scroller: RefObject<HTMLElement | null>, target: RefObject<HTMLElement | null>, distance = 60) {
-  const onScroll = useCallback(() => {
-    const s = scroller.current;
-    const t = target.current;
-    if (!s || !t) return;
-    t.style.setProperty("--collapse", String(Math.min(1, Math.max(0, s.scrollTop / distance))));
-  }, [scroller, target, distance]);
-  useLayoutEffect(onScroll, [onScroll]);
-  return onScroll;
 }

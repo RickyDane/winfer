@@ -1,7 +1,7 @@
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import type { DesktopClient } from "../client";
 import { go, haptic, useClient } from "../hooks";
-import { Aurora, Icon, ProviderMark, linkState } from "./common";
+import { Icon, ProviderMark, linkState, providerInfo } from "./common";
 
 const sessions = (n: number) => (n === 0 ? "No sessions" : n === 1 ? "1 session" : `${n} sessions`);
 
@@ -39,18 +39,17 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
 
   return (
     <div className="screen">
-      <Aurora />
-      <header className="thread-head">
+      <header className="bar">
         <button className="icon-btn" aria-label="Back" onClick={() => go("/")}>
           <Icon name="back" />
         </button>
-        <div className="thread-title">
+        <div className="bar-title">
           <b>New session</b>
           <span>{chosenWs ? `${chosenWs.name}${chosenProvider ? ` · ${chosenProvider.name}` : ""}` : "Pick a workspace"}</span>
         </div>
       </header>
       <div className="scroll">
-        <main className="settings new-session">
+        <main className="settings">
           {workspaces.length === 0 && (
             <div className="empty">
               <h3>{online ? "No workspaces" : "Desktop not connected"}</h3>
@@ -58,13 +57,13 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
             </div>
           )}
           {workspaces.length > 0 && (
-            <section className="group" style={{ "--i": 0 } as CSSProperties}>
+            <section className="group">
               <h2>Workspace</h2>
               <div className="group-card">
                 {workspaces.map((w) => (
                   <button key={w.id} className="row" aria-pressed={w.id === chosenWs?.id} onClick={() => (haptic(5), setWs(w.id))}>
                     <span className="row-icon">
-                      <Icon name="laptop" />
+                      <Icon name="folder" />
                     </span>
                     <span className="row-main">
                       <b>{w.name}</b>
@@ -73,33 +72,35 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
                         {w.active ? " · open on the desktop" : ""}
                       </span>
                     </span>
-                    {w.id === chosenWs?.id && <Icon name="check" className="check" />}
+                    {w.id === chosenWs?.id && <Icon name="check" size={18} className="check" />}
                   </button>
                 ))}
               </div>
             </section>
           )}
           {state.providers.length > 0 && (
-            <section className="group" style={{ "--i": 1 } as CSSProperties}>
+            <section className="group">
               <h2>Agent</h2>
               <div className="group-card">
                 {state.providers.map((p) => (
                   <button key={p.id} className="row" aria-pressed={p.id === chosenProvider?.id} onClick={() => (haptic(5), setProvider(p.id))}>
-                    <ProviderMark provider={p.id} size={32} />
+                    <span className="row-icon" style={{ color: providerInfo(p.id)?.mark }}>
+                      <ProviderMark provider={p.id} size={17} />
+                    </span>
                     <span className="row-main">
                       <b>{p.name}</b>
                       {p.id === state.defaultProvider && <span>Default</span>}
                     </span>
-                    {p.id === chosenProvider?.id && <Icon name="check" className="check" />}
+                    {p.id === chosenProvider?.id && <Icon name="check" size={18} className="check" />}
                   </button>
                 ))}
               </div>
             </section>
           )}
           {workspaces.length > 0 && (
-            <section className="group" style={{ "--i": 2 } as CSSProperties}>
+            <section className="group">
               <h2>First message</h2>
-              <div className="group-card">
+              <div className="field">
                 <textarea
                   className="new-prompt"
                   rows={4}
@@ -117,7 +118,7 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
         </main>
       </div>
       {workspaces.length > 0 && (
-        <footer className="dock">
+        <footer className="dock form-dock">
           {err && <div className="inline-error">{err}</div>}
           <button className="btn primary block" disabled={!online || busy || !chosenWs || !chosenProvider} onClick={() => void start()}>
             <Icon name="plus" size={18} /> {busy ? "Starting…" : text.trim() ? "Start session" : "Open session"}

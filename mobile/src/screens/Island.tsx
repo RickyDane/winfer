@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client";
 import { go, haptic, useClient } from "../hooks";
 import type { Pane } from "../protocol";
-import { ProviderMark, STATUS_LABEL, providerInfo } from "./common";
+import { Avatar, STATUS_LABEL } from "./common";
 
 const LOUD = new Set(["needs-input", "done", "error"]);
 
-/** Dynamic-Island-style toast when another agent finishes or needs you while the app is open. */
+/** Toast at the top when another agent finishes or needs you while the app is open. */
 export function Island({ client, openPaneId }: { client: DesktopClient; openPaneId: string | null }) {
   const state = useClient(client);
   const prev = useRef<Map<string, string> | null>(null);
@@ -41,7 +41,6 @@ export function Island({ client, openPaneId }: { client: DesktopClient; openPane
 
   if (!shown) return null;
   const text = shown.request?.text.split("\n")[0] ?? shown.message ?? STATUS_LABEL[shown.status];
-  const info = providerInfo(shown.provider);
   const dismiss = () => {
     setLeaving(true);
     setTimeout(() => setShown(null), 300);
@@ -74,10 +73,7 @@ export function Island({ client, openPaneId }: { client: DesktopClient; openPane
         go(`/pane/${encodeURIComponent(shown.id)}`);
       }}
     >
-      <span className="island-av" style={{ "--c": info?.tile ?? "#3a3a44", color: info?.fg ?? "#fff" } as CSSProperties}>
-        <ProviderMark provider={shown.provider} size={19} />
-        <span className="island-dot" />
-      </span>
+      <Avatar pane={shown} />
       <span className="island-text">
         <b>{shown.title}</b>
         <span>{text}</span>
