@@ -42,6 +42,8 @@ pub struct Event {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// The part of `cache_write` cached for an hour, which costs more (Claude Code's main thread).
+    pub cache_write_1h: u64,
     /// The cost the agent reported itself (OpenCode), used over the price table.
     pub cost: Option<f64>,
     /// Folder the agent ran in (forward slashes, no trailing slash), if the log says.
@@ -104,6 +106,14 @@ impl UsageHistory {
                  DELETE FROM kv WHERE key = 'opencode';",
             )?;
         }
+        if conn.prepare("SELECT cache_write_1h FROM events LIMIT 0").is_err() {
+            // Added later too: read the logs again so cache writes get their duration.
+            conn.execute_batch(
+                "ALTER TABLE events ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0;
+                 DELETE FROM files;
+                 DELETE FROM kv WHERE key = 'opencode';",
+            )?;
+        }
         if conn.prepare("SELECT session FROM events LIMIT 0").is_err() {
             // Added later too: read every log again so the rows still there get their session.
             conn.execute_batch(
@@ -126,11 +136,11 @@ impl UsageHistory {
 
     fn insert(conn: &Connection, events: &[Event]) -> rusqlite::Result<()> {
         let mut stmt = conn.prepare_cached(
-            "INSERT OR REPLACE INTO events (id, at, provider, model, input, output, cache_read, cache_write, cost, cwd, session)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO events (id, at, provider, model, input, output, cache_read, cache_write, cost, cwd, session, cache_write_1h)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )?;
         for e in events {
-            stmt.execute(params![e.id, e.at, e.provider, e.model, e.input as i64, e.output as i64, e.cache_read as i64, e.cache_write as i64, e.cost, e.cwd, e.session])?;
+            stmt.execute(params![e.id, e.at, e.provider, e.model, e.input as i64, e.output as i64, e.cache_read as i64, e.cache_write as i64, e.cost, e.cwd, e.session, e.cache_write_1h as i64])?;
         }
         Ok(())
     }
@@ -174,7 +184,7 @@ impl UsageHistory {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare_cached(
             "SELECT ?1, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost), COUNT(cost),
-                    MIN(at), MAX(at), COUNT(*)
+                    MIN(at), MAX(at), COUNT(*), SUM(cache_write_1h)
              FROM events WHERE (cwd = ?1 OR cwd LIKE ?2 ESCAPE '\\') AND at >= ?3 GROUP BY provider, model",
         )?;
         let rows = stmt.query_map(params![dir, under, since], dir_row)?;
@@ -188,7 +198,7 @@ impl UsageHistory {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare_cached(
             "SELECT ?1, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost), COUNT(cost),
-                    MIN(at), MAX(at), COUNT(*)
+                    MIN(at), MAX(at), COUNT(*), SUM(cache_write_1h)
              FROM events WHERE session = ?1 GROUP BY provider, model",
         )?;
         let rows = stmt.query_map(params![session], dir_row)?;
@@ -206,7 +216,7 @@ impl UsageHistory {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT cwd, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write), SUM(cost), COUNT(cost),
-                    MIN(at), MAX(at), COUNT(*)
+                    MIN(at), MAX(at), COUNT(*), SUM(cache_write_1h)
              FROM events WHERE cwd IS NOT NULL AND at >= ?1 GROUP BY cwd, provider, model",
         )?;
         let rows = stmt.query_map(params![since], dir_row)?;
@@ -218,7 +228,7 @@ impl UsageHistory {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT (at / ?2) * ?2 AS hour, provider, model, SUM(input), SUM(output), SUM(cache_read), SUM(cache_write),
-                    SUM(cost), COUNT(cost)
+                    SUM(cost), COUNT(cost), SUM(cache_write_1h)
              FROM events WHERE at >= ?1 GROUP BY hour, provider, model ORDER BY hour",
         )?;
         let rows = stmt.query_map(params![since, HOUR_MS], |r| {
@@ -226,15 +236,15 @@ impl UsageHistory {
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
-                [r.get::<_, i64>(3)? as u64, r.get::<_, i64>(4)? as u64, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64],
+                [r.get::<_, i64>(3)? as u64, r.get::<_, i64>(4)? as u64, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64, r.get::<_, i64>(9)? as u64],
                 r.get::<_, Option<f64>>(7)?,
                 r.get::<_, i64>(8)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (hour, provider, model, [input, output, cache_read, cache_write], reported, reported_rows) = row?;
-            let (cost, priced) = cost_of(prices, &model, reported_rows > 0, reported, [input, output, cache_read, cache_write]);
+            let (hour, provider, model, [input, output, cache_read, cache_write, cache_write_1h], reported, reported_rows) = row?;
+            let (cost, priced) = cost_of(prices, &model, reported_rows > 0, reported, [input, output, cache_read, cache_write, cache_write_1h]);
             out.push(Bucket { hour, provider, model, input, output, cache_read, cache_write, cost, priced });
         }
         Ok(out)
@@ -279,7 +289,7 @@ impl Default for DirUsage {
     }
 }
 
-type DirRow = (String, String, String, [u64; 4], Option<f64>, i64, [i64; 3]);
+type DirRow = (String, String, String, [u64; 5], Option<f64>, i64, [i64; 3]);
 
 /// dir, provider, model, token sums, reported cost sum and count, first, last, calls.
 fn dir_row(r: &rusqlite::Row) -> rusqlite::Result<DirRow> {
@@ -287,7 +297,7 @@ fn dir_row(r: &rusqlite::Row) -> rusqlite::Result<DirRow> {
         r.get(0)?,
         r.get(1)?,
         r.get(2)?,
-        [r.get::<_, i64>(3)? as u64, r.get::<_, i64>(4)? as u64, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64],
+        [r.get::<_, i64>(3)? as u64, r.get::<_, i64>(4)? as u64, r.get::<_, i64>(5)? as u64, r.get::<_, i64>(6)? as u64, r.get::<_, i64>(12)? as u64],
         r.get(7)?,
         r.get(8)?,
         [r.get(9)?, r.get(10)?, r.get(11)?],
@@ -298,8 +308,8 @@ fn dir_row(r: &rusqlite::Row) -> rusqlite::Result<DirRow> {
 fn fold_dirs(rows: impl Iterator<Item = rusqlite::Result<DirRow>>, prices: &Prices) -> rusqlite::Result<Vec<DirUsage>> {
     let mut by: HashMap<String, DirUsage> = HashMap::new();
     for row in rows {
-        let (dir, provider, model, [input, output, cache_read, cache_write], reported, reported_rows, [first, last, calls]) = row?;
-        let (cost, priced) = cost_of(prices, &model, reported_rows > 0, reported, [input, output, cache_read, cache_write]);
+        let (dir, provider, model, [input, output, cache_read, cache_write, cache_write_1h], reported, reported_rows, [first, last, calls]) = row?;
+        let (cost, priced) = cost_of(prices, &model, reported_rows > 0, reported, [input, output, cache_read, cache_write, cache_write_1h]);
         let d = by.entry(dir.clone()).or_insert_with(|| DirUsage { dir, ..Default::default() });
         d.cost += cost;
         d.priced &= priced;
@@ -367,10 +377,10 @@ fn group_by_checkout(dirs: Vec<DirUsage>, root: impl Fn(&str) -> String) -> Vec<
 }
 
 /// OpenCode reports a cost per call; elsewhere it comes from the price table.
-fn cost_of(prices: &Prices, model: &str, reported: bool, reported_cost: Option<f64>, [input, output, cache_read, cache_write]: [u64; 4]) -> (f64, bool) {
+fn cost_of(prices: &Prices, model: &str, reported: bool, reported_cost: Option<f64>, [input, output, cache_read, cache_write, cache_write_1h]: [u64; 5]) -> (f64, bool) {
     match (reported, prices.get(model)) {
         (true, _) => (reported_cost.unwrap_or(0.0), true),
-        (false, Some(p)) => (p.cost(input, output, cache_read, cache_write), true),
+        (false, Some(p)) => (p.cost(input, output, cache_read, cache_write) + p.hour_cache_premium(cache_write_1h), true),
         (false, None) => (0.0, false),
     }
 }
@@ -492,6 +502,7 @@ fn claude_events(line: &str, _path: &Path, _at: u64, _state: &mut Value) -> Opti
         output: n(&u["output_tokens"]),
         cache_read: n(&u["cache_read_input_tokens"]),
         cache_write: n(&u["cache_creation_input_tokens"]),
+        cache_write_1h: n(&u["cache_creation"]["ephemeral_1h_input_tokens"]),
         cost: None,
         cwd: v["cwd"].as_str().map(norm_dir),
         session: v["sessionId"].as_str().map(String::from),
@@ -518,7 +529,11 @@ fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<E
         if let Some(cwd) = v["payload"]["cwd"].as_str() {
             state["cwd"] = norm_dir(cwd).into();
         }
-        if line.contains("\"session_meta\"") && let Some(id) = v["payload"]["id"].as_str() {
+        // A subagent's thread has its own id but counts toward the session that spawned it:
+        // `session_id` is the root thread's (older versions only name the parent).
+        let p = &v["payload"];
+        let session = p["session_id"].as_str().or_else(|| p["parent_thread_id"].as_str()).or_else(|| p["id"].as_str());
+        if line.contains("\"session_meta\"") && let Some(id) = session {
             state["session"] = id.into();
         }
         return None;
@@ -547,6 +562,7 @@ fn codex_events(line: &str, path: &Path, at: u64, state: &mut Value) -> Option<E
         output: n(&u["output_tokens"]),
         cache_read,
         cache_write,
+        cache_write_1h: 0,
         cost: None,
         cwd: state["cwd"].as_str().map(String::from),
         session: state["session"].as_str().map(String::from),
@@ -590,6 +606,7 @@ fn pi_events(line: &str, _path: &Path, _at: u64, state: &mut Value) -> Option<Ev
         output: n(&u["output"]),
         cache_read: n(&u["cacheRead"]),
         cache_write: n(&u["cacheWrite"]),
+        cache_write_1h: 0,
         cost: u["cost"]["total"].as_f64().filter(|c| *c > 0.0),
         cwd: state["cwd"].as_str().map(String::from),
         session: session.map(String::from),
@@ -648,6 +665,7 @@ fn opencode_event(id: &str, at: i64, data: &Value) -> Option<Event> {
         output: n(&t["output"]) + n(&t["reasoning"]),
         cache_read: n(&t["cache"]["read"]),
         cache_write: n(&t["cache"]["write"]),
+        cache_write_1h: 0,
         cost: data["cost"].as_f64().filter(|c| *c > 0.0),
         cwd: None,
         session: None,
@@ -673,6 +691,12 @@ impl Price {
 
     pub fn cost(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> f64 {
         (input as f64 * self.input + output as f64 * self.output + cache_read as f64 * self.cache_read + cache_write as f64 * self.cache_write) / 1e6
+    }
+
+    /// What writing `tokens` to the cache for an hour costs over the 5 minutes `cache_write` is
+    /// priced at: Anthropic charges 2x the input price for it instead of 1.25x.
+    pub fn hour_cache_premium(&self, tokens: u64) -> f64 {
+        tokens as f64 * (2.0 * self.input - self.cache_write).max(0.0) / 1e6
     }
 }
 
@@ -982,6 +1006,36 @@ mod tests {
         assert_eq!(p.get("claude-opus-4-6").unwrap().input, 5.0);
         assert_eq!(p.get("gpt-5.4-mini").unwrap().input, 0.75);
         assert!(p.get("llama-3").is_none());
+    }
+
+    #[test]
+    fn hour_long_cache_writes_cost_twice_the_input() {
+        // Recorded from Claude Code (haiku): the main thread caches for an hour, its subagent
+        // for 5 minutes. Claude Code reported $0.01486285 for it.
+        let prices = Prices { catalog: HashMap::new() };
+        let (cost, _) = cost_of(&prices, "claude-haiku-5-5", false, None, [10, 369, 99_030, 79_200, 50_494]);
+        assert!((cost - 0.014_862_85).abs() < 1e-9, "{cost}");
+        let line = r#"{"type":"assistant","timestamp":"2026-10-24T10:00:00.000Z","sessionId":"s","message":{"id":"m","model":"claude-haiku-5-5","usage":{"input_tokens":2,"output_tokens":3,"cache_creation_input_tokens":614,"cache_creation":{"ephemeral_1h_input_tokens":614,"ephemeral_5m_input_tokens":0}}}}"#;
+        let e = claude_events(line, Path::new("s.jsonl"), 0, &mut Value::Null).unwrap();
+        assert_eq!((e.cache_write, e.cache_write_1h), (614, 614));
+    }
+
+    #[test]
+    fn codex_subagent_threads_count_toward_the_session_that_spawned_them() {
+        let path = Path::new("rollout-x.jsonl");
+        let count = r#"{"timestamp":"2026-10-14T10:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":10},"last_token_usage":{"input_tokens":10}}}}"#;
+        let session = |meta: &str| {
+            let mut state = Value::Null;
+            codex_events(meta, path, 0, &mut state);
+            codex_events(count, path, 1, &mut state).unwrap().session
+        };
+        let main = r#"{"timestamp":"2026-10-14T10:00:00.000Z","type":"session_meta","payload":{"id":"root","session_id":"root"}}"#;
+        let child = r#"{"timestamp":"2026-10-14T10:00:00.000Z","type":"session_meta","payload":{"id":"kid","session_id":"root","parent_thread_id":"mid"}}"#;
+        let old_child = r#"{"timestamp":"2026-10-14T10:00:00.000Z","type":"session_meta","payload":{"id":"kid","parent_thread_id":"root"}}"#;
+        let old_main = r#"{"timestamp":"2026-10-14T10:00:00.000Z","type":"session_meta","payload":{"id":"root"}}"#;
+        for meta in [main, child, old_child, old_main] {
+            assert_eq!(session(meta).as_deref(), Some("root"), "{meta}");
+        }
     }
 }
 

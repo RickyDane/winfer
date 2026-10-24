@@ -162,6 +162,42 @@ struct Live {
     done: u64,
     msg: u64,
     turn: TurnTokens,
+    /// The running process's own totals so far (`modelUsage`, `total_cost_usd`), which unlike
+    /// a turn's `usage` count its subagents too.
+    process: Totals,
+    /// The cost of the session's earlier processes (before a restart), as each reports only its own.
+    cost_before: f64,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+struct Totals {
+    input: u64,
+    cached: u64,
+    output: u64,
+    cost: f64,
+}
+
+impl Totals {
+    /// Claude Code's running totals in a `result`, if it sent them.
+    fn of(v: &Value) -> Option<Self> {
+        let models = v["modelUsage"].as_object().filter(|m| m.values().any(|u| u["outputTokens"].is_u64()))?;
+        let mut t = Self { cost: v["total_cost_usd"].as_f64().unwrap_or(0.0), ..Default::default() };
+        for u in models.values() {
+            let n = |k: &str| u[k].as_u64().unwrap_or(0);
+            t.input += n("inputTokens") + n("cacheReadInputTokens") + n("cacheCreationInputTokens");
+            t.cached += n("cacheReadInputTokens");
+            t.output += n("outputTokens");
+        }
+        Some(t)
+    }
+}
+
+impl Live {
+    /// A new Claude Code process took over the session: its totals start from zero.
+    fn restarted(&mut self) {
+        self.cost_before += self.process.cost;
+        self.process = Totals::default();
+    }
 }
 
 struct Bridge {
@@ -389,6 +425,7 @@ fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: 
     opts.resume = b.session.clone();
     opts.mode = b.mode;
     *proc = LineProcess::spawn("claude", &args(opts), &env(opts), &opts.cwd, me.clone())?;
+    b.live.restarted();
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
     if saved > 0 {
         b.live.usage.context = b.live.usage.context.saturating_sub(saved as u64 / 4);
@@ -678,24 +715,47 @@ impl Bridge {
                     .as_object()
                     .and_then(|m| m.values().filter_map(|u| u["contextWindow"].as_u64()).max())
                     .unwrap_or(200_000);
-                // `usage` is this turn's; the session's totals add up across turns.
+                // `usage` is the main thread's in this turn, without its subagents. The process's
+                // running totals (`modelUsage`, `total_cost_usd`) count them, so the turn is
+                // what those grew by; the session's totals add up across turns and restarts.
                 let l = &mut self.live;
-                l.input += n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
-                l.cached += n("cache_read_input_tokens");
-                l.output += n("output_tokens");
+                let main = Totals {
+                    input: n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
+                    cached: n("cache_read_input_tokens"),
+                    output: n("output_tokens"),
+                    cost: 0.0,
+                };
+                let now = Totals::of(v);
+                if now.is_some_and(|t| t.cost < l.process.cost || t.input < l.process.input) {
+                    // A process winfer didn't restart itself (its totals went back).
+                    l.restarted();
+                }
+                let turn = match now {
+                    Some(t) => Totals {
+                        input: t.input.saturating_sub(l.process.input),
+                        cached: t.cached.saturating_sub(l.process.cached),
+                        output: t.output.saturating_sub(l.process.output),
+                        cost: 0.0,
+                    },
+                    None => main,
+                };
+                let process = now.unwrap_or(l.process);
+                l.input += turn.input;
+                l.cached += turn.cached;
+                l.output += turn.output;
                 let u = Usage {
                     context: ln("input_tokens") + ln("cache_read_input_tokens") + ln("cache_creation_input_tokens") + ln("output_tokens"),
                     window,
                     input: l.input,
                     output: l.output,
                     cached: l.cached,
-                    cost: v["total_cost_usd"].as_f64(),
-                    turn: n("output_tokens"),
-                    turn_input: n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens"),
-                    turn_cached: n("cache_read_input_tokens"),
+                    cost: v["total_cost_usd"].as_f64().map(|c| l.cost_before + c),
+                    turn: turn.output,
+                    turn_input: turn.input,
+                    turn_cached: turn.cached,
                     turn_streamed: l.turn.streamed_total(),
                 };
-                *l = Live { usage: u.clone(), input: l.input, cached: l.cached, output: l.output, ..Default::default() };
+                *l = Live { usage: u.clone(), input: l.input, cached: l.cached, output: l.output, process, cost_before: l.cost_before, ..Default::default() };
                 self.emit(Ev::Usage(u));
                 if v["is_error"].as_bool() == Some(true) && v["subtype"] != "error_during_execution" {
                     let text = v["result"].as_str().unwrap_or("Claude Code reported an error.");
@@ -1203,6 +1263,41 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, Ev::ToolEnd { ok: true, diff: Some(d), .. } if d.contains("+b"))));
         assert!(evs.iter().any(|e| matches!(e, Ev::Usage(u) if u.window == 1000 && u.cost == Some(0.5))));
         assert!(matches!(evs.last(), Some(Ev::TurnDone)));
+    }
+
+    #[test]
+    fn usage_counts_subagents_and_cost_survives_a_restart() {
+        let (mut b, rx) = bridge();
+        let result = |usage: Value, models: Value, cost: f64| json!({ "type": "result", "total_cost_usd": cost, "usage": usage, "modelUsage": models });
+        let usages = |rx: &std::sync::mpsc::Receiver<Ev>| rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        // Recorded from Claude Code: a turn whose subagent wrote 28706 tokens to the cache, which
+        // the turn's `usage` leaves out but `modelUsage` (the process's running totals) counts.
+        b.on_line(&result(
+            json!({ "input_tokens": 4, "output_tokens": 312, "cache_read_input_tokens": 49208, "cache_creation_input_tokens": 49822 }),
+            json!({ "h": { "inputTokens": 6, "outputTokens": 321, "cacheReadInputTokens": 49208, "cacheCreationInputTokens": 78528, "contextWindow": 1000 } }),
+            0.0142,
+        ));
+        let u = usages(&rx);
+        assert_eq!((u.input, u.cached, u.output, u.turn, u.turn_input), (127_742, 49_208, 321, 321, 127_742));
+        b.on_line(&result(
+            json!({ "input_tokens": 4, "output_tokens": 48, "cache_read_input_tokens": 49822, "cache_creation_input_tokens": 672 }),
+            json!({ "h": { "inputTokens": 10, "outputTokens": 369, "cacheReadInputTokens": 99030, "cacheCreationInputTokens": 79200 } }),
+            0.0149,
+        ));
+        let u = usages(&rx);
+        assert_eq!((u.input, u.output, u.turn, u.turn_input), (178_240, 369, 48, 50_498), "the next turn is what the totals grew by");
+        assert_eq!(u.cost, Some(0.0149));
+        // A restart's process counts from zero again; the session keeps adding up.
+        b.live.restarted();
+        b.on_line(&result(json!({ "output_tokens": 5 }), json!({ "h": { "inputTokens": 100, "outputTokens": 5 } }), 0.001));
+        let u = usages(&rx);
+        assert_eq!((u.input, u.output, u.turn, u.turn_input), (178_340, 374, 5, 100));
+        assert!((u.cost.unwrap() - 0.0159).abs() < 1e-9, "{:?}", u.cost);
+        // One winfer didn't restart itself is noticed by its totals going back.
+        b.on_line(&result(json!({ "output_tokens": 2 }), json!({ "h": { "inputTokens": 10, "outputTokens": 2 } }), 0.0001));
+        let u = usages(&rx);
+        assert_eq!((u.input, u.output, u.turn), (178_350, 376, 2));
+        assert!((u.cost.unwrap() - 0.016).abs() < 1e-9, "{:?}", u.cost);
     }
 
     #[test]
