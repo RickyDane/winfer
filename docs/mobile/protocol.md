@@ -57,6 +57,9 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | `approve` / `decline` / `interrupt` | `paneId` | `ack` |
 | `choose` | `paneId`, `option` (an option's `n`), `text?` (answer for a "Type something" row) | `ack` |
 | `pane.new` | `workspaceId`, `provider?` (an id from `providers`; default: the desktop's default agent), `text?` (first message) | `ack` + `paneId` |
+| `code.attach` | `paneId` (a pane with `codeWeb`) | `code.snapshot` parts (the last carries `id`), then `code.ev` |
+| `code.detach` | `paneId` | `ack` |
+| `code.cmd` | `paneId`, `cmd` (a winfer code `Cmd`, src/features/code/protocol.ts) | `ack` |
 | `push.subscribe` | `subscription` (PushSubscription JSON) | `ack` |
 | `push.unsubscribe` | | `ack` |
 
@@ -68,6 +71,8 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | `panes` | `id?`, `panes: Pane[]` (every workspace's, in desktop order), `workspaces: {id, name, active}[]`, `providers: {id, name}[]` (installed agents), `defaultProvider` — the whole mirror; sent on `panes.get` and whenever panes come, go or move, or workspaces or agents change |
 | `status` | `pane: Pane`, `silent?` (pushed whenever a pane's status/message/request changes; `silent: true` for other changes such as a new title, which never push a notification) |
 | `thread` | `id`, `paneId`, `messages: Message[]`, `source` (`claude`/`codex`/`opencode`/`winfer`/`screen`) |
+| `code.snapshot` | `id?`, `paneId`, `part`, `parts`, `data` (one slice of a `CodeSnapshot` as JSON), `theme?` + `branch?` (part 0: the desktop's theme id, the pane's worktree branch) |
+| `code.ev` | `paneId`, `evs: Ev[]` (winfer code events the desktop's store applied, batched) |
 | `ack` | `id`, `ok`, `error?` |
 | `error` | `id?`, `error` |
 
@@ -84,6 +89,7 @@ interface Pane {
     options?: { n: number; label: string; detail?: string }[];
   } | null;
   reply: string | null; // last assistant reply when done
+  codeWeb?: boolean;     // winfer code's web UI: mirror it with code.attach
 }
 interface Message {
   id: string; role: "user" | "assistant" | "tool";
@@ -104,3 +110,15 @@ Desktop holds a VAPID P-256 keypair (keychain, account `mobile-vapid`) and sends
 
 Payload JSON: `{"title":"<pane title>","body":"<message or status>","paneId":"…","status":"…"}`.
 The service worker shows it and opens `/#/pane/<paneId>` on click. `404`/`410` from the push service → drop that subscription.
+
+## winfer code
+
+Panes with `codeWeb` show winfer code's web UI on the desktop; the phone renders the very same
+components (src/features/code, `CodeView`) instead of the chat view. It mirrors the desktop pane's
+store: `code.attach` sends the session state (`CodeSnapshot`, cut into ≤200k-character parts so
+frames stay under the relay's 1 MiB), then every event the store applies — the session's and the
+desktop's own changes (mode, model, effort, answered approvals, user turns) — as `code.ev`. The
+phone's store is `remote`: its commands go out as `code.cmd` and run through the desktop's store,
+so the change comes back as an event and both sides stay identical. The phone re-attaches (and
+gets a fresh snapshot) whenever the desktop comes back online. Desktop side: src/features/mobile/codeBridge.ts;
+phone side: mobile/src/codeTransport.ts.

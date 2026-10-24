@@ -1,3 +1,5 @@
+import type { Cmd, Ev } from "@/features/code/protocol";
+
 // Types from docs/mobile/protocol.md (v1). Keep in sync with the spec.
 export type AgentStatus = "idle" | "working" | "needs-input" | "done" | "error";
 
@@ -32,6 +34,8 @@ export interface Pane {
   updatedAt: number;
   request: PaneRequest | null;
   reply: string | null;
+  /** winfer code's web UI: the phone shows the same UI, mirrored with `code.attach`. */
+  codeWeb?: boolean;
 }
 
 export interface Message {
@@ -72,6 +76,8 @@ export type PhoneMsg =
   | { t: "choose"; paneId: string; option: number; text?: string }
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string }
   | { t: "pane.close"; paneId: string }
+  | { t: "code.attach" | "code.detach"; paneId: string }
+  | { t: "code.cmd"; paneId: string; cmd: Cmd }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
   | { t: "push.unsubscribe" };
 
@@ -81,6 +87,9 @@ export type DesktopMsg =
   | { t: "status"; pane: Pane; silent?: boolean }
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
   | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
+  /** The session state (a CodeSnapshot as JSON), in parts; the last one answers `code.attach`. */
+  | { t: "code.snapshot"; id?: string; paneId: string; part: number; parts: number; data: string; theme?: string; branch?: string | null }
+  | { t: "code.ev"; paneId: string; evs: Ev[] }
   | { t: "error"; id?: string; error: string };
 
 export interface Presence {

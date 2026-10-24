@@ -23,7 +23,6 @@ export function Welcome() {
     { k: "/", label: "commands", what: "every slash command", run: () => setDraft("/") },
     { k: "⇧⇥", label: "mode", what: "cycle permissions", run: () => setSheet("mode") },
     { k: "/model", label: "model", what: "switch backend", run: () => setSheet("model") },
-    { k: "⌘V", label: "images", what: "paste or drop", run: () => {} },
     { k: "/resume", label: "sessions", what: "pick up a past one", run: () => openSessions() },
   ];
   const send = useCode((s) => s.send);

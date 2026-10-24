@@ -19,6 +19,8 @@ export interface CodeWebPrefs {
   expandShell: boolean;
   /** Tighter spacing in the transcript. */
   compact: boolean;
+  /** Text size multiplier (1 = default); only text scales, not spacing. */
+  textScale: number;
   /** Models starred in the model picker (`backend/model` specs), in the order they were added. */
   favoriteModels: string[];
   /** What model aliases last resolved to (`claude/opus` → `claude-opus-5-5`), for versioned names. */
@@ -40,9 +42,25 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   expandThinking: false,
   expandShell: false,
   compact: false,
+  textScale: 1,
   favoriteModels: [],
   resolvedModels: {},
 };
+
+export const MIN_TEXT_SCALE = 0.8;
+export const MAX_TEXT_SCALE = 1.5;
+export const TEXT_SCALE_STEP = 0.05;
+
+/** Sets the web UI's text scale, clamped and rounded to TEXT_SCALE_STEP. */
+export function setTextScale(v: number) {
+  const clamped = Math.min(MAX_TEXT_SCALE, Math.max(MIN_TEXT_SCALE, v));
+  useCodeWeb.getState().set({ textScale: Math.round(clamped / TEXT_SCALE_STEP) / Math.round(1 / TEXT_SCALE_STEP) });
+}
+
+/** Steps the text scale by `delta` steps; 0 resets it. */
+export function stepTextScale(delta: number) {
+  setTextScale(delta === 0 ? 1 : useCodeWeb.getState().textScale + delta * TEXT_SCALE_STEP);
+}
 
 export const useCodeWeb = create<CodeWebSettings>()(
   persist(
@@ -64,7 +82,7 @@ export const useCodeWeb = create<CodeWebSettings>()(
 );
 
 /** The `?codeweb` browser preview: web UI panes driven by a scripted session. */
-export const CODE_WEB_DEMO = new URLSearchParams(location.search).has("codeweb");
+export const CODE_WEB_DEMO = typeof location !== "undefined" && new URLSearchParams(location.search).has("codeweb");
 
 /** Whether winfer code panes show the web UI instead of the terminal TUI. */
 export const webCodeEnabled = () => CODE_WEB_DEMO || useCodeWeb.getState().web;

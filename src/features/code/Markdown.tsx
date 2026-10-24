@@ -2,17 +2,31 @@ import { memo, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
+import { Linkify, linkifyChildren, MarkdownLink } from "./Links";
 
 let highlighter: Promise<typeof import("shiki")> | undefined;
 
-function CodeBlock({ code, lang, dark }: { code: string; lang: string; dark: boolean }) {
+function CodeBlock({
+  code,
+  lang,
+  dark,
+}: {
+  code: string;
+  lang: string;
+  dark: boolean;
+}) {
   const [html, setHtml] = useState<string>();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     let live = true;
     highlighter ??= import("shiki");
     highlighter
-      .then((s) => s.codeToHtml(code, { lang: lang || "text", theme: dark ? "github-dark-default" : "github-light-default" }))
+      .then((s) =>
+        s.codeToHtml(code, {
+          lang: lang || "text",
+          theme: dark ? "github-dark-default" : "github-light-default",
+        }),
+      )
       .then((h) => live && setHtml(h))
       .catch(() => {});
     return () => {
@@ -35,12 +49,27 @@ function CodeBlock({ code, lang, dark }: { code: string; lang: string; dark: boo
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
       </div>
-      {html ? <div className="cw-code-body" dangerouslySetInnerHTML={{ __html: html }} /> : <pre className="cw-code-body"><code>{code}</code></pre>}
+      {html ? (
+        <div
+          className="cw-code-body"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : (
+        <pre className="cw-code-body">
+          <code>{code}</code>
+        </pre>
+      )}
     </div>
   );
 }
 
-export const Markdown = memo(function Markdown({ text, dark }: { text: string; dark: boolean }) {
+export const Markdown = memo(function Markdown({
+  text,
+  dark,
+}: {
+  text: string;
+  dark: boolean;
+}) {
   return (
     <div className="cw-md">
       <ReactMarkdown
@@ -49,12 +78,30 @@ export const Markdown = memo(function Markdown({ text, dark }: { text: string; d
           code({ className, children }) {
             const m = /language-(\w+)/.exec(className ?? "");
             const src = String(children ?? "");
-            if (!m && !src.includes("\n")) return <code className="cw-inline">{children}</code>;
-            return <CodeBlock code={src.replace(/\n$/, "")} lang={m?.[1] ?? ""} dark={dark} />;
+            if (!m && !src.includes("\n"))
+              return (
+                <code className="cw-inline">
+                  <Linkify text={src} />
+                </code>
+              );
+            return (
+              <CodeBlock
+                code={src.replace(/\n$/, "")}
+                lang={m?.[1] ?? ""}
+                dark={dark}
+              />
+            );
           },
           pre({ children }) {
             return <>{children}</>;
           },
+          a: ({ href, children }) => (
+            <MarkdownLink href={href}>{children}</MarkdownLink>
+          ),
+          p: ({ children }) => <p>{linkifyChildren(children)}</p>,
+          li: ({ children }) => <li>{linkifyChildren(children)}</li>,
+          td: ({ children }) => <td>{linkifyChildren(children)}</td>,
+          th: ({ children }) => <th>{linkifyChildren(children)}</th>,
         }}
       >
         {text}

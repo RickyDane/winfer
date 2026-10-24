@@ -27,6 +27,7 @@ import * as browser from "@/features/browser/browser";
 import { loadRecipe } from "@/features/recipes/recipes";
 import { archivedPanes, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, livePanes, providerName, useWorkspaces, type SidePanelTab, type View, type Workspace, type WorktreeInfo } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
+import { paneUsesWeb, stepTextScale } from "@/features/code/styles";
 import { runPluginCommand, setPluginDispatch } from "@/features/plugins/plugins";
 import type { Args } from "@/tools/registry";
 
@@ -374,8 +375,12 @@ export function execute(cmd: Command): void {
       return readReviewsAloud();
     case "progress.readAloud":
       return readProgressAloud();
-    case "terminal.zoom":
+    case "terminal.zoom": {
+      // A focused winfer code web pane resizes its own text instead of the terminals'.
+      const focused = s.workspaces.flatMap((w) => w.panes).find((p) => p.id === s.focusedPaneId);
+      if (focused?.provider === "winfer" && paneUsesWeb(focused.id)) return stepTextScale(cmd.delta);
       return s.setTerminalFontSize(cmd.delta === 0 ? DEFAULT_TERMINAL_FONT_SIZE : s.terminalFontSize + cmd.delta);
+    }
     case "pane.nextAttention": {
       const all = s.workspaces.flatMap((w) => (w.layout ? leaves(w.layout) : []).map((id) => w.panes.find((p) => p.id === id)!));
       const rank = (p: (typeof all)[number]) => (p.status === "needs-input" ? 0 : p.unseen ? 1 : 2);

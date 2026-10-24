@@ -14,7 +14,7 @@ export async function seedCodeWeb() {
   while (!useWorkspaces.getState().hydrated) await new Promise((r) => setTimeout(r, 50));
   // Earlier previews' workspaces go, so the demo always starts fresh.
   for (const ws of useWorkspaces.getState().workspaces) if (ws.name.startsWith("winfer code ·")) useWorkspaces.getState().removeWorkspace(ws.id);
-  const workspaceId = useWorkspaces.getState().createWorkspace("winfer code · web", "/Users/you/Coding/winfer");
+  const workspaceId = useWorkspaces.getState().createWorkspace("winfer code · web", "/Users/you/winfer");
   useWorkspaces.getState().setActiveWorkspace(workspaceId);
   let prev: string | undefined;
   for (const prompt of PROMPTS) prev = useWorkspaces.getState().addPane("winfer", { workspaceId, prompt, splitFrom: prev });

@@ -14,14 +14,16 @@ import { openFile, openFileFrom, resolveFiles } from "./viewer";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 const MOD = IS_MAC ? "⌘" : "Ctrl";
-const hint = (path: string) => `Click to open in the ${isWebPage(path) ? "browser" : "viewer"} · ${MOD}-click to open in the editor`;
+export const fileLinkHint = (path: string) =>
+  `Click to open in the ${isWebPage(path) ? "browser" : "viewer"} · ${MOD}-click to open in the editor`;
 /** How long a lookup is trusted: found files rarely vanish, missing ones often appear soon. */
 const FOUND_MS = 60_000;
 const MISSING_MS = 4_000;
 
 const cache = new Map<string, { path: string | null; at: number }>();
 
-function open(event: MouseEvent, path: string, line?: number) {
+/** Opens a found file: viewer (web pages in the browser), ⌘-click (Ctrl-click) in the editor. */
+export function openFileLink(event: MouseEvent, path: string, line?: number) {
   if (IS_MAC ? event.metaKey : event.ctrlKey) void openInEditor(path);
   else if (isWebPage(path)) {
     useWorkspaces.getState().setSidePanel("browser");
@@ -47,49 +49,77 @@ function lineText(term: Terminal, y: number) {
       if (!cell) break;
       if (cell.getWidth() === 0) continue;
       const chars = cell.getChars() || " ";
-      for (let i = 0; i < chars.length; i++) cells.push({ x: x + 1, y: row + 1 });
+      for (let i = 0; i < chars.length; i++)
+        cells.push({ x: x + 1, y: row + 1 });
       text += chars;
     }
   }
   return { text, cells };
 }
 
+/** `paths` looked up from `cwd` (then `roots`), absolute when they name an existing file; cached briefly. */
+export async function resolveCached(
+  cwd: string,
+  paths: string[],
+  roots: string[] = [],
+): Promise<(string | null)[]> {
+  const now = Date.now();
+  const key = (p: string) => `${cwd}\0${p}`;
+  const fresh = (p: string) => {
+    const hit = cache.get(key(p));
+    return hit && now - hit.at < (hit.path ? FOUND_MS : MISSING_MS)
+      ? hit
+      : undefined;
+  };
+  const unknown = [...new Set(paths.filter((p) => !fresh(p)))];
+  if (unknown.length) {
+    const found = await resolveFiles(cwd, unknown, roots);
+    unknown.forEach((p, i) => cache.set(key(p), { path: found[i], at: now }));
+  }
+  return paths.map((p) => cache.get(key(p))?.path ?? null);
+}
+
 /** Links for the paths on a terminal line that name existing files, looked up from the pane's folder. */
-export function fileLinkProvider(term: Terminal, cwdOf: () => string, rootsOf: () => string[] = () => []): ILinkProvider {
+export function fileLinkProvider(
+  term: Terminal,
+  cwdOf: () => string,
+  rootsOf: () => string[] = () => [],
+): ILinkProvider {
   return {
     provideLinks(y, callback) {
       const line = lineText(term, y);
       // Only the paths that touch this row: the other rows ask for theirs.
-      const matches = findPaths(line.text).filter((m) => line.cells[m.start].y <= y && line.cells[m.end - 1].y >= y);
+      const matches = findPaths(line.text).filter(
+        (m) => line.cells[m.start].y <= y && line.cells[m.end - 1].y >= y,
+      );
       if (matches.length === 0) return callback(undefined);
       const cwd = cwdOf();
       const roots = rootsOf();
-      const now = Date.now();
-      const key = (p: string) => `${cwd}\0${p}`;
-      const fresh = (p: string) => {
-        const hit = cache.get(key(p));
-        return hit && now - hit.at < (hit.path ? FOUND_MS : MISSING_MS) ? hit : undefined;
-      };
-      const unknown = [...new Set(matches.map((m) => m.path).filter((p) => !fresh(p)))];
-      void (unknown.length ? resolveFiles(cwd, unknown, roots) : Promise.resolve([])).then((found) => {
-        unknown.forEach((p, i) => cache.set(key(p), { path: found[i], at: now }));
+      void resolveCached(
+        cwd,
+        matches.map((m) => m.path),
+        roots,
+      ).then((found) => {
         const links: ILink[] = [];
-        for (const m of matches) {
-          const path = cache.get(key(m.path))?.path;
-          if (!path) continue;
+        matches.forEach((m, i) => {
+          const path = found[i];
+          if (!path) return;
           links.push({
             range: { start: line.cells[m.start], end: line.cells[m.end - 1] },
             text: m.path,
             decorations: { pointerCursor: true, underline: true },
-            activate: (event) => open(event, path, m.line),
+            activate: (event) => openFileLink(event, path, m.line),
             hover: (event) => {
-              (event.target as HTMLElement | null)?.setAttribute("title", hint(path));
+              (event.target as HTMLElement | null)?.setAttribute(
+                "title",
+                fileLinkHint(path),
+              );
             },
             leave: (event) => {
               (event.target as HTMLElement | null)?.removeAttribute("title");
             },
           });
-        }
+        });
         callback(links.length ? links : undefined);
       });
     },
@@ -117,7 +147,9 @@ export function openTerminalUri(event: MouseEvent, uri: string, cwd: string) {
         if (p) void openInEditor(p);
       });
     } else if (isWebPage(file.path)) {
-      void resolveFiles(cwd, [file.path]).then(([p]) => p && open(event, p));
+      void resolveFiles(cwd, [file.path]).then(
+        ([p]) => p && openFileLink(event, p),
+      );
     } else void openFileFrom(cwd, file.path, { line: file.line });
     return;
   }

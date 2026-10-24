@@ -25,6 +25,8 @@ export interface DesktopClient {
   readonly name: string;
   getState(): ClientState;
   subscribe(fn: () => void): () => void;
+  /** Hears every message from the desktop (winfer code's events, which aren't kept in state). */
+  listen(fn: (msg: DesktopMsg) => void): () => void;
   /** Send a request and wait for the reply carrying the same id. */
   request(msg: PhoneMsg): Promise<DesktopMsg>;
   reconnect(): void;
@@ -47,6 +49,7 @@ export const initialState = (): ClientState => ({
 export abstract class BaseClient implements DesktopClient {
   protected state = initialState();
   private listeners = new Set<() => void>();
+  private hearers = new Set<(msg: DesktopMsg) => void>();
   abstract readonly name: string;
   abstract request(msg: PhoneMsg): Promise<DesktopMsg>;
   abstract reconnect(): void;
@@ -59,6 +62,11 @@ export abstract class BaseClient implements DesktopClient {
     return () => void this.listeners.delete(fn);
   };
 
+  listen = (fn: (msg: DesktopMsg) => void) => {
+    this.hearers.add(fn);
+    return () => void this.hearers.delete(fn);
+  };
+
   protected set(patch: Partial<ClientState>) {
     this.state = { ...this.state, ...patch };
     for (const fn of this.listeners) fn();
@@ -66,6 +74,7 @@ export abstract class BaseClient implements DesktopClient {
 
   /** Fold a desktop message into state. */
   protected apply(msg: DesktopMsg) {
+    for (const fn of this.hearers) fn(msg);
     switch (msg.t) {
       case "welcome":
         this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey }, error: null });

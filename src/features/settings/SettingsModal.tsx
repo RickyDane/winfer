@@ -19,7 +19,7 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
-import { useCodeWeb } from "@/features/code/styles";
+import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb } from "@/features/code/styles";
 import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
 import {
   copyFile,
@@ -1072,8 +1072,8 @@ function HarnessSettings() {
           </>
         }
       >
-        <Row label="Web UI" hint="New winfer code panes show a web interface (timeline of tool calls, inline diffs and approvals) instead of the terminal UI. Same sessions, settings and hooks; open panes keep what they started with.">
-          <Toggle label="Web UI" checked={codeWeb.web} onChange={(web) => codeWeb.set({ web })} />
+        <Row label="Use TUI style" hint="New winfer code panes show the terminal UI. Turn off for the web interface (timeline of tool calls, inline diffs and approvals). Same sessions, settings and hooks; open panes keep what they started with.">
+          <Toggle label="Use TUI style" checked={!codeWeb.web} onChange={(tui) => codeWeb.set({ web: !tui })} />
         </Row>
         {codeWeb.web && (
           <>
@@ -1089,7 +1089,7 @@ function HarnessSettings() {
             <Row label="Plan above the composer" hint="The agent's todo list and running subagents.">
               <Toggle label="Plan above the composer" checked={codeWeb.showPlan} onChange={(showPlan) => codeWeb.set({ showPlan })} />
             </Row>
-            <Row label="Show thinking" hint="Keep the model's reasoning open once it's done.">
+            <Row label="Show thinking" hint="Open the model's reasoning instead of collapsing it.">
               <Toggle label="Show thinking" checked={codeWeb.expandThinking} onChange={(expandThinking) => codeWeb.set({ expandThinking })} />
             </Row>
             <Row label="Live shell output" hint="Open a command's output while it runs.">
@@ -1097,6 +1097,37 @@ function HarnessSettings() {
             </Row>
             <Row label="Compact layout" hint="Tighter spacing in the transcript.">
               <Toggle label="Compact layout" checked={codeWeb.compact} onChange={(compact) => codeWeb.set({ compact })} />
+            </Row>
+            <Row
+              label="Text size"
+              hint={
+                <>
+                  Also {keysFor({ type: "terminal.zoom", delta: 1 })} / {keysFor({ type: "terminal.zoom", delta: -1 })} /{" "}
+                  {keysFor({ type: "terminal.zoom", delta: 0 })}, or {IS_MAC ? "⌘" : "Ctrl"} + scroll (pinch on a trackpad) over the pane.
+                </>
+              }
+              stacked
+            >
+              <span className="text-[10px] text-fg-subtle">A</span>
+              <input
+                type="range"
+                aria-label="Text size"
+                min={MIN_TEXT_SCALE}
+                max={MAX_TEXT_SCALE}
+                step={TEXT_SCALE_STEP}
+                value={codeWeb.textScale}
+                onChange={(e) => setTextScale(Number(e.target.value))}
+                className="flex-1 accent-[var(--color-accent)]"
+              />
+              <span className="text-sm text-fg-subtle">A</span>
+              <span className="w-12 text-right font-mono text-xs text-fg-muted">{Math.round(codeWeb.textScale * 100)}%</span>
+              <button
+                disabled={codeWeb.textScale === 1}
+                onClick={() => setTextScale(1)}
+                className="rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                Reset
+              </button>
             </Row>
           </>
         )}

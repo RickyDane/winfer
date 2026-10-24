@@ -17,7 +17,7 @@
   flex-direction: column;
   overflow: hidden;
   font-family: var(--font);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--cw-text, 1));
   line-height: 1.55;
   background: var(--bg-grad, var(--bg));
   color: var(--fg);
@@ -35,7 +35,7 @@
 }
 .cw-pane kbd {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--cw-text, 1));
   padding: 0 5px;
   border-radius: 5px;
   border: 1px solid var(--border);
@@ -94,7 +94,7 @@
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   font-weight: 500;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   transition: transform 0.15s var(--ease), background 0.2s, box-shadow 0.2s, border-color 0.2s;
 }
 .cw-btn:hover {
@@ -142,7 +142,7 @@
 .cw-btn.small {
   padding: 5px 11px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-icon-btn {
   display: inline-grid;
@@ -161,7 +161,7 @@
   transform: scale(0.92);
 }
 .cw-chip {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   padding: 1px 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -178,7 +178,7 @@
   gap: 6px;
   padding: 4px 9px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   color: var(--muted);
   border: 1px solid transparent;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
@@ -250,7 +250,7 @@
 }
 
 .cw-md {
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--cw-text, 1));
 }
 .cw-md > :first-child {
   margin-top: 0;
@@ -309,7 +309,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-md th,
 .cw-md td {
@@ -324,7 +324,7 @@
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   font-weight: 600;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-code {
   margin: 8px 0 12px;
@@ -339,7 +339,7 @@
   justify-content: space-between;
   padding: 3px 6px 3px 12px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   border-bottom: 1px solid var(--border);
 }
@@ -348,7 +348,7 @@
   padding: 12px 14px;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
   line-height: 1.6;
 }
 .cw-code-body pre {
@@ -364,7 +364,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   color: var(--dim);
   padding: 3px 2px;
   transition: color 0.15s;
@@ -377,7 +377,7 @@
   padding: 2px 0 2px 14px;
   border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--dim);
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   font-style: var(--reason-style, italic);
   white-space: pre-wrap;
 }
@@ -494,7 +494,7 @@
   width: 100%;
   padding: 7px 10px;
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-tool-head:hover {
   background: color-mix(in srgb, var(--fg) 3%, transparent);
@@ -514,7 +514,7 @@
 }
 .cw-tool-title {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -524,7 +524,7 @@
 }
 .cw-tool-meta {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -564,7 +564,7 @@
 }
 .cw-stat {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-stat .add,
 .cw-diff-row.add .sign {
@@ -579,7 +579,7 @@
   padding: 10px 14px 12px;
   border-top: 1px solid var(--border);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   line-height: 1.6;
   color: var(--muted);
   max-height: 260px;
@@ -597,7 +597,7 @@
 /* Diff */
 .cw-diff {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   line-height: 1.65;
   border-top: 1px solid var(--border);
   max-height: 360px;
@@ -642,7 +642,7 @@
 .cw-diff-more {
   padding: 4px 12px;
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 
 .cw-notice {
@@ -650,7 +650,7 @@
   align-items: center;
   gap: 7px;
   align-self: center;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   color: var(--dim);
   padding: 3px 11px;
   border-radius: 999px;
@@ -714,7 +714,7 @@
 }
 .cw-approval-head small {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
 }
 .cw-approval-diff .cw-diff {
   max-height: min(210px, 26cqh);
@@ -766,7 +766,7 @@
 }
 .cw-question-option small {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
 }
 .cw-question-own {
   padding: 7px 10px;
@@ -781,7 +781,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
   color: var(--muted);
   padding: 0 6px;
   height: 0;
@@ -802,7 +802,7 @@
 }
 .cw-status .hint {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-orb {
   width: 10px;
@@ -856,7 +856,7 @@
   outline: 0;
   background: none;
   padding: 14px 16px 6px;
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--cw-text, 1));
   line-height: 1.5;
   min-height: 48px;
 }
@@ -920,7 +920,7 @@
   padding: 7px 10px;
   border-radius: 8px;
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   color: var(--muted);
 }
 .cw-slash-item b {
@@ -950,7 +950,7 @@
   backdrop-filter: blur(20px);
 }
 .cw-pop-label {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   padding: 4px 8px 6px;
   text-transform: uppercase;
@@ -963,11 +963,11 @@
   text-align: left;
   padding: 6px 9px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-pop-item small {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-pop-item:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
@@ -997,7 +997,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-todos li {
   display: flex;
@@ -1063,7 +1063,7 @@
   --radius-sm: 7px;
   --send-radius: 8px;
   --shadow: 0 1px 0 color-mix(in srgb, var(--fg) 4%, transparent) inset, 0 8px 24px -10px rgb(0 0 0 / 0.5);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--cw-text, 1));
 }
 .cw-pane.light {
   --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 6px 20px -8px rgb(0 0 0 / 0.1);
@@ -1209,7 +1209,7 @@
   gap: 8px;
   width: 100%;
   padding: 6px 6px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
   color: var(--muted);
   text-align: left;
 }
@@ -1241,7 +1241,7 @@
 }
 .cw-plan-count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1256,7 +1256,7 @@
 .cw-plan .cw-todos {
   padding: 0 6px 8px 28px;
   gap: 4px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
 }
 /* Background tasks (BgTasks.tsx) — the compact activity timeline below the plan. */
 @keyframes cw-breathe {
@@ -1267,7 +1267,7 @@
 .cw-bg-time {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1286,7 +1286,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--del) 8%, transparent);
   color: var(--del);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.1s var(--ease);
@@ -1325,7 +1325,7 @@
   align-items: center;
   gap: 2px;
   padding: 2px 2px 0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
   color: var(--muted);
   min-height: 24px;
 }
@@ -1370,7 +1370,7 @@ button.cw-foot-item.active {
   overflow: hidden;
 }
 .cw-hint {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   display: inline-flex;
   align-items: center;
@@ -1396,7 +1396,7 @@ button.cw-foot-item.active {
 .cw-composer textarea {
   padding: 11px 14px 4px;
   min-height: 42px;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--cw-text, 1));
 }
 .cw-composer-bar {
   padding: 2px 6px 6px;
@@ -1476,7 +1476,7 @@ button.cw-foot-item.active {
   gap: 8px;
   padding: 10px 10px 10px 14px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-sheet > header > svg {
   color: var(--accent);
@@ -1500,23 +1500,23 @@ button.cw-foot-item.active {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   color: var(--muted);
   margin-bottom: 7px;
 }
 .cw-ctx-head b {
-  font-size: 15px;
+  font-size: calc(15px * var(--cw-text, 1));
   color: var(--fg);
   font-variant-numeric: tabular-nums;
 }
 .cw-ctx-head b small {
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   color: var(--dim);
   font-weight: 400;
 }
 .cw-ctx-pct {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   color: var(--accent);
 }
 .cw-ctx-pct.hot {
@@ -1556,7 +1556,7 @@ button.cw-foot-item.active {
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 10px;
+  font-size: calc(10px * var(--cw-text, 1));
   white-space: nowrap;
   color: var(--dim);
   font-style: normal;
@@ -1567,7 +1567,7 @@ button.cw-foot-item.active {
   flex-wrap: wrap;
   gap: 4px 14px;
   margin-top: 20px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
   color: var(--muted);
 }
 .cw-split-bar + .cw-ctx-legend {
@@ -1609,7 +1609,7 @@ button.cw-foot-item.active {
 }
 .cw-link {
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-link:hover {
   text-decoration: underline;
@@ -1628,11 +1628,11 @@ button.cw-foot-item.active {
   background: var(--card-bg);
 }
 .cw-stat-cell small {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
 }
 .cw-stat-cell b {
-  font-size: 14px;
+  font-size: calc(14px * var(--cw-text, 1));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1647,7 +1647,7 @@ button.cw-foot-item.active {
 }
 .cw-field small {
   color: var(--dim);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-seg {
   display: flex;
@@ -1658,7 +1658,7 @@ button.cw-foot-item.active {
   padding: 4px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   font-family: var(--font-mono);
   color: var(--muted);
   transition: background 0.15s, color 0.15s, border-color 0.15s;
@@ -1676,7 +1676,7 @@ button.cw-foot-item.active {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
 }
 .cw-dl > div {
   display: grid;
@@ -1693,7 +1693,7 @@ button.cw-foot-item.active {
 .cw-dl code,
 .cw-list code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-list {
   display: flex;
@@ -1706,7 +1706,7 @@ button.cw-foot-item.active {
   text-align: left;
   padding: 7px 10px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   transition: background 0.12s;
 }
 .cw-list-item.row {
@@ -1720,7 +1720,7 @@ button.cw-foot-item.active {
 }
 .cw-list-item small {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-list-item:not(.static):hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
@@ -1739,7 +1739,7 @@ button.cw-foot-item.active {
   align-items: flex-start;
   gap: 10px;
   padding: 8px 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   border-top: 1px solid var(--border);
 }
 .cw-task-row:first-child {
@@ -1753,12 +1753,12 @@ button.cw-foot-item.active {
 }
 .cw-task-row small {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-task-row p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-task-row .dot {
   width: 8px;
@@ -1785,7 +1785,7 @@ button.cw-foot-item.active {
   gap: 4px;
   padding: 10px 0;
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-btw:first-child {
   border-top: 0;
@@ -1809,7 +1809,7 @@ button.cw-foot-item.active {
   background: var(--color-panel);
   padding: 6px 10px;
   outline: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-inline-form input:focus {
   border-color: var(--accent);
@@ -1861,7 +1861,7 @@ button.cw-foot-item.active {
 .cw-tab small {
   margin-left: auto;
   padding-left: 10px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--cw-text, 1));
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1903,7 +1903,7 @@ button.cw-foot-item.active {
   line-height: 1.35;
 }
 .cw-model-pop .cw-model-pick small {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
 }
 .cw-model-pop .cw-model-list {
   gap: 1px;
@@ -1924,7 +1924,7 @@ button.cw-foot-item.active {
   border: 1px solid var(--border);
   background: var(--color-panel);
   outline: none;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
 }
 .cw-model-search:focus {
   border-color: var(--accent);
@@ -2001,7 +2001,7 @@ button.cw-foot-item.active {
 }
 .cw-model-tag {
   font-style: normal;
-  font-size: 10px;
+  font-size: calc(10px * var(--cw-text, 1));
   font-weight: 600;
   padding: 0 5px;
   border-radius: 4px;
@@ -2012,7 +2012,7 @@ button.cw-foot-item.active {
 }
 .cw-model-pick small {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
 }
 .cw-star {
   display: grid;
@@ -2052,12 +2052,12 @@ button.cw-foot-item.active {
 .cw-fav-empty {
   padding: 8px 10px;
   max-width: 220px;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 
 /* ——— Background task output ——— */
 .cw-sheet-label {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--dim);
@@ -2089,7 +2089,7 @@ button.cw-foot-item.active {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-log-head .dim {
   color: var(--dim);
@@ -2120,7 +2120,7 @@ button.cw-foot-item.active {
 }
 .cw-log-desc {
   margin: -6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
   color: var(--muted);
 }
 .cw-log {
@@ -2133,7 +2133,7 @@ button.cw-foot-item.active {
   border: 1px solid var(--border);
   background: var(--term-bg);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   line-height: 1.55;
   color: var(--muted);
   white-space: pre-wrap;
@@ -2150,7 +2150,7 @@ button.cw-foot-item.active {
 }
 .cw-log-file {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
   overflow-wrap: anywhere;
 }
@@ -2205,7 +2205,7 @@ button.cw-foot-item.active {
   border-radius: 999px;
   border: 1px solid var(--color-border-strong);
   background: var(--color-panel-raised);
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
   color: var(--muted);
   cursor: default;
   font-variant-numeric: tabular-nums;
@@ -2217,7 +2217,7 @@ button.cw-foot-item.active {
   padding-top: 12px;
 }
 .cw-pane.compact .cw-md {
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-pane.compact .cw-md p {
   margin-bottom: 6px;
@@ -2297,7 +2297,7 @@ button.cw-foot-item.active {
 }
 .cw-welcome h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: calc(22px * var(--cw-text, 1));
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--fg);
@@ -2310,7 +2310,7 @@ button.cw-foot-item.active {
   align-items: center;
   gap: 7px;
   margin: 14px 0 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--cw-text, 1));
   color: var(--fg);
 }
 .cw-who .dim {
@@ -2333,7 +2333,7 @@ button.cw-foot-item.active {
   background: var(--fg);
 }
 .cw-mode-tag {
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
   font-weight: 600;
   padding: 1px 7px;
   border-radius: 5px;
@@ -2356,7 +2356,7 @@ button.cw-foot-item.active {
   gap: 5px;
   margin: 6px 0 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--cw-text, 1));
   color: var(--dim);
 }
 .cw-where svg {
@@ -2381,7 +2381,7 @@ button.cw-foot-item.active {
   border: 1px solid var(--border);
   background: var(--card-bg);
   text-align: left;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--cw-text, 1));
   color: var(--fg);
   animation: cw-rise 0.6s var(--ease) both;
   transition: border-color 0.2s, transform 0.2s var(--ease), background 0.2s;
@@ -2398,7 +2398,7 @@ button.cw-foot-item.active {
 }
 .cw-tile small {
   color: var(--dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--cw-text, 1));
 }
 
 /* ——— Images: composer thumbnails, drop target, in your messages ——— */
@@ -2546,7 +2546,7 @@ label.cw-icon-btn {
   gap: 6px;
   min-width: 0;
   height: 22px;
-  font-size: 12px;
+  font-size: calc(12px * var(--cw-text, 1));
 }
 .cw-tlf-icon {
   display: grid;
@@ -2572,7 +2572,7 @@ label.cw-icon-btn {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--cw-text, 1));
   color: var(--tint);
   opacity: 0.85;
 }
@@ -2581,7 +2581,7 @@ label.cw-icon-btn {
   min-width: 0;
   margin-left: 2px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--cw-text, 1));
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2589,7 +2589,7 @@ label.cw-icon-btn {
 }
 .cw-tlf-top .cw-bg-time {
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--cw-text, 1));
 }
 .cw-tlf-top .cw-icon-btn.sm {
   width: 18px;
@@ -2663,7 +2663,7 @@ label.cw-icon-btn {
   min-width: 0;
   margin-left: 4px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--cw-text, 1));
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
