@@ -1818,6 +1818,32 @@ button.cw-foot-item.active {
   border-color: var(--accent);
   color: var(--color-on-accent);
 }
+.cw-seg-input {
+  width: 84px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  font-size: calc(12px * var(--cw-text, 1));
+  font-family: var(--font-mono);
+  color: var(--fg);
+  -moz-appearance: textfield;
+}
+.cw-seg-input::-webkit-inner-spin-button,
+.cw-seg-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.cw-seg-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cw-seg-input.sel {
+  border-color: var(--accent);
+}
+.cw-seg-input.sel::placeholder {
+  color: var(--accent);
+}
 .cw-dl {
   margin: 0;
   display: flex;

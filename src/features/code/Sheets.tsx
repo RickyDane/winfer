@@ -221,7 +221,34 @@ function ContextBreakdown({ parts, loading, total }: { parts: ContextPart[] | nu
   );
 }
 
-const PERCENTS = [0, 50, 60, 70, 75, 80, 85, 90, 95];
+const PERCENTS = [0, 20, 30, 40, 50, 60, 70];
+
+/** Free-form percentage for values the presets don't cover (10–99, like the TUI's /compact). */
+function PercentInput({ value, onSet }: { value: number; onSet: (p: number) => void }) {
+  const [draft, setDraft] = useState("");
+  const custom = value > 0 && !PERCENTS.includes(value);
+  const commit = () => {
+    const p = Math.round(Number(draft));
+    if (draft.trim() && p >= 10 && p <= 99) onSet(p);
+    setDraft("");
+  };
+  return (
+    <input
+      className={clsx("cw-seg-input", custom && "sel")}
+      type="number"
+      min={10}
+      max={99}
+      placeholder={custom ? `${value}%` : "custom %"}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") setDraft("");
+      }}
+    />
+  );
+}
 
 function CompactionSheet() {
   const { trimAt, compactAt, send } = useCode();
@@ -237,6 +264,7 @@ function CompactionSheet() {
             {p ? `${p}%` : "off"}
           </button>
         ))}
+        <PercentInput value={value} onSet={(p) => send({ type: "set_compaction", [key]: p })} />
       </div>
     </div>
   );
