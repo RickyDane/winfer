@@ -419,9 +419,7 @@ impl App {
         let tx = self.tx.clone();
         let cwd = self.cwd.clone();
         std::thread::spawn(move || {
-            let mut files: Vec<String> = tools::walk(&cwd, 50_000).into_iter().map(|(p, _)| p.to_string_lossy().into_owned()).collect();
-            files.sort();
-            let _ = tx.send(Msg::Files(files));
+            let _ = tx.send(Msg::Files(project_files(&cwd)));
         });
     }
 
@@ -1113,31 +1111,7 @@ impl App {
 
     /// `@path` mentions: images are attached, small text files inlined.
     fn mentions(&self, text: &str, images: &mut Vec<PathBuf>) -> String {
-        let mut out = String::new();
-        for word in text.split_whitespace() {
-            let Some(p) = word.strip_prefix('@') else { continue };
-            let p = p.trim_end_matches(|c: char| ",.;:)!?".contains(c));
-            let path = tools::resolve(&self.cwd, p);
-            if !path.is_file() {
-                continue;
-            }
-            if tools::image_base64(&path).is_some() {
-                images.push(path);
-                continue;
-            }
-            // Claude Code and Codex read `@path` themselves; inlining would pay for it twice.
-            if self.kind != Kind::ChatGpt {
-                continue;
-            }
-            let Ok(meta) = std::fs::metadata(&path) else { continue };
-            if meta.len() > 100_000 {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                out.push_str(&format!("\n\n<file path=\"{p}\">\n{content}\n</file>"));
-            }
-        }
-        out
+        mentions(&self.cwd, self.kind, text, images)
     }
 
     fn shell(&mut self, command: String) {
@@ -2694,6 +2668,42 @@ impl App {
             self.composer.replace_word(c.start, &format!("@{} ", item.value));
         }
     }
+}
+
+/// `@path` mentions: images are attached, small text files inlined.
+pub fn mentions(cwd: &Path, kind: Kind, text: &str, images: &mut Vec<PathBuf>) -> String {
+    let mut out = String::new();
+    for word in text.split_whitespace() {
+        let Some(p) = word.strip_prefix('@') else { continue };
+        let p = p.trim_end_matches(|c: char| ",.;:)!?".contains(c));
+        let path = tools::resolve(cwd, p);
+        if !path.is_file() {
+            continue;
+        }
+        if tools::image_base64(&path).is_some() {
+            images.push(path);
+            continue;
+        }
+        // Claude Code and Codex read `@path` themselves; inlining would pay for it twice.
+        if kind != Kind::ChatGpt {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if meta.len() > 100_000 {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            out.push_str(&format!("\n\n<file path=\"{p}\">\n{content}\n</file>"));
+        }
+    }
+    out
+}
+
+/// Files under `cwd` (gitignore-aware, capped), sorted: the `@` completion list.
+pub fn project_files(cwd: &Path) -> Vec<String> {
+    let mut files: Vec<String> = tools::walk(cwd, 50_000).into_iter().map(|(p, _)| p.to_string_lossy().into_owned()).collect();
+    files.sort();
+    files
 }
 
 /// What /undo did, for the transcript.

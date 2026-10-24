@@ -18,7 +18,7 @@ use super::backend::{self, Kind, Opts};
 use super::config::{self, Config};
 use super::event::{Cmd, Decision, Ev, Mode, UserMsg};
 use super::session::{self, Entry, Saved};
-use super::tui::app::{hook, Launch};
+use super::tui::app::{hook, mentions, project_files, Launch};
 
 enum In {
     Ev(u64, Ev),
@@ -312,15 +312,22 @@ impl Serve {
         }
         let Ok(v) = serde_json::from_str::<Value>(json_part) else { return };
         let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
-        let images = save_images(&v);
-        let msg = |text: String| UserMsg { text, images: images.clone(), skill: v.get("skill").and_then(Value::as_str).map(String::from) };
+        let mut images = save_images(&v);
         match s("type").as_str() {
             "send" | "steer" => {
                 let text = s("text");
                 let n = images.len();
                 self.user_message(&if n == 0 { text.clone() } else { format!("{text}{}[{n} image{}]", if text.is_empty() { "" } else { " " }, if n == 1 { "" } else { "s" }) });
+                // `@path` mentions, as in the TUI: images attach, text files inline for ChatGPT.
+                let full = text.clone() + &mentions(&self.cwd, self.kind, &text, &mut images);
+                let msg = UserMsg { text: full, images, skill: v.get("skill").and_then(Value::as_str).map(String::from) };
                 let steer = s("type") == "steer" && self.busy;
-                self.send(if steer { Cmd::Steer(msg(text)) } else { Cmd::Send(msg(text)) });
+                self.send(if steer { Cmd::Steer(msg) } else { Cmd::Send(msg) });
+            }
+            // The `@` completion list for the composer, walked off the main loop.
+            "files" => {
+                let cwd = self.cwd.clone();
+                std::thread::spawn(move || out(&json!({ "type": "files", "files": project_files(&cwd) })));
             }
             "interrupt" => {
                 self.send(Cmd::Interrupt);

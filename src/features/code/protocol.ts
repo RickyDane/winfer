@@ -106,6 +106,8 @@ export type Ev =
   | { type: "btw"; id: string; answer?: string; error?: string }
   | { type: "task_log"; id: string; text: string | null; file?: string | null }
   | { type: "models"; models: ModelInfo[] }
+  /** Files under the session's cwd (gitignore-aware), for `@` mentions. */
+  | { type: "files"; files: string[] }
   | { type: "restore"; transcript: { role: string; text: string; state?: string | null }[] }
   | { type: "user"; text: string }
   | { type: "cleared" }
@@ -158,7 +160,8 @@ export type Cmd =
   | { type: "sessions" }
   | { type: "context_breakdown"; tokens: number }
   | { type: "task_log"; id: string }
-  | { type: "resume"; id: string };
+  | { type: "resume"; id: string }
+  | { type: "files" };
 
 /** Where events come from and commands go: the mock below, or a socket to `winfer code --serve`. */
 export interface Transport {

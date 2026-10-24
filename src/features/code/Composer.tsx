@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, MessageCircleQuestion, ShieldCheck, Square, X } from "lucide-react";
 import clsx from "clsx";
 import { useContext } from "react";
@@ -9,6 +9,7 @@ import { useCodeWeb } from "./styles";
 import { COMMANDS, MODES, type Approval } from "./protocol";
 import { DiffView } from "./Transcript";
 import { elapsed } from "../usage/toolStats";
+import { mentionAt, rankFiles } from "./mentions";
 
 /** An approval with questions (Claude Code's AskUserQuestion): pick an option per question (or
  *  type one), then the answers go back as `answer`; declining goes through `approve` deny. */
@@ -195,6 +196,39 @@ export function Composer({ focused }: { focused: boolean }) {
     [text],
   );
 
+  // `@` file mentions: the word under the caret, ranked against the session's file list.
+  const [caret, setCaret] = useState(0);
+  const [closedAt, setClosedAt] = useState<number | null>(null);
+  const files = useCode((s) => s.files);
+  const mention = useMemo(() => (cmds.length ? null : mentionAt(text, caret)), [cmds.length, text, caret]);
+  const picks = useMemo(
+    () => (mention && mention.start !== closedAt && files ? rankFiles(files, mention.query) : []),
+    [mention, closedAt, files],
+  );
+  // Refresh the list each time a mention starts (the stale one shows meanwhile).
+  const mentioning = mention != null;
+  useEffect(() => {
+    if (mentioning) send({ type: "files" });
+  }, [mentioning, send]);
+  const pickFile = (path: string) => {
+    if (!mention) return;
+    const insert = `@${path} `;
+    const rest = text.slice(mention.end).replace(/^\s/, "");
+    setText(text.slice(0, mention.start) + insert + rest);
+    const at = mention.start + insert.length;
+    setCaret(at);
+    placeCaret.current = at;
+  };
+  // After a pick, the caret goes right after the inserted path (before the next keystroke).
+  const placeCaret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const at = placeCaret.current;
+    if (at == null || !ta.current) return;
+    placeCaret.current = null;
+    ta.current.focus();
+    ta.current.setSelectionRange(at, at);
+  }, [text]);
+
   // Approval keys work while the composer is empty.
   useEffect(() => {
     if (!focused || sheet) return;
@@ -322,6 +356,26 @@ export function Composer({ focused }: { focused: boolean }) {
             ))}
           </div>
         )}
+        {picks.length > 0 && (
+          <div className="cw-slash cw-mentions">
+            {picks.map((f, i) => {
+              const slash = f.lastIndexOf("/");
+              return (
+                <button
+                  key={f}
+                  className={clsx("cw-slash-item", i === sel && "sel")}
+                  onMouseEnter={() => setSel(i)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickFile(f)}
+                  title={f}
+                >
+                  <b>{f.slice(slash + 1)}</b>
+                  <span>{slash > 0 ? f.slice(0, slash) : ""}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="cw-attachments">
             {attachments.map((a) => (
@@ -352,9 +406,22 @@ export function Composer({ focused }: { focused: boolean }) {
           placeholder={busy ? "Steer the agent — it reads this at its next step…" : "Ask winfer code…"}
           onChange={(e) => {
             setText(e.target.value);
+            setCaret(e.target.selectionStart);
+            setClosedAt(null);
             setSel(0);
           }}
+          onSelect={(e) => {
+            const c = e.currentTarget.selectionStart;
+            if (c !== caret) (setCaret(c), setSel(0));
+          }}
           onKeyDown={(e) => {
+            if (picks.length) {
+              const n = picks.length;
+              if (e.key === "ArrowDown") return (e.preventDefault(), setSel((sel + 1) % n));
+              if (e.key === "ArrowUp") return (e.preventDefault(), setSel((sel - 1 + n) % n));
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) return (e.preventDefault(), pickFile(picks[Math.min(sel, n - 1)]));
+              if (e.key === "Escape") return (e.preventDefault(), e.stopPropagation(), setClosedAt(mention!.start));
+            }
             if (cmds.length) {
               if (e.key === "ArrowDown") return (e.preventDefault(), setSel((sel + 1) % cmds.length));
               if (e.key === "ArrowUp") return (e.preventDefault(), setSel((sel - 1 + cmds.length) % cmds.length));
@@ -371,7 +438,7 @@ export function Composer({ focused }: { focused: boolean }) {
           {!started && (
             <>
               <span className="cw-hint">
-                <kbd>/</kbd> commands <kbd>⇧⇥</kbd> mode
+                <kbd>/</kbd> commands <kbd>@</kbd> files <kbd>⇧⇥</kbd> mode
               </span>
               <span className="grow" />
             </>

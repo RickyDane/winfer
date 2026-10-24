@@ -156,6 +156,16 @@ export class MockTransport implements Transport {
         setTimeout(() => this.emit({ type: "context_breakdown", tokens: t, parts }), 200);
         break;
       }
+      case "files":
+        setTimeout(
+          () =>
+            this.emit({
+              type: "files",
+              files: ["README.md", "package.json", "src/App.tsx", "src/main.tsx", "src/features/code/Composer.tsx", "src/features/code/store.ts", "src-tauri/src/lib.rs", "src-tauri/src/harness/serve.rs", "docs/screenshot.png"],
+            }),
+          120,
+        );
+        break;
       case "sessions":
         setTimeout(
           () =>

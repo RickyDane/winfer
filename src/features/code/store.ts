@@ -46,6 +46,8 @@ export interface CodeState {
   /** The model actually answering, when the backend resolved an alias. */
   actualModel: string | null;
   models: ModelInfo[];
+  /** The `@` mention list; null until the composer first asks for it. */
+  files: string[] | null;
   cwd?: string;
   backendSession?: string | null;
   title?: string;
@@ -110,6 +112,7 @@ export const createCodeStore = () =>
   model: "",
   actualModel: null,
   models: [],
+  files: null,
   trimAt: 0,
   compactAt: 0,
   mcp: [],
@@ -319,6 +322,8 @@ export const createCodeStore = () =>
           return { btw: s.btw.map((b) => (b.id === ev.id ? { ...b, answer: ev.answer, error: ev.error } : b)) };
         case "models":
           return { models: ev.models };
+        case "files":
+          return { files: ev.files };
         case "user":
           return { items: [...items, { kind: "user", key: key(), text: ev.text, at: Date.now() }] };
         case "answered":
