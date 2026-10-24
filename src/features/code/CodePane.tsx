@@ -19,7 +19,7 @@ import { Transcript, Collapse, useFresh } from "./Transcript";
 import { LinkPaneContext } from "./Links";
 import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
-import { CODE_WEB_DEMO, compareUserStyle, stepTextScale, useCodeWeb } from "./styles";
+import { CODE_WEB_DEMO, stepTextScale, useCodeWeb } from "./styles";
 import { ModelPicker, Sheets, SubagentPicker, SUBAGENT_BACKENDS } from "./Sheets";
 import { backendOf, baseSpec, fastSpec, isFast, modelName } from "./names";
 import { Lightbox } from "./Lightbox";
@@ -405,8 +405,6 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
   const dark = useWorkspaces((s) => themeById(s.theme).mode) !== "light";
   const glass = useWorkspaces((s) => s.glassPanes);
   const compact = useCodeWeb((s) => s.compact);
-  const prefUserStyle = useCodeWeb((s) => s.userStyle);
-  const userStyle = compareUserStyle(pane.id) ?? prefUserStyle;
   const textScale = useCodeWeb((s) => s.textScale);
   const root = useRef<HTMLDivElement>(null);
 
@@ -442,7 +440,6 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
             !dark && "light",
             glass && "glass",
             compact && "compact",
-            `user-${userStyle}`,
           )}
           style={{ colorScheme: dark ? "dark" : "light", "--cw-text": textScale } as CSSProperties}
         >

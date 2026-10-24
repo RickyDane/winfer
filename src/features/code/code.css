@@ -1195,56 +1195,25 @@
 .cw-pane .cw-assistant {
   padding: 8px 0 6px;
 }
+/* Your messages: a full-bleed band with a terminal prompt chevron. */
 .cw-pane .cw-user {
   justify-content: stretch;
-  margin: 18px 0 8px;
-}
-.cw-pane .cw-user-bubble {
-  max-width: none;
-  width: 100%;
-  background: none;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  padding: 12px 0 0;
-  font-weight: 600;
-  color: var(--fg);
-}
-/* Your messages, "Accent bubble": right-aligned, accent-tinted chat bubble. */
-.cw-pane.user-bubble .cw-user {
-  justify-content: flex-end;
-  margin: 16px 0 8px;
-}
-.cw-pane.user-bubble .cw-user-bubble {
-  width: auto;
-  max-width: 80%;
-  padding: 9px 14px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 28%, var(--surface-2, var(--color-panel-raised))),
-    color-mix(in srgb, var(--accent) 18%, var(--surface-2, var(--color-panel-raised)))
-  );
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: 14px 14px 4px 14px;
-  font-weight: 400;
-}
-.cw-pane.light.user-bubble .cw-user-bubble {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg, #fff));
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-/* Your messages, "Prompt band": full-bleed band with a terminal chevron. */
-.cw-pane.user-band .cw-user {
   margin: 18px calc(-1 * var(--cw-gutter, 22px)) 8px;
 }
-.cw-pane.user-band .cw-user-bubble {
+.cw-pane .cw-user-bubble {
   position: relative;
+  max-width: none;
+  width: 100%;
   padding: 11px var(--cw-gutter, 22px) 11px calc(var(--cw-gutter, 22px) + 22px);
   background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+  border-radius: 0;
   font-weight: 500;
+  color: var(--fg);
 }
-.cw-pane.user-band .cw-user-bubble::before {
+.cw-pane .cw-user-bubble::before {
   content: "›";
   position: absolute;
   left: calc(var(--cw-gutter, 22px) + 2px);
@@ -2479,7 +2448,8 @@ button.cw-foot-item.active {
   padding-bottom: 2px;
 }
 .cw-pane.compact .cw-user {
-  margin: 10px 0 4px;
+  margin-top: 10px;
+  margin-bottom: 4px;
 }
 
 /* ——— Welcome: a fresh session ——— */
