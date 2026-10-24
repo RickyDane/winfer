@@ -165,6 +165,8 @@ export function Composer({ focused }: { focused: boolean }) {
   const attachments = useCode((s) => s.attachments);
   const setAttachments = useCode((s) => s.setAttachments);
   const [dragging, setDragging] = useState(false);
+  // Once the session has started, the composer collapses to one row (no hint bar).
+  const started = useCode((s) => s.items.length > 0);
 
   /** Pasted or dropped images become attachments (shown as thumbnails until sent). */
   const addFiles = (files: File[]) => {
@@ -287,7 +289,7 @@ export function Composer({ focused }: { focused: boolean }) {
         </span>
       </div>
       <div
-        className={clsx("cw-composer", busy && "busy", dragging && "dragging")}
+        className={clsx("cw-composer", busy && "busy", dragging && "dragging", started && "compact")}
         onDragOver={(e) => {
           if (![...e.dataTransfer.items].some((i) => i.type.startsWith("image/"))) return;
           e.preventDefault();
@@ -366,10 +368,14 @@ export function Composer({ focused }: { focused: boolean }) {
           }}
         />
         <div className="cw-composer-bar">
-          <span className="cw-hint">
-            <kbd>/</kbd> commands <kbd>⇧⇥</kbd> mode
-          </span>
-          <span className="grow" />
+          {!started && (
+            <>
+              <span className="cw-hint">
+                <kbd>/</kbd> commands <kbd>⇧⇥</kbd> mode
+              </span>
+              <span className="grow" />
+            </>
+          )}
           {busy && !text && !attachments.length ? (
             <button className="cw-send stop" onClick={() => send({ type: "interrupt" })} title="Interrupt (esc)">
               <Square size={13} fill="currentColor" />

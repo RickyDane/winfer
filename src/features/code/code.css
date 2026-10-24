@@ -1492,6 +1492,25 @@ button.cw-foot-item.active {
   width: 28px;
   height: 28px;
 }
+/* Started session: textarea and send button share one row. */
+.cw-composer.compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.cw-composer.compact .cw-attachments {
+  flex-basis: 100%;
+}
+.cw-composer.compact textarea {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  padding: 9px 4px 9px 14px;
+  min-height: 0;
+}
+.cw-composer.compact .cw-composer-bar {
+  padding: 5px 6px;
+}
 
 @container (max-height: 460px) {
   .cw-approval-diff,
