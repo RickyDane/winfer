@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  ArrowDown,
   Bot,
   Brain,
   Check,
@@ -18,6 +19,7 @@ import {
 import clsx from "clsx";
 import { useCode, type Item } from "./store";
 import { Markdown } from "./Markdown";
+import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
 import { useCodeWeb } from "./styles";
 
@@ -42,10 +44,17 @@ function useTicker(on: boolean) {
   }, [on]);
 }
 
-const secs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+const secs = (ms: number) =>
+  ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 
 /** Animated open/close via a grid-rows transition, so content height animates without measuring. */
-export function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
+export function Collapse({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: ReactNode;
+}) {
   return (
     <div className={clsx("cw-collapse", open && "open")}>
       <div>{children}</div>
@@ -56,7 +65,12 @@ export function Collapse({ open, children }: { open: boolean; children: ReactNod
 export function DiffView({ diff, max }: { diff: string; max?: number }) {
   let oldN = 0;
   let newN = 0;
-  const rows: { t: "add" | "del" | "ctx" | "hunk"; o?: number; n?: number; text: string }[] = [];
+  const rows: {
+    t: "add" | "del" | "ctx" | "hunk";
+    o?: number;
+    n?: number;
+    text: string;
+  }[] = [];
   for (const line of diff.split("\n")) {
     if (line.startsWith("---") || line.startsWith("+++")) continue;
     const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
@@ -64,22 +78,32 @@ export function DiffView({ diff, max }: { diff: string; max?: number }) {
       oldN = +h[1];
       newN = +h[2];
       rows.push({ t: "hunk", text: line });
-    } else if (line.startsWith("+")) rows.push({ t: "add", n: newN++, text: line.slice(1) });
-    else if (line.startsWith("-")) rows.push({ t: "del", o: oldN++, text: line.slice(1) });
+    } else if (line.startsWith("+"))
+      rows.push({ t: "add", n: newN++, text: line.slice(1) });
+    else if (line.startsWith("-"))
+      rows.push({ t: "del", o: oldN++, text: line.slice(1) });
     else rows.push({ t: "ctx", o: oldN++, n: newN++, text: line.slice(1) });
   }
   const shown = max ? rows.slice(0, max) : rows;
   return (
     <div className="cw-diff">
       {shown.map((r, i) => (
-        <div key={i} className={clsx("cw-diff-row", r.t)} style={{ animationDelay: `${Math.min(i, 30) * 12}ms` }}>
+        <div
+          key={i}
+          className={clsx("cw-diff-row", r.t)}
+          style={{ animationDelay: `${Math.min(i, 30) * 12}ms` }}
+        >
           <span className="ln">{r.o ?? ""}</span>
           <span className="ln">{r.n ?? ""}</span>
-          <span className="sign">{r.t === "add" ? "+" : r.t === "del" ? "−" : ""}</span>
+          <span className="sign">
+            {r.t === "add" ? "+" : r.t === "del" ? "−" : ""}
+          </span>
           <span className="txt">{r.text || " "}</span>
         </div>
       ))}
-      {max && rows.length > max && <div className="cw-diff-more">… {rows.length - max} more lines</div>}
+      {max && rows.length > max && (
+        <div className="cw-diff-more">… {rows.length - max} more lines</div>
+      )}
     </div>
   );
 }
@@ -94,6 +118,14 @@ function diffStat(diff: string) {
   return { a, d };
 }
 
+/** Keep hover tooltips small: long commands (heredocs, scripts) would cover the pane. */
+function clip(s: string, maxLines = 3, maxChars = 160): string {
+  const lines = s.split("\n");
+  let out = lines.slice(0, maxLines).join("\n");
+  if (out.length > maxChars) out = out.slice(0, maxChars);
+  return out.length < s.length ? `${out.trimEnd()}…` : out;
+}
+
 function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const running = item.ok === undefined;
   const isShell = item.name === "Bash";
@@ -102,7 +134,9 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const expanded = open ?? (isShell && running && expandShell);
   useTicker(running);
   const Icon = TOOL_ICONS[item.name] ?? Wrench;
-  const task = useCode((s) => Object.values(s.tasks).find((t) => t.tool_id === item.key));
+  const task = useCode((s) =>
+    Object.values(s.tasks).find((t) => t.tool_id === item.key),
+  );
   const openLog = useCode((s) => s.openTaskLog);
   const outRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
@@ -112,14 +146,31 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const hasBody = !!item.output || !!item.diff;
 
   return (
-    <div className={clsx("cw-tool cw-enter", running && "running", item.ok === false && "failed")}>
-      <button className="cw-tool-head" onClick={() => hasBody && setOpen(!expanded)}>
+    <div
+      className={clsx(
+        "cw-tool cw-enter",
+        running && "running",
+        item.ok === false && "failed",
+      )}
+    >
+      <button
+        className="cw-tool-head"
+        onClick={() => hasBody && setOpen(!expanded)}
+      >
         <span className="cw-tool-icon">
           <Icon size={14} />
         </span>
         <span className="cw-tool-name">{item.name}</span>
-        <span className="cw-tool-title" title={String((item.input as { command?: string } | null)?.command ?? item.title)}>
-          {item.title}
+        <span
+          className="cw-tool-title"
+          title={clip(
+            String(
+              (item.input as { command?: string } | null)?.command ??
+                item.title,
+            ),
+          )}
+        >
+          <Linkify text={item.title} />
         </span>
         {task && (
           <span
@@ -130,8 +181,14 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
               openLog(task.id);
             }}
           >
-            {task.agent ? `${task.agent} · ${task.tools ?? 0} tools` : "background"}
-            {task.status === "running" ? (task.last ? ` · ${task.last}` : " · running") : ` · ${task.status}`}
+            {task.agent
+              ? `${task.agent} · ${task.tools ?? 0} tools`
+              : "background"}
+            {task.status === "running"
+              ? task.last
+                ? ` · ${task.last}`
+                : " · running"
+              : ` · ${task.status}`}
           </span>
         )}
         {stat && (
@@ -139,18 +196,33 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
             <b className="add">+{stat.a}</b> <b className="del">−{stat.d}</b>
           </span>
         )}
-        {(item.ended ?? Date.now()) - item.started > 0 && <span className="cw-tool-meta">{secs((item.ended ?? Date.now()) - item.started)}</span>}
+        {(item.ended ?? Date.now()) - item.started > 0 && (
+          <span className="cw-tool-meta">
+            {secs((item.ended ?? Date.now()) - item.started)}
+          </span>
+        )}
         <span className="cw-tool-status">
-          {running ? <span className="cw-spinner" /> : item.ok ? <Check size={14} /> : <X size={14} />}
+          {running ? (
+            <span className="cw-spinner" />
+          ) : item.ok ? (
+            <Check size={14} />
+          ) : (
+            <X size={14} />
+          )}
         </span>
-        {hasBody && <ChevronRight size={14} className={clsx("cw-chev", expanded && "open")} />}
+        {hasBody && (
+          <ChevronRight
+            size={14}
+            className={clsx("cw-chev", expanded && "open")}
+          />
+        )}
       </button>
       <Collapse open={expanded && hasBody}>
         {item.diff ? (
           <DiffView diff={item.diff} />
         ) : (
           <pre ref={outRef} className={clsx("cw-tool-out", isShell && "shell")}>
-            {item.output}
+            <Linkify text={item.output} />
           </pre>
         )}
       </Collapse>
@@ -166,11 +238,15 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
     <div className="cw-reason cw-enter">
       <button className="cw-reason-head" onClick={() => setOpen(!open)}>
         <Brain size={14} />
-        <span className={clsx(item.streaming && "cw-shimmer")}>{item.streaming ? "Thinking" : `Thought for ${took}`}</span>
+        <span className={clsx(item.streaming && "cw-shimmer")}>
+          {item.streaming ? "Thinking" : `Thought for ${took}`}
+        </span>
         <ChevronRight size={13} className={clsx("cw-chev", open && "open")} />
       </button>
-      <Collapse open={open || item.streaming}>
-        <div className="cw-reason-body">{item.text}</div>
+      <Collapse open={open}>
+        <div className="cw-reason-body">
+          <Linkify text={item.text} />
+        </div>
       </Collapse>
     </div>
   );
@@ -180,14 +256,49 @@ export function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
   const setPreview = useCode((s) => s.setPreview);
-  const fresh = !busy && !items.some((i) => i.kind === "user" || i.kind === "text" || i.kind === "tool");
+  const fresh =
+    !busy &&
+    !items.some(
+      (i) => i.kind === "user" || i.kind === "text" || i.kind === "tool",
+    );
   const end = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const lastTop = useRef(0);
+  const lastUser = useRef<string | undefined>(undefined);
+  const [away, setAway] = useState(false);
+
+  // Instant jump: the container's CSS `scroll-behavior: smooth` would otherwise
+  // animate it, and mid-animation scroll events used to unstick the follow.
+  const toBottom = (behavior: ScrollBehavior = "instant") => {
+    const el = scroller.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior });
+  };
 
   useEffect(() => {
-    if (stick.current) end.current?.scrollIntoView({ block: "end" });
+    // A newly sent message always snaps back to the bottom, even if scrolled up.
+    let user: string | undefined;
+    for (let i = items.length - 1; i >= 0 && !user; i--)
+      if (items[i].kind === "user") user = items[i].key;
+    if (user !== lastUser.current) {
+      stick.current = true;
+      lastUser.current = user;
+      setAway(false);
+    }
+    if (stick.current) toBottom();
   }, [items]);
+
+  // Keep following when content grows after render (markdown, images, tool output).
+  useEffect(() => {
+    const box = inner.current;
+    if (!box) return;
+    const ro = new ResizeObserver(() => {
+      if (stick.current) toBottom();
+    });
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <div
@@ -195,11 +306,16 @@ export function Transcript({ dark }: { dark: boolean }) {
       ref={scroller}
       onScroll={(e) => {
         const el = e.currentTarget;
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        // Only an upward scroll by the user unsticks; programmatic scrolls go down.
+        if (atBottom) stick.current = true;
+        else if (el.scrollTop < lastTop.current) stick.current = false;
+        lastTop.current = el.scrollTop;
+        setAway(!stick.current);
       }}
     >
       {fresh && <Welcome />}
-      <div className="cw-transcript">
+      <div className="cw-transcript" ref={inner}>
         {items.map((it) => {
           switch (it.kind) {
             case "user":
@@ -209,17 +325,31 @@ export function Transcript({ dark }: { dark: boolean }) {
                     {it.images && (
                       <div className="cw-user-images">
                         {it.images.map((u, i) => (
-                          <img key={i} src={u} alt="" onClick={() => setPreview({ images: it.images!, index: i })} title="Preview" />
+                          <img
+                            key={i}
+                            src={u}
+                            alt=""
+                            onClick={() =>
+                              setPreview({ images: it.images!, index: i })
+                            }
+                            title="Preview"
+                          />
                         ))}
                       </div>
                     )}
-                    {it.text}
+                    <Linkify text={it.text} />
                   </div>
                 </div>
               );
             case "text":
               return (
-                <div key={it.key} className={clsx("cw-assistant cw-enter", it.streaming && "streaming")}>
+                <div
+                  key={it.key}
+                  className={clsx(
+                    "cw-assistant cw-enter",
+                    it.streaming && "streaming",
+                  )}
+                >
                   <Markdown text={it.text} dark={dark} />
                 </div>
               );
@@ -229,9 +359,18 @@ export function Transcript({ dark }: { dark: boolean }) {
               return <ToolCard key={it.key} item={it} />;
             case "notice":
               return (
-                <div key={it.key} className={clsx("cw-notice cw-enter", it.tone)}>
-                  {it.tone === "error" ? <TriangleAlert size={13} /> : <Info size={13} />}
-                  {it.text}
+                <div
+                  key={it.key}
+                  className={clsx("cw-notice cw-enter", it.tone)}
+                >
+                  {it.tone === "error" ? (
+                    <TriangleAlert size={13} />
+                  ) : (
+                    <Info size={13} />
+                  )}
+                  <span>
+                    <Linkify text={it.text} />
+                  </span>
                 </div>
               );
           }
@@ -249,6 +388,22 @@ export function Transcript({ dark }: { dark: boolean }) {
         )}
         <div ref={end} style={{ height: 1 }} />
       </div>
+      {away && (
+        <div className="cw-jump-wrap">
+          <button
+            className="cw-jump"
+            aria-label="Jump to latest"
+            title="Jump to latest"
+            onClick={() => {
+              stick.current = true;
+              setAway(false);
+              toBottom("smooth");
+            }}
+          >
+            <ArrowDown size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
