@@ -1,6 +1,4 @@
 // `?mock=1`: an in-memory desktop so the UI runs without relay or winfer.
-import { createCodeStore } from "@/features/code/store";
-import { MockTransport } from "@/features/code/mock";
 import { BaseClient } from "./client";
 import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
 
@@ -8,19 +6,6 @@ const now = Date.now();
 const min = 60_000;
 
 const PANES: Pane[] = [
-  {
-    id: "p-code",
-    workspaceId: "w-winfer",
-    title: "winfer code · retry backoff",
-    workspace: "winfer",
-    provider: "winfer",
-    status: "working",
-    message: null,
-    updatedAt: now - 1 * min,
-    request: null,
-    reply: null,
-    codeWeb: true,
-  },
   {
     id: "p-auth",
     workspaceId: "w-winfer",
@@ -153,20 +138,6 @@ export class MockClient extends BaseClient {
   private panes = PANES.map((p) => ({ ...p }));
   private threads: Record<string, Message[]> = structuredClone(THREADS);
   private n = 100;
-  /** The "desktop's" winfer code sessions: a scripted session each, mirrored like the real thing. */
-  private code = new Map<string, ReturnType<typeof createCodeStore>>();
-  private codeSubs = new Map<string, () => void>();
-
-  private codeHost(paneId: string) {
-    let store = this.code.get(paneId);
-    if (!store) {
-      store = createCodeStore();
-      this.code.set(paneId, store);
-      store.getState().attach(new MockTransport());
-      setTimeout(() => store!.getState().submit("Add exponential backoff to retry() and make it cancellable"), 1500);
-    }
-    return store;
-  }
 
   constructor() {
     super();
@@ -276,29 +247,6 @@ export class MockClient extends BaseClient {
       case "push.subscribe":
       case "push.unsubscribe":
         return { t: "ack", id, ok: true };
-      case "code.attach": {
-        const store = this.codeHost(msg.paneId);
-        this.codeSubs.get(msg.paneId)?.();
-        const data = JSON.stringify(store.getState().snapshot());
-        this.apply({ t: "code.snapshot", paneId: msg.paneId, part: 0, parts: 1, data, theme: "dark", branch: "winfer/retry-backoff" });
-        this.codeSubs.set(
-          msg.paneId,
-          store.getState().listen((ev) => this.apply({ t: "code.ev", paneId: msg.paneId, evs: [ev] })),
-        );
-        return { t: "ack", id, ok: true };
-      }
-      case "code.detach":
-        this.codeSubs.get(msg.paneId)?.();
-        this.codeSubs.delete(msg.paneId);
-        return { t: "ack", id, ok: true };
-      case "code.cmd": {
-        const store = this.codeHost(msg.paneId).getState();
-        const cmd = msg.cmd;
-        if (cmd.type === "send" || cmd.type === "steer")
-          store.submit(cmd.text, (cmd.images ?? []).map((im, i) => ({ id: `m${i}`, url: `data:${im.mime};base64,${im.data}`, mime: im.mime, name: "image" })));
-        else store.send(cmd);
-        return { t: "ack", id, ok: true };
-      }
     }
   }
 

@@ -14,7 +14,15 @@ import {
   type ReactNode,
 } from "react";
 import { fileFromUri, findPaths } from "@/features/viewer/paths";
+import {
+  fileLinkHint,
+  openFileLink,
+  openWebLink,
+  resolveCached,
+} from "@/features/viewer/terminalLinks";
+import { useWorkspaces } from "@/stores/workspaces";
 
+const MOD = navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl";
 /** http(s) URLs, minus trailing sentence punctuation and an unbalanced closing bracket. */
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/gi;
 
@@ -30,17 +38,15 @@ function trimUrl(url: string) {
   return u;
 }
 
-/** Where links go: winfer's browser and viewer on the desktop (desktopLinks.ts), tabs on the phone. */
-export interface LinkHost {
-  /** Absolute paths of the files `paths` name (relative to the session's folder), null if none. */
-  resolve(paths: string[]): Promise<(string | null)[]>;
-  openWeb(e: globalThis.MouseEvent, url: string): void;
-  openFile(e: globalThis.MouseEvent, abs: string, line?: number): void;
-  fileHint(abs: string): string;
-  webHint: string;
-}
+/** Which pane the links belong to: where relative paths are looked up. */
+export const LinkPaneContext = createContext<string | null>(null);
 
-export const LinkHostContext = createContext<LinkHost | null>(null);
+function paneFolders(paneId: string | null) {
+  const s = useWorkspaces.getState();
+  const ws = s.workspaces.find((w) => w.panes.some((p) => p.id === paneId));
+  const cwd = ws?.panes.find((p) => p.id === paneId)?.cwd ?? ws?.rootDir ?? "";
+  return { cwd, roots: ws?.rootDir ? [ws.rootDir] : [] };
+}
 
 type Piece = {
   text: string;
@@ -88,22 +94,24 @@ const stop = (e: MouseEvent) => {
 
 /** `text` with its URLs and existing file paths as links. */
 export function Linkify({ text }: { text: string }) {
-  const host = useContext(LinkHostContext);
+  const paneId = useContext(LinkPaneContext);
   const pieces = split(text);
   const paths = pieces.filter((p) => p.path).map((p) => p.path!);
   const key = paths.join("\0");
   const [found, setFound] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
-    if (!paths.length || !host) return;
+    if (!paths.length) return;
     let live = true;
-    void host.resolve(paths).then((abs) => {
+    const { cwd, roots } = paneFolders(paneId);
+    if (!cwd) return;
+    void resolveCached(cwd, paths, roots).then((abs) => {
       if (live) setFound(Object.fromEntries(paths.map((p, i) => [p, abs[i]])));
     });
     return () => {
       live = false;
     };
-  }, [key, host]);
+  }, [key, paneId]);
 
   if (!pieces.some((p) => p.url || p.path)) return <>{text}</>;
   return (
@@ -115,13 +123,10 @@ export function Linkify({ text }: { text: string }) {
               key={p.start}
               href={p.url}
               className="cw-link"
-              title={host?.webHint}
-              target="_blank"
-              rel="noreferrer"
+              title={`Click to open in winfer's browser · ${MOD}-click to open in your browser`}
               onClick={(e) => {
-                if (!host) return;
                 stop(e);
-                host.openWeb(e.nativeEvent, p.url!);
+                openWebLink(e.nativeEvent, p.url!);
               }}
             >
               {p.text}
@@ -129,16 +134,16 @@ export function Linkify({ text }: { text: string }) {
           );
         }
         const abs = p.path ? found[p.path] : null;
-        if (!abs || !host) return <span key={p.start}>{p.text}</span>;
+        if (!abs) return <span key={p.start}>{p.text}</span>;
         return (
           <a
             key={p.start}
             href="#"
             className="cw-link"
-            title={host.fileHint(abs)}
+            title={fileLinkHint(abs)}
             onClick={(e) => {
               stop(e);
-              host.openFile(e.nativeEvent, abs, p.line);
+              openFileLink(e.nativeEvent, abs, p.line);
             }}
           >
             {p.text}
@@ -164,30 +169,28 @@ export function MarkdownLink({
   href?: string;
   children?: ReactNode;
 }) {
-  const host = useContext(LinkHostContext);
+  const paneId = useContext(LinkPaneContext);
   return (
     <a
       href={href}
       className="cw-link"
       title={href}
-      target="_blank"
-      rel="noreferrer"
       onClick={(e) => {
-        if (!host) return;
         stop(e);
         if (!href) return;
         if (/^(https?|mailto):/i.test(href))
-          return host.openWeb(e.nativeEvent, href);
+          return openWebLink(e.nativeEvent, href);
         const file =
           fileFromUri(href) ??
           (/^[a-z][\w+.-]*:/i.test(href)
             ? null
             : { path: decodeURI(href.split("#")[0]), line: undefined });
         if (!file?.path) return;
+        const { cwd, roots } = paneFolders(paneId);
         const native = e.nativeEvent;
-        void host
-          .resolve([file.path])
-          .then(([abs]) => abs && host.openFile(native, abs, file.line));
+        void resolveCached(cwd, [file.path], roots).then(
+          ([abs]) => abs && openFileLink(native, abs, file.line),
+        );
       }}
     >
       {children}

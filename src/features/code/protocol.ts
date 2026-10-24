@@ -99,16 +99,10 @@ export type Ev =
   | { type: "task_log"; id: string; text: string | null; file?: string | null }
   | { type: "models"; models: ModelInfo[] }
   | { type: "restore"; transcript: { role: string; text: string; state?: string | null }[] }
-  /** A user turn: typed into the PTY (from serve), or sent from the web UI (with its images). */
-  | { type: "user"; text: string; images?: string[] }
+  | { type: "user"; text: string }
   | { type: "cleared" }
   /** An approval answered outside the web UI (the app's approve button, its broadcast bar). */
-  | { type: "answered"; id: string }
-  // The web UI's own changes, as events so mirrors (the phone) follow them:
-  | { type: "model_set"; model: string }
-  | { type: "effort"; effort: string | null }
-  | { type: "approvals_cleared" }
-  | { type: "compaction"; trim?: number; compact?: number };
+  | { type: "answered"; id: string };
 
 /** A pasted or dropped image: base64 without the `data:` prefix. */
 export interface ImageData {

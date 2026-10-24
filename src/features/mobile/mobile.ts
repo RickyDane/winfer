@@ -14,9 +14,6 @@ import { describeRequest, type AgentRequest } from "@/features/status/request";
 import { lastReply } from "@/features/status/replies";
 import { useUsage } from "@/features/usage/usage";
 import { answerApproval, approvalFor, useApprovals } from "@/features/plugins/approvals";
-import type { Cmd } from "@/features/code/protocol";
-import { storeFor } from "@/features/code/CodePane";
-import { attach as attachCode, command as codeCommand, detach as detachCode, isCodeWeb } from "./codeBridge";
 import { answerQuestion, currentQuestion, dismissQuestions, questionRequest, questionsFor, useQuestions } from "@/features/questions/questions";
 
 /** A pane as the phone sees it. */
@@ -33,8 +30,6 @@ export interface MobilePane {
   updatedAt: number;
   request: AgentRequest | null;
   reply: string | null;
-  /** winfer code's web UI: the phone mirrors it with `code.attach` (codeBridge.ts). */
-  codeWeb?: boolean;
 }
 
 export interface MobileMessage {
@@ -59,7 +54,7 @@ export interface MobileProvider {
   name: string;
 }
 
-type Request = { t: string; id?: string; paneId?: string; workspaceId?: string; provider?: string; text?: string; limit?: number; option?: number; cmd?: Cmd };
+type Request = { t: string; id?: string; paneId?: string; workspaceId?: string; provider?: string; text?: string; limit?: number; option?: number };
 
 /** Each pane's latest status message (the hook's or notify_user's) and when its status changed. */
 const messages = new Map<string, string | null>();
@@ -110,7 +105,6 @@ export function snapshot(pane: WorkspacePane): MobilePane {
     updatedAt: changedAt.get(pane.id) ?? Date.now(),
     request: pane.status === "needs-input" ? (requests.get(pane.id) ?? null) : null,
     reply: pane.status === "done" ? cutReply(lastReply(pane.id)) : null,
-    ...(isCodeWeb(pane) && { codeWeb: true }),
   };
   // The agent's `ask_user` questions (its tool call waits on the answers).
   const asked = questionsFor(pane.id);
@@ -162,17 +156,6 @@ async function onRequest(device: string, req: Request) {
   if (!pane) return reply({ t: req.t === "thread.get" ? "error" : "ack", ok: false, error: "That agent is gone." });
   const target = { id: pane.id };
   switch (req.t) {
-    case "code.attach":
-      if (!isCodeWeb(pane)) return reply({ t: "error", error: "That agent doesn't show winfer code's web UI." });
-      return attachCode(device, pane, req.id);
-    case "code.detach":
-      detachCode(device, pane.id);
-      return reply({ t: "ack", ok: true });
-    case "code.cmd":
-      if (!isCodeWeb(pane) || !req.cmd) return reply({ t: "ack", ok: false, error: "That agent doesn't show winfer code's web UI." });
-      codeCommand(pane, req.cmd);
-      if (req.cmd.type === "send" || req.cmd.type === "steer") logActivity(pane.workspaceId, `Sent from your phone: ${req.cmd.text.slice(0, 80)}`, pane.provider);
-      return reply({ t: "ack", ok: true });
     case "thread.get": {
       const { messages, source } = await thread(pane, Math.min(Math.max(req.limit ?? 200, 1), 500));
       return reply({ t: "thread", paneId: pane.id, messages, source });
@@ -265,11 +248,7 @@ function newPane(req: Request): Record<string, unknown> {
   // Started right away: the desktop may be minimized or show another workspace, and its
   // tile only starts a pane once it's drawn. The tile adopts the running terminal later.
   const pane = allPanes().find((p) => p.id === id);
-  // winfer code's web UI runs in its store; anything else in a terminal.
-  if (pane) {
-    if (isCodeWeb(pane)) storeFor(pane);
-    else startDetached(pane);
-  }
+  if (pane) startDetached(pane);
   logActivity(ws.id, `Started ${provider.name} from your phone${prompt ? `: ${prompt.slice(0, 80)}` : ""}`, provider.id);
   return { t: "ack", ok: true, paneId: id };
 }

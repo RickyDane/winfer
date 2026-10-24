@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DesktopClient } from "./client";
 import { RelayClient } from "./connection";
-import { go, useClient, useRoute } from "./hooks";
+import { go, useRoute } from "./hooks";
 import { MockClient } from "./mock";
 import { activePairing, addPairing, parsePairPayload } from "./pairing";
 import { Inbox } from "./screens/Inbox";
@@ -11,7 +11,6 @@ import { TabBar } from "./screens/TabBar";
 import { Pair } from "./screens/Pair";
 import { Settings } from "./screens/Settings";
 import { Thread } from "./screens/Thread";
-import { CodeThread } from "./screens/CodeThread";
 
 const MOCK = new URLSearchParams(location.search).has("mock");
 
@@ -26,12 +25,6 @@ function consumePairLink(): string | null {
     history.replaceState(null, "", location.pathname + location.search + "#/pair");
     return (e as Error).message;
   }
-}
-
-/** winfer code panes show the desktop's own web UI; other agents the chat view. */
-function PaneScreen({ client, paneId }: { client: DesktopClient; paneId: string }) {
-  const code = useClient(client).panes.find((p) => p.id === paneId)?.codeWeb;
-  return code ? <CodeThread client={client} paneId={paneId} /> : <Thread client={client} paneId={paneId} />;
 }
 
 export function App() {
@@ -79,7 +72,7 @@ export function App() {
     ) : route.name === "new" ? (
       <NewSession client={client} workspaceId={route.workspaceId} />
     ) : route.name === "pane" ? (
-      <PaneScreen key={route.id} client={client} paneId={route.id} />
+      <Thread key={route.id} client={client} paneId={route.id} />
     ) : (
       <Inbox client={client} />
     );
