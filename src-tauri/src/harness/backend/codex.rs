@@ -764,8 +764,10 @@ impl Bridge {
                 self.turn = None;
                 // Codex ends the turn without waiting for long commands (watchers, servers): they
                 // run on as background terminals, so their cards become background shells
-                // instead of being failed with the turn.
-                for (id, title) in std::mem::take(&mut self.commands) {
+                // instead of being failed with the turn. Codex gives them no name of their own,
+                // so they're named by a short form of the command, not the whole line.
+                for (id, command) in std::mem::take(&mut self.commands) {
+                    let title = crate::harness::bg::short_command(&command);
                     self.task(TaskEv { id: id.clone(), tool_id: Some(id.clone()), title: Some(title), status: Some("running".into()), ..Default::default() });
                     self.background.insert(id);
                 }
@@ -960,6 +962,7 @@ impl Bridge {
                 self.diffs.insert(id, diff);
                 ("Edit".into(), changed_paths(item))
             }
+            "mcpToolCall" if s(item, "tool") == "bg" => (format!("{} · bg", s(item, "server")), crate::harness::tools::title("bg", &item["arguments"])),
             "mcpToolCall" => (format!("{} · {}", s(item, "server"), s(item, "tool")), first_arg(&item["arguments"])),
             "dynamicToolCall" if s(item, "tool") == crate::harness::tools::ASK_USER => {
                 ("Question".into(), item["arguments"]["questions"][0]["question"].as_str().unwrap_or("").to_string())
@@ -1416,10 +1419,17 @@ mod tests {
     }
 
     #[test]
+    fn bg_cards_show_the_tasks_name() {
+        let (mut b, _rx) = bridge();
+        let item = json!({ "type": "mcpToolCall", "id": "m1", "server": "winfer", "tool": "bg", "arguments": { "action": "start", "cmd": "pnpm dev", "name": "vite dev server" } });
+        assert_eq!(b.tool_card(&item), Some(("winfer · bg".into(), "start vite dev server".into())));
+    }
+
+    #[test]
     fn commands_outliving_their_turn_become_background_shells() {
         let (mut b, rx) = bridge();
         let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
-        let cmd = |status: &str, exit: Value| json!({ "type": "commandExecution", "id": "c1", "command": "/bin/zsh -lc 'gh run watch 811'", "status": status, "exitCode": exit });
+        let cmd = |status: &str, exit: Value| json!({ "type": "commandExecution", "id": "c1", "command": "/bin/zsh -lc 'cd app && gh run watch 811 | tail'", "status": status, "exitCode": exit });
         n(&mut b, "item/started", json!({ "threadId": "main", "item": cmd("inProgress", Value::Null) }));
         n(&mut b, "item/started", json!({ "threadId": "main", "item": { "type": "commandExecution", "id": "c2", "command": "ls" } }));
         n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "commandExecution", "id": "c2", "command": "ls", "status": "completed", "exitCode": 0 } }));
@@ -1428,7 +1438,7 @@ mod tests {
         let tasks: Vec<&TaskEv> = evs.iter().filter_map(|e| if let Ev::Task(t) = e { Some(t) } else { None }).collect();
         assert_eq!(tasks.len(), 1, "{evs:?}");
         assert!(tasks[0].id == "c1" && tasks[0].tool_id.as_deref() == Some("c1") && tasks[0].status.as_deref() == Some("running") && tasks[0].agent.is_none());
-        assert_eq!(tasks[0].title.as_deref(), Some("gh run watch 811"));
+        assert_eq!(tasks[0].title.as_deref(), Some("gh run watch"));
         // The task is up before the turn ends, so the card isn't failed with the turn.
         let task_at = evs.iter().position(|e| matches!(e, Ev::Task(_))).unwrap();
         assert!(task_at < evs.iter().position(|e| matches!(e, Ev::TurnDone)).unwrap());
