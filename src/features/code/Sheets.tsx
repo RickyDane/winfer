@@ -28,7 +28,7 @@ import { COMMANDS, MODES, type TaskEv } from "./protocol";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { useCodeWeb } from "./styles";
-import { BACKENDS, modelName, modelTags } from "./names";
+import { BACKENDS, baseSpec, fastSpec, isFast, modelName, modelTags } from "./names";
 
 /** Token counts: 950 · 12.3k · 184k · 2.76M. */
 export function fmt(n: number) {
@@ -405,12 +405,20 @@ export function ModelPicker() {
   const favorites = useCodeWeb((s) => s.favoriteModels);
   const setPrefs = useCodeWeb((s) => s.set);
   const toggleFavorite = (spec: string) =>
-    setPrefs({ favoriteModels: favorites.includes(spec) ? favorites.filter((f) => f !== spec) : [...favorites, spec] });
+    setPrefs({
+      favoriteModels: favorites.some((f) => baseSpec(f) === spec) ? favorites.filter((f) => baseSpec(f) !== spec) : [...favorites, spec],
+    });
   const current = model.split("/")[0];
-  const backends = BACKENDS.filter((b) => models.some((m) => m.spec.startsWith(b.id + "/")));
-  const favModels = favorites.map((f) => models.find((m) => m.spec === f)).filter((m): m is (typeof models)[number] => !!m);
+  // Fast twins aren't rows: the status line's Fast toggle switches between a model and its twin.
+  const picked = baseSpec(model);
+  const pick = (spec: string) => (isFast(model) && fastSpec(spec, models)) || spec;
+  const rows = models.filter((m) => !isFast(m.spec) || !models.some((b) => b.spec === baseSpec(m.spec)));
+  const backends = BACKENDS.filter((b) => rows.some((m) => m.spec.startsWith(b.id + "/")));
+  const favModels = [...new Set(favorites.map(baseSpec))]
+    .map((f) => rows.find((m) => m.spec === f))
+    .filter((m): m is (typeof models)[number] => !!m);
   // Opens on Favorites when the current model is one of them, else on its backend.
-  const [tab, setTab] = useState(() => (favorites.includes(model) ? "favorites" : current));
+  const [tab, setTab] = useState(() => (favModels.some((m) => m.spec === picked) ? "favorites" : current));
   const active = tab === "favorites" || backends.some((b) => b.id === tab) ? tab : (backends[0]?.id ?? current);
   const tabs = useRef<HTMLDivElement>(null);
   const [glider, setGlider] = useState<{ top: number; height: number } | null>(null);
@@ -419,7 +427,7 @@ export function ModelPicker() {
     if (el) setGlider({ top: el.offsetTop, height: el.offsetHeight });
   }, [active, backends.length]);
   const [query, setQuery] = useState("");
-  const all = active === "favorites" ? favModels : models.filter((m) => m.spec.startsWith(active + "/"));
+  const all = active === "favorites" ? favModels : rows.filter((m) => m.spec.startsWith(active + "/"));
   const q = query.trim().toLowerCase();
   const list = q ? all.filter((m) => `${m.label} ${m.spec} ${m.detail}`.toLowerCase().includes(q)) : all;
   return (
@@ -459,21 +467,21 @@ export function ModelPicker() {
               </p>
             )}
             {list.map((m) => {
-              const fav = favorites.includes(m.spec);
+              const fav = favModels.includes(m);
               return (
-                <div key={m.spec} className={clsx("cw-list-item model", m.spec === model && "sel")}>
+                <div key={m.spec} className={clsx("cw-list-item model", m.spec === picked && "sel")}>
                   <button
                     className="cw-model-pick"
                     onClick={() => {
-                      send({ type: "set_model", model: m.spec });
+                      send({ type: "set_model", model: pick(m.spec) });
                       setSheet(null);
                     }}
                   >
                     {active === "favorites" && <ProviderIcon provider={logoFor(m.spec)} size={13} />}
                     <span>
                       <b>
-                        {modelName(m.spec, resolved, m.spec === model ? actualModel : null)}
-                        {modelTags(m.spec, m.label).map((t) => (
+                        {modelName(m.spec, resolved, m.spec === picked ? actualModel : null)}
+                        {modelTags(m.spec).map((t) => (
                           <em key={t} className="cw-model-tag">
                             {t}
                           </em>
@@ -482,7 +490,7 @@ export function ModelPicker() {
                       {m.detail && <small>{m.detail}</small>}
                     </span>
                   </button>
-                  {m.spec === model && <Check size={14} className="cw-check" />}
+                  {m.spec === picked && <Check size={14} className="cw-check" />}
                   <button
                     className={clsx("cw-star", fav && "on")}
                     title={fav ? "Remove from favorites" : "Add to favorites"}

@@ -6,6 +6,7 @@ import {
   GitBranch,
   ListTodo,
   LoaderCircle,
+  Zap,
 } from "lucide-react";
 import clsx from "clsx";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
@@ -18,17 +19,22 @@ import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
 import { CODE_WEB_DEMO, stepTextScale, useCodeWeb } from "./styles";
 import { ModelPicker, Sheets } from "./Sheets";
-import { backendOf, modelName } from "./names";
+import { backendOf, baseSpec, fastSpec, isFast, modelName } from "./names";
 import { Lightbox } from "./Lightbox";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
 import { MODES } from "./protocol";
 import { BgTasks, bgVisible } from "./BgTasks";
+import { loadPlanSidebar, usePlanSidebar } from "./planSidebar";
 import "./code.css";
 
-/** The agent's todos and running subagents, docked above the composer like the TUI's plan strip. */
-function PlanStrip() {
+/**
+ * The agent's todos and running subagents. `strip` docks above the composer like the TUI's plan strip;
+ * `side` is the right-docked sidebar (Plan sidebar setting), which CSS only shows when the pane is wide
+ * enough — the strip takes over otherwise.
+ */
+function Plan({ side }: { side?: boolean }) {
   const todos = useCode((s) => s.todos);
   const taskMap = useCode((s) => s.tasks);
   const send = useCode((s) => s.send);
@@ -37,22 +43,33 @@ function PlanStrip() {
   const openLog = useCode((s) => s.openTaskLog);
   const tasks = Object.values(taskMap);
   const show = useCodeWeb((s) => s.showPlan);
+  const sidebar = usePlanSidebar((s) => s.on);
+  useEffect(loadPlanSidebar, []);
   const bg = bgVisible(tasks);
-  if (!show || (!todos.length && !bg)) return null;
+  if (!show || (!todos.length && !bg) || (side && !sidebar)) return null;
   const done = todos.filter((t) => t.status === "completed").length;
   const current = todos.find((t) => t.status === "in_progress");
+  const expanded = side || (open && !asking);
   return (
-    <div className="cw-plan cw-enter">
+    <div className={clsx(side ? "cw-side" : "cw-plan", "cw-enter")}>
       {todos.length > 0 && (
         <>
-          <button className="cw-plan-head" onClick={() => setOpen(!open)}>
+          <button
+            className="cw-plan-head"
+            onClick={side ? undefined : () => setOpen(!open)}
+            disabled={side}
+          >
             <ListTodo size={14} />
             <span className="cw-plan-title">
-              {current
-                ? current.content
-                : done === todos.length
+              {side
+                ? done === todos.length
                   ? "Plan complete"
-                  : "Plan"}
+                  : "Plan"
+                : current
+                  ? current.content
+                  : done === todos.length
+                    ? "Plan complete"
+                    : "Plan"}
             </span>
             <span className="cw-plan-bar">
               <i style={{ width: `${(done / todos.length) * 100}%` }} />
@@ -60,12 +77,11 @@ function PlanStrip() {
             <span className="cw-plan-count">
               {done}/{todos.length}
             </span>
-            <ChevronDown
-              size={13}
-              className={clsx("cw-chev-d", open && !asking && "open")}
-            />
+            {!side && (
+              <ChevronDown size={13} className={clsx("cw-chev-d", expanded && "open")} />
+            )}
           </button>
-          <Collapse open={open && !asking}>
+          <Collapse open={expanded}>
             <ul className="cw-todos">
               {todos.map((t) => (
                 <li key={t.content} className={t.status}>
@@ -205,7 +221,9 @@ const EFFORTS = ["max", "xhigh", "high", "medium", "low", "minimal", "default"];
 
 /** The TUI's bottom status line: mode, model, effort, context, branch. */
 function Footer({ pane }: { pane: Pane }) {
-  const { mode, model, actualModel, effort, usage, send, setSheet } = useCode();
+  const { mode, model, models, actualModel, effort, usage, send, setSheet } = useCode();
+  const fast = isFast(model);
+  const fastTwin = fastSpec(model, models);
   const prefs = useCodeWeb();
   const fresh = useFresh();
   const pct = usage.window ? usage.context / usage.window : 0;
@@ -228,6 +246,17 @@ function Footer({ pane }: { pane: Pane }) {
         {m.label}
       </Menu>
       <ModelMenu label={modelLabel} model={model} />
+      {fastTwin && (
+        <button
+          className={clsx("cw-foot-item cw-fast", fast && "on")}
+          aria-pressed={fast}
+          title={fast ? "Fast mode on: 2x speed, increased usage. Click to turn off" : "Fast mode: 2x speed, increased usage"}
+          onClick={() => send({ type: "set_model", model: fast ? baseSpec(model) : fastTwin })}
+        >
+          <Zap size={12} fill={fast ? "currentColor" : "none"} />
+          Fast
+        </button>
+      )}
       <Menu
         label="Reasoning effort"
         value={effort}
@@ -373,10 +402,11 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
           {CODE_WEB_DEMO && <StatusSync paneId={pane.id} />}
           <Transcript dark={dark} />
           <div className="cw-dock">
-            <PlanStrip />
+            <Plan />
             <Composer focused={focused} />
             <Footer pane={pane} />
           </div>
+          <Plan side />
           <Lightbox />
           <Sheets
             onCommand={(c) => {

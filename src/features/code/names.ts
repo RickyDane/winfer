@@ -33,11 +33,18 @@ export function modelName(spec: string, resolved: Record<string, string>, actual
   return displayModelName(actual || resolved[spec] || tail(spec));
 }
 
-/** Variants the friendly name drops but the picker must tell apart. */
-export function modelTags(spec: string, label = "") {
-  const t = tail(spec).toLowerCase();
-  const tags: string[] = [];
-  if (t.endsWith("-fast") || /\(fast\)/i.test(label)) tags.push("fast");
-  if (/\[1m\]/.test(t)) tags.push("1M");
-  return tags;
+/** Variants the friendly name drops but the picker must tell apart (fast twins are a toggle, not a row). */
+export function modelTags(spec: string) {
+  return /\[1m\]/i.test(tail(spec)) ? ["1M"] : [];
 }
+
+/** A backend's fast-tier twin of a model (`codex/gpt-6.1-sol-fast`), see `split_fast` in codex.rs. */
+const FAST = "-fast";
+export const isFast = (spec: string) => spec.endsWith(FAST) && tail(spec) !== FAST;
+/** `codex/gpt-6.1-sol-fast` → `codex/gpt-6.1-sol`; other specs unchanged. */
+export const baseSpec = (spec: string) => (isFast(spec) ? spec.slice(0, -FAST.length) : spec);
+/** The spec of a model's fast twin, when the backend lists one. */
+export const fastSpec = (spec: string, models: { spec: string }[]) => {
+  const f = baseSpec(spec) + FAST;
+  return models.some((m) => m.spec === f) ? f : null;
+};

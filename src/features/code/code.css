@@ -1274,6 +1274,52 @@
   gap: 4px;
   font-size: calc(12.5px * var(--cw-text, 1));
 }
+
+/* ——— Plan sidebar: the plan docked on the right when the pane is wide enough (like the TUI's
+   120-column threshold); narrower panes keep the strip above the composer. ——— */
+.cw-pane {
+  --cw-side-w: clamp(240px, 30cqw, 340px);
+}
+.cw-side {
+  display: none;
+}
+@container (min-width: 900px) {
+  .cw-side {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--cw-side-w);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 10px;
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+    background: var(--card-bg, color-mix(in srgb, var(--surface-2) 55%, transparent));
+    backdrop-filter: var(--blur);
+  }
+  .cw-pane:has(> .cw-side) > .cw-scroll {
+    margin-right: var(--cw-side-w);
+  }
+  .cw-pane:has(> .cw-side) > .cw-dock {
+    position: relative;
+    left: calc(var(--cw-side-w) / -2);
+    max-width: min(864px, calc(100% - var(--cw-side-w)));
+  }
+  .cw-pane:has(> .cw-side) > .cw-dock > .cw-plan {
+    display: none;
+  }
+}
+.cw-side .cw-plan-head {
+  cursor: default;
+  opacity: 1;
+}
+.cw-side .cw-todos {
+  padding: 0 6px 8px 28px;
+  gap: 6px;
+  font-size: calc(12.5px * var(--cw-text, 1));
+}
 /* Background tasks (BgTasks.tsx) — the compact activity timeline below the plan. */
 @keyframes cw-breathe {
   50% {
@@ -1356,6 +1402,14 @@
 }
 .cw-foot-item.dim {
   color: var(--dim);
+}
+.cw-fast {
+  color: var(--dim);
+}
+button.cw-fast.on,
+button.cw-fast.on:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 button.cw-foot-item:hover,
 button.cw-foot-item.active {
