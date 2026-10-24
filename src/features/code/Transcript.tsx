@@ -251,15 +251,22 @@ function Reasoning({ item }: { item: Extract<Item, { kind: "reasoning" }> }) {
   );
 }
 
+/** No turn has run yet: the welcome screen is showing. */
+export function useFresh() {
+  return useCode(
+    (s) =>
+      !s.busy &&
+      !s.items.some(
+        (i) => i.kind === "user" || i.kind === "text" || i.kind === "tool",
+      ),
+  );
+}
+
 export function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
   const setPreview = useCode((s) => s.setPreview);
-  const fresh =
-    !busy &&
-    !items.some(
-      (i) => i.kind === "user" || i.kind === "text" || i.kind === "tool",
-    );
+  const fresh = useFresh();
   const end = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);

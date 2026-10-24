@@ -12,7 +12,7 @@ import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { themeById } from "@/features/theme/themes";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { CodeStoreContext, createCodeStore, useCode } from "./store";
-import { Transcript, Collapse } from "./Transcript";
+import { Transcript, Collapse, useFresh } from "./Transcript";
 import { LinkPaneContext } from "./Links";
 import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
@@ -207,6 +207,7 @@ const EFFORTS = ["max", "xhigh", "high", "medium", "low", "minimal", "default"];
 function Footer({ pane }: { pane: Pane }) {
   const { mode, model, actualModel, effort, usage, send, setSheet } = useCode();
   const prefs = useCodeWeb();
+  const fresh = useFresh();
   const pct = usage.window ? usage.context / usage.window : 0;
   const m = MODES.find((x) => x.id === mode) ?? MODES[0];
   const modelLabel = model
@@ -250,7 +251,7 @@ function Footer({ pane }: { pane: Pane }) {
           {pane.worktree.branch}
         </span>
       )}
-      {((prefs.showCost && usage.cost != null) || prefs.showContext) && (
+      {!fresh && ((prefs.showCost && usage.cost != null) || prefs.showContext) && (
         <button
           className={clsx("cw-foot-item", prefs.showContext && pct > 0.8 && "hot")}
           onClick={() => setSheet("usage")}
