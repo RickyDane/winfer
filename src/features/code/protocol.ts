@@ -182,6 +182,7 @@ export const COMMANDS: [string, string][] = [
   ["/tasks", "Background shells and their output (ctrl+b)"],
   ["/mcp", "MCP servers in use"],
   ["/status", "Session, model and directory"],
+  ["/sidebar", "Plan in a sidebar on wide panes (on/off)"],
   ["/login", "How to sign in to each backend"],
   ["/help", "Keys and commands"],
 ];

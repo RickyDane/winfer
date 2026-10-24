@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { usePlanSidebar } from "@/features/code/planSidebar";
 import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
@@ -1029,6 +1030,7 @@ function HarnessSettings() {
     setSettings(next);
     try {
       await invoke("harness_set_settings", { settings: next });
+      if (patch.planSidebar !== undefined) usePlanSidebar.setState({ on: patch.planSidebar });
       setResult(null);
     } catch (err) {
       setResult({ ok: false, text: String(err) });
@@ -1183,7 +1185,7 @@ function HarnessSettings() {
         </Row>
         <Row
           label="Plan sidebar"
-          hint="Shows the agent's plan in a sidebar on the right when the pane is wide enough; otherwise it stays above the prompt. /sidebar toggles it inside a session."
+          hint="Shows the agent's plan in a sidebar on the right when the pane is wide enough, in the TUI and the web UI; otherwise it stays above the prompt. /sidebar toggles it inside a session."
         >
           <Toggle label="Plan sidebar" checked={settings.planSidebar} onChange={(planSidebar) => void save({ planSidebar })} />
         </Row>

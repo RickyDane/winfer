@@ -1,6 +1,7 @@
 /** The composer's slash commands: what `tui::app` does for each, mapped to the web UI. */
 import type { StoreApi } from "zustand";
 import type { CodeState, Item } from "./store";
+import { setPlanSidebar, usePlanSidebar } from "./planSidebar";
 import { INIT_PROMPT, MODES, REVIEW_PROMPT, type Mode } from "./protocol";
 
 let seq = 0;
@@ -106,6 +107,12 @@ export function runCommand(text: string, store: StoreApi<CodeState>): boolean {
     case "/help":
       s.setSheet("help");
       return true;
+    case "/sidebar": {
+      const on = arg === "on" ? true : arg === "off" ? false : !usePlanSidebar.getState().on;
+      setPlanSidebar(on).catch((e) => notice(`Couldn't save the plan sidebar setting: ${e}`));
+      notice(on ? "Plan sidebar on (shows when the pane is wide enough)" : "Plan sidebar off");
+      return true;
+    }
     default:
       notice(`Unknown command ${cmd} — try /help`);
       return true;
