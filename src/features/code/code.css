@@ -644,6 +644,17 @@
   border-radius: 999px;
   border: 1px dashed var(--border);
 }
+.cw-notice-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.cw-notice-text.open {
+  -webkit-line-clamp: unset;
+}
 .cw-notice.error {
   color: var(--del);
   border-color: color-mix(in srgb, var(--del) 40%, transparent);

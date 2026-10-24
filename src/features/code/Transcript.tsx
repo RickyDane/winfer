@@ -118,6 +118,19 @@ function diffStat(diff: string) {
   return { a, d };
 }
 
+/** Notices (e.g. "stopped background task …" with its whole command) stay at two lines; click to expand. */
+function NoticeText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      className={clsx("cw-notice-text", open && "open")}
+      onClick={() => setOpen(!open)}
+    >
+      <Linkify text={text} />
+    </span>
+  );
+}
+
 function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
   const running = item.ok === undefined;
   const isShell = item.name === "Bash";
@@ -354,9 +367,7 @@ export function Transcript({ dark }: { dark: boolean }) {
                   ) : (
                     <Info size={13} />
                   )}
-                  <span>
-                    <Linkify text={it.text} />
-                  </span>
+                  <NoticeText text={it.text} />
                 </div>
               );
           }
