@@ -2969,7 +2969,7 @@ mod tests {
     #[test]
     fn slash_completion_opens_the_model_picker() {
         let mut a = app();
-        a.models = vec![ModelInfo { spec: "claude/opus".into(), label: "Claude Opus".into(), detail: "d".into() }];
+        a.models = vec![ModelInfo { spec: "claude/opus".into(), label: "Claude Opus".into(), detail: "d".into(), efforts: None }];
         for c in "/model".chars() {
             key(&mut a, KeyCode::Char(c));
         }

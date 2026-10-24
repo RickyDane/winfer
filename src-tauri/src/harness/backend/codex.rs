@@ -1333,13 +1333,17 @@ pub fn models() -> Vec<ModelInfo> {
 
 fn model_infos(m: &Value) -> Vec<ModelInfo> {
     let label = m["displayName"].as_str().unwrap_or(m["model"].as_str().unwrap_or("")).to_string();
-    let mut out = vec![ModelInfo { spec: format!("codex/{}", s(m, "model")), label: label.clone(), detail: format!("Codex · {}", s(m, "description")) }];
+    let efforts = m["supportedReasoningEfforts"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|e| e["reasoningEffort"].as_str().map(String::from)).collect::<Vec<_>>());
+    let mut out = vec![ModelInfo { spec: format!("codex/{}", s(m, "model")), label: label.clone(), detail: format!("Codex · {}", s(m, "description")), efforts: efforts.clone() }];
     let fast = m["serviceTiers"].as_array().into_iter().flatten().find(|t| t["id"].as_str() == Some(FAST_TIER));
     if let Some(t) = fast {
         out.push(ModelInfo {
             spec: format!("codex/{}{FAST_SUFFIX}", s(m, "model")),
             label: format!("{label} ({})", t["name"].as_str().unwrap_or("Fast")),
             detail: format!("Codex · {}", s(t, "description")),
+            efforts,
         });
     }
     out

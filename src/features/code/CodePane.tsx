@@ -21,7 +21,7 @@ import { CODE_WEB_DEMO, stepTextScale, useCodeWeb } from "./styles";
 import { ModelPicker, Sheets } from "./Sheets";
 import { backendOf, baseSpec, fastSpec, isFast, modelName } from "./names";
 import { Lightbox } from "./Lightbox";
-import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
+import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
 import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
 import { MODES } from "./protocol";
@@ -216,9 +216,6 @@ function ModelMenu({ label, model }: { label: string; model: string }) {
   );
 }
 
-/** Highest first, so the lowest level sits at the bottom, next to the status line. */
-const EFFORTS = ["max", "xhigh", "high", "medium", "low", "minimal", "default"];
-
 /** The TUI's bottom status line: mode, model, effort, context, branch. */
 function Footer({ pane }: { pane: Pane }) {
   const { mode, model, models, actualModel, effort, usage, send, setSheet } = useCode();
@@ -260,7 +257,7 @@ function Footer({ pane }: { pane: Pane }) {
       <Menu
         label="Reasoning effort"
         value={effort}
-        items={EFFORTS.map((e) => ({
+        items={effortOptions(models, model).map((e) => ({
           id: e,
           label: EFFORT_LABELS[e] ?? e,
           hint: EFFORT_HINTS[e],

@@ -124,6 +124,8 @@ export interface ModelInfo {
   spec: string;
   label: string;
   detail: string;
+  /** The reasoning efforts the model takes, lowest first: absent/null when the backend doesn't say, empty when it has none. */
+  efforts?: string[] | null;
 }
 
 export type Cmd =

@@ -40,7 +40,7 @@ pub fn models() -> Vec<ModelInfo> {
         .into_iter()
         .filter_map(|m| {
             let (provider, model) = m.id.split_once('/')?;
-            Some(ModelInfo { spec: format!("opencode/{}", m.id), label: label(model), detail: format!("OpenCode · {provider}") })
+            Some(ModelInfo { spec: format!("opencode/{}", m.id), label: label(model), detail: format!("OpenCode · {provider}"), efforts: None })
         })
         .collect()
 }

@@ -43,6 +43,8 @@ fn model_info(m: &Value) -> Option<ModelInfo> {
         spec: format!("pi/{provider}/{id}"),
         label: m["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
         detail: format!("Pi · {provider}"),
+        // pi's thinking levels (`--thinking`); a model without reasoning has none.
+        efforts: m["reasoning"].as_bool().map(|r| if r { ["minimal", "low", "medium", "high", "xhigh"].map(String::from).into() } else { Vec::new() }),
     })
 }
 
@@ -710,7 +712,7 @@ mod tests {
     #[test]
     fn reads_the_model_list() {
         let m = json!({ "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "provider": "openai" });
-        assert_eq!(model_info(&m), Some(ModelInfo { spec: "pi/openai/gpt-6.1-sol".into(), label: "GPT-6.1 Sol".into(), detail: "Pi · openai".into() }));
+        assert_eq!(model_info(&m), Some(ModelInfo { spec: "pi/openai/gpt-6.1-sol".into(), label: "GPT-6.1 Sol".into(), detail: "Pi · openai".into(), efforts: None }));
         assert_eq!(display_name("mcp__winfer__bg"), "winfer · bg");
         assert_eq!(display_name("bash"), "Bash");
     }

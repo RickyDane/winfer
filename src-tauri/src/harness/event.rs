@@ -283,6 +283,9 @@ pub struct ModelInfo {
     pub spec: String,
     pub label: String,
     pub detail: String,
+    /// The reasoning efforts the model takes, lowest first: None when the backend doesn't say,
+    /// empty when the model has none.
+    pub efforts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

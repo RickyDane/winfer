@@ -26,7 +26,7 @@ import clsx from "clsx";
 import { useCode, type Sheet } from "./store";
 import { COMMANDS, MODES, type TaskEv } from "./protocol";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
-import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
+import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
 import { useCodeWeb } from "./styles";
 import { BACKENDS, baseSpec, fastSpec, isFast, modelName, modelTags } from "./names";
 
@@ -515,7 +515,7 @@ function ListSheet({ kind }: { kind: "model" | "effort" | "mode" }) {
     kind === "model"
       ? models.map((m) => ({ id: m.spec, label: m.label, hint: m.detail }))
       : kind === "effort"
-        ? ["max", "xhigh", "high", "medium", "low", "minimal", "default"].map((e) => ({ id: e, label: EFFORT_LABELS[e] ?? e, hint: EFFORT_HINTS[e] }))
+        ? effortOptions(models, model).map((e) => ({ id: e, label: EFFORT_LABELS[e] ?? e, hint: EFFORT_HINTS[e] }))
         : MODES.map((m) => ({ id: m.id, label: m.label, hint: m.hint }));
   const value = kind === "model" ? model : kind === "effort" ? effort : mode;
   const icon = kind === "model" ? <Sparkles size={15} /> : kind === "effort" ? <Zap size={15} /> : <ShieldCheck size={15} />;

@@ -28,6 +28,8 @@ pub fn models() -> Vec<ModelInfo> {
         spec: format!("claude/{id}"),
         label: format!("Claude {label}"),
         detail: format!("Claude Code · {detail}"),
+        // Every current Claude model takes all five (Claude Code's `--effort`).
+        efforts: Some(["low", "medium", "high", "xhigh", "max"].map(String::from).into()),
     })
     .collect()
 }

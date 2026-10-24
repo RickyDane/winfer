@@ -19,9 +19,10 @@ pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("cursor-agent").is_none() {
         return Vec::new();
     }
-    listed()
-        .into_iter()
-        .map(|(id, label)| ModelInfo { detail: format!("Cursor · {id}"), spec: format!("cursor/{id}"), label })
+    let list = listed();
+    let ids: Vec<String> = list.iter().map(|(id, _)| id.clone()).collect();
+    list.into_iter()
+        .map(|(id, label)| ModelInfo { detail: format!("Cursor · {id}"), spec: format!("cursor/{id}"), efforts: efforts(&id, &ids), label })
         .collect()
 }
 
@@ -99,6 +100,13 @@ fn with_effort(model: &str, effort: &str, ids: &[String]) -> Option<String> {
         candidates.push(format!("{base}{fast}"));
     }
     candidates.into_iter().find(|c| ids.iter().any(|id| id == c))
+}
+
+/// The efforts `model` has variants for (None when it has no sibling with another effort: then
+/// Cursor sets none for it).
+fn efforts(model: &str, ids: &[String]) -> Option<Vec<String>> {
+    let list: Vec<String> = ["minimal", "low", "medium", "high", "xhigh", "max"].into_iter().filter(|e| with_effort(model, e, ids).is_some()).map(String::from).collect();
+    Some(if list.len() > 1 { list } else { Vec::new() })
 }
 
 /// Separates a stdout line from the number of the run it came from; `END` marks a run's end.

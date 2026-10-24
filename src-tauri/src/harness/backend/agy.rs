@@ -27,9 +27,11 @@ pub fn models() -> Vec<ModelInfo> {
         return hit;
     }
     let Some(out) = list_models() else { return Vec::new() };
-    let list: Vec<ModelInfo> = crate::providers::parse_models(&out)
-        .into_iter()
-        .map(|m| ModelInfo { detail: format!("Antigravity · {}", vendor(&m.id)), spec: format!("agy/{}", m.id), label: m.label })
+    let parsed = crate::providers::parse_models(&out);
+    let ids: Vec<&str> = parsed.iter().map(|m| m.id.as_str()).collect();
+    let list: Vec<ModelInfo> = parsed
+        .iter()
+        .map(|m| ModelInfo { detail: format!("Antigravity · {}", vendor(&m.id)), spec: format!("agy/{}", m.id), efforts: efforts(&m.id, &ids), label: m.label.clone() })
         .collect();
     if !list.is_empty() {
         *CACHE.lock().unwrap() = Some(list.clone());
@@ -86,6 +88,13 @@ fn window(model: &str) -> u64 {
 fn effort_flag(model: &str, effort: Option<&str>) -> Option<String> {
     let suffixed = ["-low", "-medium", "-high"].iter().any(|s| model.ends_with(s));
     effort.filter(|_| !suffixed).map(|e| if e == "minimal" { "low" } else { e }.to_string())
+}
+
+/// The efforts a model named with a thinking level can switch to (its listed siblings); None for
+/// the others, which take `--effort`.
+fn efforts(model: &str, ids: &[&str]) -> Option<Vec<String>> {
+    let base = ["-low", "-medium", "-high"].iter().find_map(|s| model.strip_suffix(s))?;
+    Some(["low", "medium", "high"].into_iter().filter(|l| ids.contains(&format!("{base}-{l}").as_str())).map(String::from).collect())
 }
 
 /// For a new effort picked on a model named with a thinking level: its sibling with that level.

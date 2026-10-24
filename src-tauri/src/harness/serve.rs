@@ -489,7 +489,7 @@ pub fn run(launch: Launch) -> i32 {
     // Models load slowly (each backend asks its service): they follow when ready.
     let models = tx.clone();
     std::thread::spawn(move || {
-        let list: Vec<Value> = backend::all_models().into_iter().map(|m| json!({ "spec": m.spec, "label": m.label, "detail": m.detail })).collect();
+        let list: Vec<Value> = backend::all_models().into_iter().map(|m| json!({ "spec": m.spec, "label": m.label, "detail": m.detail, "efforts": m.efforts })).collect();
         let _ = models.send(In::Out(json!({ "type": "models", "models": list })));
     });
 

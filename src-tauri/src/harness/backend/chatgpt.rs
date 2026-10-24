@@ -30,7 +30,7 @@ pub fn models() -> Vec<ModelInfo> {
         list.push(DEFAULT_MODEL.to_string());
     }
     list.into_iter()
-        .map(|m| ModelInfo { spec: format!("chatgpt/{m}"), label: m.clone(), detail: "ChatGPT account · winfer tools".into() })
+        .map(|m| ModelInfo { spec: format!("chatgpt/{m}"), label: m.clone(), detail: "ChatGPT account · winfer tools".into(), efforts: None })
         .collect()
 }
 
