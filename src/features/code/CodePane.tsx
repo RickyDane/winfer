@@ -28,87 +28,70 @@ import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
 import { MODES } from "./protocol";
 import { ModeIcon } from "./ModeIcon";
-import { BgTasks, bgVisible } from "./BgTasks";
 import { loadPlanSidebar, usePlanSidebar } from "./planSidebar";
 import "./code.css";
 
 /**
- * The agent's todos and running subagents. `strip` docks above the composer like the TUI's plan strip;
+ * The agent's todos (running subagents and shells sit in the pane header's indicator). `strip` docks above the composer like the TUI's plan strip;
  * `side` is the right-docked sidebar (Plan sidebar setting), which CSS only shows when the pane is wide
  * enough — the strip takes over otherwise.
  */
 function Plan({ side }: { side?: boolean }) {
   const todos = useCode((s) => s.todos);
-  const taskMap = useCode((s) => s.tasks);
-  const send = useCode((s) => s.send);
   const [open, setOpen] = useState(true);
   const asking = useCode((s) => s.approvals.length > 0);
-  const openLog = useCode((s) => s.openTaskLog);
-  const tasks = Object.values(taskMap);
   const show = useCodeWeb((s) => s.showPlan);
   const sidebar = usePlanSidebar((s) => s.on);
   useEffect(loadPlanSidebar, []);
-  const bg = bgVisible(tasks);
-  if (!show || (!todos.length && !bg) || (side && !sidebar)) return null;
+  if (!show || !todos.length || (side && !sidebar)) return null;
   const done = todos.filter((t) => t.status === "completed").length;
   const current = todos.find((t) => t.status === "in_progress");
   const expanded = side || (open && !asking);
   return (
     <div className={clsx(side ? "cw-side" : "cw-plan", "cw-enter")}>
-      {todos.length > 0 && (
-        <>
-          <button
-            className="cw-plan-head"
-            onClick={side ? undefined : () => setOpen(!open)}
-            disabled={side}
-          >
-            <ListTodo size={14} />
-            <span className="cw-plan-title">
-              {side
-                ? done === todos.length
-                  ? "Plan complete"
-                  : "Plan"
-                : current
-                  ? current.content
-                  : done === todos.length
-                    ? "Plan complete"
-                    : "Plan"}
-            </span>
-            <span className="cw-plan-bar">
-              <i style={{ width: `${(done / todos.length) * 100}%` }} />
-            </span>
-            <span className="cw-plan-count">
-              {done}/{todos.length}
-            </span>
-            {!side && (
-              <ChevronDown size={13} className={clsx("cw-chev-d", expanded && "open")} />
-            )}
-          </button>
-          <Collapse open={expanded}>
-            <ul className="cw-todos">
-              {todos.map((t) => (
-                <li key={t.content} className={t.status}>
-                  {t.status === "completed" ? (
-                    <CircleCheck size={14} />
-                  ) : t.status === "in_progress" ? (
-                    <LoaderCircle size={14} className="spin" />
-                  ) : (
-                    <CircleDashed size={14} />
-                  )}
-                  <span>{t.content}</span>
-                </li>
-              ))}
-            </ul>
-          </Collapse>
-        </>
-      )}
-      {bg && (
-        <BgTasks
-          tasks={tasks}
-          openLog={openLog}
-          stop={(id) => send({ type: "stop_task", id })}
-        />
-      )}
+      <button
+        className="cw-plan-head"
+        onClick={side ? undefined : () => setOpen(!open)}
+        disabled={side}
+      >
+        <ListTodo size={14} />
+        <span className="cw-plan-title">
+          {side
+            ? done === todos.length
+              ? "Plan complete"
+              : "Plan"
+            : current
+              ? current.content
+              : done === todos.length
+                ? "Plan complete"
+                : "Plan"}
+        </span>
+        <span className="cw-plan-bar">
+          <i style={{ width: `${(done / todos.length) * 100}%` }} />
+        </span>
+        <span className="cw-plan-count">
+          {done}/{todos.length}
+        </span>
+        {!side && (
+          <ChevronDown size={13} className={clsx("cw-chev-d", expanded && "open")} />
+        )}
+      </button>
+      <Collapse open={expanded}>
+        <ul className="cw-todos">
+          {todos.map((t) => (
+            <li key={t.content} className={t.status}>
+              {t.status === "completed" ? (
+                <CircleCheck size={14} />
+              ) : t.status === "in_progress" ? (
+                <LoaderCircle size={14} className="spin" />
+              ) : (
+                <CircleDashed size={14} />
+              )}
+              <span>{t.content}</span>
+            </li>
+          ))}
+        </ul>
+      </Collapse>
     </div>
   );
 }
@@ -377,7 +360,7 @@ export function disposeCodePane(paneId: string) {
 }
 
 /** One store per pane that outlives remounts (moving tiles, switching workspaces). */
-function storeFor(pane: Pane) {
+export function storeFor(pane: Pane) {
   let s = stores.get(pane.id);
   if (!s) {
     s = createCodeStore();

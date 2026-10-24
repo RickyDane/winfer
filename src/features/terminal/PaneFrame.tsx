@@ -20,6 +20,7 @@ import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview
 import { ContextMeter } from "@/features/usage/UsageMeter";
 import { PaneCost } from "@/features/usage/TaskCostChip";
 import { GlassPaneHeader } from "./GlassPaneHeader";
+import { BgIndicator } from "@/features/code/BgIndicator";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -110,6 +111,7 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
             {label}
           </span>
         )}
+        <BgIndicator pane={pane} />
         <ContextMeter paneId={pane.id} provider={pane.provider} />
         <PaneCost pane={pane} />
         {showProgress && (

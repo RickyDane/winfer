@@ -2718,9 +2718,35 @@ label.cw-icon-btn {
 .cw-plan:not(:has(*)) {
   display: none;
 }
-.cw-plan > * + .cw-bgl {
-  border-top: 1px solid var(--border);
-  margin-top: 2px;
+/* The popover opened from the pane header's activity chip (BgIndicator). */
+.cw-pane.cw-bgpop {
+  position: fixed;
+  z-index: 60;
+  height: auto;
+  container-type: normal;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transform-origin: top right;
+  animation: cw-bgpop-in 0.18s var(--ease) both;
+}
+@keyframes cw-bgpop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+.cw-bgpop-head {
+  padding: 4px 7px 5px;
+  font-size: calc(11px * var(--cw-text, 1));
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
 }
 .cw-tlf-row {
   --tint: var(--accent);

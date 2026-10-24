@@ -13,8 +13,8 @@ import clsx from "clsx";
 import type { TaskEv } from "./protocol";
 import { modelName } from "./names";
 
-/* Running subagents and background shells, docked in the plan strip as a compact activity
-   timeline: one line per shell, and for agents a second line with their recent tool calls. */
+/* Running subagents and background shells as a compact activity timeline, shown in the popover
+   of the pane header's activity chip (BgIndicator): one line per shell, and for agents a second line with their recent tool calls. */
 
 export interface BgProps {
   /** Every task of the session; only the running ones are shown. */
