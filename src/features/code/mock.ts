@@ -136,6 +136,25 @@ export class MockTransport implements Transport {
         this.emit({ type: "task_log", id, text: id === "bg-dev" ? lines.join("\n") : null, file: id === "bg-dev" ? "/tmp/winfer-bg/bg-dev.log" : null });
         break;
       }
+      case "context_breakdown": {
+        const share: [string, string, number][] = [
+          ["system", "System prompt", 0.04],
+          ["tools", "Tools", 0.09],
+          ["mcp", "MCP tools", 0.05],
+          ["instructions", "Memory & instructions", 0.03],
+          ["messages", "Your messages", 0.06],
+          ["replies", "Replies", 0.08],
+          ["thinking", "Thinking", 0.05],
+          ["toolCalls", "Tool calls", 0.1],
+          ["toolResults", "Tool results", 0.5],
+        ];
+        const t = cmd.tokens;
+        const parts = share.map(([kind, label, f]) => ({ kind, label, tokens: Math.round(t * f) }));
+        const results = parts[8].tokens;
+        Object.assign(parts[8], { sources: [["Read", 0.46], ["Bash", 0.28], ["Grep", 0.14], ["Other", 0.12]].map(([label, f]) => ({ label, tokens: Math.round(results * (f as number)) })) });
+        setTimeout(() => this.emit({ type: "context_breakdown", tokens: t, parts }), 200);
+        break;
+      }
       case "sessions":
         setTimeout(
           () =>

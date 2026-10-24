@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { Approval, Cmd, Ev, Mode, ModelInfo, SessionInfo, TaskEv, Todo, Transport, Usage } from "./protocol";
+import type { ContextPart } from "@/features/usage/usage";
 
 export interface Attachment {
   id: string;
@@ -53,6 +54,8 @@ export interface CodeState {
   compactAt: number;
   mcp: string[];
   sessions: SessionInfo[] | null;
+  /** The `/cost` sheet's context breakdown: undefined while it's read, null when there's none. */
+  breakdown: { tokens: number; parts: ContextPart[] | null } | undefined;
   btw: Btw[];
   /** The panel open over the transcript. */
   sheet: Sheet | null;
@@ -108,6 +111,7 @@ export const createCodeStore = () =>
   compactAt: 0,
   mcp: [],
   sessions: null,
+  breakdown: undefined,
   btw: [],
   sheet: null,
   rate: null,
@@ -142,6 +146,7 @@ export const createCodeStore = () =>
     if (cmd.type === "undo" || cmd.type === "new") set({ approvals: [] });
     if (cmd.type === "btw") set((s) => ({ btw: [...s.btw, { id: cmd.id, question: cmd.question }], sheet: "btw" }));
     if (cmd.type === "sessions") set({ sessions: null });
+    if (cmd.type === "context_breakdown") set({ breakdown: undefined });
     if (cmd.type === "set_compaction") set((s) => ({ trimAt: cmd.trim ?? s.trimAt, compactAt: cmd.compact ?? s.compactAt }));
     if (cmd.type === "approve" || cmd.type === "answer")
       set((s) => ({ approvals: s.approvals.filter((a) => a.id !== cmd.id) }));
@@ -298,6 +303,8 @@ export const createCodeStore = () =>
           };
         case "sessions":
           return { sessions: ev.sessions };
+        case "context_breakdown":
+          return { breakdown: { tokens: ev.tokens, parts: ev.parts } };
         case "task_log":
           return ev.id === s.logTask ? { taskLog: { id: ev.id, text: ev.text, file: ev.file } } : {};
         case "btw":

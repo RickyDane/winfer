@@ -1,5 +1,5 @@
 /** Panels that open over the transcript: what the TUI shows in its pickers and info notices. */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   Bot,
@@ -25,9 +25,11 @@ import {
 import clsx from "clsx";
 import { useCode, type Sheet } from "./store";
 import { COMMANDS, MODES, type TaskEv } from "./protocol";
+import type { ContextPart } from "@/features/usage/usage";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
 import { useCodeWeb } from "./styles";
+import { PART_COLORS } from "@/features/usage/contextParts";
 import { BACKENDS, baseSpec, fastSpec, isFast, modelName, modelTags } from "./names";
 
 /** Token counts: 950 · 12.3k · 184k · 2.76M. */
@@ -83,9 +85,15 @@ export function useRate() {
 }
 
 function UsageSheet() {
-  const { usage, trimAt, compactAt, model, send, setSheet } = useCode();
+  const { usage, trimAt, compactAt, model, send, setSheet, breakdown } = useCode();
   const rate = useRate();
   const pct = usage.window ? (usage.context / usage.window) * 100 : 0;
+  // Re-read the breakdown whenever the context changes (once per model request, not per token).
+  useEffect(() => {
+    if (usage.context > 0) send({ type: "context_breakdown", tokens: usage.context });
+  }, [usage.context, send]);
+  const parts = (usage.context > 0 && breakdown?.parts?.filter((p) => p.tokens > 0)) || null;
+  const partsTotal = parts?.reduce((n, p) => n + p.tokens, 0) || 1;
   const hit = usage.input ? (usage.cached / usage.input) * 100 : 0;
   const fresh = Math.max(0, usage.input - usage.cached);
   const total = usage.input + usage.output || 1;
@@ -102,14 +110,20 @@ function UsageSheet() {
           <span className={clsx("cw-ctx-pct", pct > 80 && "hot")}>{pct.toFixed(0)}%</span>
         </div>
         <div className="cw-ctx-bar">
-          <i style={{ width: `${Math.min(pct, 100)}%` }} />
+          <i className={clsx(parts?.length && "split")} style={{ width: `${Math.min(pct, 100)}%` }}>
+            {parts?.map((p) => (
+              <span key={p.kind} style={{ flexGrow: p.tokens, background: PART_COLORS[p.kind] }} title={`${p.label} · ${fmt(p.tokens)}`} />
+            ))}
+          </i>
           {trimAt > 0 && <em style={{ left: `${trimAt}%` }} data-label={`micro-compact ${trimAt}%`} />}
           {compactAt > 0 && <em className="full" style={{ left: `${compactAt}%` }} data-label={`compact ${compactAt}%`} />}
         </div>
         <div className="cw-ctx-legend">
-          <span>
-            <i className="used" /> in context
-          </span>
+          {!parts?.length && (
+            <span>
+              <i className="used" /> in context
+            </span>
+          )}
           <span>{fmt(Math.max(0, usage.window - usage.context))} free</span>
           <span className="grow" />
           <button className="cw-link" onClick={() => setSheet("compaction")}>
@@ -117,6 +131,8 @@ function UsageSheet() {
           </button>
         </div>
       </section>
+
+      <ContextBreakdown parts={parts} loading={breakdown === undefined && usage.context > 0} total={partsTotal} />
 
       <section className="cw-usage-block">
         <div className="cw-ctx-head">
@@ -157,6 +173,51 @@ function UsageSheet() {
         </button>
       </div>
     </Frame>
+  );
+}
+
+/** What fills the context: system prompt, tools, messages, tool output…, each with its share. */
+function ContextBreakdown({ parts, loading, total }: { parts: ContextPart[] | null; loading: boolean; total: number }) {
+  if (!parts?.length)
+    return loading ? <section className="cw-usage-block cw-breakdown-empty">Reading the session…</section> : null;
+  const share = (n: number) => (n / total) * 100;
+  const pctText = (n: number) => (share(n) < 1 ? "<1%" : `${Math.round(share(n))}%`);
+  return (
+    <section className="cw-usage-block">
+      <div className="cw-ctx-head">
+        <span>What's in context</span>
+        <span className="grow" />
+        <small className="cw-breakdown-note" title="Agents report only the total; the parts are measured from the session's conversation and scaled to it.">
+          estimated
+        </small>
+      </div>
+      <div className="cw-breakdown">
+        {parts.map((p) => (
+          <Fragment key={p.kind}>
+            <div className="cw-breakdown-row">
+              <i style={{ background: PART_COLORS[p.kind] }} />
+              <span className="label">{p.label}</span>
+              <span className="track">
+                <span style={{ width: `${share(p.tokens)}%`, background: PART_COLORS[p.kind] }} />
+              </span>
+              <b>{fmt(p.tokens)}</b>
+              <small>{pctText(p.tokens)}</small>
+            </div>
+            {p.sources?.map((src) => (
+              <div key={src.label} className="cw-breakdown-row nested">
+                <i />
+                <span className="label">{src.label}</span>
+                <span className="track">
+                  <span style={{ width: `${share(src.tokens)}%`, background: PART_COLORS[p.kind] }} />
+                </span>
+                <b>{fmt(src.tokens)}</b>
+                <small>{pctText(src.tokens)}</small>
+              </div>
+            ))}
+          </Fragment>
+        ))}
+      </div>
+    </section>
   );
 }
 

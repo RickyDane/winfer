@@ -1666,6 +1666,83 @@ button.cw-foot-item.active {
 .cw-ctx-legend .out {
   background: var(--ok);
 }
+.cw-ctx-bar i.split {
+  display: flex;
+  gap: 1px;
+  overflow: hidden;
+  background: none;
+}
+.cw-ctx-bar i.split span {
+  flex-basis: 0;
+  min-width: 2px;
+}
+.cw-breakdown {
+  display: grid;
+  gap: 5px;
+}
+.cw-breakdown-row {
+  display: grid;
+  grid-template-columns: 8px minmax(90px, 160px) 1fr 52px 36px;
+  align-items: center;
+  gap: 10px;
+  font-size: calc(11.5px * var(--cw-text, 1));
+  color: var(--muted);
+}
+.cw-breakdown-row > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.cw-breakdown-row .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-breakdown-row.nested {
+  font-size: calc(10.5px * var(--cw-text, 1));
+  color: var(--dim);
+}
+.cw-breakdown-row.nested .label {
+  padding-left: 12px;
+}
+.cw-breakdown-row.nested .label::before {
+  content: "· ";
+}
+.cw-breakdown-row .track {
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.cw-breakdown-row .track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.7s var(--ease);
+}
+.cw-breakdown-row.nested .track span {
+  opacity: 0.55;
+}
+.cw-breakdown-row b {
+  text-align: right;
+  font-weight: 500;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.cw-breakdown-row small {
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--dim);
+}
+.cw-breakdown-note {
+  font-size: calc(10.5px * var(--cw-text, 1));
+  color: var(--dim);
+  cursor: help;
+}
+.cw-breakdown-empty {
+  font-size: calc(11.5px * var(--cw-text, 1));
+  color: var(--dim);
+}
 .cw-split-bar {
   display: flex;
   gap: 2px;

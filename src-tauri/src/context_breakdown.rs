@@ -403,23 +403,23 @@ pub fn opencode_breakdown(conn: &rusqlite::Connection, session: &str, total: u64
 /// path for Claude and Codex, a session id for OpenCode.
 #[tauri::command]
 pub async fn usage_context_breakdown(provider: String, source: String, tokens: u64) -> Option<Vec<Part>> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let log = || (source.ends_with(".jsonl")).then(|| std::fs::read_to_string(&source).ok()).flatten();
-        match provider.as_str() {
-            "claude" => Some(claude_breakdown(&log()?, tokens)),
-            "codex" => Some(codex_breakdown(&log()?, tokens)),
-            "opencode" => opencode_breakdown(&crate::usage::opencode_db()?, &source, tokens),
-            "chatgpt" => {
-                let path = std::path::Path::new(&source);
-                let setup = std::fs::read_to_string(path.with_extension("setup.json")).ok();
-                chatgpt_breakdown(&std::fs::read_to_string(path).ok()?, setup.as_deref(), tokens)
-            }
-            _ => None,
+    tauri::async_runtime::spawn_blocking(move || breakdown(&provider, &source, tokens)).await.ok().flatten()
+}
+
+/// `usage_context_breakdown`'s work, also run by `winfer code --serve` for its `/cost` sheet.
+pub fn breakdown(provider: &str, source: &str, tokens: u64) -> Option<Vec<Part>> {
+    let log = || (source.ends_with(".jsonl")).then(|| std::fs::read_to_string(source).ok()).flatten();
+    match provider {
+        "claude" => Some(claude_breakdown(&log()?, tokens)),
+        "codex" => Some(codex_breakdown(&log()?, tokens)),
+        "opencode" => opencode_breakdown(&crate::usage::opencode_db()?, source, tokens),
+        "chatgpt" => {
+            let path = std::path::Path::new(source);
+            let setup = std::fs::read_to_string(path.with_extension("setup.json")).ok();
+            chatgpt_breakdown(&std::fs::read_to_string(path).ok()?, setup.as_deref(), tokens)
         }
-    })
-    .await
-    .ok()
-    .flatten()
+        _ => None,
+    }
 }
 
 #[cfg(test)]

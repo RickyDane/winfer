@@ -3,6 +3,7 @@
  * their JSON shape (see `event_json` in src-tauri/src/harness/mod.rs), so a real transport can
  * stream the same events the TUI consumes.
  */
+import type { ContextPart } from "@/features/usage/usage";
 
 export type Mode = "ask" | "auto-edit" | "yolo" | "plan" | "yolo-plan";
 export type Decision = "allow" | "always" | "deny";
@@ -95,6 +96,8 @@ export type Ev =
       mcp?: string[];
     }
   | { type: "sessions"; sessions: SessionInfo[] }
+  /** What the context's `tokens` are made of (estimated); null when the session log can't be read. */
+  | { type: "context_breakdown"; tokens: number; parts: ContextPart[] | null }
   | { type: "btw"; id: string; answer?: string; error?: string }
   | { type: "task_log"; id: string; text: string | null; file?: string | null }
   | { type: "models"; models: ModelInfo[] }
@@ -146,6 +149,7 @@ export type Cmd =
   | { type: "btw"; id: string; question: string }
   | { type: "export"; markdown: string }
   | { type: "sessions" }
+  | { type: "context_breakdown"; tokens: number }
   | { type: "task_log"; id: string }
   | { type: "resume"; id: string };
 

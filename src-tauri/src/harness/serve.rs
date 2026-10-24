@@ -386,6 +386,19 @@ impl Serve {
                 };
                 out(&json!({ "type": "notice", "text": text }));
             }
+            // The `/cost` sheet: what the context's `tokens` are made of, estimated from the
+            // backend's session log off the main loop (logs can be large).
+            "context_breakdown" => {
+                let tokens = v["tokens"].as_u64().unwrap_or(0);
+                let (kind, cwd) = (self.kind, self.saved.cwd.clone());
+                let session = self.saved.backend_session.clone();
+                std::thread::spawn(move || {
+                    let parts = session
+                        .and_then(|s| super::tui::app::session_log(kind, &s, &cwd))
+                        .and_then(|src| crate::context_breakdown::breakdown(kind.id(), &src, tokens));
+                    out(&json!({ "type": "context_breakdown", "tokens": tokens, "parts": parts }));
+                });
+            }
             "sessions" => {
                 let cwd = self.cwd.to_string_lossy().into_owned();
                 let list: Vec<Value> = session::list()

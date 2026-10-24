@@ -6,6 +6,7 @@ import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
 import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, refreshUsage, resetOutcomeText, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type ResetCredit, type UsageWindow } from "./usage";
+import { PART_COLORS } from "./contextParts";
 import { UsageSummary } from "./UsageHistory";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
@@ -429,20 +430,6 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
     </div>
   );
 }
-
-/** Colour per part of the context (see ContextPart.kind). */
-const PART_COLORS: Record<string, string> = {
-  setup: "#8a94a8",
-  system: "#8a94a8",
-  tools: "#5b8def",
-  mcp: "#9b7bea",
-  instructions: "#c79a3e",
-  messages: "#e5735a",
-  replies: "#d867a8",
-  thinking: "#a3b85a",
-  toolCalls: "#6dbf67",
-  toolResults: "#3fb5a3",
-};
 
 const CONTEXT_CARD_WIDTH = 280;
 

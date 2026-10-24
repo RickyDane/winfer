@@ -570,13 +570,7 @@ impl App {
                 return Some(path.clone());
             }
         }
-        let path = match self.kind {
-            Kind::Claude => crate::usage::claude_transcript(&session, &self.saved.cwd),
-            Kind::Codex => crate::usage::codex_log(Some(&session), &self.saved.cwd).filter(|p| p.to_string_lossy().contains(&session)),
-            Kind::ChatGpt => Some(backend::chatgpt::session_path(&session)),
-            _ => None,
-        }?;
-        let path = path.to_string_lossy().into_owned();
+        let path = session_log(self.kind, &session, &self.saved.cwd)?;
         self.usage_source = Some((session, path.clone()));
         Some(path)
     }
@@ -2635,6 +2629,18 @@ pub(crate) fn git_branch(cwd: &std::path::Path) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Where a backend keeps a session's conversation, for the context breakdown: Claude Code's
+/// transcript, Codex's session log, the ChatGPT backend's saved items.
+pub fn session_log(kind: Kind, session: &str, cwd: &str) -> Option<String> {
+    let path = match kind {
+        Kind::Claude => crate::usage::claude_transcript(session, cwd),
+        Kind::Codex => crate::usage::codex_log(Some(session), cwd).filter(|p| p.to_string_lossy().contains(session)),
+        Kind::ChatGpt => Some(backend::chatgpt::session_path(session)),
+        _ => None,
+    }?;
+    Some(path.to_string_lossy().into_owned())
 }
 
 /// Reports status to winfer when running in one of its panes (no-op otherwise).
