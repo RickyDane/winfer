@@ -1,19 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ChevronDown,
-  CircleCheck,
-  CircleDashed,
-  GitBranch,
-  ListTodo,
-  LoaderCircle,
-} from "lucide-react";
+import { Bot, SquareTerminal, ChevronDown, CircleCheck, CircleDashed, GitBranch, ListTodo, LoaderCircle, Square } from "lucide-react";
 import clsx from "clsx";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { themeById } from "@/features/theme/themes";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { CodeStoreContext, createCodeStore, useCode } from "./store";
 import { Transcript, Collapse } from "./Transcript";
-import { LinkPaneContext } from "./Links";
 import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
 import { CODE_WEB_DEMO, useCodeWeb } from "./styles";
@@ -24,7 +16,6 @@ import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon } from "./EffortIcon";
 import { runCommand } from "./commands";
 import { PtyTransport } from "./transport";
 import { MODES } from "./protocol";
-import { BgTasks, bgVisible } from "./BgTasks";
 import "./code.css";
 
 /** The agent's todos and running subagents, docked above the composer like the TUI's plan strip. */
@@ -35,10 +26,9 @@ function PlanStrip() {
   const [open, setOpen] = useState(true);
   const asking = useCode((s) => s.approvals.length > 0);
   const openLog = useCode((s) => s.openTaskLog);
-  const tasks = Object.values(taskMap);
+  const running = Object.values(taskMap).filter((t) => t.status === "running");
   const show = useCodeWeb((s) => s.showPlan);
-  const bg = bgVisible(tasks);
-  if (!show || (!todos.length && !bg)) return null;
+  if (!show || (!todos.length && !running.length)) return null;
   const done = todos.filter((t) => t.status === "completed").length;
   const current = todos.find((t) => t.status === "in_progress");
   return (
@@ -47,23 +37,14 @@ function PlanStrip() {
         <>
           <button className="cw-plan-head" onClick={() => setOpen(!open)}>
             <ListTodo size={14} />
-            <span className="cw-plan-title">
-              {current
-                ? current.content
-                : done === todos.length
-                  ? "Plan complete"
-                  : "Plan"}
-            </span>
+            <span className="cw-plan-title">{current ? current.content : done === todos.length ? "Plan complete" : "Plan"}</span>
             <span className="cw-plan-bar">
               <i style={{ width: `${(done / todos.length) * 100}%` }} />
             </span>
             <span className="cw-plan-count">
               {done}/{todos.length}
             </span>
-            <ChevronDown
-              size={13}
-              className={clsx("cw-chev-d", open && !asking && "open")}
-            />
+            <ChevronDown size={13} className={clsx("cw-chev-d", open && !asking && "open")} />
           </button>
           <Collapse open={open && !asking}>
             <ul className="cw-todos">
@@ -83,54 +64,44 @@ function PlanStrip() {
           </Collapse>
         </>
       )}
-      {bg && (
-        <BgTasks
-          tasks={tasks}
-          openLog={openLog}
-          stop={(id) => send({ type: "stop_task", id })}
-        />
-      )}
+      {running.map((t) => (
+        <div key={t.id} className="cw-task running clickable" onClick={() => openLog(t.id)} title="Show its output">
+          {t.agent ? <Bot size={14} /> : <SquareTerminal size={14} />}
+          <b>{t.title}</b>
+          <small>
+            {t.agent ? `${t.agent} · ${t.tools ?? 0} tools` : "background shell"}
+            {t.last ? ` · ${t.last}` : ""}
+          </small>
+          <button
+            className="cw-icon-btn sm"
+            title="Stop"
+            onClick={(e) => {
+              e.stopPropagation();
+              send({ type: "stop_task", id: t.id });
+            }}
+          >
+            <Square size={10} fill="currentColor" />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
 
-function Menu({
-  label,
-  value,
-  items,
-  onPick,
-  className,
-  title,
-  children,
-}: {
-  label: string;
-  className?: string;
-  title?: string;
-  value: string;
-  items: { id: string; label: string; hint?: string; icon?: React.ReactNode }[];
-  onPick: (id: string) => void;
-  children: React.ReactNode;
-}) {
+function Menu({ label, value, items, onPick, className, title, children }: { label: string; className?: string; title?: string; value: string; items: { id: string; label: string; hint?: string; icon?: React.ReactNode }[]; onPick: (id: string) => void; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     // A long list that has to scroll opens on the current choice.
-    ref.current
-      ?.querySelector(".cw-pop-item.sel")
-      ?.scrollIntoView({ block: "nearest" });
-    const off = (e: MouseEvent) =>
-      !ref.current?.contains(e.target as Node) && setOpen(false);
+    ref.current?.querySelector(".cw-pop-item.sel")?.scrollIntoView({ block: "nearest" });
+    const off = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     window.addEventListener("mousedown", off);
     return () => window.removeEventListener("mousedown", off);
   }, [open]);
   return (
     <div className="cw-menu" ref={ref}>
-      <button
-        className={clsx("cw-foot-item", className, open && "active")}
-        onClick={() => setOpen(!open)}
-        title={title ?? label}
-      >
+      <button className={clsx("cw-foot-item", className, open && "active")} onClick={() => setOpen(!open)} title={title ?? label}>
         {children}
       </button>
       {open && (
@@ -176,18 +147,13 @@ function ModelMenu({ label, model }: { label: string; model: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const off = (e: MouseEvent) =>
-      !ref.current?.contains(e.target as Node) && setSheet(null);
+    const off = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setSheet(null);
     window.addEventListener("mousedown", off);
     return () => window.removeEventListener("mousedown", off);
   }, [open, setSheet]);
   return (
     <div className="cw-menu" ref={ref}>
-      <button
-        className={clsx("cw-foot-item", open && "active")}
-        onClick={() => setSheet(open ? null : "model")}
-        title="Model (/model)"
-      >
+      <button className={clsx("cw-foot-item", open && "active")} onClick={() => setSheet(open ? null : "model")} title="Model (/model)">
         <ProviderIcon provider={backendOf(model)?.logo ?? "winfer"} size={12} />
         {label}
       </button>
@@ -209,9 +175,7 @@ function Footer({ pane }: { pane: Pane }) {
   const prefs = useCodeWeb();
   const pct = usage.window ? usage.context / usage.window : 0;
   const m = MODES.find((x) => x.id === mode) ?? MODES[0];
-  const modelLabel = model
-    ? modelName(model, prefs.resolvedModels, actualModel)
-    : "…";
+  const modelLabel = model ? modelName(model, prefs.resolvedModels, actualModel) : "…";
   return (
     <div className="cw-foot">
       <Menu
@@ -220,9 +184,7 @@ function Footer({ pane }: { pane: Pane }) {
         className={clsx("mode", `mode-${mode}`)}
         value={mode}
         items={MODES.map((x) => ({ id: x.id, label: x.label, hint: x.hint }))}
-        onPick={(id) =>
-          send({ type: "set_mode", mode: id as (typeof MODES)[number]["id"] })
-        }
+        onPick={(id) => send({ type: "set_mode", mode: id as (typeof MODES)[number]["id"] })}
       >
         {m.label}
       </Menu>
@@ -230,15 +192,8 @@ function Footer({ pane }: { pane: Pane }) {
       <Menu
         label="Reasoning effort"
         value={effort}
-        items={EFFORTS.map((e) => ({
-          id: e,
-          label: EFFORT_LABELS[e] ?? e,
-          hint: EFFORT_HINTS[e],
-          icon: <EffortIcon effort={e} size={16} />,
-        }))}
-        onPick={(e) =>
-          send({ type: "set_effort", effort: e === "default" ? null : e })
-        }
+        items={EFFORTS.map((e) => ({ id: e, label: EFFORT_LABELS[e] ?? e, hint: EFFORT_HINTS[e], icon: <EffortIcon effort={e} size={16} /> }))}
+        onPick={(e) => send({ type: "set_effort", effort: e === "default" ? null : e })}
       >
         <EffortIcon effort={effort} size={12} />
         <span className="dim">{EFFORT_LABELS[effort] ?? effort}</span>
@@ -250,33 +205,21 @@ function Footer({ pane }: { pane: Pane }) {
           {pane.worktree.branch}
         </span>
       )}
-      {((prefs.showCost && usage.cost != null) || prefs.showContext) && (
+      {prefs.showCost && usage.cost != null && (
+        <button className="cw-foot-item dim" onClick={() => setSheet("usage")} title="Session cost (API pricing; your plan may cover it)">
+          ${usage.cost.toFixed(2)}
+        </button>
+      )}
+      {prefs.showContext && (
         <button
-          className={clsx("cw-foot-item", prefs.showContext && pct > 0.8 && "hot")}
+          className={clsx("cw-foot-item", pct > 0.8 && "hot")}
           onClick={() => setSheet("usage")}
-          title={[
-            prefs.showCost && usage.cost != null
-              ? "Session cost (API pricing; your plan may cover it)"
-              : null,
-            prefs.showContext
-              ? `Context ${usage.context.toLocaleString()} / ${usage.window.toLocaleString()} tokens`
-              : null,
-            "click for the breakdown",
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+          title={`Context ${usage.context.toLocaleString()} / ${usage.window.toLocaleString()} tokens · click for the breakdown`}
         >
-          {prefs.showCost && usage.cost != null && (
-            <span className="dim">${usage.cost.toFixed(2)}</span>
-          )}
-          {prefs.showContext && (
-            <>
-              <span className="cw-meter">
-                <i style={{ width: `${pct * 100}%` }} />
-              </span>
-              {Math.round(pct * 100)}%
-            </>
-          )}
+          <span className="cw-meter">
+            <i style={{ width: `${pct * 100}%` }} />
+          </span>
+          {Math.round(pct * 100)}%
         </button>
       )}
     </div>
@@ -288,12 +231,7 @@ function StatusSync({ paneId }: { paneId: string }) {
   const busy = useCode((s) => s.busy);
   const asking = useCode((s) => s.approvals.length > 0);
   useEffect(() => {
-    useWorkspaces
-      .getState()
-      .setPaneStatus(
-        paneId,
-        asking ? "needs-input" : busy ? "working" : "idle",
-      );
+    useWorkspaces.getState().setPaneStatus(paneId, asking ? "needs-input" : busy ? "working" : "idle");
   }, [paneId, busy, asking]);
   return null;
 }
@@ -314,9 +252,7 @@ function storeFor(pane: Pane) {
     if (CODE_WEB_DEMO) {
       // The browser preview: a scripted session.
       s.getState().attach(new MockTransport());
-      const prompt =
-        pane.prompt ??
-        "Add exponential backoff to retry() and make it cancellable";
+      const prompt = pane.prompt ?? "Add exponential backoff to retry() and make it cancellable";
       setTimeout(() => s!.getState().submit(prompt), 3500);
     } else {
       s.getState().attach(new PtyTransport(pane));
@@ -339,33 +275,23 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
 
   return (
     <CodeStoreContext.Provider value={store}>
-      <LinkPaneContext.Provider value={pane.id}>
-        <div
-          ref={root}
-          className={clsx(
-            "cw-pane",
-            !dark && "light",
-            glass && "glass",
-            compact && "compact",
-          )}
-          style={{ colorScheme: dark ? "dark" : "light" }}
-        >
-          {CODE_WEB_DEMO && <StatusSync paneId={pane.id} />}
-          <Transcript dark={dark} />
-          <div className="cw-dock">
-            <PlanStrip />
-            <Composer focused={focused} />
-            <Footer pane={pane} />
-          </div>
-          <Lightbox />
-          <Sheets
-            onCommand={(c) => {
-              store.getState().setSheet(null);
-              runCommand(c, store);
-            }}
-          />
+      <div ref={root} className={clsx("cw-pane", !dark && "light", glass && "glass", compact && "compact")} style={{ colorScheme: dark ? "dark" : "light" }}>
+        {CODE_WEB_DEMO && <StatusSync paneId={pane.id} />}
+        <Transcript dark={dark} />
+        <div className="cw-dock">
+          <PlanStrip />
+          <Composer focused={focused} />
+          <Footer pane={pane} />
         </div>
-      </LinkPaneContext.Provider>
+        <Lightbox />
+        <Sheets
+          onCommand={(c) => {
+            store.getState().setSheet(null);
+            runCommand(c, store);
+          }}
+        />
+      </div>
     </CodeStoreContext.Provider>
   );
 }
+
