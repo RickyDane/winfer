@@ -28,9 +28,18 @@ export function rememberResolved(spec: string, actual: string) {
   if (resolvedModels[spec] !== actual) set({ resolvedModels: { ...resolvedModels, [spec]: actual } });
 }
 
+/** What Claude Code's aliases point to today (Oct 2026), for the picker before a session has
+ * resolved them; a resolution seen at runtime wins. */
+const CLAUDE_ALIASES: Record<string, string> = {
+  "claude/fable": "claude-fable-5-1",
+  "claude/opus": "claude-opus-5-5",
+  "claude/sonnet": "claude-sonnet-5-5",
+  "claude/haiku": "claude-haiku-5-5",
+};
+
 /** `claude/opus` (resolved to claude-opus-5-5) → "Opus 5.5"; `codex/gpt-6.1-sol-fast` → "GPT 6.1 Sol". */
 export function modelName(spec: string, resolved: Record<string, string>, actual?: string | null) {
-  return displayModelName(actual || resolved[spec] || tail(spec));
+  return displayModelName(actual || resolved[spec] || CLAUDE_ALIASES[spec] || tail(spec));
 }
 
 /** Variants the friendly name drops but the picker must tell apart (fast twins are a toggle, not a row). */
