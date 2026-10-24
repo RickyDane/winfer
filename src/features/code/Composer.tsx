@@ -8,6 +8,7 @@ import { fmt, useRate } from "./Sheets";
 import { useCodeWeb } from "./styles";
 import { COMMANDS, MODES, type Approval } from "./protocol";
 import { DiffView } from "./Transcript";
+import { elapsed } from "../usage/toolStats";
 
 /** An approval with questions (Claude Code's AskUserQuestion): pick an option per question (or
  *  type one), then the answers go back as `answer`; declining goes through `approve` deny. */
@@ -252,7 +253,8 @@ export function Composer({ focused }: { focused: boolean }) {
     setAttachments(() => []);
   };
 
-  const elapsed = turnStarted ? (Date.now() - turnStarted) / 1000 : 0;
+  const sec = turnStarted ? Math.floor((Date.now() - turnStarted) / 1000) : 0;
+  const took = sec < 60 ? `${sec}s` : elapsed(sec * 1000);
 
   return (
     <>
@@ -261,7 +263,7 @@ export function Composer({ focused }: { focused: boolean }) {
         <span className="cw-orb" />
         <span className="cw-shimmer">Working</span>
         <span className="sep">·</span>
-        <span>{elapsed.toFixed(0)}s</span>
+        <span>{took}</span>
         <span className="sep">·</span>
         {!!usage.turn_input && (
           <>

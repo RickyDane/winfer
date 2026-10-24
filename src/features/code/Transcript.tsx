@@ -23,6 +23,7 @@ import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
 import { useCodeWeb } from "./styles";
 import { modelName } from "./names";
+import { elapsed } from "../usage/toolStats";
 
 const TOOL_ICONS: Record<string, typeof Bot> = {
   Read: FileText,
@@ -45,8 +46,7 @@ function useTicker(on: boolean) {
   }, [on]);
 }
 
-const secs = (ms: number) =>
-  ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+const secs = elapsed;
 
 /** Animated open/close via a grid-rows transition, so content height animates without measuring. */
 export function Collapse({
