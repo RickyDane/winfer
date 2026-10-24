@@ -426,8 +426,12 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
     return () => el.removeEventListener("wheel", onWheel, { capture: true });
   }, []);
 
+  // A press in the transcript (e.g. starting to mark text) focuses the pane but mustn't move
+  // focus to the composer, which would drop the selection being made.
+  const pressInChat = useRef(0);
   useEffect(() => {
-    if (focused) root.current?.querySelector("textarea")?.focus();
+    if (focused && performance.now() - pressInChat.current > 500)
+      root.current?.querySelector("textarea")?.focus();
   }, [focused]);
 
   return (
@@ -435,6 +439,9 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
       <LinkPaneContext.Provider value={pane.id}>
         <div
           ref={root}
+          onMouseDownCapture={(e) => {
+            if ((e.target as Element).closest?.(".cw-transcript")) pressInChat.current = performance.now();
+          }}
           className={clsx(
             "cw-pane",
             !dark && "light",

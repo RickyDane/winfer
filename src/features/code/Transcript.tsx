@@ -5,6 +5,7 @@ import {
   Brain,
   Check,
   ChevronRight,
+  Copy,
   FilePen,
   FileText,
   FolderSearch,
@@ -119,13 +120,35 @@ function diffStat(diff: string) {
   return { a, d };
 }
 
+/** True while the user has text marked, so click-to-toggle handlers don't fire at the end of a drag. */
+const selecting = () => !!window.getSelection()?.toString();
+
+/** Copies a whole message; shown on hover under user and assistant messages. */
+function CopyMessage({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="cw-icon-btn cw-msg-copy"
+      title={copied ? "Copied" : "Copy message"}
+      aria-label="Copy message"
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
+  );
+}
+
 /** Notices (e.g. "stopped background task …" with its whole command) stay at two lines; click to expand. */
 function NoticeText({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <span
       className={clsx("cw-notice-text", open && "open")}
-      onClick={() => setOpen(!open)}
+      onClick={() => !selecting() && setOpen(!open)}
     >
       <Linkify text={text} />
     </span>
@@ -365,6 +388,7 @@ export function Transcript({ dark }: { dark: boolean }) {
                     )}
                     <Linkify text={it.text} />
                   </div>
+                  {it.text && <CopyMessage text={it.text} />}
                 </div>
               );
             case "text":
@@ -377,6 +401,7 @@ export function Transcript({ dark }: { dark: boolean }) {
                   )}
                 >
                   <Markdown text={it.text} dark={dark} />
+                  {!it.streaming && it.text && <CopyMessage text={it.text} />}
                 </div>
               );
             case "reasoning":

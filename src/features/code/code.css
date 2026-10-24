@@ -191,6 +191,39 @@
 }
 
 /* ——— Transcript ——— */
+/* The app body is user-select: none; the chat itself can be marked and copied (⌘/Ctrl+C). */
+.cw-transcript {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+}
+.cw-transcript button,
+.cw-transcript .cw-chip,
+.cw-transcript .cw-dots {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cw-user,
+.cw-assistant {
+  position: relative;
+}
+.cw-msg-copy {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 24px;
+  height: 24px;
+  background: var(--bg, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, transform 0.15s;
+}
+.cw-user:hover .cw-msg-copy,
+.cw-assistant:hover .cw-msg-copy,
+.cw-msg-copy:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 .cw-scroll {
   flex: 1;
   overflow-y: auto;
