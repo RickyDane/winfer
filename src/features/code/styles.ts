@@ -38,7 +38,7 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   showContext: true,
   showPlan: true,
   expandThinking: false,
-  expandShell: true,
+  expandShell: false,
   compact: false,
   favoriteModels: [],
   resolvedModels: {},
@@ -49,6 +49,15 @@ export const useCodeWeb = create<CodeWebSettings>()(
     (set) => ({ ...DEFAULT_PREFS, set: (patch) => set(patch), setWeb: (web) => set({ web }) }),
     {
       name: "winfer-code-web",
+      // v1: the TUI became the default (and thinking collapsed); reset both once for existing installs.
+      // v2: shell cards start collapsed; reset expandShell once.
+      version: 2,
+      migrate: (persisted, version) => {
+        let prefs = (persisted ?? {}) as Partial<CodeWebPrefs>;
+        if (version < 1) prefs = { ...prefs, web: false, expandThinking: false };
+        if (version < 2) prefs = { ...prefs, expandShell: false };
+        return prefs;
+      },
       partialize: ({ set: _s, setWeb: _w, ...prefs }) => prefs,
     },
   ),
