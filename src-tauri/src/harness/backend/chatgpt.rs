@@ -30,8 +30,25 @@ pub fn models() -> Vec<ModelInfo> {
         list.push(DEFAULT_MODEL.to_string());
     }
     list.into_iter()
-        .map(|m| ModelInfo { spec: format!("chatgpt/{m}"), label: m.clone(), detail: "ChatGPT account · winfer tools".into(), efforts: None })
+        .map(|m| ModelInfo { spec: format!("chatgpt/{m}"), label: m.clone(), detail: "ChatGPT account · winfer tools".into(), efforts: efforts(&m) })
         .collect()
+}
+
+/// The `reasoning.effort` values the Responses API takes for `model`, per OpenAI's model pages
+/// (developers.openai.com/api/docs/models). `ultra` is Codex's own level, not an API value.
+fn efforts(model: &str) -> Option<Vec<String>> {
+    let list: &[&str] = if model.starts_with("gpt-6.1-sol") || model.starts_with("gpt-6-astra") {
+        &["low", "medium", "high", "xhigh", "max"]
+    } else if model.starts_with("gpt-6") || model.starts_with("gpt-5.6") {
+        &["none", "low", "medium", "high", "xhigh", "max"]
+    } else if ["gpt-5.5", "gpt-5.4", "gpt-5.2"].iter().any(|p| model.starts_with(p)) {
+        &["none", "low", "medium", "high", "xhigh"]
+    } else if model == "gpt-5" || model.starts_with("gpt-5-") {
+        &["minimal", "low", "medium", "high"]
+    } else {
+        return None;
+    };
+    Some(list.iter().map(|s| s.to_string()).collect())
 }
 
 const SYSTEM: &str = "You are winfer code, a terminal coding agent. Explore with grep/glob/read; read before edit; verify with bash. Put every tool call you can already make into one response (e.g. read all relevant files at once); chain shell steps in one bash call. Use todo only for long multi-step work, never just to tick off the last item. Hand broad searches and independent subtasks to agent (several in one response run in parallel; background: true keeps you working meanwhile). If a call is declined, ask. Reply tersely in Markdown; cite path:line.";
@@ -1230,6 +1247,15 @@ fn undo(shared: &Shared, files: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn efforts_per_openai_model() {
+        assert_eq!(efforts("gpt-6.1-sol"), Some(vec!["low".to_string(), "medium".to_string(), "high".to_string(), "xhigh".to_string(), "max".to_string()]));
+        assert_eq!(efforts("gpt-6-luna"), Some(vec!["none".to_string(), "low".to_string(), "medium".to_string(), "high".to_string(), "xhigh".to_string(), "max".to_string()]));
+        assert_eq!(efforts("gpt-5.5"), Some(vec!["none".to_string(), "low".to_string(), "medium".to_string(), "high".to_string(), "xhigh".to_string()]));
+        assert_eq!(efforts("gpt-5"), Some(vec!["minimal".to_string(), "low".to_string(), "medium".to_string(), "high".to_string()]));
+        assert_eq!(efforts("o9"), None);
+    }
 
     #[test]
     fn undo_drops_the_last_user_turn_and_its_files() {

@@ -105,7 +105,14 @@ fn with_effort(model: &str, effort: &str, ids: &[String]) -> Option<String> {
 /// The efforts `model` has variants for (None when it has no sibling with another effort: then
 /// Cursor sets none for it).
 fn efforts(model: &str, ids: &[String]) -> Option<Vec<String>> {
-    let list: Vec<String> = ["minimal", "low", "medium", "high", "xhigh", "max"].into_iter().filter(|e| with_effort(model, e, ids).is_some()).map(String::from).collect();
+    let mut seen = Vec::new();
+    let mut list = Vec::new();
+    for e in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        if let Some(id) = with_effort(model, e, ids).filter(|id| !seen.contains(id)) {
+            seen.push(id);
+            list.push(e.to_string());
+        }
+    }
     Some(if list.len() > 1 { list } else { Vec::new() })
 }
 
@@ -694,6 +701,14 @@ fn clip(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn efforts_come_from_the_listed_variants() {
+        let ids: Vec<String> = ["gpt-5.6-sol-none", "gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "auto", "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-max"].map(String::from).into();
+        assert_eq!(efforts("gpt-5.6-sol-high", &ids), Some(vec!["none".to_string(), "high".to_string(), "xhigh".to_string()]));
+        assert_eq!(efforts("claude-opus-5-5-max", &ids), Some(vec!["low".to_string(), "medium".to_string(), "max".to_string()]));
+        assert_eq!(efforts("auto", &ids), Some(vec![]));
+    }
     use serde_json::json;
 
     #[test]

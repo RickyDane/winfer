@@ -43,9 +43,24 @@ fn model_info(m: &Value) -> Option<ModelInfo> {
         spec: format!("pi/{provider}/{id}"),
         label: m["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
         detail: format!("Pi · {provider}"),
-        // pi's thinking levels (`--thinking`); a model without reasoning has none.
-        efforts: m["reasoning"].as_bool().map(|r| if r { ["minimal", "low", "medium", "high", "xhigh"].map(String::from).into() } else { Vec::new() }),
+        efforts: thinking_levels(m),
     })
+}
+
+/// The `--thinking` levels pi takes for a model, as its `getSupportedThinkingLevels` works them
+/// out: a level mapped to null is off the list, and xhigh/max are on it only when mapped. "off"
+/// is left out (no effort set is the model's default).
+fn thinking_levels(m: &Value) -> Option<Vec<String>> {
+    if !m["reasoning"].as_bool()? {
+        return Some(Vec::new());
+    }
+    let map = &m["thinkingLevelMap"];
+    let levels = ["minimal", "low", "medium", "high", "xhigh", "max"].into_iter().filter(|l| match map.get(*l) {
+        Some(Value::Null) => false,
+        Some(_) => true,
+        None => !matches!(*l, "xhigh" | "max"),
+    });
+    Some(levels.map(String::from).collect())
 }
 
 /// winfer's extension for pi (see the module docs). Tool calls wait on an extension UI `select`
@@ -691,6 +706,16 @@ fn edit_diff(cwd: &std::path::Path, name: &str, input: &Value) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thinking_levels_follow_the_level_map() {
+        let m = |v: Value| thinking_levels(&v);
+        assert_eq!(m(json!({ "reasoning": false })), Some(vec![]));
+        assert_eq!(m(json!({ "reasoning": true })), Some(vec!["minimal".to_string(), "low".to_string(), "medium".to_string(), "high".to_string()]));
+        assert_eq!(m(json!({ "reasoning": true, "thinkingLevelMap": { "minimal": null, "xhigh": "xhigh", "max": "max" } })), Some(vec!["low".to_string(), "medium".to_string(), "high".to_string(), "xhigh".to_string(), "max".to_string()]));
+        assert_eq!(m(json!({ "reasoning": true, "thinkingLevelMap": { "max": "max" } })), Some(vec!["minimal".to_string(), "low".to_string(), "medium".to_string(), "high".to_string(), "max".to_string()]));
+        assert_eq!(m(json!({})), None);
+    }
 
     #[test]
     fn modes_decide_tool_calls() {

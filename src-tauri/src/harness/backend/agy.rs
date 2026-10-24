@@ -90,11 +90,16 @@ fn effort_flag(model: &str, effort: Option<&str>) -> Option<String> {
     effort.filter(|_| !suffixed).map(|e| if e == "minimal" { "low" } else { e }.to_string())
 }
 
-/// The efforts a model named with a thinking level can switch to (its listed siblings); None for
-/// the others, which take `--effort`.
+/// The efforts a model takes: a model named with a thinking level switches between its listed
+/// siblings; the others take `--effort` low/medium/high (antigravity.google/docs/models; Gemini
+/// 3.1 Pro has just low and high, and xhigh/max only on models that list such variants).
 fn efforts(model: &str, ids: &[&str]) -> Option<Vec<String>> {
-    let base = ["-low", "-medium", "-high"].iter().find_map(|s| model.strip_suffix(s))?;
-    Some(["low", "medium", "high"].into_iter().filter(|l| ids.contains(&format!("{base}-{l}").as_str())).map(String::from).collect())
+    let list: Vec<&str> = match ["-low", "-medium", "-high"].iter().find_map(|s| model.strip_suffix(s)) {
+        Some(base) => ["low", "medium", "high"].into_iter().filter(|l| ids.contains(&format!("{base}-{l}").as_str())).collect(),
+        None if model.starts_with("gemini-3.1-pro") => vec!["low", "high"],
+        None => vec!["low", "medium", "high"],
+    };
+    Some(list.into_iter().map(String::from).collect())
 }
 
 /// For a new effort picked on a model named with a thinking level: its sibling with that level.
@@ -540,6 +545,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn efforts_fit_the_model() {
+        let ids = ["gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-3.1-pro", "gemini-4-argon"];
+        assert_eq!(efforts("gemini-3.8-flash-low", &ids), Some(vec!["low".to_string(), "high".to_string()]));
+        assert_eq!(efforts("gemini-3.1-pro", &ids), Some(vec!["low".to_string(), "high".to_string()]));
+        assert_eq!(efforts("gemini-4-argon", &ids), Some(vec!["low".to_string(), "medium".to_string(), "high".to_string()]));
+    }
 
     #[test]
     fn effort_fits_the_model() {

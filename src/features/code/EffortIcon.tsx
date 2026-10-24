@@ -4,13 +4,13 @@ import type { ModelInfo } from "./protocol";
 const LEVELS: Record<string, number> = { minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 5, ultra: 5 };
 
 /** Every effort any backend knows, highest first (the picker's order: lowest next to the status line). */
-const ALL_EFFORTS = ["ultra", "max", "xhigh", "high", "medium", "low", "minimal"];
+const ALL_EFFORTS = ["ultra", "max", "xhigh", "high", "medium", "low", "minimal", "none"];
 /** What a backend takes when its models don't list their efforts. */
 const BACKEND_EFFORTS: Record<string, string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "max"],
-  chatgpt: ["minimal", "low", "medium", "high", "xhigh"],
-  pi: ["minimal", "low", "medium", "high", "xhigh"],
+  chatgpt: ["low", "medium", "high"],
+  pi: ["minimal", "low", "medium", "high"],
   agy: ["low", "medium", "high"],
 };
 
@@ -18,7 +18,7 @@ const BACKEND_EFFORTS: Record<string, string[]> = {
 export function effortOptions(models: ModelInfo[], spec: string): string[] {
   const listed = models.find((m) => m.spec === spec)?.efforts;
   const known = listed ?? BACKEND_EFFORTS[spec.split("/")[0]];
-  if (!known) return [...ALL_EFFORTS.filter((e) => e !== "ultra"), "default"];
+  if (!known) return [...ALL_EFFORTS.filter((e) => e !== "ultra" && e !== "none"), "default"];
   // Known levels in their usual order; any new one a backend reports goes on top.
   const ordered = [...known.filter((e) => !ALL_EFFORTS.includes(e)).reverse(), ...ALL_EFFORTS.filter((e) => known.includes(e))];
   return [...ordered, "default"];
@@ -26,6 +26,7 @@ export function effortOptions(models: ModelInfo[], spec: string): string[] {
 
 export const EFFORT_HINTS: Record<string, string> = {
   default: "the model's own default",
+  none: "no reasoning at all",
   minimal: "answers almost straight away",
   low: "light thinking, fast",
   medium: "balanced",
@@ -37,6 +38,7 @@ export const EFFORT_HINTS: Record<string, string> = {
 
 export const EFFORT_LABELS: Record<string, string> = {
   default: "Default",
+  none: "None",
   minimal: "Minimal",
   low: "Low",
   medium: "Medium",

@@ -40,9 +40,23 @@ pub fn models() -> Vec<ModelInfo> {
         .into_iter()
         .filter_map(|m| {
             let (provider, model) = m.id.split_once('/')?;
-            Some(ModelInfo { spec: format!("opencode/{}", m.id), label: label(model), detail: format!("OpenCode · {provider}"), efforts: None })
+            Some(ModelInfo { spec: format!("opencode/{}", m.id), label: label(model), detail: format!("OpenCode · {provider}"), efforts: efforts(provider, model) })
         })
         .collect()
+}
+
+/// OpenCode's default effort variants per provider (`packages/core/src/variant.ts`); models.dev
+/// can narrow them, so they are a best guess. Minimal isn't listed: it goes to OpenCode as low.
+fn efforts(provider: &str, model: &str) -> Option<Vec<String>> {
+    let list: &[&str] = match provider {
+        "anthropic" if model.contains("4-6") || model.contains("4.6") => &["low", "medium", "high", "max"],
+        "anthropic" if ["fable", "mythos"].iter().any(|f| model.contains(f)) => &["low", "medium", "high", "xhigh", "max"],
+        "anthropic" => &["none", "low", "medium", "high", "xhigh", "max"],
+        "openai" => &["none", "low", "medium", "high", "xhigh"],
+        "google" => &["low", "medium", "high"],
+        _ => return None,
+    };
+    Some(list.iter().map(|s| s.to_string()).collect())
 }
 
 /// A readable name for a model id: `gpt-5.6-luna-fast` → "GPT-5.6 Luna Fast".
