@@ -2463,12 +2463,93 @@ button.cw-foot-item.active {
   pointer-events: auto;
   animation: cw-rise 0.9s var(--ease) both;
 }
+/* Night sky: a faint nebula and Milky Way band, three depths of stars,
+   and the odd shooting star (spawned from Welcome.tsx). */
+.cw-stars {
+  overflow: hidden;
+  pointer-events: none;
+}
+.cw-nebula {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 45% at 18% 12%, rgb(88 80 220 / 0.13), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 85% 88%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
+    radial-gradient(ellipse 80% 50% at 50% 115%, rgb(40 70 160 / 0.14), transparent 70%);
+  animation: cw-nebula 24s ease-in-out infinite alternate;
+}
+@keyframes cw-nebula {
+  to {
+    opacity: 0.6;
+    transform: scale(1.06);
+  }
+}
+.cw-milkyway {
+  position: absolute;
+  inset: -30%;
+  background: linear-gradient(
+    115deg,
+    transparent 38%,
+    rgb(160 170 255 / 0.035) 45%,
+    rgb(200 200 255 / 0.06) 50%,
+    rgb(160 170 255 / 0.035) 55%,
+    transparent 62%
+  );
+  filter: blur(18px);
+}
+.cw-star-layer {
+  position: absolute;
+  inset: 0;
+}
+.cw-star-layer.far {
+  animation: cw-drift 180s linear infinite alternate;
+}
+.cw-star-layer.mid {
+  animation: cw-drift 120s linear infinite alternate-reverse;
+}
+@keyframes cw-drift {
+  to {
+    transform: translate3d(-14px, 6px, 0);
+  }
+}
 .cw-stars i {
   position: absolute;
   border-radius: 50%;
-  background: var(--fg);
+  background: var(--star, #fff);
   opacity: 0;
   animation: cw-twinkle ease-in-out infinite;
+}
+.cw-stars i.cool {
+  --star: #b9c8ff;
+}
+.cw-stars i.warm {
+  --star: #ffe2b8;
+}
+.cw-star-layer.far i {
+  --peak: 0.28;
+}
+.cw-star-layer.mid i {
+  --peak: 0.55;
+}
+.cw-star-layer.near i {
+  --peak: 0.9;
+  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--star, #fff) 60%, transparent);
+}
+/* A four-point glint on the brightest stars. */
+.cw-star-layer.near i::before,
+.cw-star-layer.near i::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 1px;
+  translate: -50% -50%;
+  background: linear-gradient(90deg, transparent, var(--star, #fff), transparent);
+  opacity: 0.7;
+}
+.cw-star-layer.near i::after {
+  rotate: 90deg;
 }
 @keyframes cw-twinkle {
   0%,
@@ -2476,8 +2557,53 @@ button.cw-foot-item.active {
     opacity: 0;
   }
   50% {
-    opacity: 0.35;
+    opacity: var(--peak, 0.35);
   }
+}
+.cw-shoot {
+  position: absolute;
+  height: 1.5px;
+  transform-origin: left center;
+  pointer-events: none;
+}
+.cw-shoot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgb(190 205 255 / 0.5) 70%, #fff);
+  filter: drop-shadow(0 0 4px rgb(170 190 255 / 0.9));
+  opacity: 0;
+  animation: cw-shoot var(--dur, 1s) cubic-bezier(0.3, 0, 0.6, 1) forwards;
+}
+@keyframes cw-shoot {
+  0% {
+    transform: translateX(-40%) scaleX(0.2);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(var(--dist, 300px)) scaleX(1);
+    opacity: 0;
+  }
+}
+/* Light themes: no dark sky; stars become soft ink dots. */
+.cw-pane.light .cw-nebula,
+.cw-pane.light .cw-milkyway {
+  display: none;
+}
+.cw-pane.light .cw-stars i {
+  --star: var(--fg) !important;
+  box-shadow: none;
+}
+.cw-pane.light .cw-shoot::before {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 70%, transparent));
+  filter: none;
 }
 .cw-logo-wrap {
   position: relative;
@@ -2494,6 +2620,29 @@ button.cw-foot-item.active {
   background: radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent), transparent 68%);
   filter: blur(6px);
   animation: cw-breathe 4s ease-in-out infinite;
+}
+.cw-orbit {
+  position: absolute;
+  inset: -16px;
+  border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: cw-orbit 40s linear infinite;
+}
+@keyframes cw-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cw-orbit::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -2.5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 8px 2px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 .cw-welcome-logo {
   position: relative;
@@ -2514,7 +2663,12 @@ button.cw-foot-item.active {
   color: var(--fg);
 }
 .cw-welcome h1 span {
-  color: var(--accent);
+  background: linear-gradient(100deg, var(--accent), #9aa8ff 60%, var(--accent));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: cw-shine 8s linear infinite;
 }
 .cw-who {
   display: flex;
@@ -2590,7 +2744,8 @@ button.cw-foot-item.active {
   padding: 8px 11px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--card-bg);
+  background: color-mix(in srgb, var(--card-bg) 70%, transparent);
+  backdrop-filter: blur(6px);
   text-align: left;
   font-size: calc(12.5px * var(--cw-text, 1));
   color: var(--fg);
@@ -2599,6 +2754,7 @@ button.cw-foot-item.active {
 }
 .cw-tile:hover {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: 0 0 18px -6px color-mix(in srgb, var(--accent) 60%, transparent);
   transform: translateY(-2px);
 }
 .cw-tile b {
@@ -2698,14 +2854,20 @@ label.cw-icon-btn {
   height: 32px;
   border-radius: 50%;
   color: var(--fg);
-  background: color-mix(in srgb, var(--fg) 8%, var(--bg, #111));
-  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  /* Frosted glass: blur + tint so transcript text behind doesn't read through. */
+  background: color-mix(in srgb, var(--bg, #111) 55%, rgb(255 255 255 / 0.06));
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 6px 18px rgb(0 0 0 / 0.4);
   cursor: pointer;
+  transition: background 0.15s;
   animation: cw-jump-in 0.18s var(--ease, ease-out);
 }
 .cw-jump:hover {
-  background: color-mix(in srgb, var(--fg) 14%, var(--bg, #111));
+  background: color-mix(in srgb, var(--bg, #111) 45%, rgb(255 255 255 / 0.14));
 }
 @keyframes cw-jump-in {
   from {
