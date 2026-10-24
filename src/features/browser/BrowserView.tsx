@@ -109,8 +109,19 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     return () => void unlisten.then((off) => off());
   }, [workspaceId]);
 
+  // No screencast while the window is hidden (minimized, the app hidden): nothing would show
+  // the frames. Showing the tab again on return starts with a fresh screenshot.
+  const [hidden, setHidden] = useState(false);
   useEffect(() => {
-    if (!measured) return;
+    const doc = viewOf(box.current).document;
+    const update = () => setHidden(doc.hidden);
+    update();
+    doc.addEventListener("visibilitychange", update);
+    return () => doc.removeEventListener("visibilitychange", update);
+  }, []);
+
+  useEffect(() => {
+    if (!measured || hidden) return;
     const cv = canvas.current!;
     const ctx = cv.getContext("2d")!;
     let disposed = false;
@@ -122,6 +133,9 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     attached.current = false;
     setAttachError(null);
 
+    // Each frame is reported once drawn or skipped: the browser sends the next ones only then,
+    // so it doesn't encode and ship frames faster than they can be shown.
+    const done = () => void invoke("browser_frame_done", { workspaceId, attachId }).catch(() => {});
     const draw = async (buf: ArrayBuffer) => {
       if (!gotFrame) {
         gotFrame = true;
@@ -129,6 +143,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
         clearTimeout(watchdog);
       }
       if (decoding) {
+        if (pending) done();
         pending = buf; // keep only the newest frame
         return;
       }
@@ -143,6 +158,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
         bitmap.close();
       } finally {
         decoding = false;
+        done();
         if (pending && !disposed) {
           const next = pending;
           pending = null;
@@ -184,7 +200,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       attached.current = false;
       void invoke("browser_detach", { workspaceId, attachId });
     };
-  }, [workspaceId, tabId, device, attempt, measured]);
+  }, [workspaceId, tabId, device, attempt, measured, hidden]);
 
   /** Sends the page size to the browser when it changed. */
   const sync = () => {

@@ -760,6 +760,7 @@ mockIPC(
         return null;
       case "browser_history":
       case "browser_detach":
+      case "browser_frame_done":
       case "browser_log":
         return null;
       case "browser_selection":

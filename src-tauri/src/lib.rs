@@ -217,6 +217,7 @@ pub fn run() {
             browser::browser_history,
             browser::browser_attach,
             browser::browser_detach,
+            browser::browser_frame_done,
             browser::browser_resize,
             browser::browser_input,
             browser::browser_selection,

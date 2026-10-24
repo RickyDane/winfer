@@ -94,7 +94,18 @@ struct Screencast {
     sizing: Sizing,
     /// A frame arrived; until then the panel shows nothing (frames only come when the page paints).
     got_frame: bool,
+    /// Frames sent to the view, and how many of them Chrome got an ack for. Chrome stops
+    /// capturing while a few frames are unacked, so acking once the view drew (or skipped) a frame
+    /// paces the screencast to what the view can show instead of the page's paint rate.
+    frames: u64,
+    acked: u64,
+    /// The ack's `sessionId` (the screencast's, the same for all its frames).
+    ack_id: Value,
 }
+
+/// A frame the view never reports done (it went away mid-frame) is acked after this, so the
+/// screencast can't stall.
+const FRAME_ACK_FALLBACK: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// An agent acted on a tab (see `proxy`).
 #[derive(Debug, Clone, Serialize)]
@@ -378,36 +389,72 @@ impl Instance {
                     return;
                 };
                 let mut screencast = self.screencast.lock().unwrap();
-                if let Some(sc) = screencast.as_mut().filter(|sc| sc.session_id == session) {
-                    sc.got_frame = true;
-                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD
-                        .decode(event.params["data"].as_str().unwrap_or_default())
-                    {
-                        let _ = sc.channel.send(InvokeResponseBody::Raw(bytes));
-                    }
-                    let action = sc.sizing.on_frame(&event.params["metadata"]);
-                    if action != FrameAction::None {
-                        let (instance, target, session, viewport) = (
-                            self.clone(),
-                            sc.target_id.clone(),
-                            session.to_string(),
-                            sc.sizing.viewport.clone(),
-                        );
-                        tauri::async_runtime::spawn(async move {
-                            instance.on_resized(action, target, session, viewport).await;
-                        });
-                    }
+                let Some(sc) = screencast.as_mut().filter(|sc| sc.session_id == session) else {
+                    // Not the screencast on show (it was just replaced).
+                    drop(screencast);
+                    self.send_frame_acks(session, &event.params["sessionId"], 1);
+                    return;
+                };
+                sc.got_frame = true;
+                sc.ack_id = event.params["sessionId"].clone();
+                sc.frames += 1;
+                let sent = base64::engine::general_purpose::STANDARD
+                    .decode(event.params["data"].as_str().unwrap_or_default())
+                    .is_ok_and(|bytes| sc.channel.send(InvokeResponseBody::Raw(bytes)).is_ok());
+                let (attach_id, frame) = (sc.attach_id.clone(), sc.frames);
+                let action = sc.sizing.on_frame(&event.params["metadata"]);
+                if action != FrameAction::None {
+                    let (instance, target, session, viewport) = (
+                        self.clone(),
+                        sc.target_id.clone(),
+                        session.to_string(),
+                        sc.sizing.viewport.clone(),
+                    );
+                    tauri::async_runtime::spawn(async move {
+                        instance.on_resized(action, target, session, viewport).await;
+                    });
                 }
                 drop(screencast);
-                if let Some(cdp) = self.live_cdp() {
-                    cdp.send(
-                        "Page.screencastFrameAck",
-                        json!({ "sessionId": event.params["sessionId"] }),
-                        Some(session),
-                    );
+                if sent {
+                    // Acked once the view drew it (`browser_frame_done`), or after a while.
+                    let instance = self.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(FRAME_ACK_FALLBACK).await;
+                        instance.ack_frames(&attach_id, Some(frame));
+                    });
+                } else {
+                    // The view won't report a frame it never got.
+                    self.ack_frames(&attach_id, Some(frame));
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Acks the screencast's frames up to number `upto` (None: one more), never more than were
+    /// sent. Only for the screencast `attach_id` started; a stale one's acks are dropped.
+    fn ack_frames(&self, attach_id: &str, upto: Option<u64>) {
+        let (session, ack_id, n) = {
+            let mut screencast = self.screencast.lock().unwrap();
+            let Some(sc) = screencast.as_mut().filter(|sc| sc.attach_id == attach_id) else {
+                return;
+            };
+            let to = upto.unwrap_or(sc.acked + 1).min(sc.frames);
+            if to <= sc.acked {
+                return;
+            }
+            let n = to - sc.acked;
+            sc.acked = to;
+            (sc.session_id.clone(), sc.ack_id.clone(), n)
+        };
+        self.send_frame_acks(&session, &ack_id, n);
+    }
+
+    fn send_frame_acks(&self, session: &str, ack_id: &Value, n: u64) {
+        if let Some(cdp) = self.live_cdp() {
+            for _ in 0..n {
+                cdp.send("Page.screencastFrameAck", json!({ "sessionId": ack_id }), Some(session));
+            }
         }
     }
 
@@ -1232,6 +1279,9 @@ pub async fn browser_attach(
         channel: on_frame,
         sizing: Sizing::new(viewport),
         got_frame: false,
+        frames: 0,
+        acked: 0,
+        ack_id: Value::Null,
     });
     let result = cdp
         .call(
@@ -1259,6 +1309,20 @@ pub async fn browser_attach(
             let _ = sc.channel.send(InvokeResponseBody::Raw(bytes));
         }
     });
+    Ok(())
+}
+
+/// The view drew (or skipped for a newer one) a frame of the screencast `attach_id` started.
+#[tauri::command]
+pub async fn browser_frame_done(
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    attach_id: String,
+) -> Res<()> {
+    let instance = manager.instances.lock().unwrap().get(&workspace_id).cloned();
+    if let Some(instance) = instance {
+        instance.ack_frames(&attach_id, None);
+    }
     Ok(())
 }
 
@@ -1480,6 +1544,67 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(10), cdp.closed()).await.expect("close noticed");
             assert!(cdp.is_closed());
             assert!(cdp.call("Browser.getVersion", json!({}), None).await.is_err());
+        });
+    }
+
+    /// Real Chrome: an animating page's screencast stops after a few unacked frames, and each
+    /// ack (with any frame's `sessionId`) lets it go on: what `ack_frames`' pacing relies on.
+    #[test]
+    fn screencast_waits_for_acks() {
+        let tmp = std::env::temp_dir().join(format!("winfer-ack-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
+        tauri::async_runtime::block_on(async {
+            let (tx, rx) = mpsc::channel::<Event>();
+            let tx = Mutex::new(tx);
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), move |e| {
+                let _ = tx.lock().unwrap().send(e);
+            })
+            .await
+            .unwrap();
+            let page = "data:text/html,<style>@keyframes s{to{transform:rotate(360deg)}}div{width:200px;height:200px;background:red;animation:s .5s linear infinite}</style><div></div>";
+            let target = cdp.call("Target.createTarget", json!({ "url": page }), None).await.unwrap();
+            let session = cdp
+                .call("Target.attachToTarget", json!({ "targetId": target["targetId"], "flatten": true }), None)
+                .await
+                .unwrap()["sessionId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            cdp.call("Page.enable", json!({}), Some(&session)).await.unwrap();
+            cdp.call("Page.startScreencast", json!({ "format": "jpeg", "quality": 60, "everyNthFrame": 1 }), Some(&session))
+                .await
+                .unwrap();
+            // Frames over `secs`, acking each one (or none), and the last one's ack id.
+            let count = |ack: bool, secs: u64| {
+                let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+                let (mut frames, mut last) = (0, Value::Null);
+                while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+                    let Ok(e) = rx.recv_timeout(left) else { break };
+                    if e.method != "Page.screencastFrame" {
+                        continue;
+                    }
+                    frames += 1;
+                    last = e.params["sessionId"].clone();
+                    if ack {
+                        cdp.send("Page.screencastFrameAck", json!({ "sessionId": last }), Some(&session));
+                    }
+                }
+                (frames, last)
+            };
+            assert!(count(true, 2).0 > 6, "an acked screencast of an animation streams");
+            let (unacked, last) = count(false, 2);
+            assert!((1..=4).contains(&unacked), "{unacked} frames came without acks");
+            assert_eq!(count(false, 1).0, 0, "it waits for acks");
+            // Late acks, all with the newest frame's id, release it.
+            for _ in 0..unacked {
+                cdp.send("Page.screencastFrameAck", json!({ "sessionId": last }), Some(&session));
+            }
+            assert!(count(true, 2).0 > 6, "acks let it go on");
         });
     }
 
