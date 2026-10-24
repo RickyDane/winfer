@@ -61,6 +61,9 @@ interface Entry {
   webgl?: WebglAddon;
   frame?: number;
   resizeTimer?: number;
+  /** A refit held back while a drag runs, and when the last one happened. */
+  fitTimer?: number;
+  fittedAt?: number;
 }
 
 interface ExitPayload {
@@ -273,7 +276,12 @@ function create(pane: Pane): Entry {
     const entry = entries.get(pane.id);
     if (!entry?.spawned) return;
     clearTimeout(entry.resizeTimer);
-    entry.resizeTimer = window.setTimeout(() => resizePty(pane.id, cols, rows), 50);
+    // Mid-drag the agent only gets the final size: each resize makes a TUI repaint everything.
+    const send = () => {
+      if (document.body.classList.contains("resizing")) entry.resizeTimer = window.setTimeout(send, 100);
+      else resizePty(pane.id, cols, rows);
+    };
+    entry.resizeTimer = window.setTimeout(send, 50);
   });
 
   const host = document.createElement("div");
@@ -482,10 +490,22 @@ function clearAllTextureAtlases() {
   for (const webgl of webglAddons) webgl.clearTextureAtlas();
 }
 
+/** While a pane or panel edge is dragged, a terminal refits at most this often (and once after). */
+const DRAG_FIT_MS = 150;
+
 function scheduleFit(entry: Entry) {
   cancelAnimationFrame(entry.frame ?? 0);
+  clearTimeout(entry.fitTimer);
+  // Each fit reflows the whole scrollback (up to 10k lines): every frame of a drag, for every
+  // visible terminal, took most of the frame.
+  const wait = document.body.classList.contains("resizing") ? DRAG_FIT_MS - (performance.now() - (entry.fittedAt ?? 0)) : 0;
+  if (wait > 0) {
+    entry.fitTimer = window.setTimeout(() => scheduleFit(entry), wait);
+    return;
+  }
   entry.frame = requestAnimationFrame(() => {
     if (!entry.host.isConnected || entry.host.clientWidth === 0 || entry.host.clientHeight === 0) return;
+    entry.fittedAt = performance.now();
     entry.fit.fit();
     if (!entry.spawned) void spawn(entry);
   });
@@ -630,6 +650,8 @@ export function closeTerminal(paneId: string): Promise<void> {
   setStarting(paneId, null);
   if (!entry) return killed;
   entry.observer?.disconnect();
+  clearTimeout(entry.fitTimer);
+  cancelAnimationFrame(entry.frame ?? 0);
   if (entry.webgl) webglAddons.delete(entry.webgl);
   entry.term.dispose();
   entry.host.remove();

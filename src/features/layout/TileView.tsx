@@ -30,21 +30,35 @@ export function TileView({ node, renderLeaf, onResize, path = [] }: Props) {
     const start = horizontal ? e.clientX : e.clientY;
     const initial = [...node.sizes];
     const pair = initial[i] + initial[i + 1];
+    // Mid-drag the two tiles are sized in the DOM directly, once per frame; the store (and so
+    // the app's re-render and the saved layout) only gets the final sizes.
+    const tiles = el.querySelectorAll<HTMLElement>(":scope > .contents > [data-tile]");
+    let sizes = initial;
+    let frame = 0;
 
     const move = (ev: PointerEvent) => {
       const delta = ((horizontal ? ev.clientX : ev.clientY) - start) / total;
       const a = Math.min(Math.max(initial[i] + delta, MIN_FRACTION), pair - MIN_FRACTION);
-      const sizes = [...initial];
+      sizes = [...initial];
       sizes[i] = a;
       sizes[i + 1] = pair - a;
-      onResize(path, sizes);
+      frame ||= requestAnimationFrame(() => {
+        frame = 0;
+        tiles[i].style.flex = `${sizes[i]} 1 0`;
+        tiles[i + 1].style.flex = `${sizes[i + 1]} 1 0`;
+      });
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      cancelAnimationFrame(frame);
       document.body.style.cursor = "";
+      document.body.classList.remove("resizing");
+      if (sizes !== initial) onResize(path, sizes);
     };
     document.body.style.cursor = horizontal ? "col-resize" : "row-resize";
+    // Keeps terminals from eating pointer events mid-drag, and throttles their refits.
+    document.body.classList.add("resizing");
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
@@ -55,6 +69,7 @@ export function TileView({ node, renderLeaf, onResize, path = [] }: Props) {
         <div key={i} className="contents">
           {i > 0 && (
             <div
+              data-resizer
               onPointerDown={startDrag(i - 1)}
               className={cn(
                 "group relative shrink-0",
@@ -70,7 +85,7 @@ export function TileView({ node, renderLeaf, onResize, path = [] }: Props) {
               />
             </div>
           )}
-          <div className="flex min-h-0 min-w-0" style={{ flex: `${node.sizes[i]} 1 0` }}>
+          <div data-tile className="flex min-h-0 min-w-0" style={{ flex: `${node.sizes[i]} 1 0` }}>
             <TileView node={child} renderLeaf={renderLeaf} onResize={onResize} path={[...path, i]} />
           </div>
         </div>
