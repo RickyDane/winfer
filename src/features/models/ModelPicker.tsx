@@ -3,11 +3,11 @@ import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
-import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useWorkspacesPick } from "@/stores/workspaces";
 
 /** Picks the model for the focused agent. Lists what the CLI offers; any typed name works too. */
 export function ModelPicker() {
-  const { overlay, setOverlay, focusedPaneId, workspaces, providers, models, loadModels } = useWorkspaces();
+  const { overlay, setOverlay, focusedPaneId, workspaces, providers, models, loadModels } = useWorkspacesPick("overlay", "setOverlay", "focusedPaneId", "workspaces", "providers", "models", "loadModels");
   const pane = workspaces.flatMap((w) => w.panes).find((p) => p.id === focusedPaneId);
   const provider = providers.find((p) => p.id === pane?.provider);
   const [query, setQuery] = useState("");

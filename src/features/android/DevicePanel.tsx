@@ -4,7 +4,7 @@ import { Spinner } from "@/components/Spinner";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { PanelActions } from "@/features/plugins/PanelActions";
-import { useWorkspaces } from "@/stores/workspaces";
+import { useWorkspacesPick } from "@/stores/workspaces";
 import { H264Player } from "./h264";
 
 interface Device {
@@ -252,7 +252,7 @@ function Mirror({ device }: { device: Device }) {
 
 /** Android devices and emulators over adb, mirrored in the side panel. */
 export function DevicePanel() {
-  const { androidSerial, setAndroidSerial } = useWorkspaces();
+  const { androidSerial, setAndroidSerial } = useWorkspacesPick("androidSerial", "setAndroidSerial");
   const [status, setStatus] = useState<AndroidStatus | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -49,14 +49,14 @@ import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar, SidebarResizer } from "@/features/workspaces/Sidebar";
-import { livePanes, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { livePanes, useActiveWorkspace, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { applyTheme, themeById } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
 import { PluginPageView, usePluginPages } from "@/features/plugins/PluginPage";
 import { PageTabs } from "@/features/plugins/PageTabs";
 
 function TitleBar() {
-  const { toggleSidebar, toggleBrowser } = useWorkspaces();
+  const { toggleSidebar, toggleBrowser } = useWorkspacesPick("toggleSidebar", "toggleBrowser");
   const workspace = useActiveWorkspace();
   if (!workspace) return null;
   return (
@@ -156,7 +156,7 @@ function EmptyWorkspace() {
 }
 
 export function AppShell() {
-  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view, glassPanes } = useWorkspaces();
+  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view, glassPanes } = useWorkspacesPick("sidebarOpen", "browserOpen", "focusedPaneId", "focusPane", "loadProviders", "updateActive", "hydrate", "theme", "view", "glassPanes");
   useKeymap();
   useEscapeToClose();
   const pages = usePluginPages();
@@ -199,7 +199,7 @@ export function AppShell() {
       index={order.indexOf(id) + 1}
       focused={id === focusedPaneId}
       zoomed={id === zoomed}
-      onFocus={() => focusPane(id)}
+      onFocus={focusPane}
     />
   );
 

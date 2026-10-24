@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatChord, IS_MAC } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { relativeTime, logActivity } from "@/stores/activity";
-import { defaultProviderId, providerName, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { defaultProviderId, providerName, useActiveWorkspace, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { listBranches, listWorktrees, worktreeFromBranch, type Branch, type ExistingWorktree } from "./worktree";
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -17,7 +17,7 @@ type Row = { kind: "auto" } | { kind: "new"; name: string } | { kind: "branch"; 
  * one already checked out somewhere opens in that folder, any other gets a worktree of its own.
  */
 export function NewPaneDialog() {
-  const { overlay, setOverlay, providers, newPaneProvider } = useWorkspaces();
+  const { overlay, setOverlay, providers, newPaneProvider } = useWorkspacesPick("overlay", "setOverlay", "providers", "newPaneProvider", "defaultProvider");
   const workspace = useActiveWorkspace();
   const [branches, setBranches] = useState<Branch[] | null>(null);
   const [worktrees, setWorktrees] = useState<ExistingWorktree[]>([]);

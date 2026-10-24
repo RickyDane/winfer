@@ -1,8 +1,8 @@
-import { execute } from "@/commands/bus";
+import { focusViaCommand } from "@/commands/bus";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
-import { livePanes, useWorkspaces } from "@/stores/workspaces";
+import { livePanes, useWorkspacesPick } from "@/stores/workspaces";
 import { AgentBar } from "./AgentBar";
 
 /**
@@ -11,7 +11,7 @@ import { AgentBar } from "./AgentBar";
  * active, so new panes and commands go there.
  */
 export function Overview() {
-  const { workspaces, overview, focusedPaneId, updateOverview } = useWorkspaces();
+  const { workspaces, overview, focusedPaneId, updateOverview } = useWorkspacesPick("workspaces", "overview", "focusedPaneId", "updateOverview");
   const panes = new Map(workspaces.flatMap((w) => livePanes(w).map((p) => [p.id, p] as const)));
   const names = new Map(workspaces.map((w) => [w.id, w.name]));
   const order = overview.layout ? leaves(overview.layout) : [];
@@ -27,9 +27,7 @@ export function Overview() {
         focused={id === focusedPaneId}
         zoomed={id === overview.zoomedPaneId}
         workspaceName={names.get(pane.workspaceId)}
-        onFocus={() => {
-          if (id !== useWorkspaces.getState().focusedPaneId) execute({ type: "pane.focus", target: { id } });
-        }}
+        onFocus={focusViaCommand}
       />
     );
   };

@@ -1,6 +1,6 @@
 import { Archive, ArchiveRestore, X } from "lucide-react";
 import { useEffect } from "react";
-import { execute } from "@/commands/bus";
+import { execute, focusViaCommand } from "@/commands/bus";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
@@ -108,9 +108,7 @@ export function ArchiveView() {
           focused={selected.id === focusedPaneId}
           zoomed={false}
           workspaceName={names.get(selected.workspaceId)}
-          onFocus={() => {
-            if (selected.id !== useWorkspaces.getState().focusedPaneId) execute({ type: "pane.focus", target: { id: selected.id } });
-          }}
+          onFocus={focusViaCommand}
         />
       </div>
     </div>

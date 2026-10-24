@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { keysFor } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
-import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { copyWithToast } from "@/stores/toasts";
 import { formatCost, formatTokens } from "@/features/usage/history";
 import { deleteHistoryEntry, searchHistory, type MergeRecord } from "./history";
@@ -117,7 +117,7 @@ function Entry({ merge, words, onDeleted }: { merge: MergeRecord; words: string[
 
 /** Searchable history of merged features (⌘⇧H). */
 export function HistoryView() {
-  const { overlay, setOverlay, activeWorkspaceId, workspaces } = useWorkspaces();
+  const { overlay, setOverlay, activeWorkspaceId, workspaces } = useWorkspacesPick("overlay", "setOverlay", "activeWorkspaceId", "workspaces");
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"workspace" | "all">("workspace");
   const [results, setResults] = useState<MergeRecord[] | null>(null);

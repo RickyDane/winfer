@@ -11,7 +11,7 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { removeWorktree } from "@/features/worktree/worktree";
 import { logActivity, relativeTime } from "@/stores/activity";
-import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { providerName, useWorkspaces, useWorkspacesPick, type Pane } from "@/stores/workspaces";
 import { withToast } from "@/stores/toasts";
 import { TaskCost } from "@/features/usage/TaskCostChip";
 import { refreshTaskCosts } from "@/features/usage/taskCost";
@@ -436,7 +436,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
 
 /** ⌘E: finished agent work, ready to merge, discard or send back. */
 export function ReviewInbox() {
-  const { overlay, setOverlay, activeWorkspaceId, workspaces, view } = useWorkspaces();
+  const { overlay, setOverlay, activeWorkspaceId, workspaces, view } = useWorkspacesPick("overlay", "setOverlay", "activeWorkspaceId", "workspaces", "view");
   const all = useReviews((s) => s.reviews);
   // The overview covers every workspace; the workspace view just its own.
   const everywhere = view === "overview";

@@ -12,7 +12,7 @@ import {
   type Binding,
 } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
-import { useWorkspaces } from "@/stores/workspaces";
+import { useWorkspacesPick } from "@/stores/workspaces";
 
 const GROUPS: Binding["group"][] = ["Panes", "Layout", "Workspaces", "App"];
 
@@ -51,7 +51,7 @@ function recordChord(e: KeyboardEvent, row: Row): { chord: string } | { error: s
 }
 
 export function CheatSheet() {
-  const { cheatSheetOpen, setCheatSheet, shortcuts, setShortcut, resetShortcuts } = useWorkspaces();
+  const { cheatSheetOpen, setCheatSheet, shortcuts, setShortcut, resetShortcuts } = useWorkspacesPick("cheatSheetOpen", "setCheatSheet", "shortcuts", "setShortcut", "resetShortcuts");
   const [editing, setEditing] = useState<Row | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState<{ row: Row; chord: string; clashes: { id: string; title: string }[] } | null>(null);

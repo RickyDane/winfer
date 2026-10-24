@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { fetchModels, fetchProviders, type ModelInfo, type Provider, type ProviderId } from "@/features/providers/providers";
 import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
@@ -457,13 +458,14 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
 
   focusPane: (id) => {
     // In a zoomed workspace the focused pane must be the visible one, so the zoom follows.
-    set((s) => ({
-      focusedPaneId: id,
-      overview: s.overview.zoomedPaneId && s.overview.zoomedPaneId !== id ? { ...s.overview, zoomedPaneId: id } : s.overview,
-      workspaces: s.workspaces.map((w) =>
-        w.zoomedPaneId && w.zoomedPaneId !== id && w.panes.some((p) => p.id === id) ? { ...w, zoomedPaneId: id } : w,
-      ),
-    }));
+    const rezoom = (w: Workspace) => !!w.zoomedPaneId && w.zoomedPaneId !== id && w.panes.some((p) => p.id === id);
+    // Every click in a pane lands here: unchanged state stays the same object, so nothing re-renders.
+    set((s) => {
+      const overview = s.overview.zoomedPaneId && s.overview.zoomedPaneId !== id ? { ...s.overview, zoomedPaneId: id } : s.overview;
+      const workspaces = s.workspaces.some(rezoom) ? s.workspaces.map((w) => (rezoom(w) ? { ...w, zoomedPaneId: id } : w)) : s.workspaces;
+      if (s.focusedPaneId === id && overview === s.overview && workspaces === s.workspaces) return s;
+      return { focusedPaneId: id, overview, workspaces };
+    });
     get().updatePane(id, { unseen: false });
   },
 
@@ -562,11 +564,16 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   renamePane: (id, name) => get().updatePane(id, { customTitle: name.replace(/\s+/g, " ").trim().slice(0, 80) || null }),
 
   updatePane: (id, patch) =>
-    set((s) => ({
-      workspaces: s.workspaces.map((w) =>
-        w.panes.some((p) => p.id === id) ? { ...w, panes: w.panes.map((p) => (p.id === id ? { ...p, ...patch } : p)) } : w,
-      ),
-    })),
+    set((s) => {
+      // A patch that changes nothing (or a pane that's gone) leaves the state as it is.
+      const pane = s.workspaces.find((w) => w.panes.some((p) => p.id === id))?.panes.find((p) => p.id === id);
+      if (!pane || (Object.keys(patch) as (keyof Pane)[]).every((k) => Object.is(pane[k], patch[k]))) return s;
+      return {
+        workspaces: s.workspaces.map((w) =>
+          w.panes.some((p) => p.id === id) ? { ...w, panes: w.panes.map((p) => (p.id === id ? { ...p, ...patch } : p)) } : w,
+        ),
+      };
+    }),
 
   setPaneStatus: (id, status) => {
     const s = get();
@@ -656,6 +663,20 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleBrowser: () => set((s) => ({ browserOpen: !s.browserOpen })),
 }));
+
+/**
+ * Some of the store's fields, re-rendering only when one of them changes. Destructuring the
+ * whole store (`useWorkspaces()`) re-renders on every change, down to each click in a pane.
+ */
+export function useWorkspacesPick<K extends keyof WorkspaceState>(...keys: K[]): Pick<WorkspaceState, K> {
+  return useWorkspaces(
+    useShallow((s) => {
+      const picked = {} as Pick<WorkspaceState, K>;
+      for (const k of keys) picked[k] = s[k];
+      return picked;
+    }),
+  );
+}
 
 const MAX_RECENT_SESSIONS = 200;
 

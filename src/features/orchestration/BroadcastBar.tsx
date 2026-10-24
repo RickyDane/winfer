@@ -5,11 +5,11 @@ import { formatChord } from "@/commands/keymap";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { leaves } from "@/features/layout/tree";
 import { cn } from "@/lib/cn";
-import { providerName, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useActiveWorkspace, useWorkspacesPick } from "@/stores/workspaces";
 
 /** ⌘⇧I: type once, send to several agents. */
 export function BroadcastBar() {
-  const { overlay, setOverlay, providers } = useWorkspaces();
+  const { overlay, setOverlay, providers } = useWorkspacesPick("overlay", "setOverlay", "providers");
   const workspace = useActiveWorkspace();
   const agents = workspace?.layout
     ? leaves(workspace.layout).map((id) => workspace.panes.find((p) => p.id === id)!).filter((p) => p.provider !== "shell")

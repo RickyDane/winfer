@@ -12,7 +12,7 @@ import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { paneMenu, workspaceMenu } from "./sidebarMenus";
-import { DEFAULT_SIDEBAR_WIDTH, livePanes, paneLabel, providerName, useWorkspaces, type Pane, type Workspace } from "@/stores/workspaces";
+import { DEFAULT_SIDEBAR_WIDTH, livePanes, paneLabel, providerName, useWorkspaces, useWorkspacesPick, type Pane, type Workspace } from "@/stores/workspaces";
 import { useSortable } from "./useSortable";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { PaneTitleInput } from "@/features/terminal/PaneTitleInput";
@@ -312,7 +312,7 @@ export function SidebarResizer() {
 
 export function Sidebar() {
   const width = useWorkspaces((s) => s.sidebarWidth);
-  const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, collapseAllWorkspaces, moveWorkspace, theme, toggleTheme } = useWorkspaces();
+  const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, collapseAllWorkspaces, moveWorkspace, theme, toggleTheme } = useWorkspacesPick("workspaces", "activeWorkspaceId", "focusedPaneId", "expandedWorkspaces", "toggleWorkspaceExpanded", "collapseAllWorkspaces", "moveWorkspace", "theme", "toggleTheme");
   const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
   const { drag, begin, dropLine } = useSortable(moveWorkspace);
 

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
-import { useWorkspaces } from "@/stores/workspaces";
+import { useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { focusTerminal } from "@/features/terminal/xtermRegistry";
 import { paletteEntries, score } from "./entries";
 
 export function CommandPalette() {
-  const { paletteQuery, closePalette } = useWorkspaces();
+  const { paletteQuery, closePalette } = useWorkspacesPick("paletteQuery", "closePalette");
   if (paletteQuery === null) return null;
   return <Palette initialQuery={paletteQuery} onClose={closePalette} />;
 }

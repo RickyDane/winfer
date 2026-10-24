@@ -7,7 +7,7 @@ import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { commitWorktree, mergeWorktree, removeWorktree, worktreeDiff } from "@/features/worktree/worktree";
-import { providerName, useActiveWorkspace, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { providerName, useActiveWorkspace, useWorkspaces, useWorkspacesPick, type Pane } from "@/stores/workspaces";
 import { logActivity } from "@/stores/activity";
 import { cn } from "@/lib/cn";
 import { openRaceResults } from "./resultsStore";
@@ -245,7 +245,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
 
 /** ⌘⇧R: start a race (or an A/B test) and compare the competing agents' changes. */
 export function RaceView() {
-  const { overlay, setOverlay } = useWorkspaces();
+  const { overlay, setOverlay } = useWorkspacesPick("overlay", "setOverlay");
   const workspace = useActiveWorkspace();
   const [showForm, setShowForm] = useState(false);
 

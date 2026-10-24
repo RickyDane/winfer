@@ -186,6 +186,11 @@ function paneInDirection(fromId: string, dir: Direction): string | null {
   return best?.id ?? null;
 }
 
+/** Focuses a pane through the bus (which also brings its workspace forward), unless it has focus. */
+export function focusViaCommand(id: string) {
+  if (id !== useWorkspaces.getState().focusedPaneId) execute({ type: "pane.focus", target: { id } });
+}
+
 export function execute(cmd: Command): void {
   const s = store();
   switch (cmd.type) {

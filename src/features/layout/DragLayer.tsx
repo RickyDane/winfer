@@ -1,11 +1,11 @@
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
-import { providerName, useWorkspaces } from "@/stores/workspaces";
+import { providerName, useWorkspacesPick } from "@/stores/workspaces";
 import { useDrag } from "./drag";
 
 /** Ghost of the dragged pane and a highlight of where it will land. */
 export function DragLayer() {
   const { paneId, x, y, target } = useDrag();
-  const { workspaces, providers } = useWorkspaces();
+  const { workspaces, providers } = useWorkspacesPick("workspaces", "providers");
   if (!paneId) return null;
   const pane = workspaces.flatMap((w) => w.panes).find((p) => p.id === paneId);
 

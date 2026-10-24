@@ -4,11 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { UsageHint } from "@/features/usage/UsageMeter";
-import { defaultProviderId, useWorkspaces } from "@/stores/workspaces";
+import { defaultProviderId, useWorkspacesPick } from "@/stores/workspaces";
 
 /** Provider picker for opening a new pane; the star marks (and sets) the default agent. */
 export function NewPaneMenu() {
-  const { providers, addPane, models, loadModels, agentModels, defaultProvider, setDefaultProvider } = useWorkspaces();
+  const { providers, addPane, models, loadModels, agentModels, defaultProvider, setDefaultProvider } = useWorkspacesPick("providers", "addPane", "models", "loadModels", "agentModels", "defaultProvider", "setDefaultProvider");
   const defaultId = defaultProviderId({ providers, defaultProvider });
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);

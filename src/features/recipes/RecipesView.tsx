@@ -1,10 +1,10 @@
 import { BookOpen, Play, Trash2, X } from "lucide-react";
 import { useState } from "react";
-import { useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { useActiveWorkspace, useWorkspacesPick } from "@/stores/workspaces";
 import { BUILT_IN, allRecipes, deleteRecipe, describeRecipe, loadRecipe, saveCurrentAsRecipe } from "./recipes";
 
 export function RecipesView() {
-  const { overlay, setOverlay, recipes: saved } = useWorkspaces();
+  const { overlay, setOverlay, recipes: saved } = useWorkspacesPick("overlay", "setOverlay", "recipes");
   const workspace = useActiveWorkspace();
   const [name, setName] = useState("");
 

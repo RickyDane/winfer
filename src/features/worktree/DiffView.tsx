@@ -3,12 +3,12 @@ import { Spinner } from "@/components/Spinner";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { cn } from "@/lib/cn";
-import { useWorkspaces } from "@/stores/workspaces";
+import { useWorkspacesPick } from "@/stores/workspaces";
 import { worktreeDiff, type WorktreeDiff } from "./worktree";
 
 /** Changes an agent made in its worktree (committed + uncommitted, since the branch point). */
 export function DiffView() {
-  const { diffPaneId, setDiffPane, workspaces } = useWorkspaces();
+  const { diffPaneId, setDiffPane, workspaces } = useWorkspacesPick("diffPaneId", "setDiffPane", "workspaces");
   const pane = workspaces.flatMap((w) => w.panes).find((p) => p.id === diffPaneId);
   const [data, setData] = useState<WorktreeDiff | null>(null);
   const [error, setError] = useState<string | null>(null);

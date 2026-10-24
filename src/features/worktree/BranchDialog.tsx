@@ -3,7 +3,7 @@ import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { relativeTime, logActivity } from "@/stores/activity";
-import { defaultProviderId, providerName, useActiveWorkspace, useWorkspaces } from "@/stores/workspaces";
+import { defaultProviderId, providerName, useActiveWorkspace, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { fetchBranches, listBranches, worktreeFromBranch, type Branch } from "./worktree";
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -14,7 +14,7 @@ const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?
  * locally, or from the remote's latest (fetched first).
  */
 export function BranchDialog() {
-  const { overlay, setOverlay, providers } = useWorkspaces();
+  const { overlay, setOverlay, providers } = useWorkspacesPick("overlay", "setOverlay", "providers", "defaultProvider");
   const workspace = useActiveWorkspace();
   const [branches, setBranches] = useState<Branch[] | null>(null);
   const [query, setQuery] = useState("");

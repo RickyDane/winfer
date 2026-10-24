@@ -3,7 +3,7 @@ import { usePlanSidebar } from "@/features/code/planSidebar";
 import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
-import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces } from "@/stores/workspaces";
+import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { IS_MAC, keysFor } from "@/commands/keymap";
 import { CHATGPT_VOICES, DEFAULT_CHATGPT_VOICE, DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { LIVE_ROLE } from "@/features/voice/live/instructions";
@@ -112,7 +112,7 @@ const inputClass = "h-7 rounded-md border border-border-strong bg-panel-raised p
 
 /** Color theme: a swatch per theme, showing its panel, text and terminal colors. */
 function AppearanceSettings() {
-  const { theme, setTheme } = useWorkspaces();
+  const { theme, setTheme } = useWorkspacesPick("theme", "setTheme");
   return (
     <Card
       title="Theme"
@@ -203,7 +203,7 @@ function UpdateFooter() {
 
 /** Text size of every terminal. */
 function TerminalSettings() {
-  const { terminalFontSize, setTerminalFontSize } = useWorkspaces();
+  const { terminalFontSize, setTerminalFontSize } = useWorkspacesPick("terminalFontSize", "setTerminalFontSize");
   return (
     <Card title="Terminals">
       <Row
@@ -242,7 +242,7 @@ function TerminalSettings() {
 
 /** Which code editor "Open in editor" uses. */
 function EditorSettings() {
-  const { editor, setEditor } = useWorkspaces();
+  const { editor, setEditor } = useWorkspacesPick("editor", "setEditor");
   const editors = useEditors((s) => s.editors);
   // Picks up editors installed while winfer was running.
   useEffect(() => void loadEditors(), []);
@@ -283,7 +283,7 @@ function ShortcutSettings() {
 
 /** Which agent ⌘T, splits and "open a new window" start, and the model each agent starts with. */
 function AgentSettings() {
-  const { providers, defaultProvider, setDefaultProvider, models, agentModels, setAgentModel, loadModels, workspaces, activeWorkspaceId, updateActive } = useWorkspaces();
+  const { providers, defaultProvider, setDefaultProvider, models, agentModels, setAgentModel, loadModels, workspaces, activeWorkspaceId, updateActive } = useWorkspacesPick("providers", "defaultProvider", "setDefaultProvider", "models", "agentModels", "setAgentModel", "loadModels", "workspaces", "activeWorkspaceId", "updateActive");
   const active = workspaces.find((w) => w.id === activeWorkspaceId);
   const current = defaultProviderId({ providers, defaultProvider });
   const agents = providers.filter((p) => p.installed && p.modelArg);
@@ -352,7 +352,7 @@ function AgentSettings() {
 
 /** Each installed agent's version, and updating it to the newest one. */
 function VersionSettings() {
-  const { providers } = useWorkspaces();
+  const { providers } = useWorkspacesPick("providers");
   const { versions, checking, updating, checkedAt } = useProviderUpdates();
   const agents = providers.filter((p) => p.installed && p.command);
   // Opening the page checks unless a check ran in the last few minutes.
@@ -414,7 +414,7 @@ function VersionSettings() {
 
 /** Agents that start with their permission prompts skipped (each provider's `autoApproveArgs`). */
 function AutoApproveSettings() {
-  const { providers, autoApprove, setAutoApprove } = useWorkspaces();
+  const { providers, autoApprove, setAutoApprove } = useWorkspacesPick("providers", "autoApprove", "setAutoApprove");
   const agents = providers.filter((p) => p.installed && p.autoApproveArgs?.length);
   if (!agents.length) return null;
   return (
@@ -430,7 +430,7 @@ function AutoApproveSettings() {
 
 /** Text added to every agent's system prompt when it starts (empty adds nothing). */
 function SystemPromptSettings() {
-  const { systemPrompt, setSystemPrompt } = useWorkspaces();
+  const { systemPrompt, setSystemPrompt } = useWorkspacesPick("systemPrompt", "setSystemPrompt");
   const saved = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const [draft, setDraft] = useState(saved);
   useEffect(() => setDraft(saved), [saved]);
@@ -464,7 +464,7 @@ function SystemPromptSettings() {
 
 /** The rarely used MCP tools agents start without, to turn back on one by one. */
 function AgentToolSettings() {
-  const { enabledTools, setToolEnabled } = useWorkspaces();
+  const { enabledTools, setToolEnabled } = useWorkspacesPick("enabledTools", "setToolEnabled");
   const plugins = usePlugins((s) => s.plugins);
   const tools = OPTIONAL_TOOLS.filter((t) => !t.plugin || plugins.some((p) => p.id === t.plugin && p.enabled && !p.error && p.manifest));
   return (
@@ -483,7 +483,7 @@ function AgentToolSettings() {
 
 /** What the review inbox does on its own when an agent finishes. */
 function ReviewSettings() {
-  const { reviewConfig, setReviewConfig } = useWorkspaces();
+  const { reviewConfig, setReviewConfig } = useWorkspacesPick("reviewConfig", "setReviewConfig");
   return (
     <Card title="Review inbox" description="Summaries use the LLM under AI; with it off, cards show the agent's last output instead.">
       <Row label="Run tests when an agent finishes" hint="Runs the project's tests in the agent's worktree.">
@@ -522,7 +522,7 @@ function PaneCostSettings() {
 
 /** How often the LLM re-estimates working agents' progress. */
 function ProgressSettings() {
-  const { progressConfig, setProgressConfig } = useWorkspaces();
+  const { progressConfig, setProgressConfig } = useWorkspacesPick("progressConfig", "setProgressConfig");
   const enabled = progressConfig.enabled ?? true;
   return (
     <Card title="Session progress" description="Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked.">
@@ -2391,7 +2391,7 @@ function SkillSettings() {
 }
 
 export function SettingsModal() {
-  const { settingsOpen, settingsPage, setSettings } = useWorkspaces();
+  const { settingsOpen, settingsPage, setSettings } = useWorkspacesPick("settingsOpen", "settingsPage", "setSettings");
   const page = PAGES.find((p) => p.id === settingsPage) ?? PAGES[0];
 
   if (!settingsOpen) return null;

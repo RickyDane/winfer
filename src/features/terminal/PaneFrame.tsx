@@ -1,6 +1,6 @@
 import { Archive, ArchiveRestore, ExternalLink, GitBranch, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
@@ -45,12 +45,15 @@ interface Props {
   index: number;
   focused: boolean;
   zoomed: boolean;
-  onFocus: () => void;
+  /** Called with the pane's id. A stable function (not a fresh closure) lets the frame skip
+   *  re-rendering when the layout around it re-renders. */
+  onFocus: (paneId: string) => void;
   /** Shown in the overview, where panes from every workspace sit side by side. */
   workspaceName?: string;
 }
 
-export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName }: Props) {
+export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed, onFocus: focusPane, workspaceName }: Props) {
+  const onFocus = () => focusPane(pane.id);
   const target = { id: pane.id };
   const searching = useWorkspaces((s) => s.searchPaneId === pane.id);
   const beingDragged = useDrag((s) => s.paneId === pane.id);
@@ -210,4 +213,4 @@ export function PaneFrame({ pane, index, focused, zoomed, onFocus, workspaceName
       )}
     </section>
   );
-}
+});

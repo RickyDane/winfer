@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { relativeTime } from "@/stores/activity";
-import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { providerName, useWorkspaces, useWorkspacesPick, type Pane } from "@/stores/workspaces";
 import { estimate, progressTitle, useProgress, type Progress } from "./progress";
 
 /** Thin progress bar; empty track while there's no estimate yet. */
@@ -40,7 +40,7 @@ export function trackedSessions(panes: Pane[], byPane: Record<string, Progress>)
 
 /** Mod+O: how far each running agent is with its task, across workspaces. */
 export function SessionsOverview() {
-  const { overlay, setOverlay, workspaces, providers } = useWorkspaces();
+  const { overlay, setOverlay, workspaces, providers } = useWorkspacesPick("overlay", "setOverlay", "workspaces", "providers");
   const byPane = useProgress((s) => s.byPane);
   const [, tick] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
