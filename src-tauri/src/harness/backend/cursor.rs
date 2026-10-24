@@ -248,6 +248,8 @@ impl Bridge {
             }
             Cmd::Compact => self.emit(Ev::Notice("Cursor manages its chat's context itself; it can't be compacted from here.".into())),
             Cmd::SetCompaction { .. } => {}
+            // Its subagents (if any) run on the main model.
+            Cmd::SetSubagent { .. } => {}
             Cmd::Undo { .. } => self.emit(Ev::Undone(Err("Cursor can't drop a turn from its chat in print mode.".into()))),
             Cmd::StopTask(id) => {
                 if !crate::harness::bg::stop(&id) {

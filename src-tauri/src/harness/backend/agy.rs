@@ -271,6 +271,8 @@ impl Bridge {
             }
             Cmd::Compact => self.emit(Ev::Notice("Antigravity compacts its context on its own; /compact isn't available.".into())),
             Cmd::SetCompaction { .. } => {}
+            // Its subagents (if any) run on the main model.
+            Cmd::SetSubagent { .. } => {}
             Cmd::Undo { .. } => self.emit(Ev::Undone(Err("Antigravity's CLI can't rewind a conversation.".into()))),
             Cmd::StopTask(id) => {
                 if !crate::harness::bg::stop(&id) {

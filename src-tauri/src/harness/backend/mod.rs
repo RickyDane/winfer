@@ -124,6 +124,9 @@ pub struct Opts {
     pub skills: crate::harness::claude_skills::LeanSkills,
     /// Who the CLI's `bg` tasks belong to (set by [`start`]); the backend tells `bg` its mode.
     pub bg_owner: String,
+    /// The model subagents run on (None: the main one) and their effort.
+    pub sub_model: Option<String>,
+    pub sub_effort: Option<String>,
 }
 
 /// The system prompt for Claude Code in lean mode: the essentials of its long default (which runs

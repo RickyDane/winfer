@@ -103,6 +103,8 @@ pub struct Settings {
     lean_codex: bool,
     #[serde(default)]
     lean_codex_prompt: bool,
+    #[serde(default)]
+    subagents: std::collections::BTreeMap<String, config::SubagentModel>,
 }
 
 fn yes() -> bool {
@@ -126,6 +128,7 @@ pub fn harness_settings() -> Settings {
         plan_sidebar: c.plan_sidebar,
         lean_codex: c.lean_codex,
         lean_codex_prompt: c.lean_codex_prompt,
+        subagents: c.subagents,
     }
 }
 
@@ -154,6 +157,7 @@ pub fn harness_set_settings(settings: Settings) -> Result<(), String> {
         c.plan_sidebar = settings.plan_sidebar;
         c.lean_codex = settings.lean_codex;
         c.lean_codex_prompt = settings.lean_codex_prompt;
+        c.subagents = settings.subagents.into_iter().filter(|(_, s)| !s.model.trim().is_empty()).collect();
     });
     Ok(())
 }
@@ -300,6 +304,8 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
             lean: cfg.lean_bridges && !full_prompt,
             skills: cfg.lean_skills(),
             bg_owner: String::new(),
+            sub_model: cfg.subagent_for(kind.id()).0,
+            sub_effort: cfg.subagent_for(kind.id()).1,
         },
         tx,
     );
@@ -397,7 +403,7 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
                 "options": q.options.iter().map(|(label, description)| json!({ "label": label, "description": description })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         }),
-        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "description": t.description, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status, "output_file": t.output_file, "exit_code": t.exit_code }),
+        Ev::Task(t) => json!({ "type": "task", "id": t.id, "tool_id": t.tool_id, "title": t.title, "description": t.description, "agent": t.agent, "tools": t.tools, "last": t.last, "status": t.status, "output_file": t.output_file, "exit_code": t.exit_code, "model": t.model }),
         Ev::Todos(t) => json!({ "type": "todos", "todos": t }),
         Ev::Skills(s) => json!({ "type": "skills", "skills": s.iter().map(|k| &k.name).collect::<Vec<_>>() }),
         Ev::Usage(u) => json!({ "type": "usage", "context": u.context, "window": u.window, "input": u.input, "cached": u.cached, "output": u.output, "cost": u.cost, "turn": u.turn, "turn_input": u.turn_input, "turn_cached": u.turn_cached, "turn_streamed": u.turn_streamed }),

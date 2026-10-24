@@ -368,6 +368,8 @@ impl Bridge {
             Cmd::Compact => self.send(UserMsg { text: "/compact".into(), images: Vec::new(), skill: None }),
             // OpenCode compacts the session on its own when it fills up.
             Cmd::SetCompaction { .. } => {}
+            // Its subagents (if any) run on the main model.
+            Cmd::SetSubagent { .. } => {}
             Cmd::Undo { .. } => self.emit(Ev::Undone(Err("OpenCode can't undo a turn from winfer code.".into()))),
             Cmd::StopTask(id) if crate::harness::bg::stop(&id) => {}
             Cmd::StopTask(_) => self.emit(Ev::Notice("OpenCode's subagents can't be stopped on their own; Esc stops the turn.".into())),
@@ -810,6 +812,8 @@ mod tests {
             lean: false,
             skills: crate::harness::claude_skills::LeanSkills::All,
             bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
         };
         let mut b = Bridge::new(&opts, tx);
         b.session = Some("ses_1".into());

@@ -87,6 +87,8 @@ impl Serve {
             lean: cfg.lean_bridges && !super::LEAN_OFF.load(std::sync::atomic::Ordering::Relaxed),
             skills: cfg.lean_skills(),
             bg_owner: String::new(),
+            sub_model: cfg.subagent_for(self.kind.id()).0,
+            sub_effort: cfg.subagent_for(self.kind.id()).1,
         };
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.busy = false;

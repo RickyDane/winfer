@@ -455,6 +455,8 @@ impl App {
             lean: self.config.lean_bridges && !crate::harness::LEAN_OFF.load(std::sync::atomic::Ordering::Relaxed),
             skills: self.config.lean_skills(),
             bg_owner: String::new(),
+            sub_model: self.config.subagent_for(self.kind.id()).0,
+            sub_effort: self.config.subagent_for(self.kind.id()).1,
         };
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.alive = true;

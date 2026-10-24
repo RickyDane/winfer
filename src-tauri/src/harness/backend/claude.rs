@@ -1063,6 +1063,8 @@ mod tests {
             lean,
             skills,
             bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
         };
         let has = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
         let lean = args(&opts(true, LeanSkills::Only(Vec::new())));

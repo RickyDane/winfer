@@ -1460,6 +1460,17 @@ button.cw-foot-item.active {
 .cw-foot .cw-pop {
   min-width: 260px;
 }
+/* Permission modes: wide enough that each hint stays on one line. */
+.cw-menu:has(> .cw-foot-item.mode) .cw-pop {
+  width: max-content;
+  max-width: calc(100cqw - 24px);
+}
+.cw-menu:has(> .cw-foot-item.mode) .cw-pop-item {
+  padding-right: 16px;
+}
+.cw-menu:has(> .cw-foot-item.mode) .cw-pop-item small {
+  white-space: nowrap;
+}
 .cw-foot-item .dim {
   color: var(--dim);
 }

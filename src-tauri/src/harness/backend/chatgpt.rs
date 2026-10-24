@@ -51,7 +51,7 @@ fn efforts(model: &str) -> Option<Vec<String>> {
     Some(list.iter().map(|s| s.to_string()).collect())
 }
 
-const SYSTEM: &str = "You are winfer code, a terminal coding agent. Explore with grep/glob/read; read before edit; verify with bash. Put every tool call you can already make into one response (e.g. read all relevant files at once); chain shell steps in one bash call. Use todo only for long multi-step work, never just to tick off the last item. Hand broad searches and independent subtasks to agent (several in one response run in parallel; background: true keeps you working meanwhile). If a call is declined, ask. Reply tersely in Markdown; cite path:line.";
+const SYSTEM: &str = "You are winfer code, a terminal coding agent. Explore with grep/glob/read; read before edit; verify with bash. Put every tool call you can already make into one response (e.g. read all relevant files at once); chain shell steps in one bash call. Use todo only for long multi-step work, never just to tick off the last item. Hand broad searches, web lookups, independent subtasks and small well-specified fixes to agent (several in one response run in parallel; background: true keeps you working meanwhile); you orchestrate: check a subagent's report before relying on it (read the files it changed, rerun the checks). If a call is declined, ask. Reply tersely in Markdown; cite path:line.";
 
 /// Steers long-running processes to the `bg` tool when it's on.
 const BG_HINT: &str = " Run dev servers, watchers and loops with bg (not bash with &/nohup); wait on them with bg read until (not sleep loops) and stop them when done.";
@@ -76,6 +76,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "description": { "type": "string", "description": "3-5 word title" },
                 "prompt": { "type": "string", "description": "The whole task: goal, context, paths, what to report" },
                 "background": { "type": "boolean" },
+                "model": { "type": "string", "enum": ["sub", "main"], "description": "sub (default): the subagent model the user picked, for exploring, searching and small edits; main: your own model, for hard or risky tasks" },
             },
             "required": ["description", "prompt"],
         },
@@ -88,6 +89,9 @@ struct State {
     items: Vec<Value>,
     model: String,
     effort: Option<String>,
+    /// What subagents run on (None: the main model and effort).
+    sub_model: Option<String>,
+    sub_effort: Option<String>,
     mode: Mode,
     allowed: HashSet<String>,
     usage: Usage,
@@ -156,6 +160,9 @@ struct Sub {
     reads: tools::ReadCache,
     instructions: String,
     tools: AtomicU64,
+    /// The model and effort it runs on, fixed when it starts.
+    model: String,
+    effort: Option<String>,
 }
 
 /// Whether the work of `sub` (or the main turn) should stop.
@@ -188,6 +195,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             items,
             model: if opts.model.is_empty() { DEFAULT_MODEL.to_string() } else { opts.model.clone() },
             effort: opts.effort.clone(),
+            sub_model: opts.sub_model.clone(),
+            sub_effort: opts.sub_effort.clone(),
             mode: opts.mode,
             allowed: opts.allowed_commands.iter().map(|c| format!("bash:{c}")).collect(),
             usage: Usage { window: 272_000, ..Default::default() },
@@ -314,6 +323,11 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             }
             Cmd::SetModel(m) => shared.state.lock().unwrap().model = m,
             Cmd::SetEffort(e) => shared.state.lock().unwrap().effort = e,
+            Cmd::SetSubagent { model, effort } => {
+                let mut st = shared.state.lock().unwrap();
+                st.sub_model = model;
+                st.sub_effort = effort;
+            }
             Cmd::SetMode(m) => shared.state.lock().unwrap().mode = m,
             Cmd::SetCompaction { trim, compact } => {
                 let mut st = shared.state.lock().unwrap();
@@ -502,12 +516,16 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
         }
         tools.extend(meta);
         let (instructions, input, cache_key) = match sub {
-            // Subagents share one cache key: their instructions and tools are the same.
-            Some(s) => (s.instructions.as_str(), json!(*s.items.lock().unwrap()), format!("{}-agents", shared.session)),
+            // Subagents on one model share a cache key: their instructions and tools are the same.
+            Some(s) => (s.instructions.as_str(), json!(*s.items.lock().unwrap()), format!("{}-agents-{}", shared.session, s.model)),
             None => (shared.instructions.as_str(), json!(st.items), shared.session.clone()),
         };
+        let (model, effort) = match sub {
+            Some(s) => (&s.model, &s.effort),
+            None => (&st.model, &st.effort),
+        };
         let mut body = json!({
-            "model": st.model,
+            "model": model,
             "instructions": instructions,
             "input": input,
             "store": false,
@@ -521,10 +539,10 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
             body["tool_choice"] = json!("auto");
             body["parallel_tool_calls"] = json!(true);
         }
-        if let Some(e) = &st.effort {
+        if let Some(e) = effort {
             body["reasoning"]["effort"] = json!(e);
         }
-        (body, st.model.clone())
+        (body, model.clone())
     };
     let _ = model;
     let started = std::time::Instant::now();
@@ -963,6 +981,7 @@ fn run_agent(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
     let title = args["description"].as_str().map(str::trim).filter(|t| !t.is_empty()).unwrap_or("subagent").to_string();
     let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
     let background = args["background"].as_bool() == Some(true);
+    let (model, effort) = sub_model(&shared.state.lock().unwrap(), args["model"].as_str() == Some("main"));
     emit(Ev::ToolStart { id: call_id.to_string(), name: "Agent".into(), title: title.clone(), input: args.clone() });
     if prompt.is_empty() {
         let msg = "agent needs a prompt: the whole task for the subagent.".to_string();
@@ -981,6 +1000,8 @@ fn run_agent(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
         reads: Default::default(),
         instructions: format!("{SUB_SYSTEM}{}", shared.instructions.strip_prefix(SYSTEM).unwrap_or("")),
         tools: AtomicU64::new(0),
+        model: model.clone(),
+        effort,
     };
     emit(Ev::Task(TaskEv {
         id: id.clone(),
@@ -988,6 +1009,7 @@ fn run_agent(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
         title: Some(title.clone()),
         agent: Some("general".into()),
         status: Some("running".into()),
+        model: Some(model),
         ..Default::default()
     }));
     if background {
@@ -1010,6 +1032,15 @@ fn run_agent(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
     };
     emit(Ev::ToolEnd { id: call_id.to_string(), ok, output: report.clone(), diff: None });
     report
+}
+
+/// The model and effort a new subagent runs on: the subagent model the user set, unless the
+/// main agent asked for its own (`main`) or none is set.
+fn sub_model(st: &State, main: bool) -> (String, Option<String>) {
+    match &st.sub_model {
+        Some(m) if !main => (m.clone(), st.sub_effort.clone()),
+        _ => (st.model.clone(), st.effort.clone()),
+    }
 }
 
 /// Runs a subagent to its report; `Err(None)` when it was stopped. Ends its task either way.
@@ -1346,6 +1377,8 @@ mod tests {
                 items: Vec::new(),
                 model: DEFAULT_MODEL.into(),
                 effort: None,
+                sub_model: None,
+                sub_effort: None,
                 mode,
                 allowed: HashSet::new(),
                 usage: Usage::default(),
@@ -1389,6 +1422,8 @@ mod tests {
             reads: Default::default(),
             instructions: SUB_SYSTEM.into(),
             tools: AtomicU64::new(0),
+            model: DEFAULT_MODEL.into(),
+            effort: None,
         }
     }
 
@@ -1578,6 +1613,23 @@ mod tests {
         assert!(matches!(&evs[0], Ev::ToolStart { name, title, .. } if name == "Agent" && title == "Look around"));
         assert!(matches!(&evs[1], Ev::ToolEnd { ok: false, .. }));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn subagents_run_on_the_subagent_model_unless_asked_for_the_main_one() {
+        let (shared, _rx, _dir) = shared(Mode::Ask);
+        assert_eq!(sub_model(&shared.state.lock().unwrap(), false), (DEFAULT_MODEL.to_string(), None));
+        {
+            let mut st = shared.state.lock().unwrap();
+            st.effort = Some("high".into());
+            st.sub_model = Some("gpt-mini".into());
+            st.sub_effort = Some("low".into());
+        }
+        let st = shared.state.lock().unwrap();
+        assert_eq!(sub_model(&st, false), ("gpt-mini".to_string(), Some("low".to_string())));
+        assert_eq!(sub_model(&st, true), (DEFAULT_MODEL.to_string(), Some("high".to_string())));
+        let agent = tool_definitions().into_iter().find(|t| t["name"] == "agent").unwrap();
+        assert_eq!(agent["parameters"]["properties"]["model"]["enum"], json!(["sub", "main"]));
     }
 
     #[test]

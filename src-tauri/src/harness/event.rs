@@ -63,6 +63,8 @@ pub struct TaskEv {
     /// File receiving a background shell's output.
     pub output_file: Option<String>,
     pub exit_code: Option<i32>,
+    /// The model a subagent runs on, when the backend knows it.
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -315,6 +317,8 @@ pub enum Cmd {
     Answer(String, Vec<String>),
     SetModel(String),
     SetEffort(Option<String>),
+    /// The model (None: the main one) and effort subagents run on from now on.
+    SetSubagent { model: Option<String>, effort: Option<String> },
     SetMode(Mode),
     Compact,
     /// Context fill (%) for trimming and for full compaction; 0 = off.

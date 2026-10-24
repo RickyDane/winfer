@@ -37,6 +37,18 @@ pub struct Config {
     pub lean_codex: bool,
     /// With `lean_codex`, a short system prompt in place of Codex's built-in one.
     pub lean_codex_prompt: bool,
+    /// The model subagents run on, per backend id ("chatgpt", "claude", "codex"); a missing or
+    /// empty entry means the main model.
+    pub subagents: std::collections::BTreeMap<String, SubagentModel>,
+}
+
+/// The model (and effort) a backend's subagents run on while the main model orchestrates.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubagentModel {
+    /// The backend's own model id (no `backend/` prefix); empty = the main model.
+    pub model: String,
+    pub effort: Option<String>,
 }
 
 impl Default for Config {
@@ -56,6 +68,7 @@ impl Default for Config {
             plan_sidebar: true,
             lean_codex: true,
             lean_codex_prompt: false,
+            subagents: Default::default(),
         }
     }
 }
@@ -75,6 +88,27 @@ impl Config {
             super::claude_skills::LeanSkills::All
         } else {
             super::claude_skills::LeanSkills::Only(self.lean_skills.clone())
+        }
+    }
+
+    /// The subagent model set for a backend (by id), if any: `(model, effort)`.
+    pub fn subagent_for(&self, backend: &str) -> (Option<String>, Option<String>) {
+        match self.subagents.get(backend).filter(|s| !s.model.trim().is_empty()) {
+            Some(s) => (Some(s.model.trim().to_string()), s.effort.clone().filter(|e| !e.is_empty() && e != "default")),
+            None => (None, None),
+        }
+    }
+
+    /// Sets (or with `model` None/empty, clears) a backend's subagent model.
+    pub fn set_subagent(&mut self, backend: &str, model: Option<String>, effort: Option<String>) {
+        match model.filter(|m| !m.trim().is_empty()) {
+            Some(model) => {
+                let effort = effort.filter(|e| !e.is_empty() && e != "default");
+                self.subagents.insert(backend.to_string(), SubagentModel { model, effort });
+            }
+            None => {
+                self.subagents.remove(backend);
+            }
         }
     }
 
