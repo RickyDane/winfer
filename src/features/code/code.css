@@ -2725,9 +2725,10 @@ label.cw-icon-btn {
   height: auto;
   container-type: normal;
   overflow-y: auto;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  padding: 5px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  backdrop-filter: blur(20px);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   transform-origin: top right;
@@ -2740,13 +2741,33 @@ label.cw-icon-btn {
   }
 }
 .cw-bgpop-head {
-  padding: 4px 7px 5px;
-  font-size: calc(11px * var(--cw-text, 1));
-  color: var(--dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px 7px;
+  margin-bottom: 3px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 2px;
+  font-size: calc(12px * var(--cw-text, 1));
+  font-weight: 600;
+  color: var(--fg);
+}
+.cw-bgpop-head > span:first-child {
+  flex: 1;
+}
+.cw-bgpop-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: calc(11px * var(--cw-text, 1));
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.cw-bgpop-count.shell {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
 }
 .cw-tlf-row {
   --tint: var(--accent);

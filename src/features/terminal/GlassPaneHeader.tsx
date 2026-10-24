@@ -116,7 +116,7 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
             {label}
           </span>
         )}
-        <BgIndicator pane={pane} className="rounded-full border border-white/[0.07] bg-white/[0.07] px-2 py-px hover:bg-white/15" />
+        <BgIndicator pane={pane} />
         {/* Narrow panes keep a single row: the context reading moves up next to the title. */}
         <span className="@[300px]:hidden">
           <ContextMeter paneId={pane.id} provider={pane.provider} ring />
