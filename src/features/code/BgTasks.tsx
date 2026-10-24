@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import type { TaskEv } from "./protocol";
+import { modelName } from "./names";
 
 /* Running subagents and background shells, docked in the plan strip as a compact activity
    timeline: one line per shell, and for agents a second line with their recent tool calls. */
@@ -116,7 +117,7 @@ export function BgTasks({ tasks, openLog, stop }: BgProps) {
                 {t.agent ? <Bot size={11} /> : <SquareTerminal size={11} />}
               </span>
               <b>{t.title || t.description || t.id}</b>
-              <span className="cw-tlf-kind">{t.agent ?? "shell"}</span>
+              <span className="cw-tlf-kind">{t.agent ? (t.model ? `${t.agent} · ${modelName(t.model, {})}` : t.agent) : "shell"}</span>
               {!t.agent && <span className="cw-tlf-line">{t.last || "starting…"}</span>}
               <span className="cw-bg-time">{clock(now - (starts.get(t.id) ?? now))}</span>
               <StopButton t={t} stop={stop} />

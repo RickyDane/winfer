@@ -32,6 +32,14 @@ export function runCommand(text: string, store: StoreApi<CodeState>): boolean {
     case "/model":
       s.setSheet("model");
       return true;
+    case "/subagent-model":
+    case "/submodel":
+      if (arg === "main" || arg === "default" || arg === "same") s.send({ type: "set_subagent", model: null, effort: null });
+      else if (arg) {
+        const [m, e] = arg.split(/\s+/);
+        s.send({ type: "set_subagent", model: m.replace(/^[a-z]+\//, ""), effort: e && e !== "default" ? e : null });
+      } else s.setSheet("subagent-model");
+      return true;
     case "/effort":
       if (arg) s.send({ type: "set_effort", effort: arg === "default" ? null : arg });
       else s.setSheet("effort");

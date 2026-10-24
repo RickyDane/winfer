@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
+  Bot,
   ChevronDown,
   CircleCheck,
   CircleDashed,
@@ -18,7 +19,7 @@ import { LinkPaneContext } from "./Links";
 import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
 import { CODE_WEB_DEMO, stepTextScale, useCodeWeb } from "./styles";
-import { ModelPicker, Sheets } from "./Sheets";
+import { ModelPicker, Sheets, SubagentPicker, SUBAGENT_BACKENDS } from "./Sheets";
 import { backendOf, baseSpec, fastSpec, isFast, modelName } from "./names";
 import { Lightbox } from "./Lightbox";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
@@ -217,6 +218,40 @@ function ModelMenu({ label, model }: { label: string; model: string }) {
   );
 }
 
+/** What subagents run on, anchored to the status line (also what `/subagent-model` opens). */
+function SubagentMenu({ model }: { model: string }) {
+  const open = useCode((s) => s.sheet === "subagent-model");
+  const { subModel, subEffort, setSheet } = useCode();
+  const resolved = useCodeWeb((s) => s.resolvedModels);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setSheet(null);
+    window.addEventListener("mousedown", off);
+    return () => window.removeEventListener("mousedown", off);
+  }, [open, setSheet]);
+  const backend = model.split("/")[0];
+  if (!SUBAGENT_BACKENDS.includes(backend)) return null;
+  const label = subModel ? modelName(`${backend}/${subModel}`, resolved) : null;
+  return (
+    <div className="cw-menu" ref={ref}>
+      <button
+        className={clsx("cw-foot-item", open && "active", !label && "dim")}
+        onClick={() => setSheet(open ? null : "subagent-model")}
+        title={label ? `Subagents run on ${label}${subEffort ? ` · ${subEffort}` : ""} (/subagent-model)` : "Subagents run on the main model (/subagent-model)"}
+      >
+        <Bot size={12} />
+        {label ?? "same"}
+      </button>
+      {open && (
+        <div className="cw-pop cw-model-pop">
+          <SubagentPicker />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The TUI's bottom status line: mode, model, effort, context, branch. */
 function Footer({ pane }: { pane: Pane }) {
   const { mode, model, models, actualModel, effort, usage, send, setSheet } = useCode();
@@ -277,6 +312,7 @@ function Footer({ pane }: { pane: Pane }) {
         <EffortIcon effort={effort} size={12} />
         <span className="dim">{EFFORT_LABELS[effort] ?? effort}</span>
       </Menu>
+      <SubagentMenu model={model} />
       <span className="grow" />
       {pane.worktree && (
         <span className="cw-foot-item dim">

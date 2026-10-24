@@ -119,6 +119,8 @@ impl Serve {
             "model": self.spec(),
             "mode": self.mode,
             "effort": cfg.effort,
+            "subagent_model": cfg.subagent_for(self.kind.id()).0,
+            "subagent_effort": cfg.subagent_for(self.kind.id()).1,
             "cwd": self.cwd.to_string_lossy(),
             "branch": super::tui::app::git_branch(&self.cwd),
             "trim_at": cfg.trim_at,
@@ -278,6 +280,8 @@ impl Serve {
             out(&json!({ "type": "notice", "text": format!("Switched to {} · new conversation for this backend", kind.label()) }));
         }
         out(&json!({ "type": "model", "model": self.spec() }));
+        // The subagent model is per backend.
+        self.ready();
     }
 
     /// Text typed into the PTY by the app itself rather than the web UI (its broadcast bar, its
@@ -345,6 +349,16 @@ impl Serve {
                 let effort = v.get("effort").and_then(Value::as_str).filter(|e| *e != "default").map(String::from);
                 Config::update(|c| c.effort = effort.clone());
                 self.send(Cmd::SetEffort(effort));
+            }
+            "set_subagent" => {
+                let get = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && *s != "default").map(String::from);
+                let model = get("model").map(|m| m.strip_prefix(&format!("{}/", self.kind.id())).map(String::from).unwrap_or(m));
+                let effort = model.as_ref().and(get("effort"));
+                let kind = self.kind.id();
+                let (m, e) = (model.clone(), effort.clone());
+                Config::update(|c| c.set_subagent(kind, m, e));
+                self.send(Cmd::SetSubagent { model, effort });
+                self.ready();
             }
             "set_mode" => {
                 if let Ok(mode) = serde_json::from_value::<Mode>(v["mode"].clone()) {

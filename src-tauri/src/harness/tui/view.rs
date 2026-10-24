@@ -913,6 +913,11 @@ fn status(app: &App, width: usize) -> Line<'static> {
     if let Some(e) = &app.config.effort {
         left.push(Span::styled(format!(" · {e}"), theme::dim()));
     }
+    // Subagents on a model of their own: "↳ Haiku 4.5".
+    if let (Some(m), e) = app.config.subagent_for(app.kind.id()) {
+        let e = e.map(|e| format!(" · {e}")).unwrap_or_default();
+        left.push(Span::styled(format!(" ↳ {}{e}", friendly_model(&m)), theme::dim()));
+    }
     left.push(Span::styled(" · ", theme::dim()));
     let mode = app.config.mode.label().to_string();
     match mode_color(app.config.mode) {

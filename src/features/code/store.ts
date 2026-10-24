@@ -11,7 +11,7 @@ export interface Attachment {
   name: string;
 }
 
-export type Sheet = "tasklog" | "usage" | "status" | "help" | "mcp" | "login" | "agents" | "sessions" | "btw" | "compaction" | "model" | "effort" | "mode";
+export type Sheet = "tasklog" | "usage" | "status" | "help" | "mcp" | "login" | "agents" | "sessions" | "btw" | "compaction" | "model" | "effort" | "mode" | "subagent-model";
 
 export interface Btw {
   id: string;
@@ -71,6 +71,9 @@ export interface CodeState {
   openTaskLog(id: string): void;
   mode: Mode;
   effort: string;
+  /** The model (backend's own id) and effort subagents run on; null: the main model. */
+  subModel: string | null;
+  subEffort: string | null;
   items: Item[];
   approvals: Approval[];
   tasks: Record<string, TaskEv>;
@@ -126,6 +129,8 @@ export const createCodeStore = () =>
   },
   mode: "ask",
   effort: "high",
+  subModel: null,
+  subEffort: null,
   items: [],
   approvals: [],
   tasks: {},
@@ -143,6 +148,7 @@ export const createCodeStore = () =>
     if (cmd.type === "set_mode") set({ mode: cmd.mode });
     if (cmd.type === "set_model") set({ model: cmd.model, actualModel: null });
     if (cmd.type === "set_effort") set({ effort: cmd.effort ?? "default" });
+    if (cmd.type === "set_subagent") set({ subModel: cmd.model, subEffort: cmd.model ? cmd.effort : null });
     if (cmd.type === "undo" || cmd.type === "new") set({ approvals: [] });
     if (cmd.type === "btw") set((s) => ({ btw: [...s.btw, { id: cmd.id, question: cmd.question }], sheet: "btw" }));
     if (cmd.type === "sessions") set({ sessions: null });
@@ -294,6 +300,8 @@ export const createCodeStore = () =>
             actualModel: ev.model === s.model ? s.actualModel : null,
             mode: ev.mode,
             effort: ev.effort ?? "default",
+            subModel: ev.subagent_model ?? null,
+            subEffort: ev.subagent_effort ?? null,
             cwd: ev.cwd,
             branch: ev.branch,
             trimAt: ev.trim_at ?? s.trimAt,

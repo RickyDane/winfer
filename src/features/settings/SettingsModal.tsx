@@ -962,7 +962,12 @@ interface HarnessSettings {
   planSidebar: boolean;
   leanCodex: boolean;
   leanCodexPrompt: boolean;
+  /** The model (backend's own id) and effort each backend's subagents run on; absent = the main model. */
+  subagents: Record<string, { model: string; effort: string | null }>;
 }
+
+/** Backends whose subagents can run on a model of their own. */
+const SUBAGENT_BACKENDS = ["chatgpt", "claude", "codex"];
 
 /** A skill Claude Code can load from the user's setup (`~/.claude/skills` or an enabled plugin). */
 interface ClaudeSkill {
@@ -1164,6 +1169,43 @@ function HarnessSettings() {
             ))}
           </Select>
         </Row>
+        {HARNESS_BACKENDS.filter((b) => SUBAGENT_BACKENDS.includes(b.id)).map((b) => {
+          const cur = settings.subagents?.[b.id];
+          const list = (models ?? []).filter((m) => m.spec.startsWith(`${b.id}/`) && !m.spec.endsWith("-fast"));
+          const setSub = (model: string, effort: string | null) => {
+            const next = { ...(settings.subagents ?? {}) };
+            if (model) next[b.id] = { model, effort };
+            else delete next[b.id];
+            void save({ subagents: next });
+          };
+          return (
+            <Row
+              key={`sub-${b.id}`}
+              label={`Subagent model · ${b.label}`}
+              hint="What its subagents (exploring, web lookups, small fixes) run on; the main model orchestrates and checks their work. /subagent-model changes it in a session."
+            >
+              <Select value={cur?.model ?? ""} onChange={(e) => setSub(e.target.value, cur?.effort ?? null)} className="w-48">
+                <option value="">Same as main model</option>
+                {cur && !list.some((m) => m.spec === `${b.id}/${cur.model}`) && <option value={cur.model}>{cur.model}</option>}
+                {list.map((m) => (
+                  <option key={m.spec} value={m.spec.slice(b.id.length + 1)}>
+                    {m.label}
+                  </option>
+                ))}
+              </Select>
+              {cur && b.id !== "claude" && (
+                <Select value={cur.effort ?? ""} onChange={(e) => setSub(cur.model, e.target.value || null)} className="w-32">
+                  <option value="">Default effort</option>
+                  {["minimal", "low", "medium", "high", "xhigh"].map((e) => (
+                    <option key={e} value={e}>
+                      {e}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Row>
+          );
+        })}
         <Row label="Permission mode" hint={settings.mode === "yolo" ? "Nothing asks before editing files or running commands." : "Shift+Tab cycles it inside a session."}>
           <Select value={settings.mode} onChange={(e) => void save({ mode: e.target.value as HarnessSettings["mode"] })} className="w-56">
             <option value="ask">Ask before edits and commands</option>

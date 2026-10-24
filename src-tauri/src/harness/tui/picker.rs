@@ -35,6 +35,10 @@ pub enum PickKind {
     Compaction,
     TrimAt,
     CompactAt,
+    /// The model subagents run on (current backend's models, or the main one).
+    SubModel,
+    /// The subagents' effort, after picking their model.
+    SubEffort,
     /// Live list of subagents; enter jumps to the agent's card.
     Agents,
     /// Live list of background shells; enter jumps to the command's card.

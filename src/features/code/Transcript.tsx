@@ -22,6 +22,7 @@ import { Markdown } from "./Markdown";
 import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
 import { useCodeWeb } from "./styles";
+import { modelName } from "./names";
 
 const TOOL_ICONS: Record<string, typeof Bot> = {
   Read: FileText,
@@ -180,7 +181,7 @@ function ToolCard({ item }: { item: Extract<Item, { kind: "tool" }> }) {
             }}
           >
             {task.agent
-              ? `${task.agent} · ${task.tools ?? 0} tools`
+              ? `${task.agent}${task.model ? ` · ${modelName(task.model, {})}` : ""} · ${task.tools ?? 0} tools`
               : "background"}
             {task.status === "running"
               ? task.last

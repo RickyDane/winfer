@@ -312,7 +312,7 @@ function TaskRow({ t }: { t: TaskEv }) {
       <button className="cw-task-open" onClick={() => open(t.id)} title="Show its output">
         <b>{t.title ?? t.id}</b>
         <small>
-          {t.agent ? `${t.agent} · ${t.tools ?? 0} tools` : "background shell"} · {status}
+          {t.agent ? `${t.agent}${t.model ? ` · ${modelName(t.model, {})}` : ""} · ${t.tools ?? 0} tools` : "background shell"} · {status}
           {t.exit_code != null && status !== "running" ? ` · exit ${t.exit_code}` : ""}
           {t.last ? ` · ${t.last}` : ""}
         </small>
@@ -599,6 +599,69 @@ export function ModelPicker() {
   );
 }
 
+/** Backends whose subagents can run on a model of their own (winfer's own, Claude Code's, Codex's). */
+export const SUBAGENT_BACKENDS = ["chatgpt", "claude", "codex"];
+
+/** `/subagent-model`: what this backend's subagents run on while the main model orchestrates. */
+export function SubagentPicker() {
+  const { models, model, subModel, subEffort, send } = useCode();
+  const resolved = useCodeWeb((s) => s.resolvedModels);
+  const backend = model.split("/")[0];
+  const rows = models.filter((m) => m.spec.startsWith(backend + "/") && !isFast(m.spec));
+  const id = (spec: string) => spec.slice(backend.length + 1);
+  const spec = subModel ? `${backend}/${subModel}` : null;
+  // Claude Code has no effort setting for subagents.
+  const efforts = spec && backend !== "claude" ? effortOptions(models, spec) : [];
+  const pick = (m: string | null) => {
+    const keep = m && subEffort && effortOptions(models, `${backend}/${m}`).includes(subEffort) ? subEffort : null;
+    send({ type: "set_subagent", model: m, effort: keep });
+  };
+  return (
+    <div className="cw-sub-picker">
+      <p className="cw-empty">Subagents explore, search and make small fixes; the main model orchestrates and checks their work.</p>
+      <div className="cw-list cw-model-list">
+        <div className={clsx("cw-list-item model", !subModel && "sel")}>
+          <button className="cw-model-pick" onClick={() => pick(null)}>
+            <span>
+              <b>Same as main model</b>
+              <small>{modelName(model, resolved)}</small>
+            </span>
+          </button>
+          {!subModel && <Check size={14} className="cw-check" />}
+        </div>
+        {rows.length === 0 && <p className="cw-empty">Loading models…</p>}
+        {rows.map((m) => (
+          <div key={m.spec} className={clsx("cw-list-item model", m.spec === spec && "sel")}>
+            <button className="cw-model-pick" onClick={() => pick(id(m.spec))}>
+              <span>
+                <b>{modelName(m.spec, resolved)}</b>
+                {m.detail && <small>{m.detail}</small>}
+              </span>
+            </button>
+            {m.spec === spec && <Check size={14} className="cw-check" />}
+          </div>
+        ))}
+      </div>
+      {efforts.length > 0 && (
+        <div className="cw-seg" role="radiogroup" aria-label="Subagent effort">
+          {efforts.map((e) => (
+            <button
+              key={e}
+              role="radio"
+              aria-checked={(subEffort ?? "default") === e}
+              title={EFFORT_HINTS[e]}
+              className={clsx((subEffort ?? "default") === e && "sel")}
+              onClick={() => send({ type: "set_subagent", model: subModel, effort: e === "default" ? null : e })}
+            >
+              {EFFORT_LABELS[e] ?? e}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ListSheet({ kind }: { kind: "model" | "effort" | "mode" }) {
   const { models, model, effort, mode, send, setSheet } = useCode();
   const items =
@@ -752,6 +815,7 @@ export function Sheets({ onCommand }: { onCommand: (c: string) => void }) {
     login: <LoginSheet />,
     // Opens as a popover from the status line (see CodePane's Footer).
     model: null,
+    "subagent-model": null,
     effort: <ListSheet kind="effort" />,
     mode: <ListSheet kind="mode" />,
   };

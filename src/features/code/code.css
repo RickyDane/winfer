@@ -2880,3 +2880,18 @@ label.cw-icon-btn {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* `/subagent-model`: the backend's models, the effort below. */
+.cw-sub-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw-sub-picker > .cw-empty {
+  margin: 0;
+  font-size: calc(11px * var(--cw-text, 1));
+}
+.cw-model-pop .cw-sub-picker .cw-model-list {
+  height: auto;
+  max-height: min(280px, calc(100cqh - 190px));
+}

@@ -194,6 +194,8 @@ struct Bridge {
     compact_at: u8,
     /// A turn just finished: time to see whether to micro-compact.
     settled: bool,
+    /// The model subagents get unless their spawn picks one (None: the main one).
+    sub_model: Option<String>,
 }
 
 #[derive(Default)]
@@ -207,7 +209,8 @@ struct Child {
     cached: u64,
 }
 
-pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
+/// `codex app-server` with winfer's MCP servers, the lean setup and the subagents' model.
+fn server_args(opts: &Opts) -> Vec<String> {
     let mut args = vec!["app-server".to_string()];
     args.extend(mcp_args(&opts.mcp));
     // Lean Codex (Settings → winfer code → Lean setup): on by default for winfer code; Codex CLI
@@ -217,6 +220,26 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         args.extend(crate::pty::codex_output_cap());
         args.extend(crate::pty::lean_codex_args(config.lean_codex_prompt));
     }
+    args.extend(subagent_args(opts));
+    args
+}
+
+/// `-c` flags for the model (and effort) Codex's subagents get when a spawn doesn't pick one.
+fn subagent_args(opts: &Opts) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(m) = &opts.sub_model {
+        // The fast tier is the main thread's; subagents take the base model.
+        args.extend(["-c".to_string(), format!("agents.default_subagent_model={}", json!(split_fast(m).0))]);
+        if let Some(e) = &opts.sub_effort {
+            args.extend(["-c".to_string(), format!("agents.default_subagent_reasoning_effort={}", json!(e))]);
+        }
+    }
+    args
+}
+
+pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
+    let mut opts = opts;
+    let mut args = server_args(&opts);
     let proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -256,6 +279,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         trim_at: opts.trim_at,
         compact_at: opts.compact_at,
         settled: false,
+        sub_model: opts.sub_model.clone(),
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     b.initialize();
@@ -272,12 +296,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             b.fast = true;
         }
     }
-    if let Some(system) = &opts.system {
+    if let Some(system) = super::extra_system(&opts) {
         thread_params["developerInstructions"] = json!(system);
     }
     let mut resume = opts.resume.clone();
     // Exits of processes replaced by a micro-compact that ended late.
     let mut stale_exits = 0;
+    // The subagents' model changed: Codex takes it at start, so it restarts once idle.
+    let mut respawn = false;
     // New threads keep paginated history, which `thread/revert` (/undo) needs.
     let mut start_params = thread_params.clone();
     start_params["historyMode"] = json!("paginated");
@@ -364,34 +390,6 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         None => b.on_notification(method, &v["params"]),
                     }
                 }
-                if let Some((thread, path)) = b.micro_compact_file() {
-                    // Stop Codex, trim the rollout, and resume the thread in a new app-server;
-                    // what's sent meanwhile waits for the thread (`queued`).
-                    let _ = b.proc.child.kill();
-                    let _ = b.proc.child.wait();
-                    let mut held = Vec::new();
-                    stale_exits += usize::from(!super::drain_closed(&rx, &mut held));
-                    let saved = microcompact::trim_file(&path, Format::Codex, 1, true).unwrap_or(0);
-                    b.proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            b.emit(Ev::Exited(format!("Codex didn't restart after trimming its context: {e}")));
-                            return;
-                        }
-                    };
-                    b.pending.clear();
-                    b.thread = None;
-                    resume = Some(thread);
-                    b.initialize();
-                    if saved > 0 {
-                        b.usage.context = b.usage.context.saturating_sub(saved as u64 / 4);
-                        b.emit_usage();
-                        b.emit(Ev::Notice(format!("Micro-compacted: trimmed {} KB of old tool output.", saved / 1024)));
-                    }
-                    for cmd in held {
-                        let _ = me.send(In::Cmd(cmd));
-                    }
-                }
             }
             In::Closed if stale_exits > 0 => stale_exits -= 1,
             In::Closed => {
@@ -462,8 +460,52 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         None => b.emit(Ev::Notice("That subagent isn't running.".into())),
                     }
                 }
+                Cmd::SetSubagent { model, effort } => {
+                    if (&model, &effort) != (&opts.sub_model, &opts.sub_effort) {
+                        b.sub_model = model.clone();
+                        opts.sub_model = model;
+                        opts.sub_effort = effort;
+                        args = server_args(&opts);
+                        respawn = true;
+                    }
+                }
                 Cmd::Shutdown => return,
             },
+        }
+        let restart = match b.micro_compact_file() {
+            Some((thread, path)) => Some((thread, Some(path))),
+            None if respawn && b.idle() => b.thread.clone().map(|t| (t, None)),
+            None => None,
+        };
+        if let Some((thread, path)) = restart {
+            // Stop Codex, trim the rollout (micro-compact), and resume the thread in a new
+            // app-server with the current settings; what's sent meanwhile waits for the thread
+            // (`queued`).
+            respawn = false;
+            let _ = b.proc.child.kill();
+            let _ = b.proc.child.wait();
+            let mut held = Vec::new();
+            stale_exits += usize::from(!super::drain_closed(&rx, &mut held));
+            let saved = path.map_or(0, |p| microcompact::trim_file(&p, Format::Codex, 1, true).unwrap_or(0));
+            b.proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    b.emit(Ev::Exited(format!("Codex didn't restart: {e}")));
+                    return;
+                }
+            };
+            b.pending.clear();
+            b.thread = None;
+            resume = Some(thread);
+            b.initialize();
+            if saved > 0 {
+                b.usage.context = b.usage.context.saturating_sub(saved as u64 / 4);
+                b.emit_usage();
+                b.emit(Ev::Notice(format!("Micro-compacted: trimmed {} KB of old tool output.", saved / 1024)));
+            }
+            for cmd in held {
+                let _ = me.send(In::Cmd(cmd));
+            }
         }
     }
 }
@@ -477,21 +519,24 @@ impl Bridge {
     /// `trim_at`, the thread is idle with nothing a restart would cut short (approvals, background
     /// terminals, subagents, requests in flight), and trimming saves enough.
     fn micro_compact_file(&mut self) -> Option<(String, std::path::PathBuf)> {
-        if !std::mem::take(&mut self.settled)
-            || self.turn.is_some()
-            || !self.queued.is_empty()
-            || !self.approvals.is_empty()
-            || !self.asks.is_empty()
-            || !self.background.is_empty()
-            || self.children.values().any(|c| c.turn.is_some())
-            || self.pending.values().any(|p| !matches!(p, Pending::Skills | Pending::Ignore))
-            || !microcompact::due(&self.usage, self.trim_at, self.compact_at)
-        {
+        if !std::mem::take(&mut self.settled) || !self.idle() || !microcompact::due(&self.usage, self.trim_at, self.compact_at) {
             return None;
         }
         let thread = self.thread.clone()?;
         let path = microcompact::codex_rollout(&thread)?;
         (microcompact::trim_file(&path, Format::Codex, microcompact::MIN_SAVING, false).ok()? > 0).then_some((thread, path))
+    }
+
+    /// Nothing a restart would cut short (turns, approvals, background terminals, subagents,
+    /// requests in flight).
+    fn idle(&self) -> bool {
+        !(self.turn.is_some()
+            || !self.queued.is_empty()
+            || !self.approvals.is_empty()
+            || !self.asks.is_empty()
+            || !self.background.is_empty()
+            || self.children.values().any(|c| c.turn.is_some())
+            || self.pending.values().any(|p| !matches!(p, Pending::Skills | Pending::Ignore)))
     }
 
     fn emit(&self, ev: Ev) {
@@ -935,7 +980,8 @@ impl Bridge {
                     self.emit(Ev::ToolStart { id: id.clone(), name: "Agent".into(), title: name.clone(), input: item.clone() });
                     self.emit(Ev::ToolEnd { id: id.clone(), ok: true, output: format!("Started {name}."), diff: None });
                 }
-                self.task(TaskEv { id: thread, tool_id: Some(id).filter(|_| card), title: Some(name), agent: Some("codex".into()), status: Some("running".into()), ..Default::default() });
+                let model = item["model"].as_str().map(String::from).or_else(|| self.sub_model.clone());
+                self.task(TaskEv { id: thread, tool_id: Some(id).filter(|_| card), title: Some(name), agent: Some("codex".into()), status: Some("running".into()), model, ..Default::default() });
                 return;
             }
             Some("completed") => "completed",
@@ -1026,6 +1072,7 @@ impl Bridge {
                 title,
                 agent: Some("codex".into()),
                 status: status.map(str::to_string),
+                model: spawn.then(|| item["model"].as_str().map(String::from).or_else(|| self.sub_model.clone())).flatten(),
                 ..Default::default()
             });
             if let Some(m) = state["message"].as_str().filter(|m| !m.is_empty()) {
@@ -1559,6 +1606,7 @@ mod tests {
             trim_at: 0,
             compact_at: 0,
             settled: false,
+            sub_model: None,
         };
         (b, rx)
     }
@@ -1615,6 +1663,34 @@ mod tests {
         assert!(matches!(&evs[1], Ev::Task(t) if t.tool_id.as_deref() == Some("c1") && t.status.as_deref() == Some("running")));
         assert!(matches!(&evs[3], Ev::Task(t) if t.id == "kid" && t.tool_id.is_none() && t.status.as_deref() == Some("completed")));
         assert!(matches!(&evs[4], Ev::ToolEnd { id, output, .. } if id == "c2" && output == "42 files"));
+    }
+
+    #[test]
+    fn a_subagent_model_becomes_codexs_subagent_default() {
+        let mut opts = Opts {
+            cwd: std::env::temp_dir(),
+            model: String::new(),
+            effort: None,
+            mode: Mode::Ask,
+            resume: None,
+            system: None,
+            mcp: Default::default(),
+            allowed_commands: Vec::new(),
+            trim_at: 0,
+            compact_at: 0,
+            lean: false,
+            skills: crate::harness::claude_skills::LeanSkills::All,
+            bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
+        };
+        assert!(subagent_args(&opts).is_empty());
+        opts.sub_model = Some("gpt-mini-fast".into());
+        opts.sub_effort = Some("low".into());
+        assert_eq!(
+            subagent_args(&opts),
+            ["-c", "agents.default_subagent_model=\"gpt-mini\"", "-c", "agents.default_subagent_reasoning_effort=\"low\""]
+        );
     }
 
     #[test]

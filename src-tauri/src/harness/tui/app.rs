@@ -119,8 +119,9 @@ You can't run tools or change anything; if the transcript doesn't tell, say so."
 /// How much of the transcript a `/btw` question sees, newest first.
 pub(crate) const BTW_CONTEXT_BYTES: usize = 120_000;
 
-pub const COMMANDS: [(&str, &str); 25] = [
+pub const COMMANDS: [(&str, &str); 26] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
+    ("/subagent-model", "Model subagents run on while the main model orchestrates"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
     ("/new", "Start a new conversation"),
@@ -169,6 +170,8 @@ pub struct Subagent<'a> {
     /// Tool calls it has made so far and the latest one (while it runs).
     pub steps: usize,
     pub last: &'a str,
+    /// The model it runs on ("" if unknown).
+    pub model: &'a str,
     /// Index of its card in `App::items`.
     pub item: usize,
 }
@@ -189,6 +192,8 @@ pub struct Task {
     pub last: String,
     pub output_file: Option<PathBuf>,
     pub exit_code: Option<i32>,
+    /// The model a subagent runs on, when the backend says.
+    pub model: String,
     polled: Option<Instant>,
 }
 
@@ -1286,6 +1291,17 @@ impl App {
                     self.switch_model(arg);
                 }
             }
+            "/subagent-model" | "/submodel" => {
+                let mut words = arg.split_whitespace();
+                match words.next() {
+                    None => self.open_sub_models(),
+                    Some("main" | "default" | "same") => self.set_subagent("", None),
+                    Some(m) => {
+                        let m = m.strip_prefix(&format!("{}/", self.kind.id())).unwrap_or(m).to_string();
+                        self.set_subagent(&m, words.next());
+                    }
+                }
+            }
             "/effort" => {
                 if arg.is_empty() {
                     self.open_effort();
@@ -1385,6 +1401,56 @@ impl App {
         let mut p = Picker::new(PickKind::Model, "Model", items);
         p.loading = self.models.is_empty();
         self.open(p);
+    }
+
+    /// `/subagent-model`: the current backend's models, for its subagents.
+    fn open_sub_models(&mut self) {
+        if !matches!(self.kind, Kind::ChatGpt | Kind::Claude | Kind::Codex) {
+            self.toast(format!("{}'s subagents run on its main model.", self.kind.label()), NoticeKind::Info);
+            return;
+        }
+        let (cur, _) = self.config.subagent_for(self.kind.id());
+        let cur = cur.unwrap_or_default();
+        let prefix = format!("{}/", self.kind.id());
+        let mut items = vec![PickItem::new("Same as main model", "subagents inherit the model you orchestrate with", "").current(cur.is_empty())];
+        items.extend(self.models.iter().filter_map(|m| {
+            let id = m.spec.strip_prefix(&prefix)?;
+            Some(PickItem::new(m.label.clone(), m.detail.clone(), id).current(id == cur))
+        }));
+        let mut p = Picker::new(PickKind::SubModel, "Subagent model", items);
+        p.loading = self.models.is_empty();
+        self.open(p);
+    }
+
+    /// The subagents' effort for `model`, from its efforts (or the usual levels).
+    fn open_sub_effort(&mut self, model: &str) {
+        let spec = format!("{}/{model}", self.kind.id());
+        let (_, cur) = self.config.subagent_for(self.kind.id());
+        let cur = cur.unwrap_or_default();
+        let levels: Vec<String> = match self.models.iter().find(|m| m.spec == spec).and_then(|m| m.efforts.clone()) {
+            Some(e) => e,
+            None => self.effort_levels().iter().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect(),
+        };
+        let mut items = vec![PickItem::new("Default", "the model's default", format!("{model}\t")).current(cur.is_empty())];
+        items.extend(levels.iter().map(|l| PickItem::new(l.clone(), "", format!("{model}\t{l}")).current(*l == cur)));
+        self.open(Picker::new(PickKind::SubEffort, "Subagent effort", items));
+    }
+
+    /// Sets the model ("" = the main one) and effort the current backend's subagents run on.
+    fn set_subagent(&mut self, model: &str, effort: Option<&str>) {
+        let model = Some(model.trim().to_string()).filter(|m| !m.is_empty());
+        let effort = effort.map(str::to_string).filter(|e| !e.is_empty() && e != "default");
+        let kind = self.kind.id();
+        let (m, e) = (model.clone(), effort.clone());
+        self.config.set_subagent(kind, m.clone(), e.clone());
+        Config::update(|c| c.set_subagent(kind, m, e));
+        self.send(Cmd::SetSubagent { model: model.clone(), effort: effort.clone() });
+        let text = match (&model, &effort) {
+            (None, _) => "Subagents: same as main model".to_string(),
+            (Some(m), None) => format!("Subagents: {}", super::view::friendly_model(m)),
+            (Some(m), Some(e)) => format!("Subagents: {} · {e}", super::view::friendly_model(m)),
+        };
+        self.toast(text, NoticeKind::Success);
     }
 
     fn open_effort(&mut self) {
@@ -1515,7 +1581,8 @@ impl App {
                         Some(t) => t.last.as_str(),
                         None => steps.last().copied().unwrap_or(""),
                     };
-                    Some(Subagent { id, title, status, started: *started, ended, steps: steps.len().max(task.map_or(0, |t| t.tools)), last, item })
+                    let model = task.map_or("", |t| t.model.as_str());
+                    Some(Subagent { id, title, status, started: *started, ended, steps: steps.len().max(task.map_or(0, |t| t.tools)), last, model, item })
                 }
                 _ => None,
             })
@@ -1524,7 +1591,7 @@ impl App {
         for t in &self.tasks {
             let carded = t.tool_id.as_deref().is_some_and(|id| out.iter().any(|a| a.id == id));
             if t.agent && !carded {
-                out.push(Subagent { id: &t.id, title: &t.title, status: t.status, started: t.started, ended: t.ended, steps: t.tools, last: &t.last, item: usize::MAX });
+                out.push(Subagent { id: &t.id, title: &t.title, status: t.status, started: t.started, ended: t.ended, steps: t.tools, last: &t.last, model: &t.model, item: usize::MAX });
             }
         }
         out.sort_by_key(|a| (a.status != Status::Running, if a.status == Status::Running { a.item as i64 } else { -(a.item as i64) }));
@@ -1557,6 +1624,7 @@ impl App {
                     last: String::new(),
                     output_file: None,
                     exit_code: None,
+                    model: String::new(),
                     polled: None,
                 });
                 self.tasks.len() - 1
@@ -1585,6 +1653,9 @@ impl App {
         }
         if let Some(l) = t.last {
             task.last = l;
+        }
+        if let Some(m) = t.model {
+            task.model = m;
         }
         match t.status.as_deref() {
             Some("running" | "pending") if task.ended.is_none() => {
@@ -1665,6 +1736,7 @@ impl App {
                     Status::Ok => format!("done in {took}"),
                     Status::Failed => format!("stopped after {took}"),
                 };
+                let detail = if a.model.is_empty() { detail } else { format!("{} · {detail}", super::view::friendly_model(a.model)) };
                 let label = if a.title.trim().is_empty() { "(subagent)".to_string() } else { a.title.to_string() };
                 PickItem::new(label, detail, a.id).group(if a.status == Status::Running { "Running" } else { "Finished" })
             })
@@ -1886,6 +1958,14 @@ impl App {
         match p.kind {
             PickKind::Model => self.switch_model(&item.value),
             PickKind::Effort => self.set_effort(&item.value),
+            // Claude Code has no effort setting for subagents.
+            PickKind::SubModel if item.value.is_empty() || self.kind == Kind::Claude => self.set_subagent(&item.value, None),
+            PickKind::SubModel => self.open_sub_effort(&item.value),
+            PickKind::SubEffort => {
+                let (m, e) = item.value.split_once('\t').unwrap_or((item.value.as_str(), ""));
+                let (m, e) = (m.to_string(), e.to_string());
+                self.set_subagent(&m, Some(&e));
+            }
             PickKind::Mode => {
                 if let Ok(m) = serde_json::from_value::<Mode>(json!(item.value)) {
                     self.set_mode(m);
@@ -2724,9 +2804,13 @@ pub fn drain(app: &mut App, rx: &Receiver<Msg>, first: Msg) {
         Msg::Models(m) => {
             app.models = m;
             if let Some(p) = &app.picker {
-                if p.kind == PickKind::Model {
+                if matches!(p.kind, PickKind::Model | PickKind::SubModel) {
                     let filter = p.filter.clone();
-                    app.open_models();
+                    if p.kind == PickKind::Model {
+                        app.open_models();
+                    } else {
+                        app.open_sub_models();
+                    }
                     if let Some(p) = &mut app.picker {
                         p.set_filter(filter);
                         p.opened -= Duration::from_secs(1);
@@ -2868,6 +2952,30 @@ mod tests {
         // Its late answer is ignored.
         a.on_checkpoint(rx.recv_timeout(Duration::from_secs(10)).unwrap());
         assert_eq!(a.turns.len(), 1);
+    }
+
+    #[test]
+    fn subagent_model_picks_the_backends_models_then_an_effort() {
+        let mut a = app();
+        a.kind = Kind::Codex;
+        a.models = vec![
+            ModelInfo { spec: "codex/gpt-big".into(), label: "Big".into(), detail: String::new(), efforts: Some(vec!["low".into(), "high".into()]) },
+            ModelInfo { spec: "claude/haiku".into(), label: "Haiku".into(), detail: String::new(), efforts: None },
+        ];
+        a.command("/subagent-model");
+        let p = a.picker.as_ref().unwrap();
+        assert_eq!(p.kind, PickKind::SubModel);
+        assert_eq!(p.items.iter().map(|i| i.value.as_str()).collect::<Vec<_>>(), ["", "gpt-big"]);
+        a.picker.as_mut().unwrap().selected = 1;
+        a.pick();
+        let p = a.picker.as_ref().unwrap();
+        assert_eq!(p.kind, PickKind::SubEffort);
+        assert_eq!(p.items.len(), 3);
+        a.picker.as_mut().unwrap().selected = 1;
+        a.pick();
+        assert_eq!(a.config.subagent_for("codex"), (Some("gpt-big".into()), Some("low".into())));
+        a.command("/subagent-model main");
+        assert_eq!(a.config.subagent_for("codex"), (None, None));
     }
 
     #[test]

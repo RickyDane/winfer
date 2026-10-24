@@ -41,6 +41,8 @@ export interface TaskEv {
   /** File receiving a background shell's output (read with `task_log`). */
   output_file?: string | null;
   exit_code?: number | null;
+  /** The model a subagent runs on, when the backend says. */
+  model?: string | null;
 }
 
 export interface Usage {
@@ -89,6 +91,9 @@ export type Ev =
       model: string;
       mode: Mode;
       effort?: string | null;
+      /** The model (backend's own id) subagents run on; null: the main one. */
+      subagent_model?: string | null;
+      subagent_effort?: string | null;
       cwd: string;
       branch?: string | null;
       trim_at?: number;
@@ -139,6 +144,8 @@ export type Cmd =
   | { type: "answer"; id: string; answers: string[] }
   | { type: "set_model"; model: string }
   | { type: "set_effort"; effort: string | null }
+  /** The model (null: the main one) and effort this backend's subagents run on. */
+  | { type: "set_subagent"; model: string | null; effort: string | null }
   | { type: "set_mode"; mode: Mode }
   | { type: "compact" }
   | { type: "undo"; files: boolean }
@@ -170,6 +177,7 @@ export const MODES: { id: Mode; label: string; hint: string }[] = [
 /** Mirrors `tui::app::COMMANDS`. */
 export const COMMANDS: [string, string][] = [
   ["/model", "Switch model (ChatGPT, Claude, Codex)"],
+  ["/subagent-model", "Model subagents run on while the main model orchestrates"],
   ["/effort", "Set reasoning effort"],
   ["/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"],
   ["/new", "Start a new conversation"],

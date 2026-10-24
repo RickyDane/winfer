@@ -357,7 +357,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             }
         }
         let path = b.micro_compact_file();
-        if path.is_some() || (respawn && b.idle() && b.session.is_some()) {
+        if path.is_some() || (respawn && b.idle() && (b.session.is_some() || opts.resume.is_none())) {
             respawn = false;
             match micro_compact(&mut b, &mut proc, &mut opts, path.as_deref(), &rx, &me) {
                         Ok((held, ended)) => {
@@ -511,6 +511,8 @@ impl Bridge {
                 let level = e.map(|e| if e == "minimal" { "low".to_string() } else { e });
                 self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } }));
             }
+            // Applied by `run`, which restarts Claude Code with it.
+            Cmd::SetSubagent { .. } => {}
             Cmd::Compact => {
                 self.busy = true;
                 self.emit(Ev::TurnStart);
@@ -1062,6 +1064,32 @@ mod tests {
             settled: false,
         };
         (b, rx)
+    }
+
+    #[test]
+    fn a_subagent_model_sets_claudes_default_and_the_orchestration_prompt() {
+        let mut opts = Opts {
+            cwd: std::env::temp_dir(),
+            model: String::new(),
+            effort: None,
+            mode: Mode::Ask,
+            resume: None,
+            system: None,
+            mcp: Default::default(),
+            allowed_commands: Vec::new(),
+            trim_at: 60,
+            compact_at: 85,
+            lean: false,
+            skills: LeanSkills::All,
+            bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
+        };
+        assert!(!env(&opts).iter().any(|(k, _)| *k == "CLAUDE_CODE_SUBAGENT_MODEL"));
+        assert!(!args(&opts).contains(&"--append-system-prompt".to_string()));
+        opts.sub_model = Some("haiku".into());
+        assert!(env(&opts).contains(&("CLAUDE_CODE_SUBAGENT_MODEL", "haiku")));
+        assert!(args(&opts).windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == super::super::ORCHESTRATE_PROMPT));
     }
 
     #[test]

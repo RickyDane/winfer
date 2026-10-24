@@ -83,6 +83,7 @@ export class MockTransport implements Transport {
       model: "claude/opus",
       mode: "ask",
       effort: "high",
+      subagent_model: "haiku",
       cwd: "/Users/you/Coding/winfer",
       branch: "main",
       trim_at: 75,
@@ -319,7 +320,7 @@ export class MockTransport implements Transport {
         output: "src/api/client.ts:41:  return retry(() => fetchModels(), 3);\nsrc/api/usage.ts:18:  const u = await retry(poll, 5);",
       });
 
-      e({ type: "task", id: id("agent"), tool_id: id("ag"), title: "Find retry-related tests", agent: "Explore", tools: 0, status: "running" });
+      e({ type: "task", id: id("agent"), tool_id: id("ag"), title: "Find retry-related tests", agent: "Explore", model: "claude-haiku-4-5", tools: 0, status: "running" });
       e({ type: "tool_start", id: id("ag"), name: "Agent", title: "Find retry-related tests", input: { subagent_type: "Explore" } });
       for (let n = 1; n <= 4; n++) {
         await this.step(350);
