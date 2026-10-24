@@ -143,6 +143,17 @@ pub const LEAN_CODEGRAPH_PROMPT: &str = "You are a coding agent working in the u
 /// Codex's built-in one; its tools describe themselves.
 pub const CODEX_LEAN_PROMPT: &str = "You are a coding agent working in the user's repository from their terminal. Work autonomously: explore with search and reads, read a file before editing it, make focused changes that match the surrounding code, and verify with the project's tests or a quick run. Edit files with apply_patch. Put independent tool calls in one response. Don't stop to ask unless you're blocked or the request is ambiguous. Reply tersely in Markdown and reference code as path:line.";
 
+/// Added to the system prompt when subagents run on a model of their own: the main model
+/// orchestrates and checks their work.
+pub const ORCHESTRATE_PROMPT: &str = "Subagents run on a smaller, faster model than yours. Delegate codebase exploration, web lookups and small, well-specified fixes to them (give each the full context it needs); keep the hard reasoning and the decisions yourself. Treat a subagent's report as unverified: before relying on it or calling the work done, read the files it changed and rerun the relevant checks.";
+
+/// The extra system prompt for a session: the app's own (`Opts::system`) plus
+/// [`ORCHESTRATE_PROMPT`] when subagents have a model of their own.
+pub fn extra_system(opts: &Opts) -> Option<String> {
+    let parts: Vec<&str> = opts.system.as_deref().into_iter().chain(opts.sub_model.as_ref().map(|_| ORCHESTRATE_PROMPT)).collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
 /// Where the agent is (Claude Code drops it with its default prompt); goes after [`LEAN_PROMPT`]
 /// so the cached prefix stays the same.
 pub fn environment(cwd: &std::path::Path) -> String {

@@ -116,8 +116,8 @@ pub fn args(opts: &Opts) -> Vec<String> {
         let prompt = if opts.mcp.contains_key("codegraph") { super::LEAN_CODEGRAPH_PROMPT } else { super::LEAN_PROMPT };
         args.extend(["--system-prompt".into(), format!("{prompt}\n\n{}", super::environment(&opts.cwd))]);
     }
-    if let Some(system) = &opts.system {
-        args.extend(["--append-system-prompt".into(), system.clone()]);
+    if let Some(system) = super::extra_system(opts) {
+        args.extend(["--append-system-prompt".into(), system]);
     }
     if !opts.mcp.is_empty() {
         args.extend(["--mcp-config".into(), json!({ "mcpServers": opts.mcp }).to_string()]);
@@ -273,12 +273,22 @@ const ENV: &[(&str, &str)] = &[
     ("ENABLE_TOOL_SEARCH", "false"),
 ];
 
+/// [`ENV`] plus the subagents' model: Claude Code's default for subagents a spawn (or an agent
+/// definition) doesn't give one of their own.
+fn env(opts: &Opts) -> Vec<(&'static str, &str)> {
+    let mut env = ENV.to_vec();
+    if let Some(m) = &opts.sub_model {
+        env.push(("CLAUDE_CODE_SUBAGENT_MODEL", m.as_str()));
+    }
+    env
+}
+
 /// Tools whose changes Claude Code's file checkpoints cover.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut opts = opts;
-    let mut proc = match LineProcess::spawn("claude", &args(&opts), ENV, &opts.cwd, me.clone()) {
+    let mut proc = match LineProcess::spawn("claude", &args(&opts), &env(&opts), &opts.cwd, me.clone()) {
         Ok(p) => p,
         Err(e) => {
             let _ = events.send(Ev::Exited(e));
@@ -312,6 +322,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     // Exits of processes replaced by a micro-compact that ended late.
     let mut stale_exits = 0;
+    // The subagent model changed: Claude Code takes it at start, so it restarts once idle.
+    let mut respawn = false;
     while let Some(msg) = super::recv(&rx) {
         match msg {
             In::Line(line) => {
@@ -320,22 +332,6 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
                 for out in std::mem::take(&mut b.outbox) {
                     let _ = proc.write(&out);
-                }
-                if let Some(path) = b.micro_compact_file() {
-                    match micro_compact(&mut b, &mut proc, &mut opts, &path, &rx, &me) {
-                        Ok((held, ended)) => {
-                            stale_exits += usize::from(!ended);
-                            for cmd in held {
-                                if !b.on_cmd(cmd, &mut proc) {
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart after trimming its context: {e}")));
-                            return;
-                        }
-                    }
                 }
             }
             In::Closed if stale_exits > 0 => stale_exits -= 1,
@@ -349,6 +345,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 match &cmd {
                     Cmd::SetModel(m) => opts.model = m.clone(),
                     Cmd::SetEffort(e) => opts.effort = e.clone(),
+                    Cmd::SetSubagent { model, .. } if *model != opts.sub_model => {
+                        opts.sub_model = model.clone();
+                        respawn = true;
+                    }
                     _ => {}
                 }
                 if !b.on_cmd(cmd, &mut proc) {
@@ -356,21 +356,39 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
             }
         }
+        let path = b.micro_compact_file();
+        if path.is_some() || (respawn && b.idle() && b.session.is_some()) {
+            respawn = false;
+            match micro_compact(&mut b, &mut proc, &mut opts, path.as_deref(), &rx, &me) {
+                        Ok((held, ended)) => {
+                            stale_exits += usize::from(!ended);
+                            for cmd in held {
+                                if !b.on_cmd(cmd, &mut proc) {
+                                    return;
+                                }
+                            }
+                        }
+                Err(e) => {
+                    let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart: {e}")));
+                    return;
+                }
+            }
+        }
     }
 }
 
-/// Micro-compacts the session: stops Claude Code, trims old tool output in its session file and
-/// resumes the session in a new process. Returns the commands that came meanwhile, and whether
-/// the old process's output ended (else its exit arrives later).
-fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: &std::path::Path, rx: &Receiver<In>, me: &Sender<In>) -> Result<(Vec<Cmd>, bool), String> {
+/// Restarts Claude Code on the session (with `path`, its session file, micro-compacted first:
+/// old tool output trimmed) so it picks up the current settings. Returns the commands that came
+/// meanwhile, and whether the old process's output ended (else its exit arrives later).
+fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: Option<&std::path::Path>, rx: &Receiver<In>, me: &Sender<In>) -> Result<(Vec<Cmd>, bool), String> {
     let _ = proc.child.kill();
     let _ = proc.child.wait();
     let mut held = Vec::new();
     let ended = super::drain_closed(rx, &mut held);
-    let saved = microcompact::trim_file(path, Format::Claude, 1, true).unwrap_or(0);
+    let saved = path.map_or(0, |p| microcompact::trim_file(p, Format::Claude, 1, true).unwrap_or(0));
     opts.resume = b.session.clone();
     opts.mode = b.mode;
-    *proc = LineProcess::spawn("claude", &args(opts), ENV, &opts.cwd, me.clone())?;
+    *proc = LineProcess::spawn("claude", &args(opts), &env(opts), &opts.cwd, me.clone())?;
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
     if saved > 0 {
         b.live.usage.context = b.live.usage.context.saturating_sub(saved as u64 / 4);
@@ -422,17 +440,16 @@ impl Bridge {
     /// The session file, when it's time to micro-compact: the context is past `trim_at`, the
     /// session is idle with nothing a restart would cut short, and trimming saves enough.
     fn micro_compact_file(&mut self) -> Option<std::path::PathBuf> {
-        if !std::mem::take(&mut self.settled)
-            || self.busy
-            || !self.pending.is_empty()
-            || self.undoing.is_some()
-            || !self.running.is_empty()
-            || !microcompact::due(&self.live.usage, self.trim_at, self.compact_at)
-        {
+        if !std::mem::take(&mut self.settled) || !self.idle() || !microcompact::due(&self.live.usage, self.trim_at, self.compact_at) {
             return None;
         }
         let path = microcompact::claude_transcript(self.session.as_deref()?)?;
         (microcompact::trim_file(&path, Format::Claude, microcompact::MIN_SAVING, false).ok()? > 0).then_some(path)
+    }
+
+    /// Nothing a restart would cut short: no turn, approval, undo or subagent running.
+    fn idle(&self) -> bool {
+        !self.busy && self.pending.is_empty() && self.undoing.is_none() && self.running.is_empty()
     }
 
     fn control(&mut self, proc: &mut LineProcess, request: Value) {

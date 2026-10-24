@@ -11,5 +11,5 @@ const ICONS: Record<string, LucideIcon> = {
 
 export function ModeIcon({ mode, size = 14 }: { mode: string; size?: number }) {
   const Icon = ICONS[mode] ?? Hand;
-  return <Icon size={size} aria-hidden />;
+  return <Icon size={size} className={`cw-mode-icon mode-${mode}`} aria-hidden />;
 }

@@ -1465,6 +1465,12 @@ button.cw-foot-item.active {
   width: max-content;
   max-width: calc(100cqw - 24px);
 }
+.cw-mode-icon.mode-plan {
+  color: var(--color-warning);
+}
+.cw-mode-icon.mode-yolo {
+  color: #f97316;
+}
 .cw-menu:has(> .cw-foot-item.mode) .cw-pop-item {
   padding-right: 16px;
 }
