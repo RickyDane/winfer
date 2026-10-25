@@ -51,6 +51,11 @@ export function beginDrag(e: React.PointerEvent, paneId: string) {
 
   const move = (ev: PointerEvent) => {
     if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < THRESHOLD) return;
+    if (!active) {
+      // Without this the browser keeps extending a text selection across the panes passed over.
+      window.getSelection()?.removeAllRanges();
+      document.body.classList.add("pane-dragging");
+    }
     active = true;
     document.body.style.cursor = "grabbing";
     useDrag.setState({ paneId, x: ev.clientX, y: ev.clientY, target: dropTargetAt(ev.clientX, ev.clientY, paneId) });
@@ -60,6 +65,7 @@ export function beginDrag(e: React.PointerEvent, paneId: string) {
     window.removeEventListener("pointerup", end);
     window.removeEventListener("keydown", cancel);
     document.body.style.cursor = "";
+    document.body.classList.remove("pane-dragging");
     const { target } = useDrag.getState();
     useDrag.setState({ paneId: null, target: null });
     if (active && target) execute({ type: "pane.move", paneId, targetId: target.paneId, side: target.side });

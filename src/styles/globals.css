@@ -95,6 +95,13 @@
 body.resizing * {
   pointer-events: none;
 }
+body.pane-dragging,
+body.pane-dragging *,
+body.resizing,
+body.resizing * {
+  user-select: none;
+  -webkit-user-select: none;
+}
 /* The handle keeps its events so a double-click still lands on it. */
 body.resizing [data-resizer] {
   pointer-events: auto;
