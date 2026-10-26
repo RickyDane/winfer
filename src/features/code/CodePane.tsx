@@ -353,9 +353,12 @@ function StatusSync({ paneId }: { paneId: string }) {
 }
 
 const stores = new Map<string, ReturnType<typeof createCodeStore>>();
+const disconnects = new Map<string, () => void>();
 
 /** Ends a pane's session view (the PTY itself is killed with the pane, see closeTerminal). */
 export function disposeCodePane(paneId: string) {
+  disconnects.get(paneId)?.();
+  disconnects.delete(paneId);
   stores.delete(paneId);
 }
 
@@ -365,17 +368,24 @@ export function storeFor(pane: Pane) {
   if (!s) {
     s = createCodeStore();
     stores.set(pane.id, s);
+    let disconnect: () => void;
+    let promptTimer: ReturnType<typeof setTimeout> | undefined;
     if (CODE_WEB_DEMO) {
       // The browser preview: a scripted session.
-      s.getState().attach(new MockTransport());
+      disconnect = s.getState().attach(new MockTransport());
       const prompt =
         pane.prompt ??
         "Add exponential backoff to retry() and make it cancellable";
-      setTimeout(() => s!.getState().submit(prompt), 3500);
+      promptTimer = setTimeout(() => s!.getState().submit(prompt), 3500);
     } else {
-      s.getState().attach(new PtyTransport(pane));
+      disconnect = s.getState().attach(new PtyTransport(pane));
     }
-    trackTitle(pane.id, s);
+    const untrack = trackTitle(pane.id, s);
+    disconnects.set(pane.id, () => {
+      clearTimeout(promptTimer);
+      untrack();
+      disconnect();
+    });
   }
   return s;
 }
@@ -386,8 +396,10 @@ export function storeFor(pane: Pane) {
  * A resumed session without a saved title is named from its first restored message.
  */
 function trackTitle(paneId: string, store: ReturnType<typeof createCodeStore>) {
-  store.subscribe((st, prev) => {
+  return store.subscribe((st, prev) => {
     if (st.items === prev.items) return;
+    // A token replaces an existing row but cannot introduce a user message.
+    if (st.items.length === prev.items.length && st.items[0] === prev.items[0]) return;
     const appended = st.items.length > prev.items.length && st.items[prev.items.length - 1] === prev.items.at(-1);
     // Undo and /clear shrink the list: nothing new was said.
     const added = appended ? st.items.slice(prev.items.length) : st.items;

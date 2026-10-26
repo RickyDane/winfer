@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { Approval, Cmd, Ev, Mode, ModelInfo, SessionInfo, TaskEv, Todo, Transport, Usage } from "./protocol";
 import type { ContextPart } from "@/features/usage/usage";
+import { batchEvents } from "./eventBatcher";
 
 export interface Attachment {
   id: string;
@@ -144,7 +145,12 @@ export const createCodeStore = () =>
 
   attach(t) {
     set({ transport: t });
-    return t.connect((ev) => get().apply(ev));
+    const events = batchEvents((ev) => get().apply(ev));
+    const disconnect = t.connect(events.push);
+    return () => {
+      events.dispose();
+      disconnect();
+    };
   },
 
   send(cmd) {

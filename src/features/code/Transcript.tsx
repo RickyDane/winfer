@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   Bot,
@@ -22,6 +22,7 @@ import { useCode, type Item } from "./store";
 import { Markdown } from "./Markdown";
 import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
+import { HISTORY_PAGE, historyStart } from "./history";
 import { useCodeWeb } from "./styles";
 import { modelName } from "./names";
 import { elapsed } from "../usage/toolStats";
@@ -42,7 +43,7 @@ function useTicker(on: boolean) {
   const [, set] = useState(0);
   useEffect(() => {
     if (!on) return;
-    const t = setInterval(() => set((n) => n + 1), 100);
+    const t = setInterval(() => set((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [on]);
 }
@@ -136,22 +137,37 @@ function diffStat(diff: string) {
 /** True while the user has text marked, so click-to-toggle handlers don't fire at the end of a drag. */
 const selecting = () => !!window.getSelection()?.toString();
 
-/** Copies a whole message; shown on hover under user and assistant messages. */
+/** A quiet, discoverable footer action that never covers message content. */
 function CopyMessage({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  useEffect(() => {
+    if (status !== "copied" && status !== "error") return;
+    const timer = setTimeout(() => setStatus("idle"), 2400);
+    return () => clearTimeout(timer);
+  }, [status]);
+  const label = status === "copied" ? "Copied" : status === "error" ? "Retry copy" : "Copy";
   return (
-    <button
-      className="cw-icon-btn cw-msg-copy"
-      title={copied ? "Copied" : "Copy message"}
-      aria-label="Copy message"
-      onClick={() => {
-        void navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      }}
-    >
-      {copied ? <Check size={13} /> : <Copy size={13} />}
-    </button>
+    <div className="cw-msg-actions">
+      <button
+        type="button"
+        className={clsx("cw-msg-copy", status === "copied" && "copied")}
+        title={status === "error" ? "Couldn't copy. Try again." : "Copy message"}
+        aria-label="Copy message"
+        disabled={status === "copying"}
+        onClick={async () => {
+          setStatus("copying");
+          try {
+            await navigator.clipboard.writeText(text);
+            setStatus("copied");
+          } catch {
+            setStatus("error");
+          }
+        }}
+      >
+        {status === "copied" ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+        <span role="status">{label}</span>
+      </button>
+    </div>
   );
 }
 
@@ -355,17 +371,58 @@ export function useFresh() {
   );
 }
 
-export function Transcript({ dark }: { dark: boolean }) {
+export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
   const fresh = useFresh();
-  const end = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const lastTop = useRef(0);
   const lastUser = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
+  const head = items[0]?.key;
+  const [history, setHistory] = useState(() => ({ head, start: historyStart(items.length) }));
+  const start = historyStart(items.length, history.head === head ? history.start : undefined);
+  if (history.head !== head || history.start !== start) setHistory({ head, start });
+  const prepend = useRef<{ row: Element; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && prepend.current) {
+      const { row: anchor, top } = prepend.current;
+      // New offscreen rows initially have estimated heights. Measure just this
+      // page before anchoring, otherwise their later expansion moves the reader.
+      const added: HTMLElement[] = [];
+      for (const row of inner.current?.children ?? []) {
+        if (row === anchor) break;
+        if (row instanceof HTMLElement && row.classList.contains("cw-enter")) {
+          row.style.contentVisibility = "visible";
+          added.push(row);
+        }
+      }
+      const heights = added.map((row) => {
+        const css = getComputedStyle(row);
+        return row.getBoundingClientRect().height - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)
+          - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth);
+      });
+      added.forEach((row, i) => {
+        row.style.containIntrinsicBlockSize = `auto ${heights[i]}px`;
+        row.style.contentVisibility = "";
+      });
+      el.scrollTo({ top: el.scrollTop + anchor.getBoundingClientRect().top - top, behavior: "instant" });
+      prepend.current = null;
+    }
+  }, [start]);
+
+  // ResizeObserver and token commits often arrive together. Read scrollHeight and
+  // write scrollTop once per frame, never from inside the observer's layout phase.
+  const followFrame = useRef(0);
+  const follow = () => {
+    followFrame.current ||= requestAnimationFrame(() => {
+      followFrame.current = 0;
+      if (stick.current) toBottom();
+    });
+  };
 
   // Instant jump: the container's CSS `scroll-behavior: smooth` would otherwise
   // animate it, and mid-animation scroll events used to unstick the follow.
@@ -384,7 +441,13 @@ export function Transcript({ dark }: { dark: boolean }) {
       lastUser.current = user;
       setAway(false);
     }
-    if (stick.current) toBottom();
+    if (stick.current) {
+      // Long-running panes need the same bound as restored ones. Only retire old
+      // rows while following, never while the user is reading earlier history.
+      const latest = historyStart(items.length, start, true);
+      if (latest !== start) setHistory({ head, start: latest });
+      follow();
+    }
   }, [items]);
 
   // Keep following when content grows after render (markdown, images, tool output).
@@ -392,10 +455,16 @@ export function Transcript({ dark }: { dark: boolean }) {
     const box = inner.current;
     if (!box) return;
     const ro = new ResizeObserver(() => {
-      if (stick.current) toBottom();
+      if (stick.current) follow();
     });
     ro.observe(box);
-    return () => ro.disconnect();
+    // Height-only pane resizing doesn't necessarily resize the content itself.
+    if (scroller.current) ro.observe(scroller.current);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(followFrame.current);
+      followFrame.current = 0;
+    };
   }, []);
 
   return (
@@ -423,7 +492,23 @@ export function Transcript({ dark }: { dark: boolean }) {
     >
       {fresh && <Welcome />}
       <div className="cw-transcript" ref={inner}>
-        {items.map((it) => {
+        {start > 0 && (
+          <button
+            className="cw-history-more"
+            onClick={() => {
+              const el = scroller.current;
+              if (!el) return;
+              stick.current = false;
+              setAway(true);
+              const row = inner.current?.children[1];
+              if (row) prepend.current = { row, top: row.getBoundingClientRect().top };
+              setHistory({ head, start: Math.max(0, start - HISTORY_PAGE) });
+            }}
+          >
+            Show earlier messages ({start})
+          </button>
+        )}
+        {items.slice(start).map((it) => {
           switch (it.kind) {
             case "user":
               return <UserRow key={it.key} item={it} />;
@@ -454,7 +539,7 @@ export function Transcript({ dark }: { dark: boolean }) {
             </div>
           </div>
         )}
-        <div ref={end} style={{ height: 1 }} />
+        <div style={{ height: 1 }} />
       </div>
       {away && (
         <div className="cw-jump-wrap">
@@ -465,6 +550,7 @@ export function Transcript({ dark }: { dark: boolean }) {
             onClick={() => {
               stick.current = true;
               setAway(false);
+              setHistory({ head, start: historyStart(items.length) });
               toBottom("smooth");
             }}
           >
@@ -474,4 +560,4 @@ export function Transcript({ dark }: { dark: boolean }) {
       )}
     </div>
   );
-}
+});

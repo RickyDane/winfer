@@ -47,6 +47,8 @@ export default defineConfig(() => ({
   // Only the app's own page: mobile/index.html (the PWA) has its own React, and pre-bundling
   // both copies breaks hooks in the desktop app.
   optimizeDeps: { entries: ["index.html"] },
+  // The syntax-highlighting worker loads language grammars on demand.
+  worker: { format: "es" },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

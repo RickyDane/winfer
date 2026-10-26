@@ -16,6 +16,13 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Typing in a terminal works; colors, links (click) and copy/paste (⌘C/⌘V) work.
 - [ ] Quit (⌘Q) and reopen: workspaces, panes and layout come back; Claude/Codex resume their last session.
 
+## winfer code web UI performance
+- [ ] Resume a session with hundreds of messages: only the latest 40 rows mount initially. **Show earlier messages** reveals 40 more without moving the message you were reading; repeat through the first page. No history is deleted.
+- [ ] Resize a populated code pane continuously, including height-only resizing. The latest message stays in view when following; scrolling up stops following, **Jump to latest** resumes it. Streaming while reading older messages does not pull you down; sending a new message does.
+- [ ] Fenced code starts as plain text, highlights near the viewport after streaming finishes, and remains copyable. Test light/dark themes, `c++`, an unknown language, and a snippet over 50,000 characters (which stays plain). A blocked worker must not break the transcript.
+- [ ] Close a streaming pane, switch workspaces, and reopen/resume a session: no late updates, duplicate output or accumulating timers/listeners. Clear/undo during streaming must not resurrect buffered text.
+- [ ] Browser preview: `pnpm dev`, open `http://localhost:1420/?codeweb` in winfer's browser. Use a Performance recording with a long transcript; compare long tasks, DOM node count and resize frame times, not just navigation timing. Unit regressions: `pnpm test src/features/code`.
+
 ## 2. Tiling and keys (⌘/ shows all shortcuts)
 - [ ] ⌘D / ⌘⇧D split right/down; ⌘W closes the focused pane (not the window).
 - [ ] Drag a gap between panes to resize; ⌘⌃←→↑↓ resizes from the keyboard.

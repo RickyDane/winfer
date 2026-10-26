@@ -203,26 +203,52 @@
   user-select: none;
   -webkit-user-select: none;
 }
-.cw-user,
-.cw-assistant {
-  position: relative;
+.cw-msg-actions {
+  display: flex;
+  margin-top: 6px;
 }
 .cw-msg-copy {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 24px;
-  height: 24px;
-  background: var(--bg, transparent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 76px;
+  min-height: 32px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: calc(11px * var(--cw-text, 1));
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s, background 0.15s, color 0.15s, transform 0.15s;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
 .cw-user:hover .cw-msg-copy,
 .cw-assistant:hover .cw-msg-copy,
 .cw-msg-copy:focus-visible {
   opacity: 1;
   pointer-events: auto;
+}
+@media (hover: none) {
+  .cw-msg-copy {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+.cw-msg-copy:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
+}
+.cw-msg-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cw-msg-copy.copied {
+  color: var(--ok);
+}
+@media (pointer: coarse) {
+  .cw-msg-copy {
+    min-height: 44px;
+  }
 }
 .cw-scroll {
   flex: 1;
@@ -237,6 +263,24 @@
   flex-direction: column;
   gap: 10px;
 }
+/* Remember measured heights while skipping offscreen layout/paint on every pane
+   resize. History paging separately bounds the initial React/markdown work. */
+.cw-transcript > :is(.cw-user, .cw-assistant, .cw-tool, .cw-reason, .cw-notice, .cw-worked) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 100px;
+}
+.cw-history-more {
+  align-self: center;
+  padding: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+/* Hundreds of restored rows must not all animate blur/compositing on mount. */
+body.resizing .cw-enter {
+  animation: none;
+}
 .cw-enter {
   animation: cw-rise 0.42s var(--ease) both;
 }
@@ -249,7 +293,8 @@
 }
 .cw-user {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
   margin: 10px 0 6px;
 }
 .cw-user-bubble {
@@ -1230,8 +1275,12 @@
 }
 /* Your messages: a full-bleed band with a terminal prompt chevron. */
 .cw-pane .cw-user {
-  justify-content: stretch;
+  align-items: stretch;
   margin: 18px calc(-1 * var(--cw-gutter, 22px)) 8px;
+}
+.cw-pane .cw-user > .cw-msg-actions {
+  justify-content: flex-end;
+  padding: 0 var(--cw-gutter, 22px);
 }
 .cw-pane .cw-user-bubble {
   position: relative;

@@ -1,11 +1,10 @@
-import { createContext, memo, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { Linkify, linkifyChildren, MarkdownLink } from "./Links";
 import { splitBlocks } from "./mdBlocks";
-
-let highlighter: Promise<typeof import("shiki")> | undefined;
+import { highlightCode } from "./highlightCode";
 
 /** Whether the markdown block being rendered is still streaming in. */
 const StreamingContext = createContext(false);
@@ -20,29 +19,39 @@ function CodeBlock({
   dark: boolean;
 }) {
   const streaming = useContext(StreamingContext);
-  const [html, setHtml] = useState<string>();
+  const root = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [result, setResult] = useState<{ code: string; lang: string; dark: boolean; html: string | null }>();
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "300px" });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     // Highlighting a block that's still streaming would redo the whole block on every token
     // (tens of milliseconds for a few KB, on the main thread): it waits until it's complete.
-    if (streaming) return;
+    if (streaming || !visible) return;
     let live = true;
-    highlighter ??= import("shiki");
-    highlighter
-      .then((s) =>
-        s.codeToHtml(code, {
-          lang: lang || "text",
-          theme: dark ? "github-dark-default" : "github-light-default",
-        }),
-      )
-      .then((h) => live && setHtml(h))
-      .catch(() => {});
+    void highlightCode(code, lang, dark).then((html) => live && setResult({ code, lang, dark, html }));
     return () => {
       live = false;
     };
-  }, [code, lang, dark, streaming]);
+  }, [code, lang, dark, streaming, visible]);
+  const html = result?.code === code && result.lang === lang && result.dark === dark ? result.html : null;
   return (
-    <div className="cw-code">
+    <div className="cw-code" ref={root}>
       <div className="cw-code-head">
         <span>{lang || "text"}</span>
         <button
@@ -79,7 +88,7 @@ const remarkPlugins = [remarkGfm];
 function makeComponents(dark: boolean): Components {
   return {
     code({ className, children }) {
-      const m = /language-(\w+)/.exec(className ?? "");
+      const m = /language-([^\s]+)/.exec(className ?? "");
       const src = String(children ?? "");
       if (!m && !src.includes("\n"))
         return (

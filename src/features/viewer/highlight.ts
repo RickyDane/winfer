@@ -3,7 +3,8 @@
  * a light and a dark color (as CSS variables) so the theme can switch without re-highlighting.
  */
 import { useEffect, useState } from "react";
-import { bundledLanguagesInfo, createHighlighter, createJavaScriptRegexEngine, type BundledLanguage, type BundledTheme, type HighlighterGeneric, type ThemedToken } from "shiki";
+import { bundledLanguagesInfo } from "shiki/langs";
+import type { BundledLanguage, BundledTheme, HighlighterGeneric, ThemedToken } from "shiki";
 
 export type Tokens = ThemedToken[][];
 
@@ -60,7 +61,9 @@ export function languageFor(path: string): string | null {
 
 let highlighter: Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> | null = null;
 const getHighlighter = () =>
-  (highlighter ??= createHighlighter({ themes: Object.values(THEMES), langs: [], engine: createJavaScriptRegexEngine({ forgiving: true }) }));
+  (highlighter ??= import("shiki").then((s) => s.createHighlighter({
+    themes: Object.values(THEMES), langs: [], engine: s.createJavaScriptRegexEngine({ forgiving: true }),
+  })));
 
 /** Tokenizes `code` as `lang`, or resolves null when it can't or shouldn't. */
 export async function highlight(code: string, lang: string | null): Promise<Tokens | null> {
