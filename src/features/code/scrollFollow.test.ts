@@ -40,9 +40,28 @@ describe("transcript scroll following", () => {
     expect(followAfterScroll(false, 980, 999, 1, 0)).toBe(true);
   });
 
-  it("pauses when a keyboard/scrollbar move goes up, but not when content shrinks", () => {
-    expect(followAfterScroll(true, 1000, 900, 100, 0)).toBe(false);
+  it("keeps keyboard/scrollbar input paused before its scroll event arrives", () => {
+    expect(followAfterScroll(false, 1000, 900, 100, -1)).toBe(false);
+    expect(followAfterScroll(false, 1000, 900, 100, 0)).toBe(false);
+  });
+
+  it("keeps following when layout moves upward, even if new output has grown below it", () => {
     expect(followAfterScroll(true, 1000, 900, 0, 0)).toBe(true);
+    // A collapse or history trim clamps scrollTop; output then grows before the
+    // queued scroll event, so distance is no longer zero when it is handled.
+    expect(followAfterScroll(true, 4013, 335, 702, 0)).toBe(true);
+    expect(followAfterScroll(true, 1000, 900, 100, 1)).toBe(true);
+  });
+
+  it("continues through repeated history trims and streaming growth", () => {
+    let following = true;
+    for (let trim = 0; trim < 3; trim++) {
+      following = followAfterScroll(following, 4000, 300, 700, 0);
+      expect(following).toBe(true);
+      expect(isAwayFromBottom(following, 700)).toBe(false);
+      following = followAfterScroll(following, 300, 1000, 0, 0);
+      expect(following).toBe(true);
+    }
   });
 
   it("keeps following during normal streaming and programmatic downward jumps", () => {
