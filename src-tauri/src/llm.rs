@@ -153,6 +153,14 @@ fn codex_args(dir: &Path, model: &str) -> Vec<String> {
     // A TOML literal string: Windows paths keep their backslashes.
     args.push(format!("model_instructions_file='{}'", dir.join("system.txt").to_string_lossy()));
     args.extend(["--output-last-message".into(), dir.join("answer.txt").to_string_lossy().into_owned()]);
+    // Like the interactive Codex backend, `-fast` selects a service tier, not a model ID.
+    let model = match model.strip_suffix("-fast") {
+        Some(base) if !base.is_empty() => {
+            args.extend(["-c".into(), "service_tier=\"priority\"".into()]);
+            base
+        }
+        _ => model,
+    };
     if !model.is_empty() {
         args.extend(["--model".into(), model.into()]);
     }
@@ -234,6 +242,19 @@ mod tests {
         assert!(after("--output-last-message").unwrap().ends_with("answer.txt"));
         assert_eq!(args.last().map(String::as_str), Some("-"));
         assert!(!codex_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn codex_fast_uses_the_base_model_and_priority_tier() {
+        let args = codex_args(Path::new("/tmp/x"), "gpt-6.1-sol-fast");
+        let model = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[model + 1], "gpt-6.1-sol");
+        assert!(args.windows(2).any(|a| a[0] == "-c" && a[1] == "service_tier=\"priority\""));
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        for model in ["gpt-6.1-sol", "", "-fast"] {
+            let args = codex_args(Path::new("/tmp/x"), model);
+            assert!(!args.iter().any(|a| a.starts_with("service_tier=")));
+        }
     }
 
     /// Live: a logged-in Claude Code and Codex, and a ChatGPT sign-in made in winfer.

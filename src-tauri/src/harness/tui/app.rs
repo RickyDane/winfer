@@ -119,8 +119,9 @@ You can't run tools or change anything; if the transcript doesn't tell, say so."
 /// How much of the transcript a `/btw` question sees, newest first.
 pub(crate) const BTW_CONTEXT_BYTES: usize = 120_000;
 
-pub const COMMANDS: [(&str, &str); 26] = [
+pub const COMMANDS: [(&str, &str); 27] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex)"),
+    ("/fast", "Toggle fast mode (increased usage)"),
     ("/subagent-model", "Model subagents run on while the main model orchestrates"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
@@ -409,6 +410,12 @@ impl App {
 
     pub fn spec(&self) -> String {
         if self.model.is_empty() { self.kind.id().to_string() } else { format!("{}/{}", self.kind.id(), self.model) }
+    }
+
+    /// Speed is part of the selected spec; backend model reports may omit the suffix.
+    pub fn is_fast(&self) -> bool {
+        let model = if self.model.is_empty() { &self.actual_model } else { &self.model };
+        model.strip_suffix("-fast").is_some_and(|base| !base.is_empty())
     }
 
     fn load_async(&self) {
@@ -1258,6 +1265,7 @@ impl App {
         let (cmd, arg) = line.split_once(' ').map(|(c, a)| (c, a.trim())).unwrap_or((line, ""));
         match cmd {
             "/help" | "/?" => self.help(),
+            "/fast" => self.toggle_fast(),
             "/model" | "/models" => {
                 if arg.is_empty() {
                     self.open_models();
@@ -1967,6 +1975,20 @@ impl App {
                 }
             }
         }
+    }
+
+    fn toggle_fast(&mut self) {
+        let model = if self.model.is_empty() { &self.actual_model } else { &self.model };
+        let fast = self.is_fast();
+        let target = if fast { model.strip_suffix("-fast").unwrap().to_string() } else { format!("{model}-fast") };
+        let spec = format!("{}/{target}", self.kind.id());
+        // Always allow turning it off, including before the model list has arrived.
+        if !fast && !self.models.iter().any(|m| m.spec == spec) {
+            self.toast("Fast mode is not available for this model. Use /model to choose another model.", NoticeKind::Info);
+            return;
+        }
+        self.switch_model(&spec);
+        self.toast(if fast { "Fast mode off" } else { "Fast mode on: increased usage" }, NoticeKind::Success);
     }
 
     fn switch_model(&mut self, spec: &str) {
@@ -3092,6 +3114,66 @@ mod tests {
         // Editing the recalled command brings the menu back.
         key(&mut a, KeyCode::Backspace);
         assert!(a.completion.is_some());
+    }
+
+    #[test]
+    fn fast_command_toggles_the_current_models_advertised_variant() {
+        let mut a = app();
+        a.kind = Kind::Codex;
+        a.model = "gpt-6.1-sol".into();
+        a.alive = true;
+        a.models = vec![ModelInfo { spec: "codex/gpt-6.1-sol-fast".into(), label: "GPT Fast".into(), detail: String::new(), efforts: None }];
+        for c in "/fast".chars() {
+            key(&mut a, KeyCode::Char(c));
+        }
+        assert!(a.completion.as_ref().unwrap().items.iter().any(|i| i.value == "/fast"));
+        key(&mut a, KeyCode::Enter);
+        assert!(a.composer.is_empty());
+        assert!(a.is_fast());
+        assert_eq!(a.model, "gpt-6.1-sol-fast");
+        assert_eq!(a.config.model, a.spec());
+        assert_eq!(a.saved.model, a.spec());
+        // Reports of the underlying model must not hide the active speed tier.
+        a.on_agent(a.generation, Ev::Model("gpt-6.1-sol".into()));
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains('⚡') && s.contains("fast"), "{s}");
+        // The status bar keeps the indicator after the welcome screen disappears.
+        a.items.push(Item::new(Block::User { text: "hello".into() }));
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains('⚡') && s.contains("fast"), "{s}");
+        a.models.clear();
+        a.command("/fast");
+        assert!(!a.is_fast());
+        assert_eq!(a.model, "gpt-6.1-sol");
+        assert_eq!(a.config.model, a.spec());
+        assert_eq!(a.saved.model, a.spec());
+        let s = screen(&mut a, 100, 30);
+        assert!(!s.contains('⚡'), "{s}");
+    }
+
+    #[test]
+    fn fast_command_leaves_unsupported_models_unchanged() {
+        let mut a = app();
+        a.models = vec![ModelInfo { spec: "codex/gpt-6.1-sol-fast".into(), label: "GPT Fast".into(), detail: String::new(), efforts: None }];
+        let spec = a.spec();
+        a.command("/fast");
+        assert_eq!(a.spec(), spec);
+        assert!(!a.is_fast());
+        assert!(a.toast.as_ref().unwrap().0.contains("not available"));
+    }
+
+    #[test]
+    fn fast_indicator_handles_launch_and_resolved_default_models() {
+        let mut a = app();
+        a.kind = Kind::Codex;
+        a.model = "gpt-6.1-sol-fast".into();
+        let s = screen(&mut a, 100, 30);
+        assert!(s.contains('⚡') && s.contains("fast"), "{s}");
+        a.model.clear();
+        a.actual_model = "gpt-6.1-sol-fast".into();
+        assert!(a.is_fast());
+        a.actual_model = "-fast".into();
+        assert!(!a.is_fast());
     }
 
     #[test]

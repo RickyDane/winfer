@@ -253,6 +253,9 @@ fn welcome(f: &mut Frame, app: &App, area: Rect, t: Duration) {
     if !model.is_empty() {
         who.push(Span::styled(format!("  {model}"), theme::muted()));
     }
+    if app.is_fast() {
+        who.push(Span::styled(" ⚡ fast", theme::bold(theme::YELLOW())));
+    }
     if let Some(e) = &app.config.effort {
         who.push(Span::styled(format!(" · {e}"), theme::dim()));
     }
@@ -947,6 +950,9 @@ fn status(app: &App, width: usize) -> Line<'static> {
         Span::styled("▌", theme::fg(pill)),
         Span::styled(format!(" {model}"), theme::muted()),
     ];
+    if app.is_fast() {
+        left.push(Span::styled(" ⚡ fast", theme::bold(theme::YELLOW())));
+    }
     if let Some(e) = &app.config.effort {
         left.push(Span::styled(format!(" · {e}"), theme::dim()));
     }

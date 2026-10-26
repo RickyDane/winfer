@@ -23,7 +23,7 @@ import { Markdown } from "./Markdown";
 import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
 import { HISTORY_PAGE, historyStart } from "./history";
-import { followAfterScroll } from "./scrollFollow";
+import { followAfterScroll, isAwayFromBottom } from "./scrollFollow";
 import { useCodeWeb } from "./styles";
 import { modelName } from "./names";
 import { elapsed } from "../usage/toolStats";
@@ -400,6 +400,11 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     }
   }, [start]);
 
+  const updateAway = () => {
+    const el = scroller.current;
+    setAway(!!el && isAwayFromBottom(stick.current, el.scrollHeight - el.scrollTop - el.clientHeight));
+  };
+
   // ResizeObserver and token commits often arrive together. Read scrollHeight and
   // write scrollTop once per frame, never from inside the observer's layout phase.
   const followFrame = useRef(0);
@@ -407,6 +412,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     followFrame.current ||= requestAnimationFrame(() => {
       followFrame.current = 0;
       if (stick.current) toBottom();
+      updateAway();
     });
   };
 
@@ -427,11 +433,10 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
       // Cancel an in-flight Jump to latest animation before native wheel/touch
       // scrolling starts. Otherwise it can keep dragging the reader downward.
       if (wasFollowing && el) el.scrollTo({ top: el.scrollTop, behavior: "instant" });
-      setAway(true);
     } else if (el && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) {
       stick.current = true;
-      setAway(false);
     }
+    updateAway();
   };
 
   useEffect(() => {
@@ -454,13 +459,12 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     }
   }, [items]);
 
-  // Keep following when content grows after render (markdown, images, tool output).
+  // Follow growing content, and refresh the jump button on content/pane resizing
+  // even while paused (collapsing output can make the transcript fit again).
   useEffect(() => {
     const box = inner.current;
     if (!box) return;
-    const ro = new ResizeObserver(() => {
-      if (stick.current) follow();
-    });
+    const ro = new ResizeObserver(follow);
     ro.observe(box);
     // Height-only pane resizing doesn't necessarily resize the content itself.
     if (scroller.current) ro.observe(scroller.current);
@@ -504,7 +508,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
         const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
         stick.current = followAfterScroll(stick.current, lastTop.current, el.scrollTop, dist, scrollIntent.current);
         lastTop.current = el.scrollTop;
-        setAway(!stick.current);
+        updateAway();
       }}
     >
       {fresh && <Welcome />}
@@ -517,7 +521,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
               if (!el) return;
               stick.current = false;
               scrollIntent.current = -1;
-              setAway(true);
+              updateAway();
               const row = inner.current?.children[1];
               if (row) prepend.current = { row, top: row.getBoundingClientRect().top };
               setHistory({ head, start: Math.max(0, start - HISTORY_PAGE) });

@@ -12,6 +12,12 @@ export interface Attachment {
   name: string;
 }
 
+/** Session-local task activity, recorded even while its popover is closed. */
+export interface CodeTask extends TaskEv {
+  startedAt: number;
+  recentLines: string[];
+}
+
 export type Sheet = "tasklog" | "usage" | "status" | "help" | "mcp" | "login" | "agents" | "sessions" | "btw" | "compaction" | "model" | "effort" | "mode" | "subagent-model";
 
 export interface Btw {
@@ -79,7 +85,7 @@ export interface CodeState {
   subEffort: string | null;
   items: Item[];
   approvals: Approval[];
-  tasks: Record<string, TaskEv>;
+  tasks: Record<string, CodeTask>;
   todos: Todo[];
   skills: string[];
   usage: Usage;
@@ -257,9 +263,12 @@ export const createCodeStore = () =>
         }
         case "task": {
           const { type: _t, ...t } = ev;
-          const prev = s.tasks[t.id] ?? { id: t.id };
+          const prev = s.tasks[t.id] ?? { id: t.id, startedAt: Date.now(), recentLines: [] };
           const merged = { ...prev };
           for (const [k, v] of Object.entries(t)) if (v != null) (merged as Record<string, unknown>)[k] = v;
+          if (t.last && prev.recentLines.at(-1) !== t.last) {
+            merged.recentLines = [...prev.recentLines, t.last].slice(-8);
+          }
           return { tasks: { ...s.tasks, [t.id]: merged } };
         }
         case "todos":

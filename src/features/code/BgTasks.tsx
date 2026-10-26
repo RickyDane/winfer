@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import type { TaskEv } from "./protocol";
+import type { CodeTask } from "./store";
 import { modelName } from "./names";
 
 /* Running subagents and background shells as a compact activity timeline, shown in the popover
@@ -18,26 +19,9 @@ import { modelName } from "./names";
 
 export interface BgProps {
   /** Every task of the session; only the running ones are shown. */
-  tasks: TaskEv[];
+  tasks: CodeTask[];
   openLog: (id: string) => void;
   stop: (id: string) => void;
-}
-
-/* ——— Bookkeeping: when each task was first seen and the history of its `last` lines ——— */
-
-const starts = new Map<string, number>();
-const history = new Map<string, string[]>();
-
-function track(tasks: TaskEv[], now: number) {
-  for (const t of tasks) {
-    if (!starts.has(t.id)) starts.set(t.id, now);
-    const h = history.get(t.id) ?? [];
-    if (t.last && h[h.length - 1] !== t.last) {
-      h.push(t.last);
-      if (h.length > 8) h.shift();
-      history.set(t.id, h);
-    }
-  }
 }
 
 function useNow() {
@@ -57,7 +41,7 @@ function clock(ms: number) {
   return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
 }
 
-const running = (ts: TaskEv[]) => ts.filter((t) => t.status === "running");
+const running = <T extends TaskEv,>(ts: T[]) => ts.filter((t) => t.status === "running");
 
 /** A tool icon for a `last` line like "Read src/x.ts". */
 function ToolIcon({ line }: { line: string }) {
@@ -97,13 +81,12 @@ export const bgVisible = (tasks: TaskEv[]) => running(tasks).length > 0;
 
 export function BgTasks({ tasks, openLog, stop }: BgProps) {
   const now = useNow();
-  track(tasks, now);
   const list = running(tasks);
   if (!list.length) return null;
   return (
     <div className="cw-bgl compact">
       {list.map((t) => {
-        const h = history.get(t.id) ?? [];
+        const h = t.recentLines;
         const cur = h[h.length - 1];
         return (
           <div
@@ -119,7 +102,7 @@ export function BgTasks({ tasks, openLog, stop }: BgProps) {
               <b>{t.title || t.description || t.id}</b>
               <span className="cw-tlf-kind">{t.agent ? (t.model ? `${t.agent} · ${modelName(t.model, {})}` : t.agent) : "shell"}</span>
               {!t.agent && <span className="cw-tlf-line">{t.last || "starting…"}</span>}
-              <span className="cw-bg-time">{clock(now - (starts.get(t.id) ?? now))}</span>
+              <span className="cw-bg-time">{clock(now - t.startedAt)}</span>
               <StopButton t={t} stop={stop} />
             </div>
             {t.agent && (

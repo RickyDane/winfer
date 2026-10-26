@@ -60,7 +60,10 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
       onPointerDown={pane.archived ? undefined : (e) => beginDrag(e, pane.id)}
       title={pane.archived ? undefined : "Drag to move this pane"}
       className={cn(
-        "group/header @container relative m-2 mb-0 flex shrink-0 flex-col gap-1.5 rounded-xl border px-3 py-2.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.12),0_8px_20px_-10px_rgb(0_0_0/0.6)] transition-colors",
+        "group/header @container relative flex shrink-0 flex-col rounded-xl border shadow-[inset_0_1px_0_rgb(255_255_255/0.12),0_8px_20px_-10px_rgb(0_0_0/0.6)] transition-colors",
+        pane.provider === "winfer"
+          ? "m-1.5 mb-0 gap-1 px-2.5 py-1.5"
+          : "m-2 mb-0 gap-1.5 px-3 py-2.5",
         needs
           ? "border-warning/40 bg-[linear-gradient(rgb(251_191_36/0.15),rgb(251_191_36/0.05))]"
           : error

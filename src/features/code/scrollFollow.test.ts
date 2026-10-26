@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { followAfterScroll } from "./scrollFollow";
+import { followAfterScroll, isAwayFromBottom } from "./scrollFollow";
+
+describe("transcript jump button", () => {
+  it("stays hidden after pausing when the transcript fits or is at the bottom", () => {
+    expect(isAwayFromBottom(false, 0)).toBe(false);
+    expect(isAwayFromBottom(false, -1)).toBe(false);
+    expect(isAwayFromBottom(false, 0.5)).toBe(false);
+    expect(isAwayFromBottom(false, 2)).toBe(false);
+  });
+
+  it("only shows when paused with content below the viewport", () => {
+    expect(isAwayFromBottom(false, 3)).toBe(true);
+    expect(isAwayFromBottom(false, 100)).toBe(true);
+    expect(isAwayFromBottom(true, 100)).toBe(false);
+  });
+
+  it("hides when a resize or collapsed output removes the remaining distance", () => {
+    expect([100, 20, 0].map((distance) => isAwayFromBottom(false, distance)))
+      .toEqual([true, true, false]);
+  });
+});
 
 describe("transcript scroll following", () => {
   it("keeps an upward wheel/trackpad gesture paused, including subpixel moves", () => {

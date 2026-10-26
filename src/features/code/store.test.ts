@@ -53,3 +53,47 @@ describe("batched code transport", () => {
     expect(store.getState().items).toEqual([]);
   });
 });
+
+describe("background task activity", () => {
+  it("records time and activity before any dropdown mounts and preserves them on updates", () => {
+    const { store, emit } = setup();
+    vi.setSystemTime(0);
+    emit({ type: "task", id: "shell", status: "running", last: "starting" });
+    const first = store.getState().tasks.shell;
+    vi.advanceTimersByTime(65_000);
+    emit({ type: "task", id: "shell", last: "ready" });
+    emit({ type: "task", id: "shell", last: "ready", status: null });
+    const task = store.getState().tasks.shell;
+    expect(Date.now() - task.startedAt).toBe(65_000);
+    expect(task.status).toBe("running");
+    expect(task.recentLines).toEqual(["starting", "ready"]);
+    expect(first.recentLines).toEqual(["starting"]);
+    emit({ type: "task", id: "shell", status: "done" });
+    expect(store.getState().tasks.shell.startedAt).toBe(0);
+  });
+
+  it("isolates matching task IDs between sessions and resets activity on clear", () => {
+    const a = createCodeStore();
+    const b = createCodeStore();
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    a.getState().apply({ type: "task", id: "same", status: "running", last: "first" });
+    vi.setSystemTime(9000);
+    b.getState().apply({ type: "task", id: "same", status: "running", last: "second" });
+    expect(a.getState().tasks.same.startedAt).toBe(1000);
+    expect(b.getState().tasks.same).toMatchObject({ startedAt: 9000, recentLines: ["second"] });
+    a.getState().apply({ type: "cleared" });
+    a.getState().apply({ type: "task", id: "same", status: "running" });
+    expect(a.getState().tasks.same).toMatchObject({ startedAt: 9000, recentLines: [] });
+  });
+
+  it("keeps only the latest eight distinct activity lines", () => {
+    const store = createCodeStore();
+    for (let i = 0; i < 10; i++) {
+      store.getState().apply({ type: "task", id: "agent", last: `Read ${i}` });
+    }
+    expect(store.getState().tasks.agent.recentLines).toEqual(
+      Array.from({ length: 8 }, (_, i) => `Read ${i + 2}`),
+    );
+  });
+});

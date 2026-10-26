@@ -774,6 +774,7 @@ body.resizing .cw-enter {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
 .cw-approval {
   border-radius: var(--radius);
@@ -2571,6 +2572,8 @@ button.cw-foot-item.active {
 }
 .cw-welcome-inner {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2887,6 +2890,51 @@ button.cw-foot-item.active {
 /* Keep welcome shortcuts from pushing the composer down in small panes. */
 @container (max-width: 520px) or (max-height: 600px) {
   .cw-tiles {
+    display: none;
+  }
+  .cw-welcome-inner {
+    padding: 16px 12px;
+  }
+  .cw-logo-wrap {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 8px;
+  }
+  .cw-welcome h1 {
+    font-size: calc(18px * var(--cw-text, 1));
+  }
+  .cw-who {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+    margin-top: 8px;
+  }
+  .cw-where {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Short tiles trade decoration, not input controls, for usable conversation space. */
+@container (max-height: 460px) {
+  .cw-welcome-inner {
+    padding-block: 10px;
+  }
+  .cw-logo-wrap,
+  .cw-welcome h1 {
+    display: none;
+  }
+  .cw-who {
+    margin-top: 0;
+  }
+  .cw-dock {
+    gap: 4px;
+    padding-bottom: 4px;
+  }
+}
+
+@container (max-height: 320px) {
+  .cw-welcome .cw-where {
     display: none;
   }
 }
