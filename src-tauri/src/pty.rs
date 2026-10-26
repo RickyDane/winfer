@@ -95,7 +95,7 @@ impl OutputStream {
 }
 
 struct Session {
-    master: Box<dyn MasterPty + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
     /// Input for the pane's writer thread. Writing to a pty blocks while the program isn't
     /// reading (a big paste into a busy agent; on Windows the ConPTY pipe is small), so it
     /// never happens on the thread that handles the command.
@@ -564,8 +564,49 @@ fn reattach(session: &Session, req: &SpawnRequest, on_data: Channel) -> SpawnRes
     }
     output.pending.clear();
     output.channel = Some(on_data);
-    let _ = session.master.resize(size(req.cols, req.rows));
+    if let Some(master) = &session.master {
+        let _ = master.resize(size(req.cols, req.rows));
+    }
     SpawnResult { attached: true, pid: session.pid }
+}
+
+struct ProcessIo {
+    master: Option<Box<dyn MasterPty + Send>>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+}
+
+fn spawn_io(cmd: CommandBuilder, serve: bool, size: PtySize) -> Result<ProcessIo, String> {
+    if serve {
+        // JSON is not terminal output. ConPTY renders it to a screen, inserting cursor
+        // escapes and wrapping/truncating long model lists, session lists and transcripts.
+        // Pipes preserve the protocol bytes in both directions on every platform.
+        let argv = cmd.get_argv();
+        let mut process = std::process::Command::new(&argv[0]);
+        process.args(&argv[1..]).env_clear().envs(cmd.iter_full_env_as_str());
+        if let Some(cwd) = cmd.get_cwd() {
+            process.current_dir(cwd);
+        }
+        process.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+        crate::env::no_window(&mut process);
+        // terminate() signals the process group on Unix, just as for PTY children.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            process.process_group(0);
+        }
+        let mut child = process.spawn().map_err(|e| e.to_string())?;
+        let reader = Box::new(child.stdout.take().ok_or("no stdout")?);
+        let writer = Box::new(child.stdin.take().ok_or("no stdin")?);
+        return Ok(ProcessIo { master: None, child: Box::new(child), reader, writer });
+    }
+    let pair = native_pty_system().openpty(size).map_err(|e| e.to_string())?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    Ok(ProcessIo { master: Some(pair.master), child, reader, writer })
 }
 
 fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result<SpawnResult, String> {
@@ -589,14 +630,7 @@ fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result
     };
     let req = with_system_prompt(req);
     let (cmd, type_prompt) = build_command(&req, cdp_url.as_deref())?;
-    let pair = native_pty_system()
-        .openpty(size(req.cols, req.rows))
-        .map_err(|e| e.to_string())?;
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let ProcessIo { master, mut child, mut reader, mut writer } = spawn_io(cmd, req.serve && req.provider_id == "winfer", size(req.cols, req.rows))?;
     let pid = child.process_id();
     let mut killer = child.clone_killer();
     let output = Arc::new(OutputStream {
@@ -623,7 +657,7 @@ fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result
         sessions.insert(
             req.pane_id.clone(),
             Session {
-                master: pair.master,
+                master,
                 input: input.clone(),
                 killer,
                 pid,
@@ -731,10 +765,10 @@ pub fn pty_resize(
 ) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
     let session = sessions.get(&pane_id).ok_or("no such pane")?;
-    session
-        .master
-        .resize(size(cols, rows))
-        .map_err(|e| e.to_string())
+    match &session.master {
+        Some(master) => master.resize(size(cols, rows)).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -771,6 +805,53 @@ fn terminate(pid: Option<u32>, killer: &mut (dyn ChildKiller + Send + Sync)) {
     #[cfg(not(unix))]
     let _ = pid;
     let _ = killer.kill();
+}
+
+#[cfg(test)]
+mod pipe_tests {
+    use super::*;
+
+    #[test]
+    fn serve_pipes_preserve_long_json_lines_and_process_settings() {
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut cmd = CommandBuilder::new("/bin/sh");
+            cmd.args(["-c", "test \"$WINFER_PIPE_TEST\" = protocol && test \"$PWD\" = \"$WINFER_PIPE_CWD\" && cat"]);
+            cmd
+        };
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut cmd = CommandBuilder::new("powershell.exe");
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", "if ($env:WINFER_PIPE_TEST -ne 'protocol' -or (Get-Location).Path -ne $env:WINFER_PIPE_CWD) { exit 1 }; [Console]::OpenStandardInput().CopyTo([Console]::OpenStandardOutput())"]);
+            cmd
+        };
+        #[cfg(unix)]
+        let cwd = std::env::temp_dir().canonicalize().unwrap();
+        #[cfg(windows)]
+        let cwd = std::env::current_dir().unwrap();
+        cmd.cwd(&cwd);
+        cmd.env("WINFER_PIPE_TEST", "protocol");
+        cmd.env("WINFER_PIPE_CWD", &cwd);
+        let ProcessIo { master, mut child, mut reader, mut writer } = spawn_io(cmd, true, size(80, 24)).unwrap();
+        assert!(master.is_none());
+        let models = serde_json::json!({ "type": "models", "models": [{ "spec": "claude/sonnet", "detail": "long model description · 模型".repeat(4000) }] });
+        let sessions = serde_json::json!({ "type": "sessions", "sessions": [{ "id": "resume-test", "title": "saved session".repeat(4000) }] });
+        let bytes = format!("{models}\n{sessions}\n").into_bytes();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut received = Vec::new();
+            reader.read_to_end(&mut received).unwrap();
+            let _ = tx.send(received);
+        });
+        writer.write_all(&bytes).unwrap();
+        drop(writer);
+        let received = rx.recv_timeout(Duration::from_secs(15));
+        if received.is_err() {
+            let _ = child.kill();
+        }
+        assert_eq!(received.unwrap(), bytes);
+        assert!(child.wait().unwrap().success());
+    }
 }
 
 #[cfg(all(test, unix))]

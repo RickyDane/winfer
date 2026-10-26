@@ -1,6 +1,6 @@
 /**
- * Talks to a real winfer code session: `winfer code --serve` in the pane's PTY (spawned like
- * the TUI would be, with winfer's tools, hooks and worktree), JSON lines both ways.
+ * Talks to a real winfer code session: `winfer code --serve` through pipes (with the same
+ * tools, hooks and worktree as the TUI), JSON lines both ways via the pane process API.
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

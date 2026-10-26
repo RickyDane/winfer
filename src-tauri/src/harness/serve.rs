@@ -1,8 +1,8 @@
 //! `winfer code --serve`: the session without the terminal UI, for winfer's web UI pane.
 //! Every backend event goes out on stdout as one JSON line (the shape of `--print --json`, see
 //! [`super::event_json`]), and commands come in on stdin as JSON lines (`{"type":"send","text":…}`,
-//! see `src/features/code/protocol.ts`). It runs in the pane's PTY like the TUI would, so stdin is
-//! put in raw mode: no echo, and no line-length limit on long messages.
+//! see `src/features/code/protocol.ts`). The web UI uses pipes to preserve JSON bytes; when
+//! invoked in a terminal, stdin is put in raw mode to avoid echo and line-length limits.
 //!
 //! Like the TUI it saves the session (so `--continue`/`--resume` and the app's session tracking
 //! work) and reports turns, approvals and the session id through winfer's hooks.
@@ -486,7 +486,10 @@ fn save_images(v: &Value) -> Vec<PathBuf> {
 
 /// Raw mode on the PTY: no echo of our own input, and no canonical-mode line limit.
 fn raw_stdin() {
-    let _ = ratatui::crossterm::terminal::enable_raw_mode();
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        let _ = ratatui::crossterm::terminal::enable_raw_mode();
+    }
 }
 
 pub fn run(launch: Launch) -> i32 {
@@ -578,6 +581,9 @@ pub fn run(launch: Launch) -> i32 {
     }
     app.save();
     app.send(Cmd::Shutdown);
-    let _ = ratatui::crossterm::terminal::disable_raw_mode();
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        let _ = ratatui::crossterm::terminal::disable_raw_mode();
+    }
     0
 }
