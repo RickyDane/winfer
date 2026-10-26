@@ -1362,7 +1362,7 @@ body.resizing .cw-enter {
   transform: none;
 }
 .cw-plan .cw-todos {
-  padding: 0 6px 8px 28px;
+  padding: 0 6px 8px;
   gap: 4px;
   font-size: calc(12.5px * var(--cw-text, 1));
 }
@@ -1408,7 +1408,7 @@ body.resizing .cw-enter {
   opacity: 1;
 }
 .cw-side .cw-todos {
-  padding: 0 6px 8px 28px;
+  padding: 0 6px 8px;
   gap: 6px;
   font-size: calc(12.5px * var(--cw-text, 1));
 }
