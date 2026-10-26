@@ -2,6 +2,7 @@
 // Unit tests don't exercise its real startup or inherited stdin/stdout handles.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,8 +16,13 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.to
 const emptyPath = join(sandbox, "bin");
 await mkdir(emptyPath);
 Object.assign(env, { HOME: sandbox, USERPROFILE: sandbox, APPDATA: sandbox, LOCALAPPDATA: sandbox, XDG_DATA_HOME: sandbox, PATH: emptyPath });
-const data = process.platform === "darwin" ? join(sandbox, "Library", "Application Support") : sandbox;
-const file = join(data, "dev.winfer.app", "harness", "sessions", "resume-smoke.json");
+// Windows Known Folders ignore APPDATA overrides. Use a uniquely named fixture there
+// and remove only that file; never overwrite or clear the user's existing sessions.
+const data = process.platform === "win32" ? process.env.APPDATA
+  : process.platform === "darwin" ? join(sandbox, "Library", "Application Support") : sandbox;
+assert(data, "Windows APPDATA must be set");
+const session = `resume-smoke-${randomUUID()}`;
+const file = join(data, "dev.winfer.app", "harness", "sessions", `${session}.json`);
 const child = spawn(binary, ["code", "--serve", "--model", "claude/sonnet"], {
   cwd: sandbox, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
 });
@@ -57,17 +63,17 @@ try {
     const transcript = "Long Unicode transcript · 模型\n".repeat(6000);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, JSON.stringify({
-      id: "resume-smoke", model: "claude/sonnet", cwd: ready.cwd,
+      id: session, model: "claude/sonnet", cwd: ready.cwd,
       title: "Resume smoke test", updated: 1, transcript: [{ role: "user", text: transcript }],
     }));
     // With an empty PATH there are no paid/logged-in agent CLIs. Even an empty model
     // response must arrive; the previous broken transport left this pending forever.
     assert(Array.isArray((await next("models")).models));
     send({ type: "sessions" });
-    assert((await next("sessions")).sessions.some((s) => s.id === "resume-smoke"));
-    send({ type: "resume", id: "resume-smoke" });
+    assert((await next("sessions")).sessions.some((s) => s.id === session));
+    send({ type: "resume", id: session });
     assert.equal((await next("restore")).transcript[0].text, transcript);
-    assert.equal((await next("ready")).session, "resume-smoke");
+    assert.equal((await next("ready")).session, session);
     send({ type: "send", text: "Input pipe smoke test" });
     send({ type: "sessions" });
     await next("sessions"); // Barrier: the preceding chat command has been consumed.
@@ -82,5 +88,6 @@ try {
   if (child.exitCode === null) child.kill();
   await closed.catch(() => {});
   lines.close();
+  await rm(file, { force: true });
   await rm(sandbox, { recursive: true, force: true });
 }
