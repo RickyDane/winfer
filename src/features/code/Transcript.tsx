@@ -23,6 +23,7 @@ import { Markdown } from "./Markdown";
 import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
 import { HISTORY_PAGE, historyStart } from "./history";
+import { followAfterScroll } from "./scrollFollow";
 import { useCodeWeb } from "./styles";
 import { modelName } from "./names";
 import { elapsed } from "../usage/toolStats";
@@ -379,6 +380,8 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
   const inner = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const lastTop = useRef(0);
+  const scrollIntent = useRef(0);
+  const touchY = useRef<number | undefined>(undefined);
   const lastUser = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
   const head = items[0]?.key;
@@ -390,25 +393,8 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     const el = scroller.current;
     if (el && prepend.current) {
       const { row: anchor, top } = prepend.current;
-      // New offscreen rows initially have estimated heights. Measure just this
-      // page before anchoring, otherwise their later expansion moves the reader.
-      const added: HTMLElement[] = [];
-      for (const row of inner.current?.children ?? []) {
-        if (row === anchor) break;
-        if (row instanceof HTMLElement && row.classList.contains("cw-enter")) {
-          row.style.contentVisibility = "visible";
-          added.push(row);
-        }
-      }
-      const heights = added.map((row) => {
-        const css = getComputedStyle(row);
-        return row.getBoundingClientRect().height - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)
-          - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth);
-      });
-      added.forEach((row, i) => {
-        row.style.containIntrinsicBlockSize = `auto ${heights[i]}px`;
-        row.style.contentVisibility = "";
-      });
+      // Mounted rows have real heights, so the previous first row can be anchored
+      // directly, without estimates that change later as the page is revealed.
       el.scrollTo({ top: el.scrollTop + anchor.getBoundingClientRect().top - top, behavior: "instant" });
       prepend.current = null;
     }
@@ -424,11 +410,28 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     });
   };
 
-  // Instant jump: the container's CSS `scroll-behavior: smooth` would otherwise
-  // animate it, and mid-animation scroll events used to unstick the follow.
+  // Streaming follows instantly; only an explicit Jump to latest animates.
   const toBottom = (behavior: ScrollBehavior = "instant") => {
     const el = scroller.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior });
+  };
+
+  const scrolling = (direction: number) => {
+    scrollIntent.current = Math.sign(direction);
+    const el = scroller.current;
+    if (direction <= 0) {
+      const wasFollowing = stick.current;
+      stick.current = false;
+      cancelAnimationFrame(followFrame.current);
+      followFrame.current = 0;
+      // Cancel an in-flight Jump to latest animation before native wheel/touch
+      // scrolling starts. Otherwise it can keep dragging the reader downward.
+      if (wasFollowing && el) el.scrollTo({ top: el.scrollTop, behavior: "instant" });
+      setAway(true);
+    } else if (el && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) {
+      stick.current = true;
+      setAway(false);
+    }
   };
 
   useEffect(() => {
@@ -438,6 +441,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
       if (items[i].kind === "user") user = items[i].key;
     if (user !== lastUser.current) {
       stick.current = true;
+      scrollIntent.current = 0;
       lastUser.current = user;
       setAway(false);
     }
@@ -471,21 +475,34 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     <div
       className="cw-scroll"
       ref={scroller}
+      tabIndex={0}
       onWheel={(e) => {
-        // Unstick on intent, before a streaming resize can snap back down.
-        if (e.deltaY < 0 && stick.current) {
-          stick.current = false;
-          setAway(true);
-        }
+        if (!e.ctrlKey && !e.metaKey && e.deltaY) scrolling(e.deltaY);
+      }}
+      onPointerDown={(e) => {
+        // Scrollbar dragging does not emit wheel events. Pause before it starts;
+        // subsequent downward movement to the bottom may resume following.
+        if (e.target === e.currentTarget) scrolling(0);
+      }}
+      onTouchStart={(e) => {
+        touchY.current = e.touches[0]?.clientY;
+        scrolling(0);
+      }}
+      onTouchMove={(e) => {
+        const y = e.touches[0]?.clientY;
+        if (y !== undefined && touchY.current !== undefined && y !== touchY.current)
+          scrolling(touchY.current - y);
+        touchY.current = y;
+      }}
+      onKeyDown={(e) => {
+        if ((e.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) return;
+        if (["ArrowUp", "PageUp", "Home"].includes(e.key) || (e.key === " " && e.shiftKey)) scrolling(-1);
+        else if (["ArrowDown", "PageDown", "End", " "].includes(e.key)) scrolling(1);
       }}
       onScroll={(e) => {
         const el = e.currentTarget;
         const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-        // Any upward move away from the bottom unsticks (programmatic scrolls go
-        // down; content shrinking only clamps us, leaving dist ~0). Checked
-        // before the near-bottom zone so a small scroll-up isn't re-stuck.
-        if (el.scrollTop < lastTop.current && dist > 2) stick.current = false;
-        else if (dist < 80) stick.current = true;
+        stick.current = followAfterScroll(stick.current, lastTop.current, el.scrollTop, dist, scrollIntent.current);
         lastTop.current = el.scrollTop;
         setAway(!stick.current);
       }}
@@ -499,6 +516,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
               const el = scroller.current;
               if (!el) return;
               stick.current = false;
+              scrollIntent.current = -1;
               setAway(true);
               const row = inner.current?.children[1];
               if (row) prepend.current = { row, top: row.getBoundingClientRect().top };
@@ -549,6 +567,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
             title="Jump to latest"
             onClick={() => {
               stick.current = true;
+              scrollIntent.current = 0;
               setAway(false);
               setHistory({ head, start: historyStart(items.length) });
               toBottom("smooth");

@@ -18,6 +18,7 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 
 ## winfer code web UI performance
 - [ ] Resume a session with hundreds of messages: only the latest 40 rows mount initially. **Show earlier messages** reveals 40 more without moving the message you were reading; repeat through the first page. No history is deleted.
+- [ ] Cold long-history scroll: alternate very short and multi-screen messages, jump to the latest, then wheel/trackpad/PageUp through rows that have never been visible. With the backend idle, the scroll height must stay constant and scrolling upward must never jump downward. Repeat after loading an earlier page; then stream new output while paused near the bottom.
 - [ ] Resize a populated code pane continuously, including height-only resizing. The latest message stays in view when following; scrolling up stops following, **Jump to latest** resumes it. Streaming while reading older messages does not pull you down; sending a new message does.
 - [ ] Fenced code starts as plain text, highlights near the viewport after streaming finishes, and remains copyable. Test light/dark themes, `c++`, an unknown language, and a snippet over 50,000 characters (which stays plain). A blocked worker must not break the transcript.
 - [ ] Close a streaming pane, switch workspaces, and reopen/resume a session: no late updates, duplicate output or accumulating timers/listeners. Clear/undo during streaming must not resurrect buffered text.
