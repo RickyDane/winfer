@@ -53,7 +53,7 @@ fn next_version() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// How long a new block takes to fade in, and a finished tool's dot to settle.
+/// How long a new block takes to fade in, and a finished tool's icon to settle.
 const FADE_IN: Duration = Duration::from_millis(320);
 const SETTLE: Duration = Duration::from_millis(700);
 
@@ -174,19 +174,16 @@ fn render(block: &Block, width: usize, expanded: bool, now: Instant, epoch: Inst
             let mut out = Vec::new();
             let (body, collapsible) = tool_body(output, diff.as_deref(), *status, width, expanded);
             let took = ended.unwrap_or(now).duration_since(*started);
-            // A finished dot flashes bright and settles into its color.
+            // The action icon is the timeline node; don't add a separate status gutter.
             let settle = ended.map(|e| (now.saturating_duration_since(e).as_secs_f32() / SETTLE.as_secs_f32()).min(1.0)).unwrap_or(1.0);
-            // Timeline node: a spinning moon while running, then a ◆ that flashes bright and
-            // settles into its spot on the nebula gradient (each step a little further along).
-            let hue = started.saturating_duration_since(epoch).as_secs_f32() * 0.08;
-            let (dot, dot_style) = match status {
-                Status::Running => (anim::moon_spin(t), theme::bold(theme::nebula(t.as_secs_f32() * 0.8))),
-                Status::Ok => ("◆", theme::fg(theme::mix(theme::FG(), theme::nebula(hue), anim::ease_out(settle)))),
-                Status::Failed => ("◌", theme::bold(theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle)))),
-            };
             let (label, kind) = tool_kind(name);
-            let mut head = vec![Span::styled(format!("{dot} "), dot_style)];
-            head.extend(chip(&label, kind));
+            let mut head = chip(&label, kind);
+            let color = head[0].style.fg.unwrap_or(theme::DIM());
+            head[0].style = match status {
+                Status::Running => theme::bold(theme::nebula(t.as_secs_f32() * 0.8)),
+                Status::Ok => theme::fg(theme::mix(theme::FG(), color, anim::ease_out(settle))),
+                Status::Failed => theme::bold(theme::mix(theme::FG(), theme::RED(), anim::ease_out(settle))),
+            };
             if background {
                 head.push(Span::styled(" ⇢ bg", theme::fg(theme::PINK())));
             }
@@ -278,9 +275,8 @@ const PREVIEW: usize = 2;
 /// hides any of it (so the header gets a ▸/▾ to click).
 fn tool_body(output: &str, diff: Option<&str>, status: Status, width: usize, expanded: bool) -> (Vec<Line<'static>>, bool) {
     let mut out = Vec::new();
-    // The rail runs down the output and curls right under its last line, but only once the
-    // output is really over: still running or cut short, it stays straight.
-    let rail = |last: bool| vec![Span::styled(if last { "╰─ " } else { "│  " }, theme::fg(theme::FAINT()))];
+    // Keep the rail in the action icon's column, connecting consecutive tool calls.
+    let rail = || vec![Span::styled("│  ", theme::fg(theme::FAINT()))];
     if let Some(d) = diff.filter(|d| !d.trim().is_empty()) {
         let all = diff_lines(d, width.saturating_sub(3));
         let changes = all.iter().filter(|l| is_change(l)).count();
@@ -291,7 +287,7 @@ fn tool_body(output: &str, diff: Option<&str>, status: Status, width: usize, exp
         let max = if expanded { usize::MAX } else { PREVIEW };
         let shown = total.min(max);
         for (i, l) in lines.into_iter().take(max).enumerate() {
-            let mut spans = rail(i + 1 == shown && total == shown && status != Status::Running);
+            let mut spans = rail();
             spans.extend(l.spans);
             out.push(with_more(spans, if i + 1 == shown { total - shown } else { 0 }, width));
         }
@@ -322,7 +318,7 @@ fn tool_body(output: &str, diff: Option<&str>, status: Status, width: usize, exp
     let n = shown.len();
     for (i, line) in shown.into_iter().enumerate() {
         let line = truncate(&line, width.saturating_sub(14).max(10));
-        out.push(with_more([rail(i + 1 == n && hidden == 0 && status != Status::Running), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
+        out.push(with_more([rail(), vec![Span::styled(line, style)]].concat(), if i + 1 == n { hidden } else { 0 }, width));
     }
     (out, collapsible)
 }
@@ -372,7 +368,7 @@ fn chip(label: &str, kind: ToolKind) -> Vec<Span<'static>> {
         ToolKind::Skill => ("✧", theme::GREEN()),
         ToolKind::Other => ("·", theme::DIM()),
     };
-    vec![Span::styled(format!(" {icon} "), theme::fg(color)), Span::styled(format!("{label:<5}"), theme::muted())]
+    vec![Span::styled(format!("{icon} "), theme::fg(color)), Span::styled(format!("{label:<5}"), theme::muted())]
 }
 
 /// Short lowercase label and kind for a tool: `Bash` → `bash`, an MCP tool
@@ -536,11 +532,33 @@ mod tests {
     }
 
     #[test]
+    fn tool_rails_connect_at_the_action_icons() {
+        let now = Instant::now();
+        for (name, icon) in [("Bash", "❯"), ("Read", "◇"), ("Edit", "✎"), ("mcp__winfer__tabs", "◈")] {
+            for status in [Status::Running, Status::Ok, Status::Failed] {
+                for expanded in [false, true] {
+                    for diff in [None, Some(crate::harness::diff::unified("a.txt", "old\n", "new\n"))] {
+                        let tool = Block::Tool {
+                            id: "1".into(), name: name.into(), title: "action".into(),
+                            output: "first\nsecond\nthird".into(), diff, status, started: now,
+                            ended: (status != Status::Running).then_some(now),
+                        };
+                        let lines = plain(&render(&tool, 80, expanded, now, now, false, None));
+                        assert!(lines[0].starts_with(&format!("{icon} ")), "{lines:?}");
+                        assert!(lines[1..].iter().all(|line| line.starts_with("│  ")), "{lines:?}");
+                        assert!(lines.iter().all(|line| !line.contains('◆')), "{lines:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn chips_are_an_icon_and_a_name() {
         let text = |kind| chip("bash", kind).iter().map(|s| s.content.to_string()).collect::<String>();
-        assert_eq!(text(ToolKind::Shell), " ❯ bash ");
+        assert_eq!(text(ToolKind::Shell), "❯ bash ");
         assert!(matches!(tool_kind("PowerShell"), (l, ToolKind::Shell) if l == "powershell"));
         assert!(matches!(tool_kind("Zsh"), (l, ToolKind::Shell) if l == "zsh"));
-        assert_eq!(text(ToolKind::Read), " ◇ bash ");
+        assert_eq!(text(ToolKind::Read), "◇ bash ");
     }
 }

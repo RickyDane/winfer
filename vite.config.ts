@@ -39,7 +39,8 @@ export default defineConfig(() => ({
   test: {
     // Harness Bench task fixtures hold deliberately broken repos for agents to fix; not our tests.
     // mobile/ and relay/ are separate packages with their own vitest setups.
-    exclude: ["**/node_modules/**", "**/dist/**", "plugins-src/harness-bench/**", "mobile/**", "relay/**"],
+    // The standalone mockup uses node:test, run with node --test instead of Vitest.
+    exclude: ["**/node_modules/**", "**/dist/**", "plugins-src/harness-bench/**", "mobile/**", "relay/**", "mockups/tui-refinements/cosmos.test.mjs"],
   },
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "src") },
