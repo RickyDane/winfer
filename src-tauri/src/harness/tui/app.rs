@@ -603,19 +603,8 @@ impl App {
     }
 
     fn report_usage(&mut self, u: &Usage) {
-        if u.window == 0 {
-            return;
-        }
-        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         let source = self.usage_source();
-        hook(
-            "usage",
-            json!({
-                "backend": self.kind.id(),
-                "context": { "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at, "source": source, "provider": self.kind.id() },
-                "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "turn": u.turn, "at": at },
-            }),
-        );
+        report_usage(self.kind, source, u);
     }
 
     fn apply_agent(&mut self, ev: Ev) {
@@ -869,6 +858,7 @@ impl App {
         self.saved.transcript = transcript;
         self.saved.updated = session::now();
         self.saved.model = self.spec();
+        self.saved.usage = Some(self.usage.clone());
         session::save(&self.saved);
     }
 
@@ -876,6 +866,10 @@ impl App {
         let (kind, model) = backend::parse_spec(&saved.model);
         self.kind = kind;
         self.model = model;
+        self.usage = saved.restored_usage();
+        self.ctx_shown.set(self.usage.context as f32 / self.usage.window.max(1) as f32, 0);
+        self.usage_source = None;
+        self.usage_sent = None;
         self.items.clear();
         for e in &saved.transcript {
             let block = match e.role.as_str() {
@@ -900,6 +894,7 @@ impl App {
         }
         let resume = saved.backend_session.clone();
         self.saved = saved;
+        self.report_usage(&self.usage.clone());
         self.forget_turns();
         self.notice(format!("Resumed session · {}", session::ago(self.saved.updated)), NoticeKind::Success);
         self.start_backend(resume);
@@ -2757,6 +2752,19 @@ pub fn session_log(kind: Kind, session: &str, cwd: &str) -> Option<String> {
         _ => None,
     }?;
     Some(path.to_string_lossy().into_owned())
+}
+
+/// Shared by the terminal and web sessions so the pane header follows both, including resume.
+pub fn report_usage(kind: Kind, source: Option<String>, u: &Usage) {
+    if u.window == 0 {
+        return;
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    hook("usage", json!({
+        "backend": kind.id(),
+        "context": { "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at, "source": source, "provider": kind.id() },
+        "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "turn": u.turn, "at": at },
+    }));
 }
 
 /// Reports status to winfer when running in one of its panes (no-op otherwise).

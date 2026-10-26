@@ -118,7 +118,8 @@ pub enum Decision {
     Deny,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Usage {
     /// Tokens in the context right now (last request's input).
     pub context: u64,

@@ -17,6 +17,45 @@ pub struct Saved {
     pub title: String,
     pub updated: u64,
     pub transcript: Vec<Entry>,
+    /// Last measured context and usage, restored before the next backend turn arrives.
+    pub usage: Option<super::event::Usage>,
+}
+
+impl Saved {
+    pub fn restored_usage(&self) -> super::event::Usage {
+        if let Some(u) = &self.usage {
+            return u.clone();
+        }
+        let (kind, _) = super::backend::parse_spec(&self.model);
+        let log = self.backend_session.as_deref()
+            .and_then(|s| super::tui::app::session_log(kind, s, &self.cwd))
+            .and_then(|p| std::fs::read_to_string(p).ok());
+        log.as_deref().and_then(|log| context_from_log(kind, log))
+            .unwrap_or(super::event::Usage { window: 200_000, ..Default::default() })
+    }
+}
+
+/// Older saved sessions have no usage snapshot. Recover their last context from the
+/// backend's own log, never from another session in the same working directory.
+fn context_from_log(kind: super::backend::Kind, log: &str) -> Option<super::event::Usage> {
+    use super::backend::Kind;
+    let (context, window) = match kind {
+        Kind::Codex => {
+            let c = crate::usage::codex_context_in(log)?;
+            (c.tokens, c.window)
+        }
+        Kind::Claude => {
+            let u = log.lines().rev().find_map(|line| {
+                let v: serde_json::Value = serde_json::from_str(line).ok()?;
+                (v["type"] == "assistant" && v["message"]["usage"].is_object())
+                    .then(|| v["message"]["usage"].clone())
+            })?;
+            let n = |k: &str| u[k].as_u64().unwrap_or(0);
+            (n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens") + n("output_tokens"), 200_000)
+        }
+        _ => return None,
+    };
+    Some(super::event::Usage { context, window, ..Default::default() })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -145,6 +184,48 @@ pub fn ago(ts: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resumed_usage_survives_serialization() {
+        let saved = Saved {
+            usage: Some(super::super::event::Usage {
+                context: 123_456, window: 1_000_000, input: 100, cached: 80,
+                output: 20, cost: Some(1.25), ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let restored: Saved = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let u = restored.restored_usage();
+        assert_eq!((u.context, u.window, u.input, u.cached, u.output), (123_456, 1_000_000, 100, 80, 20));
+        assert_eq!(u.cost, Some(1.25));
+
+        // Sessions written before usage snapshots were added still load, and don't inherit
+        // the previous session's context when no backend log is available.
+        let old: Saved = serde_json::from_str(r#"{"id":"old","model":"claude/opus"}"#).unwrap();
+        assert!(old.usage.is_none());
+        assert_eq!(old.restored_usage().context, 0);
+    }
+
+    #[test]
+    fn legacy_context_comes_from_the_latest_backend_reading() {
+        use super::super::backend::Kind;
+        let claude = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":99999}}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":20000,\"cache_creation_input_tokens\":3000,\"output_tokens\":50}}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"next\"}}\nmalformed\n"
+        );
+        let u = context_from_log(Kind::Claude, claude).unwrap();
+        assert_eq!((u.context, u.window), (23060, 200_000));
+        let codex = concat!(
+            "{\"type\":\"event_msg\",\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":99999},\"model_context_window\":272000}}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"info\":{\"last_token_usage\":{\"total_tokens\":42000},\"model_context_window\":475000}}}\n",
+            "{}\n"
+        );
+        let u = context_from_log(Kind::Codex, codex).unwrap();
+        assert_eq!((u.context, u.window), (42000, 475000));
+        assert!(context_from_log(Kind::Claude, "{}").is_none());
+        assert!(context_from_log(Kind::Codex, "{}").is_none());
+    }
 
     #[test]
     fn chats_for_agents() {

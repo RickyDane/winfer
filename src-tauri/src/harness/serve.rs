@@ -44,6 +44,7 @@ struct Serve {
     pending: Vec<String>,
     /// Background tasks' output files, for `task_log`.
     task_files: HashMap<String, String>,
+    usage_sent: Option<std::time::Instant>,
 }
 
 fn out(v: &Value) {
@@ -109,6 +110,15 @@ impl Serve {
         session::save(&self.saved);
     }
 
+    fn report_usage(&mut self) {
+        if let Some(u) = &self.saved.usage {
+            let source = self.saved.backend_session.as_deref()
+                .and_then(|s| super::tui::app::session_log(self.kind, s, &self.saved.cwd));
+            super::tui::app::report_usage(self.kind, source, u);
+            self.usage_sent = Some(std::time::Instant::now());
+        }
+    }
+
     fn ready(&self) {
         let cfg = Config::load();
         out(&json!({
@@ -139,6 +149,8 @@ impl Serve {
         out(&json!({ "type": "restore", "transcript": saved.transcript.iter().map(|e| json!({ "role": e.role, "text": e.text, "state": e.state })).collect::<Vec<_>>() }));
         let resume = saved.backend_session.clone();
         self.saved = saved;
+        self.usage_sent = None;
+        self.on_event(Ev::Usage(self.saved.restored_usage()));
         self.start_backend(resume);
     }
 
@@ -207,6 +219,12 @@ impl Serve {
                 self.save();
             }
             Ev::Mode(mode) => self.mode = mode,
+            Ev::Usage(u) => {
+                self.saved.usage = Some(u);
+                if self.usage_sent.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(500)) {
+                    self.report_usage();
+                }
+            }
             Ev::Task(t) => {
                 if let Some(f) = t.output_file {
                     self.task_files.insert(t.id, f);
@@ -240,6 +258,7 @@ impl Serve {
             Ev::TurnDone => {
                 self.busy = false;
                 self.pending.clear();
+                self.report_usage();
                 self.save();
                 let reply = self.saved.transcript.iter().rev().find(|e| e.role == "assistant").map(|e| e.text.clone());
                 hook("turn_done", json!({ "session_id": self.saved.id, "last_assistant_message": reply.unwrap_or_default() }));
@@ -513,6 +532,7 @@ pub fn run(launch: Launch) -> i32 {
         busy: false,
         pending: Vec::new(),
         task_files: HashMap::new(),
+        usage_sent: None,
     };
     app.fresh_session();
 
