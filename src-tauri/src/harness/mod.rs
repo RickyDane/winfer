@@ -33,6 +33,16 @@ pub const CODE_ARGS_ENV: &str = "WINFER_CODE_ARGS";
 /// missing standard handles at it. Returns the arguments, taken from [`CODE_ARGS_ENV`] if set.
 #[cfg(windows)]
 pub fn attach_console(args: Vec<String>) -> Vec<String> {
+    let passed = std::env::var(CODE_ARGS_ENV).ok().and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
+    // Not for tools and agents started from here. This runs before other threads.
+    unsafe { std::env::remove_var(CODE_ARGS_ENV) };
+    let args = if args.is_empty() { passed.unwrap_or(args) } else { args };
+    // The web protocol uses inherited pipes, not a console. Attaching a console can
+    // replace standard handles; never let it redirect the serve protocol away from them.
+    if args.iter().any(|a| a == "--serve") {
+        return args;
+    }
+
     use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
     use windows_sys::Win32::System::Console::{
@@ -72,16 +82,7 @@ pub fn attach_console(args: Vec<String>) -> Vec<String> {
         SetConsoleCP(CP_UTF8);
     }
 
-    let Some(passed) = std::env::var(CODE_ARGS_ENV)
-        .ok()
-        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
-    else {
-        return args;
-    };
-    // Not for tools and agents started from here.
-    // SAFETY: still single-threaded.
-    unsafe { std::env::remove_var(CODE_ARGS_ENV) };
-    if args.is_empty() { passed } else { args }
+    args
 }
 
 /// Settings shown in the app (Settings → winfer code); history stays out.

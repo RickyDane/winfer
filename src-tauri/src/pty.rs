@@ -496,8 +496,10 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                 req.session.as_deref(),
                 req.prompt.as_deref().filter(|_| !launcher.batch),
             ));
+            // Only terminal sessions need a console host. `start` must not sit between
+            // the web protocol and its inherited pipes (or consume its stdin).
             #[cfg(windows)]
-            if provider.id == "winfer" {
+            if provider.id == "winfer" && !req.serve {
                 let (host, args) = console_host(&cmd);
                 agent_env.push((crate::harness::CODE_ARGS_ENV.to_string(), args));
                 cmd = host;
@@ -810,6 +812,36 @@ fn terminate(pid: Option<u32>, killer: &mut (dyn ChildKiller + Send + Sync)) {
 #[cfg(test)]
 mod pipe_tests {
     use super::*;
+
+    #[test]
+    fn serve_command_bypasses_the_windows_console_host() {
+        let req = SpawnRequest {
+            pane_id: "serve-command-test".into(),
+            provider_id: "winfer".into(),
+            cwd: None,
+            workspace_id: None,
+            resume: true,
+            session: Some("resume-test".into()),
+            prompt: None,
+            model: Some("claude/sonnet".into()),
+            auto_approve: false,
+            system_prompt: None,
+            plain: true,
+            lean: false,
+            hidden_tools: Vec::new(),
+            serve: true,
+            cols: 80,
+            rows: 24,
+        };
+        let (cmd, _) = build_command(&req, None).unwrap();
+        let argv = cmd.get_argv();
+        assert_eq!(PathBuf::from(&argv[0]), std::env::current_exe().unwrap());
+        assert_eq!(argv[1], "code");
+        assert!(argv.iter().any(|a| a == "--serve"));
+        assert!(argv.iter().any(|a| a == "resume-test"));
+        #[cfg(windows)]
+        assert!(cmd.get_env(crate::harness::CODE_ARGS_ENV).is_none());
+    }
 
     #[test]
     fn serve_pipes_preserve_long_json_lines_and_process_settings() {

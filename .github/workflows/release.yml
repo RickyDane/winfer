@@ -217,6 +217,11 @@ jobs:
           # one file at once could drop a platform.
           includeUpdaterJson: false
 
+      # Exercise the GUI-subsystem executable, not only console/debug unit-test binaries.
+      - name: Verify Windows web session protocol
+        if: runner.os == 'Windows'
+        run: node scripts/serve-smoke.mjs src-tauri/target/${{ matrix.target }}/release/winfer.exe
+
       # Fail the release if the shipped app isn't what Gatekeeper accepts on a fresh Mac.
       - name: Verify signature and notarization
         if: runner.os == 'macOS' && env.WINFER_NOTARIZED == '1'
