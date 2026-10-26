@@ -2549,26 +2549,27 @@ button.cw-foot-item.active {
   overflow: hidden;
   pointer-events: none;
 }
-/* Fresh session: welcome + composer sit together in the pane's center;
-   the stars still span the whole pane. */
-.cw-pane:has(> .cw-scroll > .cw-welcome) {
-  justify-content: center;
-}
-.cw-pane:has(> .cw-scroll > .cw-welcome) > .cw-scroll {
-  flex: 0 0 auto;
-  position: static;
-  overflow: visible;
-}
-.cw-pane:has(> .cw-scroll > .cw-welcome) .cw-welcome {
-  position: static;
-  overflow: visible;
-}
-.cw-pane:has(> .cw-scroll > .cw-welcome) .cw-stars {
-  position: absolute;
-  inset: 0;
-}
-.cw-pane:has(> .cw-scroll > .cw-welcome) > .cw-dock {
-  position: relative;
+/* Center the welcome screen only in wide panes. Narrow/split panes keep the normal
+   flexible transcript and bottom dock. Auto margins also yield if content grows. */
+@container (min-width: 601px) {
+  .cw-pane:has(> .cw-scroll > .cw-welcome) > .cw-scroll {
+    flex: 0 0 auto;
+    margin-top: auto;
+    position: static;
+    overflow: visible;
+  }
+  .cw-pane:has(> .cw-scroll > .cw-welcome) .cw-welcome {
+    position: static;
+    overflow: visible;
+  }
+  .cw-pane:has(> .cw-scroll > .cw-welcome) .cw-stars {
+    position: absolute;
+    inset: 0;
+  }
+  .cw-pane:has(> .cw-scroll > .cw-welcome) > .cw-dock {
+    position: relative;
+    margin-bottom: auto;
+  }
 }
 .cw-welcome-inner {
   position: relative;

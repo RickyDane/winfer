@@ -34,6 +34,28 @@ pub fn models() -> Vec<ModelInfo> {
     .collect()
 }
 
+/// Before the first result, Claude Code doesn't report a context window. Resolve its
+/// aliases and versioned names so a model switch doesn't retain the previous limit.
+/// https://platform.claude.com/docs/en/build-with-claude/context-windows
+fn context_window(model: &str) -> u64 {
+    let name = model.strip_prefix("claude-").unwrap_or(model);
+    if name.contains("[1m]") || matches!(name, "opus" | "sonnet" | "fable" | "mythos") {
+        return 1_000_000;
+    }
+    let mut parts = name.split('-');
+    let family = parts.next().unwrap_or("");
+    let major = parts.next().and_then(|v| v.parse::<u32>().ok());
+    let minor = parts.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let version = major.map(|major| (major, minor));
+    let large = match family {
+        "opus" | "sonnet" => version.is_some_and(|v| v >= (4, 6)),
+        "haiku" => version.is_some_and(|v| v >= (5, 5)),
+        "fable" | "mythos" => true,
+        _ => false,
+    };
+    if large { 1_000_000 } else { 200_000 }
+}
+
 fn permission_mode(mode: Mode) -> &'static str {
     match mode {
         Mode::Ask => "default",
@@ -201,6 +223,7 @@ impl Live {
 }
 
 struct Bridge {
+    model: String,
     events: Events,
     calls: HashMap<String, Call>,
     /// Background Bash calls' own descriptions by tool id, to name their tasks with instead of
@@ -333,6 +356,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     };
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
     let mut b = Bridge {
+        model: String::new(),
         events,
         calls: HashMap::new(),
         shell_names: HashMap::new(),
@@ -355,6 +379,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         running: Default::default(),
         settled: false,
     };
+    b.set_model(&opts.model);
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     // Exits of processes replaced by a micro-compact that ended late.
     let mut stale_exits = 0;
@@ -436,6 +461,16 @@ fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: 
 }
 
 impl Bridge {
+    fn set_model(&mut self, model: &str) {
+        if self.model == model {
+            return;
+        }
+        self.model = model.to_string();
+        self.live.usage.window = context_window(model);
+        self.emit(Ev::Model(model.to_string()));
+        self.emit(Ev::Usage(self.live.usage.clone()));
+    }
+
     /// Sends the running turn's usage on top of the session's finished turns.
     fn emit_live(&mut self) {
         let l = &mut self.live;
@@ -536,7 +571,10 @@ impl Bridge {
                     "response": { "subtype": "success", "request_id": id, "response": { "behavior": "allow", "updatedInput": input } },
                 }));
             }
-            Cmd::SetModel(model) => self.control(proc, json!({ "subtype": "set_model", "model": model })),
+            Cmd::SetModel(model) => {
+                self.set_model(&model);
+                self.control(proc, json!({ "subtype": "set_model", "model": model }));
+            }
             Cmd::SetMode(mode) => {
                 self.mode = mode;
                 crate::harness::bg::set_mode(&self.bg_owner, mode);
@@ -613,7 +651,7 @@ impl Bridge {
                         self.emit(Ev::Session(s.to_string()));
                     }
                     if let Some(m) = v["model"].as_str() {
-                        self.emit(Ev::Model(m.to_string()));
+                        self.set_model(m);
                     }
                     if let Some(skills) = init_skills(v) {
                         self.emit(Ev::Skills(skills));
@@ -713,8 +751,14 @@ impl Bridge {
                 let ln = |k: &str| last[k].as_u64().unwrap_or(0);
                 let window = v["modelUsage"]
                     .as_object()
-                    .and_then(|m| m.values().filter_map(|u| u["contextWindow"].as_u64()).max())
-                    .unwrap_or(200_000);
+                    // These are process-wide totals: old models and subagents can have
+                    // different limits. Only the active model describes this context.
+                    .and_then(|m| m.get(&self.model).or_else(|| {
+                        if self.model.is_empty() && m.len() == 1 { m.values().next() } else { None }
+                    }))
+                    .and_then(|u| u["contextWindow"].as_u64())
+                    .filter(|w| *w > 0)
+                    .unwrap_or_else(|| if self.live.usage.window > 0 { self.live.usage.window } else { context_window(&self.model) });
                 // `usage` is the main thread's in this turn, without its subagents. The process's
                 // running totals (`modelUsage`, `total_cost_usd`) count them, so the turn is
                 // what those grew by; the session's totals add up across turns and restarts.
@@ -858,6 +902,9 @@ impl Bridge {
     fn on_stream(&mut self, e: &Value) {
         match e["type"].as_str().unwrap_or("") {
             "message_start" => {
+                if let Some(model) = e["message"]["model"].as_str() {
+                    self.set_model(model);
+                }
                 self.message = e["message"]["id"].as_str().unwrap_or("").to_string();
                 let u = &e["message"]["usage"];
                 let n = |k: &str| u[k].as_u64().unwrap_or(0);
@@ -1101,6 +1148,7 @@ mod tests {
     fn bridge() -> (Bridge, std::sync::mpsc::Receiver<Ev>) {
         let (tx, rx) = channel();
         let b = Bridge {
+            model: String::new(),
             events: tx,
             calls: HashMap::new(),
             shell_names: HashMap::new(),
@@ -1237,6 +1285,48 @@ mod tests {
     }
 
     #[test]
+    fn context_limits_follow_the_active_model_without_resetting_tokens() {
+        let (mut b, rx) = bridge();
+        b.live.usage.context = 236_000;
+        b.live.usage.input = 300_000;
+        b.set_model("haiku");
+        assert_eq!(b.live.usage.window, 200_000);
+        b.set_model("opus");
+        assert_eq!(b.live.usage.window, 1_000_000);
+        assert_eq!((b.live.usage.context, b.live.usage.input), (236_000, 300_000));
+        assert!(rx.try_iter().any(|e| matches!(e, Ev::Usage(u) if u.window == 1_000_000 && u.context == 236_000)));
+
+        // The stream resolves aliases, including after a restart or backend fallback.
+        b.on_stream(&json!({ "type": "message_start", "message": {
+            "id": "m", "model": "claude-opus-4-6", "usage": { "input_tokens": 236_000 }
+        } }));
+        assert_eq!(b.live.usage.window, 1_000_000);
+        let result = json!({ "type": "result", "modelUsage": {
+            "claude-opus-4-6": { "contextWindow": 1_000_000 },
+            "claude-haiku-4-5": { "contextWindow": 200_000 }
+        } });
+        b.on_line(&result);
+        assert_eq!(b.live.usage.window, 1_000_000);
+
+        // Switching down must not choose the old model's larger window.
+        b.set_model("claude-haiku-4-5");
+        b.on_line(&result);
+        assert_eq!(b.live.usage.window, 200_000);
+        b.on_line(&json!({ "type": "result" }));
+        assert_eq!(b.live.usage.window, 200_000);
+    }
+
+    #[test]
+    fn context_window_resolves_aliases_versions_and_extended_context() {
+        for model in ["opus", "sonnet", "fable", "claude-opus-4-6", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-5-5", "sonnet[1m]"] {
+            assert_eq!(context_window(model), 1_000_000, "{model}");
+        }
+        for model in ["haiku", "claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5", "custom"] {
+            assert_eq!(context_window(model), 200_000, "{model}");
+        }
+    }
+
+    #[test]
     fn maps_a_turn_with_a_tool_call() {
         let (mut b, rx) = bridge();
         let lines = [
@@ -1249,7 +1339,7 @@ mod tests {
             r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/x/a.rs","old_string":"a\n","new_string":"b\n"}}]}}"#,
             r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"permission_suggestions":[]}}"#,
             r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
-            r#"{"type":"result","is_error":false,"total_cost_usd":0.5,"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":10},"modelUsage":{"x":{"contextWindow":1000}}}"#,
+            r#"{"type":"result","is_error":false,"total_cost_usd":0.5,"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":10},"modelUsage":{"claude-opus":{"contextWindow":1000}}}"#,
         ];
         for l in lines {
             b.on_line(&serde_json::from_str(l).unwrap());
