@@ -39,12 +39,20 @@ import "./code.css";
  */
 function Plan({ side }: { side?: boolean }) {
   const todos = useCode((s) => s.todos);
+  const doneAt = useCode((s) => s.planDoneAt);
+  const [expiredAt, setExpiredAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (doneAt === null) return;
+    const timer = setTimeout(() => setExpiredAt(doneAt), Math.max(0, doneAt + 10_000 - Date.now()));
+    return () => clearTimeout(timer);
+  }, [doneAt]);
   const [open, setOpen] = useState(true);
   const asking = useCode((s) => s.approvals.length > 0);
   const show = useCodeWeb((s) => s.showPlan);
   const sidebar = usePlanSidebar((s) => s.on);
   useEffect(loadPlanSidebar, []);
-  if (!show || !todos.length || (side && !sidebar)) return null;
+  if (!show || !todos.length || (side && !sidebar)
+    || (doneAt !== null && (expiredAt === doneAt || Date.now() >= doneAt + 10_000))) return null;
   const done = todos.filter((t) => t.status === "completed").length;
   const current = todos.find((t) => t.status === "in_progress");
   const expanded = side || (open && !asking);

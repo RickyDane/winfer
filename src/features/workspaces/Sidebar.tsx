@@ -20,16 +20,17 @@ import { WorktreeList } from "@/features/worktree/WorktreeList";
 import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { themeById } from "@/features/theme/themes";
 import { UsageButton } from "@/features/usage/UsageMeter";
+import { checkoutDetails, paneTooltip, useSidebarCheckouts } from "./sidebarTooltips";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
-export function PaneName({ pane, className }: { pane: Pane; className?: string }) {
+export function PaneName({ pane, className, tooltip }: { pane: Pane; className?: string; tooltip?: string }) {
   const providers = useWorkspaces((s) => s.providers);
   const task = useProgress((s) => progressTitle(s.byPane[pane.id]));
   const title = useProgress((s) => s.byPane[pane.id]?.title ?? null);
   const label = paneLabel(pane, providers, task, title);
   const name = providerName(providers, pane.provider);
   return (
-    <span className={cn("min-w-0 truncate", className)} title={label === name ? name : `${name}: ${label}`}>
+    <span className={cn("min-w-0 truncate", className)} title={tooltip ?? (label === name ? name : `${name}: ${label}`)}>
       {label}
     </span>
   );
@@ -188,6 +189,9 @@ type OpenMenu = (e: React.MouseEvent, target: { title: string; items: MenuItem[]
 /** An expanded workspace's sessions, in the order the user dragged them into. */
 function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace: Workspace; focusedPaneId: string | null; openMenu: OpenMenu }) {
   const movePaneInList = useWorkspaces((s) => s.movePaneInList);
+  const providers = useWorkspaces((s) => s.providers);
+  const byPane = useProgress((s) => s.byPane);
+  const { listings, refresh } = useSidebarCheckouts();
   const { drag, begin, dropLine } = useSortable(movePaneInList);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
@@ -196,6 +200,8 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
   // Archived rows sit in their own list, dimmed and not draggable.
   const row = (pane: Pane, i: number, sortable: boolean) => {
     const focused = pane.id === focusedPaneId;
+    const progress = byPane[pane.id];
+    const tooltip = paneTooltip(pane, providerName(providers, pane.provider), paneLabel(pane, providers, progressTitle(progress), progress?.title), progress, listings[pane.cwd]);
     const line = sortable ? dropLine(i, live.length) : null;
     return (
       // Not a <button>: the rename field sits inside the row, and WebKit won't focus inputs in buttons.
@@ -203,6 +209,9 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
         key={pane.id}
         role="button"
         tabIndex={0}
+        title={tooltip}
+        onMouseEnter={() => refresh(pane.cwd)}
+        onFocus={() => refresh(pane.cwd)}
         data-sort-id={sortable ? pane.id : undefined}
         onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
         onKeyDown={(e) => {
@@ -233,7 +242,7 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
           {renaming === pane.id ? (
             <PaneTitleInput pane={pane} onDone={() => setRenaming(null)} className="h-5 flex-1 text-[13px]" />
           ) : (
-            <PaneName pane={pane} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
+            <PaneName pane={pane} tooltip={tooltip} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
           )}
           <PanePercent pane={pane} />
         </span>
@@ -312,6 +321,7 @@ export function SidebarResizer() {
 
 export function Sidebar() {
   const width = useWorkspaces((s) => s.sidebarWidth);
+  const { listings, refresh } = useSidebarCheckouts();
   const { workspaces, activeWorkspaceId, focusedPaneId, expandedWorkspaces, toggleWorkspaceExpanded, collapseAllWorkspaces, moveWorkspace, theme, toggleTheme } = useWorkspacesPick("workspaces", "activeWorkspaceId", "focusedPaneId", "expandedWorkspaces", "toggleWorkspaceExpanded", "collapseAllWorkspaces", "moveWorkspace", "theme", "toggleTheme");
   const [menu, openMenu, closeMenu] = useContextMenu<{ title: string; items: MenuItem[] }>();
   const { drag, begin, dropLine } = useSortable(moveWorkspace);
@@ -369,7 +379,9 @@ export function Sidebar() {
                 onDoubleClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
                 onPointerDown={(e) => begin(e, ws.id)}
                 onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
-                title={`${ws.rootDir}\nDouble-click to open · drag to reorder`}
+                title={[ws.name, `Directory: ${ws.rootDir}`, ...checkoutDetails(ws.rootDir, listings[ws.rootDir]), `New agents: ${ws.useWorktrees ? "isolated worktrees" : "shared checkout"}`, "Double-click to open · drag to reorder"].join("\n")}
+                onMouseEnter={() => refresh(ws.rootDir)}
+                onFocus={() => refresh(ws.rootDir)}
                 className={cn(
                   "group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
                   active ? "font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",

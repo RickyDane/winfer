@@ -301,8 +301,8 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
               wt.isMain
                 ? `${wt.info.path}\nThe project folder itself, on ${wt.info.branch}\nClick to open an agent here (no worktree)`
                 : wt.prunable
-                  ? `${wt.info.path} (folder missing)`
-                  : `${wt.info.path}\n${describeState(wt)}\n${selecting ? "Click to select" : "Click to open an agent here"}`
+                  ? `Branch: ${wt.info.branch}\nWorktree: ${wt.info.path} (folder missing)`
+                  : `Branch: ${wt.info.branch}\nWorktree: ${wt.info.path}\nBase branch: ${wt.info.base}\n${describeState(wt)}\n${selecting ? "Click to select" : "Click to open an agent here"}`
             }
             className="flex min-w-0 flex-1 items-start gap-2 py-1 pr-1 text-left text-[13px] text-fg-muted group-hover:text-fg"
           >

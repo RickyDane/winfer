@@ -351,7 +351,7 @@ fn mode_color(mode: Mode) -> Option<ratatui::style::Color> {
 }
 
 /// How long a finished plan stays up before it's cleared away.
-const PLAN_LINGER: Duration = Duration::from_secs(4);
+const PLAN_LINGER: Duration = Duration::from_secs(10);
 
 /// Whether there's a plan to show: some of it is still open, or it was just finished.
 fn plan_visible(app: &App) -> bool {

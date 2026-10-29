@@ -87,6 +87,8 @@ export interface CodeState {
   approvals: Approval[];
   tasks: Record<string, CodeTask>;
   todos: Todo[];
+  /** Completion time, kept across pane remounts until a task is open again. */
+  planDoneAt: number | null;
   skills: string[];
   usage: Usage;
   busy: boolean;
@@ -128,7 +130,7 @@ export const createCodeStore = () =>
   btw: [],
   sheet: null,
   rate: null,
-  setSheet: (sheet) => set({ sheet }),
+  setSheet: (sheet) => set(sheet === "btw" ? { sheet, btw: [] } : { sheet }),
   preview: null,
   setPreview: (preview) => set({ preview }),
   logTask: null,
@@ -145,6 +147,7 @@ export const createCodeStore = () =>
   approvals: [],
   tasks: {},
   todos: [],
+  planDoneAt: null,
   skills: [],
   usage: { context: 0, window: 200_000, input: 0, cached: 0, output: 0 },
   busy: false,
@@ -165,7 +168,7 @@ export const createCodeStore = () =>
     if (cmd.type === "set_effort") set({ effort: cmd.effort ?? "default" });
     if (cmd.type === "set_subagent") set({ subModel: cmd.model, subEffort: cmd.model ? cmd.effort : null });
     if (cmd.type === "undo" || cmd.type === "new") set({ approvals: [] });
-    if (cmd.type === "btw") set((s) => ({ btw: [...s.btw, { id: cmd.id, question: cmd.question }], sheet: "btw" }));
+    if (cmd.type === "btw") set({ btw: [{ id: cmd.id, question: cmd.question }], sheet: "btw" });
     if (cmd.type === "sessions") set({ sessions: null });
     if (cmd.type === "context_breakdown") set({ breakdown: undefined });
     if (cmd.type === "set_compaction") set((s) => ({ trimAt: cmd.trim ?? s.trimAt, compactAt: cmd.compact ?? s.compactAt }));
@@ -272,7 +275,12 @@ export const createCodeStore = () =>
           return { tasks: { ...s.tasks, [t.id]: merged } };
         }
         case "todos":
-          return { todos: ev.todos };
+          return {
+            todos: ev.todos,
+            planDoneAt: ev.todos.length && ev.todos.every((t) => t.status === "completed")
+              ? s.planDoneAt ?? Date.now()
+              : null,
+          };
         case "skills":
           return { skills: ev.skills };
         case "usage": {
@@ -344,7 +352,7 @@ export const createCodeStore = () =>
         case "answered":
           return { approvals: s.approvals.filter((a) => a.id !== ev.id) };
         case "cleared":
-          return { items: [], approvals: [], tasks: {}, todos: [], busy: false, usage: { ...s.usage, context: 0, input: 0, cached: 0, output: 0, cost: null, turn: 0 }, rate: null };
+          return { items: [], approvals: [], tasks: {}, todos: [], planDoneAt: null, busy: false, usage: { ...s.usage, context: 0, input: 0, cached: 0, output: 0, cost: null, turn: 0 }, rate: null };
         case "restore": {
           const restored: Item[] = ev.transcript.map((e): Item => {
             if (e.role === "user") return { kind: "user", key: key(), text: e.text, at: 0 };

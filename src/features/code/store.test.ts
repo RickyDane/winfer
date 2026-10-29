@@ -54,6 +54,33 @@ describe("batched code transport", () => {
   });
 });
 
+describe("side questions", () => {
+  it("opens a blank modal without previous questions or late answers", () => {
+    const store = createCodeStore();
+    const { send, apply, setSheet } = store.getState();
+    send({ type: "btw", id: "old", question: "Previous question" });
+    apply({ type: "btw", id: "old", answer: "Previous answer" });
+    setSheet(null);
+    setSheet("btw");
+    expect(store.getState().sheet).toBe("btw");
+    expect(store.getState().btw).toEqual([]);
+    apply({ type: "btw", id: "old", answer: "Late answer" });
+    expect(store.getState().btw).toEqual([]);
+  });
+
+  it("replaces the previous question and ignores its pending response", () => {
+    const store = createCodeStore();
+    const { send, apply } = store.getState();
+    send({ type: "btw", id: "old", question: "Previous question" });
+    send({ type: "btw", id: "new", question: "New question" });
+    apply({ type: "btw", id: "old", error: "Late error" });
+    expect(store.getState().sheet).toBe("btw");
+    expect(store.getState().btw).toEqual([{ id: "new", question: "New question" }]);
+    apply({ type: "btw", id: "new", answer: "New answer" });
+    expect(store.getState().btw).toEqual([{ id: "new", question: "New question", answer: "New answer" }]);
+  });
+});
+
 describe("background task activity", () => {
   it("records time and activity before any dropdown mounts and preserves them on updates", () => {
     const { store, emit } = setup();
