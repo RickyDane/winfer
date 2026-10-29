@@ -9,7 +9,7 @@ vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 vi.stubGlobal("document", { hasFocus: () => true });
 
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
-const { duration, leftNow, refreshClaude, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
+const { duration, leftNow, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
 
 const HOUR = 3600_000;
 const now = 1_800_000_000_000;
@@ -116,5 +116,40 @@ describe("Claude usage refresh", () => {
     await refreshClaude();
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "usage_claude")).toHaveLength(2);
     vi.mocked(Date.now).mockRestore();
+  });
+});
+
+describe("pooled accounts", () => {
+  const account = (id: string, enabled = true, signedIn = true) => ({ id, provider: "claude", label: id, enabled, dir: "", signedIn, exhaustedUntil: null });
+  const accounts = [account("claude:default"), account("claude:account-2"), account("claude:account-3", false)];
+  const snap = (provider: string, used: number, resetsAt: number, at = now) => ({ provider, at, windows: [{ kind: "session", label: "5-hour", usedPercent: used, resetsAt }] });
+  const snapshots = {
+    claude: snap("claude", 100, now + 1 * HOUR),
+    "claude:account-2": snap("claude:account-2", 22, now + 4 * HOUR, now - HOUR),
+    "claude:account-3": snap("claude:account-3", 0, now + 2 * HOUR),
+  };
+
+  it("averages what the counted accounts have left, resetting with the first", () => {
+    const p = pooled("claude", snapshots, accounts, now)!;
+    expect(leftNow(p.windows[0], now)).toBe(39);
+    expect(p.windows[0].resetsAt).toBe(now + HOUR);
+    expect(p.at).toBe(now - HOUR);
+  });
+
+  it("is the default reading with a single account", () => {
+    expect(pooled("claude", snapshots, [], now)).toEqual(snapshots.claude);
+  });
+
+  it("averages the readings over time and projects the combined pace", () => {
+    const samples = {
+      [`claude:session:${now + HOUR}`]: [[now - HOUR, 80], [now, 100]] as [number, number][],
+      [`claude:account-2:session:${now + 4 * HOUR}`]: [[now - 30 * 60_000, 2], [now, 22]] as [number, number][],
+    };
+    expect(pooledSamples("claude", "session", snapshots, accounts, samples, now)).toEqual([[now - HOUR, 41], [now - 30 * 60_000, 41], [now, 61]]);
+    // 78% left in total, used at 20%/h + 40%/h: out in 1.3h, after the default's reset in 1h.
+    expect(pooledRunsOutAt("claude", "session", snapshots, accounts, samples, now)).toBeNull();
+    const later = { ...snapshots, claude: snap("claude", 100, now + 3 * HOUR) };
+    const laterSamples = { ...samples, [`claude:session:${now + 3 * HOUR}`]: samples[`claude:session:${now + HOUR}`] };
+    expect(pooledRunsOutAt("claude", "session", later, accounts, laterSamples, now)).toBe(now + 1.3 * HOUR);
   });
 });

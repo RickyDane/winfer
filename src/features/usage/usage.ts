@@ -9,7 +9,7 @@ import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notifi
 import { create } from "zustand";
 import { toast } from "@/stores/toasts";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { accountLabel, accountsOf, hasAlternatives, loadAccounts, providerOfAccount, startAccount, useAccounts, usageKey } from "@/features/accounts/accounts";
+import { accountLabel, accountsOf, defaultAccountId, hasAlternatives, loadAccounts, providerOfAccount, startAccount, useAccounts, usageKey, type Account } from "@/features/accounts/accounts";
 import { continueIn, handoffTarget, paneToHandOff } from "./handoff";
 
 export interface UsageWindow {
@@ -151,6 +151,86 @@ export function tightest(snapshot: Snapshot | undefined, now = Date.now()): Usag
   if (leftNow(tightPlan, now) > 0) return tightPlan;
   const credits = snapshot.windows.filter(isCredit);
   return credits.length ? credits.reduce((a, b) => (leftNow(b, now) > leftNow(a, now) ? b : a)) : tightPlan;
+}
+
+// Pooled accounts ---------------------------------------------------------------------------------
+
+/** One of an agent's accounts as it counts toward the agent's pooled limits. */
+export interface PoolMember {
+  id: string;
+  /** Where its usage is kept (see accounts.ts `usageKey`). */
+  key: string;
+  label: string;
+  snapshot: Snapshot | undefined;
+  /** Enabled and signed in: failover can move work to it, so its room counts. */
+  counted: boolean;
+}
+
+/** An agent's accounts in failover order; just the default sign-in when there are no others. */
+export function poolMembers(provider: string, snapshots: Record<string, Snapshot>, list: Account[]): PoolMember[] {
+  const accounts = accountsOf(provider, list);
+  if (accounts.length < 2) return [{ id: defaultAccountId(provider), key: provider, label: accountLabel(defaultAccountId(provider), list), snapshot: snapshots[provider], counted: true }];
+  return accounts.map((a) => ({ id: a.id, key: usageKey(a.id), label: a.label, snapshot: snapshots[usageKey(a.id)], counted: a.enabled && a.signedIn }));
+}
+
+/**
+ * An agent's limits over all its counted accounts: each account is 100%, so a window's "left" is
+ * the average of what each account has left. It resets (partly) when the first account's does,
+ * and is as old as the oldest reading in it.
+ */
+export function pooled(provider: string, snapshots: Record<string, Snapshot>, list: Account[], now = Date.now()): Snapshot | undefined {
+  const members = poolMembers(provider, snapshots, list).filter((m) => m.counted && m.snapshot?.windows.length);
+  if (members.length === 0) return snapshots[provider]?.windows.length ? snapshots[provider] : undefined;
+  if (members.length === 1) return { ...members[0].snapshot!, provider };
+  const kinds = [...new Set(members.flatMap((m) => m.snapshot!.windows.map((w) => w.kind)))];
+  const windows = kinds.map((kind) => {
+    const ws = members.flatMap((m) => m.snapshot!.windows.filter((w) => w.kind === kind));
+    const left = ws.reduce((sum, w) => sum + leftNow(w, now), 0) / ws.length;
+    const resets = ws.map((w) => w.resetsAt).filter((t): t is number => t !== null && t > now);
+    return { kind, label: ws[0].label, usedPercent: 100 - left, resetsAt: resets.length ? Math.min(...resets) : null };
+  });
+  return { provider, windows, at: Math.min(...members.map((m) => m.snapshot!.at)) };
+}
+
+/** Readings of a pooled window over time ([at, used%]): at each reading, the accounts' average. */
+export function pooledSamples(provider: string, kind: string, snapshots: Record<string, Snapshot>, list: Account[], samples = useUsage.getState().samples, now = Date.now()): [number, number][] {
+  const members = poolMembers(provider, snapshots, list).filter((m) => m.counted && m.snapshot?.windows.some((w) => w.kind === kind));
+  const series = members.map((m) => {
+    const w = m.snapshot!.windows.find((x) => x.kind === kind)!;
+    const live = w.resetsAt !== null && w.resetsAt > now;
+    return { points: live ? (samples[windowKey(m.key, w)] ?? []) : [], current: usedNow(w, now) };
+  });
+  if (members.length < 2) return series[0]?.points ?? [];
+  const times = [...new Set(series.flatMap((s) => s.points.map(([t]) => t)))].sort((a, b) => a - b);
+  // Each account at its last reading by then; before its first one, as it was first seen.
+  const at = (s: (typeof series)[number], t: number) => [...s.points].reverse().find(([pt]) => pt <= t)?.[1] ?? s.points[0]?.[1] ?? s.current;
+  return times.map((t) => [t, series.reduce((sum, s) => sum + at(s, t), 0) / series.length]);
+}
+
+/** When a pooled window runs out at the combined pace of its accounts, if before any of them resets. */
+export function pooledRunsOutAt(provider: string, kind: string, snapshots: Record<string, Snapshot>, list: Account[], samples = useUsage.getState().samples, now = Date.now()): number | null {
+  const members = poolMembers(provider, snapshots, list).filter((m) => m.counted && m.snapshot?.windows.some((w) => w.kind === kind));
+  if (members.length < 2) {
+    const m = members[0];
+    const w = m?.snapshot!.windows.find((x) => x.kind === kind);
+    return m && w ? runsOutAt(m.key, w, samples, now) : null;
+  }
+  let left = 0;
+  let perMs = 0;
+  let firstReset = Infinity;
+  for (const m of members) {
+    const w = m.snapshot!.windows.find((x) => x.kind === kind)!;
+    left += leftNow(w, now);
+    if (w.resetsAt !== null && w.resetsAt > now) firstReset = Math.min(firstReset, w.resetsAt);
+    const points = samples[windowKey(m.key, w)] ?? [];
+    if (points.length < 2) continue;
+    const [t0, u0] = points[0];
+    const [t1, u1] = points[points.length - 1];
+    if (t1 - t0 >= 15 * 60_000 && u1 > u0) perMs += (u1 - u0) / (t1 - t0);
+  }
+  if (perMs <= 0) return null;
+  const at = now + left / perMs;
+  return at < firstReset ? at : null;
 }
 
 /** When the window runs out at the pace measured in it, if that's before it resets. */

@@ -128,13 +128,18 @@ fn claude_credentials(account: Option<&str>) -> Option<Value> {
         let suffix = crate::accounts::overridden(&id)
             .then(|| format!("-{}", &hex::encode(Sha256::digest(config.to_string_lossy().as_bytes()))[..8]))
             .unwrap_or_default();
-        let service = format!("Claude Code{suffix}-credentials");
-        let out = Command::new("/usr/bin/security")
-            .args(["find-generic-password", "-s", &service, "-w"])
-            .stdin(Stdio::null()).stderr(Stdio::null()).output().ok();
-        if let Some(out) = out.filter(|o| o.status.success()) {
-            if let Ok(auth) = serde_json::from_slice(&out.stdout) {
-                return Some(auth);
+        // Claude Code names it "Claude Code-credentials-<hash>"; older builds put the hash first.
+        for service in [format!("Claude Code-credentials{suffix}"), format!("Claude Code{suffix}-credentials")] {
+            let out = Command::new("/usr/bin/security")
+                .args(["find-generic-password", "-s", &service, "-w"])
+                .stdin(Stdio::null()).stderr(Stdio::null()).output().ok();
+            if let Some(out) = out.filter(|o| o.status.success()) {
+                if let Ok(auth) = serde_json::from_slice(&out.stdout) {
+                    return Some(auth);
+                }
+            }
+            if suffix.is_empty() {
+                break;
             }
         }
     }
@@ -157,7 +162,11 @@ pub async fn usage_claude(account: Option<String>) -> Result<Snapshot, String> {
             .header("Authorization", &format!("Bearer {token}"))
             .header("anthropic-beta", "oauth-2025-04-20")
             .header("User-Agent", "claude-cli")
-            .call().map_err(|_| "Couldn't refresh Claude limits. Check your connection and Claude Code sign-in.")?;
+            .call().map_err(|e| match e {
+                ureq::Error::StatusCode(429) => "Claude is limiting how often usage can be read; trying again later.",
+                ureq::Error::StatusCode(401 | 403) => "Claude sign-in expired. Use Claude Code once to renew it, then refresh.",
+                _ => "Couldn't refresh Claude limits. Check your connection and Claude Code sign-in.",
+            })?;
         let body: Value = response.body_mut().read_json().map_err(|_| "Claude returned an invalid usage response.")?;
         claude_usage_snapshot(&body, now_ms()).ok_or_else(|| "Claude returned no plan limits.".to_string())
     }).await.map_err(|_| "Claude usage refresh failed.".to_string())?

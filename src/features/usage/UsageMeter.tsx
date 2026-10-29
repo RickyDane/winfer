@@ -5,15 +5,16 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
-import { accountLabel, accountsOf, useAccounts } from "@/features/accounts/accounts";
-import { activeKey, contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, refreshUsage, resetOutcomeText, runsOutAt, tightest, tokens, useUsage, when, windowKey, type ContextPart, type ResetCredit, type UsageWindow } from "./usage";
+import { accountLabel, useAccounts } from "@/features/accounts/accounts";
+import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, pooled, pooledRunsOutAt, pooledSamples, poolMembers, refreshUsage, resetOutcomeText, tightest, tokens, useUsage, when, type ContextPart, type PoolMember, type ResetCredit, type Snapshot, type UsageWindow } from "./usage";
 import { PART_COLORS } from "./contextParts";
 import { UsageSummary } from "./UsageHistory";
 
 /** Ring that drains as the limit is used up, with the provider's icon inside. */
 export function UsageRing({ provider, size = 22, className }: { provider: string; size?: number; className?: string }) {
   const accounts = useAccounts((s) => s.list);
-  const snapshot = useUsage((s) => s.snapshots[activeKey(provider, accounts)]);
+  const snapshots = useUsage((s) => s.snapshots);
+  const snapshot = pooled(provider, snapshots, accounts);
   const window = tightest(snapshot);
   if (!window) return <ProviderIcon provider={provider} size={Math.round(size * 0.6)} />;
   const left = leftNow(window);
@@ -45,7 +46,8 @@ export function UsageRing({ provider, size = 22, className }: { provider: string
 /** "62%" next to a provider in pickers; dimmed reset hint when it's nearly out. */
 export function UsageHint({ provider }: { provider: string }) {
   const accounts = useAccounts((s) => s.list);
-  const snapshot = useUsage((s) => s.snapshots[activeKey(provider, accounts)]);
+  const snapshots = useUsage((s) => s.snapshots);
+  const snapshot = pooled(provider, snapshots, accounts);
   const window = tightest(snapshot);
   if (!window) return null;
   const left = Math.round(leftNow(window));
@@ -60,9 +62,16 @@ export function UsageHint({ provider }: { provider: string }) {
   );
 }
 
-function WindowBar({ provider, window }: { provider: string; window: UsageWindow }) {
+interface WindowProps {
+  window: UsageWindow;
+  /** When it runs out at the current pace, if before it resets. */
+  outAt: number | null;
+  /** Readings so far ([at, used%]), for the line. */
+  samples: [number, number][];
+}
+
+function WindowBar({ window, outAt }: WindowProps) {
   const left = leftNow(window);
-  const outAt = runsOutAt(provider, window);
   return (
     <div className="space-y-1">
       <div className="flex items-baseline gap-2 text-xs">
@@ -90,13 +99,11 @@ const clock = (t: number, long: boolean) =>
   new Date(t).toLocaleString(undefined, long ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
 
 /** What's left of a window over its run so far, from the readings kept for the run-out projection. */
-function WindowLine({ provider, window: w }: { provider: string; window: UsageWindow }) {
-  const samples = useUsage((s) => s.samples[windowKey(provider, w)]);
+function WindowLine({ window: w, outAt, samples }: WindowProps) {
   const [hover, setHover] = useState<number | null>(null);
   const now = Date.now();
   const left = leftNow(w, now);
   const live = w.resetsAt !== null && w.resetsAt > now;
-  const outAt = runsOutAt(provider, w);
   const span = SPAN[w.kind];
   // Readings as [at, % left], ending at the current value now.
   const points: [number, number][] = live ? (samples ?? []).filter(([t]) => t <= now).map(([t, used]) => [t, 100 - used]) : [];
@@ -180,9 +187,11 @@ function useLimited() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const accounts = useAccounts((s) => s.list);
   const installed = (id: string) => providers.some((p) => p.id === id && p.installed);
-  // Accounts other than the default are listed under their agent (keys "claude:account-2").
-  const limited = Object.values(snapshots).filter((s) => installed(s.provider) && s.windows.length > 0);
+  // One entry per agent, its accounts pooled (other accounts are kept under "claude:account-2").
+  const ids = [...new Set(Object.keys(snapshots).map((k) => k.split(":")[0]))].filter(installed);
+  const limited = ids.flatMap((id) => pooled(id, snapshots, accounts) ?? []).filter((s) => s.windows.length > 0);
   const showOpencode = installed("opencode") && opencode !== null;
   return { limited, showOpencode, installed };
 }
@@ -249,50 +258,62 @@ function CodexResets({ count }: { count: number }) {
 
 const CARD = "w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl";
 
-/** Every agent's limits as bars or lines, plus OpenCode's spend today. */
-export function Limits({ chart = "bars", refresh = true }: { chart?: ChartKind; refresh?: boolean }) {
+/** Every agent's limits (its accounts pooled) as bars or lines, plus OpenCode's spend today.
+ *  `accounts` adds what each account has left under its agent. */
+export function Limits({ chart = "bars", refresh = true, accounts: showAccounts = false }: { chart?: ChartKind; refresh?: boolean; accounts?: boolean }) {
   const snapshots = useUsage((s) => s.snapshots);
+  const samples = useUsage((s) => s.samples);
   const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
   const errors = useUsage((s) => s.errors);
   const { limited, showOpencode, installed } = useLimited();
   const accounts = useAccounts((s) => s.list);
   const claudeInstalled = installed("claude");
-  // Each agent's accounts in failover order, the default one's reading under the agent's id.
-  const sections = limited.flatMap((base) => {
-    const list = accountsOf(base.provider, accounts);
-    if (list.length < 2) return [{ snapshot: base, label: null as string | null, key: base.provider, isDefault: true }];
-    return list.flatMap((a) => {
-      const isDefault = a.id.endsWith(":default");
-      const snapshot = isDefault ? base : snapshots[a.id];
-      return snapshot?.windows.length ? [{ snapshot: { ...snapshot, provider: base.provider }, label: accountLabel(a.id, accounts), key: a.id, isDefault }] : [];
-    });
-  });
+  // Errors of accounts that don't count (disabled, signed out, removed) don't matter here.
+  const counts = (key: string) => {
+    const provider = key.split(":")[0];
+    return installed(provider) && (key === provider || poolMembers(provider, snapshots, accounts).some((m) => m.key === key && m.counted));
+  };
   const Window = chart === "line" ? WindowLine : WindowBar;
   return (
     <div className="space-y-4">
       {refresh && <div className="flex justify-end"><RefreshUsageButton /></div>}
-      {Object.entries(errors).map(([provider, error]) => error && installed(provider.split(":")[0]) && (
-        <p key={provider} role="status" className="text-[11px] text-warning">
-          {providerName(providers, provider.split(":")[0])}{provider.includes(":") && ` (${accountLabel(provider, accounts)})`}: {error}{(snapshots[provider] || (provider === "opencode" && opencode)) && " Previous reading kept."}
+      {Object.entries(errors).map(([key, error]) => error && counts(key) && (
+        <p key={key} role="status" className="text-[11px] text-warning">
+          {providerName(providers, key.split(":")[0])}{key.includes(":") && ` (${accountLabel(key, accounts)})`}: {error}{(snapshots[key] || (key === "opencode" && opencode)) && " Previous reading kept."}
         </p>
       ))}
-      {sections.map(({ snapshot: s, label, key, isDefault }) => (
-        <section key={key} className="space-y-2">
-          <header className="flex items-center gap-2 text-[13px]">
-            <ProviderIcon provider={s.provider} />
-            <span className="flex-1 font-medium text-fg">{providerName(providers, s.provider)}{label && <span className="font-normal text-fg-muted"> · {label}</span>}</span>
-            <span className={cn("text-[10px]", Date.now() - s.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(s.at).toLocaleString()}>
-              {Date.now() - s.at > 10 * 60_000 && "Stale · "}
-              {Date.now() - s.at < 120_000 ? "just now" : `${duration(Date.now() - s.at)} ago`}
-            </span>
-          </header>
-          {s.windows.map((w) => (
-            <Window key={w.kind} provider={isDefault ? s.provider : key} window={w} />
-          ))}
-          {s.provider === "codex" && isDefault && <CodexResets count={s.resetCredits ?? 0} />}
-        </section>
-      ))}
+      {limited.map((s) => {
+        const members = poolMembers(s.provider, snapshots, accounts);
+        const pool = members.filter((m) => m.counted && m.snapshot?.windows.length);
+        return (
+          <section key={s.provider} className="space-y-2">
+            <header className="flex items-center gap-2 text-[13px]">
+              <ProviderIcon provider={s.provider} />
+              <span className="flex-1 font-medium text-fg">
+                {providerName(providers, s.provider)}
+                {pool.length > 1 && (
+                  <span className="font-normal text-fg-muted" title={pool.map((m) => `${m.label}: ${accountLeft(m.snapshot!)}`).join("\n")}> · {pool.length} accounts</span>
+                )}
+              </span>
+              <span className={cn("text-[10px]", Date.now() - s.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(s.at).toLocaleString()}>
+                {Date.now() - s.at > 10 * 60_000 && "Stale · "}
+                {Date.now() - s.at < 120_000 ? "just now" : `${duration(Date.now() - s.at)} ago`}
+              </span>
+            </header>
+            {s.windows.map((w) => (
+              <Window
+                key={w.kind}
+                window={w}
+                outAt={pooledRunsOutAt(s.provider, w.kind, snapshots, accounts, samples)}
+                samples={pooledSamples(s.provider, w.kind, snapshots, accounts, samples)}
+              />
+            ))}
+            {showAccounts && members.length > 1 && <AccountBreakdown members={members} />}
+            {s.provider === "codex" && <CodexResets count={snapshots.codex?.resetCredits ?? 0} />}
+          </section>
+        );
+      })}
       {showOpencode && opencode && (
         <section className="flex items-center gap-2 text-[13px]">
           <ProviderIcon provider="opencode" />
@@ -303,9 +324,42 @@ export function Limits({ chart = "bars", refresh = true }: { chart?: ChartKind; 
         </section>
       )}
       {limited.length === 0 && !showOpencode && <p className="text-[11px] text-fg-subtle">No usage reported yet. Refresh to check your signed-in accounts.</p>}
-      {!claudeInstalled || snapshots.claude ? null : (
+      {!claudeInstalled || limited.some((s) => s.provider === "claude") ? null : (
         <p className="text-[11px] text-fg-subtle">Sign in through Claude Code, then refresh to read your plan limits.</p>
       )}
+    </div>
+  );
+}
+
+/** "5-hour 78% · Weekly 98% left": what each window has left, in order. */
+const accountLeft = (s: Snapshot) => s.windows.map((w) => `${w.label} ${Math.round(leftNow(w))}%`).join(" · ") + " left";
+
+/** What each of an agent's accounts has left; the pooled bars above are their average. */
+function AccountBreakdown({ members }: { members: PoolMember[] }) {
+  return (
+    <div className="space-y-1 rounded-md border border-border bg-hover/40 p-2 text-[11px]">
+      <div className="text-fg-subtle">Each account counts as 100%; the bars above are their average.</div>
+      {members.map((m) => {
+        const w = m.snapshot ? tightest(m.snapshot) : null;
+        const left = w ? leftNow(w) : null;
+        return (
+          <div key={m.id} className={cn("flex items-center gap-2", !m.counted && "opacity-50")}>
+            <span className="min-w-0 flex-1 truncate text-fg-muted">
+              {m.label}
+              {!m.counted && " (not counted: disabled or signed out)"}
+            </span>
+            {m.snapshot?.windows.length ? (
+              m.snapshot.windows.map((x) => (
+                <span key={x.kind} className="font-mono text-fg" title={x.resetsAt ? `${x.label}: resets ${when(x.resetsAt)}` : x.label}>
+                  {x.label} <span style={{ color: x === w && left !== null && left < 30 ? levelColor(left) : undefined }}>{Math.round(leftNow(x))}%</span>
+                </span>
+              ))
+            ) : (
+              <span className="text-fg-subtle">no reading yet</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

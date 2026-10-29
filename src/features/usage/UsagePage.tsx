@@ -18,12 +18,12 @@ function LimitsTab() {
     <div className="space-y-4">
       <div className="flex items-start gap-3">
         <p className="flex-1 text-xs text-fg-muted">
-          How much of each plan's usage limits is left, as the title bar's rings show it. The lines follow each window since it started; a dashed line is where it
+          How much of each plan's usage limits is left, as the title bar's rings show it. An agent with several accounts counts each as 100% and shows their average. The lines follow each window since it started; a dashed line is where it
           runs out at the current pace.
         </p>
         <ChartKindToggle value={chart} onChange={setChart} />
       </div>
-      <Limits chart={chart} />
+      <Limits chart={chart} accounts />
     </div>
   );
 }
