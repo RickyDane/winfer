@@ -108,7 +108,7 @@ function AccountRow({ account, index, count, ids }: { account: Account; index: n
           onClick={() => void updateAccount(account.id, { enabled: !account.enabled })}
           className={cn("relative ml-1 h-5 w-9 shrink-0 rounded-full transition-colors", account.enabled ? "bg-accent" : "bg-active ring-1 ring-border-strong ring-inset")}
         >
-          <span className={cn("absolute top-0.5 size-4 rounded-full bg-white shadow transition-transform", account.enabled ? "translate-x-[18px]" : "translate-x-0.5")} />
+          <span className={cn("absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform duration-150", account.enabled && "translate-x-4")} />
         </button>
       </div>
     </div>
