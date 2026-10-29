@@ -1,15 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
-import { ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
-import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
+import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, suspendSaving, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { IS_MAC, keysFor } from "@/commands/keymap";
 import { CHATGPT_VOICES, DEFAULT_CHATGPT_VOICE, DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { LIVE_ROLE } from "@/features/voice/live/instructions";
 import { timed, trace } from "@/features/voice/live/trace";
 import { availableLlms, LLM_PROVIDERS, llmProvider, type LlmProvider } from "@/features/llm/llm";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { exportData, inspectExport, stageImport, type ExportManifest } from "@/features/settings/transfer";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { fetchCatalog, installPlugin, loadPlugins, matchesSearch, pluginsDir, setPluginEnabled, uninstallPlugin, usePlugins, type StoreEntry, type PluginInfo } from "@/features/plugins/plugins";
 import { toast } from "@/stores/toasts";
@@ -1488,6 +1490,124 @@ function MobileSettings() {
   );
 }
 
+/* Data */
+
+const EXPORT_FILTERS = [{ name: "winfer export", extensions: ["winfer"] }];
+
+/** Moving winfer to another machine: export everything portable into one file, import it there. */
+function DataSettings() {
+  const [withSecrets, setWithSecrets] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [exportResult, setExportResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [importing, setImporting] = useState<{ path: string; manifest: ExportManifest } | null>(null);
+  const [importPassphrase, setImportPassphrase] = useState("");
+  const [importResult, setImportResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const mismatch = withSecrets && passphrase !== confirm;
+  const canExport = !busy && (!withSecrets || (passphrase.length >= 8 && !mismatch));
+
+  const runExport = async () => {
+    const date = new Date().toISOString().slice(0, 10);
+    const path = await saveDialog({ defaultPath: `winfer-${date}.winfer`, filters: EXPORT_FILTERS });
+    if (!path) return;
+    setBusy("export");
+    setExportResult(null);
+    try {
+      await exportData(path, withSecrets ? passphrase : null);
+      setExportResult({ ok: true, text: `Exported to ${path}` });
+      setPassphrase("");
+      setConfirm("");
+    } catch (err) {
+      setExportResult({ ok: false, text: `Export failed: ${err}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pickImport = async () => {
+    const path = await openDialog({ multiple: false, filters: EXPORT_FILTERS });
+    if (typeof path !== "string") return;
+    setImportResult(null);
+    try {
+      setImporting({ path, manifest: await inspectExport(path) });
+      setImportPassphrase("");
+    } catch (err) {
+      setImporting(null);
+      setImportResult({ ok: false, text: String(err) });
+    }
+  };
+
+  const runImport = async () => {
+    if (!importing) return;
+    const confirmed = await ask(
+      "Importing replaces this machine's settings, workspaces, plugins and usage history, then restarts winfer. The current data is kept in a pre-import folder in winfer's data folder.",
+      { title: "Import winfer data?", kind: "warning", okLabel: "Import and restart" },
+    );
+    if (!confirmed) return;
+    setBusy("import");
+    setImportResult(null);
+    try {
+      await stageImport(importing.path, importing.manifest.hasSecrets && importPassphrase ? importPassphrase : null);
+      suspendSaving();
+      await relaunch();
+    } catch (err) {
+      setImportResult({ ok: false, text: `Import failed: ${err}` });
+      setBusy(null);
+    }
+  };
+
+  return (
+    <>
+      <Card
+        title="Export"
+        description="Saves settings, workspaces, plugins with their data, and usage history into one file to import on another machine. Agent sign-ins, paired phones, browser logins and winfer code chats stay here."
+      >
+        <Row label="Include secrets" hint="ChatGPT sign-in, the voice OpenAI key and plugin vault values, encrypted with a passphrase you'll enter when importing.">
+          <Toggle checked={withSecrets} onChange={setWithSecrets} label="Include secrets" />
+        </Row>
+        {withSecrets && (
+          <Row label="Passphrase" hint={mismatch && confirm ? "The passphrases don't match." : "At least 8 characters. It can't be recovered."} stacked>
+            <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder="Passphrase" className={cn(inputClass, "flex-1")} />
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Repeat" className={cn(inputClass, "flex-1")} />
+          </Row>
+        )}
+        <Row label="Export file">
+          <button onClick={() => void runExport()} disabled={!canExport} className={buttonClass}>
+            {busy === "export" ? <Spinner size={12} /> : <Download size={12} />}
+            Export…
+          </button>
+        </Row>
+      </Card>
+      <Result result={exportResult} />
+
+      <Card title="Import" description="Replaces this machine's data with an export, then restarts. Paths under the other machine's home folder are moved to this one's.">
+        <Row label={importing ? importing.path.split(/[\\/]/).pop() : "Export file"} hint={importing && `From winfer ${importing.manifest.appVersion} on ${importing.manifest.platform}, ${new Date(importing.manifest.createdAt).toLocaleString()}`}>
+          <button onClick={() => void pickImport()} disabled={!!busy} className={buttonClass}>
+            <FolderOpen size={12} />
+            {importing ? "Change…" : "Choose…"}
+          </button>
+        </Row>
+        {importing?.manifest.hasSecrets && (
+          <Row label="Passphrase" hint="Leave empty to import without the secrets.">
+            <input type="password" value={importPassphrase} onChange={(e) => setImportPassphrase(e.target.value)} placeholder="Passphrase" className={cn(inputClass, "w-48")} />
+          </Row>
+        )}
+        {importing && (
+          <Row label="Import and restart">
+            <button onClick={() => void runImport()} disabled={!!busy} className={buttonClass}>
+              {busy === "import" ? <Spinner size={12} /> : <ArchiveRestore size={12} />}
+              Import
+            </button>
+          </Row>
+        )}
+      </Card>
+      <Result result={importResult} />
+    </>
+  );
+}
+
 const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.ReactNode }[] = [
   {
     id: "general",
@@ -1537,6 +1657,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   },
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
   { id: "skills", label: "Skills", icon: Wand2, render: () => <SkillSettings /> },
+  { id: "data", label: "Data", icon: ArchiveRestore, render: () => <DataSettings /> },
 ];
 
 /** What a plugin adds, e.g. "2 tools · 1 agent · code". */

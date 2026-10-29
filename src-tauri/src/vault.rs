@@ -43,7 +43,7 @@ pub fn valid_key(key: &str) -> bool {
         && key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
-fn service(plugin: &str) -> String {
+pub(crate) fn service(plugin: &str) -> String {
     format!("dev.winfer.app.plugin.{plugin}")
 }
 

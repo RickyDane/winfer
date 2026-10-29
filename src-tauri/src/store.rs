@@ -183,6 +183,11 @@ impl Store {
         })
     }
 
+    /// A consistent copy of the database at `dest` (the live file may have changes in its WAL).
+    pub fn vacuum_into(&self, dest: &Path) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute("VACUUM INTO ?1", [dest.to_string_lossy()]).map(|_| ())
+    }
+
     #[cfg(test)]
     fn in_memory() -> Self {
         let conn = Connection::open_in_memory().unwrap();

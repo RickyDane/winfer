@@ -29,6 +29,7 @@ mod usage_history;
 mod vault;
 mod realtime;
 mod chatgpt_voice;
+mod transfer;
 mod worktree;
 
 use tauri::Manager;
@@ -130,6 +131,9 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            if let Err(e) = transfer::apply_pending(&data_dir) {
+                eprintln!("import failed: {e}");
+            }
             plugins::init(&data_dir);
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
             app.manage(usage_history::UsageHistory::open(&data_dir.join("usage.db"))?);
@@ -283,6 +287,10 @@ pub fn run() {
             harness::harness_set_settings,
             harness::harness_models,
             harness::harness_claude_skills,
+            transfer::data_export,
+            transfer::data_import_inspect,
+            transfer::data_import_stage,
+            transfer::data_import_take_local,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

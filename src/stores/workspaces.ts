@@ -773,9 +773,16 @@ function toSnapshot(s: WorkspaceState): Snapshot {
 
 let saveTimer: number | undefined;
 let lastSaved = "";
+let savingSuspended = false;
+
+/** Stops saving the state, so an import staged for the next start isn't overwritten by this one. */
+export function suspendSaving() {
+  savingSuspended = true;
+  clearTimeout(saveTimer);
+}
 
 useWorkspaces.subscribe((s) => {
-  if (!s.hydrated) return;
+  if (!s.hydrated || savingSuspended) return;
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     const snapshot = toSnapshot(useWorkspaces.getState());

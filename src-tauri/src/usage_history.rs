@@ -80,6 +80,11 @@ impl UsageHistory {
         Self::init(conn)
     }
 
+    /// A consistent copy of the database at `dest` (the live file may have changes in its WAL).
+    pub fn vacuum_into(&self, dest: &Path) -> rusqlite::Result<()> {
+        self.conn.lock().unwrap().execute("VACUUM INTO ?1", [dest.to_string_lossy()]).map(|_| ())
+    }
+
     fn init(conn: Connection) -> rusqlite::Result<Self> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (

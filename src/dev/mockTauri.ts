@@ -310,6 +310,13 @@ mockIPC(
     switch (cmd) {
       case "providers_list":
         return providers;
+      case "data_export":
+      case "data_import_stage":
+        return null;
+      case "data_import_take_local":
+        return null;
+      case "data_import_inspect":
+        return { format: 1, appVersion: "0.1.101", createdAt: Date.now(), home: "/Users/demo", platform: "macos", hasSecrets: true };
       case "harness_settings":
         return harnessSettings;
       case "harness_set_settings":
