@@ -508,12 +508,27 @@ mockIPC(
         mergeHistory = mergeHistory.filter((m) => m.id !== a.id);
         return null;
       case "usage_claude":
+        // A second sign-in (see accounts_list) with room left: the limits pool to their average.
+        if (a.account === "claude:account-2") {
+          return {
+            provider: "claude", at: Date.now(), windows: [
+              { kind: "session", label: "5-hour", usedPercent: 22, resetsAt: RESETS.claude.session + 3 * 3600_000 },
+              { kind: "week", label: "Weekly", usedPercent: 2, resetsAt: RESETS.claude.week + 2 * 86400_000 },
+            ],
+          };
+        }
         return {
           provider: "claude", at: Date.now(), windows: [
             { kind: "session", label: "5-hour", usedPercent: 100, resetsAt: RESETS.claude.session },
             { kind: "week", label: "Weekly", usedPercent: 17, resetsAt: RESETS.claude.week },
           ],
         };
+      case "accounts_list":
+        return [
+          { id: "claude:default", provider: "claude", label: "Default", enabled: true, dir: "~/.claude", signedIn: true, exhaustedUntil: RESETS.claude.session },
+          { id: "claude:account-2", provider: "claude", label: "Account 2", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-2", signedIn: true, exhaustedUntil: null },
+          { id: "codex:default", provider: "codex", label: "Default", enabled: true, dir: "~/.codex", signedIn: true, exhaustedUntil: null },
+        ];
       case "usage_codex": {
         const now = Date.now();
         const used = mockCodexReset ? 0 : 1;
