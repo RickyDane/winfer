@@ -15,6 +15,7 @@ import { themeById } from "@/features/theme/themes";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { nameFromHistory, setTask } from "@/features/progress/progress";
 import { CodeStoreContext, createCodeStore, useCode } from "./store";
+import { liveCodeStores } from "./liveStores";
 import { Transcript, Collapse, useFresh } from "./Transcript";
 import { LinkPaneContext } from "./Links";
 import { Composer } from "./Composer";
@@ -352,7 +353,7 @@ function StatusSync({ paneId }: { paneId: string }) {
   return null;
 }
 
-const stores = new Map<string, ReturnType<typeof createCodeStore>>();
+const stores = liveCodeStores;
 const disconnects = new Map<string, () => void>();
 
 /** Ends a pane's session view (the PTY itself is killed with the pane, see closeTerminal). */

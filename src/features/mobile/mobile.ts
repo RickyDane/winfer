@@ -15,6 +15,8 @@ import { lastReply } from "@/features/status/replies";
 import { useUsage } from "@/features/usage/usage";
 import { answerApproval, approvalFor, useApprovals } from "@/features/plugins/approvals";
 import { answerQuestion, currentQuestion, dismissQuestions, questionRequest, questionsFor, useQuestions } from "@/features/questions/questions";
+import { liveCodeStores } from "@/features/code/liveStores";
+import { liveThread } from "./liveThread";
 
 /** A pane as the phone sees it. */
 export interface MobilePane {
@@ -38,6 +40,8 @@ export interface MobileMessage {
   text: string;
   tool?: string;
   ts: number | null;
+  state?: "running" | "done" | "failed";
+  background?: boolean;
 }
 
 /** A workspace as the phone sees it, in the desktop's sidebar order. */
@@ -130,6 +134,8 @@ const send = (device: string | null, msg: unknown) => invoke("mobile_send", { de
 
 /** The phone's thread: the agent's session when winfer can read it, else the screen. */
 async function thread(pane: WorkspacePane, limit: number): Promise<{ messages: MobileMessage[]; source: string }> {
+  const live = liveCodeStores.get(pane.id);
+  if (pane.provider === "winfer" && live) return { messages: liveThread(live.getState(), limit), source: "winfer" };
   // winfer code keeps its own transcript whatever backend it runs on; its usage context names
   // the backend's, which may not exist (API backends) or lacks winfer's tool summaries.
   if (pane.provider === "winfer" && pane.sessionId) {
@@ -157,7 +163,9 @@ async function onRequest(device: string, req: Request) {
   const target = { id: pane.id };
   switch (req.t) {
     case "thread.get": {
-      const { messages, source } = await thread(pane, Math.min(Math.max(req.limit ?? 200, 1), 500));
+      const limit = Math.min(Math.max(req.limit ?? 200, 1), 500);
+      watchThread(device, pane, limit);
+      const { messages, source } = await thread(pane, limit);
       return reply({ t: "thread", paneId: pane.id, messages, source });
     }
     case "send": {
@@ -233,6 +241,34 @@ async function onRequest(device: string, req: Request) {
     default:
       return reply({ t: "error", error: `unknown request ${req.t}` });
   }
+}
+
+/** A thread read leases live updates for a minute; refreshes renew it, closed phones expire. */
+const threadWatches = new Map<string, () => void>();
+function watchThread(device: string, pane: WorkspacePane, limit: number) {
+  const key = JSON.stringify([device, pane.id]);
+  threadWatches.get(key)?.();
+  threadWatches.delete(key);
+  const store = liveCodeStores.get(pane.id);
+  if (pane.provider !== "winfer" || !store) return;
+  let pending: ReturnType<typeof setTimeout> | undefined;
+  const unsubscribe = store.subscribe((state, prev) => {
+    if (state.items === prev.items && state.tasks === prev.tasks && state.busy === prev.busy) return;
+    if (pending) return;
+    // Coalesce token bursts, not whole messages or turns.
+    pending = setTimeout(() => {
+      pending = undefined;
+      if (liveCodeStores.get(pane.id) !== store) return;
+      void send(device, { t: "thread", paneId: pane.id, messages: liveThread(store.getState(), limit), source: "winfer" });
+    }, 50);
+  });
+  const expiry = setTimeout(() => { cleanup(); threadWatches.delete(key); }, 60_000);
+  const cleanup = () => {
+    unsubscribe();
+    clearTimeout(expiry);
+    clearTimeout(pending);
+  };
+  threadWatches.set(key, cleanup);
 }
 
 /** Starts an agent session in a workspace for the phone; its first message is optional. */

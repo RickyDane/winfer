@@ -67,7 +67,7 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | `welcome` | `id`, `desktop` (name), `version`, `vapidPublicKey` (base64url, uncompressed P-256) |
 | `panes` | `id?`, `panes: Pane[]` (every workspace's, in desktop order), `workspaces: {id, name, active}[]`, `providers: {id, name}[]` (installed agents), `defaultProvider` — the whole mirror; sent on `panes.get` and whenever panes come, go or move, or workspaces or agents change |
 | `status` | `pane: Pane`, `silent?` (pushed whenever a pane's status/message/request changes; `silent: true` for other changes such as a new title, which never push a notification) |
-| `thread` | `id`, `paneId`, `messages: Message[]`, `source` (`claude`/`codex`/`opencode`/`winfer`/`screen`) |
+| `thread` | `id?` (absent for live updates), `paneId`, `messages: Message[]`, `source` (`claude`/`codex`/`opencode`/`winfer`/`screen`) |
 | `ack` | `id`, `ok`, `error?` |
 | `error` | `id?`, `error` |
 
@@ -96,7 +96,7 @@ interface Message {
 }
 ```
 
-Phone handles frames strictly in arrival order and re-requests `panes.get` every 20 s while visible (self-heals anything lost on the way). It re-requests `thread.get` for the open pane on each `status` for it, every 4 s while that pane is `working`, and every 6 s while any background tool is `running`.
+Phone handles frames strictly in arrival order and re-requests `panes.get` every 20 s while visible. A `thread.get` for a live winfer code pane leases direct in-memory transcript updates for 60 s, coalesced over 50 ms. The phone renews every 15 s and reloads on status changes, reconnection and foregrounding. Other providers are polled every second while working or running background tools, otherwise every 15 s. Sends render optimistically, survive stale snapshots until their transcript echo arrives, and roll back on delivery failure.
 
 ## Push
 

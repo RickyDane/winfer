@@ -27,6 +27,8 @@ import { noteStatusMessage, startMobileBridge } from "./mobile";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
 import { useUsage } from "@/features/usage/usage";
 import { requestApproval, useApprovals } from "@/features/plugins/approvals";
+import { createCodeStore } from "@/features/code/store";
+import { liveCodeStores } from "@/features/code/liveStores";
 
 const pane = (over: Partial<Pane> = {}) => ({ id: "p1", workspaceId: "w1", provider: "claude", title: "", cwd: "/", status: "working", agentTitle: "Fix login", customTitle: null, prompt: null, ...over }) as Pane;
 
@@ -54,6 +56,37 @@ describe("mobile bridge", () => {
     const [{ device, msg }] = sent();
     expect(device).toBe("d1");
     expect(msg).toMatchObject({ t: "panes", id: "1", panes: [{ id: "p1", title: "Fix login", workspace: "winfer", provider: "claude", status: "working", request: null }] });
+  });
+
+  it("pushes live messages mid-turn, renews without duplicating subscriptions, and expires", async () => {
+    vi.useFakeTimers();
+    const store = createCodeStore();
+    liveCodeStores.set("p1", store);
+    setPanes([pane({ provider: "winfer", sessionId: "live" })]);
+    try {
+      request({ t: "thread.get", id: "live1", paneId: "p1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent().at(-1)!.msg).toMatchObject({ t: "thread", id: "live1", source: "winfer", messages: [] });
+      request({ t: "thread.get", id: "live2", paneId: "p1" });
+      await vi.advanceTimersByTimeAsync(0);
+      h.invoke.mockClear();
+      store.getState().submit("Start now");
+      store.getState().apply({ type: "text_delta", id: "reply", text: "Working" });
+      await vi.advanceTimersByTimeAsync(50);
+      const updates = sent().filter((s) => s.msg.t === "thread");
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ device: "d1", msg: { messages: [{ role: "user", text: "Start now" }, { role: "assistant", text: "Working" }] } });
+      expect(updates[0].msg.id).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+      h.invoke.mockClear();
+      store.getState().apply({ type: "text_delta", id: "reply", text: " more" });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sent().filter((s) => s.msg.t === "thread")).toHaveLength(0);
+    } finally {
+      liveCodeStores.delete("p1");
+      vi.useRealTimers();
+      setPanes([pane()]);
+    }
   });
 
   it("shows a plugin's approval as the pane's request and answers it from the phone", async () => {

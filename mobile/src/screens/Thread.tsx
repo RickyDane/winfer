@@ -174,17 +174,24 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const messages = thinking ? raw.slice(0, -1) : raw;
   const bgRunning = messages.some((m) => m.background && m.state === "running");
 
-  // Refetch on every status change for this pane, every 4 s while it works, and every 6 s while
-  // background work runs (it reports back without a status change).
+  // Live winfer sessions push updates; reads renew the lease and heal reconnects.
+  // Other providers' session files are polled independently of turn completion.
   const statusKey = pane ? `${pane.status}:${pane.updatedAt}` : "";
   useEffect(() => {
     if (!ready) return;
-    const load = () => client.request({ t: "thread.get", paneId, limit: 200 }).catch(() => {});
+    let loading = false;
+    const load = async () => {
+      if (loading || document.visibilityState === "hidden") return;
+      loading = true;
+      try { await client.request({ t: "thread.get", paneId, limit: 200 }); } catch { /* retry on the next tick */ }
+      finally { loading = false; }
+    };
     load();
-    const every = pane?.status === "working" ? 4000 : bgRunning ? 6000 : 0;
-    if (!every) return;
+    const every = pane?.provider === "winfer" ? 15_000 : pane?.status === "working" || bgRunning ? 1000 : 15_000;
     const t = setInterval(load, every);
-    return () => clearInterval(t);
+    const visible = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", visible); };
   }, [client, paneId, ready, statusKey, pane?.status, bgRunning]);
 
   // Only messages that arrive after the first load animate in.
@@ -201,7 +208,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
     if (!el) return;
     if (stick.current) el.scrollTo({ top: el.scrollHeight, behavior: seen.current ? "smooth" : "auto" });
     else setUnseen(true);
-  }, [messages.length, pane?.request, pane?.status]);
+  }, [messages.length, raw.at(-1)?.id, raw.at(-1)?.text, pane?.request, pane?.status]);
 
   async function act(kind: "send" | "approve" | "decline" | "interrupt", text = draft.trim()) {
     if (busy) return;
@@ -209,18 +216,23 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
     setBusy(kind);
     setErr(null);
     haptic(kind === "interrupt" ? [6, 30, 6] : 8);
+    stick.current = true;
+    if (kind === "send") {
+      setDraft("");
+      if (input.current) input.current.style.height = "";
+    }
     try {
       // Text for a "Type something" row answers through that row.
       const msg =
         kind === "send" && typing !== null ? ({ t: "choose", paneId, option: typing, text } as const) : kind === "send" ? ({ t: "send", paneId, text } as const) : ({ t: kind, paneId } as const);
-      await client.request(msg);
+      if (msg.t === "send" && !pane?.request) await client.sendMessage(paneId, text);
+      else await client.request(msg);
       if (kind === "send") {
-        setDraft("");
         setTyping(null);
-        if (input.current) input.current.style.height = "";
       }
       stick.current = true;
     } catch (e) {
+      if (kind === "send") setDraft((current) => current || text);
       setErr((e as Error).message);
       throw e;
     } finally {
