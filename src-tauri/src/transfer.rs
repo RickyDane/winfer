@@ -329,7 +329,7 @@ pub fn data_import_take_local(app: AppHandle) -> Option<Map<String, Value>> {
 }
 
 /// `s` with `from` (a folder) replaced by `to` wherever it's a whole path prefix, or `None`
-/// when nothing changed. Works inside JSON text too.
+/// when nothing changed.
 fn remap(s: &str, from: &str, to: &str) -> Option<String> {
     if from.is_empty() || from == to || !s.contains(from) {
         return None;
@@ -347,7 +347,21 @@ fn remap(s: &str, from: &str, to: &str) -> Option<String> {
     changed.then_some(out)
 }
 
-fn remap_column(conn: &Connection, table: &str, column: &str, from: &str, to: &str) -> rusqlite::Result<()> {
+/// [`remap`] inside JSON text, where the paths are escaped (Windows' backslashes doubled).
+fn remap_json(s: &str, from: &str, to: &str) -> Option<String> {
+    remap(s, &escape_json(from), &escape_json(to))
+}
+
+/// `p` as it appears inside a JSON string.
+fn escape_json(p: &str) -> String {
+    let quoted = serde_json::to_string(p).unwrap_or_default();
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+/// `json` when the column holds JSON text.
+fn remap_column(conn: &Connection, table: &str, column: &str, json: bool, from: &str, to: &str) -> rusqlite::Result<()> {
+    let (from, to) = if json { (escape_json(from), escape_json(to)) } else { (from.to_string(), to.to_string()) };
+    let (from, to) = (from.as_str(), to.as_str());
     let rows: Vec<(i64, String)> = conn
         .prepare(&format!("SELECT rowid, {column} FROM {table} WHERE instr({column}, ?1) > 0"))?
         .query_map([from], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -367,8 +381,8 @@ fn fix_paths(data_dir: &Path, from: &str, to: &str) -> Result<(), String> {
     let db = data_dir.join("winfer.db");
     if db.exists() {
         let conn = Connection::open(&db).map_err(err)?;
-        for (table, column) in [("workspaces", "root_dir"), ("panes", "cwd"), ("panes", "worktree"), ("merges", "repo"), ("kv", "value")] {
-            remap_column(&conn, table, column, from, to).map_err(err)?;
+        for (table, column, json) in [("workspaces", "root_dir", false), ("panes", "cwd", false), ("panes", "worktree", true), ("merges", "repo", false), ("kv", "value", true)] {
+            remap_column(&conn, table, column, json, from, to).map_err(err)?;
         }
         let worktrees: Vec<(String, String)> = conn
             .prepare("SELECT id, worktree FROM panes WHERE worktree IS NOT NULL")
@@ -384,10 +398,10 @@ fn fix_paths(data_dir: &Path, from: &str, to: &str) -> Result<(), String> {
     }
     let usage = data_dir.join("usage.db");
     if usage.exists() {
-        remap_column(&Connection::open(&usage).map_err(err)?, "events", "cwd", from, to).map_err(err)?;
+        remap_column(&Connection::open(&usage).map_err(err)?, "events", "cwd", false, from, to).map_err(err)?;
     }
     let config = data_dir.join("harness/config.json");
-    if let Some(text) = std::fs::read_to_string(&config).ok().and_then(|t| remap(&t, from, to)) {
+    if let Some(text) = std::fs::read_to_string(&config).ok().and_then(|t| remap_json(&t, from, to)) {
         std::fs::write(&config, text).map_err(err)?;
     }
     Ok(())
@@ -470,6 +484,11 @@ mod tests {
         assert_eq!(remap(r#"{"x":"/Users/a"}"#, "/Users/a", "/home/b").as_deref(), Some(r#"{"x":"/home/b"}"#));
         assert_eq!(remap("/Users/ab/code", "/Users/a", "/home/b"), None);
         assert_eq!(remap("/Users/a/x", "/Users/a", "/Users/a"), None);
+        // Windows homes have backslashes, which JSON escapes.
+        let json = remap_json(r#"{"x":"/Users/a/p"}"#, "/Users/a", r"C:\Users\b").unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&json).unwrap()["x"], r"C:\Users\b/p");
+        let back = remap_json(&json, r"C:\Users\b", "/Users/a").unwrap();
+        assert_eq!(back, r#"{"x":"/Users/a/p"}"#);
     }
 
     #[test]
