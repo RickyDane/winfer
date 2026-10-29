@@ -467,7 +467,9 @@ impl App {
             bg_owner: String::new(),
             sub_model: self.config.subagent_for(self.kind.id()).0,
             sub_effort: self.config.subagent_for(self.kind.id()).1,
+            account: backend::account_for(self.kind, self.saved.account.as_deref()),
         };
+        self.saved.account = opts.account.clone();
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.alive = true;
         self.busy = false;
@@ -758,6 +760,7 @@ impl App {
             Ev::TurnDone => self.turn_done(),
             Ev::Undone(result) => self.undone(result),
             Ev::BgNote(note) => self.bg_note(note),
+            Ev::Account(id) => self.saved.account = Some(id),
             Ev::Exited(reason) => {
                 self.alive = false;
                 self.busy = false;

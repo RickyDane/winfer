@@ -19,6 +19,7 @@ import { isAppChord } from "@/commands/keymap";
 import { setTask } from "@/features/progress/progress";
 import { terminalMinContrast, terminalTheme } from "@/features/theme/themes";
 import { optionTypedChar } from "./optionKey";
+import { accountUsable, startAccount } from "@/features/accounts/accounts";
 import { fileLinkProvider, openTerminalUri, openWebLink } from "@/features/viewer/terminalLinks";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
@@ -73,6 +74,9 @@ interface ExitPayload {
 }
 
 const entries = new Map<string, Entry>();
+
+/** Someone reading what agent panes print (the account failover watches for usage limits). */
+export const outputTaps = new Set<(paneId: string, provider: string, data: ArrayBuffer) => void>();
 
 /**
  * Input waiting for a pane's in-flight pty_write. Every IPC call runs on the app's UI thread
@@ -396,6 +400,14 @@ async function spawn(entry: Entry) {
   }
   if (entries.get(id) === entry) setStarting(id, "process");
   const statusBefore = paneStatus(id);
+  // Claude Code / Codex start on the first account with usage left, then keep theirs while it has some.
+  if (!entry.pane.accountId || accountUsable(entry.pane.accountId) === false) {
+    const account = startAccount(entry.pane.provider);
+    if (account !== entry.pane.accountId && (account || accountUsable(`${entry.pane.provider}:default`))) {
+      useWorkspaces.getState().updatePane(id, { accountId: account });
+      entry.pane = { ...entry.pane, accountId: account };
+    }
+  }
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (data) => {
     if (!entry.lastOutput) {
@@ -406,6 +418,7 @@ async function spawn(entry: Entry) {
     entry.lastOutput = Date.now();
     reportOutput(entry.pane.id);
     detectDevServer(entry, data);
+    outputTaps.forEach((tap) => tap(entry.pane.id, entry.pane.provider, data));
   };
   try {
     const { pid } = await invoke<{ pid: number | null }>("pty_spawn", {
@@ -423,6 +436,7 @@ async function spawn(entry: Entry) {
         plain: entry.pane.plain,
         lean: entry.pane.provider === "codex" && useWorkspaces.getState().leanCodex,
         hiddenTools: hiddenToolsOf(useWorkspaces.getState()),
+        account: entry.pane.accountId,
         cols: entry.term.cols,
         rows: entry.term.rows,
       },

@@ -297,6 +297,7 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
             effort: cfg.effort.clone(),
             mode,
             resume: None,
+            account: backend::account_for(kind, None),
             system: launch.system,
             mcp: config::mcp_servers(&cfg),
             allowed_commands: cfg.allowed_commands.clone(),
@@ -415,5 +416,6 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::Exited(e) => json!({ "type": "exited", "text": e }),
         Ev::Undone(r) => json!({ "type": "undone", "files": r.as_ref().ok(), "error": r.as_ref().err() }),
         Ev::BgNote(n) => json!({ "type": "bg_note", "text": n }),
+        Ev::Account(id) => json!({ "type": "account", "id": id, "label": crate::accounts::label(id) }),
     }
 }

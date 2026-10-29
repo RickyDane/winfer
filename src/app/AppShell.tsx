@@ -32,6 +32,7 @@ import { Toaster } from "@/components/Toaster";
 import { UsageMeter } from "@/features/usage/UsageMeter";
 import { startUsageTracking } from "@/features/usage/usage";
 import { startWakes } from "@/features/usage/agentUsage";
+import { startAccountFailover } from "@/features/accounts/failover";
 import { startUpdateChecks } from "@/features/updates/updater";
 import { startProviderUpdateChecks } from "@/features/providers/updates";
 import { WhatsNew } from "@/features/updates/WhatsNew";
@@ -183,6 +184,7 @@ export function AppShell() {
     startProgressTracking();
     startUsageTracking();
     startWakes();
+    startAccountFailover();
     startUpdateChecks();
     startProviderUpdateChecks();
     startPluginEvents();

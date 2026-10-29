@@ -90,7 +90,9 @@ impl Serve {
             bg_owner: String::new(),
             sub_model: cfg.subagent_for(self.kind.id()).0,
             sub_effort: cfg.subagent_for(self.kind.id()).1,
+            account: backend::account_for(self.kind, self.saved.account.as_deref()),
         };
+        self.saved.account = opts.account.clone();
         self.handle = Some(backend::start(self.kind, opts, etx));
         self.busy = false;
     }
@@ -219,6 +221,10 @@ impl Serve {
                 self.save();
             }
             Ev::Mode(mode) => self.mode = mode,
+            Ev::Account(id) => {
+                self.saved.account = Some(id);
+                self.save();
+            }
             Ev::Usage(u) => {
                 self.saved.usage = Some(u);
                 if self.usage_sent.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(500)) {

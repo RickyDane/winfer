@@ -7,7 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { pasteText, sendText } from "@/features/terminal/xtermRegistry";
 import { logActivity } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { duration, leftNow, refreshClaude, refreshCodex, runsOutAt, tightest, useUsage, usedNow, type UsageWindow } from "./usage";
+import { accountLabel, accountsOf, paneAccount, usageKey } from "@/features/accounts/accounts";
+import { activeKey, duration, leftNow, refreshClaude, refreshCodex, runsOutAt, tightest, useUsage, usedNow, type UsageWindow } from "./usage";
 
 /** OpenCode's model providers whose account sign-in shares the limits of a plan winfer tracks. */
 const PLAN_OF: Record<string, string> = { openai: "codex", anthropic: "claude" };
@@ -21,14 +22,16 @@ const WINFER_BACKEND_NAME: Record<string, string> = { claude: "Claude Code", cod
  * reports say); for OpenCode those of the plan it's signed in to for the model it runs (ChatGPT
  * for OpenAI models, the same limits as Codex). `note` says so.
  */
-export async function limitsOf(pane: Pane): Promise<{ provider: string; note: string | null }> {
+export async function limitsOf(pane: Pane): Promise<{ provider: string; note: string | null; key?: string }> {
   if (pane.provider === "winfer") {
     const backend = useUsage.getState().context[pane.id]?.provider;
     const plan = backend ? WINFER_BACKEND_PLAN[backend] : undefined;
     if (!backend || !plan) return { provider: "winfer", note: null };
     const name = providerName(useWorkspaces.getState().providers, plan);
-    return { provider: plan, note: `winfer code is running on ${WINFER_BACKEND_NAME[backend]}, so ${name}'s plan limits apply.` };
+    return { provider: plan, key: activeKey(plan), note: `winfer code is running on ${WINFER_BACKEND_NAME[backend]}, so ${name}'s plan limits apply.` };
   }
+  // Claude Code / Codex panes: the account they run on.
+  if (pane.provider === "claude" || pane.provider === "codex") return { provider: pane.provider, key: usageKey(paneAccount(pane)), note: null };
   if (pane.provider !== "opencode") return { provider: pane.provider, note: null };
   const model = await invoke<{ provider: string; model: string; plan: boolean } | null>("usage_opencode_model", { cwd: pane.cwd }).catch(() => null);
   const plan = model?.plan ? PLAN_OF[model.provider] : undefined;
@@ -54,10 +57,10 @@ function at(ms: number, now: number): string {
 }
 
 /** What `usage_status` answers for an agent. */
-export function usageReport(provider: string, now = Date.now()): string {
+export function usageReport(provider: string, now = Date.now(), key = provider): string {
   const name = providerName(useWorkspaces.getState().providers, provider);
   const { snapshots, opencode } = useUsage.getState();
-  const snapshot = snapshots[provider];
+  const snapshot = snapshots[key];
   if (!snapshot?.windows.length) {
     if (provider === "opencode") {
       const spend = opencode ? ` Today so far: ${opencode.tokens} tokens, $${opencode.cost.toFixed(2)}.` : "";
@@ -85,7 +88,30 @@ export function usageReport(provider: string, now = Date.now()): string {
   const tight = tightest(snapshot, now)!;
   lines.push(`Least left: ${tight.label}, ${round(leftNow(tight, now))}%.`);
   if (age > 30 * 60_000) lines.push("These numbers may be out of date: no agent has reported usage for a while.");
+  const accounts = accountsReport(provider, key, now);
+  if (accounts) lines.push(accounts);
   return lines.join("\n");
+}
+
+/** The agent's accounts, when it has several: winfer moves to the next when one runs out. */
+function accountsReport(provider: string, key: string, now: number): string | null {
+  const list = accountsOf(provider).filter((a) => a.enabled);
+  if (list.length < 2) return null;
+  const { snapshots } = useUsage.getState();
+  const rows = list.map((a, i) => {
+    const w = tightest(snapshots[usageKey(a.id)], now);
+    const state = a.exhaustedUntil !== null ? "out of usage" : !a.signedIn ? "not signed in" : w ? `${round(leftNow(w, now))}% of ${w.label.toLowerCase()} left` : "no reading yet";
+    return `${i + 1}. ${a.label}${usageKey(a.id) === key ? " (this one)" : ""}: ${state}`;
+  });
+  return `${name(provider)} has ${list.length} accounts, used in this order; when one runs out of usage winfer moves you to the next and resumes your session there:\n${rows.join("\n")}`;
+}
+
+const name = (provider: string) => providerName(useWorkspaces.getState().providers, provider);
+
+/** Whether another of the agent's accounts still has usage (so waiting for a reset isn't needed). */
+export function otherAccountLeft(provider: string, key: string, now = Date.now()): string | null {
+  const other = accountsOf(provider).find((a) => usageKey(a.id) !== key && a.enabled && a.signedIn && (a.exhaustedUntil === null || (a.exhaustedUntil > 0 && a.exhaustedUntil <= now)));
+  return other ? accountLabel(other.id) : null;
 }
 
 // Waking agents after a reset ------------------------------------------------------------------
@@ -128,7 +154,7 @@ export const pendingWake = (paneId: string) => wakes.find((w) => w.paneId === pa
  * percent left (if none is that low, the one with least left), or after `minutes` when given.
  * Replaces the pane's earlier wake-up. Returns what to tell the agent.
  */
-export function scheduleWake(paneId: string, provider: string, opts: { below?: number; minutes?: number; message?: string }, now = Date.now()): string {
+export function scheduleWake(paneId: string, provider: string, opts: { below?: number; minutes?: number; message?: string; key?: string }, now = Date.now()): string {
   const message = opts.message?.trim() || DEFAULT_WAKE_MESSAGE;
   let due: number;
   let reason: string;
@@ -138,7 +164,7 @@ export function scheduleWake(paneId: string, provider: string, opts: { below?: n
     due = now + minutes * 60_000;
     reason = `after ${duration(minutes * 60_000)}`;
   } else {
-    const snapshot = useUsage.getState().snapshots[provider];
+    const snapshot = useUsage.getState().snapshots[opts.key ?? provider];
     const name = providerName(useWorkspaces.getState().providers, provider);
     const pending = (snapshot?.windows ?? []).filter((w): w is UsageWindow & { resetsAt: number } => w.resetsAt !== null && w.resetsAt > now);
     if (!pending.length) {

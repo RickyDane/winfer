@@ -289,6 +289,7 @@ mod tests {
             bg_owner: String::new(),
             sub_model: None,
             sub_effort: None,
+            account: None,
         };
         let h = super::super::start(kind, opts, tx);
         let wait = |until: &dyn Fn(&Ev) -> bool| -> Vec<Ev> {

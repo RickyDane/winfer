@@ -16,7 +16,8 @@ import { logActivity } from "@/stores/activity";
 import { setTask } from "@/features/progress/progress";
 import { agentCaller, pluginAgentToolList, runPluginAgentTool, type AgentCaller } from "@/features/plugins/plugins";
 import { answersText, askQuestions, DISMISSED, dropQuestions, parseQuestions } from "@/features/questions/questions";
-import { cancelWake, limitsOf, pendingWake, refreshLimits, scheduleWake, usageReport } from "@/features/usage/agentUsage";
+import { cancelWake, limitsOf, otherAccountLeft, pendingWake, refreshLimits, scheduleWake, usageReport } from "@/features/usage/agentUsage";
+import { refreshAccount } from "@/features/usage/usage";
 
 interface Call {
   id: string;
@@ -183,9 +184,10 @@ async function runWorkspaceTool(ws: Workspace, self: Pane | null, tool: string, 
     case "usage_status": {
       // Live voice asks about a pane's agent (its plan), defaulting to the focused pane.
       const subject = self ?? resolve(ws, a.pane ?? s.focusedPaneId ?? 1);
-      const { provider, note } = await limitsOf(subject);
+      const { provider, note, key } = await limitsOf(subject);
       await refreshLimits(provider);
-      const lines = [note, usageReport(provider)];
+      if (key && key !== provider) await refreshAccount(key);
+      const lines = [note, usageReport(provider, undefined, key)];
       const wake = self && pendingWake(self.id);
       if (wake) lines.push(`You are paused: winfer will wake you at ${new Date(wake.at).toLocaleString()}.`);
       return lines.filter(Boolean).join("\n");
@@ -193,13 +195,18 @@ async function runWorkspaceTool(ws: Workspace, self: Pane | null, tool: string, 
     case "wait_for_usage_reset": {
       if (!self) throw new ToolError("Only agent panes can wait for a usage reset.");
       if (a.cancel === true) return cancelWake(self.id) ? "Cancelled: winfer won't wake you." : "You had no wake-up scheduled.";
-      const { provider } = await limitsOf(self);
+      const { provider, key } = await limitsOf(self);
       if (a.minutes === undefined) await refreshLimits(provider);
+      if (a.minutes === undefined && key && key !== provider) await refreshAccount(key);
+      // Another account has usage: winfer moves the agent there when this one runs out.
+      const other = key && a.minutes === undefined ? otherAccountLeft(provider, key) : null;
+      if (other) return `No need to wait: your account still has another one to fall back on ("${other}"). When this account runs out of usage, winfer moves you to it and resumes your session. Keep working.`;
       try {
         return scheduleWake(self.id, provider, {
           below: a.below === undefined ? undefined : Number(a.below),
           minutes: a.minutes === undefined ? undefined : Number(a.minutes),
           message: typeof a.message === "string" ? a.message : undefined,
+          key,
         });
       } catch (err) {
         throw new ToolError(err instanceof Error ? err.message : String(err));

@@ -814,6 +814,7 @@ mod tests {
             bg_owner: String::new(),
             sub_model: None,
             sub_effort: None,
+            account: None,
         };
         let mut b = Bridge::new(&opts, tx);
         b.session = Some("ses_1".into());

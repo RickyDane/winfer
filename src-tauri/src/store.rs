@@ -45,6 +45,9 @@ pub struct PaneRecord {
     /// Moved to the archive: kept running, out of the workspace's tiles.
     #[serde(default)]
     pub archived: bool,
+    /// The Claude Code / Codex account the agent runs on (see accounts.rs).
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,6 +136,9 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE panes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
 "#,
+    r#"
+    ALTER TABLE panes ADD COLUMN account_id TEXT;
+"#,
 ];
 
 /// A merged feature in the history (from the review inbox, the pane menu, voice or a race).
@@ -211,7 +217,7 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut panes = conn.prepare(
-            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title, custom_title, session_id, plain, archived FROM panes WHERE workspace_id = ?1 ORDER BY sort",
+            "SELECT id, provider, title, cwd, worktree, race_id, model, agent_title, custom_title, session_id, plain, archived, account_id FROM panes WHERE workspace_id = ?1 ORDER BY sort",
         )?;
         for ws in &mut workspaces {
             ws.panes = panes
@@ -229,6 +235,7 @@ impl Store {
                         session_id: r.get(9)?,
                         plain: r.get(10)?,
                         archived: r.get(11)?,
+                        account_id: r.get(12)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -267,8 +274,8 @@ impl Store {
             )?;
             for (j, pane) in ws.panes.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title, custom_title, session_id, plain, archived)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    "INSERT INTO panes (id, workspace_id, provider, title, cwd, worktree, sort, race_id, model, agent_title, custom_title, session_id, plain, archived, account_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         pane.id,
                         ws.id,
@@ -284,6 +291,7 @@ impl Store {
                         pane.session_id,
                         pane.plain,
                         pane.archived,
+                        pane.account_id,
                     ],
                 )?;
             }

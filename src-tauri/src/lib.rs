@@ -1,3 +1,4 @@
+mod accounts;
 mod android;
 mod app_updates;
 mod browser;
@@ -248,6 +249,15 @@ pub fn run() {
             mobile::mobile_send,
             mobile::mobile_activity,
             mobile::mobile_thread,
+            accounts::accounts_list,
+            accounts::accounts_add,
+            accounts::accounts_remove,
+            accounts::accounts_update,
+            accounts::accounts_reorder,
+            accounts::accounts_clear_exhausted,
+            accounts::accounts_mark_exhausted,
+            accounts::accounts_pick,
+            accounts::accounts_login,
             usage::usage_codex,
             usage::usage_codex_resets,
             usage::usage_codex_redeem_reset,

@@ -19,6 +19,8 @@ pub struct Saved {
     pub transcript: Vec<Entry>,
     /// Last measured context and usage, restored before the next backend turn arrives.
     pub usage: Option<super::event::Usage>,
+    /// The Claude Code / Codex account the session last ran on (see accounts.rs).
+    pub account: Option<String>,
 }
 
 impl Saved {

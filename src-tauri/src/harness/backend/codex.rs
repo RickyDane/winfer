@@ -196,6 +196,11 @@ struct Bridge {
     settled: bool,
     /// The model subagents get unless their spawn picks one (None: the main one).
     sub_model: Option<String>,
+    /// The account ran out of usage (with Codex's error and the reset time): move to the next
+    /// account once idle.
+    limit: Option<(String, Option<i64>)>,
+    /// The account's usage is nearly gone: the next turn starts on another account.
+    low: bool,
 }
 
 #[derive(Default)]
@@ -240,7 +245,7 @@ fn subagent_args(opts: &Opts) -> Vec<String> {
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut opts = opts;
     let mut args = server_args(&opts);
-    let proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
+    let proc = match LineProcess::spawn("codex", &args, &super::env_pairs(&opts.account_env()), &opts.cwd, me.clone()) {
         Ok(p) => p,
         Err(e) => {
             let _ = events.send(Ev::Exited(e));
@@ -280,6 +285,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         compact_at: opts.compact_at,
         settled: false,
         sub_model: opts.sub_model.clone(),
+        limit: None,
+        low: false,
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     b.initialize();
@@ -304,6 +311,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut stale_exits = 0;
     // The subagents' model changed: Codex takes it at start, so it restarts once idle.
     let mut respawn = false;
+    // A message held back while the bridge moves to another account first.
+    let mut switch_send: Option<crate::harness::event::UserMsg> = None;
     // New threads keep paginated history, which `thread/revert` (/undo) needs.
     let mut start_params = thread_params.clone();
     start_params["historyMode"] = json!("paginated");
@@ -320,7 +329,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     if let Some(err) = v.get("error") {
                         let message = err["message"].as_str().unwrap_or("request failed").to_string();
                         if matches!(kind, Some(Pending::Turn)) {
-                            b.emit(Ev::Error(format!("Codex: {message}")));
+                            match super::usage_limit(&err.to_string()) {
+                                Some(reset) => b.limit = Some((format!("Codex: {message}"), reset)),
+                                None => b.emit(Ev::Error(format!("Codex: {message}"))),
+                            }
                             b.emit(Ev::TurnDone);
                         } else if let Some(Pending::Steer(msg)) = kind {
                             // The turn ended (or can't be steered) meanwhile: the message gets its own.
@@ -398,6 +410,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 return;
             }
             In::Cmd(cmd) => match cmd {
+                // The account is nearly out: the turn starts on the next one, after a restart.
+                Cmd::Send(msg) if b.low && b.idle() && b.thread.is_some() && crate::accounts::has_alternatives("codex") => {
+                    b.low = false;
+                    b.limit = Some((String::new(), None));
+                    switch_send = Some(msg);
+                }
                 Cmd::Send(msg) => {
                     b.emit(Ev::TurnStart);
                     if b.thread.is_some() {
@@ -472,9 +490,33 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 Cmd::Shutdown => return,
             },
         }
+        // Out of usage: move to the next account, resume the thread there and carry on (with the
+        // message that was about to start, or by asking Codex to continue).
+        let mut switched = None;
+        if b.limit.is_some() && b.idle() {
+            let (text, reset) = b.limit.take().unwrap();
+            let proactive = switch_send.is_some();
+            match super::next_account("codex", opts.account.as_deref(), if proactive { None } else { reset }).filter(|_| b.thread.is_some()) {
+                Some(next) => {
+                    b.emit(Ev::Notice(super::switched_notice(opts.account.as_deref(), &next, reset, "codex")));
+                    opts.account = Some(next.clone());
+                    b.emit(Ev::Account(next));
+                    let msg = switch_send.take().unwrap_or_else(|| crate::harness::event::UserMsg { text: super::CONTINUE_PROMPT.into(), ..Default::default() });
+                    switched = Some(msg);
+                }
+                None if proactive => {
+                    // No other account: the account was only low, so it isn't out yet.
+                    crate::accounts::clear_exhausted(&opts.account.clone().unwrap_or_else(|| crate::accounts::default_id("codex")));
+                    let _ = me.send(In::Cmd(Cmd::Send(switch_send.take().unwrap())));
+                }
+                // Without the CLI's own message (a rate limit event), it has already reported the error.
+                None if text.is_empty() => {}
+                None => b.emit(Ev::Error(text)),
+            }
+        }
         let restart = match b.micro_compact_file() {
             Some((thread, path)) => Some((thread, Some(path))),
-            None if respawn && b.idle() => b.thread.clone().map(|t| (t, None)),
+            None if (respawn || switched.is_some()) && b.idle() => b.thread.clone().map(|t| (t, None)),
             None => None,
         };
         if let Some((thread, path)) = restart {
@@ -487,7 +529,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             let mut held = Vec::new();
             stale_exits += usize::from(!super::drain_closed(&rx, &mut held));
             let saved = path.map_or(0, |p| microcompact::trim_file(&p, Format::Codex, 1, true).unwrap_or(0));
-            b.proc = match LineProcess::spawn("codex", &args, &[], &opts.cwd, me.clone()) {
+            b.proc = match LineProcess::spawn("codex", &args, &super::env_pairs(&opts.account_env()), &opts.cwd, me.clone()) {
                 Ok(p) => p,
                 Err(e) => {
                     b.emit(Ev::Exited(format!("Codex didn't restart: {e}")));
@@ -502,6 +544,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 b.usage.context = b.usage.context.saturating_sub(saved as u64 / 4);
                 b.emit_usage();
                 b.emit(Ev::Notice(format!("Micro-compacted: trimmed {} KB of old tool output.", saved / 1024)));
+            }
+            if let Some(msg) = switched.take() {
+                let _ = me.send(In::Cmd(Cmd::Send(msg)));
             }
             for cmd in held {
                 let _ = me.send(In::Cmd(cmd));
@@ -804,7 +849,10 @@ impl Bridge {
                 let turn = &p["turn"];
                 if turn["status"] == "failed" {
                     let message = turn["error"]["message"].as_str().unwrap_or("the turn failed");
-                    self.emit(Ev::Error(format!("Codex: {message}")));
+                    match super::usage_limit(&turn["error"].to_string()) {
+                        Some(reset) => self.limit = Some((format!("Codex: {message}"), reset.or(self.limit.as_ref().and_then(|l| l.1)))),
+                        None => self.emit(Ev::Error(format!("Codex: {message}"))),
+                    }
                 }
                 self.turn = None;
                 // Codex ends the turn without waiting for long commands (watchers, servers): they
@@ -822,7 +870,22 @@ impl Bridge {
             "error" => {
                 if p["willRetry"].as_bool() != Some(true) {
                     let message = p["error"]["message"].as_str().unwrap_or("error");
-                    self.emit(Ev::Error(format!("Codex: {message}")));
+                    match super::usage_limit(&p["error"].to_string()) {
+                        // turn/completed follows; the bridge moves accounts once the turn is over.
+                        Some(reset) => self.limit = Some((format!("Codex: {message}"), reset.or(self.limit.as_ref().and_then(|l| l.1)))),
+                        None => self.emit(Ev::Error(format!("Codex: {message}"))),
+                    }
+                }
+            }
+            "account/rateLimits/updated" => {
+                let limits = &p["rateLimits"];
+                let windows = [&limits["primary"], &limits["secondary"]];
+                self.low = windows.iter().any(|w| w["usedPercent"].as_f64().is_some_and(|u| 100.0 - u <= super::LOW_LEFT));
+                if let Some(w) = windows.iter().find(|w| w["usedPercent"].as_f64().is_some_and(|u| u >= 100.0)) {
+                    let reset = w["resetsAt"].as_i64().map(|t| if t < 100_000_000_000 { t * 1000 } else { t });
+                    if let Some(l) = self.limit.as_mut() {
+                        l.1 = l.1.or(reset);
+                    }
                 }
             }
             "item/agentMessage/delta" => {
@@ -1606,7 +1669,7 @@ mod tests {
             trim_at: 0,
             compact_at: 0,
             settled: false,
-            sub_model: None,
+            sub_model: None, limit: None, low: false,
         };
         (b, rx)
     }
@@ -1683,6 +1746,7 @@ mod tests {
             bg_owner: String::new(),
             sub_model: None,
             sub_effort: None,
+            account: None,
         };
         assert!(subagent_args(&opts).is_empty());
         opts.sub_model = Some("gpt-mini-fast".into());

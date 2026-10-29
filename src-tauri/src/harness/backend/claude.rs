@@ -261,6 +261,11 @@ struct Bridge {
     running: std::collections::HashSet<String>,
     /// A turn just finished: time to see whether to micro-compact.
     settled: bool,
+    /// The account ran out of usage (with Claude Code's error and the reset time): move to the
+    /// next account once idle.
+    limit: Option<(String, Option<i64>)>,
+    /// The account's usage is nearly gone: the next turn starts on another account.
+    low: bool,
 }
 
 struct Checkpoint {
@@ -334,11 +339,13 @@ const ENV: &[(&str, &str)] = &[
 
 /// [`ENV`] plus the subagents' model: Claude Code's default for subagents a spawn (or an agent
 /// definition) doesn't give one of their own.
-fn env(opts: &Opts) -> Vec<(&'static str, &str)> {
-    let mut env = ENV.to_vec();
+/// And the account's config dir.
+fn env(opts: &Opts) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     if let Some(m) = &opts.sub_model {
-        env.push(("CLAUDE_CODE_SUBAGENT_MODEL", m.as_str()));
+        env.push(("CLAUDE_CODE_SUBAGENT_MODEL".into(), m.clone()));
     }
+    env.extend(opts.account_env());
     env
 }
 
@@ -347,7 +354,7 @@ const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut opts = opts;
-    let mut proc = match LineProcess::spawn("claude", &args(&opts), &env(&opts), &opts.cwd, me.clone()) {
+    let mut proc = match LineProcess::spawn("claude", &args(&opts), &super::env_pairs(&env(&opts)), &opts.cwd, me.clone()) {
         Ok(p) => p,
         Err(e) => {
             let _ = events.send(Ev::Exited(e));
@@ -378,6 +385,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         compact_at: opts.compact_at,
         running: Default::default(),
         settled: false,
+        limit: None,
+        low: false,
     };
     b.set_model(&opts.model);
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
@@ -402,6 +411,18 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 return;
             }
             In::Cmd(cmd) => {
+                // The account is nearly out: the turn starts on the next one.
+                if matches!(cmd, Cmd::Send(_)) && b.low && b.idle() && b.session.is_some() {
+                    b.low = false;
+                    if let Some(next) = super::next_account("claude", opts.account.as_deref(), None) {
+                        let notice = super::switched_notice(opts.account.as_deref(), &next, None, "claude");
+                        if let Err(e) = switch_account(&mut b, &mut proc, &mut opts, next, &rx, &me, &mut stale_exits) {
+                            let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart: {e}")));
+                            return;
+                        }
+                        b.emit(Ev::Notice(notice));
+                    }
+                }
                 // A restart starts Claude Code with the session's current settings.
                 match &cmd {
                     Cmd::SetModel(m) => opts.model = m.clone(),
@@ -415,6 +436,26 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 if !b.on_cmd(cmd, &mut proc) {
                     return;
                 }
+            }
+        }
+        if b.limit.is_some() && b.idle() {
+            let (text, reset) = b.limit.take().unwrap();
+            match super::next_account("claude", opts.account.as_deref(), reset).filter(|_| b.session.is_some()) {
+                Some(next) => {
+                    let notice = super::switched_notice(opts.account.as_deref(), &next, reset, "claude");
+                    if let Err(e) = switch_account(&mut b, &mut proc, &mut opts, next, &rx, &me, &mut stale_exits) {
+                        let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart: {e}")));
+                        return;
+                    }
+                    b.emit(Ev::Notice(notice));
+                    let msg = crate::harness::event::UserMsg { text: super::CONTINUE_PROMPT.into(), ..Default::default() };
+                    if !b.on_cmd(Cmd::Send(msg), &mut proc) {
+                        return;
+                    }
+                }
+                // Without the CLI's own message (a rate limit event), it has already reported the error.
+                None if text.is_empty() => {}
+                None => b.emit(Ev::Error(text)),
             }
         }
         let path = b.micro_compact_file();
@@ -438,6 +479,19 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     }
 }
 
+/// Restarts Claude Code on the session signed in to another account.
+#[allow(clippy::too_many_arguments)]
+fn switch_account(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, account: String, rx: &Receiver<In>, me: &Sender<In>, stale_exits: &mut usize) -> Result<(), String> {
+    opts.account = Some(account.clone());
+    let (held, ended) = micro_compact(b, proc, opts, None, rx, me)?;
+    *stale_exits += usize::from(!ended);
+    b.emit(Ev::Account(account));
+    for cmd in held {
+        let _ = me.send(In::Cmd(cmd));
+    }
+    Ok(())
+}
+
 /// Restarts Claude Code on the session (with `path`, its session file, micro-compacted first:
 /// old tool output trimmed) so it picks up the current settings. Returns the commands that came
 /// meanwhile, and whether the old process's output ended (else its exit arrives later).
@@ -449,7 +503,7 @@ fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: 
     let saved = path.map_or(0, |p| microcompact::trim_file(p, Format::Claude, 1, true).unwrap_or(0));
     opts.resume = b.session.clone();
     opts.mode = b.mode;
-    *proc = LineProcess::spawn("claude", &args(opts), &env(opts), &opts.cwd, me.clone())?;
+    *proc = LineProcess::spawn("claude", &args(opts), &super::env_pairs(&env(opts)), &opts.cwd, me.clone())?;
     b.live.restarted();
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
     if saved > 0 {
@@ -744,6 +798,15 @@ impl Bridge {
                     self.emit(Ev::ToolEnd { id, ok, output, diff });
                 }
             }
+            "rate_limit_event" => {
+                let info = &v["rate_limit_info"];
+                let reset = info["resetsAt"].as_i64().map(|t| if t < 100_000_000_000 { t * 1000 } else { t });
+                match info["status"].as_str() {
+                    Some("rejected") => self.limit = Some((String::new(), reset)),
+                    // A fraction, or a percentage in some versions.
+                    _ => self.low = info["utilization"].as_f64().is_some_and(|u| 100.0 - if u <= 1.0 { u * 100.0 } else { u } <= super::LOW_LEFT),
+                }
+            }
             "result" => {
                 let usage = &v["usage"];
                 let n = |k: &str| usage[k].as_u64().unwrap_or(0);
@@ -803,7 +866,11 @@ impl Bridge {
                 self.emit(Ev::Usage(u));
                 if v["is_error"].as_bool() == Some(true) && v["subtype"] != "error_during_execution" {
                     let text = v["result"].as_str().unwrap_or("Claude Code reported an error.");
-                    self.emit(Ev::Error(text.to_string()));
+                    // A usage limit is reported (or worked around) once the bridge picks the next account.
+                    match super::usage_limit(text) {
+                        Some(reset) => self.limit = Some((text.to_string(), reset.or(self.limit.as_ref().and_then(|l| l.1)))),
+                        None => self.emit(Ev::Error(text.to_string())),
+                    }
                 }
                 self.busy = false;
                 self.settled = true;
@@ -1169,7 +1236,7 @@ mod tests {
             trim_at: 0,
             compact_at: 0,
             running: Default::default(),
-            settled: false,
+            settled: false, limit: None, low: false,
         };
         (b, rx)
     }
@@ -1192,11 +1259,12 @@ mod tests {
             bg_owner: String::new(),
             sub_model: None,
             sub_effort: None,
+            account: None,
         };
-        assert!(!env(&opts).iter().any(|(k, _)| *k == "CLAUDE_CODE_SUBAGENT_MODEL"));
+        assert!(!env(&opts).iter().any(|(k, _)| k == "CLAUDE_CODE_SUBAGENT_MODEL"));
         assert!(!args(&opts).contains(&"--append-system-prompt".to_string()));
         opts.sub_model = Some("haiku".into());
-        assert!(env(&opts).contains(&("CLAUDE_CODE_SUBAGENT_MODEL", "haiku")));
+        assert!(env(&opts).contains(&("CLAUDE_CODE_SUBAGENT_MODEL".into(), "haiku".into())));
         assert!(args(&opts).windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == super::super::ORCHESTRATE_PROMPT));
     }
 
@@ -1218,6 +1286,7 @@ mod tests {
             bg_owner: String::new(),
             sub_model: None,
             sub_effort: None,
+            account: None,
         };
         let has = |args: &[String], flag: &str, value: &str| args.windows(2).any(|w| w[0] == flag && w[1] == value);
         let lean = args(&opts(true, LeanSkills::Only(Vec::new())));

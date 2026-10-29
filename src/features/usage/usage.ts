@@ -9,6 +9,7 @@ import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notifi
 import { create } from "zustand";
 import { toast } from "@/stores/toasts";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
+import { accountLabel, accountsOf, hasAlternatives, loadAccounts, providerOfAccount, startAccount, useAccounts, usageKey } from "@/features/accounts/accounts";
 import { continueIn, handoffTarget, paneToHandOff } from "./handoff";
 
 export interface UsageWindow {
@@ -118,6 +119,17 @@ useUsage.subscribe((s) =>
 
 export const windowKey = (provider: string, w: UsageWindow) => `${provider}:${w.kind}:${w.resetsAt ?? ""}`;
 
+/**
+ * Where the usage of the account new agents start on is kept (see accounts.ts `usageKey`): the
+ * agent's id while that's its default sign-in.
+ */
+export function activeKey(provider: string, list = useAccounts.getState().list): string {
+  return startAccount(provider, list) ?? provider;
+}
+
+/** Someone to tell when an account's plan runs out: (account id, reset time). */
+export const exhaustedListeners = new Set<(accountId: string, resetAt: number | null) => void>();
+
 /** Used percent now: a window whose reset time has passed starts over. */
 export function usedNow(w: UsageWindow, now = Date.now()): number {
   return w.resetsAt !== null && w.resetsAt <= now ? 0 : w.usedPercent;
@@ -184,8 +196,14 @@ export function when(at: number, now = Date.now()): string {
 const WARN_AT = [20, 5];
 const warned = new Set<string>();
 
-async function warn(provider: string, w: UsageWindow, left: number) {
-  const name = providerName(useWorkspaces.getState().providers, provider);
+async function warn(key: string, w: UsageWindow, left: number) {
+  const provider = providerOfAccount(key);
+  const account = key === provider ? `${provider}:default` : key;
+  const many = accountsOf(provider).length > 1;
+  const name = providerName(useWorkspaces.getState().providers, provider) + (many ? ` (${accountLabel(account)})` : "");
+  if (left <= 0) exhaustedListeners.forEach((l) => l(account, w.resetsAt));
+  // Out, with another account to move to: the failover says what happens instead.
+  if (left <= 0 && many && hasAlternatives(provider)) return;
   const text = left <= 0 ? `${name}: ${w.label.toLowerCase()} limit reached` : `${name}: ${Math.round(left)}% of the ${w.label.toLowerCase()} limit left`;
   const detail = w.resetsAt ? `Resets ${when(w.resetsAt)}` : undefined;
   // At the limit: offer to carry the work over to an agent that still has room.
@@ -201,6 +219,7 @@ async function warn(provider: string, w: UsageWindow, left: number) {
 }
 
 function record(snapshot: Snapshot) {
+  // `provider` is the usage key: an account other than the default is kept under its own id.
   const before = useUsage.getState().snapshots[snapshot.provider];
   useUsage.setState((s) => {
     const samples = { ...s.samples };
@@ -216,7 +235,7 @@ function record(snapshot: Snapshot) {
     // Drop samples of windows that have reset.
     const now = Date.now();
     for (const key of Object.keys(samples)) {
-      const resets = Number(key.split(":")[2]);
+      const resets = Number(key.split(":").at(-1));
       if (resets && resets < now) delete samples[key];
     }
     return { snapshots: { ...s.snapshots, [snapshot.provider]: snapshot }, samples };
@@ -307,6 +326,31 @@ export function refreshClaude() {
   });
 }
 
+/** Reads the limits of an account other than the default one (see accounts.ts). */
+export function refreshAccount(id: string) {
+  const key = usageKey(id);
+  const provider = providerOfAccount(id);
+  if (key === provider) return provider === "codex" ? refreshCodex() : refreshClaude();
+  return refresh(key, async () => {
+    const snapshot = provider === "codex"
+      ? await invoke<Snapshot | null>("usage_codex", { account: id })
+      : await invoke<Snapshot>("usage_claude", { account: id });
+    if (!snapshot?.windows.length) throw new Error(`Couldn't refresh the limits of ${accountLabel(id)}. Check its sign-in.`);
+    record({ ...snapshot, provider: key });
+  });
+}
+
+/** The other signed-in accounts' limits (Claude's at most every 5 minutes, like the default). */
+const accountPolledAt = new Map<string, number>();
+export function refreshOtherAccounts(force = false) {
+  return Promise.all(useAccounts.getState().list.filter((a) => a.signedIn && a.enabled && usageKey(a.id) !== a.provider).map((a) => {
+    const due = a.provider === "codex" || Date.now() - (accountPolledAt.get(a.id) ?? 0) >= 5 * 60_000;
+    if (!force && !due) return undefined;
+    accountPolledAt.set(a.id, Date.now());
+    return refreshAccount(a.id);
+  }));
+}
+
 export async function refreshUsage() {
   const { providers } = useWorkspaces.getState();
   const known = useUsage.getState().snapshots;
@@ -316,6 +360,7 @@ export async function refreshUsage() {
     installed("codex") ? refreshCodex() : undefined,
     installed("claude") ? refreshClaude() : undefined,
     installed("opencode") ? refreshOpencode() : undefined,
+    refreshOtherAccounts(true),
   ]);
 }
 
@@ -366,8 +411,11 @@ export function startUsageTracking() {
   started = true;
   void listen<{ provider: string; paneId: string; report: { windows?: UsageWindow[]; context?: Context | null; spend?: PaneSpend | null } }>("usage://report", ({ payload }) => {
     // Status-line limits may be cached by Claude Code. Prefer a recent account-wide read.
-    if (payload.report.windows?.length && !(payload.provider === "claude" && Date.now() - claudeLiveAt < 5 * 60_000)) {
-      record({ provider: payload.provider, windows: payload.report.windows, at: Date.now() });
+    // A pane on another account reports that account's limits.
+    const pane = useWorkspaces.getState().workspaces.flatMap((w) => w.panes).find((p) => p.id === payload.paneId);
+    const key = pane?.accountId && providerOfAccount(pane.accountId) === payload.provider ? usageKey(pane.accountId) : payload.provider;
+    if (payload.report.windows?.length && !(key === "claude" && Date.now() - claudeLiveAt < 5 * 60_000)) {
+      record({ provider: key, windows: payload.report.windows, at: Date.now() });
     }
     if (payload.report.context) setContext(payload.paneId, payload.report.context);
     const spend = payload.report.spend;
@@ -399,6 +447,7 @@ export function startUsageTracking() {
   // the provider list.
   let claudePolledAt = 0;
   const poll = () => {
+    void loadAccounts().then(() => refreshOtherAccounts());
     void refreshCodex();
     if (installed("claude") && Date.now() - Math.max(claudePolledAt, claudeLiveAt) >= 5 * 60_000) {
       claudePolledAt = Date.now();

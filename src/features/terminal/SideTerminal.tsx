@@ -41,6 +41,7 @@ const shellPane = (workspace: Workspace): Pane => ({
   agentTitle: null,
   customTitle: null,
   archived: false,
+  accountId: null,
 });
 
 /**

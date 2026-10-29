@@ -117,14 +117,16 @@ fn claude_token(auth: &Value, now: i64) -> Option<String> {
     oauth["accessToken"].as_str().filter(|s| !s.is_empty()).map(String::from)
 }
 
-fn claude_credentials() -> Option<Value> {
-    let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".claude")))?;
+/// The sign-in of a Claude account (see accounts.rs; None = the default one).
+fn claude_credentials(account: Option<&str>) -> Option<Value> {
+    let id = account.map_or_else(|| crate::accounts::default_id("claude"), String::from);
+    let config = crate::accounts::dir(&id)?;
     // macOS Claude Code keeps its sign-in in Keychain; other platforms use this file.
     #[cfg(target_os = "macos")]
     {
         use sha2::{Digest, Sha256};
-        let suffix = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(|_| format!("-{}", &hex::encode(Sha256::digest(config.to_string_lossy().as_bytes()))[..8]))
+        let suffix = crate::accounts::overridden(&id)
+            .then(|| format!("-{}", &hex::encode(Sha256::digest(config.to_string_lossy().as_bytes()))[..8]))
             .unwrap_or_default();
         let service = format!("Claude Code{suffix}-credentials");
         let out = Command::new("/usr/bin/security")
@@ -146,9 +148,9 @@ fn claude_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
 
 /// Account-wide limits, including use outside winfer. Errors keep the previous reading visible.
 #[tauri::command]
-pub async fn usage_claude() -> Result<Snapshot, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let token = claude_credentials().and_then(|a| claude_token(&a, now_ms()))
+pub async fn usage_claude(account: Option<String>) -> Result<Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = claude_credentials(account.as_deref()).and_then(|a| claude_token(&a, now_ms()))
             .ok_or("Claude sign-in unavailable or expired. Sign in through Claude Code, then refresh.")?;
         let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
         let mut response = agent.get("https://api.anthropic.com/api/oauth/usage")
@@ -256,23 +258,26 @@ const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// sign-in (API-key users have no plan limits); None when signed out or the token has expired
 /// (Codex refreshes it on its next run).
 /// Falls back to OpenCode's ChatGPT sign-in: the same plan limits, used through OpenCode.
-fn codex_live() -> Option<Snapshot> {
-    let (token, account) = codex_auth()?;
+fn codex_live(account: Option<&str>) -> Option<Snapshot> {
+    let (token, account) = codex_auth(account)?;
     let req = with_codex_auth(codex_agent().get(CODEX_USAGE_URL), &token, account.as_deref());
     let body: Value = req.call().ok()?.body_mut().read_json().ok()?;
     codex_usage_snapshot(&body, now_ms())
 }
 
-/// Codex's ChatGPT sign-in (access token, account id), or OpenCode's when Codex has none.
-fn codex_auth() -> Option<(String, Option<String>)> {
-    codex_home()
+/// A Codex account's ChatGPT sign-in (access token, account id); for the default account,
+/// OpenCode's when Codex has none.
+fn codex_auth(account: Option<&str>) -> Option<(String, Option<String>)> {
+    let default = account.is_none_or(|a| a == crate::accounts::default_id("codex"));
+    let home = if default { codex_home() } else { crate::accounts::dir(account?) };
+    let own = home
         .and_then(|home| std::fs::read_to_string(home.join("auth.json")).ok())
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|auth| {
             let token = auth["tokens"]["access_token"].as_str().filter(|t| !t.is_empty())?.to_string();
             Some((token, auth["tokens"]["account_id"].as_str().map(String::from)))
-        })
-        .or_else(opencode_chatgpt_token)
+        });
+    if default { own.or_else(opencode_chatgpt_token) } else { own }
 }
 
 fn codex_agent() -> ureq::Agent {
@@ -470,10 +475,14 @@ pub async fn usage_codex_context(session: Option<String>, cwd: String) -> Option
 }
 
 #[tauri::command]
-pub async fn usage_codex() -> Option<Snapshot> {
-    tauri::async_runtime::spawn_blocking(|| {
-        if let Some(live) = codex_live() {
+pub async fn usage_codex(account: Option<String>) -> Option<Snapshot> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(live) = codex_live(account.as_deref()) {
             return Some(live);
+        }
+        // Session logs are shared by all accounts, so they only stand in for the default one.
+        if account.is_some_and(|a| a != crate::accounts::default_id("codex")) {
+            return None;
         }
         let root = codex_sessions()?;
         // The newest reading of the last few sessions (a session started yesterday may still be
@@ -525,8 +534,8 @@ pub struct ResetOutcome {
     pub windows_reset: i64,
 }
 
-fn codex_call(url: &str, body: Option<Value>) -> Result<Value, String> {
-    let (token, account) = codex_auth().ok_or("Sign in to Codex with ChatGPT to use rate limit resets.")?;
+fn codex_call(url: &str, body: Option<Value>, account: Option<&str>) -> Result<Value, String> {
+    let (token, account) = codex_auth(account).ok_or("Sign in to Codex with ChatGPT to use rate limit resets.")?;
     let agent = codex_agent();
     let result = match body {
         Some(body) => with_codex_auth(agent.post(url), &token, account.as_deref()).send_json(body),
@@ -543,21 +552,21 @@ fn codex_call(url: &str, body: Option<Value>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn usage_codex_resets() -> Result<Vec<ResetCredit>, String> {
-    tauri::async_runtime::spawn_blocking(|| codex_call(CODEX_RESETS_URL, None).map(|body| codex_reset_credits(&body)))
+pub async fn usage_codex_resets(account: Option<String>) -> Result<Vec<ResetCredit>, String> {
+    tauri::async_runtime::spawn_blocking(move || codex_call(CODEX_RESETS_URL, None, account.as_deref()).map(|body| codex_reset_credits(&body)))
         .await
         .map_err(|e| e.to_string())?
 }
 
 /// Redeems a reset (the given one, else whichever the server picks).
 #[tauri::command]
-pub async fn usage_codex_redeem_reset(credit_id: Option<String>) -> Result<ResetOutcome, String> {
+pub async fn usage_codex_redeem_reset(credit_id: Option<String>, account: Option<String>) -> Result<ResetOutcome, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut request = json!({ "redeem_request_id": format!("winfer-{:016x}", rand::random::<u64>()) });
         if let Some(id) = credit_id.filter(|s| !s.is_empty()) {
             request["credit_id"] = json!(id);
         }
-        let body = codex_call(&format!("{CODEX_RESETS_URL}/consume"), Some(request))?;
+        let body = codex_call(&format!("{CODEX_RESETS_URL}/consume"), Some(request), account.as_deref())?;
         Ok(ResetOutcome {
             code: body["code"].as_str().unwrap_or("unknown").to_string(),
             windows_reset: body["windows_reset"].as_i64().unwrap_or(0),
@@ -852,7 +861,7 @@ mod tests {
     #[test]
     #[ignore]
     fn claude_live_on_this_machine() {
-        let result = tauri::async_runtime::block_on(usage_claude());
+        let result = tauri::async_runtime::block_on(usage_claude(None));
         assert!(result.is_ok(), "{}", result.unwrap_err());
     }
 
@@ -947,7 +956,7 @@ mod tests {
     #[test]
     #[ignore]
     fn codex_live_on_this_machine() {
-        println!("{:#?}", codex_live());
+        println!("{:#?}", codex_live(None));
     }
 
     #[test]

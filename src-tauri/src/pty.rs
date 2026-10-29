@@ -160,6 +160,9 @@ pub struct SpawnRequest {
     /// winfer code panes shown as the web UI: run `winfer code --serve` (JSON lines) instead of the TUI.
     #[serde(default)]
     serve: bool,
+    /// The Claude Code / Codex account to run on (see accounts.rs); None = the default sign-in.
+    #[serde(default)]
+    account: Option<String>,
     cols: u16,
     rows: u16,
 }
@@ -524,6 +527,9 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
     for (key, value) in agent_env {
         cmd.env(key, value);
     }
+    for (key, value) in crate::accounts::env_for(req.account.as_deref()) {
+        cmd.env(key, value);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "winfer");
@@ -830,6 +836,7 @@ mod pipe_tests {
             lean: false,
             hidden_tools: Vec::new(),
             serve: true,
+            account: None,
             cols: 80,
             rows: 24,
         };
@@ -907,6 +914,7 @@ mod tests {
             lean: false,
             hidden_tools: Vec::new(),
             serve: false,
+            account: None,
             cols: 80,
             rows: 24,
         };
@@ -1011,6 +1019,7 @@ mod tests {
             lean: false,
             hidden_tools: Vec::new(),
             serve: false,
+            account: None,
             cols: 80,
             rows: 24,
         };
@@ -1111,6 +1120,7 @@ mod tests {
             lean: false,
             hidden_tools: Vec::new(),
             serve: false,
+            account: None,
             cols: 80,
             rows: 24,
         };

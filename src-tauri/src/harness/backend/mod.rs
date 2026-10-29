@@ -127,6 +127,85 @@ pub struct Opts {
     /// The model subagents run on (None: the main one) and their effort.
     pub sub_model: Option<String>,
     pub sub_effort: Option<String>,
+    /// The Claude Code / Codex account to run on (see accounts.rs); None = the default sign-in.
+    pub account: Option<String>,
+}
+
+impl Opts {
+    /// The environment that runs the CLI on [`Opts::account`].
+    pub fn account_env(&self) -> Vec<(String, String)> {
+        crate::accounts::env_for(self.account.as_deref())
+    }
+}
+
+/// The account a new Claude Code / Codex bridge runs on: the session's own while it has usage,
+/// else the first with usage left (None: the default sign-in, or another kind of backend).
+pub fn account_for(kind: Kind, saved: Option<&str>) -> Option<String> {
+    let provider = match kind {
+        Kind::Claude => "claude",
+        Kind::Codex => "codex",
+        _ => return None,
+    };
+    if let Some(saved) = saved.filter(|s| crate::accounts::provider_of(s) == provider) {
+        if crate::accounts::usable(saved) {
+            return Some(saved.to_string());
+        }
+    }
+    crate::accounts::pick(provider, &[]).or_else(|| saved.map(String::from))
+}
+
+/// Borrowed pairs of an owned environment, for [`LineProcess::spawn`].
+pub fn env_pairs(env: &[(String, String)]) -> Vec<(&str, &str)> {
+    env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+}
+
+// Accounts --------------------------------------------------------------------------------------
+
+/// What a bridge sends to carry on after moving to another account. The failed request is
+/// already in the session, so it asks to continue rather than repeating it.
+pub const CONTINUE_PROMPT: &str = "[winfer] The previous request stopped because the account ran out of usage. winfer switched to another account: continue where you left off.";
+
+/// Whether a CLI's error is its plan's usage limit, with the reset time (unix ms) if it says.
+/// Claude Code: "Claude AI usage limit reached|<unix seconds>", "You've hit your limit · resets
+/// 3pm"; Codex: "You've hit your usage limit…".
+pub fn usage_limit(text: &str) -> Option<Option<i64>> {
+    let lower = text.to_lowercase();
+    let hit = ["usage limit", "hit your limit", "limit reached", "out of extra usage", "usagelimitexceeded", "usage_limit_reached"].iter().any(|p| lower.contains(p))
+        && !lower.contains("context");
+    hit.then(|| {
+        text.rsplit_once('|')
+            .and_then(|(_, t)| t.trim().parse::<i64>().ok())
+            .map(|t| if t < 100_000_000_000 { t * 1000 } else { t })
+    })
+}
+
+/// Usage left this low (%) on the account counts as out, so the next turn starts on another.
+pub const LOW_LEFT: f64 = 2.0;
+
+/// Moves an agent off its account (out of usage until `reset_at`): the next one to use, or None
+/// when there's no other account with usage left.
+pub fn next_account(provider: &str, current: Option<&str>, reset_at: Option<i64>) -> Option<String> {
+    let current = current.map_or_else(|| crate::accounts::default_id(provider), String::from);
+    crate::accounts::mark_exhausted(&current, reset_at);
+    crate::accounts::pick(provider, &[current.as_str()])
+}
+
+/// The notice for a move between accounts.
+pub fn switched_notice(from: Option<&str>, to: &str, reset_at: Option<i64>, provider: &str) -> String {
+    let from = crate::accounts::label(&from.map_or_else(|| crate::accounts::default_id(provider), String::from));
+    let until = reset_at.map(|t| format!(" for {}", in_time(t))).unwrap_or_default();
+    format!("Account \"{from}\" is out of usage{until}; continuing on \"{}\".", crate::accounts::label(to))
+}
+
+/// How long until `at` (unix ms): "2h 15m", "40m".
+fn in_time(at: i64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let minutes = ((at - now).max(0) + 59_999) / 60_000;
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}h"),
+        (h, m) => format!("{h}h {m}m"),
+    }
 }
 
 /// The system prompt for Claude Code in lean mode: the essentials of its long default (which runs
@@ -351,4 +430,18 @@ pub fn drain_closed(rx: &Receiver<In>, held: &mut Vec<Cmd>) -> bool {
 /// Waits for the next message, giving up once the receiver closes.
 pub fn recv(rx: &Receiver<In>) -> Option<In> {
     rx.recv().ok()
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::usage_limit;
+
+    #[test]
+    fn recognizes_usage_limits() {
+        assert_eq!(usage_limit("Claude AI usage limit reached|1730000000"), Some(Some(1_730_000_000_000)));
+        assert_eq!(usage_limit("You've hit your limit · resets 3pm (Europe/Berlin)"), Some(None));
+        assert_eq!(usage_limit("You've hit your usage limit. Upgrade to Pro or try again later."), Some(None));
+        assert_eq!(usage_limit("Prompt is too long"), None);
+        assert_eq!(usage_limit("context limit reached"), None);
+    }
 }

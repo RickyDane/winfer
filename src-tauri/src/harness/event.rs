@@ -43,6 +43,8 @@ pub enum Ev {
     /// Something the agent should hear about its `bg` tasks (one exited unseen, the user stopped
     /// one): the TUI sends it as the next message (backends with their own queue don't emit it).
     BgNote(String),
+    /// The bridge moved to another Claude Code / Codex account (see accounts.rs), by id.
+    Account(String),
 }
 
 /// One update about a background task; unset fields are unchanged.

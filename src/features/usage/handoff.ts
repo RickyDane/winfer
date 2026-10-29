@@ -2,7 +2,7 @@
 import { useProgress } from "@/features/progress/progress";
 import { readTerminal } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
-import { leftNow, tightest, useUsage } from "./usage";
+import { activeKey, leftNow, tightest, useUsage } from "./usage";
 
 /** The installed agent with the most room left (OpenCode has no plan limits, so it's last). */
 export function handoffTarget(from: string): string | null {
@@ -11,7 +11,7 @@ export function handoffTarget(from: string): string | null {
   const candidates = providers
     .filter((p) => p.installed && p.id !== from && p.id !== "shell" && p.command)
     .map((p) => {
-      const w = tightest(snapshots[p.id]);
+      const w = tightest(snapshots[activeKey(p.id)]);
       return { id: p.id, left: w ? leftNow(w) : p.id === "opencode" ? 50 : -1 };
     })
     .filter((c) => c.left >= 10)

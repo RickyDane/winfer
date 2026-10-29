@@ -54,6 +54,8 @@ export interface Pane {
   customTitle: string | null;
   /** Moved to the archive: still running, but out of the workspace's tiles until restored. */
   archived: boolean;
+  /** The Claude Code / Codex account it runs on (see src/features/accounts); null = the default sign-in. */
+  accountId: string | null;
 }
 
 export interface Workspace {
@@ -363,7 +365,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
         const key = `${p.provider}:${p.cwd}`;
         const resume = !!p.sessionId || !resumed.has(key);
         if (!p.sessionId) resumed.add(key);
-        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, archived: p.archived ?? false, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
+        return { ...p, sessionId: p.sessionId ?? null, raceId: p.raceId ?? null, plain: p.plain ?? false, model: p.model ?? null, agentTitle: p.agentTitle ?? null, customTitle: p.customTitle ?? null, archived: p.archived ?? false, accountId: p.accountId ?? null, workspaceId: w.id, status: "idle", wantsWorktree: false, resume, unseen: false, devUrl: null, prompt: null };
       }),
     }));
     const ui = snapshot.ui ?? {};
@@ -493,6 +495,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             wantsWorktree: !opts?.existingWorktree && provider !== "shell" && (opts?.worktree ?? w.useWorktrees),
             resume: !!opts?.resumeSession,
             sessionId: opts?.resumeSession ?? null,
+            accountId: null,
             unseen: false,
             devUrl: null,
             agentTitle: null,
@@ -703,7 +706,7 @@ export const providerName = (providers: Provider[], id: ProviderId) =>
 // ---------------------------------------------------------------------------------------------
 // Persistence (SQLite via src-tauri/src/store.rs)
 
-type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { archived?: boolean; raceId?: string | null; plain?: boolean; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null };
+type PanePersisted = Pick<Pane, "id" | "provider" | "title" | "cwd" | "worktree"> & { archived?: boolean; raceId?: string | null; plain?: boolean; model?: string | null; agentTitle?: string | null; customTitle?: string | null; sessionId?: string | null; accountId?: string | null };
 
 interface Snapshot {
   workspaces: (Omit<Workspace, "panes"> & { panes: PanePersisted[] })[];
@@ -762,7 +765,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
   return {
     workspaces: s.workspaces.map(({ panes, ...w }) => ({
       ...w,
-      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived })),
+      panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived, accountId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived, accountId })),
     })),
     ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, glassPanes: s.glassPanes, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
   };

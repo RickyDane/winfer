@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
-import { ArrowUpCircle, Bot, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
@@ -16,6 +16,7 @@ import { toast } from "@/stores/toasts";
 import { cancelChatGptSignIn, signInWithChatGpt, signOutOfChatGpt, useChatGpt } from "@/features/llm/chatgpt";
 import { checkForUpdates, installUpdate, setUpdateChannel, showReleaseNotes, type UpdateChannel, useUpdates } from "@/features/updates/updater";
 import { UsageSettings } from "@/features/usage/UsagePage";
+import { AccountsSettings } from "@/features/accounts/AccountsSettings";
 import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates } from "@/features/providers/updates";
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
@@ -1519,6 +1520,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
       </>
     ),
   },
+  { id: "accounts", label: "Accounts", icon: Users, render: () => <AccountsSettings /> },
   { id: "voice", label: "Voice", icon: Mic, render: () => <VoiceSettings /> },
   { id: "ai", label: "AI", icon: Sparkles, render: () => <AiSettings /> },
   { id: "mobile", label: "Mobile", icon: Smartphone, render: () => <MobileSettings /> },
