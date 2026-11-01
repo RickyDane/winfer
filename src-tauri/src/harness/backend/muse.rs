@@ -5,7 +5,10 @@
 //! mid-turn, so the permission mode maps to Muse's own approval flags (see `args`).
 
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -89,13 +92,15 @@ fn terminal(v: &Value) -> Option<(bool, String)> {
 }
 
 /// A tool call starting or ending: `(call_id, display name)` / `(call_id, ok)`.
-fn tool_start(v: &Value) -> Option<(String, String)> {
+fn tool_start(v: &Value) -> Option<(String, String, String)> {
     if v["payload_type"] != "tool_batch.effect.started" {
         return None;
     }
     let r = &v["payload"]["record"];
     let id = r["call_id"].as_str().filter(|s| !s.is_empty())?.to_string();
-    Some((id, display_name(r["tool_name"].as_str().unwrap_or("tool"))))
+    let name = display_name(r["tool_name"].as_str().unwrap_or("tool"));
+    let title = r["parallel_profile"]["subject"].as_str().unwrap_or(&name).to_string();
+    Some((id, name, title))
 }
 
 fn tool_end(v: &Value) -> Option<(String, bool)> {
@@ -156,6 +161,63 @@ fn args(model: &str, effort: Option<&str>, mode: Mode, session: &str, prompt_fil
 /// Separates a stdout line from the number of the run it came from; `END` marks a run's end.
 const SEP: char = '\u{1f}';
 const END: char = '\u{1e}';
+/// Tool effects are persisted in Muse's session log but aren't forwarded by `exec --json`.
+const LOG: char = '\u{1d}';
+
+fn session_log(session: &str) -> Option<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(data) = std::env::var_os("XDG_DATA_HOME") {
+        roots.push(std::path::PathBuf::from(data).join("muse/sessions"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        roots.push(home.join(".local/share/muse/sessions"));
+        roots.push(home.join("Library/Application Support/muse/sessions"));
+    }
+    if let Some(data) = dirs::data_dir() {
+        roots.push(data.join("muse/sessions"));
+    }
+    for root in roots {
+        let Ok(years) = std::fs::read_dir(root) else { continue };
+        for year in years.flatten() {
+            let Ok(months) = std::fs::read_dir(year.path()) else { continue };
+            for month in months.flatten() {
+                let Ok(days) = std::fs::read_dir(month.path()) else { continue };
+                for day in days.flatten() {
+                    let path = day.path().join(session).join("session.jsonl");
+                    if path.is_file() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn tail_session_log(me: Sender<In>, run: u64, session: String, live: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let mut path = None;
+        while live.load(Ordering::Relaxed) && path.is_none() {
+            path = session_log(&session);
+            if path.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        let Some(path) = path else { return };
+        let Ok(file) = std::fs::File::open(path) else { return };
+        let mut lines = BufReader::new(file).lines();
+        while live.load(Ordering::Relaxed) {
+            match lines.next() {
+                Some(Ok(line)) => {
+                    if me.send(In::Line(format!("{run}{LOG}{line}"))).is_err() { return; }
+                }
+                Some(Err(_)) => return,
+                None => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+    });
+}
 
 struct Bridge {
     events: Events,
@@ -178,6 +240,7 @@ struct Bridge {
     streamed: bool,
     /// Running tool calls: id → display name.
     calls: HashMap<String, String>,
+    log_tail: Option<Arc<AtomicBool>>,
     /// Stdout that isn't JSON (Muse prints warnings as plain text).
     noise: String,
     explained_ask: bool,
@@ -206,6 +269,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         queue: Vec::new(),
         streamed: false,
         calls: HashMap::new(),
+        log_tail: None,
         noise: String::new(),
         explained_ask: false,
         usage: Usage::default(),
@@ -330,7 +394,7 @@ impl Bridge {
             Ok(()) => args(&self.model, self.effort.as_deref(), self.mode, &session, &prompt_file, &msg.images),
             Err(_) => {
                 let mut a: Vec<String> = ["exec", "--json", "--trust-workspace"].iter().map(|s| s.to_string()).collect();
-                a.extend(["--session-id".into(), session]);
+                a.extend(["--session-id".into(), session.clone()]);
                 if !self.model.is_empty() {
                     a.extend(["--model".into(), self.model.clone()]);
                 }
@@ -342,6 +406,9 @@ impl Bridge {
         match LineProcess::spawn("muse", &args, &[], &self.cwd, tx) {
             Ok(p) => {
                 self.proc = Some(p);
+                let live = Arc::new(AtomicBool::new(true));
+                tail_session_log(self.me.clone(), self.run, session, live.clone());
+                self.log_tail = Some(live);
                 // Tags its lines with the run, so a killed run's late output is told apart.
                 let (me, run) = (self.me.clone(), self.run);
                 std::thread::spawn(move || {
@@ -366,6 +433,9 @@ impl Bridge {
 
     /// Kills the running process (if any); its remaining output is ignored.
     fn stop_run(&mut self) {
+        if let Some(live) = self.log_tail.take() {
+            live.store(false, Ordering::Relaxed);
+        }
         self.run += 1;
         self.proc = None;
         for (id, _) in std::mem::take(&mut self.calls) {
@@ -376,6 +446,14 @@ impl Bridge {
     fn end_turn(&mut self) {
         self.busy = false;
         self.emit(Ev::TurnDone);
+        // Let the log tail catch effects flushed just before the terminal stdout record, then
+        // stop its polling thread while this pane is idle.
+        if let Some(live) = self.log_tail.take() {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                live.store(false, Ordering::Relaxed);
+            });
+        }
         if !self.queue.is_empty() {
             let msg = self.queue.remove(0);
             self.start(msg);
@@ -391,15 +469,17 @@ impl Bridge {
     }
 
     fn on_tagged(&mut self, line: &str) {
-        let Some(at) = line.find([SEP, END]) else { return };
+        let Some(at) = line.find([SEP, END, LOG]) else { return };
         if line[..at].parse::<u64>().ok() != Some(self.run) {
             return;
         }
         if line[at..].starts_with(END) {
             return self.on_closed();
         }
+        let from_log = line[at..].starts_with(LOG);
         let line = &line[at + SEP.len_utf8()..];
         match serde_json::from_str::<Value>(line) {
+            Ok(v) if v.is_object() && from_log => self.on_log_record(&v),
             Ok(v) if v.is_object() => self.on_record(&v),
             _ if !line.trim().is_empty() => {
                 self.noise.push_str(line.trim());
@@ -442,9 +522,9 @@ impl Bridge {
             self.emit(Ev::TextDelta { id: format!("muse-t{}", self.run), text });
             return;
         }
-        if let Some((id, name)) = tool_start(v) {
+        if let Some((id, name, title)) = tool_start(v) {
             // A message's text ends where its tools start: the next delta is a new block.
-            self.emit(Ev::ToolStart { id: id.clone(), name: name.clone(), title: name.clone(), input: Value::Null });
+            self.emit(Ev::ToolStart { id: id.clone(), name: name.clone(), title, input: Value::Null });
             self.calls.insert(id, name);
             return;
         }
@@ -481,6 +561,21 @@ impl Bridge {
             self.end_turn();
         }
     }
+
+    /// The durable log supplements stdout with tool progress only; stdout remains the authority
+    /// for answer text, usage and turn completion.
+    fn on_log_record(&mut self, v: &Value) {
+        if let Some((id, name, title)) = tool_start(v) {
+            if !self.calls.contains_key(&id) {
+                self.emit(Ev::ToolStart { id: id.clone(), name: name.clone(), title, input: Value::Null });
+                self.calls.insert(id, name);
+            }
+        } else if let Some((id, ok)) = tool_end(v) {
+            if self.calls.remove(&id).is_some() {
+                self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: None });
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -514,7 +609,7 @@ mod tests {
     #[test]
     fn reads_tool_batches() {
         let started = json!({"payload_type": "tool_batch.effect.started", "payload": {"kind": "tool_batch_effect", "record": {"kind": "started", "call_id": "c1", "tool_name": "bash"}}});
-        assert_eq!(tool_start(&started), Some(("c1".to_string(), "Bash".to_string())));
+        assert_eq!(tool_start(&started), Some(("c1".to_string(), "Bash".to_string(), "Bash".to_string())));
         let done = json!({"payload_type": "tool_batch.effect.terminal", "payload": {"kind": "tool_batch_effect", "record": {"kind": "terminal", "call_id": "c1", "outcome": {"kind": "completed"}}}});
         assert_eq!(tool_end(&done), Some(("c1".to_string(), true)));
         assert_eq!(display_name("read_file"), "Read");
