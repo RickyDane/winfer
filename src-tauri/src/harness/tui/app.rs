@@ -120,7 +120,7 @@ You can't run tools or change anything; if the transcript doesn't tell, say so."
 pub(crate) const BTW_CONTEXT_BYTES: usize = 120_000;
 
 pub const COMMANDS: [(&str, &str); 27] = [
-    ("/model", "Switch model (ChatGPT, Claude, Codex)"),
+    ("/model", "Switch model (ChatGPT, Claude, Codex, Muse)"),
     ("/fast", "Toggle fast mode (increased usage)"),
     ("/subagent-model", "Model subagents run on while the main model orchestrates"),
     ("/effort", "Set reasoning effort (ctrl+r cycles)"),

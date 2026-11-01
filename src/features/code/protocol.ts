@@ -179,7 +179,7 @@ export const MODES: { id: Mode; label: string; hint: string }[] = [
 
 /** Mirrors `tui::app::COMMANDS`. */
 export const COMMANDS: [string, string][] = [
-  ["/model", "Switch model (ChatGPT, Claude, Codex)"],
+  ["/model", "Switch model (ChatGPT, Claude, Codex, Muse)"],
   ["/subagent-model", "Model subagents run on while the main model orchestrates"],
   ["/effort", "Set reasoning effort"],
   ["/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"],
@@ -221,4 +221,6 @@ export const MOCK_MODELS: ModelInfo[] = [
   { spec: "opencode/anthropic/claude-sonnet-4-5", label: "anthropic/claude-sonnet-4-5", detail: "OpenCode · anthropic" },
   { spec: "pi/openai/gpt-6.1-sol", label: "openai/gpt-6.1-sol", detail: "Pi · openai" },
   { spec: "codex/gpt-6.1-sol-fast", label: "GPT-6.1-Sol (Fast)", detail: "Codex · 2x speed, increased usage" },
+  { spec: "muse/muse-wonder-1.0", label: "Muse Wonder 1.0", detail: "Muse Code · most capable" },
+  { spec: "muse/muse-spark-1.3", label: "Muse Spark 1.3", detail: "Muse Code · fast, everyday coding" },
 ];

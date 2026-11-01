@@ -183,12 +183,12 @@ pub async fn harness_models() -> Vec<HarnessModel> {
 /// `--full-prompt` for this process (the TUI reads lean mode from the saved config otherwise).
 pub static LEAN_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-const HELP: &str = "winfer code — a coding agent for ChatGPT, Claude and Codex models
+const HELP: &str = "winfer code — a coding agent for ChatGPT, Claude, Codex and Muse models
 
 Usage: winfer code [options] [prompt]
 
 Options:
-  -m, --model <backend/model>  chatgpt/<model>, claude/<opus|sonnet|haiku|fable>, codex/<model>
+  -m, --model <backend/model>  chatgpt/<model>, claude/<opus|sonnet|haiku|fable>, codex/<model>, muse/<muse-wonder-1.0|muse-spark-1.3>
   -r, --resume <id>            Resume a saved session
   -c, --continue               Resume the latest session in this directory
   -p, --print                  Run the prompt without the UI and print the answer

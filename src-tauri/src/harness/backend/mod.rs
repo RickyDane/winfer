@@ -7,6 +7,7 @@ pub mod claude;
 pub mod codex;
 pub mod cursor;
 pub mod microcompact;
+pub mod muse;
 pub mod opencode;
 pub mod pi;
 
@@ -32,6 +33,8 @@ pub enum Kind {
     OpenCode,
     /// The pi coding agent (`pi`).
     Pi,
+    /// Meta's Muse (`muse`).
+    Muse,
 }
 
 impl Kind {
@@ -44,6 +47,7 @@ impl Kind {
             Kind::Cursor => "cursor",
             Kind::OpenCode => "opencode",
             Kind::Pi => "pi",
+            Kind::Muse => "muse",
         }
     }
     pub fn label(self) -> &'static str {
@@ -55,6 +59,7 @@ impl Kind {
             Kind::Cursor => "Cursor",
             Kind::OpenCode => "OpenCode",
             Kind::Pi => "Pi",
+            Kind::Muse => "Muse Code",
         }
     }
     pub fn from_id(id: &str) -> Option<Kind> {
@@ -66,6 +71,7 @@ impl Kind {
             "cursor" | "cursor-agent" => Some(Kind::Cursor),
             "opencode" => Some(Kind::OpenCode),
             "pi" => Some(Kind::Pi),
+            "muse" => Some(Kind::Muse),
             _ => None,
         }
     }
@@ -79,6 +85,9 @@ pub fn parse_spec(spec: &str) -> (Kind, String) {
         }
     }
     let lower = spec.to_ascii_lowercase();
+    if lower.starts_with("muse-") || lower == "muse" {
+        return (Kind::Muse, spec.to_string());
+    }
     let claude = ["claude", "opus", "sonnet", "haiku", "fable"].iter().any(|m| lower.contains(m));
     if claude {
         (Kind::Claude, spec.to_string())
@@ -301,6 +310,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
                 Kind::Cursor => cursor::run(opts, rx, me, events),
                 Kind::OpenCode => opencode::run(opts, rx, me, events),
                 Kind::Pi => pi::run(opts, rx, me, events),
+                Kind::Muse => muse::run(opts, rx, me, events),
                 _ => codex::run(opts, rx, me, events),
             }
             crate::harness::bg::stop_owner(&owner);
@@ -389,7 +399,7 @@ impl Drop for LineProcess {
 pub fn all_models() -> Vec<ModelInfo> {
     // Each backend lists its own (asking its CLI, so some take seconds); one that isn't
     // installed lists nothing, so it doesn't show in the picker.
-    let listers: [fn() -> Vec<ModelInfo>; 7] = [chatgpt::models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models];
+    let listers: [fn() -> Vec<ModelInfo>; 8] = [chatgpt::models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models, muse::models];
     let (tx, rx) = channel::<Vec<ModelInfo>>();
     for list in listers {
         let tx = tx.clone();
@@ -406,7 +416,8 @@ pub fn all_models() -> Vec<ModelInfo> {
         Some("agy") => 3,
         Some("cursor") => 4,
         Some("opencode") => 5,
-        _ => 6,
+        Some("muse") => 6,
+        _ => 7,
     };
     all.sort_by_key(order);
     all

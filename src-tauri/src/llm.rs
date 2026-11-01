@@ -34,6 +34,8 @@ pub struct ComposeRequest {
 const CLAUDE_FAST_MODEL: &str = "haiku";
 /// Codex's quickest model, for the same jobs.
 const CODEX_FAST_MODEL: &str = "gpt-6-luna";
+/// Muse's quickest model, for the same jobs.
+const MUSE_FAST_MODEL: &str = "muse-spark-1.3";
 
 /// Runs a prepared CLI command with `input` on stdin, in a scratch directory, and waits for it.
 /// Returns stdout. The prompt goes in on stdin: it's multi-line, which a command-line argument
@@ -187,13 +189,74 @@ fn codex(model: &str, system: &str, user: &str) -> Result<String, String> {
     Ok(answer.to_string())
 }
 
-/// One blocking, tool-less answer from `provider` ("claude", "codex" or "chatgpt") with the
-/// user's own login. An empty model uses the provider's default.
+/// Muse in exec mode with the user's Muse login: no workspace writes or shell, and the
+/// answer read from its JSONL stream's output deltas (falling back to the terminal text).
+fn muse_args(dir: &Path, model: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "exec",
+        "--json",
+        "--disable-write",
+        "--disable-shell",
+        "--disable-web-tools",
+        "--approval-mode",
+        "never",
+        "--prompt-file",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    args.push(dir.join("prompt.txt").to_string_lossy().into_owned());
+    if !model.is_empty() {
+        args.extend(["--model".into(), model.into()]);
+    }
+    args
+}
+
+fn muse(model: &str, system: &str, user: &str) -> Result<String, String> {
+    let launcher = crate::env::launcher("muse").ok_or("Muse isn't installed.")?;
+    let dir = scratch_dir()?;
+    let prompt = format!("{system}\n\n{user}");
+    let result = std::fs::write(dir.join("prompt.txt"), &prompt).map_err(|e| e.to_string()).and_then(|_| {
+        let mut cmd = Command::new(&launcher.program);
+        cmd.args(&launcher.args).args(muse_args(&dir, model)).current_dir(&dir);
+        run(cmd, "", "Muse")
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    let out = result?;
+    let mut answer = String::new();
+    let mut terminal = String::new();
+    for line in out.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match v["payload_type"].as_str() {
+            Some("run.output.delta") => {
+                if let Some(t) = v["payload"]["text"].as_str() {
+                    answer.push_str(t);
+                }
+            }
+            Some("run.terminal.completed") => {
+                if let Some(t) = v["payload"]["text"].as_str() {
+                    terminal = t.to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    let answer = if answer.trim().is_empty() { terminal } else { answer };
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err("Muse gave no answer".into());
+    }
+    Ok(answer.to_string())
+}
+
+/// One blocking, tool-less answer from `provider` ("claude", "codex", "chatgpt" or "muse")
+/// with the user's own login. An empty model uses the provider's default.
 pub fn respond(provider: &str, model: &str, system: &str, user: &str) -> Result<String, String> {
     match provider {
         "claude" => claude(model, system, user),
         "codex" => codex(model, system, user),
         "chatgpt" => crate::chatgpt::respond(model, system, user),
+        "muse" => muse(model, system, user),
         other => Err(format!("unknown LLM provider {other}")),
     }
 }
@@ -204,6 +267,7 @@ pub async fn llm_compose(req: ComposeRequest) -> Result<String, String> {
         let model = match (req.fast, req.provider.as_str()) {
             (true, "claude") => CLAUDE_FAST_MODEL,
             (true, "codex") => CODEX_FAST_MODEL,
+            (true, "muse") => MUSE_FAST_MODEL,
             _ => &req.model,
         };
         respond(&req.provider, model, &req.system, &req.user)
@@ -227,6 +291,20 @@ mod tests {
         assert!(args.contains(&"--strict-mcp-config".to_string()));
         assert!(after("--system-prompt-file").unwrap().ends_with("system.txt"));
         assert!(!claude_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn muse_runs_tool_less_and_reads_its_prompt_from_a_file() {
+        let args = muse_args(Path::new("/tmp/x"), "muse-spark-1.3");
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].as_str());
+        assert_eq!(args[0], "exec");
+        assert!(args.contains(&"--json".to_string()));
+        assert!(args.contains(&"--disable-write".to_string()));
+        assert!(args.contains(&"--disable-shell".to_string()));
+        assert_eq!(after("--approval-mode"), Some("never"));
+        assert_eq!(after("--model"), Some("muse-spark-1.3"));
+        assert!(after("--prompt-file").unwrap().ends_with("prompt.txt"));
+        assert!(!muse_args(Path::new("/tmp/x"), "").contains(&"--model".to_string()));
     }
 
     #[test]

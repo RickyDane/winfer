@@ -11,6 +11,7 @@ export const BACKENDS: { id: string; label: string; logo: string }[] = [
   { id: "cursor", label: "Cursor", logo: "cursor" },
   { id: "opencode", label: "OpenCode", logo: "opencode" },
   { id: "pi", label: "Pi", logo: "pi" },
+  { id: "muse", label: "Muse Code", logo: "muse" },
 ];
 
 /** The backend a spec runs on (`opencode/anthropic/claude-sonnet` → opencode). */

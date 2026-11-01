@@ -329,7 +329,7 @@ mockIPC(
           { id: "caveman:caveman", name: "caveman", description: "Ultra-compressed communication mode", source: "caveman", dir: "" },
         ];
       case "harness_models":
-        return [{ spec: "chatgpt/gpt-6.1-sol", label: "GPT-6.1 Sol", detail: "" }, { spec: "claude/sonnet", label: "Sonnet", detail: "" }];
+        return [{ spec: "chatgpt/gpt-6.1-sol", label: "GPT-6.1 Sol", detail: "" }, { spec: "claude/sonnet", label: "Sonnet", detail: "" }, { spec: "muse/muse-wonder-1.0", label: "Muse Wonder 1.0", detail: "Muse Code" }];
       case "editors_list":
         return [{ id: "vscode", name: "VS Code" }, { id: "cursor", name: "Cursor" }, { id: "zed", name: "Zed" }];
       case "editor_open":

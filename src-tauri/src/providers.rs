@@ -346,7 +346,7 @@ mod live {
     #[test]
     #[ignore]
     fn live_model_lists() {
-        for id in ["claude", "agy", "cursor", "opencode", "codex", "pi"] {
+        for id in ["claude", "agy", "cursor", "opencode", "codex", "pi", "muse"] {
             let p = super::find(id).unwrap();
             if !super::is_installed(&p) {
                 continue;

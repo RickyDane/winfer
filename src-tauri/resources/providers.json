@@ -230,6 +230,41 @@
     }
   },
   {
+    "id": "muse",
+    "name": "Muse Code",
+    "command": "muse",
+    "args": [],
+    "resumeArgs": [
+      "resume",
+      "--last"
+    ],
+    "resumeSessionArgs": [
+      "resume",
+      "{session}"
+    ],
+    "aliases": [
+      "muse",
+      "muse code",
+      "muse agent"
+    ],
+    "promptArg": true,
+    "approveInput": "y",
+    "modelArg": "--model",
+    "models": [
+      {
+        "id": "muse-wonder-1.0",
+        "label": "Muse Wonder 1.0"
+      },
+      {
+        "id": "muse-spark-1.3",
+        "label": "Muse Spark 1.3"
+      }
+    ],
+    "autoApproveArgs": [
+      "--yolo"
+    ]
+  },
+  {
     "id": "winfer",
     "name": "winfer code",
     "command": "winfer",
