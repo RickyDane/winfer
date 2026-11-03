@@ -29,6 +29,7 @@ mod usage_history;
 mod vault;
 mod realtime;
 mod chatgpt_voice;
+mod diagnostics;
 mod transfer;
 mod worktree;
 
@@ -54,7 +55,9 @@ pub fn run_statusline() {
 pub fn run_code(args: &[String]) {
     #[cfg(windows)]
     let args = &harness::attach_console(args.to_vec());
-    log_panics();
+    if let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app")) {
+        diagnostics::init(&dir);
+    }
     harness::run(args);
 }
 
@@ -64,38 +67,12 @@ pub fn run_hook(args: &[String]) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// Release builds have no console to print a panic to (especially on Windows), so the
-/// message goes to `crash.log` in the app data folder for bug reports.
-fn log_panics() {
-    let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app")) else {
-        return;
-    };
-    let default = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = std::fs::create_dir_all(&dir);
-        let entry = format!(
-            "[{}] winfer {} {}: {info}\n{}\n\n",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
-            env!("CARGO_PKG_VERSION"),
-            std::env::consts::OS,
-            std::backtrace::Backtrace::force_capture(),
-        );
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("crash.log"))
-        {
-            use std::io::Write;
-            let _ = file.write_all(entry.as_bytes());
-        }
-        default(info);
-    }));
-}
-
 pub fn run() {
-    log_panics();
+    // File log + crash log + memory sampler, before anything can crash.
+    // `setup` re-inits with Tauri's resolved data dir (idempotent).
+    if let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app")) {
+        diagnostics::init(&dir);
+    }
     // Resolve the login-shell environment off the main thread so the first spawn is fast.
     std::thread::spawn(|| {
         env::login_env();
@@ -131,8 +108,10 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            diagnostics::init(&data_dir);
+            diagnostics::breadcrumb("app setup".to_string());
             if let Err(e) = transfer::apply_pending(&data_dir) {
-                eprintln!("import failed: {e}");
+                diagnostics::error("import", &format!("import failed: {e}"));
             }
             plugins::init(&data_dir);
             app.manage(store::Store::open(&data_dir.join("winfer.db"))?);
@@ -291,11 +270,17 @@ pub fn run() {
             transfer::data_import_inspect,
             transfer::data_import_stage,
             transfer::data_import_take_local,
+            diagnostics::diagnostics_frontend_log,
+            diagnostics::diagnostics_info,
+            diagnostics::diagnostics_set_verbose,
+            diagnostics::diagnostics_export,
+            diagnostics::diagnostics_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                diagnostics::mark_clean_exit();
                 app.state::<realtime::LiveBrowser>().shutdown();
                 app.state::<browser::BrowserManager>().shutdown();
                 app.state::<android::AndroidManager>().shutdown();

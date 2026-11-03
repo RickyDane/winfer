@@ -120,6 +120,23 @@ pub struct PtyManager {
     starting: Mutex<HashMap<String, Arc<Starting>>>,
 }
 
+impl PtyManager {
+    /// Live sessions, for the diagnostics memory timeline.
+    pub fn session_count(&self) -> usize {
+        self.sessions.lock().map_or(0, |s| s.len())
+    }
+
+    /// Bytes held in every session's replay scrollback (capped per pane at
+    /// `SCROLLBACK_BYTES`; the total is what a many-pane window costs).
+    pub fn scrollback_bytes(&self) -> usize {
+        let Ok(sessions) = self.sessions.lock() else { return 0 };
+        sessions
+            .values()
+            .map(|s| s.output.state.lock().map_or(0, |o| o.scrollback.len() + o.pending.len()))
+            .sum()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnRequest {
@@ -673,6 +690,8 @@ fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result
             },
         );
     }
+    crate::diagnostics::set_gauge("pty_sessions", manager.session_count() as i64);
+    crate::diagnostics::breadcrumb(format!("pty spawn {} pid={}", req.provider_id, pid.map_or("?".into(), |p| p.to_string())));
 
     // Ends when the session is dropped (its sender goes) or the program is gone.
     std::thread::spawn(move || {

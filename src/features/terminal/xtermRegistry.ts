@@ -78,6 +78,11 @@ const entries = new Map<string, Entry>();
 /** Someone reading what agent panes print (the account failover watches for usage limits). */
 export const outputTaps = new Set<(paneId: string, provider: string, data: ArrayBuffer) => void>();
 
+/** Live xterm instances, for the diagnostics memory samples. */
+export function liveTerminalCount() {
+  return entries.size;
+}
+
 /**
  * Input waiting for a pane's in-flight pty_write. Every IPC call runs on the app's UI thread
  * (on Windows a slow web-request round trip), and programs that track the mouse (OpenCode)

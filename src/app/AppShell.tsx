@@ -43,7 +43,8 @@ import { startStatusTracking } from "@/features/status/agentStatus";
 import { startMobileBridge } from "@/features/mobile/mobile";
 import { startAgentApi } from "@/features/mcp/agentApi";
 import { startBgNotices } from "@/features/mcp/bgNotices";
-import { startTerminalEvents } from "@/features/terminal/xtermRegistry";
+import { liveTerminalCount, startTerminalEvents } from "@/features/terminal/xtermRegistry";
+import { installDiagnostics, logger, setLogContext } from "@/features/diagnostics/logger";
 import { loadHome } from "@/lib/home";
 import { loadEditors } from "@/features/editors/editors";
 import { leaves, setSizesAt } from "@/features/layout/tree";
@@ -171,6 +172,19 @@ export function AppShell() {
   }, [theme]);
 
   useEffect(() => {
+    installDiagnostics();
+    setLogContext(() => {
+      const s = useWorkspaces.getState();
+      const panes = s.workspaces.flatMap((w) => w.panes);
+      return {
+        workspaces: s.workspaces.length,
+        panes: panes.length,
+        livePanes: panes.filter((p) => !p.archived).length,
+        terminals: liveTerminalCount(),
+        view: s.view,
+      };
+    });
+    logger.breadcrumb("app shell mounted");
     void loadProviders();
     void hydrate();
     void loadHome();

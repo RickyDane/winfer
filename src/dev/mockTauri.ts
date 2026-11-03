@@ -310,6 +310,32 @@ mockIPC(
     switch (cmd) {
       case "providers_list":
         return providers;
+      case "diagnostics_frontend_log":
+        return null;
+      case "diagnostics_info":
+        return {
+          version: "0.1.101",
+          os: "macos",
+          arch: "aarch64",
+          logDir: "~/Library/Application Support/dev.winfer.app/logs",
+          logBytes: 184_320,
+          crashBytes: 0,
+          dumpCount: 0,
+          memory: { rssBytes: 412_876_800, peakRssBytes: 450_000_000, systemTotalBytes: 17_179_869_184, systemAvailableBytes: 4_294_967_296 },
+          sessionPeakRssBytes: 430_000_000,
+          uptimeSecs: 1845,
+          ptySessions: 4,
+          scrollbackBytes: 3_145_728,
+          previousUnexpectedExit: false,
+          verbose: false,
+          crashTail: "",
+          recentMemory: [],
+        };
+      case "diagnostics_set_verbose":
+      case "diagnostics_clear":
+        return null;
+      case "diagnostics_export":
+        return `diagnostics exported to ${a.path}`;
       case "data_export":
       case "data_import_stage":
         return null;

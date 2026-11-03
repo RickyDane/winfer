@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
-import { ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, suspendSaving, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
@@ -25,6 +25,7 @@ import { loadEditors, preferredEditor, useEditors } from "@/features/editors/edi
 import { cn } from "@/lib/cn";
 import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb } from "@/features/code/styles";
 import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
+import { clearDiagnostics, exportDiagnostics, getDiagnostics, mb, setVerboseLogging, type DiagnosticsInfo } from "@/features/diagnostics/diagnostics";
 import {
   copyFile,
   copyLabel,
@@ -1608,6 +1609,143 @@ function DataSettings() {
   );
 }
 
+/* Diagnostics: the file log, crash log and memory timeline from diagnostics.rs. */
+
+function DiagnosticsSettings() {
+  const [info, setInfo] = useState<DiagnosticsInfo | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    const load = () => void getDiagnostics().then((i) => live && setInfo(i)).catch(() => {});
+    load();
+    const timer = window.setInterval(load, 5_000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  if (!info) return <Card title="Diagnostics"><Row label="Loading…">{null}</Row></Card>;
+
+  const summary = [
+    `winfer ${info.version} · ${info.os} ${info.arch} · up ${Math.floor(info.uptimeSecs / 60)} min`,
+    `memory: ${mb(info.memory.rssBytes)} now, ${mb(info.sessionPeakRssBytes)} session peak, ${mb(info.memory.systemAvailableBytes)} of ${mb(info.memory.systemTotalBytes)} free`,
+    `panes: ${info.ptySessions} terminal sessions, ${mb(info.scrollbackBytes)} scrollback`,
+    `logs: ${info.logDir} (${mb(info.logBytes)} log, ${mb(info.crashBytes)} crash log${info.dumpCount ? `, ${info.dumpCount} minidump(s)` : ""})`,
+    info.previousUnexpectedExit ? "previous run ended without a clean exit (crash or OOM kill)" : "previous run exited cleanly",
+  ].join("\n");
+
+  const copySummary = async () => {
+    try {
+      await navigator.clipboard.writeText(`${summary}\n\ncrash log tail:\n${info.crashTail || "(empty)"}`);
+      toast("Diagnostics summary copied", "success");
+    } catch {
+      setResult({ ok: false, text: "Couldn't copy to the clipboard." });
+    }
+  };
+
+  const runExport = async () => {
+    const date = new Date().toISOString().slice(0, 10);
+    const path = await saveDialog({ defaultPath: `winfer-diagnostics-${date}.zip`, filters: [{ name: "Zip", extensions: ["zip"] }] });
+    if (!path) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult({ ok: true, text: await exportDiagnostics(path) });
+    } catch (err) {
+      setResult({ ok: false, text: `Export failed: ${err}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runClear = async () => {
+    const ok = await ask("Delete the current log and crash log? Minidumps are kept.", { title: "Clear logs?", kind: "warning", okLabel: "Clear" });
+    if (!ok) return;
+    await clearDiagnostics().catch(() => {});
+    void getDiagnostics().then(setInfo).catch(() => {});
+  };
+
+  const memoryValues = info.recentMemory.map((line) => Number(/(\d+)MB/.exec(line)?.[1] ?? 0));
+  const memoryMax = Math.max(1, ...memoryValues);
+
+  return (
+    <>
+      {info.previousUnexpectedExit && (
+        <p className="anim-fade rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-fg">
+          The previous run ended without a clean exit — a crash or an out-of-memory kill. Its last memory
+          samples are at the end of <span className="font-mono">winfer.log</span>; export the diagnostics
+          below and attach them to a bug report.
+        </p>
+      )}
+      <Card title="Memory" description="winfer's own resident memory, sampled every 5 seconds into the log. A steady climb before a crash points at a leak; the timeline in the export shows it.">
+        <Row label="Now / session peak" hint={`${mb(info.memory.systemAvailableBytes)} of ${mb(info.memory.systemTotalBytes)} system memory free`}>
+          <span className="font-mono text-xs text-fg">{mb(info.memory.rssBytes)} / {mb(info.sessionPeakRssBytes)}</span>
+        </Row>
+        <Row label="Terminals" hint="Each live pane also holds up to 2 MB of replay scrollback in the backend, plus its xterm buffer in the webview.">
+          <span className="font-mono text-xs text-fg">{info.ptySessions} sessions · {mb(info.scrollbackBytes)}</span>
+        </Row>
+        {memoryValues.length > 1 && (
+          <Row label="Last 2 minutes" hint={info.recentMemory.at(-1)}>
+            <span className="flex h-8 items-end gap-[2px]" aria-hidden>
+              {memoryValues.map((v, i) => (
+                <span key={i} className="w-1.5 rounded-sm bg-accent/70" style={{ height: `${Math.max(8, (v / memoryMax) * 100)}%` }} />
+              ))}
+            </span>
+          </Row>
+        )}
+      </Card>
+
+      <Card title="Logs" description="winfer.log keeps the app and webview log (rotated at 5 MB); crash.log holds panics with backtraces — on Windows also a minidump per native crash. Both live in the folder below.">
+        <Row label="Log folder" hint={info.logDir}>
+          <button onClick={() => void revealItemInDir(info.logDir).catch(() => {})} className={buttonClass}>
+            <FolderOpen size={12} /> Open…
+          </button>
+        </Row>
+        <Row label="Sizes" hint={info.dumpCount ? `${info.dumpCount} minidump(s) kept in the log folder — attach the newest .dmp to a crash report.` : undefined}>
+          <span className="font-mono text-xs text-fg">{mb(info.logBytes)} log · {mb(info.crashBytes)} crash</span>
+        </Row>
+        <Row label="Verbose logging" hint="Also records debug lines (more detail, faster-growing log). Kept across restarts.">
+          <Toggle
+            checked={info.verbose}
+            label="Verbose logging"
+            onChange={(on) => {
+              setInfo({ ...info, verbose: on });
+              void setVerboseLogging(on).catch(() => {});
+            }}
+          />
+        </Row>
+        <Row label="Copy summary" hint="Version, memory and the crash-log tail — paste it into a bug report.">
+          <button onClick={() => void copySummary()} className={buttonClass}>
+            <Copy size={12} /> Copy
+          </button>
+        </Row>
+        <Row label="Export for a bug report" hint="A zip with the summary, both logs and the memory timeline. No settings, chats or secrets.">
+          <button onClick={() => void runExport()} disabled={busy} className={buttonClass}>
+            {busy ? <Spinner size={12} /> : <FileArchive size={12} />} Export…
+          </button>
+        </Row>
+        <Row label="Clear logs">
+          <button onClick={() => void runClear()} className={buttonClass}>
+            <Trash2 size={12} /> Clear
+          </button>
+        </Row>
+      </Card>
+      <Result result={result} />
+
+      {info.crashTail && (
+        <Card title="Latest crash" description="The end of crash.log. Full backtraces are in the file and in the export.">
+          <div className="px-3.5 py-3">
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-fg-muted">{info.crashTail}</pre>
+          </div>
+        </Card>
+      )}
+    </>
+  );
+}
+
 const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.ReactNode }[] = [
   {
     id: "general",
@@ -1658,6 +1796,7 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
   { id: "skills", label: "Skills", icon: Wand2, render: () => <SkillSettings /> },
   { id: "data", label: "Data", icon: ArchiveRestore, render: () => <DataSettings /> },
+  { id: "diagnostics", label: "Diagnostics", icon: Activity, render: () => <DiagnosticsSettings /> },
 ];
 
 /** What a plugin adds, e.g. "2 tools · 1 agent · code". */
