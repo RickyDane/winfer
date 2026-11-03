@@ -14,6 +14,68 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
+/// A single CDP message at or above this size gets logged (with method and tab) before it is
+/// forwarded. WebView2 crashed with `partition_alloc` OOM (~1 GiB single allocation) serializing
+/// a `Fetch.fulfillRequest` body: the next time an agent pushes something huge through the
+/// browser, the diagnostics log should name the method, size and tab first. 64 MiB is far above
+/// any normal command (screenshots included) and far below the crash size.
+const OVERSIZED_BYTES: usize = 64 * 1024 * 1024;
+/// Oversized messages are logged at most once per this window (they often come in bursts).
+const OVERSIZED_LOG_GAP: Duration = Duration::from_secs(10);
+
+fn oversized_info(text: &str, limit: usize) -> Option<String> {
+    if text.len() < limit {
+        return None;
+    }
+    Some(format!("{} ({} bytes)", method_of(text).unwrap_or_else(|| "response/event".into()), text.len()))
+}
+
+/// The `"method":"…"` value, found by scanning instead of parsing: a near-1 GiB body must not
+/// be JSON-parsed (that would copy it) just to name it in a log line.
+fn method_of(text: &str) -> Option<String> {
+    let start = text.find("\"method\"")?;
+    let rest = &text[start + 8..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// The `"sessionId":"…"` value, same scanning approach as [`method_of`].
+fn session_of(text: &str) -> Option<String> {
+    let start = text.find("\"sessionId\"")?;
+    let rest = &text[start + 11..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn note_oversized(direction: &str, text: &str, tab: Option<&str>) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    static SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+    let Some(info) = oversized_info(text, OVERSIZED_BYTES) else { return };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let last = LAST.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < OVERSIZED_LOG_GAP.as_millis() as u64 {
+        SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if LAST.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let suppressed = SUPPRESSED.swap(0, Ordering::Relaxed);
+    crate::diagnostics::warn(
+        "browser-cdp",
+        &format!(
+            "oversized CDP message {direction}: {info} tab={}{}",
+            tab.unwrap_or("?"),
+            if suppressed > 0 { format!(" (+{suppressed} similar suppressed)") } else { String::new() }
+        ),
+    );
+    crate::diagnostics::breadcrumb(format!("oversized CDP {direction}: {info}"));
+}
+
 /// What an agent did with a tab (by target id).
 #[derive(Debug, PartialEq)]
 pub enum Activity<'a> {
@@ -202,14 +264,20 @@ async fn websocket(stream: TcpStream, browser: u16, on_activity: OnActivity) -> 
         async move {
             while let Some(Ok(msg)) = client_rx.next().await {
                 if let Message::Text(text) = &msg {
-                    let target = tracker.lock().unwrap().command(text);
-                    if let Some(target) = target {
-                        on_activity(Activity::Acted(&target));
-                        if text.contains("\"Page.navigate\"") {
-                            on_activity(Activity::Navigated(&target));
-                        }
-                        if let Some(pointer) = Pointer::of(text) {
-                            on_activity(Activity::Pointer(&target, pointer));
+                    if text.len() >= OVERSIZED_BYTES {
+                        // Forward untouched, and don't JSON-parse the body here either.
+                        let tab = session_of(text).and_then(|s| tracker.lock().unwrap().tab_for_session(&s));
+                        note_oversized("agent→browser", text, tab.as_deref());
+                    } else {
+                        let target = tracker.lock().unwrap().command(text);
+                        if let Some(target) = target {
+                            on_activity(Activity::Acted(&target));
+                            if text.contains("\"Page.navigate\"") {
+                                on_activity(Activity::Navigated(&target));
+                            }
+                            if let Some(pointer) = Pointer::of(text) {
+                                on_activity(Activity::Pointer(&target, pointer));
+                            }
                         }
                     }
                 }
@@ -223,6 +291,10 @@ async fn websocket(stream: TcpStream, browser: u16, on_activity: OnActivity) -> 
     let events = async move {
         while let Some(Ok(msg)) = upstream_rx.next().await {
             if let Message::Text(text) = &msg {
+                if text.len() >= OVERSIZED_BYTES {
+                    let tab = session_of(text).and_then(|s| tracker.lock().unwrap().tab_for_session(&s));
+                    note_oversized("browser→agent", text, tab.as_deref());
+                }
                 let opened = tracker.lock().unwrap().event(text);
                 if let Some(target) = opened {
                     opened_by(Activity::Opened(&target));
@@ -258,6 +330,11 @@ impl Tracker {
             page: path.strip_prefix("/devtools/page/").map(|id| id.split(['?', '/']).next().unwrap_or(id).to_string()),
             ..Self::default()
         }
+    }
+
+    /// The tab a session belongs to (the page tab itself on page connections).
+    pub(crate) fn tab_for_session(&self, session: &str) -> Option<String> {
+        self.sessions.get(session).map(|(tab, _)| tab.clone()).or_else(|| self.page.clone())
     }
 
     /// A message from the browser: learns which session belongs to which tab, and returns the
@@ -404,6 +481,25 @@ mod tests {
         assert!(t.creating.is_empty());
         let activate = serde_json::json!({ "id": 2, "method": "Target.activateTarget", "params": { "targetId": "T9" } }).to_string();
         assert_eq!(t.command(&activate).as_deref(), Some("T9"));
+    }
+
+    #[test]
+    fn flags_oversized_cdp_messages_by_method_and_tab() {
+        // Under the limit: nothing, however it looks.
+        assert_eq!(oversized_info(r#"{"method":"Fetch.fulfillRequest","params":{"body":"AA=="}}"#, 1024), None);
+        // Over the limit: method named without parsing the (here padded) body.
+        let big = format!(r#"{{"id":1,"sessionId":"S1","method":"Fetch.fulfillRequest","params":{{"body":"{}"}}}}"#, "A".repeat(2048));
+        let info = oversized_info(&big, 1024).unwrap();
+        assert!(info.starts_with("Fetch.fulfillRequest ("), "{info}");
+        assert!(info.contains(&big.len().to_string()), "{info}");
+        // Responses have no method; the session still names the tab.
+        let response = format!(r#"{{"id":9,"sessionId":"S1","result":{{"body":"{}"}}}}"#, "B".repeat(2048));
+        assert!(oversized_info(&response, 1024).unwrap().starts_with("response/event ("));
+        assert_eq!(session_of(&response).as_deref(), Some("S1"));
+        // Session → tab resolution, including page connections.
+        let mut t = Tracker::default();
+        t.event(&attach("S1", "T1", "page", None));
+        assert_eq!(t.tab_for_session("S1").as_deref(), Some("T1"));
     }
 
     #[test]
