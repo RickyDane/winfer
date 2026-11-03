@@ -504,6 +504,9 @@ pub fn install_panic_hook(log_dir: PathBuf) {
         return;
     }
     let default = std::panic::take_hook();
+    // The closure owns its copy; `log_dir` itself goes to the Windows
+    // native-crash handler below.
+    let hook_dir = log_dir.clone();
     std::panic::set_hook(Box::new(move |info| {
         let location = info
             .location()
@@ -523,9 +526,9 @@ pub fn install_panic_hook(log_dir: PathBuf) {
         // If diagnostics were never initialised (e.g. `winfer code`), fall
         // back to the pre-diagnostics location so nothing is lost.
         if state().is_none() {
-            let _ = std::fs::create_dir_all(&log_dir);
+            let _ = std::fs::create_dir_all(&hook_dir);
             let entry = format!("[{}] {}: {info}\n{}\n\n", now_ms() / 1000, system_summary(), std::backtrace::Backtrace::force_capture());
-            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(log_dir.join("crash.log")) {
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(hook_dir.join("crash.log")) {
                 let _ = file.write_all(entry.as_bytes());
             }
         } else {
