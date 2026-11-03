@@ -847,7 +847,11 @@ pub async fn worktree_create(
 
 #[tauri::command]
 pub async fn worktree_diff(info: WorktreeInfo) -> Result<WorktreeDiff, String> {
-    blocking(move || diff(&info)).await
+    let result = blocking(move || diff(&info)).await;
+    if let Ok(done) = &result {
+        crate::diagnostics::log_large_payload("invoke", "worktree_diff", done.diff.len());
+    }
+    result
 }
 
 /// Just the names of the files a worktree changed: for callers that don't need the diff itself.

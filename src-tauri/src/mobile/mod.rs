@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use devices::Device;
 
@@ -95,7 +95,7 @@ impl Mobile {
     }
 
     fn changed(&self) {
-        let _ = self.app.emit("mobile://changed", ());
+        let _ = crate::diagnostics::emit_logged(&self.app, "mobile://changed", ());
     }
 
     /// Writes the devices and config, off the calling thread (the keychain may prompt).
@@ -169,7 +169,7 @@ impl Mobile {
                         Some(json!({"t": "ack", "id": id, "ok": true}))
                     }
                     _ => {
-                        let _ = self.app.emit("mobile://request", json!({"device": device_id, "msg": msg}));
+                        let _ = crate::diagnostics::emit_logged(&self.app, "mobile://request", json!({"device": device_id, "msg": msg}));
                         return;
                     }
                 }
@@ -189,7 +189,7 @@ impl Mobile {
                 });
                 self.send_to(device_id, &welcome);
                 // The webview answers with the panes.
-                let _ = self.app.emit("mobile://request", json!({"device": device_id, "msg": {"t": "panes.get"}}));
+                let _ = crate::diagnostics::emit_logged(&self.app, "mobile://request", json!({"device": device_id, "msg": {"t": "panes.get"}}));
             }
         }
     }

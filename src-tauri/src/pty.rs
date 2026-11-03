@@ -14,7 +14,7 @@ use std::time::Duration;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::env::{login_env, user_shell};
 use crate::providers;
@@ -734,7 +734,7 @@ fn spawn_session(app: &AppHandle, req: SpawnRequest, on_data: Channel) -> Result
             sessions.remove(&pane_id);
         }
         drop(sessions);
-        let _ = exit_app.emit("pty://exit", ExitEvent { pane_id, code, pid });
+        let _ = crate::diagnostics::emit_logged(&exit_app, "pty://exit", ExitEvent { pane_id, code, pid });
     });
 
     // CLIs without a prompt argument get the prompt typed in once they've had time to start.

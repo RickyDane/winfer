@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 use crate::hooks;
 
@@ -173,7 +173,7 @@ pub fn listen_bg(app: AppHandle) {
             }
             let out = if tail.trim().is_empty() || tail == "(no new output)" { String::new() } else { format!(" Last output:\n{tail}") };
             let text = format!("[winfer] Background task {} exited with code {code} after {secs}s.{out}", crate::harness::bg::mention(&id, &name, &cmd));
-            let _ = app.emit("bg://note", json!({ "paneId": owner, "text": text }));
+            let _ = crate::diagnostics::emit_logged(&app, "bg://note", json!({ "paneId": owner, "text": text }));
         }
     });
 }
@@ -189,7 +189,7 @@ pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
     call.id = format!("{:016x}", rand::random::<u64>());
     let (tx, rx) = mpsc::channel();
     pending().lock().unwrap().insert(call.id.clone(), tx);
-    if app.emit("mcp://call", &call).is_err() {
+    if crate::diagnostics::emit_logged(&app, "mcp://call", &call).is_err() {
         pending().lock().unwrap().remove(&call.id);
         return Reply {
             ok: false,

@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 pub struct HookServer {
     pub addr: String,
@@ -315,11 +315,11 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) -> std::io::Result<()> 
     let addr = serve(
         token.clone(),
         move |event| {
-            let _ = status_app.emit("agent://status", event);
+            let _ = crate::diagnostics::emit_logged(&status_app, "agent://status", event);
         },
         move |call| crate::mcp::dispatch(&app, call),
         move |provider, pane_id, body| {
-            let _ = usage_app.emit("usage://report", json!({ "provider": provider, "paneId": pane_id, "report": body }));
+            let _ = crate::diagnostics::emit_logged(&usage_app, "usage://report", json!({ "provider": provider, "paneId": pane_id, "report": body }));
         },
     )?;
     let _ = SERVER.set(HookServer {

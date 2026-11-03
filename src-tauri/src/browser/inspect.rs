@@ -7,7 +7,7 @@ use std::sync::Arc;
 use base64::Engine;
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 use super::cdp::Event;
 use super::{BrowserManager, Instance, Res, instance};
@@ -146,7 +146,8 @@ impl Instance {
                 entries.pop_front();
             }
         }
-        let _ = self.app.emit(
+        let _ = crate::diagnostics::emit_logged(
+            &self.app,
             "browser://console",
             ConsoleEvent {
                 workspace_id: self.workspace_id.clone(),
@@ -210,7 +211,7 @@ impl Instance {
             text: info["text"].as_str().unwrap_or_default().into(),
             screenshot,
         };
-        let _ = self.app.emit("browser://picked", picked);
+        let _ = crate::diagnostics::emit_logged(&self.app, "browser://picked", picked);
         Ok(())
     }
 

@@ -29,7 +29,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 // ---------------------------------------------------------------- levels
 
@@ -422,6 +422,63 @@ pub fn debug(target: &str, message: &str) {
     log(DEBUG, target, message);
 }
 
+// ------------------------------------------------------- payload guardrails
+//
+// The 2026-11-03 crash: after Tauri's custom-protocol IPC failed, invoke
+// replies and events were delivered by evaluating a script with the payload
+// inlined, and WebView2 died converting a ~3 GB script (one 2.75 GiB
+// allocation). Payloads this size must therefore be visible in the log
+// *before* they can do that again, on every transport we control.
+
+/// Replies, events and channel messages larger than this are logged (and
+/// breadcrumbed, so a later crash report names them).
+pub const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+pub fn is_large_payload(bytes: usize) -> bool {
+    bytes > LARGE_PAYLOAD_BYTES
+}
+
+pub fn payload_bytes(body: &tauri::ipc::InvokeResponseBody) -> usize {
+    match body {
+        tauri::ipc::InvokeResponseBody::Json(json) => json.len(),
+        tauri::ipc::InvokeResponseBody::Raw(bytes) => bytes.len(),
+    }
+}
+
+/// Logs (WARN `payload`) and breadcrumbs one oversized payload. Cheap: one
+/// comparison on the hot path, formatting only when over the threshold.
+pub fn log_large_payload(kind: &str, name: &str, bytes: usize) {
+    if is_large_payload(bytes) {
+        warn("payload", &format!("large {kind} payload: {name} is {} bytes (threshold {})", bytes, LARGE_PAYLOAD_BYTES));
+        breadcrumb(format!("large {kind} payload {name} {bytes}B"));
+    }
+}
+
+/// `app.emit` with payload-size logging. Tauri always delivers events by
+/// evaluating a script with the payload inlined, so an oversized event is
+/// exactly the crash shape above; there is no fetch fallback for events.
+pub fn emit_logged<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) -> tauri::Result<()> {
+    if let Ok(bytes) = serde_json::to_vec(&payload) {
+        log_large_payload("event", event, bytes.len());
+    }
+    app.emit(event, payload)
+}
+
+fn is_ipc_fallback(message: &str) -> bool {
+    message.contains("IPC custom protocol failed")
+}
+
+/// Breadcrumbs Tauri's postMessage IPC fallback (once per run). After it
+/// trips, invoke replies are inlined into evaluated scripts, which is how a
+/// merely large reply becomes a fatal one — a crash report must show it.
+fn note_ipc_fallback(message: &str) {
+    static NOTED: AtomicBool = AtomicBool::new(false);
+    if is_ipc_fallback(message) && !NOTED.swap(true, Ordering::SeqCst) {
+        breadcrumb("IPC custom protocol failed; postMessage fallback active (invoke replies are inlined into scripts)");
+        warn("ipc", "custom protocol failed; postMessage fallback active (invoke replies are inlined into scripts)");
+    }
+}
+
 // ---------------------------------------------------------------- crashes
 
 fn system_summary() -> String {
@@ -778,6 +835,7 @@ pub struct FrontendEntry {
 #[tauri::command]
 pub fn diagnostics_frontend_log(entries: Vec<FrontendEntry>) {
     for entry in entries.into_iter().take(100) {
+        note_ipc_fallback(&entry.message);
         log(parse_level(&entry.level), &format!("web/{}", truncate(&entry.target, 64)), &truncate(&entry.message, 4096));
     }
 }
@@ -1006,6 +1064,16 @@ mod tests {
         mark_clean_exit();
         assert!(!previous_run_crashed(&dir.join("logs")));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn large_payload_threshold_is_strictly_over() {
+        assert!(!is_large_payload(LARGE_PAYLOAD_BYTES));
+        assert!(is_large_payload(LARGE_PAYLOAD_BYTES + 1));
+        assert_eq!(payload_bytes(&tauri::ipc::InvokeResponseBody::Json("[1]".into())), 3);
+        assert_eq!(payload_bytes(&tauri::ipc::InvokeResponseBody::Raw(vec![0; 7])), 7);
+        assert!(is_ipc_fallback("IPC custom protocol failed, Tauri will now use the postMessage interface instead"));
+        assert!(!is_ipc_fallback("some other warning"));
     }
 
     #[test]

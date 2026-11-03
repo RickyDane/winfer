@@ -17,7 +17,7 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -188,7 +188,7 @@ pub async fn chatgpt_voice_join(app: AppHandle) -> Result<(), String> {
         while let Some(m) = stream.next().await {
             match m {
                 Ok(Message::Text(t)) => {
-                    let _ = app.emit("chatgpt-voice://event", t.as_str());
+                    let _ = crate::diagnostics::emit_logged(&app, "chatgpt-voice://event", t.as_str());
                 }
                 Ok(Message::Close(frame)) => {
                     reason = frame.map(|f| f.reason.to_string()).filter(|r| !r.is_empty()).unwrap_or(reason);
@@ -202,7 +202,7 @@ pub async fn chatgpt_voice_join(app: AppHandle) -> Result<(), String> {
             }
         }
         *app.state::<ChatgptVoice>().socket.lock().unwrap() = None;
-        let _ = app.emit("chatgpt-voice://closed", reason);
+        let _ = crate::diagnostics::emit_logged(&app, "chatgpt-voice://closed", reason);
     });
     Ok(())
 }

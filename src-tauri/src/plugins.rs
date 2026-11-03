@@ -492,6 +492,27 @@ pub fn plugins_app_exe() -> Result<String, String> {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).map_err(|e| e.to_string())
 }
 
+/// Largest file a plugin may pull into the webview in one piece. The reply
+/// crosses IPC as one buffer (and, if Tauri's postMessage fallback is active,
+/// as one evaluated script several times its size — the 2026-11-03 OOM), so
+/// an uncapped `fs::read` here is a crash with the file's name on it. Same
+/// value as the viewer's byte cap in `files.rs`.
+pub const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Reads a whole file, refusing anything over [`MAX_READ_BYTES`] by metadata
+/// before a byte is read (and re-checking after, in case it grew).
+pub fn read_file_capped(path: &Path) -> Result<Vec<u8>, String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
+    if meta.len() > MAX_READ_BYTES {
+        return Err(format!("{} is too big for a plugin to read in one piece ({} MB, limit {} MB)", path.display(), meta.len() / 1024 / 1024, MAX_READ_BYTES / 1024 / 1024));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
+    if bytes.len() as u64 > MAX_READ_BYTES {
+        return Err(format!("{} is too big for a plugin to read in one piece ({} MB, limit {} MB)", path.display(), bytes.len() / 1024 / 1024, MAX_READ_BYTES / 1024 / 1024));
+    }
+    Ok(bytes)
+}
+
 /// The source of an enabled plugin's `main` module.
 #[tauri::command]
 pub fn plugins_source(id: String) -> Result<String, String> {
@@ -502,7 +523,9 @@ pub fn plugins_source(id: String) -> Result<String, String> {
     }
     let main = plugin.manifest.as_ref().and_then(|m| m.main.as_deref()).ok_or("plugin has no main module")?;
     let path = resolve_inside(Path::new(&plugin.dir), main)?;
-    std::fs::read_to_string(&path).map_err(|e| format!("can't read {}: {e}", path.display()))
+    let bytes = read_file_capped(&path)?;
+    crate::diagnostics::log_large_payload("invoke", "plugins_source", bytes.len());
+    String::from_utf8(bytes).map_err(|e| format!("can't read {}: {e}", path.display()))
 }
 
 /// A file's bytes, for plugins reading big project files (a knowledge graph) without the shell
@@ -515,7 +538,9 @@ pub async fn plugins_read_file(path: String) -> Result<tauri::ipc::Response, Str
         if !path.is_absolute() {
             return Err(format!("{} isn't an absolute path", path.display()));
         }
-        std::fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| format!("can't read {}: {e}", path.display()))
+        let bytes = read_file_capped(&path)?;
+        crate::diagnostics::log_large_payload("invoke", "plugins_read_file", bytes.len());
+        Ok(tauri::ipc::Response::new(bytes))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -691,6 +716,20 @@ mod tests {
         assert_eq!(scan(&root, &BTreeSet::new())[0].store_version.as_deref(), Some("0.9"));
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
         assert!(install(&root, &local_store("store-ok", "1"), "missing").unwrap_err().contains("isn't in the plugin store"));
+    }
+
+    #[test]
+    fn read_file_capped_reads_small_and_refuses_huge() {
+        let root = temp_dir("read-capped");
+        let small = root.join("small.bin");
+        std::fs::write(&small, b"hello").unwrap();
+        assert_eq!(read_file_capped(&small).unwrap(), b"hello");
+        // Sparse file: over the cap by metadata alone, no real bytes written.
+        let huge = root.join("huge.bin");
+        std::fs::File::create(&huge).unwrap().set_len(MAX_READ_BYTES + 1).unwrap();
+        let err = read_file_capped(&huge).unwrap_err();
+        assert!(err.contains("too big"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

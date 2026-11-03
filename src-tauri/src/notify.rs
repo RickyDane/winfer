@@ -6,7 +6,7 @@
 //! `notify-send` on Linux.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +33,8 @@ pub fn notify_action(app: AppHandle, notification: ActionNotification) -> Result
     // Waiting for the click blocks, so every notification gets its own thread.
     std::thread::spawn(move || {
         if let Some((action, text)) = show(&app, &notification) {
-            let _ = app.emit(
+            let _ = crate::diagnostics::emit_logged(
+                &app,
                 "notification://action",
                 ActionEvent {
                     pane_id: notification.pane_id.clone(),

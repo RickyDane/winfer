@@ -12,7 +12,7 @@
 //! `window.open` coordinates aren't reliable), so it reopens where it was, say on another screen.
 
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder};
 
 /// Undocked browser windows are labelled `browser-<n>`: a fresh label each time, so an old one
 /// still closing (or left over from a reload of the main window) never blocks a new one.
@@ -100,7 +100,7 @@ fn open_browser_window(app: &AppHandle, url: tauri::Url, features: tauri::webvie
             if current.as_deref() == Some(label.as_str()) {
                 *current = None;
                 // Closed by its own close button (or docked): the panel goes back to the side.
-                let _ = handle.emit("browser://undocked-closed", ());
+                let _ = crate::diagnostics::emit_logged(&handle, "browser://undocked-closed", ());
             }
         }
         _ => {}

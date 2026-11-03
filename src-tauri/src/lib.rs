@@ -125,6 +125,13 @@ pub fn run() {
             undock::create_main_window(app.handle())?;
             Ok(())
         })
+        // Channel messages (PTY output, code-pane streams, screencasts) are
+        // the one high-volume transport we cannot size at each call site, so
+        // oversized ones are named here instead. Never consumes the message.
+        .channel_interceptor(|_webview, callback, _index, body| {
+            crate::diagnostics::log_large_payload("channel", &format!("callback {}", callback.0), crate::diagnostics::payload_bytes(body));
+            false
+        })
         .invoke_handler(tauri::generate_handler![
             app_updates::app_update_check,
             providers::providers_list,

@@ -18,7 +18,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::OnceCell;
 
 use cdp::{Cdp, Event};
@@ -252,7 +252,8 @@ impl Drop for Instance {
 impl Instance {
     fn emit_tabs(&self) {
         let tabs = self.tabs.lock().unwrap().clone();
-        let _ = self.app.emit(
+        let _ = crate::diagnostics::emit_logged(
+            &self.app,
             "browser://tabs",
             TabsEvent {
                 workspace_id: self.workspace_id.clone(),
@@ -353,7 +354,7 @@ impl Instance {
                 let instance = self.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(err) = instance.clone().finish_pick(session, node).await {
-                        let _ = instance.app.emit("browser://pick-error", err);
+                        let _ = crate::diagnostics::emit_logged(&instance.app, "browser://pick-error", err);
                     }
                 });
             }
@@ -468,7 +469,8 @@ impl Instance {
             proxy::Activity::Acted(target) => target,
             // Not throttled: each navigation brings its tab on screen.
             proxy::Activity::Navigated(target) => {
-                let _ = self.app.emit(
+                let _ = crate::diagnostics::emit_logged(
+                    &self.app,
                     "browser://agent-navigate",
                     AgentEvent {
                         workspace_id: self.workspace_id.clone(),
@@ -481,7 +483,8 @@ impl Instance {
             // Not throttled: the cursor follows every move and click.
             proxy::Activity::Pointer(target, pointer) => {
                 if self.tabs.lock().unwrap().iter().any(|t| t.id == target) {
-                    let _ = self.app.emit(
+                    let _ = crate::diagnostics::emit_logged(
+                        &self.app,
                         "browser://agent-pointer",
                         PointerEvent {
                             workspace_id: self.workspace_id.clone(),
@@ -505,7 +508,8 @@ impl Instance {
             }
             seen.insert(target.to_string(), now);
         }
-        let _ = self.app.emit(
+        let _ = crate::diagnostics::emit_logged(
+            &self.app,
             "browser://agent",
             AgentEvent {
                 workspace_id: self.workspace_id.clone(),
@@ -525,7 +529,8 @@ impl Instance {
             FrameAction::None => {}
             FrameAction::Adopt(width, height) => {
                 let _ = apply_viewport(&cdp, &target, &session, &v).await;
-                let _ = self.app.emit(
+                let _ = crate::diagnostics::emit_logged(
+                    &self.app,
                     "browser://viewport",
                     ViewportEvent {
                         workspace_id: self.workspace_id.clone(),
@@ -593,7 +598,7 @@ impl Instance {
             watched.closed().await;
             if let Some(instance) = weak.upgrade() {
                 log::warning!("[{}] browser connection lost", instance.workspace_id);
-                let _ = instance.app.emit("browser://disconnected", instance.workspace_id.clone());
+                let _ = crate::diagnostics::emit_logged(&instance.app, "browser://disconnected", instance.workspace_id.clone());
             }
         });
         Ok(cdp)
@@ -795,7 +800,7 @@ impl Instance {
                 return;
             }
             log::warning!("[{}] screencast of tab {} lost its session, showing it again", instance.workspace_id, short(&sc.target_id));
-            let _ = instance.app.emit("browser://disconnected", instance.workspace_id.clone());
+            let _ = crate::diagnostics::emit_logged(&instance.app, "browser://disconnected", instance.workspace_id.clone());
         });
     }
 }
