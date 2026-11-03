@@ -68,10 +68,12 @@ pub fn run_hook(args: &[String]) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // File log + crash log + memory sampler, before anything can crash.
-    // `setup` re-inits with Tauri's resolved data dir (idempotent).
-    if let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app")) {
-        diagnostics::init(&dir);
+    // Crash hooks before anything can crash. The full file log waits for
+    // `setup`: only Tauri knows the real identifier (a `.dev` build has its
+    // own data dir), and initialising here would lock logging to the
+    // production folder.
+    if let Some(dir) = dirs::data_dir().map(|d| d.join("dev.winfer.app").join("logs")) {
+        diagnostics::install_panic_hook(dir);
     }
     // Resolve the login-shell environment off the main thread so the first spawn is fast.
     std::thread::spawn(|| {
