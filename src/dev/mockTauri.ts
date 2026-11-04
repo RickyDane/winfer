@@ -543,6 +543,14 @@ mockIPC(
             ],
           };
         }
+        if (a.account === "claude:account-3") {
+          return {
+            provider: "claude", at: Date.now(), windows: [
+              { kind: "session", label: "5-hour", usedPercent: 55, resetsAt: RESETS.claude.session + 90 * 60_000 },
+              { kind: "week", label: "Weekly", usedPercent: 88, resetsAt: RESETS.claude.week + 4 * 86400_000 },
+            ],
+          };
+        }
         return {
           provider: "claude", at: Date.now(), windows: [
             { kind: "session", label: "5-hour", usedPercent: 100, resetsAt: RESETS.claude.session },
@@ -553,10 +561,20 @@ mockIPC(
         return [
           { id: "claude:default", provider: "claude", label: "Default", enabled: true, dir: "~/.claude", signedIn: true, exhaustedUntil: RESETS.claude.session },
           { id: "claude:account-2", provider: "claude", label: "Account 2", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-2", signedIn: true, exhaustedUntil: null },
+          { id: "claude:account-3", provider: "claude", label: "Account 3", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-3", signedIn: true, exhaustedUntil: null },
           { id: "codex:default", provider: "codex", label: "Default", enabled: true, dir: "~/.codex", signedIn: true, exhaustedUntil: null },
+          { id: "codex:account-2", provider: "codex", label: "Work", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/codex/account-2", signedIn: true, exhaustedUntil: null },
         ];
       case "usage_codex": {
         const now = Date.now();
+        if (a.account === "codex:account-2") {
+          return {
+            provider: "codex", at: now, windows: [
+              { kind: "session", label: "5-hour", usedPercent: 34, resetsAt: RESETS.codex.session + 2 * 3600_000 },
+              { kind: "week", label: "Weekly", usedPercent: 47, resetsAt: RESETS.codex.week + 86400_000 },
+            ],
+          };
+        }
         const used = mockCodexReset ? 0 : 1;
         return {
           provider: "codex",

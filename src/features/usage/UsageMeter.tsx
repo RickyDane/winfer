@@ -3,21 +3,16 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { PROVIDER_COLORS } from "@/features/providers/providers";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
 import { accountLabel, useAccounts } from "@/features/accounts/accounts";
-import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, pooled, pooledRunsOutAt, pooledSamples, poolMembers, refreshUsage, resetOutcomeText, tightest, tokens, useUsage, when, type ContextPart, type PoolMember, type ResetCredit, type Snapshot, type UsageWindow } from "./usage";
+import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, pooled, pooledRunsOutAt, pooledSamples, poolMembers, refreshUsage, resetOutcomeText, runsOutAt, tightest, tokens, useUsage, when, type ContextPart, type PoolMember, type ResetCredit, type Snapshot, type UsageWindow } from "./usage";
 import { PART_COLORS } from "./contextParts";
 import { UsageSummary } from "./UsageHistory";
 
-/** Ring that drains as the limit is used up, with the provider's icon inside. */
-export function UsageRing({ provider, size = 22, className }: { provider: string; size?: number; className?: string }) {
-  const accounts = useAccounts((s) => s.list);
-  const snapshots = useUsage((s) => s.snapshots);
-  const snapshot = pooled(provider, snapshots, accounts);
-  const window = tightest(snapshot);
-  if (!window) return <ProviderIcon provider={provider} size={Math.round(size * 0.6)} />;
-  const left = leftNow(window);
+/** Ring that drains as a limit is used up; `left` is the percent remaining. */
+export function LimitRing({ left, size = 22, className, children }: { left: number; size?: number; className?: string; children?: React.ReactNode }) {
   const stroke = Math.max(2, size / 9);
   const r = (size - stroke) / 2;
   const circumference = 2 * Math.PI * r;
@@ -38,8 +33,56 @@ export function UsageRing({ provider, size = 22, className }: { provider: string
           className="transition-[stroke-dashoffset,stroke] duration-700 ease-out"
         />
       </svg>
-      <ProviderIcon provider={provider} size={Math.round(size * 0.45)} />
+      {children}
     </span>
+  );
+}
+
+/** Ring that drains as the limit is used up, with the provider's icon inside. */
+export function UsageRing({ provider, size = 22, className }: { provider: string; size?: number; className?: string }) {
+  const accounts = useAccounts((s) => s.list);
+  const snapshots = useUsage((s) => s.snapshots);
+  const snapshot = pooled(provider, snapshots, accounts);
+  const window = tightest(snapshot);
+  if (!window) return <ProviderIcon provider={provider} size={Math.round(size * 0.6)} />;
+  return (
+    <LimitRing left={leftNow(window)} size={size} className={className}>
+      <ProviderIcon provider={provider} size={Math.round(size * 0.45)} />
+    </LimitRing>
+  );
+}
+
+/** One account's own ring: its tightest window, with the percent left inside. */
+function AccountRing({ snapshot, size = 30 }: { snapshot: Snapshot; size?: number }) {
+  const window = tightest(snapshot);
+  if (!window) return null;
+  const left = leftNow(window);
+  return (
+    <LimitRing left={left} size={size}>
+      <span className="font-mono text-[8px] font-medium text-fg" title={`${window.label}: ${Math.round(left)}% left`}>
+        {Math.round(left)}%
+      </span>
+    </LimitRing>
+  );
+}
+
+/** One window of one account on a single line: label, bar, % left, and reset (run-out in the tooltip / warning suffix). */
+function AccountWindowRow({ memberKey, window: w, samples }: { memberKey: string; window: UsageWindow; samples: Record<string, [number, number][]> }) {
+  const left = leftNow(w);
+  const outAt = runsOutAt(memberKey, w, samples);
+  const reset = w.resetsAt ? (w.resetsAt > Date.now() ? `resets ${when(w.resetsAt)}` : "reset — full again") : null;
+  const title = [reset, outAt && `at this pace runs out ${when(outAt)}`].filter(Boolean).join(" · ");
+  return (
+    <div className="flex items-center gap-1.5 text-[11px]" title={title || undefined}>
+      <span className="w-11 shrink-0 truncate text-fg-muted">{w.label}</span>
+      <span className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-hover">
+        <span className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out" style={{ width: `${left}%`, background: levelColor(left) }} />
+      </span>
+      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-fg">{Math.round(left)}%</span>
+      <span className={cn("w-[104px] shrink-0 truncate text-right text-[10px]", outAt ? "text-warning" : "text-fg-subtle")}>
+        {outAt ? `out ${when(outAt)}` : reset ?? ""}
+      </span>
+    </div>
   );
 }
 
@@ -256,7 +299,7 @@ function CodexResets({ count }: { count: number }) {
   );
 }
 
-const CARD = "w-[360px] space-y-4 rounded-lg border border-border-strong bg-panel-raised p-4 shadow-xl";
+const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl";
 
 /** Every agent's limits (its accounts pooled) as bars or lines, plus OpenCode's spend today.
  *  `accounts` adds what each account has left under its agent. */
@@ -309,7 +352,7 @@ export function Limits({ chart = "bars", refresh = true, accounts: showAccounts 
                 samples={pooledSamples(s.provider, w.kind, snapshots, accounts, samples)}
               />
             ))}
-            {showAccounts && members.length > 1 && <AccountBreakdown members={members} />}
+            {showAccounts && members.length > 1 && <AccountBreakdown members={members} samples={samples} provider={s.provider} providerLabel={providerName(providers, s.provider)} />}
             {s.provider === "codex" && <CodexResets count={snapshots.codex?.resetCredits ?? 0} />}
           </section>
         );
@@ -334,32 +377,57 @@ export function Limits({ chart = "bars", refresh = true, accounts: showAccounts 
 /** "5-hour 78% · Weekly 98% left": what each window has left, in order. */
 const accountLeft = (s: Snapshot) => s.windows.map((w) => `${w.label} ${Math.round(leftNow(w))}%`).join(" · ") + " left";
 
-/** What each of an agent's accounts has left; the pooled bars above are their average. */
-function AccountBreakdown({ members }: { members: PoolMember[] }) {
+/** Each account on its own: its ring (tightest window) plus every window's bar and reset time.
+ *  The pooled bars above are the average of these accounts. */
+function AccountBreakdown({ members, samples, provider, providerLabel }: { members: PoolMember[]; samples: Record<string, [number, number][]>; provider: string; providerLabel: string }) {
+  const color = PROVIDER_COLORS[provider] ?? "var(--color-fg-muted)";
   return (
-    <div className="space-y-1 rounded-md border border-border bg-hover/40 p-2 text-[11px]">
-      <div className="text-fg-subtle">Each account counts as 100%; the bars above are their average.</div>
-      {members.map((m) => {
-        const w = m.snapshot ? tightest(m.snapshot) : null;
-        const left = w ? leftNow(w) : null;
-        return (
-          <div key={m.id} className={cn("flex items-center gap-2", !m.counted && "opacity-50")}>
-            <span className="min-w-0 flex-1 truncate text-fg-muted">
-              {m.label}
-              {!m.counted && " (not counted: disabled or signed out)"}
+    <div className="border-t border-border pt-2">
+      <div className="flex items-baseline justify-between gap-2 pb-0.5">
+        <span className="flex items-center gap-1.5 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">
+          <ProviderIcon provider={provider} size={10} />
+          <span>
+            Per account · <span style={{ color }}>{providerLabel}</span>
+          </span>
+        </span>
+        <span className="text-[10px] text-fg-subtle">above = average</span>
+      </div>
+      {members.map((m, i) => (
+        <div key={m.id} className={cn("py-1.5", i > 0 && "border-t border-border/50", !m.counted && "opacity-60")}>
+          <div className="flex items-center gap-2">
+            <span className="relative shrink-0" title={`${providerLabel} · ${m.label}`}>
+              {m.snapshot?.windows.length ? (
+                <AccountRing snapshot={m.snapshot} />
+              ) : (
+                <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong font-mono text-[8px] text-fg-subtle">—</span>
+              )}
+              <span className="absolute -right-1 -bottom-1 flex rounded-full bg-panel-raised p-[2px] shadow-sm ring-1 ring-border-strong">
+                <ProviderIcon provider={provider} size={8} />
+              </span>
             </span>
-            {m.snapshot?.windows.length ? (
-              m.snapshot.windows.map((x) => (
-                <span key={x.kind} className="font-mono text-fg" title={x.resetsAt ? `${x.label}: resets ${when(x.resetsAt)}` : x.label}>
-                  {x.label} <span style={{ color: x === w && left !== null && left < 30 ? levelColor(left) : undefined }}>{Math.round(leftNow(x))}%</span>
-                </span>
-              ))
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
+              <span style={{ color }}>{providerLabel}</span>
+              <span className="font-normal text-fg-subtle"> · </span>
+              {m.label}
+              {!m.counted && <span className="ml-1.5 text-[10px] font-normal text-fg-subtle">not counted</span>}
+            </span>
+            {m.snapshot ? (
+              <span className={cn("shrink-0 text-[10px]", Date.now() - m.snapshot.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(m.snapshot.at).toLocaleString()}>
+                {Date.now() - m.snapshot.at < 120_000 ? "just now" : `${duration(Date.now() - m.snapshot.at)} ago`}
+              </span>
             ) : (
-              <span className="text-fg-subtle">no reading yet</span>
+              <span className="shrink-0 text-[10px] text-fg-subtle">no reading</span>
             )}
           </div>
-        );
-      })}
+          {m.snapshot?.windows.length ? (
+            <div className="mt-1 space-y-1 pl-[38px]">
+              {m.snapshot.windows.map((w) => <AccountWindowRow key={w.kind} memberKey={m.key} window={w} samples={samples} />)}
+            </div>
+          ) : (
+            <p className="mt-0.5 pl-[38px] text-[10px] text-fg-subtle">Refresh to check this account.</p>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -385,7 +453,7 @@ export function UsageDetails({ className }: { className?: string }) {
         <Heading>Usage limits</Heading>
         <RefreshUsageButton />
       </div>
-      <Limits refresh={false} />
+      <Limits refresh={false} accounts />
     </div>
   );
 }
@@ -490,7 +558,7 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
                 <UsageSummary />
               </PreviewSection>
               <PreviewSection title="Limits" onOpen={() => openTab("limits")} className="border-t border-border pt-3">
-                <Limits />
+                <Limits accounts />
               </PreviewSection>
             </div>
           </div>,
