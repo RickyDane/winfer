@@ -1,5 +1,5 @@
-import { ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -300,9 +300,10 @@ function CodexResets({ count }: { count: number }) {
 const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl";
 
 /** Every agent's limits (its accounts pooled) as bars or lines.
- *  `accounts` adds what each account has left under its agent; `spend` adds OpenCode's
+ *  `accounts` adds what each account has left under its agent (collapsed behind a toggle
+ *  when `accountsCollapsed` is set, as in the popups); `spend` adds OpenCode's
  *  spend today (Settings only — the title bar popup shows limits only). */
-export function Limits({ chart = "bars", refresh = true, accounts: showAccounts = false, spend: showSpend = true }: { chart?: ChartKind; refresh?: boolean; accounts?: boolean; spend?: boolean }) {
+export function Limits({ chart = "bars", refresh = true, accounts: showAccounts = false, accountsCollapsed = false, spend: showSpend = true }: { chart?: ChartKind; refresh?: boolean; accounts?: boolean; accountsCollapsed?: boolean; spend?: boolean }) {
   const snapshots = useUsage((s) => s.snapshots);
   const samples = useUsage((s) => s.samples);
   const opencode = useUsage((s) => s.opencode);
@@ -353,7 +354,7 @@ export function Limits({ chart = "bars", refresh = true, accounts: showAccounts 
                 samples={pooledSamples(s.provider, w.kind, snapshots, accounts, samples)}
               />
             ))}
-            {showAccounts && members.length > 1 && <AccountBreakdown members={members} samples={samples} provider={s.provider} providerLabel={providerName(providers, s.provider)} />}
+            {showAccounts && members.length > 1 && <AccountBreakdown members={members} samples={samples} provider={s.provider} providerLabel={providerName(providers, s.provider)} startCollapsed={accountsCollapsed} />}
             {s.provider === "codex" && <CodexResets count={snapshots.codex?.resetCredits ?? 0} />}
           </section>
         );
@@ -379,56 +380,77 @@ export function Limits({ chart = "bars", refresh = true, accounts: showAccounts 
 const accountLeft = (s: Snapshot) => s.windows.map((w) => `${w.label} ${Math.round(leftNow(w))}%`).join(" · ") + " left";
 
 /** Each account on its own: its ring (tightest window) plus every window's bar and reset time.
- *  The pooled bars above are the average of these accounts. */
-function AccountBreakdown({ members, samples, provider, providerLabel }: { members: PoolMember[]; samples: Record<string, [number, number][]>; provider: string; providerLabel: string }) {
+ *  The pooled bars above are the average of these accounts. Behind a toggle under its
+ *  provider's pooled bars; `startCollapsed` (the popups) hides the accounts until it's opened. */
+export function AccountBreakdown({ members, samples, provider, providerLabel, startCollapsed = false }: { members: PoolMember[]; samples: Record<string, [number, number][]>; provider: string; providerLabel: string; startCollapsed?: boolean }) {
   const color = PROVIDER_COLORS[provider] ?? "var(--color-fg-muted)";
+  const [open, setOpen] = useState(!startCollapsed);
+  const bodyId = useId();
   return (
     <div className="border-t border-border pt-2">
-      <div className="flex items-baseline justify-between gap-2 pb-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={bodyId}
+        className="flex w-full items-center justify-between gap-2 pb-0.5 text-left"
+        title={open ? `Hide ${providerLabel} accounts` : `Show ${providerLabel} accounts`}
+      >
         <span className="flex items-center gap-1.5 text-[10px] font-medium tracking-wide text-fg-subtle uppercase">
           <ProviderIcon provider={provider} size={10} />
           <span>
             Per account · <span style={{ color }}>{providerLabel}</span>
           </span>
         </span>
-        <span className="text-[10px] text-fg-subtle">above = average</span>
-      </div>
-      {members.map((m, i) => (
-        <div key={m.id} className={cn("py-1.5", i > 0 && "border-t border-border/50", !m.counted && "opacity-60")}>
-          <div className="flex items-center gap-2">
-            <span className="relative shrink-0" title={`${providerLabel} · ${m.label}`}>
-              {m.snapshot?.windows.length ? (
-                <AccountRing snapshot={m.snapshot} />
-              ) : (
-                <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong font-mono text-[8px] text-fg-subtle">—</span>
-              )}
-              <span className="absolute -right-1 -bottom-1 flex rounded-full bg-panel-raised p-[2px] shadow-sm ring-1 ring-border-strong">
-                <ProviderIcon provider={provider} size={8} />
-              </span>
-            </span>
-            <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
-              <span style={{ color }}>{providerLabel}</span>
-              <span className="font-normal text-fg-subtle"> · </span>
-              {m.label}
-              {!m.counted && <span className="ml-1.5 text-[10px] font-normal text-fg-subtle">not counted</span>}
-            </span>
-            {m.snapshot ? (
-              <span className={cn("shrink-0 text-[10px]", Date.now() - m.snapshot.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(m.snapshot.at).toLocaleString()}>
-                {Date.now() - m.snapshot.at < 120_000 ? "just now" : `${duration(Date.now() - m.snapshot.at)} ago`}
-              </span>
-            ) : (
-              <span className="shrink-0 text-[10px] text-fg-subtle">no reading</span>
-            )}
-          </div>
-          {m.snapshot?.windows.length ? (
-            <div className="mt-1 space-y-1 pl-[38px]">
-              {m.snapshot.windows.map((w) => <AccountWindowRow key={w.kind} memberKey={m.key} window={w} samples={samples} />)}
-            </div>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {open ? (
+            <span className="text-[10px] font-normal tracking-normal text-fg-subtle normal-case">above = average</span>
           ) : (
-            <p className="mt-0.5 pl-[38px] text-[10px] text-fg-subtle">Refresh to check this account.</p>
+            <span className="text-[10px] font-normal tracking-normal text-fg-subtle normal-case">{members.length} accounts</span>
           )}
+          <ChevronDown size={12} className={cn("text-fg-subtle transition-transform duration-200", open && "rotate-180")} />
+        </span>
+      </button>
+      {open && (
+        <div id={bodyId}>
+          {members.map((m, i) => (
+            <div key={m.id} className={cn("py-1.5", i > 0 && "border-t border-border/50", !m.counted && "opacity-60")}>
+            <div className="flex items-center gap-2">
+              <span className="relative shrink-0" title={`${providerLabel} · ${m.label}`}>
+                {m.snapshot?.windows.length ? (
+                  <AccountRing snapshot={m.snapshot} />
+                ) : (
+                  <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong font-mono text-[8px] text-fg-subtle">—</span>
+                )}
+                <span className="absolute -right-1 -bottom-1 flex rounded-full bg-panel-raised p-[2px] shadow-sm ring-1 ring-border-strong">
+                  <ProviderIcon provider={provider} size={8} />
+                </span>
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
+                <span style={{ color }}>{providerLabel}</span>
+                <span className="font-normal text-fg-subtle"> · </span>
+                {m.label}
+                {!m.counted && <span className="ml-1.5 text-[10px] font-normal text-fg-subtle">not counted</span>}
+              </span>
+              {m.snapshot ? (
+                <span className={cn("shrink-0 text-[10px]", Date.now() - m.snapshot.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(m.snapshot.at).toLocaleString()}>
+                  {Date.now() - m.snapshot.at < 120_000 ? "just now" : `${duration(Date.now() - m.snapshot.at)} ago`}
+                </span>
+              ) : (
+                <span className="shrink-0 text-[10px] text-fg-subtle">no reading</span>
+              )}
+            </div>
+            {m.snapshot?.windows.length ? (
+              <div className="mt-1 space-y-1 pl-[38px]">
+                {m.snapshot.windows.map((w) => <AccountWindowRow key={w.kind} memberKey={m.key} window={w} samples={samples} />)}
+              </div>
+            ) : (
+              <p className="mt-0.5 pl-[38px] text-[10px] text-fg-subtle">Refresh to check this account.</p>
+            )}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -454,7 +476,7 @@ export function UsageDetails({ className }: { className?: string }) {
         <Heading>Usage limits</Heading>
         <RefreshUsageButton />
       </div>
-      <Limits refresh={false} accounts spend={false} />
+      <Limits refresh={false} accounts accountsCollapsed spend={false} />
     </div>
   );
 }
@@ -559,7 +581,7 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
                 <UsageSummary />
               </PreviewSection>
               <PreviewSection title="Limits" onOpen={() => openTab("limits")} className="border-t border-border pt-3">
-                <Limits accounts spend={false} />
+                <Limits accounts accountsCollapsed spend={false} />
               </PreviewSection>
             </div>
           </div>,
