@@ -2,7 +2,17 @@
 import type { StoreApi } from "zustand";
 import type { CodeState, Item } from "./store";
 import { setPlanSidebar, usePlanSidebar } from "./planSidebar";
-import { INIT_PROMPT, MODES, REVIEW_PROMPT, type Mode } from "./protocol";
+import { COMMANDS, INIT_PROMPT, MODES, REVIEW_PROMPT, type Mode } from "./protocol";
+
+/** `/name args` → the skill call, when `name` is a known skill and not a built-in command (those win). */
+export function skillCall(text: string, skills: string[]): { name: string; args: string } | null {
+  const t = text.trim();
+  if (!t.startsWith("/") || t.startsWith("//")) return null;
+  const [head, ...rest] = t.split(/\s+/);
+  const name = head.slice(1);
+  if (!name || COMMANDS.some(([c]) => c.slice(1) === name) || !skills.includes(name)) return null;
+  return { name, args: rest.join(" ") };
+}
 
 let seq = 0;
 

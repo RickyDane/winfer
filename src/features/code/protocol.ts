@@ -139,8 +139,8 @@ export interface ModelInfo {
 }
 
 export type Cmd =
-  | { type: "send"; text: string; images?: ImageData[] }
-  | { type: "steer"; text: string; images?: ImageData[] }
+  | { type: "send"; text: string; images?: ImageData[]; skill?: string }
+  | { type: "steer"; text: string; images?: ImageData[]; skill?: string }
   | { type: "interrupt" }
   | { type: "approve"; id: string; decision: Decision }
   | { type: "answer"; id: string; answers: string[] }

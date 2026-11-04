@@ -3,6 +3,10 @@ import type { Pane, WorktreeInfo } from "@/stores/workspaces";
 
 export interface WorktreeDiff {
   diff: string;
+  /** Byte length of the full diff before the backend cap (`diffTruncated`). */
+  diffBytes: number;
+  /** Whether `diff` holds only the first bytes of a very large diff. */
+  diffTruncated: boolean;
   untracked: string[];
   /** Lines in the untracked text files. */
   untrackedLines: number;

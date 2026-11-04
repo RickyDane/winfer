@@ -724,7 +724,7 @@ mockIPC(
             ]
           : [];
       case "worktree_diff":
-        return { diff: SAMPLE_DIFF, untracked: ["test/subscription.e2e-spec.ts"], untrackedLines: 42, ahead: 2, dirty: false };
+        return { diff: SAMPLE_DIFF, diffBytes: SAMPLE_DIFF.length, diffTruncated: false, untracked: ["test/subscription.e2e-spec.ts"], untrackedLines: 42, ahead: 2, dirty: false };
       case "worktree_changed_files":
         return [...(SAMPLE_DIFF.match(/^diff --git a\/.+ b\/(.+)$/gm) ?? []).map((l) => l.replace(/^.* b\//, "")), "test/subscription.e2e-spec.ts"];
       case "worktree_merge":

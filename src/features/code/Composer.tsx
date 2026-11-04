@@ -3,7 +3,7 @@ import { ArrowUp, MessageCircleQuestion, ShieldCheck, Square, X } from "lucide-r
 import clsx from "clsx";
 import { useContext } from "react";
 import { CodeStoreContext, useCode } from "./store";
-import { runCommand } from "./commands";
+import { runCommand, skillCall } from "./commands";
 import { fmt, useRate } from "./Sheets";
 import { useCodeWeb } from "./styles";
 import { COMMANDS, MODES, type Approval } from "./protocol";
@@ -191,10 +191,14 @@ export function Composer({ focused }: { focused: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
 
-  const cmds = useMemo(
-    () => (text.startsWith("/") && !text.includes(" ") ? COMMANDS.filter(([c]) => c.startsWith(text)) : []),
-    [text],
-  );
+  const skills = useCode((s) => s.skills);
+  const cmds = useMemo(() => {
+    if (!text.startsWith("/") || text.includes(" ")) return [];
+    const skillCmds: [string, string][] = skills
+      .filter((n) => !COMMANDS.some(([c]) => c === `/${n}`))
+      .map((n): [string, string] => [`/${n}`, "skill"]);
+    return [...COMMANDS, ...skillCmds].filter(([c]) => c.startsWith(text));
+  }, [text, skills]);
 
   // `@` file mentions: the word under the caret, ranked against the session's file list.
   const [caret, setCaret] = useState(0);
@@ -284,7 +288,9 @@ export function Composer({ focused }: { focused: boolean }) {
   }, []);
 
   const go = () => {
-    if (attachments.length || !runCommand(text, store)) submit(text, attachments);
+    const call = skillCall(text, skills);
+    if (call) submit(call.args, attachments, call.name);
+    else if (attachments.length || !runCommand(text, store)) submit(text, attachments);
     setText("");
     setAttachments(() => []);
   };

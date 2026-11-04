@@ -75,6 +75,25 @@ fn status_for(provider: &str, event: &str) -> Option<&'static str> {
     }
 }
 
+/// Largest final reply shipped in an `agent://status` event. Consumers cut
+/// it far below this (the phone shows 4 000 chars); an uncapped reply is
+/// another oversized payload into the webview on every turn end.
+pub const MAX_REPLY_BYTES: usize = 32 * 1024;
+
+/// Cuts a reply to [`MAX_REPLY_BYTES`] on a char boundary.
+pub fn cap_reply(mut reply: String) -> String {
+    if reply.len() <= MAX_REPLY_BYTES {
+        return reply;
+    }
+    let mut end = MAX_REPLY_BYTES;
+    while end > 0 && !reply.is_char_boundary(end) {
+        end -= 1;
+    }
+    reply.truncate(end);
+    reply.push('…');
+    reply
+}
+
 /// Claude Code's `Notification` hook also fires as a reminder once the agent has sat idle
 /// after finishing a turn ("Claude is waiting for your input"), and after logging in. Neither
 /// is a request: the pane keeps its "done" status instead of turning into "needs input".
@@ -93,19 +112,26 @@ fn is_reminder(provider: &str, event: &str, json: Option<&Value>) -> bool {
 /// The agent's last reply from a turn-complete event: Claude Code's `last_assistant_message`
 /// (else the last assistant text in its transcript), Codex's `last-assistant-message`.
 fn last_reply(json: &Value) -> Option<String> {
+    reply_from_fields(json)
+        .or_else(|| transcript_reply(json.get("transcript_path")?.as_str()?))
+}
+
+/// The reply carried by the event itself, without reading any transcript.
+fn reply_from_fields(json: &Value) -> Option<String> {
     let text = |key: &str| {
         let text = json.get(key)?.as_str()?.trim();
         (!text.is_empty()).then(|| text.to_string())
     };
-    text("last_assistant_message")
-        .or_else(|| text("last-assistant-message"))
-        .or_else(|| transcript_reply(json.get("transcript_path")?.as_str()?))
+    text("last_assistant_message").or_else(|| text("last-assistant-message"))
 }
 
 /// The text of the last assistant message in a Claude Code transcript (JSONL), from the
 /// current turn only: the search stops at the user's prompt.
 fn transcript_reply(path: &str) -> Option<String> {
-    let file = std::fs::read_to_string(path).ok()?;
+    transcript_reply_str(&std::fs::read_to_string(path).ok()?)
+}
+
+fn transcript_reply_str(file: &str) -> Option<String> {
     for entry in file.lines().rev().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
         let content = &entry["message"]["content"];
         let texts = || {
@@ -143,6 +169,10 @@ fn background_pending(path: &str) -> bool {
     let Ok(file) = std::fs::read_to_string(path) else {
         return false;
     };
+    background_pending_str(&file)
+}
+
+fn background_pending_str(file: &str) -> bool {
     let cutoff = iso_utc(std::time::SystemTime::now(), BACKGROUND_MAX_AGE_SECS);
     let mut launched: Vec<String> = Vec::new();
     let mut finished: Vec<String> = Vec::new();
@@ -385,20 +415,29 @@ fn serve(
                             let _ = req.respond(tiny_http::Response::empty(204));
                             continue;
                         }
+                        // Read the transcript once: background detection and the reply
+                        // fallback both scan it, and it can be many megabytes.
+                        let transcript = json
+                            .as_ref()
+                            .and_then(|v| v["transcript_path"].as_str())
+                            .and_then(|p| std::fs::read_to_string(p).ok());
                         // A turn that ends while background tasks or subagents still run isn't
                         // the end of the work: their results start another turn.
                         if (provider.as_str(), event.as_str()) == ("claude", "Stop")
-                            && json
-                                .as_ref()
-                                .and_then(|v| v["transcript_path"].as_str())
-                                .is_some_and(background_pending)
+                            && transcript.as_deref().is_some_and(background_pending_str)
                         {
                             status = "working";
                         }
                         let field = |key: &str| json.as_ref().and_then(|v| v.get(key)).and_then(Value::as_str).map(String::from);
                         let message = field("message");
                         let session = field("thread-id").or_else(|| field("session_id"));
-                        let reply = if status == "done" { json.as_ref().and_then(last_reply) } else { None };
+                        let reply = if status == "done" {
+                            json.as_ref().and_then(|v| {
+                                reply_from_fields(v).or_else(|| transcript.as_deref().and_then(transcript_reply_str))
+                            }).map(cap_reply)
+                        } else {
+                            None
+                        };
                         emit(StatusEvent {
                             pane_id: pane_id.clone(),
                             provider: provider.clone(),
@@ -715,6 +754,14 @@ mod tests {
         assert_eq!(reply(), None);
         assert_eq!(last_reply(&json!({ "last_assistant_message": " Hi " })).as_deref(), Some("Hi"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cap_reply_bounds_oversized_replies() {
+        assert_eq!(cap_reply("short".to_string()), "short");
+        let capped = cap_reply("x".repeat(MAX_REPLY_BYTES + 100));
+        assert!(capped.len() <= MAX_REPLY_BYTES + '…'.len_utf8());
+        assert!(capped.ends_with('…'));
     }
 
     #[test]

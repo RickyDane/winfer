@@ -54,6 +54,23 @@ describe("batched code transport", () => {
   });
 });
 
+describe("skills from the start", () => {
+  it("keeps skills sent before any session event and sends /name as a skill call", () => {
+    const sent: unknown[] = [];
+    const transport: Transport = { connect: () => () => {}, send: (cmd) => void sent.push(cmd) };
+    const store = createCodeStore();
+    store.getState().attach(transport);
+    // The backend's disk preload arrives before `ready`/session init.
+    store.getState().apply({ type: "skills", skills: ["graphify"] });
+    expect(store.getState().skills).toEqual(["graphify"]);
+    store.getState().submit("check src", [], "graphify");
+    expect(sent).toEqual([{ type: "send", text: "check src", skill: "graphify" }]);
+    expect(store.getState().items.at(-1)).toMatchObject({ kind: "user", text: "/graphify check src" });
+    store.getState().submit("", [], "graphify");
+    expect(sent.at(-1)).toEqual({ type: "send", text: "", skill: "graphify" });
+  });
+});
+
 describe("side questions", () => {
   it("opens a blank modal without previous questions or late answers", () => {
     const store = createCodeStore();

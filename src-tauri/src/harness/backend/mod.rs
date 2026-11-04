@@ -19,7 +19,8 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use super::event::{Cmd, Events, Mode, ModelInfo};
+use super::claude_skills::{self, LeanSkills};
+use super::event::{Cmd, Events, Mode, ModelInfo, Skill};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -279,10 +280,80 @@ impl Handle {
     }
 }
 
+/// Skills `/name` can run, read from disk so they're offered from the moment a session
+/// opens — not only once the backend's own session init reports them. The backend still
+/// sends its authoritative list when it starts, which replaces this one.
+fn preloaded_skills(kind: Kind, home: &std::path::Path, cwd: &std::path::Path, lean: &LeanSkills) -> Vec<Skill> {
+    let mut out: Vec<Skill> = Vec::new();
+    let mut push = |name: String, description: String| {
+        if !name.is_empty() && !out.iter().any(|s: &Skill| s.name == name) {
+            out.push(Skill { name, description });
+        }
+    };
+    match kind {
+        Kind::ChatGpt => {}
+        Kind::Claude => {
+            let available = claude_skills::available_in(home);
+            let picked = match lean {
+                LeanSkills::All => available,
+                LeanSkills::Only(ids) => available.into_iter().filter(|s| ids.contains(&s.id)).collect(),
+            };
+            for s in picked {
+                push(s.name, s.description);
+            }
+            for s in claude_skills::in_dir(&cwd.join(".claude/skills"), "project") {
+                push(s.name, s.description);
+            }
+        }
+        Kind::Codex => {
+            for s in claude_skills::codex_in(home) {
+                push(s.name, s.description);
+            }
+            for dir in [".codex/skills", ".agents/skills"] {
+                for s in claude_skills::in_dir(&cwd.join(dir), "project") {
+                    push(s.name, s.description);
+                }
+            }
+        }
+        Kind::Muse => {
+            for s in claude_skills::pickable_in(home) {
+                push(s.name, s.description);
+            }
+            for dir in [".claude/skills", ".agents/skills"] {
+                for s in claude_skills::in_dir(&cwd.join(dir), "project") {
+                    push(s.name, s.description);
+                }
+            }
+        }
+        Kind::Agy | Kind::Cursor | Kind::OpenCode | Kind::Pi => {
+            let targets: &[&str] = match kind {
+                Kind::Agy => &["gemini", "agents"],
+                Kind::Cursor => &["cursor", "agents"],
+                Kind::OpenCode => &["opencode", "agents"],
+                _ => &["pi", "agents"],
+            };
+            for s in crate::skills::list_installed(home, &[cwd.to_path_buf()]) {
+                if s.copies.iter().any(|c| c.kind == crate::skills::Kind::Skill && targets.contains(&c.target.as_str())) {
+                    push(s.name, s.description);
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
     let (tx, rx) = channel();
     let me = tx.clone();
-    std::thread::spawn(move || match kind {
+    std::thread::spawn(move || {
+        // Offer the disk's skills at once; the backend's own list follows on session init.
+        if let Some(home) = dirs::home_dir() {
+            let preloaded = preloaded_skills(kind, &home, &opts.cwd, &opts.skills);
+            if !preloaded.is_empty() {
+                let _ = events.send(super::event::Ev::Skills(preloaded));
+            }
+        }
+        match kind {
         Kind::ChatGpt => chatgpt::run(opts, rx, events),
         _ => {
             // The CLIs reach `bg` through winfer's MCP server; send those calls here, so the
@@ -314,6 +385,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
                 _ => codex::run(opts, rx, me, events),
             }
             crate::harness::bg::stop_owner(&owner);
+        }
         }
     });
     Handle { tx }
@@ -441,6 +513,35 @@ pub fn drain_closed(rx: &Receiver<In>, held: &mut Vec<Cmd>) -> bool {
 /// Waits for the next message, giving up once the receiver closes.
 pub fn recv(rx: &Receiver<In>) -> Option<In> {
     rx.recv().ok()
+}
+
+#[cfg(test)]
+mod preload_tests {
+    use super::{preloaded_skills, Kind, LeanSkills};
+    use std::path::Path;
+
+    fn skill(dir: &Path, desc: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), format!("---\nname: x\ndescription: {desc}\n---\nbody")).unwrap();
+    }
+
+    #[test]
+    fn skills_are_available_before_the_session_starts() {
+        let root = std::env::temp_dir().join(format!("winfer-preload-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        skill(&home.join(".claude/skills/graphify"), "Graphs");
+        skill(&home.join(".codex/skills/wrangler"), "Workers");
+        skill(&cwd.join(".claude/skills/projskill"), "Project");
+        let names = |v: Vec<super::Skill>| v.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        // Claude sees its user + project skills, Codex its own, ChatGPT none.
+        assert_eq!(names(preloaded_skills(Kind::Claude, &home, &cwd, &LeanSkills::All)), ["graphify", "projskill"]);
+        assert_eq!(names(preloaded_skills(Kind::Codex, &home, &cwd, &LeanSkills::All)), ["wrangler"]);
+        assert!(preloaded_skills(Kind::ChatGpt, &home, &cwd, &LeanSkills::All).is_empty());
+        // Lean mode keeps only the picked Claude skills (project skills still load).
+        assert_eq!(names(preloaded_skills(Kind::Claude, &home, &cwd, &LeanSkills::Only(vec![]))), ["projskill"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

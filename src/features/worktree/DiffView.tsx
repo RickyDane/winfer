@@ -85,6 +85,11 @@ export function DiffView() {
             </div>
           )}
           {data && files.length === 0 && data.untracked.length === 0 && <div className="p-4 text-fg-subtle">No changes yet.</div>}
+          {data?.diffTruncated && (
+            <div className="border-b border-border px-4 py-3 text-warning">
+              This diff is {Math.round(data.diffBytes / 1048576)} MB — showing only its first part. Very large diffs are not sent in full.
+            </div>
+          )}
           {data && data.untracked.length > 0 && (
             <section className="border-b border-border px-4 py-3">
               <div className="mb-1 text-[11px] text-fg-subtle uppercase">New files (untracked)</div>

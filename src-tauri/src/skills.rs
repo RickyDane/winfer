@@ -235,7 +235,7 @@ fn scan_source(root: &Path, source: &Source, project: Option<&Path>, out: &mut B
 }
 
 /// Skills and commands in the home folder and in each project folder.
-fn list_installed(home: &Path, projects: &[PathBuf]) -> Vec<InstalledSkill> {
+pub(crate) fn list_installed(home: &Path, projects: &[PathBuf]) -> Vec<InstalledSkill> {
     let mut skills = BTreeMap::new();
     for source in SOURCES {
         if let Some(dir) = source.home {

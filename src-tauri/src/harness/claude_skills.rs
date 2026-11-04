@@ -88,6 +88,14 @@ pub fn available() -> Vec<ClaudeSkill> {
     dirs::home_dir().map(|h| available_in(&h)).unwrap_or_default()
 }
 
+/// The skills in one folder (e.g. a project's `.claude/skills`), labelled `source`.
+pub fn in_dir(root: &Path, source: &str) -> Vec<ClaudeSkill> {
+    skill_dirs(root)
+        .into_iter()
+        .map(|(name, dir)| ClaudeSkill { id: name.clone(), description: describe(&dir), name, source: source.into(), dir })
+        .collect()
+}
+
 /// The user skill folders Codex loads (its bundled `.system` skills are left out).
 const CODEX_DIRS: &[&str] = &[".codex/skills", ".agents/skills"];
 

@@ -97,7 +97,7 @@ export interface CodeState {
   transport?: Transport;
   apply(ev: Ev): void;
   send(cmd: Cmd): void;
-  submit(text: string, images?: Attachment[]): void;
+  submit(text: string, images?: Attachment[], skill?: string): void;
   /** The composer's unsent text and images: kept here so they survive the pane remounting. */
   draft: string;
   attachments: Attachment[];
@@ -182,13 +182,14 @@ export const createCodeStore = () =>
   setDraft: (draft) => set({ draft }),
   setAttachments: (fn) => set((s) => ({ attachments: fn(s.attachments) })),
 
-  submit(text, attachments = []) {
+  submit(text, attachments = [], skill) {
     const t = text.trim();
-    if (!t && !attachments.length) return;
+    if (!t && !attachments.length && !skill) return;
     const urls = attachments.map((a) => a.url);
-    set((s) => ({ items: [...s.items, { kind: "user", key: key(), text: t, at: Date.now(), images: urls.length ? urls : undefined }] }));
+    const shown = skill ? `/${skill}${t ? ` ${t}` : ""}` : t;
+    set((s) => ({ items: [...s.items, { kind: "user", key: key(), text: shown, at: Date.now(), images: urls.length ? urls : undefined }] }));
     const images = attachments.map((a) => ({ mime: a.mime, data: a.url.slice(a.url.indexOf(",") + 1) }));
-    get().send({ type: get().busy ? "steer" : "send", text: t, ...(images.length ? { images } : {}) });
+    get().send({ type: get().busy ? "steer" : "send", text: t, ...(skill ? { skill } : {}), ...(images.length ? { images } : {}) });
   },
 
   apply(ev) {

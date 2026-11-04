@@ -30,7 +30,14 @@ pub struct WorktreeInfo {
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeDiff {
     /// Unified diff of committed + uncommitted changes since the branch point.
+    /// Capped at [`MAX_DIFF_BYTES`]: a turn that rewrites a huge tracked file
+    /// otherwise returns gigabytes over IPC, which killed WebView2 on Windows
+    /// (single ~2.95 GB allocation converting the reply, crash 2026-11-03).
     pub diff: String,
+    /// Byte length of the full diff before capping.
+    pub diff_bytes: u64,
+    /// Whether `diff` was cut at the cap (stats derived from it undercount).
+    pub diff_truncated: bool,
     pub untracked: Vec<String>,
     /// Lines in the untracked text files (new files the diff doesn't show).
     pub untracked_lines: u64,
@@ -423,12 +430,36 @@ pub fn create(
     Err(format!("couldn't find a free worktree name for {provider}"))
 }
 
+/// Largest diff sent to the webview. Far above any diff a human reviews in
+/// the diff view, far below the gigabyte replies that killed WebView2.
+pub const MAX_DIFF_BYTES: usize = 8 * 1024 * 1024;
+
+/// Cuts `text` to at most `max` bytes on a char boundary. Returns the cut
+/// text and whether anything was dropped.
+pub fn cap_diff(mut text: String, max: usize) -> (String, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    (text, true)
+}
+
 pub fn diff(info: &WorktreeInfo) -> Result<WorktreeDiff, String> {
     let path = Path::new(&info.path);
     let merge_base = git(path, &["merge-base", &info.base, "HEAD"])?;
     // Diffing against the merge base with no second commit compares to the working tree,
     // so committed and uncommitted changes show together.
     let diff = git(path, &["diff", "--no-color", &merge_base])?;
+    let diff_bytes = diff.len() as u64;
+    let (diff, diff_truncated) = cap_diff(diff, MAX_DIFF_BYTES);
+    if diff_truncated {
+        crate::diagnostics::warn("payload", &format!("worktree diff capped: {diff_bytes} bytes, sending first {MAX_DIFF_BYTES}"));
+        crate::diagnostics::breadcrumb(format!("worktree diff capped {diff_bytes}B"));
+    }
     let untracked = git(path, &["ls-files", "--others", "--exclude-standard"])?
         .lines()
         .map(String::from)
@@ -443,6 +474,8 @@ pub fn diff(info: &WorktreeInfo) -> Result<WorktreeDiff, String> {
     let dirty = !git(path, &["status", "--porcelain"])?.is_empty();
     Ok(WorktreeDiff {
         diff,
+        diff_bytes,
+        diff_truncated,
         untracked,
         untracked_lines,
         ahead,
@@ -931,6 +964,16 @@ mod tests {
             .unwrap()
             .success();
         assert!(ok, "failed: {script}");
+    }
+
+    #[test]
+    fn cap_diff_cuts_on_char_boundary_and_flags_it() {
+        let (kept, cut) = cap_diff("hello".to_string(), 10);
+        assert_eq!((kept.as_str(), cut), ("hello", false));
+        // 'é' is two bytes: a 4-byte cap must not split it.
+        let (kept, cut) = cap_diff("abécd".to_string(), 4);
+        assert_eq!((kept.as_str(), cut), ("abé", true));
+        assert!(kept.len() <= 4);
     }
 
     fn temp_dir(name: &str) -> PathBuf {
