@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{In, LineProcess, Opts};
-use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, TurnTokens, Usage, UserMsg};
+use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, Skill, TaskEv, Todo, TurnTokens, Usage, UserMsg};
 
 /// Reasoning efforts Muse takes (`--reasoning-effort`); "none" is its own default tier and
 /// stays off the list, as in pi's bridge.
@@ -70,6 +70,12 @@ fn display_name(name: &str) -> String {
     }
 }
 
+/// Transcript id of one text block: a new segment after each tool call, so the
+/// UI keeps text before and after a call as separate items in order.
+fn text_id(run: u64, seg: u64) -> String {
+    format!("muse-t{run}-{seg}")
+}
+
 /// Streamed answer text of a record, if it carries any.
 fn text_delta(v: &Value) -> Option<String> {
     (v["payload_type"] == "run.output.delta")
@@ -112,6 +118,119 @@ fn tool_end(v: &Value) -> Option<(String, bool)> {
     Some((id, r["outcome"]["kind"] == "completed"))
 }
 
+/// Calls the model committed to, from the log's `assistant_tool_calls_committed`
+/// records: `(call_id, raw tool name, parsed args)`. These precede the matching
+/// `tool_batch.effect.started`, so a call's args are known when it starts.
+fn committed_calls(v: &Value) -> Vec<(String, String, Value)> {
+    if v["payload_type"] != "runtime.session" {
+        return Vec::new();
+    }
+    let ev = &v["payload"]["event"];
+    if ev["kind"] != "assistant_tool_calls_committed" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for tc in ev["tool_calls"].as_array().into_iter().flatten() {
+        let Some(id) = tc["call_id"].as_str().filter(|s| !s.is_empty()) else { continue };
+        let args = tc["args"].as_str().and_then(|a| serde_json::from_str(a).ok()).unwrap_or(Value::Null);
+        out.push((id.to_string(), tc["name"].as_str().unwrap_or("tool").to_string(), args));
+    }
+    out
+}
+
+/// Finished calls' result texts, from `tool_result_batch_committed` records.
+/// They follow the matching `tool_batch.effect.terminal`, so they complete a
+/// call that already ended in the UI.
+fn committed_results(v: &Value) -> Vec<(String, String)> {
+    if v["payload_type"] != "runtime.session" {
+        return Vec::new();
+    }
+    let ev = &v["payload"]["event"];
+    if ev["kind"] != "tool_result_batch_committed" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for r in ev["results"].as_array().into_iter().flatten() {
+        let Some(id) = r["tool_call_id"].as_str().filter(|s| !s.is_empty()) else { continue };
+        out.push((id.to_string(), r["text"].as_str().unwrap_or("").to_string()));
+    }
+    out
+}
+
+/// The readable part of a result: shell-style tools wrap their output in a JSON
+/// envelope (`{"output": "…", "exit_code": …}`); other results are plain text.
+fn result_text(text: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<Value>(text) {
+        if let Some(out) = v["output"].as_str() {
+            return out.to_string();
+        }
+    }
+    text.to_string()
+}
+
+/// The title other providers show for a call, derived from its args.
+fn title_for(name: &str, input: &Value) -> Option<String> {
+    let s = |k: &str| input[k].as_str().unwrap_or("");
+    let t: String = match name {
+        "Bash" => {
+            let d = s("description");
+            if d.is_empty() { s("command") } else { d }.to_string()
+        }
+        "Read" | "Edit" | "Write" => crate::harness::tools::short_path(s("path")),
+        "Search" => s("pattern").to_string(),
+        _ => input.as_object().and_then(|o| o.values().find_map(|v| v.as_str())).unwrap_or("").to_string(),
+    };
+    let first = t.lines().next().unwrap_or("").trim();
+    (!first.is_empty()).then(|| first.to_string())
+}
+
+/// A `write_todos` call's list, as the plan sidebar's todos.
+fn todos_of(input: &Value) -> Option<Vec<Todo>> {
+    let list = input["todos"].as_array()?;
+    let todos: Vec<Todo> = list
+        .iter()
+        .filter_map(|t| {
+            let content = t["text"].as_str().or_else(|| t["content"].as_str())?.trim().to_string();
+            if content.is_empty() {
+                return None;
+            }
+            let status = match t["status"].as_str() {
+                Some(s @ ("in_progress" | "completed")) => s.to_string(),
+                _ => "pending".to_string(),
+            };
+            Some(Todo { content, status })
+        })
+        .collect();
+    (!todos.is_empty()).then_some(todos)
+}
+
+/// Skills Muse itself offers (`muse skills list`, TSV), for the `/` picker.
+fn muse_skills() -> Vec<Skill> {
+    let Some(muse) = crate::env::find_command("muse") else { return Vec::new() };
+    let Ok(out) = std::process::Command::new(muse).args(["skills", "list"]).output() else { return Vec::new() };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut skills = Vec::new();
+    for line in text.lines().skip(1) {
+        let mut cols = line.split('\t');
+        let (Some(name), Some(_scope), Some(active)) = (cols.next(), cols.next(), cols.next()) else { continue };
+        if active != "on" || name.is_empty() {
+            continue;
+        }
+        skills.push(Skill { name: name.to_string(), description: cols.next().unwrap_or("").to_string() });
+    }
+    skills
+}
+
+/// The diff an edit or write makes, from its args (mirrors the Claude bridge).
+fn edit_diff(name: &str, input: &Value) -> Option<String> {
+    let short = crate::harness::tools::short_path(input["path"].as_str()?);
+    match name {
+        "Edit" => Some(crate::harness::diff::unified(&short, input["find"].as_str()?, input["replace"].as_str()?)),
+        "Write" => Some(crate::harness::diff::unified(&short, "", input["content"].as_str()?)),
+        _ => None,
+    }
+}
+
 /// One run's usage: (input, cached, output) summed over its model calls.
 fn run_usage(v: &Value) -> Option<(u64, u64, u64)> {
     if v["payload_type"] != "run.usage" {
@@ -135,7 +254,7 @@ fn record_session(v: &Value) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn args(model: &str, effort: Option<&str>, mode: Mode, session: &str, prompt_file: &std::path::Path, images: &[std::path::PathBuf]) -> Vec<String> {
+fn args(model: &str, effort: Option<&str>, mode: Mode, session: &str, prompt_file: &std::path::Path, images: &[std::path::PathBuf], lean: bool, trim_at: u8, compact_at: u8) -> Vec<String> {
     let mut args: Vec<String> = ["exec", "--json", "--trust-workspace"].iter().map(|s| s.to_string()).collect();
     args.extend(["--session-id".into(), session.to_string()]);
     if !model.is_empty() {
@@ -143,6 +262,16 @@ fn args(model: &str, effort: Option<&str>, mode: Mode, session: &str, prompt_fil
     }
     if let Some(effort) = effort.filter(|e| !e.is_empty()) {
         args.extend(["--reasoning-effort".into(), effort.to_string()]);
+    }
+    if lean {
+        // The trims Muse has: no other tools' personal context, no web, no reminders.
+        args.extend(["--no-foreign-personal-context".into(), "--disable-web-tools".into(), "--disable-reminders".into()]);
+    }
+    if trim_at > 0 {
+        args.extend(["--context-compaction-soft-threshold".into(), format!("{}", f32::from(trim_at) / 100.0)]);
+    }
+    if compact_at > 0 {
+        args.extend(["--context-compaction-hard-threshold".into(), format!("{}", f32::from(compact_at) / 100.0)]);
     }
     match mode {
         Mode::Yolo => args.push("--yolo".into()),
@@ -195,7 +324,10 @@ fn session_log(session: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-fn tail_session_log(me: Sender<In>, run: u64, session: String, live: Arc<AtomicBool>) {
+/// Shared read position in the session log: kept across runs so a new turn's tail
+/// resumes where the last one stopped instead of replaying every earlier tool call.
+/// `u64::MAX` means "start at the current end" (a resumed session's history).
+fn tail_session_log(me: Sender<In>, run: u64, session: String, live: Arc<AtomicBool>, pos: Arc<std::sync::Mutex<u64>>) {
     std::thread::spawn(move || {
         let mut path = None;
         while live.load(Ordering::Relaxed) && path.is_none() {
@@ -206,14 +338,30 @@ fn tail_session_log(me: Sender<In>, run: u64, session: String, live: Arc<AtomicB
         }
         let Some(path) = path else { return };
         let Ok(file) = std::fs::File::open(path) else { return };
-        let mut lines = BufReader::new(file).lines();
+        let mut reader = BufReader::new(file);
+        {
+            let mut p = pos.lock().unwrap();
+            let len = reader.get_ref().metadata().map(|m| m.len()).unwrap_or(0);
+            if *p == u64::MAX || *p > len {
+                *p = if *p == u64::MAX { len } else { 0 };
+            }
+        }
+        use std::io::Seek;
         while live.load(Ordering::Relaxed) {
-            match lines.next() {
-                Some(Ok(line)) => {
+            let cur = *pos.lock().unwrap();
+            if reader.seek(std::io::SeekFrom::Start(cur)).is_err() {
+                return;
+            }
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => std::thread::sleep(std::time::Duration::from_millis(25)),
+                // A line without its newline may still be mid-write: retry it whole.
+                Ok(_) if !line.ends_with('\n') => std::thread::sleep(std::time::Duration::from_millis(25)),
+                Ok(n) => {
+                    *pos.lock().unwrap() = cur + n as u64;
                     if me.send(In::Line(format!("{run}{LOG}{line}"))).is_err() { return; }
                 }
-                Some(Err(_)) => return,
-                None => std::thread::sleep(std::time::Duration::from_millis(25)),
+                Err(_) => return,
             }
         }
     });
@@ -241,6 +389,24 @@ struct Bridge {
     /// Running tool calls: id → display name.
     calls: HashMap<String, String>,
     log_tail: Option<Arc<AtomicBool>>,
+    /// Byte offset the session-log tail has consumed (shared with its thread).
+    log_pos: Arc<std::sync::Mutex<u64>>,
+    /// Text block within the run: bumped at each tool start so text after a tool
+    /// becomes a new transcript item instead of merging into the earlier block.
+    text_seg: u64,
+    /// Committed calls' args by call id (raw name, display name, input).
+    inputs: HashMap<String, (String, String, Value)>,
+    /// Results that arrived before their call's end record.
+    results: HashMap<String, String>,
+    /// Ended calls still awaiting their result record: call id → ok.
+    ended: HashMap<String, bool>,
+    /// Calls shown as tasks (subagents, workflows, monitors): call id → agent label.
+    task_calls: HashMap<String, Option<String>>,
+    /// Winfer's lean setting, and the compaction thresholds (percent; 0 = off).
+    lean: bool,
+    trim_at: u8,
+    compact_at: u8,
+    explained_subagent: bool,
     /// Stdout that isn't JSON (Muse prints warnings as plain text).
     noise: String,
     explained_ask: bool,
@@ -270,6 +436,17 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         streamed: false,
         calls: HashMap::new(),
         log_tail: None,
+        // A resumed session's log already holds its earlier turns: skip them.
+        log_pos: Arc::new(std::sync::Mutex::new(if opts.resume.is_some() { u64::MAX } else { 0 })),
+        text_seg: 0,
+        inputs: HashMap::new(),
+        results: HashMap::new(),
+        ended: HashMap::new(),
+        task_calls: HashMap::new(),
+        lean: opts.lean,
+        trim_at: opts.trim_at,
+        compact_at: opts.compact_at,
+        explained_subagent: false,
         noise: String::new(),
         explained_ask: false,
         usage: Usage::default(),
@@ -282,6 +459,19 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         b.emit(Ev::Notice("Muse only loads MCP servers from its own config, so winfer's MCP tools aren't attached.".into()));
     }
     b.explain_mode();
+    if b.lean {
+        b.emit(Ev::Notice(
+            "Lean mode for Muse is partial: personal rules/skills from other tools, web tools and reminders are off. Muse has no short-prompt or trimmed-tool mode.".into(),
+        ));
+    }
+    // Muse's own skill catalog, for the composer's `/` picker.
+    let events = b.events.clone();
+    std::thread::spawn(move || {
+        let skills = muse_skills();
+        if !skills.is_empty() {
+            let _ = events.send(Ev::Skills(skills));
+        }
+    });
     while let Some(msg) = super::recv(&rx) {
         match msg {
             In::Line(line) => b.on_tagged(&line),
@@ -338,9 +528,16 @@ impl Bridge {
                 self.explain_mode();
             }
             Cmd::Compact => self.emit(Ev::Notice("Muse compacts its context on its own; /compact isn't available.".into())),
-            Cmd::SetCompaction { .. } => {}
-            // Its subagents (if any) run on the main model.
-            Cmd::SetSubagent { .. } => {}
+            Cmd::SetCompaction { trim, compact } => {
+                self.trim_at = trim;
+                self.compact_at = compact;
+            }
+            Cmd::SetSubagent { .. } => {
+                if !self.explained_subagent {
+                    self.explained_subagent = true;
+                    self.emit(Ev::Notice("Muse runs its subagents on the main model in exec mode; a separate subagent model isn't available.".into()));
+                }
+            }
             Cmd::Undo { .. } => self.emit(Ev::Undone(Err("Muse can't drop a turn from its session in exec mode.".into()))),
             Cmd::StopTask(id) => {
                 if !crate::harness::bg::stop(&id) {
@@ -369,6 +566,7 @@ impl Bridge {
         self.busy = true;
         self.finished = false;
         self.streamed = false;
+        self.text_seg = 0;
         self.noise.clear();
         self.turn = TurnTokens::default();
         (self.usage.turn, self.usage.turn_input, self.usage.turn_cached) = (0, 0, 0);
@@ -391,7 +589,7 @@ impl Bridge {
         let prompt_file = dir.join(format!("prompt-{}-{}.txt", std::process::id(), self.run));
         let text = self.prompt(&msg);
         let args = match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&prompt_file, &text)) {
-            Ok(()) => args(&self.model, self.effort.as_deref(), self.mode, &session, &prompt_file, &msg.images),
+            Ok(()) => args(&self.model, self.effort.as_deref(), self.mode, &session, &prompt_file, &msg.images, self.lean, self.trim_at, self.compact_at),
             Err(_) => {
                 let mut a: Vec<String> = ["exec", "--json", "--trust-workspace"].iter().map(|s| s.to_string()).collect();
                 a.extend(["--session-id".into(), session.clone()]);
@@ -407,7 +605,7 @@ impl Bridge {
             Ok(p) => {
                 self.proc = Some(p);
                 let live = Arc::new(AtomicBool::new(true));
-                tail_session_log(self.me.clone(), self.run, session, live.clone());
+                tail_session_log(self.me.clone(), self.run, session, live.clone(), self.log_pos.clone());
                 self.log_tail = Some(live);
                 // Tags its lines with the run, so a killed run's late output is told apart.
                 let (me, run) = (self.me.clone(), self.run);
@@ -519,19 +717,15 @@ impl Bridge {
             if self.turn.streamed(&text) {
                 self.emit_usage();
             }
-            self.emit(Ev::TextDelta { id: format!("muse-t{}", self.run), text });
+            self.emit(Ev::TextDelta { id: self.text_id(), text });
             return;
         }
         if let Some((id, name, title)) = tool_start(v) {
-            // A message's text ends where its tools start: the next delta is a new block.
-            self.emit(Ev::ToolStart { id: id.clone(), name: name.clone(), title, input: Value::Null });
-            self.calls.insert(id, name);
+            self.start_call(id, name, title);
             return;
         }
         if let Some((id, ok)) = tool_end(v) {
-            if self.calls.remove(&id).is_some() {
-                self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: None });
-            }
+            self.finish_call(&id, ok);
             return;
         }
         if let Some((input, cached, output)) = run_usage(v) {
@@ -549,11 +743,14 @@ impl Bridge {
         if let Some((ok, text)) = terminal(v) {
             self.finished = true;
             for (id, _) in std::mem::take(&mut self.calls) {
-                self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: None });
+                // Their result records may still follow in the log: let them land.
+                self.ended.insert(id.clone(), ok);
+                let diff = if ok { self.diff_for(&id) } else { None };
+                self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff });
             }
             if ok {
                 if !self.streamed && !text.is_empty() {
-                    self.emit(Ev::Text { id: format!("muse-t{}", self.run), text });
+                    self.emit(Ev::Text { id: self.text_id(), text });
                 }
             } else {
                 self.emit(Ev::Error(format!("Muse: {text}")));
@@ -564,16 +761,101 @@ impl Bridge {
 
     /// The durable log supplements stdout with tool progress only; stdout remains the authority
     /// for answer text, usage and turn completion.
+    fn text_id(&self) -> String {
+        text_id(self.run, self.text_seg)
+    }
+
+    fn diff_for(&self, id: &str) -> Option<String> {
+        self.inputs.get(id).and_then(|(_, name, input)| edit_diff(name, input))
+    }
+
+    /// Emits a call's start once (stdout and the log can both report it), with
+    /// its committed args as the input the UI opens to.
+    fn start_call(&mut self, id: String, name: String, fallback_title: String) {
+        if self.calls.contains_key(&id) {
+            return;
+        }
+        // A message's text ends where its tools start: the next delta is a new block.
+        self.text_seg += 1;
+        let (raw, input) = self
+            .inputs
+            .get(&id)
+            .map(|(raw, _, v)| (raw.clone(), v.clone()))
+            .unwrap_or_default();
+        let title = title_for(&name, &input).unwrap_or(fallback_title);
+        self.emit(Ev::ToolStart { id: id.clone(), name: name.clone(), title: title.clone(), input: input.clone() });
+        self.calls.insert(id.clone(), name);
+        // Subagents, workflows and monitors also surface as tasks (agents/background UI).
+        let agent = ["subagent_type", "role", "agent"].iter().find_map(|k| input[*k].as_str()).map(str::to_string);
+        if raw.contains("subagent") || raw == "workflow" || raw == "monitor" || agent.is_some() {
+            self.task_calls.insert(id.clone(), agent.clone());
+            self.emit(Ev::Task(TaskEv {
+                id: id.clone(),
+                tool_id: Some(id.clone()),
+                title: Some(title),
+                description: input["description"].as_str().map(str::to_string),
+                agent,
+                status: Some("running".into()),
+                ..Default::default()
+            }));
+        }
+    }
+
+    /// A call's end record: show it ended, with its diff. Its result record
+    /// (which follows in the log) fills in the output via `complete_call`; a
+    /// result that somehow arrived first is attached right away.
+    fn finish_call(&mut self, id: &str, ok: bool) {
+        if self.calls.remove(id).is_none() {
+            return;
+        }
+        if self.task_calls.remove(id).is_some() {
+            self.emit(Ev::Task(TaskEv {
+                id: id.to_string(),
+                status: Some(if ok { "done" } else { "failed" }.into()),
+                ..Default::default()
+            }));
+        }
+        let diff = if ok { self.diff_for(id) } else { None };
+        if let Some(output) = self.results.remove(id) {
+            self.inputs.remove(id);
+            self.emit(Ev::ToolEnd { id: id.to_string(), ok, output, diff });
+        } else {
+            self.ended.insert(id.to_string(), ok);
+            self.emit(Ev::ToolEnd { id: id.to_string(), ok, output: String::new(), diff });
+        }
+    }
+
+    /// A call's result record: attach its output to the already-ended call (the
+    /// UI's second `ToolEnd` for the id replaces the empty output).
+    fn complete_call(&mut self, id: &str, text: &str) {
+        let output = result_text(text);
+        if self.calls.contains_key(id) {
+            self.results.insert(id.to_string(), output);
+        } else if let Some(ok) = self.ended.remove(id) {
+            let diff = if ok { self.diff_for(id) } else { None };
+            self.inputs.remove(id);
+            self.emit(Ev::ToolEnd { id: id.to_string(), ok, output, diff });
+        } else {
+            self.results.insert(id.to_string(), output);
+        }
+    }
+
     fn on_log_record(&mut self, v: &Value) {
+        for (id, raw, args) in committed_calls(v) {
+            if raw == "write_todos" {
+                if let Some(todos) = todos_of(&args) {
+                    self.emit(Ev::Todos(todos));
+                }
+            }
+            self.inputs.insert(id, (raw.clone(), display_name(&raw), args));
+        }
+        for (id, text) in committed_results(v) {
+            self.complete_call(&id, &text);
+        }
         if let Some((id, name, title)) = tool_start(v) {
-            if !self.calls.contains_key(&id) {
-                self.emit(Ev::ToolStart { id: id.clone(), name: name.clone(), title, input: Value::Null });
-                self.calls.insert(id, name);
-            }
+            self.start_call(id, name, title);
         } else if let Some((id, ok)) = tool_end(v) {
-            if self.calls.remove(&id).is_some() {
-                self.emit(Ev::ToolEnd { id, ok, output: String::new(), diff: None });
-            }
+            self.finish_call(&id, ok);
         }
     }
 }
@@ -616,14 +898,55 @@ mod tests {
     }
 
     #[test]
+    fn reads_committed_calls_and_results() {
+        let calls = json!({"payload_type": "runtime.session", "payload": {"kind": "run", "event": {"kind": "assistant_tool_calls_committed", "tool_calls": [{"call_id": "c1", "name": "bash", "args": "{\"command\": \"ls\", \"description\": \"List files\"}"}]}}});
+        let got = committed_calls(&calls);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "c1");
+        assert_eq!(title_for("Bash", &got[0].2).as_deref(), Some("List files"));
+        let results = json!({"payload_type": "runtime.session", "payload": {"kind": "run", "event": {"kind": "tool_result_batch_committed", "results": [{"tool_call_id": "c1", "text": "{\"output\": \"a.txt\\n\", \"exit_code\": 0}"}]}}});
+        assert_eq!(committed_results(&results), vec![("c1".to_string(), "{\"output\": \"a.txt\\n\", \"exit_code\": 0}".to_string())]);
+        // Shell envelopes unwrap to their output; plain results pass through.
+        assert_eq!(result_text("{\"output\": \"a.txt\\n\", \"exit_code\": 0}"), "a.txt\n");
+        assert_eq!(result_text("plain"), "plain");
+        // Edits open to a diff of find → replace.
+        let edit = json!({"path": "src/a.rs", "find": "old", "replace": "new"});
+        assert!(edit_diff("Edit", &edit).is_some_and(|d| d.contains("+new") && d.contains("-old")));
+        assert_eq!(title_for("Read", &json!({"path": "src/a.rs"})).as_deref(), Some("src/a.rs"));
+    }
+
+    #[test]
+    fn todos_come_from_write_todos() {
+        let input = json!({"todos": [{"text": "One", "status": "in_progress"}, {"text": "Two", "status": "bogus"}, {"content": "Three", "status": "completed"}]});
+        let todos = todos_of(&input).unwrap();
+        assert_eq!(todos.iter().map(|t| t.content.as_str()).collect::<Vec<_>>(), ["One", "Two", "Three"]);
+        assert_eq!(todos.iter().map(|t| t.status.as_str()).collect::<Vec<_>>(), ["in_progress", "pending", "completed"]);
+        assert!(todos_of(&json!({"todos": []})).is_none());
+    }
+
+    #[test]
+    fn text_blocks_split_at_tool_calls() {
+        // Same block while only text streams; a new block once a tool intervened,
+        // and a new run never collides with the previous one.
+        assert_eq!(text_id(3, 0), text_id(3, 0));
+        assert_ne!(text_id(3, 0), text_id(3, 1));
+        assert_ne!(text_id(3, 1), text_id(4, 0));
+    }
+
+    #[test]
     fn args_carry_model_effort_and_mode() {
-        let a = args("muse-spark-1.3", Some("high"), Mode::Yolo, "s", std::path::Path::new("/tmp/p.txt"), &[]);
+        let a = args("muse-spark-1.3", Some("high"), Mode::Yolo, "s", std::path::Path::new("/tmp/p.txt"), &[], false, 0, 0);
         assert!(a.windows(2).any(|w| w == ["--model", "muse-spark-1.3"]));
         assert!(a.windows(2).any(|w| w == ["--reasoning-effort", "high"]));
         assert!(a.contains(&"--yolo".to_string()));
-        let plan = args("", None, Mode::Plan, "s", std::path::Path::new("/tmp/p.txt"), &[]);
+        let plan = args("", None, Mode::Plan, "s", std::path::Path::new("/tmp/p.txt"), &[], false, 0, 0);
         assert!(plan.contains(&"--disable-write".to_string()));
         assert!(!plan.contains(&"--model".to_string()));
+        // Lean's partial trims and the compaction thresholds reach the run.
+        let lean = args("", None, Mode::Yolo, "s", std::path::Path::new("/tmp/p.txt"), &[], true, 75, 90);
+        assert!(lean.contains(&"--no-foreign-personal-context".to_string()));
+        assert!(lean.windows(2).any(|w| w == ["--context-compaction-soft-threshold", "0.75"]));
+        assert!(lean.windows(2).any(|w| w == ["--context-compaction-hard-threshold", "0.9"]));
     }
 }
 

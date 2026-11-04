@@ -241,6 +241,8 @@ export const createCodeStore = () =>
           };
         }
         case "tool_start":
+          // A backend with two reporting paths for one call must not show it twice.
+          if (findLast("tool", ev.id) >= 0) return {};
           return {
             items: [
               ...closeReasoning(items),

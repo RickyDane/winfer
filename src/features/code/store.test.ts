@@ -54,6 +54,24 @@ describe("batched code transport", () => {
   });
 });
 
+describe("tool rows", () => {
+  it("shows each call once and keeps text between calls as separate rows", () => {
+    const { store, emit } = setup();
+    emit({ type: "text_delta", id: "t0", text: "Looking first. " });
+    vi.advanceTimersByTime(16);
+    emit({ type: "tool_start", id: "c1", name: "Read", title: "a.ts", input: null });
+    // The same call reported again (a second reporting path) adds no row.
+    emit({ type: "tool_start", id: "c1", name: "Read", title: "a.ts", input: null });
+    emit({ type: "tool_end", id: "c1", ok: true, output: "ok" });
+    emit({ type: "text_delta", id: "t1", text: "Now editing." });
+    vi.advanceTimersByTime(16);
+    const kinds = store.getState().items.map((i) => i.kind);
+    expect(kinds).toEqual(["text", "tool", "text"]);
+    expect(store.getState().items[1]).toMatchObject({ kind: "tool", ok: true });
+    expect(store.getState().items[2]).toMatchObject({ kind: "text", text: "Now editing." });
+  });
+});
+
 describe("skills from the start", () => {
   it("keeps skills sent before any session event and sends /name as a skill call", () => {
     const sent: unknown[] = [];
