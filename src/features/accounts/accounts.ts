@@ -15,6 +15,8 @@ export interface Account {
   enabled: boolean;
   dir: string;
   signedIn: boolean;
+  /** The sign-in's email, when its credential file records one. */
+  email: string | null;
   /** Out of usage until (unix ms; 0 = unknown). */
   exhaustedUntil: number | null;
 }

@@ -9,7 +9,7 @@ vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 vi.stubGlobal("document", { hasFocus: () => true });
 
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
-const { duration, leftNow, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, refreshOpencode, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
+const { duration, leftNow, poolMembers, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, refreshOpencode, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
 
 const HOUR = 3600_000;
 const now = 1_800_000_000_000;
@@ -157,7 +157,7 @@ describe("OpenCode usage refresh", () => {
 });
 
 describe("pooled accounts", () => {
-  const account = (id: string, enabled = true, signedIn = true) => ({ id, provider: "claude", label: id, enabled, dir: "", signedIn, exhaustedUntil: null });
+  const account = (id: string, enabled = true, signedIn = true) => ({ id, provider: "claude", label: id, enabled, dir: "", signedIn, email: `${id}@example.com`, exhaustedUntil: null });
   const accounts = [account("claude:default"), account("claude:account-2"), account("claude:account-3", false)];
   const snap = (provider: string, used: number, resetsAt: number, at = now) => ({ provider, at, windows: [{ kind: "session", label: "5-hour", usedPercent: used, resetsAt }] });
   const snapshots = {
@@ -175,6 +175,14 @@ describe("pooled accounts", () => {
 
   it("is the default reading with a single account", () => {
     expect(pooled("claude", snapshots, [], now)).toEqual(snapshots.claude);
+  });
+
+  it("carries each account's email for the breakdown", () => {
+    expect(poolMembers("claude", snapshots, accounts).map((m) => [m.id, m.email])).toEqual([
+      ["claude:default", "claude:default@example.com"],
+      ["claude:account-2", "claude:account-2@example.com"],
+      ["claude:account-3", "claude:account-3@example.com"],
+    ]);
   });
 
   it("averages the readings over time and projects the combined pace", () => {

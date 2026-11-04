@@ -51,6 +51,8 @@ pub struct Entry {
     pub account: Account,
     pub dir: String,
     pub signed_in: bool,
+    /// The sign-in's email, when its credential file records one.
+    pub email: Option<String>,
     /// Out of usage until (unix ms; 0 = unknown), if so.
     pub exhausted_until: Option<i64>,
 }
@@ -221,6 +223,50 @@ fn exhausted_until(file: &File, id: &str, now: i64) -> Option<i64> {
     (effective > now).then_some(until)
 }
 
+/// The email a sign-in belongs to: Claude Code records it in `.claude.json`'s `oauthAccount`
+/// (at `~/.claude.json` for the default sign-in, inside the config dir for the others), Codex
+/// in the `email` claim of the `id_token` in its `auth.json`. Display only — never verified.
+fn non_empty_email(s: &str) -> Option<String> {
+    (!s.trim().is_empty()).then(|| s.trim().to_string())
+}
+
+fn claude_email(state: &Value) -> Option<String> {
+    state["oauthAccount"]["emailAddress"].as_str().and_then(non_empty_email)
+}
+
+fn codex_email(auth: &Value) -> Option<String> {
+    use base64::Engine;
+    let payload = auth["tokens"]["id_token"].as_str()?.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    claims["email"].as_str().and_then(non_empty_email)
+}
+
+fn email(id: &str) -> Option<String> {
+    let dir = dir(id)?;
+    match provider_of(id) {
+        "claude" => {
+            let mut files = vec![dir.join(".claude.json")];
+            if is_default(id) {
+                if let Some(home) = dirs::home_dir() {
+                    files.insert(0, home.join(".claude.json"));
+                }
+            }
+            files.iter().find_map(|f| {
+                let text = std::fs::read_to_string(f).ok()?;
+                let value: Value = serde_json::from_str(&text).ok()?;
+                claude_email(&value)
+            })
+        }
+        "codex" => {
+            let text = std::fs::read_to_string(dir.join("auth.json")).ok()?;
+            let auth: Value = serde_json::from_str(&text).ok()?;
+            codex_email(&auth)
+        }
+        _ => None,
+    }
+}
+
 fn signed_in(id: &str) -> bool {
     let Some(dir) = dir(id) else { return false };
     match provider_of(id) {
@@ -280,6 +326,7 @@ pub fn list() -> Vec<Entry> {
             account: a.clone(),
             dir: dir(&a.id).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
             signed_in: signed_in(&a.id),
+            email: email(&a.id),
             exhausted_until: exhausted_until(&file, &a.id, now),
         })
         .collect()
@@ -444,6 +491,19 @@ mod tests {
         assert_eq!(exhausted_until(&file, "claude:account-2", 500), Some(1_000));
         assert_eq!(exhausted_until(&file, "claude:account-2", 2_000), None);
         assert_eq!(exhausted_until(&file, "claude:other", 0), None);
+    }
+
+    #[test]
+    fn emails_come_from_the_sign_in_files() {
+        use base64::Engine;
+        use serde_json::json;
+        assert_eq!(claude_email(&json!({ "oauthAccount": { "emailAddress": " a@b.c " } })).as_deref(), Some("a@b.c"));
+        assert_eq!(claude_email(&json!({ "oauthAccount": {} })), None);
+        assert_eq!(claude_email(&json!({})), None);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"email":"x@y.z"}"#);
+        assert_eq!(codex_email(&json!({ "tokens": { "id_token": format!("h.{payload}.s") } })).as_deref(), Some("x@y.z"));
+        assert_eq!(codex_email(&json!({ "tokens": {} })), None);
+        assert_eq!(codex_email(&json!({ "tokens": { "id_token": "not-a-jwt" } })), None);
     }
 
     #[test]

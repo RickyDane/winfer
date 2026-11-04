@@ -15,11 +15,11 @@ const { AccountBreakdown } = await import("./UsageMeter");
 
 const now = Date.now();
 const windows = [{ kind: "session", label: "5-hour", usedPercent: 40, resetsAt: now + 3 * 3600_000 }];
-const member = (id: string, label: string): PoolMember => ({
-  id, key: id === "claude:default" ? "claude" : id, label,
+const member = (id: string, label: string, email: string | null = null): PoolMember => ({
+  id, key: id === "claude:default" ? "claude" : id, label, email,
   snapshot: { provider: "claude", at: now, windows }, counted: true,
 });
-const members = [member("claude:default", "Default"), member("claude:account-2", "Account 2"), member("claude:account-3", "Account 3")];
+const members = [member("claude:default", "Default", "default@example.com"), member("claude:account-2", "Account 2", "second@example.com"), member("claude:account-3", "Account 3")];
 const render = (startCollapsed?: boolean) =>
   renderToStaticMarkup(createElement(AccountBreakdown, { members, samples: {}, provider: "claude", providerLabel: "Claude Code", startCollapsed }));
 
@@ -37,5 +37,13 @@ describe("AccountBreakdown", () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain("Account 2");
     expect(html).toContain("Account 3");
+  });
+
+  it("shows each account's email when known, and nothing when not", () => {
+    const html = render();
+    expect(html).toContain("default@example.com");
+    expect(html).toContain("second@example.com");
+    // Account 3 has no email on file: no empty placeholder is rendered for it.
+    expect(html.match(/>[^<]*@example\.com</g)).toHaveLength(2);
   });
 });

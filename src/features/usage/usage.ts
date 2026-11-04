@@ -161,6 +161,8 @@ export interface PoolMember {
   /** Where its usage is kept (see accounts.ts `usageKey`). */
   key: string;
   label: string;
+  /** The sign-in's email, when known. */
+  email: string | null;
   snapshot: Snapshot | undefined;
   /** Enabled and signed in: failover can move work to it, so its room counts. */
   counted: boolean;
@@ -169,8 +171,8 @@ export interface PoolMember {
 /** An agent's accounts in failover order; just the default sign-in when there are no others. */
 export function poolMembers(provider: string, snapshots: Record<string, Snapshot>, list: Account[]): PoolMember[] {
   const accounts = accountsOf(provider, list);
-  if (accounts.length < 2) return [{ id: defaultAccountId(provider), key: provider, label: accountLabel(defaultAccountId(provider), list), snapshot: snapshots[provider], counted: true }];
-  return accounts.map((a) => ({ id: a.id, key: usageKey(a.id), label: a.label, snapshot: snapshots[usageKey(a.id)], counted: a.enabled && a.signedIn }));
+  if (accounts.length < 2) return [{ id: defaultAccountId(provider), key: provider, label: accountLabel(defaultAccountId(provider), list), email: accounts[0]?.email ?? null, snapshot: snapshots[provider], counted: true }];
+  return accounts.map((a) => ({ id: a.id, key: usageKey(a.id), label: a.label, email: a.email ?? null, snapshot: snapshots[usageKey(a.id)], counted: a.enabled && a.signedIn }));
 }
 
 /**

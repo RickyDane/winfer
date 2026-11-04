@@ -416,7 +416,7 @@ export function AccountBreakdown({ members, samples, provider, providerLabel, st
           {members.map((m, i) => (
             <div key={m.id} className={cn("py-1.5", i > 0 && "border-t border-border/50", !m.counted && "opacity-60")}>
             <div className="flex items-center gap-2">
-              <span className="relative shrink-0" title={`${providerLabel} · ${m.label}`}>
+              <span className="relative shrink-0" title={[`${providerLabel} · ${m.label}`, m.email].filter(Boolean).join(" · ")}>
                 {m.snapshot?.windows.length ? (
                   <AccountRing snapshot={m.snapshot} />
                 ) : (
@@ -426,11 +426,18 @@ export function AccountBreakdown({ members, samples, provider, providerLabel, st
                   <ProviderIcon provider={provider} size={8} />
                 </span>
               </span>
-              <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
-                <span style={{ color }}>{providerLabel}</span>
-                <span className="font-normal text-fg-subtle"> · </span>
-                {m.label}
-                {!m.counted && <span className="ml-1.5 text-[10px] font-normal text-fg-subtle">not counted</span>}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium text-fg">
+                  <span style={{ color }}>{providerLabel}</span>
+                  <span className="font-normal text-fg-subtle"> · </span>
+                  {m.label}
+                  {!m.counted && <span className="ml-1.5 text-[10px] font-normal text-fg-subtle">not counted</span>}
+                </span>
+                {m.email && (
+                  <span className="block truncate text-[10px] text-fg-subtle" title={m.email}>
+                    {m.email}
+                  </span>
+                )}
               </span>
               {m.snapshot ? (
                 <span className={cn("shrink-0 text-[10px]", Date.now() - m.snapshot.at > 10 * 60_000 ? "text-warning" : "text-fg-subtle")} title={new Date(m.snapshot.at).toLocaleString()}>

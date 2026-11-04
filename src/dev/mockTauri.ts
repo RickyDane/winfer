@@ -559,11 +559,11 @@ mockIPC(
         };
       case "accounts_list":
         return [
-          { id: "claude:default", provider: "claude", label: "Default", enabled: true, dir: "~/.claude", signedIn: true, exhaustedUntil: RESETS.claude.session },
-          { id: "claude:account-2", provider: "claude", label: "Account 2", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-2", signedIn: true, exhaustedUntil: null },
-          { id: "claude:account-3", provider: "claude", label: "Account 3", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-3", signedIn: true, exhaustedUntil: null },
-          { id: "codex:default", provider: "codex", label: "Default", enabled: true, dir: "~/.codex", signedIn: true, exhaustedUntil: null },
-          { id: "codex:account-2", provider: "codex", label: "Work", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/codex/account-2", signedIn: true, exhaustedUntil: null },
+          { id: "claude:default", provider: "claude", label: "Default", enabled: true, dir: "~/.claude", signedIn: true, email: "you@example.com", exhaustedUntil: RESETS.claude.session },
+          { id: "claude:account-2", provider: "claude", label: "Account 2", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-2", signedIn: true, email: "second@example.com", exhaustedUntil: null },
+          { id: "claude:account-3", provider: "claude", label: "Account 3", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/claude/account-3", signedIn: true, email: "third@example.com", exhaustedUntil: null },
+          { id: "codex:default", provider: "codex", label: "Default", enabled: true, dir: "~/.codex", signedIn: true, email: "you@example.com", exhaustedUntil: null },
+          { id: "codex:account-2", provider: "codex", label: "Work", enabled: true, dir: "~/Library/Application Support/dev.winfer.app/accounts/codex/account-2", signedIn: true, email: "work@example.com", exhaustedUntil: null },
         ];
       case "usage_codex": {
         const now = Date.now();
