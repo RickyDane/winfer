@@ -217,10 +217,9 @@ function WindowLine({ window: w, outAt, samples }: WindowProps) {
   );
 }
 
-/** Providers with known limits, and whether OpenCode's spend is shown; re-renders as countdowns move. */
+/** Providers with known limits; re-renders as countdowns move. */
 function useLimited() {
   const snapshots = useUsage((s) => s.snapshots);
-  const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
   const [, tick] = useState(0);
 
@@ -235,8 +234,7 @@ function useLimited() {
   // One entry per agent, its accounts pooled (other accounts are kept under "claude:account-2").
   const ids = [...new Set(Object.keys(snapshots).map((k) => k.split(":")[0]))].filter(installed);
   const limited = ids.flatMap((id) => pooled(id, snapshots, accounts) ?? []).filter((s) => s.windows.length > 0);
-  const showOpencode = installed("opencode") && opencode !== null;
-  return { limited, showOpencode, installed };
+  return { limited, installed };
 }
 
 /** Codex's redeemable rate limit resets: pick one to put the 5-hour and weekly limits back to full. */
@@ -301,19 +299,22 @@ function CodexResets({ count }: { count: number }) {
 
 const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl";
 
-/** Every agent's limits (its accounts pooled) as bars or lines, plus OpenCode's spend today.
- *  `accounts` adds what each account has left under its agent. */
-export function Limits({ chart = "bars", refresh = true, accounts: showAccounts = false }: { chart?: ChartKind; refresh?: boolean; accounts?: boolean }) {
+/** Every agent's limits (its accounts pooled) as bars or lines.
+ *  `accounts` adds what each account has left under its agent; `spend` adds OpenCode's
+ *  spend today (Settings only — the title bar popup shows limits only). */
+export function Limits({ chart = "bars", refresh = true, accounts: showAccounts = false, spend: showSpend = true }: { chart?: ChartKind; refresh?: boolean; accounts?: boolean; spend?: boolean }) {
   const snapshots = useUsage((s) => s.snapshots);
   const samples = useUsage((s) => s.samples);
   const opencode = useUsage((s) => s.opencode);
   const providers = useWorkspaces((s) => s.providers);
   const errors = useUsage((s) => s.errors);
-  const { limited, showOpencode, installed } = useLimited();
+  const { limited, installed } = useLimited();
   const accounts = useAccounts((s) => s.list);
   const claudeInstalled = installed("claude");
+  const showOpencode = showSpend && installed("opencode") && opencode !== null;
   // Errors of accounts that don't count (disabled, signed out, removed) don't matter here.
   const counts = (key: string) => {
+    if (key === "opencode") return showSpend;
     const provider = key.split(":")[0];
     return installed(provider) && (key === provider || poolMembers(provider, snapshots, accounts).some((m) => m.key === key && m.counted));
   };
@@ -453,7 +454,7 @@ export function UsageDetails({ className }: { className?: string }) {
         <Heading>Usage limits</Heading>
         <RefreshUsageButton />
       </div>
-      <Limits refresh={false} accounts />
+      <Limits refresh={false} accounts spend={false} />
     </div>
   );
 }
@@ -461,7 +462,7 @@ export function UsageDetails({ className }: { className?: string }) {
 /** Title bar: one ring per agent with known limits; click for the details. */
 export function UsageMeter() {
   const providers = useWorkspaces((s) => s.providers);
-  const { limited, showOpencode } = useLimited();
+  const { limited } = useLimited();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
@@ -477,7 +478,7 @@ export function UsageMeter() {
     };
   }, [open]);
 
-  if (limited.length === 0 && !showOpencode) return null;
+  if (limited.length === 0) return null;
 
   const summary = limited
     .map((s) => {
@@ -493,7 +494,7 @@ export function UsageMeter() {
         title={summary || "Usage"}
         className={cn("flex items-center gap-1 rounded-md px-1 py-0.5 hover:bg-hover", open && "bg-hover")}
       >
-        {limited.length > 0 ? limited.map((s) => <UsageRing key={s.provider} provider={s.provider} />) : <Gauge size={14} />}
+        {limited.map((s) => <UsageRing key={s.provider} provider={s.provider} />)}
       </button>
       {open && <UsageDetails className="anim-menu absolute right-0 z-50 mt-1" />}
     </div>
@@ -558,7 +559,7 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
                 <UsageSummary />
               </PreviewSection>
               <PreviewSection title="Limits" onOpen={() => openTab("limits")} className="border-t border-border pt-3">
-                <Limits accounts />
+                <Limits accounts spend={false} />
               </PreviewSection>
             </div>
           </div>,

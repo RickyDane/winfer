@@ -9,7 +9,7 @@ vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 vi.stubGlobal("document", { hasFocus: () => true });
 
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
-const { duration, leftNow, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
+const { duration, leftNow, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, refreshOpencode, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
 
 const HOUR = 3600_000;
 const now = 1_800_000_000_000;
@@ -80,6 +80,16 @@ describe("Claude usage refresh", () => {
     expect(useUsage.getState().errors.claude).toBeUndefined();
   });
 
+  it("does not warn over a fresh reading when the account-wide poll fails", async () => {
+    const fresh = { provider: "claude", at: Date.now(), windows: [session] };
+    useUsage.setState({ snapshots: { claude: fresh } });
+    vi.mocked(invoke).mockRejectedValueOnce("Claude sign-in unavailable or expired. Sign in through Claude Code, then refresh.");
+    await refreshClaude();
+    expect(useUsage.getState().snapshots.claude).toEqual(fresh);
+    expect(useUsage.getState().errors.claude).toBeUndefined();
+    expect(useUsage.getState().refreshing.claude).toBe(false);
+  });
+
   it("shares concurrent manual and automatic requests", async () => {
     let resolve!: (value: unknown) => void;
     vi.mocked(invoke).mockImplementation(() => new Promise((done) => { resolve = done; }));
@@ -107,6 +117,10 @@ describe("Claude usage refresh", () => {
     const report = vi.mocked(listen).mock.calls.find(([event]) => event === "usage://report")![1];
     report({ payload: { provider: "claude", paneId: "p", report: { windows: [{ ...session, usedPercent: 1 }] } } } as never);
     expect(useUsage.getState().snapshots.claude).toEqual(saved); // Cached status line cannot overwrite live limits.
+    // A pane reporting fresh limits proves its account works: a latched warning clears.
+    useUsage.setState((s) => ({ errors: { ...s.errors, codex: "Couldn't refresh Codex limits." } }));
+    report({ payload: { provider: "codex", paneId: "p", report: { windows: [{ ...session, usedPercent: 5 }] } } } as never);
+    expect(useUsage.getState().errors.codex).toBeUndefined();
     const poll = timers.setInterval.mock.calls.find(([, ms]) => ms === 60_000)![0];
     poll();
     await Promise.resolve();
@@ -116,6 +130,29 @@ describe("Claude usage refresh", () => {
     await refreshClaude();
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "usage_claude")).toHaveLength(2);
     vi.mocked(Date.now).mockRestore();
+  });
+});
+
+describe("OpenCode usage refresh", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    useUsage.setState({ opencode: null, refreshing: {}, errors: {} });
+  });
+
+  it("treats no reading as no error", async () => {
+    vi.mocked(invoke).mockResolvedValue(null);
+    await refreshOpencode();
+    expect(useUsage.getState().opencode).toBeNull();
+    expect(useUsage.getState().errors.opencode).toBeUndefined();
+    expect(useUsage.getState().refreshing.opencode).toBe(false);
+  });
+
+  it("stores today's spend when OpenCode reports it", async () => {
+    const spend = { tokens: 1200, cost: 0.5, sessions: 2 };
+    vi.mocked(invoke).mockResolvedValue(spend);
+    await refreshOpencode();
+    expect(useUsage.getState().opencode).toEqual(spend);
+    expect(useUsage.getState().errors.opencode).toBeUndefined();
   });
 });
 

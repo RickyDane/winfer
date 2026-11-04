@@ -318,7 +318,9 @@ function record(snapshot: Snapshot) {
       const resets = Number(key.split(":").at(-1));
       if (resets && resets < now) delete samples[key];
     }
-    return { snapshots: { ...s.snapshots, [snapshot.provider]: snapshot }, samples };
+    // A fresh reading (e.g. from a running pane's status line) proves the account works,
+    // so any warning latched by a failed account-wide poll no longer applies.
+    return { snapshots: { ...s.snapshots, [snapshot.provider]: snapshot }, samples, errors: { ...s.errors, [snapshot.provider]: undefined } };
   });
   // Warn once per window and threshold, only when crossing it (not on the very first reading).
   if (!before) return;
@@ -349,6 +351,11 @@ function refresh(provider: string, read: () => Promise<void>): Promise<void> {
   const request = Promise.resolve().then(read).then(() => {
     useUsage.setState((s) => ({ errors: { ...s.errors, [provider]: undefined } }));
   }).catch((error: unknown) => {
+    // A fresh reading (e.g. from a running pane's status line) proves the account works.
+    // Claude Code renews its stored sign-in itself, so a poll that finds that sign-in
+    // momentarily expired must not warn over a working account.
+    const at = useUsage.getState().snapshots[provider]?.at;
+    if (at !== undefined && Date.now() - at < 10 * 60_000) return;
     useUsage.setState((s) => ({ errors: { ...s.errors, [provider]: String(error) } }));
   }).finally(() => {
     pending.delete(provider);
@@ -479,8 +486,9 @@ export function tokens(n: number): string {
 export function refreshOpencode() {
   return refresh("opencode", async () => {
     const spend = await invoke<Spend | null>("usage_opencode");
-    if (!spend) throw new Error("Couldn't refresh OpenCode usage.");
-    useUsage.setState({ opencode: spend });
+    // No reading (e.g. an OpenCode version without `stats --json`) is not an error:
+    // OpenCode has no plan limits, so there's nothing to warn about.
+    if (spend) useUsage.setState({ opencode: spend });
   });
 }
 
