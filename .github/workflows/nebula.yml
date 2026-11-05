@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   frontend:
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -37,7 +37,7 @@ jobs:
   tag:
     needs: frontend
     if: github.event_name != 'pull_request'
-    runs-on: avrea-ubuntu-latest-2-vcpu
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
