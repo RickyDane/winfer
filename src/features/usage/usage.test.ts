@@ -9,7 +9,7 @@ vi.mock("@/stores/toasts", () => ({ toast: vi.fn() }));
 vi.stubGlobal("document", { hasFocus: () => true });
 
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
-const { duration, leftNow, poolMembers, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, refreshOpencode, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
+const { duration, leftNow, poolMembers, pooled, pooledRunsOutAt, pooledSamples, refreshClaude, refreshOpencode, resetWhen, runsOutAt, startUsageTracking, tightest, useUsage } = await import("./usage");
 
 const HOUR = 3600_000;
 const now = 1_800_000_000_000;
@@ -47,6 +47,15 @@ describe("usage", () => {
     expect(duration(108 * 60_000)).toBe("1h 48m");
     expect(duration(3 * 86400_000 + 4 * HOUR)).toBe("3d 4h");
     expect(duration(20_000)).toBe("1m");
+  });
+
+  it("formats reset times exactly, with the countdown", () => {
+    const at = now + 3 * HOUR;
+    const exact = new Date(at).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    expect(resetWhen(at, now)).toBe(`${exact} (in 3h)`);
+    expect(resetWhen(now + 50 * HOUR, now)).toContain("(in 2d 2h)");
+    // A reset that has passed has no countdown.
+    expect(resetWhen(now - HOUR, now)).not.toContain("(in ");
   });
 });
 

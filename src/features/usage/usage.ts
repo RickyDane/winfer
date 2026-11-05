@@ -273,6 +273,13 @@ export function when(at: number, now = Date.now()): string {
   return new Date(at).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/** Exact local time plus how long until then: "Mon 3 Nov, 21:16 (in 3h 12m)".
+ *  For the limits popup, where "in 3h" alone doesn't say when a window resets. */
+export function resetWhen(at: number, now = Date.now()): string {
+  const exact = new Date(at).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return at > now ? `${exact} (in ${duration(at - now)})` : exact;
+}
+
 // Thresholds -----------------------------------------------------------------------------------
 
 const WARN_AT = [20, 5];

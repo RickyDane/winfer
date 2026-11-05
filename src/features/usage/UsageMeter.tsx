@@ -7,7 +7,7 @@ import { PROVIDER_COLORS } from "@/features/providers/providers";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { setUsageTab, type ChartKind, type UsageTab } from "./controls";
 import { accountLabel, useAccounts } from "@/features/accounts/accounts";
-import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, pooled, pooledRunsOutAt, pooledSamples, poolMembers, refreshUsage, resetOutcomeText, runsOutAt, tightest, tokens, useUsage, when, type ContextPart, type PoolMember, type ResetCredit, type Snapshot, type UsageWindow } from "./usage";
+import { contextBreakdown, contextColor, duration, leftNow, levelColor, listCodexResets, redeemCodexReset, pooled, pooledRunsOutAt, pooledSamples, poolMembers, refreshUsage, resetOutcomeText, resetWhen, runsOutAt, tightest, tokens, useUsage, when, type ContextPart, type PoolMember, type ResetCredit, type Snapshot, type UsageWindow } from "./usage";
 import { PART_COLORS } from "./contextParts";
 import { UsageSummary } from "./UsageHistory";
 
@@ -66,22 +66,27 @@ function AccountRing({ snapshot, size = 30 }: { snapshot: Snapshot; size?: numbe
   );
 }
 
-/** One window of one account on a single line: label, bar, % left, and reset (run-out in the tooltip / warning suffix). */
+/** One window of one account: label, bar, % left, and on its own line the exact reset time (and exact run-out time when projected). */
 function AccountWindowRow({ memberKey, window: w, samples }: { memberKey: string; window: UsageWindow; samples: Record<string, [number, number][]> }) {
   const left = leftNow(w);
   const outAt = runsOutAt(memberKey, w, samples);
-  const reset = w.resetsAt ? (w.resetsAt > Date.now() ? `resets ${when(w.resetsAt)}` : "reset — full again") : null;
-  const title = [reset, outAt && `at this pace runs out ${when(outAt)}`].filter(Boolean).join(" · ");
+  const reset = w.resetsAt ? (w.resetsAt > Date.now() ? `resets ${resetWhen(w.resetsAt)}` : "reset — full again") : null;
+  const title = w.resetsAt ? new Date(w.resetsAt).toLocaleString() : undefined;
   return (
-    <div className="flex items-center gap-1.5 text-[11px]" title={title || undefined}>
-      <span className="w-11 shrink-0 truncate text-fg-muted">{w.label}</span>
-      <span className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-hover">
-        <span className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out" style={{ width: `${left}%`, background: levelColor(left) }} />
-      </span>
-      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-fg">{Math.round(left)}%</span>
-      <span className={cn("w-[104px] shrink-0 truncate text-right text-[10px]", outAt ? "text-warning" : "text-fg-subtle")}>
-        {outAt ? `out ${when(outAt)}` : reset ?? ""}
-      </span>
+    <div className="space-y-0.5 text-[11px]">
+      <div className="flex items-center gap-1.5">
+        <span className="w-11 shrink-0 truncate text-fg-muted">{w.label}</span>
+        <span className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-hover">
+          <span className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out" style={{ width: `${left}%`, background: levelColor(left) }} />
+        </span>
+        <span className="w-9 shrink-0 text-right font-mono text-[10px] text-fg">{Math.round(left)}%</span>
+      </div>
+      {(reset || outAt) && (
+        <div className="pl-[50px] text-[10px] leading-snug text-fg-subtle" title={title}>
+          {reset}
+          {outAt && <span className="text-warning">{reset ? " · " : ""}at this pace runs out {resetWhen(outAt)}</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -111,9 +116,11 @@ interface WindowProps {
   outAt: number | null;
   /** Readings so far ([at, used%]), for the line. */
   samples: [number, number][];
+  /** Pooled over several accounts: the shown reset is the first account's. */
+  firstReset?: boolean;
 }
 
-function WindowBar({ window, outAt }: WindowProps) {
+function WindowBar({ window, outAt, firstReset }: WindowProps) {
   const left = leftNow(window);
   return (
     <div className="space-y-1">
@@ -127,9 +134,9 @@ function WindowBar({ window, outAt }: WindowProps) {
         </span>
         <span className="w-16 shrink-0 text-right font-mono text-[11px] text-fg">{Math.round(left)}% left</span>
       </div>
-      <div className="pl-26 text-[11px] text-fg-subtle">
-        {window.resetsAt && (window.resetsAt > Date.now() ? `resets ${when(window.resetsAt)}` : "reset — full again")}
-        {outAt && <span className="text-warning"> · at this pace runs out {when(outAt)}</span>}
+      <div className="pl-26 text-[11px] text-fg-subtle" title={window.resetsAt ? new Date(window.resetsAt).toLocaleString() : undefined}>
+        {window.resetsAt && (window.resetsAt > Date.now() ? `${firstReset ? "first resets" : "resets"} ${resetWhen(window.resetsAt)}` : "reset — full again")}
+        {outAt && <span className="text-warning"> · at this pace runs out {resetWhen(outAt)}</span>}
       </div>
     </div>
   );
@@ -142,7 +149,7 @@ const clock = (t: number, long: boolean) =>
   new Date(t).toLocaleString(undefined, long ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
 
 /** What's left of a window over its run so far, from the readings kept for the run-out projection. */
-function WindowLine({ window: w, outAt, samples }: WindowProps) {
+function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
   const [hover, setHover] = useState<number | null>(null);
   const now = Date.now();
   const left = leftNow(w, now);
@@ -209,9 +216,9 @@ function WindowLine({ window: w, outAt, samples }: WindowProps) {
         <span>{clock(start, long)}</span>
         <span>{live ? clock(end, long) : "now"}</span>
       </div>
-      <div className="text-[11px] text-fg-subtle">
-        {w.resetsAt && (live ? `resets ${when(w.resetsAt)}` : "reset — full again")}
-        {outAt && <span className="text-warning"> · at this pace runs out {when(outAt)}</span>}
+      <div className="text-[11px] text-fg-subtle" title={w.resetsAt ? new Date(w.resetsAt).toLocaleString() : undefined}>
+        {w.resetsAt && (live ? `${firstReset ? "first resets" : "resets"} ${resetWhen(w.resetsAt)}` : "reset — full again")}
+        {outAt && <span className="text-warning"> · at this pace runs out {resetWhen(outAt)}</span>}
       </div>
     </div>
   );
@@ -352,6 +359,7 @@ export function Limits({ chart = "bars", refresh = true, accounts: showAccounts 
                 window={w}
                 outAt={pooledRunsOutAt(s.provider, w.kind, snapshots, accounts, samples)}
                 samples={pooledSamples(s.provider, w.kind, snapshots, accounts, samples)}
+                firstReset={pool.length > 1}
               />
             ))}
             {showAccounts && members.length > 1 && <AccountBreakdown members={members} samples={samples} provider={s.provider} providerLabel={providerName(providers, s.provider)} startCollapsed={accountsCollapsed} />}

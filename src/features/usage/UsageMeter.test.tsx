@@ -39,6 +39,30 @@ describe("AccountBreakdown", () => {
     expect(html).toContain("Account 3");
   });
 
+  it("shows the exact reset time of each account's 5-hour and weekly windows", () => {
+    const two = [
+      { kind: "session", label: "5-hour", usedPercent: 40, resetsAt: now + 3 * 3600_000 },
+      { kind: "week", label: "Weekly", usedPercent: 90, resetsAt: now + 50 * 3600_000 },
+    ];
+    const one: PoolMember[] = [{ id: "claude:default", key: "claude", label: "Default", email: null, snapshot: { provider: "claude", at: now, windows: two }, counted: true }];
+    const html = renderToStaticMarkup(createElement(AccountBreakdown, { members: one, samples: {}, provider: "claude", providerLabel: "Claude Code" }));
+    expect(html).toContain("5-hour");
+    expect(html).toContain("Weekly");
+    expect(html).toContain("resets ");
+    expect(html).toContain("(in 3h)");
+    expect(html).toContain("(in 2d 2h)");
+  });
+
+  it("keeps the exact reset visible when a run-out is projected", () => {
+    const one: PoolMember[] = [{ id: "claude:default", key: "claude", label: "Default", email: null, snapshot: { provider: "claude", at: now, windows }, counted: true }];
+    const samples = { [`claude:session:${windows[0].resetsAt}`]: [[now - 3600_000, 10], [now, 40]] as [number, number][] };
+    const html = renderToStaticMarkup(createElement(AccountBreakdown, { members: one, samples, provider: "claude", providerLabel: "Claude Code" }));
+    expect(html).toContain("resets ");
+    expect(html).toContain("(in 3h)");
+    expect(html).toContain("at this pace runs out");
+    expect(html).toContain("(in 2h)");
+  });
+
   it("shows each account's email when known, and nothing when not", () => {
     const html = render();
     expect(html).toContain("default@example.com");
