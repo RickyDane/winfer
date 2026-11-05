@@ -94,9 +94,7 @@ jobs:
           - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
-    # Rust goes through sccache on Avrea's WebDAV cache. actions/cache (what rust-cache used) is
-    # scoped to the ref that saved it, so a cache saved under one tag was never visible to the
-    # next tag's run and every release compiled from scratch; sccache's store isn't ref-scoped.
+    # Rust goes through sccache on the GitHub Actions cache backend (see .github/actions/sccache).
     env:
       RUSTC_WRAPPER: sccache
     steps:
