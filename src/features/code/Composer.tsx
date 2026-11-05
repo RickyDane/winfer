@@ -10,6 +10,7 @@ import { COMMANDS, MODES, type Approval } from "./protocol";
 import { DiffView } from "./Transcript";
 import { elapsed } from "../usage/toolStats";
 import { mentionAt, rankFiles } from "./mentions";
+import { composerHeight } from "./composerHeight";
 
 /** An approval with questions (Claude Code's AskUserQuestion): pick an option per question (or
  *  type one), then the answers go back as `answer`; declining goes through `approve` deny. */
@@ -161,6 +162,7 @@ export function Composer({ focused }: { focused: boolean }) {
   const store = useContext(CodeStoreContext)!;
   const rate = useRate();
   const showRate = useCodeWeb((s) => s.showRate);
+  const textScale = useCodeWeb((s) => s.textScale);
   const text = useCode((s) => s.draft);
   const setText = useCode((s) => s.setDraft);
   const attachments = useCode((s) => s.attachments);
@@ -264,15 +266,25 @@ export function Composer({ focused }: { focused: boolean }) {
     return () => window.removeEventListener("keydown", on);
   }, [focused, sheet, approvals, text, busy, mode, send]);
 
+  // Latest text for the ResizeObserver closure below (mounted once).
+  const textRef = useRef(text);
+  textRef.current = text;
   const fit = () => {
     const el = ta.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = Math.min(el.scrollHeight, 220) + "px";
+    // Empty text clears the inline height instead of trusting scrollHeight:
+    // that measurement counts the placeholder, which wraps to many lines when
+    // the pane mounts hidden/narrow (engines differ), leaving a clean session
+    // with a huge composer that nothing re-measured while text stayed empty.
+    const h = composerHeight(textRef.current, el.scrollHeight);
+    el.style.height = h == null ? "" : h + "px";
   };
-  useEffect(fit, [text]);
+  // Re-fit when the text changes, and also when font size (text scale) or the
+  // compact (started) styling changes the line height at unchanged width.
+  useEffect(fit, [text, textScale, started]);
   // A resumed session can mount while the pane is still hidden/narrow, so the
-  // placeholder wraps and the first measurement sticks. Re-fit on width changes.
+  // first measurement can be off. Re-fit on width changes.
   useEffect(() => {
     const el = ta.current;
     if (!el) return;
