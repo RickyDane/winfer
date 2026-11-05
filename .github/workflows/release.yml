@@ -230,8 +230,20 @@ jobs:
           info=$(codesign -dv --verbose=4 "$app" 2>&1)
           grep -q 'Authority=Developer ID Application' <<<"$info" || { echo "::error::Not Developer ID signed"; exit 1; }
           grep -q 'flags=.*runtime' <<<"$info" || { echo "::error::Hardened runtime missing"; exit 1; }
-          xcrun stapler validate "$app"
-          spctl --assess --type execute --verbose=4 "$app"
+          # stapler/spctl talk to Apple's ticket servers: one dropped connection
+          # (e.g. "network connection was lost", stapler Error 68) must not fail
+          # a build that is already signed and notarized, so retry with backoff.
+          retry() {
+            local n=0
+            until "$@"; do
+              n=$((n + 1))
+              [ "$n" -ge 5 ] && return 1
+              echo "::warning::$1 failed (attempt $n/5), retrying in $((n * 15))s"
+              sleep $((n * 15))
+            done
+          }
+          retry xcrun stapler validate "$app"
+          retry spctl --assess --type execute --verbose=4 "$app"
 
       - name: sccache stats
         if: always()
