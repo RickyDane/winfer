@@ -10,6 +10,8 @@ describe("normalizeUrl", () => {
     ["github.com", "https://github.com"],
     ["docs.rs/tokio", "https://docs.rs/tokio"],
     ["https://example.com/x", "https://example.com/x"],
+    ["http://example.com/x", "http://example.com/x"],
+    ["https://d-inf-devops01.medata.de/MeData/MARGO/_git/Katalon/pullrequest/5370", "https://d-inf-devops01.medata.de/MeData/MARGO/_git/Katalon/pullrequest/5370"],
     ["about:blank", "about:blank"],
     ["tauri multiwebview", "https://www.google.com/search?q=tauri%20multiwebview"],
   ])("%s → %s", (input, expected) => expect(normalizeUrl(input)).toBe(expected));

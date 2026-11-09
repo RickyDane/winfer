@@ -225,6 +225,8 @@ struct Instance {
     /// Page targets in creation order.
     tabs: Mutex<Vec<Tab>>,
     sessions: Mutex<HashMap<String, String>>,
+    /// Opt-in for this browser lifetime only, never for the app's own network requests.
+    ignore_certificate_errors: tokio::sync::Mutex<bool>,
     /// One attach per target even when the UI and target discovery race for it.
     attaching: Mutex<HashMap<String, Arc<OnceCell<String>>>>,
     screencast: Mutex<Option<Screencast>>,
@@ -588,6 +590,7 @@ impl Instance {
             }
         })
         .await?;
+        set_certificate_policy(&cdp, *self.ignore_certificate_errors.lock().await).await?;
         cdp.call("Target.setDiscoverTargets", json!({ "discover": true }), None)
             .await?;
         *self.cdp.lock().unwrap() = Some(cdp.clone());
@@ -873,6 +876,7 @@ impl BrowserManager {
             connecting: tokio::sync::Mutex::new(()),
             tabs: Mutex::default(),
             sessions: Mutex::default(),
+            ignore_certificate_errors: tokio::sync::Mutex::new(false),
             attaching: Mutex::default(),
             screencast: Mutex::default(),
             attach_lock: tokio::sync::Mutex::new(()),
@@ -894,6 +898,7 @@ impl BrowserManager {
             agent_opened: Mutex::default(),
         });
         instances.insert(workspace_id.to_string(), instance.clone());
+        let _ = crate::diagnostics::emit_logged(app, "browser://certificate-policy", json!({ "workspaceId": workspace_id, "allow": false }));
         Ok(instance)
     }
 
@@ -1020,6 +1025,28 @@ pub async fn browser_open(
         }
     }
     Ok(instance.tabs.lock().unwrap().clone())
+}
+
+#[tauri::command]
+pub async fn browser_allow_invalid_certificates(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    allow: bool,
+) -> Res<()> {
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let cdp = instance.cdp().await?;
+    // Serialize with reconnects and other policy changes; only commit after Chrome accepts it.
+    let _guard = instance.connecting.lock().await;
+    let mut policy = instance.ignore_certificate_errors.lock().await;
+    set_certificate_policy(&cdp, allow).await?;
+    *policy = allow;
+    Ok(())
+}
+
+async fn set_certificate_policy(cdp: &Cdp, allow: bool) -> Res<()> {
+    cdp.call("Security.setIgnoreCertificateErrors", json!({ "ignore": allow }), None).await?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1481,6 +1508,24 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    /// The policy is browser-wide (not a page session), reversible, and supported by real Chrome.
+    #[test]
+    fn certificate_policy_can_be_enabled_and_revoked() {
+        let tmp = std::env::temp_dir().join(format!("winfer-tls-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
+        tauri::async_runtime::block_on(async {
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), |_| {}).await.unwrap();
+            for allow in [false, true, false] {
+                set_certificate_policy(&cdp, allow).await.unwrap();
+            }
+        });
+    }
 
     #[test]
     fn adopts_an_agents_size_but_not_stale_frames() {
