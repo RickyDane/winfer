@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl as openExternal, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Check, Code, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, MessageSquarePlus, Pencil, Plus, RotateCw, Send, X } from "lucide-react";
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ThemedToken } from "shiki";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -17,8 +17,9 @@ import { pasteText, sendText } from "@/features/terminal/xtermRegistry";
 import { providerName, useWorkspaces } from "@/stores/workspaces";
 import { findComments, insertComment, parseCommentValue, removeComment } from "./comments";
 import { languageFor, lineTokens, tokenStyle, useHighlight } from "./highlight";
-import { dirName, fileFromUri, fileName, isImage, isMarkdown, relativeTo, slugger } from "./paths";
-import { closeFile, openFile, openFileFrom, pickFile, resolveFiles, useViewerJump } from "./viewer";
+import { dirName, fileFromUri, fileName, isImage, isMarkdown, isPdf, relativeTo, slugger } from "./paths";
+import { closeFile, openFile, openFileFrom, pickFile, resolveFiles, selectViewerProject, useViewerJump } from "./viewer";
+import { viewerProjects } from "./projects";
 
 interface TextFile {
   path: string;
@@ -30,6 +31,7 @@ interface TextFile {
 const POLL_MS = 1500;
 /** Code files longer than this are shown without line numbers. */
 const MAX_NUMBERED_LINES = 20_000;
+const PdfView = lazy(() => import("./PdfView"));
 
 const IconButton = ({ title, onClick, active, children }: { title: string; onClick: () => void; active?: boolean; children: React.ReactNode }) => (
   <button title={title} onClick={onClick} className={cn("rounded p-1 hover:bg-hover hover:text-fg", active ? "bg-accent-soft text-accent" : "text-fg-subtle")}>
@@ -44,22 +46,46 @@ function tabLabel(path: string, docs: string[]) {
   return twin ? `${fileName(dirName(path))}/${name}` : name;
 }
 
-const iconFor = (path: string) => (isMarkdown(path) ? FileText : isImage(path) ? ImageIcon : Code);
+const iconFor = (path: string) => (isMarkdown(path) || isPdf(path) ? FileText : isImage(path) ? ImageIcon : Code);
 
-/** The side panel's file viewer: a tab per open file. */
+/** The side panel's file viewer: project tabs, then the selected project's files. */
 export function ViewerPanel() {
   const { docs, active } = useWorkspaces((s) => s.viewer);
-  const root = useWorkspaces((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.rootDir);
-  const shown = active && docs.includes(active) ? active : null;
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  const projects = viewerProjects(docs, workspaces);
+  const project = projects.find((g) => active && g.docs.includes(active)) ?? projects[0];
+  const projectDocs = project?.docs ?? [];
+  const root = project?.root;
+  const shown = active && projectDocs.includes(active) ? active : projectDocs[0] ?? null;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {projects.length > 0 && (
+        <div role="tablist" aria-label="File viewer projects" className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-1.5">
+          {projects.map((group) => (
+            <button
+              key={group.id}
+              role="tab"
+              aria-selected={group.id === project?.id}
+              onClick={() => selectViewerProject(group.id)}
+              title={group.root ?? "Files outside your projects"}
+              className={cn("flex h-7 max-w-48 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs", group.id === project?.id ? "bg-accent-soft text-accent" : "text-fg-muted hover:bg-hover")}
+            >
+              <FolderOpen size={12} className="shrink-0" />
+              <span className="truncate">{group.name}</span>
+              <span className="text-[10px] opacity-60">{group.docs.length}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-          {docs.map((path) => {
+        <div role="tablist" aria-label="Project files" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          {projectDocs.map((path) => {
             const Icon = iconFor(path);
             return (
               <button
                 key={path}
+                role="tab"
+                aria-selected={path === shown}
                 onClick={() => openFile(path)}
                 onMouseDown={(e) => e.button === 1 && e.preventDefault()}
                 onAuxClick={(e) => e.button === 1 && closeFile(path)}
@@ -70,7 +96,7 @@ export function ViewerPanel() {
                 )}
               >
                 <Icon size={12} className="shrink-0" />
-                <span className="truncate">{tabLabel(path, docs)}</span>
+                <span className="truncate">{tabLabel(path, projectDocs)}</span>
                 <X
                   size={11}
                   className="shrink-0 opacity-0 group-hover:opacity-60 hover:opacity-100"
@@ -83,7 +109,7 @@ export function ViewerPanel() {
             );
           })}
         </div>
-        <IconButton title="Open a file…" onClick={() => void pickFile()}>
+        <IconButton title="Open a file…" onClick={() => void pickFile(root)}>
           <Plus size={14} />
         </IconButton>
       </div>
@@ -117,6 +143,8 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
   const editor = preferredEditor(useEditors((s) => s.editors));
   const markdown = isMarkdown(path);
   const image = isImage(path);
+  const pdf = isPdf(path);
+  const [pdfRevision, setPdfRevision] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -132,7 +160,7 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
   }, [path]);
 
   useEffect(() => {
-    if (image) return;
+    if (image || pdf) return;
     void load();
     const timer = window.setInterval(() => {
       if (document.hidden) return;
@@ -142,7 +170,7 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
       });
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [path, image, load]);
+  }, [path, image, pdf, load]);
 
   /** Writes `text`, refusing when the file changed since `expected` (unless null). */
   const write = useCallback(
@@ -216,7 +244,7 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
   }, [composing, file]);
 
   const binary = file?.text.includes("\u0000");
-  const editable = !image && !!file && !binary;
+  const editable = !image && !pdf && !!file && !binary;
   const rendered = markdown && !source && !draft;
   const shownText = file?.text ?? "";
   const userComments = markdown ? findComments(shownText).filter((c) => c.author === "user").length : 0;
@@ -270,7 +298,7 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
               </IconButton>
             )}
             {!image && (
-              <IconButton title="Reload" onClick={() => void load()}>
+              <IconButton title="Reload" onClick={() => pdf ? setPdfRevision((n) => n + 1) : void load()}>
                 <RotateCw size={14} />
               </IconButton>
             )}
@@ -303,7 +331,11 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
         </div>
       )}
       <div ref={scroller} className="relative min-h-0 flex-1 overflow-auto select-text">
-        {image ? (
+        {pdf ? (
+          <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner size={14} /></div>}>
+            <PdfView path={path} revision={pdfRevision} />
+          </Suspense>
+        ) : image ? (
           <div className="flex min-h-full items-center justify-center p-4">
             <LocalImage src={path} base={dirName(path)} alt={fileName(path)} />
           </div>

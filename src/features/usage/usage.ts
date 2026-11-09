@@ -75,8 +75,11 @@ export interface Spend {
 
 /** What a pane's agent spent this session, as it reports it (winfer code). */
 export interface PaneSpend {
-  /** At API prices; null when the backend doesn't say (e.g. billed to a ChatGPT plan). */
+  /** At API prices; null when neither a reported cost nor a known token price is available. */
   cost: number | null;
+  /** Token-based estimate at the current model's API prices, not a reported charge. */
+  estimated?: boolean;
+  model?: string;
   input: number;
   output: number;
   cached: number;

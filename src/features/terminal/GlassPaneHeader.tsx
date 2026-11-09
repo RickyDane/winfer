@@ -127,7 +127,7 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
         {pane.devUrl && (
           <button
             onMouseDown={stop}
-            onClick={() => execute({ type: "browser.open", url: pane.devUrl! })}
+            onClick={() => execute({ type: "browser.open", url: pane.devUrl!, paneId: pane.id })}
             aria-label={`Open ${pane.devUrl} in the browser panel`}
             className="group/launch relative shrink-0"
           >
@@ -191,16 +191,16 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
         ) : (
           <>
             {pane.worktree ? (
-              <button onMouseDown={stop} onClick={() => execute({ type: "pane.showChanges", target })} title={`Own worktree: ${pane.worktree.path}\nClick to show changes`} className="min-w-0 shrink">
-                <Pill className="max-w-44 border-teal-400/30 bg-teal-400/10 text-teal-200 hover:bg-teal-400/20">
+              <button onMouseDown={stop} onClick={() => execute({ type: "pane.showChanges", target })} aria-label={`Show changes for ${branch}`} title={`Branch: ${branch}\nOwn worktree: ${pane.worktree.path}\nClick to show changes`} className="min-w-0 shrink-0 @[500px]:shrink">
+                <Pill className="max-w-full border-teal-400/30 bg-teal-400/10 text-teal-200 hover:bg-teal-400/20 @[500px]:max-w-44">
                   <FolderGit2 size={11} className="shrink-0" />
-                  <span className="truncate">{branch}</span>
+                  <span className="hidden truncate @[500px]:inline">{branch}</span>
                 </Pill>
               </button>
             ) : (
               <Pill className="border-dashed bg-transparent text-fg-subtle" title="Works in the project folder, not its own worktree">
                 <GitBranch size={11} className="shrink-0" />
-                shared folder
+                <span className="hidden @[500px]:inline">shared folder</span>
               </Pill>
             )}
             {pane.model && (

@@ -5,7 +5,6 @@ import {
   Brain,
   Check,
   ChevronRight,
-  Copy,
   FilePen,
   FileText,
   FolderSearch,
@@ -137,40 +136,6 @@ function diffStat(diff: string) {
 
 /** True while the user has text marked, so click-to-toggle handlers don't fire at the end of a drag. */
 const selecting = () => !!window.getSelection()?.toString();
-
-/** A quiet, discoverable footer action that never covers message content. */
-function CopyMessage({ text }: { text: string }) {
-  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
-  useEffect(() => {
-    if (status !== "copied" && status !== "error") return;
-    const timer = setTimeout(() => setStatus("idle"), 2400);
-    return () => clearTimeout(timer);
-  }, [status]);
-  const label = status === "copied" ? "Copied" : status === "error" ? "Retry copy" : "Copy";
-  return (
-    <div className="cw-msg-actions">
-      <button
-        type="button"
-        className={clsx("cw-msg-copy", status === "copied" && "copied")}
-        title={status === "error" ? "Couldn't copy. Try again." : "Copy message"}
-        aria-label="Copy message"
-        disabled={status === "copying"}
-        onClick={async () => {
-          setStatus("copying");
-          try {
-            await navigator.clipboard.writeText(text);
-            setStatus("copied");
-          } catch {
-            setStatus("error");
-          }
-        }}
-      >
-        {status === "copied" ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
-        <span role="status">{label}</span>
-      </button>
-    </div>
-  );
-}
 
 /** Notices (e.g. "stopped background task …" with its whole command) stay at two lines; click to expand. */
 function NoticeText({ text }: { text: string }) {
@@ -338,7 +303,6 @@ const UserRow = memo(function UserRow({ item }: { item: Extract<Item, { kind: "u
         )}
         <Linkify text={item.text} />
       </div>
-      {item.text && <CopyMessage text={item.text} />}
     </div>
   );
 });
@@ -347,7 +311,6 @@ const TextRow = memo(function TextRow({ item, dark }: { item: Extract<Item, { ki
   return (
     <div className={clsx("cw-assistant cw-enter", item.streaming && "streaming")}>
       <Markdown text={item.text} dark={dark} streaming={item.streaming} />
-      {!item.streaming && item.text && <CopyMessage text={item.text} />}
     </div>
   );
 });

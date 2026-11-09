@@ -12,6 +12,7 @@ import { pasteText } from "@/features/terminal/xtermRegistry";
 import { normalizeUrl } from "./url";
 import { relatedTab } from "./related";
 import { followedTab } from "./follow";
+import { useUndock } from "./undockState";
 
 export { normalizeUrl };
 
@@ -80,6 +81,8 @@ interface BrowserState {
   shown: string | null;
   /** Tabs an agent is using right now (acted on in the last few seconds), by tab id. */
   agentTabs: Record<string, AgentUse>;
+  /** Last pane to open or adopt each tab; survives the short agent activity indicator. */
+  tabPanes: Record<string, string>;
 }
 
 export const useBrowser = create<BrowserState>(() => ({
@@ -96,6 +99,7 @@ export const useBrowser = create<BrowserState>(() => ({
   notice: null,
   shown: null,
   agentTabs: {},
+  tabPanes: {},
 }));
 
 /** How long a tab stays marked as used after an agent's last action in it. */
@@ -111,7 +115,8 @@ export function markAgentOpened(tabId: string) {
 }
 
 /** An agent acted on a tab (the backend's CDP proxy saw it): mark it until it goes quiet. */
-export function markAgentTab(tabId: string, workspaceId: string, adopted: boolean) {
+export function markAgentTab(tabId: string, workspaceId: string, adopted: boolean, paneId?: string) {
+  if (paneId) linkTabPane(tabId, workspaceId, paneId);
   adopted &&= !agentOpened.has(tabId);
   const tab = useBrowser.getState().tabs[workspaceId]?.find((t) => t.id === tabId);
   if (adopted && tab && !announced.has(tabId)) {
@@ -133,6 +138,19 @@ export function markAgentTab(tabId: string, workspaceId: string, adopted: boolea
 }
 
 const activeWorkspaceId = () => useWorkspaces.getState().activeWorkspaceId;
+
+/** Only explicit callers establish ownership; workspace-wide CDP activity has no pane identity. */
+export function linkTabPane(tabId: string, workspaceId: string, paneId: string) {
+  if (!useWorkspaces.getState().workspaces.some((w) => w.id === workspaceId && w.panes.some((p) => p.id === paneId))) return;
+  useBrowser.setState((s) => ({ tabPanes: { ...s.tabPanes, [tabId]: paneId } }));
+}
+
+/** Ignore closed tabs and panes, including stale links after a workspace is removed. */
+export function tabPane(s: Pick<BrowserState, "tabs" | "tabPanes">, workspaceId: string, tabId: string | null | undefined, workspaces = useWorkspaces.getState().workspaces) {
+  if (!tabId || !s.tabs[workspaceId]?.some((t) => t.id === tabId)) return null;
+  const paneId = s.tabPanes[tabId];
+  return workspaces.find((w) => w.id === workspaceId)?.panes.some((p) => p.id === paneId) ? paneId : null;
+}
 
 /** Records a browser problem in browser.log (app data folder) for later debugging. */
 export function logBrowser(level: "error" | "warn" | "info", message: string) {
@@ -161,23 +179,25 @@ function setTabs(workspaceId: string, tabs: Tab[]) {
     const current = s.activeTab[workspaceId];
     const stillOpen = tabs.some((t) => t.id === current);
     const follow = watched ? followedTab(s.tabs[workspaceId], tabs, current) : undefined;
+    const remainingWorkspace = ws.workspaces.find((w) => w.id !== workspaceId && s.tabs[w.id]?.length);
     return {
       tabs: { ...s.tabs, [workspaceId]: tabs },
+      tabPanes: Object.fromEntries(Object.entries(s.tabPanes).filter(([id]) => !s.tabs[workspaceId]?.some((t) => t.id === id) || tabs.some((t) => t.id === id))),
       activeTab: { ...s.activeTab, [workspaceId]: follow?.id ?? (stillOpen ? current! : (tabs.at(-1)?.id ?? null)) },
-      shown: follow ? workspaceId : s.shown,
+      shown: follow ? workspaceId : !tabs.length && workspaceId === shownWorkspaceId() && remainingWorkspace ? remainingWorkspace.id : s.shown,
     };
   });
-  // Never leave a browser without tabs: its last one closed, so open a blank one in its place.
-  if (tabs.length === 0 && hadTabs && ws.workspaces.some((w) => w.id === workspaceId)) void reopenBlankTab(workspaceId);
+  // Projects may have no tabs; only replace the last tab across the entire panel.
+  if (tabs.length === 0 && hadTabs && ws.workspaces.some((w) => w.id === workspaceId) && !ws.workspaces.some((w) => useBrowser.getState().tabs[w.id]?.length)) void reopenBlankTab(workspaceId);
 }
 
 const reopening = new Set<string>();
 async function reopenBlankTab(workspaceId: string) {
-  if (reopening.has(workspaceId)) return;
+  if (reopening.size) return;
   reopening.add(workspaceId);
   try {
     const id = await invoke<string>("browser_new_tab", { workspaceId, url: "about:blank" });
-    useBrowser.setState((s) => ({ activeTab: { ...s.activeTab, [workspaceId]: id } }));
+    useBrowser.setState((s) => ({ activeTab: { ...s.activeTab, [workspaceId]: id }, shown: workspaceId }));
   } catch (err) {
     flash(`Couldn't open a new tab: ${String(err)}`);
   } finally {
@@ -193,10 +213,10 @@ function listenForTabs() {
   void listen<{ workspaceId: string; targetId: string; adopted: boolean }>("browser://agent", ({ payload }) =>
     markAgentTab(payload.targetId, payload.workspaceId, payload.adopted),
   );
-  // An agent navigated a tab: open the panel and show that tab.
+  // An agent navigated a tab: reveal the browser where it is and show that tab.
   void listen<{ workspaceId: string; targetId: string }>("browser://agent-navigate", ({ payload }) => {
     const ws = useWorkspaces.getState();
-    if (!ws.browserOpen) ws.toggleBrowser();
+    if (!ws.browserOpen && !useUndock.getState().win) ws.toggleBrowser();
     selectTab(payload.targetId, payload.workspaceId);
   });
   void listen<{ targetId: string; width: number; height: number }>("browser://viewport", ({ payload }) => setPageSize(payload.targetId, payload));
@@ -369,13 +389,13 @@ export interface Opened {
  * Opens a URL in a workspace's browser (by default the one on screen) and shows it: takes over
  * a tab already showing that site (see `relatedTab`) unless `newTab`, else a blank active tab.
  */
-export async function openUrl(input: string, opts: { newTab?: boolean; workspaceId?: string } = {}): Promise<Opened | undefined> {
+export async function openUrl(input: string, opts: { newTab?: boolean; workspaceId?: string; paneId?: string } = {}): Promise<Opened | undefined> {
   if (!input.trim()) {
     focusUrlBar();
     return undefined;
   }
   const ws = useWorkspaces.getState();
-  if (!ws.browserOpen) ws.toggleBrowser();
+  if (!ws.browserOpen && !useUndock.getState().win) ws.toggleBrowser();
   const workspaceId = opts.workspaceId ?? targetWorkspaceId();
   if (!(await ensureBrowser(workspaceId))) return;
   const url = normalizeUrl(input);
@@ -388,14 +408,17 @@ export async function openUrl(input: string, opts: { newTab?: boolean; workspace
     if (!opts.newTab && existing) {
       selectTab(existing.id, workspaceId);
       if (existing.url !== url) await invoke("browser_navigate", { workspaceId, targetId: existing.id, url });
+      if (opts.paneId) linkTabPane(existing.id, workspaceId, opts.paneId);
       return { id: existing.id, tookOver: existing };
     } else if (!opts.newTab && blank) {
       selectTab(blank.id, workspaceId);
       await invoke("browser_navigate", { workspaceId, targetId: blank.id, url });
+      if (opts.paneId) linkTabPane(blank.id, workspaceId, opts.paneId);
       return { id: blank.id };
     } else {
       const id = await invoke<string>("browser_new_tab", { workspaceId, url });
       selectTab(id, workspaceId);
+      if (opts.paneId) linkTabPane(id, workspaceId, opts.paneId);
       return { id };
     }
   } catch (err) {
@@ -440,6 +463,6 @@ export function setPageSize(tabId: string, size: PageSize | null) {
 
 export function focusUrlBar() {
   const ws = useWorkspaces.getState();
-  if (!ws.browserOpen) ws.toggleBrowser();
+  if (!ws.browserOpen && !useUndock.getState().win) ws.toggleBrowser();
   useBrowser.setState((s) => ({ focusUrlBar: s.focusUrlBar + 1 }));
 }

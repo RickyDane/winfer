@@ -260,6 +260,15 @@ body.resizing [data-resizer] {
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   animation: agent-spin 2.4s linear infinite;
 }
+/* Persistent pane/tab links are distinct from the short-lived agent activity animation. */
+.browser-linked-tab,
+.agent-tab.browser-linked-tab {
+  box-shadow: inset 0 -2px 0 var(--color-accent), inset 0 0 0 1px var(--color-accent);
+}
+.browser-linked-pane {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -3px;
+}
 .agent-icon {
   color: var(--color-accent);
 }

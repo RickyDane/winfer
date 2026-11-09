@@ -29,6 +29,7 @@ import {
   useBrowser,
   agentName,
   tabLabel,
+  tabPane,
 } from "./browser";
 
 const label = tabLabel;
@@ -83,8 +84,10 @@ export function BrowserResizer() {
 }
 
 export function BrowserPanel() {
-  const { availability, error, tabs: allTabs, activeTab, device: devices, sizes, focusUrlBar, console: logs, consoleOpen, picking, notice, shown, agentTabs } = useBrowser();
+  const browser = useBrowser();
+  const { availability, error, tabs: allTabs, activeTab, device: devices, sizes, focusUrlBar, console: logs, consoleOpen, picking, notice, shown, agentTabs } = browser;
   const workspaces = useWorkspaces((s) => s.workspaces);
+  const focusedPaneId = useWorkspaces((s) => s.focusedPaneId);
   // Re-read on workspace switches until a tab pins the panel to a workspace.
   useWorkspaces((s) => s.activeWorkspaceId);
   const workspaceId = shownWorkspaceId();
@@ -149,6 +152,8 @@ export function BrowserPanel() {
               {tabs.map((tab) => (
                 <button
                   key={tab.id}
+                  data-linked-pane={tabPane(browser, workspace.id, tab.id, workspaces) ?? undefined}
+                  data-pane-highlighted={!!focusedPaneId && tabPane(browser, workspace.id, tab.id, workspaces) === focusedPaneId || undefined}
                   onClick={() => selectTab(tab.id, workspace.id)}
                   // Middle-click closes, like a real browser. preventDefault on mousedown
                   // stops the platform autoscroll cursor from kicking in.
@@ -166,6 +171,7 @@ export function BrowserPanel() {
                     workspace.id === workspaceId && tab.id === active?.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover",
                     agentTabs[tab.id] && "agent-tab",
                     agentTabs[tab.id]?.adopted && "agent-adopted",
+                    focusedPaneId && tabPane(browser, workspace.id, tab.id, workspaces) === focusedPaneId && "browser-linked-tab",
                   )}
                 >
                   {agentTabs[tab.id] ? <Bot size={12} className="agent-icon shrink-0" /> : <TabIcon favicon={tab.favicon} />}

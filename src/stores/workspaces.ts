@@ -119,7 +119,7 @@ interface WorkspaceState {
   /** What the side panel shows: the browser, a mirrored Android device, a terminal or the file viewer. */
   sidePanel: SidePanelTab;
   /** Files open in the side panel's viewer (absolute paths) and the one shown. */
-  viewer: { docs: string[]; active: string | null };
+  viewer: { docs: string[]; active: string | null; activeByProject?: Record<string, string> };
   /** Device the Android panel mirrors (adb serial). */
   androidSerial: string | null;
   /** Color theme id (see features/theme/themes.ts). */
@@ -203,7 +203,7 @@ interface WorkspaceState {
   setBrowserWidth: (width: number) => void;
   setSidebarWidth: (width: number) => void;
   setSidePanel: (panel: SidePanelTab) => void;
-  setViewer: (viewer: { docs: string[]; active: string | null }) => void;
+  setViewer: (viewer: { docs: string[]; active: string | null; activeByProject?: Record<string, string> }) => void;
   setAndroidSerial: (serial: string | null) => void;
   setTheme: (theme: Theme) => void;
   /** Switch to the theme's light/dark counterpart. */
@@ -391,7 +391,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       browserWidth: ui.browserWidth ?? DEFAULT_BROWSER_WIDTH,
       sidebarWidth: ui.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH,
       sidePanel: ui.sidePanel ?? "browser",
-      viewer: { docs: ui.viewer?.docs ?? [], active: ui.viewer?.active ?? null },
+      viewer: { ...ui.viewer, docs: ui.viewer?.docs ?? [], active: ui.viewer?.active ?? null },
       androidSerial: ui.androidSerial ?? null,
       theme: isThemeId(ui.theme) ? ui.theme : DEFAULT_THEME,
       view: ui.view ?? "workspace",
@@ -728,7 +728,7 @@ interface Snapshot {
     browserWidth?: number;
     sidebarWidth?: number;
     sidePanel?: SidePanelTab;
-    viewer?: { docs?: string[]; active?: string | null };
+    viewer?: { docs?: string[]; active?: string | null; activeByProject?: Record<string, string> };
     androidSerial?: string | null;
     theme?: Theme;
     view?: View;

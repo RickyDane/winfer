@@ -10,6 +10,8 @@ export interface Attachment {
   url: string;
   mime: string;
   name: string;
+  /** Local desktop drop: the backend can read the original file directly. */
+  path?: string;
 }
 
 /** Session-local task activity, recorded even while its popover is closed. */
@@ -185,11 +187,13 @@ export const createCodeStore = () =>
   submit(text, attachments = [], skill) {
     const t = text.trim();
     if (!t && !attachments.length && !skill) return;
-    const urls = attachments.map((a) => a.url);
-    const shown = skill ? `/${skill}${t ? ` ${t}` : ""}` : t;
+    const imageAttachments = attachments.filter((a) => !a.path && a.mime.startsWith("image/"));
+    const urls = imageAttachments.map((a) => a.url);
+    const files = attachments.filter((a) => !imageAttachments.includes(a)).map((a) => ({ name: a.name, ...(a.path ? { path: a.path } : { data: a.url.slice(a.url.indexOf(",") + 1) }) }));
+    const shown = (skill ? `/${skill}${t ? ` ${t}` : ""}` : t) + files.map((f) => `\n[File: ${f.name}]`).join("");
     set((s) => ({ items: [...s.items, { kind: "user", key: key(), text: shown, at: Date.now(), images: urls.length ? urls : undefined }] }));
-    const images = attachments.map((a) => ({ mime: a.mime, data: a.url.slice(a.url.indexOf(",") + 1) }));
-    get().send({ type: get().busy ? "steer" : "send", text: t, ...(skill ? { skill } : {}), ...(images.length ? { images } : {}) });
+    const images = imageAttachments.map((a) => ({ mime: a.mime, data: a.url.slice(a.url.indexOf(",") + 1) }));
+    get().send({ type: get().busy ? "steer" : "send", text: t, ...(skill ? { skill } : {}), ...(images.length ? { images } : {}), ...(files.length ? { files } : {}) });
   },
 
   apply(ev) {

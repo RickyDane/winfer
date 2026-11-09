@@ -65,6 +65,7 @@ const IMAGE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
 
 export const isMarkdown = (path: string) => MARKDOWN.test(path);
 export const isImage = (path: string) => IMAGE.test(path);
+export const isPdf = (path: string) => /\.pdf$/i.test(path);
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 export const dirName = (path: string) => path.replace(/[\\/][^\\/]*$/, "") || path;

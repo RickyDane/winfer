@@ -21,6 +21,7 @@ import { ContextMeter } from "@/features/usage/UsageMeter";
 import { PaneCost } from "@/features/usage/TaskCostChip";
 import { GlassPaneHeader } from "./GlassPaneHeader";
 import { BgIndicator } from "@/features/code/BgIndicator";
+import { tabPane, useBrowser } from "@/features/browser/browser";
 
 const HeaderButton = ({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) => (
   <button
@@ -64,12 +65,16 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
   const label = useWorkspaces((s) => paneLabel(pane, s.providers, progressTitle(progress), progress?.title));
   const [renaming, setRenaming] = useState(false);
   const glass = useWorkspaces((s) => s.glassPanes);
+  const browserVisible = useWorkspaces((s) => s.browserOpen && s.sidePanel === "browser");
+  const workspaces = useWorkspaces((s) => s.workspaces);
+  const browserLinked = useBrowser((s) => s.shown === pane.workspaceId && tabPane(s, pane.workspaceId, s.activeTab[pane.workspaceId], workspaces) === pane.id);
   const [isNew] = useState(() => !seen.has(pane.id));
   seen.add(pane.id);
 
   return (
     <section
       data-pane-id={pane.id}
+      data-browser-highlighted={browserVisible && browserLinked || undefined}
       onMouseDown={onFocus}
       className={cn(
         "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border transition-[border-color,opacity,box-shadow,background-color] duration-150",
@@ -77,6 +82,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
         isNew && "anim-grow",
         glass ? focused && "pane-glass-focused" : focused ? "border-accent/70" : "border-border",
         beingDragged && "opacity-40",
+        browserVisible && browserLinked && "browser-linked-pane",
       )}
     >
       {/* Archived panes aren't tiled, so there's nowhere to drag them. */}
@@ -149,7 +155,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
         {pane.devUrl && (
           <button
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => execute({ type: "browser.open", url: pane.devUrl! })}
+            onClick={() => execute({ type: "browser.open", url: pane.devUrl!, paneId: pane.id })}
             title={`Open ${pane.devUrl} in the browser panel`}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-accent hover:bg-accent-soft"
           >

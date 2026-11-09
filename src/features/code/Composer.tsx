@@ -11,6 +11,8 @@ import { DiffView } from "./Transcript";
 import { elapsed } from "../usage/toolStats";
 import { mentionAt, rankFiles } from "./mentions";
 import { composerHeight } from "./composerHeight";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 /** An approval with questions (Claude Code's AskUserQuestion): pick an option per question (or
  *  type one), then the answers go back as `answer`; declining goes through `approve` deny. */
@@ -171,10 +173,11 @@ export function Composer({ focused }: { focused: boolean }) {
   // Once the session has started, the composer collapses to one row (no hint bar).
   const started = useCode((s) => s.items.length > 0);
 
-  /** Pasted or dropped images become attachments (shown as thumbnails until sent). */
+  /** Keep dropped files in the draft until the user sends them. */
   const addFiles = (files: File[]) => {
-    for (const f of files.filter((f) => f.type.startsWith("image/"))) {
+    for (const f of files) {
       const reader = new FileReader();
+      reader.onerror = () => store.getState().apply({ type: "error", text: `Couldn't read ${f.name}` });
       reader.onload = () =>
         setAttachments((a) => [...a, { id: `${Date.now()}-${Math.random()}`, url: String(reader.result), mime: f.type, name: f.name || "pasted image" }]);
       reader.readAsDataURL(f);
@@ -182,6 +185,27 @@ export function Composer({ focused }: { focused: boolean }) {
   };
   const [sel, setSel] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const dropTarget = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const listener = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (disposed) return;
+      if (payload.type === "leave") { setDragging(false); return; }
+      const rect = dropTarget.current?.getBoundingClientRect();
+      const x = payload.position.x / window.devicePixelRatio;
+      const y = payload.position.y / window.devicePixelRatio;
+      const inside = !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      setDragging(inside && payload.type !== "drop");
+      if (inside && payload.type === "drop") {
+        setAttachments((all) => [...all, ...payload.paths.map((path) => ({
+          id: crypto.randomUUID(), path, name: path.split(/[\\/]/).pop() || path, mime: "", url: "",
+        }))]);
+        ta.current?.focus();
+      }
+    });
+    return () => { disposed = true; void listener.then((unlisten) => unlisten()).catch(() => {}); };
+  }, [setAttachments]);
   const [, tick] = useState(0);
   const startOut = useRef(0);
 
@@ -341,19 +365,22 @@ export function Composer({ focused }: { focused: boolean }) {
         </span>
       </div>
       <div
+        ref={dropTarget}
         className={clsx("cw-composer", busy && "busy", dragging && "dragging", started && "compact")}
         onDragOver={(e) => {
-          if (![...e.dataTransfer.items].some((i) => i.type.startsWith("image/"))) return;
+          if (!e.dataTransfer.types.includes("Files")) return;
           e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
           setDragging(true);
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
         onDrop={(e) => {
           setDragging(false);
-          const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+          const files = [...e.dataTransfer.files];
           if (!files.length) return;
           e.preventDefault();
           addFiles(files);
+          ta.current?.focus();
         }}
       >
         {cmds.length > 0 && (
@@ -398,11 +425,11 @@ export function Composer({ focused }: { focused: boolean }) {
           <div className="cw-attachments">
             {attachments.map((a) => (
               <div key={a.id} className="cw-thumb" title={a.name}>
-                <img
+                {a.mime.startsWith("image/") ? <img
                   src={a.url}
                   alt={a.name}
-                  onClick={() => store.getState().setPreview({ images: attachments.map((x) => x.url), index: attachments.indexOf(a) })}
-                />
+                  onClick={() => { const images = attachments.filter((x) => x.mime.startsWith("image/")); store.getState().setPreview({ images: images.map((x) => x.url), index: images.indexOf(a) }); }}
+                /> : <span className="cw-file-name">{a.name}</span>}
                 <button onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))} title="Remove">
                   <X size={11} />
                 </button>

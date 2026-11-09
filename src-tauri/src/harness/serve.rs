@@ -32,6 +32,7 @@ struct Serve {
     cwd: PathBuf,
     kind: Kind,
     model: String,
+    actual_model: String,
     mode: Mode,
     system: Option<String>,
     handle: Option<backend::Handle>,
@@ -59,6 +60,7 @@ impl Serve {
     }
 
     fn start_backend(&mut self, resume: Option<String>) {
+        self.actual_model.clear();
         if let Some(h) = self.handle.take() {
             h.send(Cmd::Shutdown);
         }
@@ -116,7 +118,8 @@ impl Serve {
         if let Some(u) = &self.saved.usage {
             let source = self.saved.backend_session.as_deref()
                 .and_then(|s| super::tui::app::session_log(self.kind, s, &self.saved.cwd));
-            super::tui::app::report_usage(self.kind, source, u);
+            let model = if self.actual_model.is_empty() { &self.model } else { &self.actual_model };
+            super::tui::app::report_usage(self.kind, model, source, u);
             self.usage_sent = Some(std::time::Instant::now());
         }
     }
@@ -146,6 +149,7 @@ impl Serve {
         let (kind, model) = backend::parse_spec(&saved.model);
         self.kind = kind;
         self.model = model;
+        self.actual_model.clear();
         self.assistant.clear();
         self.pending.clear();
         out(&json!({ "type": "restore", "transcript": saved.transcript.iter().map(|e| json!({ "role": e.role, "text": e.text, "state": e.state })).collect::<Vec<_>>() }));
@@ -221,6 +225,7 @@ impl Serve {
                 self.save();
             }
             Ev::Mode(mode) => self.mode = mode,
+            Ev::Model(model) => self.actual_model = model,
             Ev::Account(id) => {
                 self.saved.account = Some(id);
                 self.save();
@@ -340,7 +345,10 @@ impl Serve {
         let mut images = save_images(&v);
         match s("type").as_str() {
             "send" | "steer" => {
-                let text = s("text");
+                let text = match save_files(&v) {
+                    Ok(paths) => s("text") + &paths.iter().map(|p| format!("\n@\"{}\"", p.to_string_lossy().replace('"', "\\\""))).collect::<String>(),
+                    Err(e) => { out(&json!({ "type": "error", "text": format!("Couldn't attach files: {e}") })); return; }
+                };
                 let n = images.len();
                 self.user_message(&if n == 0 { text.clone() } else { format!("{text}{}[{n} image{}]", if text.is_empty() { "" } else { " " }, if n == 1 { "" } else { "s" }) });
                 // `@path` mentions, as in the TUI: images attach, text files inline for ChatGPT.
@@ -484,6 +492,28 @@ impl Serve {
     }
 }
 
+/// Browser uploads get their own directory; never trust a supplied filename as a path.
+fn save_files(v: &Value) -> Result<Vec<PathBuf>, String> {
+    use base64::Engine;
+    let Some(files) = v.get("files").and_then(Value::as_array) else { return Ok(Vec::new()) };
+    files.iter().map(|file| {
+        if let Some(path) = file.get("path").and_then(Value::as_str) {
+            let path = PathBuf::from(path);
+            return if path.is_file() { Ok(path) } else { Err(format!("Not a file: {}", path.display())) };
+        }
+        let data = file.get("data").and_then(Value::as_str).ok_or("Missing file data")?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+        let name = file.get("name").and_then(Value::as_str).unwrap_or("attachment");
+        let name: String = name.chars().map(|c| if c.is_alphanumeric() || ".-_".contains(c) { c } else { '_' }).collect();
+        let name = if name.is_empty() || name == "." || name == ".." { "attachment" } else { &name };
+        let dir = std::env::temp_dir().join("winfer-code").join(format!("drop-{:016x}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        Ok(path)
+    }).collect()
+}
+
 /// Images the web UI pasted (base64 in the command) as files, where the TUI keeps its pasted
 /// ones: `<temp>/winfer-code/paste-<millis>-<n>.<ext>`. Backends take image paths.
 fn save_images(v: &Value) -> Vec<PathBuf> {
@@ -529,6 +559,7 @@ pub fn run(launch: Launch) -> i32 {
         cwd: cwd.clone(),
         kind,
         model,
+        actual_model: String::new(),
         mode: launch.mode.unwrap_or(cfg.mode),
         system: launch.system.clone(),
         handle: None,
