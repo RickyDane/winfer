@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cosmos DB plugin preview</title>
+<link rel="icon" href="data:,">
+<style>
+  body { margin:0; background:#121215; color:#e6e6ea; font-family:system-ui,sans-serif; }
+  input,button,select { font:inherit; }
+</style>
+<main id="app"></main>
+<script type="module">
+  import { activate } from "../plugins/cosmos-db/index.js";
+  const connections = [];
+  window.preview = { connections, approval: true };
+  const api = {
+    dir: "/preview", registerAgentTool() {}, registerTool() {},
+    registerPage(page) { page.mount(document.querySelector("#app")); },
+    confirm: async () => window.preview.approval,
+    vault: {
+      list: async () => structuredClone(connections),
+      set: async (key, value, meta) => {
+        let conn = connections.find(c => c.key === key);
+        if (conn) conn.meta = meta;
+        else connections.push({ key, meta, updatedAt: Date.now() });
+      },
+      delete: async (key) => connections.splice(connections.findIndex(c => c.key === key), 1),
+    },
+  };
+  activate(api);
+</script>
+</html>

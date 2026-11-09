@@ -2,6 +2,39 @@
   "version": 1,
   "plugins": [
     {
+      "id": "cosmos-db",
+      "name": "Cosmos DB",
+      "version": "1.0.1",
+      "description": "Connect Azure Cosmos DB for NoSQL using a connection string or Microsoft Entra identity. Agents browse, query and write items, with optional per-write approval enabled by default. Requires Python and the Azure Cosmos/Identity SDKs.",
+      "author": "winfer",
+      "tags": [
+        "database",
+        "cosmos",
+        "azure",
+        "nosql",
+        "microsoft",
+        "agents"
+      ],
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "a9f806798fb18116a10d384d3c8b3b7ee3dcf05eee8b2548787a3ea38f006dbc"
+        },
+        {
+          "path": "bridge.py",
+          "sha256": "59f8c660c5cc664041bf90a53306d3d310c1e1ad4ab9717c80436f0c055db77c"
+        },
+        {
+          "path": "index.js",
+          "sha256": "b8dc0d37867cf80faa258425c2c0122f764677e46f867f69b22804f14fd3194f"
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "77d715f6a904185dd363522070f1153b4e57a872783695d90c2cee8ea0ca29be"
+        }
+      ]
+    },
+    {
       "id": "cross-project",
       "name": "Cross-Project Knowledge",
       "version": "1.0.2",
@@ -104,10 +137,6 @@
           "sha256": "33058f1f20218899e46867191bf60e0ad2e9b99225a4b17cb369c13d3a25307d"
         },
         {
-          "path": "bench/results/20261018-174154.jsonl",
-          "sha256": "24d1878cabb8942b0e299b1779a078f592c50a8503185aadfa5882c5b0ed8392"
-        },
-        {
           "path": "bench/run.py",
           "sha256": "0b6b538e5bad45b31d07c621af24535dc0782d23eb4853f1db151b47247cf445"
         },
@@ -202,7 +231,7 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "817b570d52b8806814fdb12d68ea33d222a894d499bc6ade22904e8ebbb9af34"
+          "sha256": "28c2ec04bd9d47caf71ef56ca1d2f8393cb1d5ada837deca2d7c4f89ce046eac"
         },
         {
           "path": "plugin.json",
