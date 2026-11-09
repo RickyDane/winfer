@@ -606,7 +606,8 @@ impl App {
 
     fn report_usage(&mut self, u: &Usage) {
         let source = self.usage_source();
-        report_usage(self.kind, source, u);
+        let model = if self.actual_model.is_empty() { &self.model } else { &self.actual_model };
+        report_usage(self.kind, model, source, u);
     }
 
     fn apply_agent(&mut self, ev: Ev) {
@@ -2693,7 +2694,7 @@ impl App {
 /// `@path` mentions: images are attached, small text files inlined.
 pub fn mentions(cwd: &Path, kind: Kind, text: &str, images: &mut Vec<PathBuf>) -> String {
     let mut out = String::new();
-    for word in text.split_whitespace() {
+    for word in super::composer::path_words(text) {
         let Some(p) = word.strip_prefix('@') else { continue };
         let p = p.trim_end_matches(|c: char| ",.;:)!?".contains(c));
         let path = tools::resolve(cwd, p);
@@ -2758,16 +2759,27 @@ pub fn session_log(kind: Kind, session: &str, cwd: &str) -> Option<String> {
 }
 
 /// Shared by the terminal and web sessions so the pane header follows both, including resume.
-pub fn report_usage(kind: Kind, source: Option<String>, u: &Usage) {
-    if u.window == 0 {
-        return;
-    }
+pub fn report_usage(kind: Kind, model: &str, source: Option<String>, u: &Usage) {
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    hook("usage", json!({
+    hook("usage", usage_report(kind, model, source, u, at));
+}
+
+fn usage_report(kind: Kind, model: &str, source: Option<String>, u: &Usage, at: u64) -> serde_json::Value {
+    // Some backends only report tokens. Reuse the Usage page's prices, but identify this as
+    // an estimate at the current model's price (earlier turns/subagents may use other models).
+    static PRICES: std::sync::OnceLock<crate::usage_history::Prices> = std::sync::OnceLock::new();
+    let estimated = u.cost.is_none();
+    let cost = u.cost.or_else(|| {
+        // Claude's input count excludes cache reads/writes; don't apply OpenAI's convention.
+        if !matches!(kind, Kind::Codex | Kind::ChatGpt) { return None; }
+        let price = PRICES.get_or_init(crate::usage_history::Prices::load).get(model)?;
+        Some(price.cost(u.input.saturating_sub(u.cached), u.output, u.cached.min(u.input), 0))
+    });
+    json!({
         "backend": kind.id(),
-        "context": { "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at, "source": source, "provider": kind.id() },
-        "spend": { "cost": u.cost, "input": u.input, "output": u.output, "cached": u.cached, "turn": u.turn, "at": at },
-    }));
+        "context": (u.window > 0).then(|| json!({ "usedPercent": u.context as f64 * 100.0 / u.window as f64, "tokens": u.context, "window": u.window, "at": at, "source": source, "provider": kind.id() })),
+        "spend": { "cost": cost, "estimated": estimated && cost.is_some(), "model": model, "input": u.input, "output": u.output, "cached": u.cached, "turn": u.turn, "at": at },
+    })
 }
 
 /// Reports status to winfer when running in one of its panes (no-op otherwise).
@@ -2880,6 +2892,33 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn pane_cost_report_estimates_openai_tokens_without_double_counting_cache() {
+        let u = Usage { input: 1_000_000, cached: 800_000, output: 100_000, ..Default::default() };
+        for kind in [Kind::Codex, Kind::ChatGpt] {
+            let report = usage_report(kind, "gpt-5.4", None, &u, 42);
+            // 200k uncached * $2.50 + 800k cached * $0.25 + 100k output * $15.
+            assert!((report["spend"]["cost"].as_f64().unwrap() - 2.2).abs() < 1e-9);
+            assert_eq!(report["spend"]["estimated"], true);
+            assert_eq!(report["spend"]["at"], 42);
+            assert!(report["context"].is_null(), "costs don't require a context window");
+        }
+    }
+
+    #[test]
+    fn pane_cost_report_preserves_reported_prices_and_unknown_models() {
+        let mut u = Usage { cost: Some(0.75), window: 100, context: 25, ..Default::default() };
+        let report = usage_report(Kind::Claude, "unknown", Some("log".into()), &u, 42);
+        assert_eq!(report["spend"]["cost"], 0.75);
+        assert_eq!(report["spend"]["estimated"], false);
+        assert_eq!(report["context"]["usedPercent"], 25.0);
+        assert_eq!(report["context"]["source"], "log");
+        u.cost = None;
+        let report = usage_report(Kind::Codex, "unknown", None, &u, 42);
+        assert!(report["spend"]["cost"].is_null());
+        assert_eq!(report["spend"]["estimated"], false);
+    }
 
     fn app() -> App {
         let (tx, _rx) = channel();

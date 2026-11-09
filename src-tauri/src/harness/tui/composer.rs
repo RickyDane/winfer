@@ -17,6 +17,32 @@ pub struct Composer {
 
 const IMAGE_EXT: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
+/// Paths emitted by terminals on drop: quoted Windows paths or shell-escaped Unix paths.
+/// Backslashes are otherwise literal (in particular in Windows drive/UNC paths).
+pub fn path_words(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if quote == Some(c) {
+            quote = None;
+        } else if quote.is_none() && (word.is_empty() || word == "@") && (c == '\'' || c == '"') {
+            quote = Some(c);
+        } else if c == '\\' && chars.peek().is_some_and(|n| {
+            (quote.is_none() && (n.is_whitespace() || *n == '\'' || *n == '"')) || (quote == Some('"') && *n == '"')
+        }) {
+            word.push(chars.next().unwrap());
+        } else if quote.is_none() && c.is_whitespace() {
+            if !word.is_empty() { words.push(std::mem::take(&mut word)); }
+        } else {
+            word.push(c);
+        }
+    }
+    if !word.is_empty() { words.push(word); }
+    words
+}
+
 impl Composer {
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
@@ -42,14 +68,20 @@ impl Composer {
         self.history_pos = None;
     }
 
-    /// Pastes: long text collapses to a placeholder, an image file path becomes an attachment.
+    /// Long text collapses; dropped file paths become image attachments or quoted mentions.
     pub fn paste(&mut self, s: &str) {
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
-        let trimmed = s.trim().trim_matches(|c| c == '\'' || c == '"');
-        let path = PathBuf::from(trimmed.replace("\\ ", " "));
-        let is_image = path.extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGE_EXT.contains(&e.to_ascii_lowercase().as_str()));
-        if is_image && path.is_file() {
-            self.attach_image(path);
+        let whole = PathBuf::from(s.trim());
+        let paths: Vec<PathBuf> = if whole.is_file() { vec![whole] } else { path_words(&s).into_iter().map(PathBuf::from).collect() };
+        if !paths.is_empty() && paths.iter().all(|p| p.is_file()) {
+            for path in paths {
+                let is_image = path.extension().and_then(|e| e.to_str()).is_some_and(|e| IMAGE_EXT.contains(&e.to_ascii_lowercase().as_str()));
+                if is_image {
+                    self.attach_image(path);
+                } else {
+                    self.insert(&format!("@\"{}\" ", path.to_string_lossy().replace('"', "\\\"")));
+                }
+            }
             return;
         }
         let lines = s.lines().count();
@@ -77,7 +109,9 @@ impl Composer {
             let lines = p.lines().count();
             text = text.replace(&format!("[Pasted text #{} +{lines} lines]", i + 1), p);
         }
-        let images = std::mem::take(&mut self.images);
+        let images = std::mem::take(&mut self.images).into_iter().enumerate()
+            .filter(|(i, _)| self.text.contains(&format!("[Image #{}]", i + 1)))
+            .map(|(_, path)| path).collect();
         self.clear();
         (text, shown, images)
     }
@@ -283,6 +317,49 @@ impl Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_terminal_drop_paths_without_losing_windows_separators() {
+        assert_eq!(path_words(r#""C:\My Files\a.png" 'C:\My Files\b.txt'"#), vec![r"C:\My Files\a.png", r"C:\My Files\b.txt"]);
+        assert_eq!(path_words(r"/tmp/my\ image.png /tmp/other.txt"), vec!["/tmp/my image.png", "/tmp/other.txt"]);
+        assert_eq!(path_words(r#"see @"/tmp/my notes.txt""#), vec!["see", "@/tmp/my notes.txt"]);
+        assert_eq!(path_words("don't skip @file.txt"), vec!["don't", "skip", "@file.txt"]);
+    }
+
+    #[test]
+    fn mixed_file_drops_attach_images_and_mention_other_files() {
+        let dir = std::env::temp_dir().join(format!("winfer-drop-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("my image.PNG");
+        let file = dir.join("my notes.txt");
+        std::fs::write(&image, b"image").unwrap();
+        std::fs::write(&file, b"notes").unwrap();
+        let mut c = Composer::default();
+        c.paste(&format!("\"{}\" \"{}\"", image.display(), file.display()));
+        let (text, _, images) = c.take();
+        assert_eq!(images, vec![image.clone()]);
+        assert!(text.contains(&format!("@\"{}\"", file.display())));
+        std::fs::remove_file(image).unwrap();
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn ordinary_pastes_are_not_rewritten_as_paths() {
+        let mut c = Composer::default();
+        c.paste("please review 'my notes' and C:\\missing.txt");
+        assert_eq!(c.text, "please review 'my notes' and C:\\missing.txt");
+    }
+
+    #[test]
+    fn removed_image_placeholders_are_not_sent() {
+        let mut c = Composer::default();
+        c.attach_image(PathBuf::from("removed.png"));
+        c.backspace(); // trailing space
+        c.backspace(); // image placeholder
+        let (_, _, images) = c.take();
+        assert!(images.is_empty());
+    }
 
     #[test]
     fn edits_and_moves() {

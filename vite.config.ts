@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import process from "node:process";
 import path from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 
 /**
@@ -33,9 +35,38 @@ function mockFavicons(): Plugin {
 
 const host = process.env.TAURI_DEV_HOST;
 
+/** PDF.js needs fonts, character maps and image decoders locally, including offline. */
+function pdfAssets(): Plugin {
+  const root = path.dirname(fileURLToPath(import.meta.resolve("pdfjs-dist/package.json")));
+  const folders = ["cmaps", "standard_fonts", "wasm", "iccs"];
+  return {
+    name: "pdf-assets",
+    configureServer(server) {
+      server.middlewares.use("/pdfjs", async (req, res, next) => {
+        const [folder, name, extra] = (req.url ?? "").split("?")[0].slice(1).split("/");
+        if (!folders.includes(folder) || !/^[\w.-]+$/.test(name ?? "") || extra || name === "." || name === "..") return next();
+        try {
+          const bytes = await readFile(path.join(root, folder, name));
+          res.setHeader("Content-Type", name.endsWith(".wasm") ? "application/wasm" : name.endsWith(".js") ? "text/javascript" : "application/octet-stream");
+          res.end(bytes);
+        } catch {
+          next();
+        }
+      });
+    },
+    async generateBundle() {
+      for (const folder of folders) {
+        for (const name of await readdir(path.join(root, folder))) {
+          this.emitFile({ type: "asset", fileName: `pdfjs/${folder}/${name}`, source: await readFile(path.join(root, folder, name)) });
+        }
+      }
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [react(), tailwindcss(), mockFavicons()],
+  plugins: [react(), tailwindcss(), mockFavicons(), pdfAssets()],
   test: {
     // Harness Bench task fixtures hold deliberately broken repos for agents to fix; not our tests.
     // mobile/ and relay/ are separate packages with their own vitest setups.

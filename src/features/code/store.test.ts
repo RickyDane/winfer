@@ -18,6 +18,22 @@ function setup() {
 }
 
 describe("batched code transport", () => {
+  it("sends mixed dropped images, uploads and desktop paths without treating files as images", () => {
+    const store = createCodeStore();
+    const send = vi.fn();
+    store.getState().attach({ connect: () => () => {}, send });
+    store.getState().submit("review", [
+      { id: "1", name: "shot.png", mime: "image/png", url: "data:image/png;base64,aW1hZ2U=" },
+      { id: "2", name: "notes.txt", mime: "text/plain", url: "data:text/plain;base64,aGVsbG8=" },
+      { id: "3", name: "local.png", mime: "", url: "", path: "C:\\My Files\\local.png" },
+    ]);
+    expect(send).toHaveBeenLastCalledWith({ type: "send", text: "review",
+      images: [{ mime: "image/png", data: "aW1hZ2U=" }],
+      files: [{ name: "notes.txt", data: "aGVsbG8=" }, { name: "local.png", path: "C:\\My Files\\local.png" }],
+    });
+    expect(store.getState().items[0]).toMatchObject({ images: ["data:image/png;base64,aW1hZ2U="], text: "review\n[File: notes.txt]\n[File: local.png]" });
+  });
+
   it("preserves immutable historical rows while reducing subscriber notifications", () => {
     const { store, emit } = setup();
     emit({ type: "text", id: "old", text: "history" });

@@ -43,17 +43,18 @@ export function PaneCost({ pane }: { pane: Pane }) {
 /** What the agent itself says it spent this session (winfer code reports it after each turn). */
 function ReportedCost({ spend }: { spend: PaneSpend }) {
   const tokens = spend.input + spend.output;
-  if (tokens === 0) return null;
+  if (tokens === 0 && !spend.cost) return null;
   const title = [
     "This session" + (spend.cost !== null ? ", at API prices:" : ":"),
     `${formatTokens(spend.input)} in (${formatTokens(spend.cached)} cached) · ${formatTokens(spend.output)} out`,
     spend.cost !== null ? `Cost: ${formatCost(spend.cost)} (your plan may cover it)` : "No price reported (billed to your plan)",
+    ...(spend.estimated ? [`Estimated at ${spend.model}'s API prices; other models and service tiers may differ.`] : []),
   ].join("\n");
   return (
     <span className="hidden @[24rem]:contents">
       <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-fg-muted" title={title}>
         <Coins size={11} className="text-fg-subtle" />
-        {spend.cost !== null ? formatCost(spend.cost) : "—"}
+        {spend.cost !== null ? `${spend.estimated ? "≈" : ""}${formatCost(spend.cost)}` : "—"}
         <span className="text-fg-subtle">· {formatTokens(tokens)}</span>
       </span>
     </span>

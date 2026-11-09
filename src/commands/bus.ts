@@ -83,7 +83,7 @@ export type Command =
   | { type: "workspace.create"; rootDir?: string; name?: string }
   | { type: "workspace.remove"; id: string }
   | { type: "workspace.toggleWorktrees" }
-  | { type: "browser.open"; url: string; newTab?: boolean }
+  | { type: "browser.open"; url: string; newTab?: boolean; paneId?: string }
   | { type: "browser.newTab" }
   | { type: "browser.closeTab" }
   | { type: "browser.history"; delta: -1 | 0 | 1 }
@@ -432,7 +432,11 @@ export function execute(cmd: Command): void {
       s.updateActive((w) => ({ useWorktrees: !w.useWorktrees }));
       return;
     case "browser.open":
-      void browser.openUrl(cmd.url, { newTab: cmd.newTab });
+      void browser.openUrl(cmd.url, {
+        newTab: cmd.newTab,
+        paneId: cmd.paneId ?? s.focusedPaneId ?? undefined,
+        workspaceId: cmd.paneId ? s.workspaces.find((w) => w.panes.some((p) => p.id === cmd.paneId))?.id : undefined,
+      });
       return;
     case "browser.newTab":
       void browser.newTab();

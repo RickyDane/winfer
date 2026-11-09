@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// Biggest document the viewer opens.
 const MAX_TEXT: u64 = 8 * 1024 * 1024;
-/// Biggest image a document may embed.
+/// Biggest binary file (image or PDF) the viewer opens.
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// `path` (absolute, `~/…`, or relative to `cwd`) as a clean absolute path, without touching the disk.
@@ -217,7 +217,7 @@ pub async fn files_write_text(path: String, text: String, expected: Option<u64>)
     .map_err(|e| e.to_string())?
 }
 
-/// A file's bytes, for images a document embeds.
+/// A file's bytes, for images and PDFs shown in the viewer.
 #[tauri::command]
 pub async fn files_read_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     tauri::async_runtime::spawn_blocking(move || {

@@ -8,22 +8,15 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { create } from "zustand";
 import { handleShortcut } from "@/commands/keymap";
 import { useWorkspaces } from "@/stores/workspaces";
+import { useUndock } from "./undockState";
+
+export { useUndock } from "./undockState";
 
 /** Must match UNDOCK_URL in src-tauri/src/undock.rs. */
 const UNDOCK_URL = "about:blank#winfer-browser";
 const ROOT_ID = "winfer-undocked";
-
-interface UndockState {
-  /** The undocked window, null while the browser sits in the side panel. */
-  win: Window | null;
-  /** The element the panel renders into. */
-  root: HTMLElement | null;
-}
-
-export const useUndock = create<UndockState>(() => ({ win: null, root: null }));
 
 let cleanup: (() => void) | null = null;
 

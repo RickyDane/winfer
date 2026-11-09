@@ -203,53 +203,6 @@
   user-select: none;
   -webkit-user-select: none;
 }
-.cw-msg-actions {
-  display: flex;
-  margin-top: 6px;
-}
-.cw-msg-copy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 76px;
-  min-height: 32px;
-  padding: 5px 9px;
-  border-radius: 7px;
-  color: var(--muted);
-  font-size: calc(11px * var(--cw-text, 1));
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
-}
-.cw-user:hover .cw-msg-copy,
-.cw-assistant:hover .cw-msg-copy,
-.cw-msg-copy:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-@media (hover: none) {
-  .cw-msg-copy {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-.cw-msg-copy:hover {
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-  color: var(--fg);
-}
-.cw-msg-copy:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.cw-msg-copy.copied {
-  color: var(--ok);
-}
-@media (pointer: coarse) {
-  .cw-msg-copy {
-    min-height: 44px;
-  }
-}
 .cw-scroll {
   flex: 1;
   overflow-y: auto;
@@ -1277,10 +1230,6 @@ body.resizing .cw-enter {
 .cw-pane .cw-user {
   align-items: stretch;
   margin: 18px calc(-1 * var(--cw-gutter, 22px)) 8px;
-}
-.cw-pane .cw-user > .cw-msg-actions {
-  justify-content: flex-end;
-  padding: 0 var(--cw-gutter, 22px);
 }
 .cw-pane .cw-user-bubble {
   position: relative;
@@ -2960,6 +2909,15 @@ button.cw-foot-item.active {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.cw-file-name {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 6px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  overflow: hidden;
 }
 .cw-thumb button {
   position: absolute;

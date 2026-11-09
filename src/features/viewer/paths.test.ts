@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { fileFromUri, fileUrl, findPaths, isWebPage, relativeTo, slugger } from "./paths";
+import { fileFromUri, fileUrl, findPaths, isImage, isMarkdown, isPdf, isWebPage, relativeTo, slugger } from "./paths";
 
 const paths = (text: string) => findPaths(text).map((m) => (m.line ? `${m.path}:${m.line}` : m.path));
+
+it("recognizes PDFs as documents, not editable text, images or web pages", () => {
+  for (const path of ["/docs/report.pdf", "C:\\My Files\\REPORT.PDF"]) {
+    expect(isPdf(path)).toBe(true);
+    expect(isMarkdown(path)).toBe(false);
+    expect(isImage(path)).toBe(false);
+    expect(isWebPage(path)).toBe(false);
+  }
+  for (const path of ["/docs/pdf.txt", "/report.pdf.md", "/pdf", "/pdf/image.png"]) expect(isPdf(path)).toBe(false);
+  expect(paths("Read docs/report.pdf and C:\\work\\REPORT.PDF")).toEqual(["docs/report.pdf", "C:\\work\\REPORT.PDF"]);
+});
 
 describe("findPaths", () => {
   it("finds the paths agents print", () => {

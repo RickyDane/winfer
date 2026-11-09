@@ -140,7 +140,7 @@ async function runWorkspaceTool(ws: Workspace, self: Pane | null, tool: string, 
       if (!opened) return `Couldn't open ${url} in the browser panel.`;
       if (!opened.tookOver) markAgentOpened(opened.id);
       // Lit up right away; the agent's own browser tools keep it lit while it works there.
-      markAgentTab(opened.id, ws.id, Boolean(opened.tookOver));
+      markAgentTab(opened.id, ws.id, Boolean(opened.tookOver), self?.id);
       if (opened.tookOver) {
         const was = opened.tookOver;
         logActivity(ws.id, `${who(ws, self)} took over ${tabLabel(was)} for ${url}`, self?.provider);
