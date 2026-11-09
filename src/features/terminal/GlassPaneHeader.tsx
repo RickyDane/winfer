@@ -12,6 +12,7 @@ import type { Progress } from "@/features/progress/progress";
 import type { Pane } from "@/stores/workspaces";
 import { StatusDot } from "./StatusDot";
 import { PaneMenu } from "./PaneMenu";
+import { PaneNote } from "./PaneNote";
 import { PaneTitleInput } from "./PaneTitleInput";
 import { displayModelName } from "@/lib/modelName";
 import { BgIndicator } from "@/features/code/BgIndicator";
@@ -142,6 +143,7 @@ export function GlassPaneHeader({ pane, index, focused, zoomed, onFocus, workspa
           </button>
         )}
         <div className={cn("flex shrink-0 items-center transition-opacity group-hover/header:opacity-100", focused ? "opacity-100" : "opacity-55")}>
+          <PaneNote paneId={pane.id} />
           <PaneMenu pane={pane} onRename={() => setRenaming(true)} />
           {pane.archived ? (
             <button

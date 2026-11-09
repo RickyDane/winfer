@@ -50,6 +50,14 @@ describe("agent MCP tools", () => {
     expect(await call("list_panes")).toBe("Workspace “api” (~/api):\n1. Claude Code · idle · (you)\n2. Codex · idle");
   });
 
+  it("does not expose private pane notes through agent tools or workspace state", async () => {
+    const { usePaneNotes } = await import("@/features/terminal/paneNotes");
+    usePaneNotes.getState().setNote("p-2", "Private task planning");
+    expect(await call("list_panes")).not.toContain("Private task planning");
+    expect(await call("read_pane", { pane: 2 })).not.toContain("Private task planning");
+    expect(JSON.stringify(useWorkspaces.getState().workspaces)).not.toContain("Private task planning");
+  });
+
   it("reads another pane by number", async () => {
     expect(await call("read_pane", { pane: 2 })).toBe("$ npm test\n12 passing");
     await expect(call("read_pane", { pane: 7 })).rejects.toThrow("No pane 7");
