@@ -50,6 +50,11 @@ packed as `bench/suites.tar.gz` because the store installs at most 500 files per
 `api.appExe()`, polling a status file with `readFile` for live progress and `usage()` for the plan limits at the start and end of a run (and when they ran out); `pnpm dev` with `?bench`
 opens it on a fake runner.
 
+[`plugins/cosmos-db`](../../plugins/cosmos-db) connects Azure Cosmos DB for NoSQL
+using a vault-held connection string or Microsoft Entra identity. Its agent tools
+list, query and write items; per-connection write approval defaults to on. It uses
+the Python Azure Cosmos/Identity SDKs and ships offline bridge and tool tests.
+
 ## plugin.json
 
 | Field | |

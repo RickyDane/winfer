@@ -1,0 +1,9 @@
+{
+  "id": "cosmos-db",
+  "name": "Cosmos DB",
+  "version": "1.0.1",
+  "description": "Connect Azure Cosmos DB for NoSQL using a connection string or Microsoft Entra identity. Agents browse, query and write items, with optional per-write approval enabled by default. Requires Python and the Azure Cosmos/Identity SDKs.",
+  "author": "winfer",
+  "main": "index.js",
+  "tags": ["database", "cosmos", "azure", "nosql", "microsoft", "agents"]
+}
