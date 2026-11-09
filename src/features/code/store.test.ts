@@ -17,6 +17,17 @@ function setup() {
   return { store, emit, detach, disconnect };
 }
 
+describe("events the store has no state for", () => {
+  it.each([
+    { type: "account", id: "work", label: "work@example.com" },
+    { type: "from_a_newer_harness" },
+  ])("keep the state: $type", (ev) => {
+    const store = createCodeStore();
+    store.getState().apply(ev as Ev);
+    expect(store.getState().tasks).toEqual({});
+  });
+});
+
 describe("batched code transport", () => {
   it("sends mixed dropped images, uploads and desktop paths without treating files as images", () => {
     const store = createCodeStore();

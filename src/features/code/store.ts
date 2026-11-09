@@ -378,6 +378,11 @@ export const createCodeStore = () =>
           const text = ev.error ? `Undo failed: ${ev.error}` : `Undid last turn${ev.files?.length ? ` · reverted ${ev.files.join(", ")}` : ""}`;
           return { items: [...kept, { kind: "notice", key: key(), text, tone: ev.error ? "error" : "info" }] };
         }
+        // Must stay: zustand replaces the whole state when an updater returns undefined, so an
+        // event type this switch doesn't know would wipe the store and crash every reader.
+        case "account":
+        default:
+          return {};
       }
     });
   },

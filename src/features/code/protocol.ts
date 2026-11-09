@@ -112,7 +112,9 @@ export type Ev =
   | { type: "user"; text: string }
   | { type: "cleared" }
   /** An approval answered outside the web UI (the app's approve button, its broadcast bar). */
-  | { type: "answered"; id: string };
+  | { type: "answered"; id: string }
+  /** The bridge moved to another account after hitting a usage limit. */
+  | { type: "account"; id: string; label?: string | null };
 
 /** A pasted or dropped image: base64 without the `data:` prefix. */
 export interface ImageData {
