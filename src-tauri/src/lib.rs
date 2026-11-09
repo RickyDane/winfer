@@ -207,6 +207,7 @@ pub fn run() {
             browser::browser_new_tab,
             browser::browser_close_tab,
             browser::browser_navigate,
+            browser::browser_allow_invalid_certificates,
             browser::browser_history,
             browser::browser_attach,
             browser::browser_detach,

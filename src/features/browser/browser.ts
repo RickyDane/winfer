@@ -67,6 +67,8 @@ interface BrowserState {
   tabs: Record<string, Tab[]>;
   activeTab: Record<string, string | null>;
   device: Record<string, Device>;
+  /** Explicit, session-only opt-in for all tabs in a workspace's browser. */
+  invalidCertificates: Record<string, boolean>;
   /** Page sizes set by dragging the page's edges or by an agent, per tab id; absent fits the panel. */
   sizes: Record<string, PageSize>;
   /** Bumped to ask the URL bar to take focus (⌘L). */
@@ -91,6 +93,7 @@ export const useBrowser = create<BrowserState>(() => ({
   tabs: {},
   activeTab: {},
   device: {},
+  invalidCertificates: {},
   sizes: {},
   focusUrlBar: 0,
   console: {},
@@ -210,6 +213,9 @@ function listenForTabs() {
   if (listening) return;
   listening = true;
   void listen<{ workspaceId: string; tabs: Tab[] }>("browser://tabs", ({ payload }) => setTabs(payload.workspaceId, payload.tabs));
+  void listen<{ workspaceId: string; allow: boolean }>("browser://certificate-policy", ({ payload }) =>
+    useBrowser.setState((s) => ({ invalidCertificates: { ...s.invalidCertificates, [payload.workspaceId]: payload.allow } })),
+  );
   void listen<{ workspaceId: string; targetId: string; adopted: boolean }>("browser://agent", ({ payload }) =>
     markAgentTab(payload.targetId, payload.workspaceId, payload.adopted),
   );
@@ -430,6 +436,17 @@ export async function openUrl(input: string, opts: { newTab?: boolean; workspace
 export async function newTab() {
   await openUrl("about:blank", { newTab: true });
   useBrowser.setState((s) => ({ focusUrlBar: s.focusUrlBar + 1 }));
+}
+
+export async function allowInvalidCertificates(workspaceId: string, allow: boolean) {
+  try {
+    await invoke("browser_allow_invalid_certificates", { workspaceId, allow });
+    useBrowser.setState((s) => ({ invalidCertificates: { ...s.invalidCertificates, [workspaceId]: allow } }));
+    return true;
+  } catch (err) {
+    flash(`Couldn't change certificate checks: ${String(err)}`);
+    return false;
+  }
 }
 
 export async function closeTab(tabId = activeTabId(), workspaceId = shownWorkspaceId()) {

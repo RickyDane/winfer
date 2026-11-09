@@ -110,6 +110,27 @@ left): **Stable** only offers stable releases, **Nebula** every build, stable on
 the channel of the build you downloaded.
 Maintainers promote a Nebula build to stable with the **stable** workflow in Actions.
 
+## Internal sites in the browser
+
+Plain `http://` URLs are supported. For an HTTPS site with an untrusted, expired or self-signed
+certificate, click **TLS** in the browser toolbar, confirm **Allow invalid certificates**, then
+reload. This turns certificate checks off for **all tabs in that workspace's browser session**,
+not for winfer's own requests. The warning stays visible; use **Enable certificate checks** to
+restore verification. Checks are on by default and the opt-in is not saved across browser restarts.
+
+Windows/domain SSO (Negotiate/NTLM) is separate from certificate verification. To let the browser
+use your OS login for trusted internal servers, fully quit winfer and launch it with
+`WINFER_BROWSER_SSO_HOSTS` set to comma-separated **exact hostnames**, for example in PowerShell:
+
+```powershell
+$env:WINFER_BROWSER_SSO_HOSTS = 'd-inf-devops01.medata.de'
+# Launch winfer from this shell, or use `pnpm tauri dev` when building from source.
+```
+
+Only add hosts you trust with your domain identity. URLs and wildcards are rejected; credential
+delegation is not enabled. SSO requires usable OS/domain credentials and server support; it does
+not sign in with a different Microsoft account or display a username/password dialog.
+
 ## Build from source
 
 Requirements: Node 20+, pnpm, Rust (stable) and the [Tauri prerequisites](https://tauri.app/start/prerequisites/).

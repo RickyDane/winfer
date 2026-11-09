@@ -18,15 +18,45 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (name: string, han
 }) }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { ensureBrowser, focusUrlBar, openUrl, useBrowser } from "./browser";
+import { allowInvalidCertificates, ensureBrowser, focusUrlBar, openUrl, useBrowser } from "./browser";
 import { useUndock } from "./undockState";
 
 beforeEach(async () => {
   vi.clearAllMocks();
   workspace.browserOpen = false;
   useUndock.setState({ win: null, root: null });
-  useBrowser.setState({ tabs: { ws: [] }, activeTab: {}, shown: "ws", availability: "ready", focusUrlBar: 0 });
+  useBrowser.setState({ tabs: { ws: [] }, activeTab: {}, shown: "ws", availability: "ready", focusUrlBar: 0, invalidCertificates: {} });
   await ensureBrowser("ws");
+});
+
+describe("certificate policy", () => {
+  it("is secure by default and scopes the opt-in to one workspace", async () => {
+    expect(useBrowser.getState().invalidCertificates.ws).toBeUndefined();
+    await allowInvalidCertificates("ws", true);
+    expect(invoke).toHaveBeenCalledWith("browser_allow_invalid_certificates", { workspaceId: "ws", allow: true });
+    expect(useBrowser.getState().invalidCertificates).toEqual({ ws: true });
+    await allowInvalidCertificates("other", true);
+    await allowInvalidCertificates("ws", false);
+    expect(useBrowser.getState().invalidCertificates).toEqual({ ws: false, other: true });
+  });
+
+  it("does not change the displayed policy if Chrome rejects the change", async () => {
+    vi.stubGlobal("window", { setTimeout: vi.fn(() => 0) });
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("disconnected"));
+    try {
+      await allowInvalidCertificates("ws", true);
+      expect(useBrowser.getState().invalidCertificates.ws).toBeUndefined();
+      expect(useBrowser.getState().notice).toContain("Couldn't change certificate checks");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("clears the warning when the backend starts a fresh browser", async () => {
+    await allowInvalidCertificates("ws", true);
+    events.get("browser://certificate-policy")!({ payload: { workspaceId: "ws", allow: false } });
+    expect(useBrowser.getState().invalidCertificates.ws).toBe(false);
+  });
 });
 
 describe.each([false, true])("browser reveal (undocked: %s)", (undocked) => {

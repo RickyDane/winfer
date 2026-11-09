@@ -16,6 +16,7 @@ import { viewOf } from "./view";
 import { backgroundLuminance, blendsIn, iconPixels, INVERT_FILTER } from "./iconContrast";
 import {
   closeTab,
+  allowInvalidCertificates,
   ensureBrowser,
   history,
   installBrowser,
@@ -96,6 +97,17 @@ export function BrowserPanel() {
   const tabs = allTabs[workspaceId] ?? [];
   const active = tabs.find((t) => t.id === activeTab[workspaceId]) ?? null;
   const device = devices[workspaceId] ?? "desktop";
+  const invalidCertificates = browser.invalidCertificates[workspaceId] ?? false;
+  const [certificatePrompt, setCertificatePrompt] = useState<string | null>(null);
+  const [changingCertificates, setChangingCertificates] = useState(false);
+  const changeCertificates = async (allow: boolean) => {
+    setChangingCertificates(true);
+    try {
+      if (await allowInvalidCertificates(workspaceId, allow)) setCertificatePrompt(null);
+    } finally {
+      setChangingCertificates(false);
+    }
+  };
   const size = active ? sizes[active.id] : undefined;
   const errors = active ? (logs[active.id] ?? []).filter((e) => e.level === "error").length : 0;
   const who = useAgentName(workspaceId);
@@ -250,6 +262,15 @@ export function BrowserPanel() {
         </button>
         <PanelActions panel="browser" />
         <button
+          title="Allow invalid HTTPS certificates…"
+          aria-label="Allow invalid HTTPS certificates"
+          aria-pressed={invalidCertificates}
+          onClick={() => setCertificatePrompt(certificatePrompt === workspaceId ? null : workspaceId)}
+          className={cn("rounded px-1 text-[10px] hover:bg-hover", invalidCertificates ? "text-danger" : "text-fg-subtle")}
+        >
+          TLS
+        </button>
+        <button
           title="Console and network errors"
           onClick={() => useBrowser.setState({ consoleOpen: !consoleOpen })}
           className={cn("relative rounded p-1 hover:bg-hover hover:text-fg", consoleOpen ? "text-fg" : "text-fg-subtle")}
@@ -290,6 +311,18 @@ export function BrowserPanel() {
           </IconButton>
         )}
       </div>
+      {(invalidCertificates || certificatePrompt === workspaceId) && (
+        <div className="shrink-0 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+          {invalidCertificates
+            ? "HTTPS certificate checks are off for all tabs in this workspace's browser for this browser session."
+            : "Allow untrusted, expired or self-signed HTTPS certificates for all tabs in this workspace's browser? Only use this for sites you trust."}
+          <button disabled={changingCertificates} className="ml-2 underline disabled:opacity-50" onClick={() => void changeCertificates(!invalidCertificates)}>
+            {invalidCertificates ? "Enable certificate checks" : "Allow invalid certificates"}
+          </button>
+          {!invalidCertificates && <button className="ml-2 underline" onClick={() => setCertificatePrompt(null)}>Cancel</button>}
+          <span className="ml-2">Reload the page after changing this setting.</span>
+        </div>
+      )}
       {picking && <div className="shrink-0 bg-accent-soft px-3 py-1 text-[11px] text-accent">Click an element to send it to the agent · Esc to cancel</div>}
       {notice && <div className="shrink-0 bg-success/10 px-3 py-1 text-[11px] text-success">{notice}</div>}
       {consoleOpen && active && <ConsoleList tabId={active.id} />}

@@ -166,6 +166,23 @@ const PORT_FILE: &str = "winfer-devtools-port";
 /// Chrome's exit code when another browser holds the profile (`RESULT_CODE_PROFILE_IN_USE`).
 pub const PROFILE_IN_USE: i32 = 21;
 
+/// Only explicitly trusted, exact hostnames may receive the user's ambient domain credentials.
+/// No wildcard, URL, port or command-line fragments are accepted.
+fn sso_hosts(value: &str) -> Result<String, String> {
+    let mut hosts = Vec::new();
+    for host in value.split(',').map(str::trim).filter(|host| !host.is_empty()) {
+        if host.len() > 253 || !host.split('.').all(|label| {
+            !label.is_empty() && label.len() <= 63
+                && !label.starts_with('-') && !label.ends_with('-')
+                && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        }) {
+            return Err("WINFER_BROWSER_SSO_HOSTS must contain comma-separated exact hostnames, not URLs or wildcards".into());
+        }
+        hosts.push(host.to_ascii_lowercase());
+    }
+    Ok(hosts.join(","))
+}
+
 /// Starts the browser with its DevTools endpoint on a port chosen up front. Returns as soon as
 /// the process runs: callers (terminal spawns on the UI thread) must never wait for the
 /// browser. Use `ws_url` to get the endpoint once it's up.
@@ -178,6 +195,7 @@ pub fn launch(exe: &Executable, profile_dir: &Path) -> Result<Launched, String> 
 /// Starts the browser on `port`, first freeing the profile from any browser still on it. Also
 /// used to retry on the same port, so the CDP URL agents already got stays valid.
 pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, String> {
+    let trusted_hosts = sso_hosts(&std::env::var("WINFER_BROWSER_SSO_HOSTS").unwrap_or_default())?;
     std::fs::create_dir_all(profile_dir).map_err(|e| e.to_string())?;
     // The startup sweep would end this browser as an orphan if it ran after the launch.
     wait_startup_reclaim();
@@ -192,6 +210,11 @@ pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, S
             "--disable-features=Translate,MediaRouter",
             "--mute-audio",
         ]);
+    if !trusted_hosts.is_empty() {
+        // Enables Negotiate/NTLM with the current OS login for these hosts only. No Kerberos
+        // delegation and no password storage; the OS must already have usable credentials.
+        cmd.arg(format!("--auth-server-allowlist={trusted_hosts}"));
+    }
     if !exe.is_headless_shell() {
         cmd.arg("--headless=new");
     }
@@ -696,6 +719,15 @@ impl Drop for ChromeGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sso_requires_explicit_exact_hosts() {
+        assert_eq!(sso_hosts("").unwrap(), "");
+        assert_eq!(sso_hosts(" d-inf-devops01.medata.de, INTRANET ").unwrap(), "d-inf-devops01.medata.de,intranet");
+        for invalid in ["*", "*.medata.de", "https://host", "host:443", "host/path", "host --flag", "-host", "host.", "a..b"] {
+            assert!(sso_hosts(invalid).is_err(), "accepted {invalid}");
+        }
+    }
 
     /// Needs a local Chrome (or WINFER_CHROME); skipped otherwise.
     #[test]
