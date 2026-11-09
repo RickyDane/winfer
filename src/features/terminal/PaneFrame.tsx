@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { StatusDot } from "./StatusDot";
 import { PaneMenu } from "./PaneMenu";
+import { PaneNote } from "./PaneNote";
 import { PaneTitleInput } from "./PaneTitleInput";
 import { PaneSearch } from "./PaneSearch";
 import { beginDrag, useDrag } from "@/features/layout/drag";
@@ -163,6 +164,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
             <ExternalLink size={10} />
           </button>
         )}
+        <PaneNote paneId={pane.id} />
         <PaneMenu pane={pane} onRename={() => setRenaming(true)} />
         {pane.archived ? (
           <button
