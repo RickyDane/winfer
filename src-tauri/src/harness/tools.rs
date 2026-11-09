@@ -101,7 +101,7 @@ pub fn definitions() -> Vec<Value> {
 /// phone answers too.
 pub const ASK_USER: &str = "ask_user";
 
-pub const ASK_USER_DESCRIPTION: &str = "Ask the user 1-4 multiple-choice questions when you are blocked on a decision that is genuinely theirs (requirements, trade-offs, preferences); they can also type their own answer. Returns their answers. Don't ask what you can find out or sensibly decide yourself; put a recommended option first, marked \"(Recommended)\".";
+pub const ASK_USER_DESCRIPTION: &str = "Ask the user 1-4 questions whenever progress needs their input, a decision, or a manual action (for example reconnecting a device, signing in, or granting access). Use this tool instead of asking in chat or ending with a blocker. The call waits for their answers; they can pick an option or type their own. For a manual action, explain what to do in the question and offer completion/defer options; wait for the answer before continuing. Don't use background-task polling to wait for a human response. Don't ask what you can find out or sensibly decide yourself; put a recommended option first, marked \"(Recommended)\", when there is one.";
 
 /// JSON schema of `ask_user`'s arguments (the same shape as Claude Code's AskUserQuestion).
 pub fn ask_user_schema() -> Value {

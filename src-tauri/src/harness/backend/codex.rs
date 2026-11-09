@@ -61,6 +61,14 @@ enum Ask {
     Input { rpc: Value, ids: Vec<String> },
 }
 
+/// Codex's native question tool is plan-only; our blocking picker works in every mode.
+/// Keep this on both new and resumed threads, even without a user-configured prompt.
+const ASK_USER_INSTRUCTIONS: &str = "When progress requires the user's input, decision, or manual action, call ask_user and wait for its answer instead of asking in chat or ending with a blocker. For example, if a device must be reconnected, use ask_user to explain the steps and offer 'Reconnected' and 'Later' options. Do not use bg read or shell polling as a substitute for waiting for the user. ask_user is available in every mode, unlike request_user_input, which is plan-only. Continue autonomously when you can resolve the issue yourself.";
+
+fn developer_instructions(system: Option<String>) -> String {
+    system.into_iter().chain(std::iter::once(ASK_USER_INSTRUCTIONS.to_string())).collect::<Vec<_>>().join("\n\n")
+}
+
 /// winfer code's plan tool for Codex, whose app-server has none: `update_plan`, named and
 /// shaped like the plan tool GPT models know. Its steps become the TUI's plan.
 const UPDATE_PLAN: &str = "update_plan";
@@ -303,9 +311,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             b.fast = true;
         }
     }
-    if let Some(system) = super::extra_system(&opts) {
-        thread_params["developerInstructions"] = json!(system);
-    }
+    thread_params["developerInstructions"] = json!(developer_instructions(super::extra_system(&opts)));
     let mut resume = opts.resume.clone();
     // Exits of processes replaced by a micro-compact that ended late.
     let mut stale_exits = 0;
@@ -1465,6 +1471,17 @@ fn model_infos(m: &Value) -> Vec<ModelInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn questions_have_guidance_without_replacing_custom_instructions() {
+        assert_eq!(developer_instructions(None), ASK_USER_INSTRUCTIONS);
+        let custom = "Project instructions\n\nOrchestration instructions";
+        assert_eq!(developer_instructions(Some(custom.into())), format!("{custom}\n\n{ASK_USER_INSTRUCTIONS}"));
+        let tools = dynamic_tools();
+        let ask = tools.as_array().unwrap().iter().find(|t| t["name"] == crate::harness::tools::ASK_USER).unwrap();
+        assert_eq!(ask["description"], crate::harness::tools::ASK_USER_DESCRIPTION);
+        assert!(ask["description"].as_str().unwrap().contains("manual action"));
+    }
 
     #[test]
     fn update_plan_becomes_todos() {
