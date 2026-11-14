@@ -107,6 +107,8 @@ struct State {
     /// big old tool output costs full price every request, so it's trimmed as the turn goes on.
     cache: Option<bool>,
     cache_misses: u8,
+    /// The main agent's last answer hit the output limit (`max_output_tokens`).
+    cut: bool,
     /// The user turns, newest last, for /undo.
     undo: Vec<UndoTurn>,
 }
@@ -251,6 +253,7 @@ fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: bool) {
             compact_at: opts.compact_at,
             cache: None,
             cache_misses: 0,
+            cut: false,
             turn: TurnTokens::default(),
             turn_base: 0,
             turn_input_base: 0,
@@ -560,8 +563,20 @@ const RETRY_WAITS: [u64; 5] = [2, 4, 8, 16, 30];
 /// [`request_once`], retried while its error is one a retry can get past (see [`retryable`]).
 fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<Vec<Value>>, String> {
     let mut tries = 0;
+    // The output limit the server asked for after a request didn't fit its context.
+    let mut cap: Option<u64> = None;
     loop {
-        let e = match request_once(shared, tools_on, sub) {
+        let e = match request_once(shared, tools_on, sub, cap) {
+            Err(e) if shared.local && too_long(&e) => {
+                // Sending it again unchanged can't fit: ask for fewer reply tokens, once per
+                // smaller figure; with no room left for a reply the context needs compacting.
+                let next = reply_room(&e).unwrap_or_else(|| cap.unwrap_or(8_192) / 2);
+                if next < 1_024 || cap.is_some_and(|c| next >= c) {
+                    return Err(format!("{e}\n\nThe conversation no longer fits the model's context window; /compact it or start a new session."));
+                }
+                cap = Some(next);
+                continue;
+            }
             Err(e) if retryable(&e) && tries < RETRY_WAITS.len() => e,
             done => return done,
         };
@@ -595,8 +610,37 @@ fn retryable(e: &str) -> bool {
     }
 }
 
+/// The output limit for a local request of `bytes` (its JSON body): what the context window
+/// has room for after the prompt, estimated at 3 bytes a token (on the high side for code and
+/// JSON, so it rarely asks for too much), up to 32k tokens.
+fn output_budget(window: u64, bytes: usize) -> u64 {
+    window.saturating_sub(bytes as u64 / 3 + 1_024).clamp(1_024, 32_768)
+}
+
+/// Whether a server refused a request for not fitting its context window.
+fn too_long(e: &str) -> bool {
+    let e = e.to_ascii_lowercase();
+    ["context length", "context window", "context_length", "maximum context", "too many tokens", "exceeds the context"].iter().any(|p| e.contains(p))
+}
+
+/// The reply size a too-long error says would fit ("…or request at most 27885 reply tokens").
+fn reply_room(e: &str) -> Option<u64> {
+    let lower = e.to_ascii_lowercase();
+    lower.match_indices("at most ").find_map(|(i, _)| {
+        let n: String = lower[i + 8..].chars().take_while(char::is_ascii_digit).collect();
+        let after = lower[i + 8 + n.len()..].trim_start();
+        ["reply", "completion", "output"].iter().any(|w| after.starts_with(w)).then(|| n.parse().ok()).flatten()
+    })
+}
+
+/// Times a turn continues on its own after an answer hits the output limit.
+const MAX_CONTINUES: usize = 3;
+
+/// Sent when an answer hit the output limit, so the model picks up where it stopped.
+const CONTINUE: &str = "[winfer] Your last answer hit the output token limit and was cut off. Continue where you left off; keep reasoning brief and act (call tools or answer) sooner.";
+
 /// One model request; see [`request`].
-fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<Vec<Value>>, String> {
+fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<u64>) -> Result<Option<Vec<Value>>, String> {
     if let Some(start) = shared.mcp_start.lock().unwrap().take() {
         let _ = start.join();
     }
@@ -644,6 +688,11 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Op
             let o = body.as_object_mut().unwrap();
             o.remove("include");
             o.remove("prompt_cache_key");
+            // Without a limit, servers apply a small default that long reasoning runs into; allow
+            // what the context has room for.
+            let bytes = serde_json::to_string(o).map_or(0, |s| s.len());
+            let budget = output_budget(st.usage.window, bytes);
+            o.insert("max_output_tokens".into(), json!(cap.map_or(budget, |c| c.min(budget))));
         }
         (body, model.clone())
     };
@@ -775,9 +824,13 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Op
                     st.usage.clone()
                 };
                 emit(Ev::Usage(usage));
-                if ev["type"] == "response.incomplete" && sub.is_none() {
+                if sub.is_none() {
                     let why = r["incomplete_details"]["reason"].as_str().unwrap_or("unknown");
-                    emit(Ev::Notice(format!("The answer was cut short ({why}).")));
+                    let cut = ev["type"] == "response.incomplete" && why == "max_output_tokens";
+                    shared.state.lock().unwrap().cut = cut;
+                    if ev["type"] == "response.incomplete" && !cut {
+                        emit(Ev::Notice(format!("The answer was cut short ({why}).")));
+                    }
                 }
                 return Ok(Some(out));
             }
@@ -841,6 +894,7 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         }
     }
     let mut steps = 0;
+    let mut continues = 0;
     loop {
         steps += 1;
         // Reports of background subagents that finished meanwhile.
@@ -867,9 +921,23 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
             }
         };
         let calls: Vec<Value> = out.iter().filter(|i| i["type"] == "function_call").cloned().collect();
-        shared.state.lock().unwrap().items.extend(out);
+        let cut = {
+            let mut st = shared.state.lock().unwrap();
+            st.items.extend(out);
+            std::mem::take(&mut st.cut)
+        };
         // A message the user sent meanwhile gets an answer in this turn, even after a final reply.
         let steered = !shared.steer.lock().unwrap().is_empty() && !shared.stop.load(Ordering::Relaxed);
+        // Cut off by the output limit before it acted: carry on rather than end the turn.
+        if cut && calls.is_empty() && !steered && steps <= 200 {
+            if continues < MAX_CONTINUES {
+                continues += 1;
+                emit(Ev::Notice(format!("The answer hit the output limit; continuing ({continues}/{MAX_CONTINUES})…")));
+                shared.state.lock().unwrap().items.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": CONTINUE }] }));
+                continue;
+            }
+            emit(Ev::Notice("The answer hit the output limit again; stopped. Send \"continue\" to go on.".into()));
+        }
         if (calls.is_empty() && !steered) || steps > 200 {
             break;
         }
@@ -1510,6 +1578,7 @@ mod tests {
                 compact_at: 0,
                 cache: None,
                 cache_misses: 0,
+            cut: false,
                 turn: TurnTokens::default(),
                 turn_base: 0,
             turn_input_base: 0,
@@ -1762,6 +1831,18 @@ mod tests {
         let t = today();
         assert_eq!(t.len(), 10);
         assert!(t.starts_with("20"));
+    }
+
+    #[test]
+    fn local_output_budget_fits_the_context() {
+        assert_eq!(output_budget(110_592, 30_000), 32_768);
+        // The failed request: 22k prompt tokens (about 66k bytes) in a 50k window.
+        assert_eq!(output_budget(50_000, 66_345), 50_000 - 22_115 - 1_024);
+        assert_eq!(output_budget(50_000, 200_000), 1_024);
+        let e = "Local model server 200: This server's maximum context length is 50000 tokens, but the rendered prompt has 22115 tokens and requests 28973 reply tokens, which exceeds the context window. Reduce the prompt to at most 21027 prompt tokens or request at most 27885 reply tokens, including chat template and thinking tokens.";
+        assert!(too_long(e));
+        assert_eq!(reply_room(e), Some(27_885));
+        assert!(!too_long("Local model server 200: insufficient memory"));
     }
 
     #[test]
