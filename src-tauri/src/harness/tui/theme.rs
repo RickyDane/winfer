@@ -168,6 +168,7 @@ pub fn backend(kind: Kind) -> Color {
         Kind::OpenCode => p.yellow,
         Kind::Pi => p.green,
         Kind::Muse => p.violet,
+        Kind::Local => p.green,
     }
 }
 

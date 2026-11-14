@@ -10,6 +10,7 @@ mod files;
 mod harness;
 mod hooks;
 mod llm;
+mod local_llm;
 mod mcp;
 mod mobile;
 mod notify;
@@ -276,6 +277,7 @@ pub fn run() {
             harness::harness_set_settings,
             harness::harness_models,
             harness::harness_claude_skills,
+            local_llm::local_llm_test,
             transfer::data_export,
             transfer::data_import_inspect,
             transfer::data_import_stage,

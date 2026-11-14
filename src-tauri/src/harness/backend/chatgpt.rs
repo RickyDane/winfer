@@ -147,6 +147,8 @@ struct Shared {
     steer: Mutex<Vec<UserMsg>>,
     /// Owner of this backend's `bg` tasks (a backend started after it has its own).
     bg_owner: String,
+    /// Talks to the local model server (Settings → winfer code → Local models), not OpenAI.
+    local: bool,
 }
 
 /// A subagent's own conversation.
@@ -181,6 +183,28 @@ fn push_items(shared: &Shared, sub: Option<&Sub>, items: impl IntoIterator<Item 
     }
 }
 
+/// The models on the local server (Settings → winfer code → Local models), as `local/<id>`;
+/// empty when that's off or the server isn't up.
+pub fn local_models() -> Vec<ModelInfo> {
+    if !crate::local_llm::enabled() {
+        return Vec::new();
+    }
+    let address = crate::local_llm::address();
+    crate::local_llm::list(&crate::harness::config::Config::load().local)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| ModelInfo {
+            spec: format!("local/{}", m.id),
+            label: m.id,
+            detail: match m.context {
+                Some(c) => format!("Local · {address} · {}k context · winfer tools", c / 1000),
+                None => format!("Local · {address} · winfer tools"),
+            },
+            efforts: Some(["low", "medium", "high"].map(String::from).into()),
+        })
+        .collect()
+}
+
 pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
     if !crate::chatgpt::signed_in() {
         let _ = events.send(Ev::Exited(
@@ -188,6 +212,29 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         ));
         return;
     }
+    run_with(opts, rx, events, false);
+}
+
+/// The same agent loop on the local model server.
+pub fn run_local(mut opts: Opts, rx: Receiver<In>, events: Events) {
+    if opts.model.is_empty() {
+        match crate::local_llm::list(&crate::harness::config::Config::load().local) {
+            Ok(list) if !list.is_empty() => opts.model = list[0].id.clone(),
+            Ok(_) => {
+                let _ = events.send(Ev::Exited(format!("The local model server at {} lists no models.", crate::local_llm::address())));
+                return;
+            }
+            Err(e) => {
+                let _ = events.send(Ev::Exited(format!("{e}. Start it, or change its address in winfer → Settings → winfer code → Local models.")));
+                return;
+            }
+        }
+    }
+    run_with(opts, rx, events, true);
+}
+
+fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: bool) {
+    let window = if local { crate::local_llm::window(&opts.model) } else { 272_000 };
     let session = opts.resume.clone().unwrap_or_else(new_id);
     let items = opts.resume.as_ref().map(|id| load_items(id)).unwrap_or_default();
     let shared = Arc::new(Shared {
@@ -199,7 +246,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             sub_effort: opts.sub_effort.clone(),
             mode: opts.mode,
             allowed: opts.allowed_commands.iter().map(|c| format!("bash:{c}")).collect(),
-            usage: Usage { window: 272_000, ..Default::default() },
+            usage: Usage { window, ..Default::default() },
             trim_at: opts.trim_at,
             compact_at: opts.compact_at,
             cache: None,
@@ -226,6 +273,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         notes: Mutex::new(Vec::new()),
         steer: Mutex::new(Vec::new()),
         bg_owner: format!("code-{}", new_id()),
+        local,
     });
     let _ = events.send(Ev::Session(session));
     let _ = events.send(Ev::Model(shared.state.lock().unwrap().model.clone()));
@@ -321,7 +369,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
             Cmd::Answer(id, answers) => {
                 shared.answers.lock().unwrap().insert(id, answers);
             }
-            Cmd::SetModel(m) => shared.state.lock().unwrap().model = m,
+            Cmd::SetModel(m) => {
+                let window = shared.local.then(|| crate::local_llm::window(&m));
+                let mut st = shared.state.lock().unwrap();
+                if let Some(w) = window {
+                    st.usage.window = w;
+                }
+                st.model = m;
+            }
             Cmd::SetEffort(e) => shared.state.lock().unwrap().effort = e,
             Cmd::SetSubagent { model, effort } => {
                 let mut st = shared.state.lock().unwrap();
@@ -542,18 +597,26 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
         if let Some(e) = effort {
             body["reasoning"]["effort"] = json!(e);
         }
+        if shared.local {
+            // Local servers keep nothing between requests and many reject OpenAI-only fields.
+            let o = body.as_object_mut().unwrap();
+            o.remove("include");
+            o.remove("prompt_cache_key");
+        }
         (body, model.clone())
     };
     let _ = model;
     let started = std::time::Instant::now();
     trace(&json!({ "request": { "bytes": body.to_string().len(), "items": body["input"].as_array().map(Vec::len), "prefix_hash": prefix_hash(&body) } }));
-    let reader = crate::chatgpt::open_stream(&body)?;
+    let reader: Box<dyn std::io::Read + Send> =
+        if shared.local { Box::new(crate::local_llm::open_stream(&body)?) } else { Box::new(crate::chatgpt::open_stream(&body)?) };
+    let who = if shared.local { "the local model server" } else { "OpenAI" };
     trace(&json!({ "headers_ms": started.elapsed().as_millis() as u64 }));
     let (tx, rx) = channel::<Stream>();
     std::thread::spawn(move || {
         for line in BufReader::new(reader).lines() {
             let Ok(line) = line else {
-                let _ = tx.send(Stream::Failed("the connection to OpenAI dropped".into()));
+                let _ = tx.send(Stream::Failed(format!("the connection to {who} dropped")));
                 return;
             };
             let Some(data) = line.strip_prefix("data:") else { continue };
@@ -581,7 +644,7 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
         let ev = match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Stream::Event(v)) => v,
             Ok(Stream::Failed(e)) => return Err(e),
-            Ok(Stream::End) | Err(RecvTimeoutError::Disconnected) => return Err("OpenAI's answer stopped before it finished.".into()),
+            Ok(Stream::End) | Err(RecvTimeoutError::Disconnected) => return Err(format!("The answer from {who} stopped before it finished.")),
             Err(RecvTimeoutError::Timeout) => continue,
         };
         let emit = |e: Ev| {
@@ -612,7 +675,7 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                 streamed(&d);
                 stream(Ev::TextDelta { id, text: d });
             }
-            "response.reasoning_summary_text.delta" => {
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("");
                 streamed(d);
                 stream(Ev::ReasoningDelta { id, text: d.into() });
@@ -669,7 +732,18 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                 return Ok(Some(out));
             }
             "response.failed" | "error" => {
-                let error = if ev["response"]["error"].is_object() { &ev["response"]["error"] } else { &ev["error"] };
+                // `response.failed` nests it; an `error` event is `{ error: {…} }` or carries
+                // `code`/`message` itself (the Responses API streaming spec, local servers).
+                let error = if ev["response"]["error"].is_object() {
+                    &ev["response"]["error"]
+                } else if ev["error"].is_object() {
+                    &ev["error"]
+                } else {
+                    &ev
+                };
+                if shared.local {
+                    return Err(crate::local_llm::error_message(200, &json!({ "error": error })));
+                }
                 return Err(crate::chatgpt::api_error(200, &json!({ "error": error })).1);
             }
             _ => {}
@@ -1408,6 +1482,7 @@ mod tests {
             notes: Mutex::new(Vec::new()),
         steer: Mutex::new(Vec::new()),
             bg_owner: String::new(),
+            local: false,
         });
         (shared, rx, dir)
     }

@@ -968,10 +968,21 @@ interface HarnessSettings {
   leanCodexPrompt: boolean;
   /** The model (backend's own id) and effort each backend's subagents run on; absent = the main model. */
   subagents: Record<string, { model: string; effort: string | null }>;
+  /** A local OpenAI-compatible server (`local/<model>`). */
+  local: LocalLlm;
+}
+
+interface LocalLlm {
+  enabled: boolean;
+  host: string;
+  port: number;
+  path: string;
+  apiKey: string;
+  contextWindow: number;
 }
 
 /** Backends whose subagents can run on a model of their own. */
-const SUBAGENT_BACKENDS = ["chatgpt", "claude", "codex"];
+const SUBAGENT_BACKENDS = ["chatgpt", "claude", "codex", "local"];
 
 /** A skill Claude Code can load from the user's setup (`~/.claude/skills` or an enabled plugin). */
 interface ClaudeSkill {
@@ -991,12 +1002,124 @@ const HARNESS_BACKENDS: { id: string; label: string }[] = [
   { id: "chatgpt", label: "ChatGPT account" },
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
+  { id: "local", label: "Local model" },
 ];
 /** winfer code's provider id (providers.json); its `autoApproveArgs` is `--yolo`. */
 const WINFER_PROVIDER = "winfer";
 const PERCENTS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95];
 // Models load once per app run (asking Codex and OpenAI takes a few seconds).
 let harnessModelsCache: HarnessModel[] | null = null;
+
+const DEFAULT_LOCAL: LocalLlm = { enabled: false, host: "127.0.0.1", port: 8000, path: "/v1", apiKey: "", contextWindow: 0 };
+
+/** Settings → winfer code → Local models: where an OpenAI-compatible server listens. Edits stay
+ * local until they leave a field, so typing a host doesn't refetch models on every key. */
+function LocalModelSettings({ value, onSave }: { value: LocalLlm | undefined; onSave: (local: LocalLlm) => Promise<void> }) {
+  const saved = { ...DEFAULT_LOCAL, ...value };
+  const [draft, setDraft] = useState<LocalLlm>(saved);
+  const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const set = (patch: Partial<LocalLlm>) => setDraft((d) => ({ ...d, ...patch }));
+  const commit = (patch: Partial<LocalLlm> = {}) => {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    if (JSON.stringify(next) !== JSON.stringify(saved)) void onSave(next);
+  };
+  const runTest = async () => {
+    setTesting(true);
+    setTest(null);
+    try {
+      const models = await invoke<{ id: string; context: number | null }[]>("local_llm_test", { settings: draft });
+      setTest(
+        models.length
+          ? { ok: true, text: `Connected · ${models.map((m) => (m.context ? `${m.id} (${Math.round(m.context / 1000)}k)` : m.id)).join(", ")}` }
+          : { ok: false, text: "Connected, but the server lists no models." },
+      );
+    } catch (err) {
+      setTest({ ok: false, text: String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+  const base = `${/^[a-z]+:\/\//i.test(draft.host) ? "" : "http://"}${draft.host.replace(/\/+$/, "") || "127.0.0.1"}${draft.port ? `:${draft.port}` : ""}${draft.path.trim() ? `/${draft.path.trim().replace(/^\/+|\/+$/g, "")}` : ""}`;
+
+  return (
+    <Card
+      title="Local models"
+      description={
+        <>
+          Run <span className="font-mono">winfer code</span> on a model served from your machine or network (vLLM, LM Studio, Ollama, llama.cpp, mtplx…), with winfer's own
+          tools. The server needs the OpenAI Responses API (<span className="font-mono">/v1/responses</span>). Its models show up in the pickers as{" "}
+          <span className="font-mono">local/&lt;model&gt;</span>.
+        </>
+      }
+    >
+      <Row label="Use local models">
+        <Toggle label="Use local models" checked={draft.enabled} onChange={(enabled) => commit({ enabled })} />
+      </Row>
+      {draft.enabled && (
+        <>
+          <Row label="Host / Port" hint={<span className="font-mono">{base}</span>}>
+            <input
+              aria-label="Host"
+              className={cn(inputClass, "w-40")}
+              value={draft.host}
+              placeholder="127.0.0.1"
+              spellCheck={false}
+              onChange={(e) => set({ host: e.target.value.trim() })}
+              onBlur={() => commit()}
+            />
+            <span className="text-fg-subtle">:</span>
+            <input
+              aria-label="Port"
+              className={cn(inputClass, "w-20")}
+              inputMode="numeric"
+              value={draft.port || ""}
+              placeholder="none"
+              onChange={(e) => {
+                const n = Number(e.target.value.replace(/\D/g, ""));
+                if (n <= 65535) set({ port: n });
+              }}
+              onBlur={() => commit()}
+            />
+          </Row>
+          <Row label="API path" hint="Where the OpenAI-compatible API lives on the server.">
+            <input aria-label="API path" className={cn(inputClass, "w-28")} value={draft.path} placeholder="/v1" spellCheck={false} onChange={(e) => set({ path: e.target.value.trim() })} onBlur={() => commit()} />
+          </Row>
+          <Row label="API key" hint="Sent as a bearer token. Most local servers don't need one.">
+            <input
+              aria-label="API key"
+              type="password"
+              className={cn(inputClass, "w-48")}
+              value={draft.apiKey}
+              placeholder="none"
+              spellCheck={false}
+              onChange={(e) => set({ apiKey: e.target.value.trim() })}
+              onBlur={() => commit()}
+            />
+          </Row>
+          <Row label="Context window" hint="Tokens, for the context meter and compaction. Automatic uses what the server reports for the model (else 32k).">
+            <input
+              aria-label="Context window"
+              className={cn(inputClass, "w-28")}
+              inputMode="numeric"
+              value={draft.contextWindow || ""}
+              placeholder="Automatic"
+              onChange={(e) => set({ contextWindow: Number(e.target.value.replace(/\D/g, "")) })}
+              onBlur={() => commit()}
+            />
+          </Row>
+          <Row label="Connection" hint={test ? <span className={test.ok ? "text-success" : "text-danger"}>{test.text}</span> : "Lists the server's models."}>
+            <button className={buttonClass} disabled={testing} onClick={() => void runTest()}>
+              {testing ? <Spinner size={12} /> : <RefreshCw size={12} />}
+              Test
+            </button>
+          </Row>
+        </>
+      )}
+    </Card>
+  );
+}
 
 function HarnessSettings() {
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
@@ -1236,6 +1359,20 @@ function HarnessSettings() {
           <Toggle label="Plan sidebar" checked={settings.planSidebar} onChange={(planSidebar) => void save({ planSidebar })} />
         </Row>
       </Card>
+
+      <LocalModelSettings
+        value={settings.local}
+        onSave={async (local) => {
+          await save({ local });
+          // Its models join (or leave) the pickers.
+          harnessModelsCache = null;
+          setModels(null);
+          void invoke<HarnessModel[]>("harness_models").then((m) => {
+            harnessModelsCache = m;
+            setModels(m);
+          });
+        }}
+      />
 
       <Card title="Lean setup" description="Starts agents with fewer tools and skills, so every request is smaller. Applies to sessions started (or restarted) after the change.">
         <Row

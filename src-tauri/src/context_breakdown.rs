@@ -413,7 +413,7 @@ pub fn breakdown(provider: &str, source: &str, tokens: u64) -> Option<Vec<Part>>
         "claude" => Some(claude_breakdown(&log()?, tokens)),
         "codex" => Some(codex_breakdown(&log()?, tokens)),
         "opencode" => opencode_breakdown(&crate::usage::opencode_db()?, source, tokens),
-        "chatgpt" => {
+        "chatgpt" | "local" => {
             let path = std::path::Path::new(source);
             let setup = std::fs::read_to_string(path.with_extension("setup.json")).ok();
             chatgpt_breakdown(&std::fs::read_to_string(path).ok()?, setup.as_deref(), tokens)

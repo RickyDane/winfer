@@ -46,5 +46,6 @@ export const PROVIDER_COLORS: Record<string, string> = {
   cursor: "#a0a0ff",
   pi: "#7ee787",
   muse: "#fb7185",
+  local: "#7ee787",
   winfer: "var(--color-accent)",
 };

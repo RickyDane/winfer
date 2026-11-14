@@ -819,7 +819,7 @@ impl App {
         if !self.queue.is_empty() {
             let msg = self.queue.remove(0);
             self.dispatch(msg);
-        } else if was_busy && self.kind != Kind::ChatGpt && self.needs_compact() {
+        } else if was_busy && !self.kind.native() && self.needs_compact() {
             // The ChatGPT backend compacts itself; the bridges are told to at the threshold.
             self.notice(format!("Context at {}%; compacting…", self.usage.context * 100 / self.usage.window.max(1)), NoticeKind::Info);
             self.busy = true;
@@ -1387,7 +1387,7 @@ impl App {
 
     /// `/subagent-model`: the current backend's models, for its subagents.
     fn open_sub_models(&mut self) {
-        if !matches!(self.kind, Kind::ChatGpt | Kind::Claude | Kind::Codex) {
+        if !matches!(self.kind, Kind::ChatGpt | Kind::Local | Kind::Claude | Kind::Codex) {
             self.toast(format!("{}'s subagents run on its main model.", self.kind.label()), NoticeKind::Info);
             return;
         }
@@ -2706,7 +2706,7 @@ pub fn mentions(cwd: &Path, kind: Kind, text: &str, images: &mut Vec<PathBuf>) -
             continue;
         }
         // Claude Code and Codex read `@path` themselves; inlining would pay for it twice.
-        if kind != Kind::ChatGpt {
+        if !kind.native() {
             continue;
         }
         let Ok(meta) = std::fs::metadata(&path) else { continue };
@@ -2752,7 +2752,7 @@ pub fn session_log(kind: Kind, session: &str, cwd: &str) -> Option<String> {
     let path = match kind {
         Kind::Claude => crate::usage::claude_transcript(session, cwd),
         Kind::Codex => crate::usage::codex_log(Some(session), cwd).filter(|p| p.to_string_lossy().contains(session)),
-        Kind::ChatGpt => Some(backend::chatgpt::session_path(session)),
+        Kind::ChatGpt | Kind::Local => Some(backend::chatgpt::session_path(session)),
         _ => None,
     }?;
     Some(path.to_string_lossy().into_owned())

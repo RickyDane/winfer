@@ -36,6 +36,8 @@ pub enum Kind {
     Pi,
     /// Meta's Muse (`muse`).
     Muse,
+    /// A local OpenAI-compatible server, run with winfer's own tools (the ChatGPT backend's loop).
+    Local,
 }
 
 impl Kind {
@@ -49,6 +51,7 @@ impl Kind {
             Kind::OpenCode => "opencode",
             Kind::Pi => "pi",
             Kind::Muse => "muse",
+            Kind::Local => "local",
         }
     }
     pub fn label(self) -> &'static str {
@@ -61,7 +64,12 @@ impl Kind {
             Kind::OpenCode => "OpenCode",
             Kind::Pi => "Pi",
             Kind::Muse => "Muse Code",
+            Kind::Local => "Local model",
         }
+    }
+    /// Runs winfer's own agent loop and tools (not a CLI bridge).
+    pub fn native(self) -> bool {
+        matches!(self, Kind::ChatGpt | Kind::Local)
     }
     pub fn from_id(id: &str) -> Option<Kind> {
         match id {
@@ -73,6 +81,7 @@ impl Kind {
             "opencode" => Some(Kind::OpenCode),
             "pi" => Some(Kind::Pi),
             "muse" => Some(Kind::Muse),
+            "local" => Some(Kind::Local),
             _ => None,
         }
     }
@@ -86,6 +95,10 @@ pub fn parse_spec(spec: &str) -> (Kind, String) {
         }
     }
     let lower = spec.to_ascii_lowercase();
+    // `local` alone: the server's first model.
+    if lower == "local" {
+        return (Kind::Local, String::new());
+    }
     if lower.starts_with("muse-") || lower == "muse" {
         return (Kind::Muse, spec.to_string());
     }
@@ -291,7 +304,7 @@ fn preloaded_skills(kind: Kind, home: &std::path::Path, cwd: &std::path::Path, l
         }
     };
     match kind {
-        Kind::ChatGpt => {}
+        Kind::ChatGpt | Kind::Local => {}
         Kind::Claude => {
             let available = claude_skills::available_in(home);
             let picked = match lean {
@@ -355,6 +368,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
         }
         match kind {
         Kind::ChatGpt => chatgpt::run(opts, rx, events),
+        Kind::Local => chatgpt::run_local(opts, rx, events),
         _ => {
             // The CLIs reach `bg` through winfer's MCP server; send those calls here, so the
             // tasks show in winfer code's task list and end with this backend.
@@ -471,7 +485,7 @@ impl Drop for LineProcess {
 pub fn all_models() -> Vec<ModelInfo> {
     // Each backend lists its own (asking its CLI, so some take seconds); one that isn't
     // installed lists nothing, so it doesn't show in the picker.
-    let listers: [fn() -> Vec<ModelInfo>; 8] = [chatgpt::models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models, muse::models];
+    let listers: [fn() -> Vec<ModelInfo>; 9] = [chatgpt::models, chatgpt::local_models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models, muse::models];
     let (tx, rx) = channel::<Vec<ModelInfo>>();
     for list in listers {
         let tx = tx.clone();
@@ -489,7 +503,8 @@ pub fn all_models() -> Vec<ModelInfo> {
         Some("cursor") => 4,
         Some("opencode") => 5,
         Some("muse") => 6,
-        _ => 7,
+        Some("local") => 7,
+        _ => 8,
     };
     all.sort_by_key(order);
     all

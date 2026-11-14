@@ -40,6 +40,32 @@ pub struct Config {
     /// The model subagents run on, per backend id ("chatgpt", "claude", "codex"); a missing or
     /// empty entry means the main model.
     pub subagents: std::collections::BTreeMap<String, SubagentModel>,
+    /// A local OpenAI-compatible server (`local/<model>`), see local_llm.rs.
+    pub local: LocalLlm,
+}
+
+/// Where a local model server listens (Settings → winfer code → Local models).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LocalLlm {
+    /// Offer its models in the picker.
+    pub enabled: bool,
+    /// Host name or IP, optionally with a scheme (`https://box.lan`).
+    pub host: String,
+    /// 0 = none (the scheme's default).
+    pub port: u16,
+    /// The API's path on the server.
+    pub path: String,
+    /// Sent as a bearer token when set.
+    pub api_key: String,
+    /// Tokens; 0 = what the server reports for the model.
+    pub context_window: u64,
+}
+
+impl Default for LocalLlm {
+    fn default() -> Self {
+        LocalLlm { enabled: false, host: "127.0.0.1".into(), port: 8000, path: "/v1".into(), api_key: String::new(), context_window: 0 }
+    }
 }
 
 /// The model (and effort) a backend's subagents run on while the main model orchestrates.
@@ -69,6 +95,7 @@ impl Default for Config {
             lean_codex: true,
             lean_codex_prompt: false,
             subagents: Default::default(),
+            local: LocalLlm::default(),
         }
     }
 }
