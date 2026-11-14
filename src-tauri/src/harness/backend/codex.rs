@@ -934,6 +934,7 @@ impl Bridge {
                     turn_input: 0,
                     turn_cached: 0,
                     turn_streamed: 0,
+                    turn_active_ms: 0,
                 };
                 self.counted();
             }

@@ -554,7 +554,49 @@ enum Stream {
 
 /// One model request for the main conversation, or a subagent's (`sub`): streams the main
 /// one's deltas to the UI; returns the output items, or None if stopped.
+/// Waits before each retry of a failed request; one wait per retry.
+const RETRY_WAITS: [u64; 5] = [2, 4, 8, 16, 30];
+
+/// [`request_once`], retried while its error is one a retry can get past (see [`retryable`]).
 fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<Vec<Value>>, String> {
+    let mut tries = 0;
+    loop {
+        let e = match request_once(shared, tools_on, sub) {
+            Err(e) if retryable(&e) && tries < RETRY_WAITS.len() => e,
+            done => return done,
+        };
+        let wait = RETRY_WAITS[tries];
+        tries += 1;
+        if sub.is_none() {
+            let _ = shared.events.send(Ev::Notice(format!("{e} — retrying in {wait}s ({tries}/{})…", RETRY_WAITS.len())));
+        }
+        let until = std::time::Instant::now() + Duration::from_secs(wait);
+        while std::time::Instant::now() < until {
+            if stopped(shared, sub) {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Whether a failed request is worth sending again: the server erred (5xx, or an error event in
+/// a stream it had accepted, like a local model's malformed output or a memory squeeze), the
+/// connection dropped or the server wasn't reachable. Not: a request the server rejected (4xx),
+/// a missing endpoint, a sign-in or a plan's limits.
+fn retryable(e: &str) -> bool {
+    let status = ["Local model server ", "OpenAI "].iter().find_map(|p| {
+        let rest = e.split_once(p)?.1;
+        rest.get(..3).filter(|s| s.bytes().all(|b| b.is_ascii_digit())).and_then(|s| s.parse::<u16>().ok())
+    });
+    match status {
+        Some(s) => s == 200 || s == 408 || s >= 500,
+        None => ["couldn't reach", "dropped", "stopped before it finished", "request failed (5"].iter().any(|p| e.contains(p)),
+    }
+}
+
+/// One model request; see [`request`].
+fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<Vec<Value>>, String> {
     if let Some(start) = shared.mcp_start.lock().unwrap().take() {
         let _ = start.join();
     }
@@ -607,6 +649,9 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
     };
     let _ = model;
     let started = std::time::Instant::now();
+    if sub.is_none() {
+        shared.state.lock().unwrap().turn.request_started(started);
+    }
     trace(&json!({ "request": { "bytes": body.to_string().len(), "items": body["input"].as_array().map(Vec::len), "prefix_hash": prefix_hash(&body) } }));
     let reader: Box<dyn std::io::Read + Send> =
         if shared.local { Box::new(crate::local_llm::open_stream(&body)?) } else { Box::new(crate::chatgpt::open_stream(&body)?) };
@@ -664,6 +709,7 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
             if moved {
                 st.usage.turn = st.turn.now();
                 st.usage.turn_streamed = st.turn.streamed_total();
+                st.usage.turn_active_ms = st.turn.active_ms();
                 emit(Ev::Usage(st.usage.clone()));
             }
         };
@@ -707,9 +753,13 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
                     let cached = u["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
                     st.usage.cached += cached;
                     let turn = st.usage.output.saturating_sub(st.turn_base);
+                    if sub.is_none() {
+                        st.turn.request_done(output, std::time::Instant::now());
+                    }
                     st.turn.exact(turn);
                     st.usage.turn = turn;
                     st.usage.turn_streamed = st.turn.streamed_total();
+                    st.usage.turn_active_ms = st.turn.active_ms();
                     st.usage.turn_input = st.usage.input.saturating_sub(st.turn_input_base);
                     st.usage.turn_cached = st.usage.cached.saturating_sub(st.turn_cached_base);
                     if sub.is_none() {
@@ -1712,5 +1762,30 @@ mod tests {
         let t = today();
         assert_eq!(t.len(), 10);
         assert!(t.starts_with("20"));
+    }
+
+    #[test]
+    fn retries_server_side_failures_only() {
+        for e in [
+            r#"Local model server 200: Engine protocol predict stream returned an error: {"code":500,"message":"The model produced output that does not match the expected peg-native format"}"#,
+            "Local model server 200: insufficient memory: the Mac ran out of memory",
+            "Local model server 503: loading model",
+            "Local model server request failed (502)",
+            "couldn't reach the local model server at http://127.0.0.1:8000/v1/responses: Connection refused",
+            "the connection to OpenAI dropped",
+            "The answer from the local model server stopped before it finished.",
+            "OpenAI 500: The server had an error",
+        ] {
+            assert!(retryable(e), "{e}");
+        }
+        for e in [
+            "Local model server 400: context length exceeded",
+            "Local model server 404: Not Found — http://x/v1/responses isn't there",
+            "OpenAI 401: invalid token",
+            "OpenAI 429: rate limited",
+            "Your ChatGPT plan's limit for winfer is used up (ChatGPT settings → Usage).",
+        ] {
+            assert!(!retryable(e), "{e}");
+        }
     }
 }

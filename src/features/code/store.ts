@@ -303,7 +303,7 @@ export const createCodeStore = () =>
         case "error":
           return { items: [...items, { kind: "notice", key: key(), text: ev.text, tone: "error" }] };
         case "turn_start":
-          return { busy: true, turnStarted: Date.now(), rate: null, usage: { ...s.usage, turn: 0, turn_input: 0, turn_cached: 0, turn_streamed: 0 } };
+          return { busy: true, turnStarted: Date.now(), rate: null, usage: { ...s.usage, turn: 0, turn_input: 0, turn_cached: 0, turn_streamed: 0, turn_active_ms: 0 } };
         case "turn_done": {
           const closed = closeReasoning(items).map((i) => (i.kind === "text" && i.streaming ? { ...i, streaming: false } : i));
           // Follow-up turns without a new user message (queued steers, background

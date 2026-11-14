@@ -82,6 +82,10 @@ function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: 
 export function useRate() {
   const rate = useCode((s) => s.rate);
   const busy = useCode((s) => s.busy);
+  const timed = useCode((s) => s.usage.turn_active_ms ?? 0);
+  const tokens = useCode((s) => s.usage.turn_streamed ?? 0);
+  // The backend's own pace counts reasoning it didn't stream; else pace the streamed count here.
+  if (busy && timed >= 500) return tokens > 0 ? (tokens / timed) * 1000 : null;
   if (!busy || !rate || rate.at - rate.startAt < 800) return null;
   return ((rate.tokens - rate.start) / (rate.at - rate.startAt)) * 1000;
 }

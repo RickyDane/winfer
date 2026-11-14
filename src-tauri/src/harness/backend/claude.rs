@@ -861,6 +861,7 @@ impl Bridge {
                     turn_input: turn.input,
                     turn_cached: turn.cached,
                     turn_streamed: l.turn.streamed_total(),
+                    turn_active_ms: 0,
                 };
                 *l = Live { usage: u.clone(), input: l.input, cached: l.cached, output: l.output, process, cost_before: l.cost_before, ..Default::default() };
                 self.emit(Ev::Usage(u));

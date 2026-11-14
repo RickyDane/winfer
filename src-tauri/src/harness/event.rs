@@ -142,6 +142,9 @@ pub struct Usage {
     /// only grows as text arrives, never by an exact count landing (which also covers hidden
     /// reasoning and subagents), so the tok/s rate is taken from it.
     pub turn_streamed: u64,
+    /// Milliseconds the main agent spent producing `turn_streamed`, when the backend times it
+    /// (0: it doesn't, and the reader paces the count itself). Covers silent reasoning too.
+    pub turn_active_ms: u64,
 }
 
 /// Counts a turn's output tokens as it runs. Backends report exact counts once per model
@@ -153,6 +156,17 @@ pub struct TurnTokens {
     shown: u64,
     /// Every streamed character of the main agent this turn, kept across exact counts.
     paced: u64,
+    /// Reasoning tokens the main agent made without streaming them (known from a request's
+    /// exact count), credited to the pace over the silence they were made in.
+    hidden: u64,
+    /// Time the main agent spent making `paced` and `hidden`.
+    active: std::time::Duration,
+    /// When the main agent last streamed text.
+    last: Option<std::time::Instant>,
+    /// The running main request: when it started, `paced` then, and when it first streamed.
+    request: Option<(std::time::Instant, u64, Option<std::time::Instant>)>,
+    /// The backend times its requests ([`Self::request_started`]).
+    timed: bool,
 }
 
 impl TurnTokens {
@@ -160,9 +174,36 @@ impl TurnTokens {
         self.exact + self.chars / 4
     }
 
-    /// The main agent's streamed text so far, in estimated tokens (`Usage::turn_streamed`).
+    /// The main agent's output so far, in estimated tokens (`Usage::turn_streamed`): streamed
+    /// text and reasoning, plus reasoning the backend only counted.
     pub fn streamed_total(&self) -> u64 {
-        self.paced / 4
+        self.paced / 4 + self.hidden
+    }
+
+    /// The time behind [`Self::streamed_total`], in ms (`Usage::turn_active_ms`); 0 until a
+    /// backend times its requests with [`Self::request_started`].
+    pub fn active_ms(&self) -> u64 {
+        if self.timed { self.active.as_millis() as u64 } else { 0 }
+    }
+
+    /// A main-agent model request starts; what it makes before its first streamed text is
+    /// reasoning that [`Self::request_done`] credits.
+    pub fn request_started(&mut self, at: std::time::Instant) {
+        self.request = Some((at, self.paced, None));
+        self.timed = true;
+        self.last = None;
+    }
+
+    /// The running main request ended having made `output` tokens: whatever of them didn't
+    /// stream counts as made between its start and its first streamed text (or its end).
+    pub fn request_done(&mut self, output: u64, at: std::time::Instant) {
+        let Some((start, paced, first)) = self.request.take() else { return };
+        let shown = (self.paced - paced) / 4;
+        if output > shown {
+            self.hidden += output - shown;
+            self.active += first.unwrap_or(at).saturating_duration_since(start);
+        }
+        self.last = None;
     }
 
     /// Streamed text of a subagent: adds to the count but not to the pace, since subagents
@@ -180,6 +221,20 @@ impl TurnTokens {
 
     /// Streamed text; true when the count moved enough (~25 tokens) to be worth sending.
     pub fn streamed(&mut self, text: &str) -> bool {
+        self.streamed_at(text, std::time::Instant::now())
+    }
+
+    fn streamed_at(&mut self, text: &str, at: std::time::Instant) -> bool {
+        if let Some((_, _, first)) = self.request.as_mut() {
+            first.get_or_insert(at);
+        }
+        if let Some(last) = self.last {
+            let gap = at.saturating_duration_since(last);
+            if gap <= Tps::IDLE {
+                self.active += gap;
+            }
+        }
+        self.last = Some(at);
         self.paced += text.len() as u64;
         self.count(text)
     }
@@ -204,10 +259,12 @@ pub struct Tps {
     last: Option<(std::time::Instant, u64)>,
     tokens: u64,
     active: std::time::Duration,
+    /// The backend's own pace (`Usage::turn_active_ms`), which covers silent reasoning.
+    reported: Option<(u64, u64)>,
 }
 
 impl Tps {
-    const IDLE: std::time::Duration = std::time::Duration::from_secs(3);
+    pub const IDLE: std::time::Duration = std::time::Duration::from_secs(3);
 
     /// The turn's streamed output count (`Usage::turn_streamed`) at `at`.
     pub fn sample(&mut self, at: std::time::Instant, turn: u64) {
@@ -221,8 +278,17 @@ impl Tps {
         self.last = Some((at, turn));
     }
 
+    /// The backend's count and the ms it took (`Usage::turn_streamed`, `turn_active_ms`): when
+    /// it times its requests, its pace is used instead of the sampled one.
+    pub fn reported(&mut self, tokens: u64, active_ms: u64) {
+        self.reported = (active_ms > 0).then_some((tokens, active_ms));
+    }
+
     /// Tokens per second, once there's enough streaming to tell.
     pub fn rate(&self) -> Option<f64> {
+        if let Some((tokens, ms)) = self.reported {
+            return (tokens > 0 && ms >= 500).then(|| tokens as f64 * 1000.0 / ms as f64);
+        }
         (self.tokens > 0 && self.active >= std::time::Duration::from_millis(500)).then(|| self.tokens as f64 / self.active.as_secs_f64())
     }
 }
@@ -250,6 +316,28 @@ mod tps_tests {
         r.sample(at(12_000), 90);
         r.sample(at(12_500), 115);
         assert_eq!(r.rate(), Some(100.0 / 2.0));
+    }
+
+    #[test]
+    fn silent_reasoning_counts_over_its_own_time() {
+        use super::TurnTokens;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut turn = TurnTokens::default();
+        assert_eq!(turn.active_ms(), 0, "untimed backends leave pacing to the reader");
+        // 2s of silent reasoning, then 25 tokens of text over 500ms; the request made 225.
+        turn.request_started(at(0));
+        turn.streamed_at(&"x".repeat(50), at(2_000));
+        turn.streamed_at(&"x".repeat(50), at(2_500));
+        turn.request_done(225, at(2_600));
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (225, 2_500));
+        // A 10s tool run, then a request that only reasons and calls a tool for 1s.
+        turn.request_started(at(12_600));
+        turn.request_done(100, at(13_600));
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (325, 3_500));
+        let mut r = Tps::default();
+        r.reported(turn.streamed_total(), turn.active_ms());
+        assert_eq!(r.rate(), Some(325.0 / 3.5));
     }
 
     #[test]

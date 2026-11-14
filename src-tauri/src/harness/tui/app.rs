@@ -739,6 +739,7 @@ impl App {
                 self.ctx_shown.set(pct, 600);
                 if self.busy {
                     self.tps.sample(Instant::now(), u.turn_streamed);
+                    self.tps.reported(u.turn_streamed, u.turn_active_ms);
                 }
                 self.usage = u;
                 self.usage_unsent = true;

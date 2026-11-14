@@ -58,6 +58,8 @@ export interface Usage {
   turn_input?: number;
   turn_cached?: number;
   turn_streamed?: number;
+  /** ms the backend spent producing `turn_streamed`, silent reasoning included; 0 or absent when it doesn't time it. */
+  turn_active_ms?: number;
 }
 
 export type Ev =
