@@ -6,6 +6,7 @@ pub mod chatgpt;
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod local;
 pub mod microcompact;
 pub mod muse;
 pub mod opencode;
@@ -36,7 +37,7 @@ pub enum Kind {
     Pi,
     /// Meta's Muse (`muse`).
     Muse,
-    /// A local OpenAI-compatible server, run with winfer's own tools (the ChatGPT backend's loop).
+    /// A local OpenAI-compatible server, run with winfer's own tools (local.rs, on the ChatGPT backend's loop).
     Local,
 }
 
@@ -368,7 +369,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
         }
         match kind {
         Kind::ChatGpt => chatgpt::run(opts, rx, events),
-        Kind::Local => chatgpt::run_local(opts, rx, events),
+        Kind::Local => local::run(opts, rx, events),
         _ => {
             // The CLIs reach `bg` through winfer's MCP server; send those calls here, so the
             // tasks show in winfer code's task list and end with this backend.
@@ -485,7 +486,7 @@ impl Drop for LineProcess {
 pub fn all_models() -> Vec<ModelInfo> {
     // Each backend lists its own (asking its CLI, so some take seconds); one that isn't
     // installed lists nothing, so it doesn't show in the picker.
-    let listers: [fn() -> Vec<ModelInfo>; 9] = [chatgpt::models, chatgpt::local_models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models, muse::models];
+    let listers: [fn() -> Vec<ModelInfo>; 9] = [chatgpt::models, local::models, claude::models, codex::models, agy::models, cursor::models, opencode::models, pi::models, muse::models];
     let (tx, rx) = channel::<Vec<ModelInfo>>();
     for list in listers {
         let tx = tx.clone();

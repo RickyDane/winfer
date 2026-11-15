@@ -534,6 +534,7 @@ impl Bridge {
         l.usage.output = l.output + turn;
         l.usage.turn = turn;
         l.usage.turn_streamed = l.turn.streamed_total();
+        l.usage.turn_active_ms = l.turn.active_ms();
         l.usage.turn_input = l.turn_input;
         l.usage.turn_cached = l.turn_cached;
         if l.usage.window == 0 {
@@ -588,6 +589,7 @@ impl Bridge {
             Cmd::Send(msg) => {
                 self.busy = true;
                 self.emit(Ev::TurnStart);
+                self.live.turn.request_started(std::time::Instant::now());
                 let uuid = new_uuid();
                 self.checkpoints.push(Checkpoint { uuid: uuid.clone(), edited: false });
                 let mut line = user_message(&msg);
@@ -773,6 +775,10 @@ impl Bridge {
                 }
             }
             "user" => {
+                // Tool results went back: Claude Code asks the model again now.
+                if !self.live.turn.generating() {
+                    self.live.turn.request_started(std::time::Instant::now());
+                }
                 if let Some(t) = shell_notification(&content_text(&v["message"]["content"])) {
                     self.task(t);
                 }
@@ -861,7 +867,7 @@ impl Bridge {
                     turn_input: turn.input,
                     turn_cached: turn.cached,
                     turn_streamed: l.turn.streamed_total(),
-                    turn_active_ms: 0,
+                    turn_active_ms: l.turn.active_ms(),
                 };
                 *l = Live { usage: u.clone(), input: l.input, cached: l.cached, output: l.output, process, cost_before: l.cost_before, ..Default::default() };
                 self.emit(Ev::Usage(u));
@@ -978,6 +984,10 @@ impl Bridge {
                 let n = |k: &str| u[k].as_u64().unwrap_or(0);
                 let input = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
                 let l = &mut self.live;
+                // Each message is one API request, sent with the turn or the last tool results. Its
+                // start usually comes with its first token, but Claude Code sometimes holds a
+                // whole message back and delivers it at once (TurnTokens::MAX_RATE catches that).
+                l.turn.first_token(std::time::Instant::now());
                 l.turn_input += input;
                 l.turn_cached += n("cache_read_input_tokens");
                 l.msg = n("output_tokens");
@@ -996,6 +1006,7 @@ impl Bridge {
             }
             "message_stop" => {
                 let l = &mut self.live;
+                l.turn.request_done(l.msg, std::time::Instant::now(), false);
                 l.done = l.turn.now();
                 l.msg = 0;
             }
@@ -1473,6 +1484,7 @@ mod tests {
         b.on_line(&ev(json!({ "type": "message_stop" })));
         b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m2", "usage": { "input_tokens": 300, "output_tokens": 1 } } })));
         assert_eq!(outputs(&rx), vec![120, 121], "finished requests add up");
+        assert_eq!(b.live.turn.streamed_total(), 120, "the pace counts each request's exact output");
         b.on_line(&json!({ "type": "result", "total_cost_usd": 0.1, "usage": { "output_tokens": 130 }, "modelUsage": { "x": { "contextWindow": 1000 } } }));
         b.on_line(&ev(json!({ "type": "message_start", "message": { "id": "m3", "usage": { "output_tokens": 3 } } })));
         let us: Vec<Usage> = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).collect();

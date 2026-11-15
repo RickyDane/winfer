@@ -156,17 +156,27 @@ pub struct TurnTokens {
     shown: u64,
     /// Every streamed character of the main agent this turn, kept across exact counts.
     paced: u64,
-    /// Reasoning tokens the main agent made without streaming them (known from a request's
-    /// exact count), credited to the pace over the silence they were made in.
-    hidden: u64,
-    /// Time the main agent spent making `paced` and `hidden`.
-    active: std::time::Duration,
-    /// When the main agent last streamed text.
-    last: Option<std::time::Instant>,
-    /// The running main request: when it started, `paced` then, and when it first streamed.
-    request: Option<(std::time::Instant, u64, Option<std::time::Instant>)>,
+    /// Finished main requests of a backend that times them: every token they made (text,
+    /// reasoning, tool calls) and the time they spent making them.
+    made: u64,
+    making: std::time::Duration,
+    /// The running main request.
+    request: Option<Request>,
     /// The backend times its requests ([`Self::request_started`]).
     timed: bool,
+}
+
+/// A main-agent model request being timed.
+#[derive(Debug)]
+struct Request {
+    start: std::time::Instant,
+    /// `TurnTokens::paced` when it started.
+    paced: u64,
+    /// Its first and latest generated output (text, reasoning or tool-call arguments).
+    first: Option<std::time::Instant>,
+    last: Option<std::time::Instant>,
+    /// How many pieces of output it streamed.
+    pieces: u32,
 }
 
 impl TurnTokens {
@@ -174,36 +184,66 @@ impl TurnTokens {
         self.exact + self.chars / 4
     }
 
-    /// The main agent's output so far, in estimated tokens (`Usage::turn_streamed`): streamed
-    /// text and reasoning, plus reasoning the backend only counted.
+    /// The main agent's output so far, in tokens (`Usage::turn_streamed`): the exact counts of
+    /// finished requests plus the running one's streamed estimate, or (for backends that don't
+    /// time requests) the streamed estimate.
     pub fn streamed_total(&self) -> u64 {
-        self.paced / 4 + self.hidden
+        if !self.timed {
+            return self.paced / 4;
+        }
+        self.made + self.request.as_ref().map_or(0, |r| (self.paced - r.paced) / 4)
     }
 
     /// The time behind [`Self::streamed_total`], in ms (`Usage::turn_active_ms`); 0 until a
     /// backend times its requests with [`Self::request_started`].
     pub fn active_ms(&self) -> u64 {
-        if self.timed { self.active.as_millis() as u64 } else { 0 }
-    }
-
-    /// A main-agent model request starts; what it makes before its first streamed text is
-    /// reasoning that [`Self::request_done`] credits.
-    pub fn request_started(&mut self, at: std::time::Instant) {
-        self.request = Some((at, self.paced, None));
-        self.timed = true;
-        self.last = None;
-    }
-
-    /// The running main request ended having made `output` tokens: whatever of them didn't
-    /// stream counts as made between its start and its first streamed text (or its end).
-    pub fn request_done(&mut self, output: u64, at: std::time::Instant) {
-        let Some((start, paced, first)) = self.request.take() else { return };
-        let shown = (self.paced - paced) / 4;
-        if output > shown {
-            self.hidden += output - shown;
-            self.active += first.unwrap_or(at).saturating_duration_since(start);
+        if !self.timed {
+            return 0;
         }
-        self.last = None;
+        let running = self.request.as_ref().and_then(|r| Some(r.last?.saturating_duration_since(r.first?))).unwrap_or_default();
+        (self.making + running).as_millis() as u64
+    }
+
+    /// The fastest pace that's taken as generation: a stream faster than this was held back and
+    /// delivered at once (Claude Code does with some messages), so its tokens count from the
+    /// request's start instead of its first piece.
+    pub const MAX_RATE: f64 = 1500.0;
+
+    /// The running request's first token arrived at `at` without text (Claude's `message_start`);
+    /// opens a request when the backend didn't see one start.
+    pub fn first_token(&mut self, at: std::time::Instant) {
+        let paced = self.paced;
+        let r = self.request.get_or_insert(Request { start: at, paced, first: None, last: None, pieces: 0 });
+        r.first.get_or_insert(at);
+        r.last = Some(at);
+        self.timed = true;
+    }
+
+    /// Whether the running main request has generated anything yet.
+    pub fn generating(&self) -> bool {
+        self.request.as_ref().is_some_and(|r| r.first.is_some())
+    }
+
+    /// A main-agent model request starts.
+    pub fn request_started(&mut self, at: std::time::Instant) {
+        self.request = Some(Request { start: at, paced: self.paced, first: None, last: None, pieces: 0 });
+        self.timed = true;
+    }
+
+    /// The running main request ended having made `output` tokens. They count over the time from
+    /// its first generated token on: processing the prompt before it isn't generating. Unless
+    /// `from_start`: when the model made tokens it didn't stream before its first streamed one
+    /// (reasoning OpenAI hides), or the backend's start already is its first token (Claude's
+    /// `message_start`), its whole time counts, as it does when it streamed too little to time.
+    pub fn request_done(&mut self, output: u64, at: std::time::Instant, from_start: bool) {
+        let Some(r) = self.request.take() else { return };
+        let plausible = |first: std::time::Instant| output as f64 / at.saturating_duration_since(first).as_secs_f64().max(0.001) <= Self::MAX_RATE;
+        let from = match r.first {
+            Some(first) if !from_start && r.pieces >= 3 && plausible(first) => first,
+            _ => r.start,
+        };
+        self.made += output;
+        self.making += at.saturating_duration_since(from);
     }
 
     /// Streamed text of a subagent: adds to the count but not to the pace, since subagents
@@ -225,16 +265,15 @@ impl TurnTokens {
     }
 
     fn streamed_at(&mut self, text: &str, at: std::time::Instant) -> bool {
-        if let Some((_, _, first)) = self.request.as_mut() {
-            first.get_or_insert(at);
+        // Output with no request open (one the backend couldn't see start) times from here.
+        if self.timed && self.request.is_none() {
+            self.request = Some(Request { start: at, paced: self.paced, first: None, last: None, pieces: 0 });
         }
-        if let Some(last) = self.last {
-            let gap = at.saturating_duration_since(last);
-            if gap <= Tps::IDLE {
-                self.active += gap;
-            }
+        if let Some(r) = self.request.as_mut() {
+            r.first.get_or_insert(at);
+            r.last = Some(at);
+            r.pieces += 1;
         }
-        self.last = Some(at);
         self.paced += text.len() as u64;
         self.count(text)
     }
@@ -319,25 +358,59 @@ mod tps_tests {
     }
 
     #[test]
-    fn silent_reasoning_counts_over_its_own_time() {
+    fn generation_counts_from_the_first_token() {
         use super::TurnTokens;
         let t0 = Instant::now();
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         let mut turn = TurnTokens::default();
         assert_eq!(turn.active_ms(), 0, "untimed backends leave pacing to the reader");
-        // 2s of silent reasoning, then 25 tokens of text over 500ms; the request made 225.
+        // A local model: 3s processing a long prompt, then reasoning, text and a tool call's
+        // arguments stream for 1s; the request made 300 tokens (more than the 4-chars estimate).
         turn.request_started(at(0));
-        turn.streamed_at(&"x".repeat(50), at(2_000));
-        turn.streamed_at(&"x".repeat(50), at(2_500));
-        turn.request_done(225, at(2_600));
-        assert_eq!((turn.streamed_total(), turn.active_ms()), (225, 2_500));
-        // A 10s tool run, then a request that only reasons and calls a tool for 1s.
-        turn.request_started(at(12_600));
-        turn.request_done(100, at(13_600));
-        assert_eq!((turn.streamed_total(), turn.active_ms()), (325, 3_500));
+        for ms in [3_000, 3_400, 3_800] {
+            turn.streamed_at(&"x".repeat(100), at(ms));
+        }
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (75, 800), "live: the estimate over the time so far");
+        turn.request_done(300, at(4_000), false);
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (300, 1_000));
+        // A 10s tool run, then a request that streamed nothing: its whole time counts.
+        turn.request_started(at(14_000));
+        turn.request_done(100, at(15_000), false);
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (400, 2_000));
         let mut r = Tps::default();
         r.reported(turn.streamed_total(), turn.active_ms());
-        assert_eq!(r.rate(), Some(325.0 / 3.5));
+        assert_eq!(r.rate(), Some(200.0));
+    }
+
+    #[test]
+    fn a_held_back_stream_counts_from_the_request_start() {
+        use super::TurnTokens;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut turn = TurnTokens::default();
+        // Sent at 0, nothing for 3s, then the whole 400-token message within 10ms.
+        turn.request_started(at(0));
+        turn.first_token(at(3_000));
+        for ms in [3_002, 3_005, 3_008] {
+            turn.streamed_at(&"x".repeat(400), at(ms));
+        }
+        turn.request_done(400, at(3_010), false);
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (400, 3_010));
+    }
+
+    #[test]
+    fn silent_reasoning_counts_over_its_own_time() {
+        use super::TurnTokens;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut turn = TurnTokens::default();
+        // 2s of reasoning nobody saw, then text over 500ms; the request made 225 tokens.
+        turn.request_started(at(0));
+        for ms in [2_000, 2_250, 2_500] {
+            turn.streamed_at(&"x".repeat(50), at(ms));
+        }
+        turn.request_done(225, at(2_600), true);
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (225, 2_600));
     }
 
     #[test]

@@ -16,6 +16,8 @@ import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { nameFromHistory, setTask } from "@/features/progress/progress";
 import { CodeStoreContext, createCodeStore, useCode } from "./store";
 import { liveCodeStores } from "./liveStores";
+import { typeIntoCode } from "./typedInput";
+import { setTextSink } from "@/features/terminal/xtermRegistry";
 import { Transcript, Collapse, useFresh } from "./Transcript";
 import { LinkPaneContext } from "./Links";
 import { Composer } from "./Composer";
@@ -369,6 +371,7 @@ export function disposeCodePane(paneId: string) {
   disconnects.get(paneId)?.();
   disconnects.delete(paneId);
   stores.delete(paneId);
+  setTextSink(paneId, null);
 }
 
 /** One store per pane that outlives remounts (moving tiles, switching workspaces). */
@@ -390,6 +393,9 @@ export function storeFor(pane: Pane) {
       disconnect = s.getState().attach(new PtyTransport(pane));
     }
     const untrack = trackTitle(pane.id, s);
+    // Broadcasts, send_to_pane, the phone, Approve and Interrupt type into panes; here that's the composer.
+    const store = s;
+    setTextSink(pane.id, (text) => typeIntoCode(store, text));
     disconnects.set(pane.id, () => {
       clearTimeout(promptTimer);
       untrack();

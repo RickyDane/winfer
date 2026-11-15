@@ -617,8 +617,19 @@ export function searchTerminal(paneId: string, query: string, direction: "next" 
   return entry.searchResults;
 }
 
+/** Panes without a terminal (winfer code's web UI) take typed text here instead. */
+const textSinks = new Map<string, (text: string) => void>();
+
+/** Routes text typed into `paneId` (sendText, pasteText) to `sink`; null removes it. */
+export function setTextSink(paneId: string, sink: ((text: string) => void) | null) {
+  if (sink) textSinks.set(paneId, sink);
+  else textSinks.delete(paneId);
+}
+
 /** Writes text to a pane's process as if typed. */
 export function sendText(paneId: string, text: string) {
+  const sink = textSinks.get(paneId);
+  if (sink) return sink(text);
   const entry = entries.get(paneId);
   if (!entry?.spawned || entry.exited) return;
   writeInput(paneId, text);

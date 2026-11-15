@@ -182,6 +182,8 @@ struct Bridge {
     usage: Usage,
     /// The running turn's output tokens, and the session's output total when it started.
     turn_tokens: TurnTokens,
+    /// Whether the running request's reasoning streamed (summaries), else Codex made it silently.
+    reasoning_streamed: bool,
     turn_base: u64,
     /// Input tokens of the main thread and its subagents when the running turn started.
     turn_input_base: u64,
@@ -281,6 +283,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         children: HashMap::new(),
         usage: Usage::default(),
         turn_tokens: TurnTokens::default(),
+        reasoning_streamed: false,
         turn_base: 0,
         turn_input_base: 0,
         turn_cached_base: 0,
@@ -847,6 +850,10 @@ impl Bridge {
             "turn/started" => {
                 self.turn = p["turn"]["id"].as_str().map(str::to_string);
                 self.turn_tokens = TurnTokens::default();
+                // Codex has no event for its model requests: one starts with the turn, and the
+                // next once the tools the last one called have finished.
+                self.turn_tokens.request_started(std::time::Instant::now());
+                self.reasoning_streamed = false;
                 self.turn_base = self.output_total();
                 self.turn_input_base = self.usage.input + self.children.values().map(|c| c.input).sum::<u64>();
                 self.turn_cached_base = self.usage.cached + self.children.values().map(|c| c.cached).sum::<u64>();
@@ -899,6 +906,7 @@ impl Bridge {
                 self.emit(Ev::TextDelta { id: s(p, "itemId"), text: s(p, "delta") });
             }
             "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+                self.reasoning_streamed = true;
                 self.streamed(p);
                 self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") });
             }
@@ -923,6 +931,13 @@ impl Bridge {
             "thread/tokenUsage/updated" => {
                 let u = &p["tokenUsage"];
                 let n = |part: &str, k: &str| u[part][k].as_u64().unwrap_or(0);
+                // A request finished (its count grew the total): its tokens over its time. Hidden
+                // reasoning was made before the first streamed token, so then its start counts.
+                if self.turn.is_some() && n("total", "outputTokens") > self.usage.output {
+                    let silent = n("last", "reasoningOutputTokens") > 0 && !self.reasoning_streamed;
+                    self.turn_tokens.request_done(n("last", "outputTokens"), std::time::Instant::now(), silent);
+                    self.reasoning_streamed = false;
+                }
                 self.usage = Usage {
                     context: n("last", "inputTokens") + n("last", "outputTokens"),
                     window: u["modelContextWindow"].as_u64().unwrap_or(272_000),
@@ -960,6 +975,7 @@ impl Bridge {
         }
         u.turn = self.turn_tokens.now();
         u.turn_streamed = self.turn_tokens.streamed_total();
+        u.turn_active_ms = self.turn_tokens.active_ms();
         u.turn_input = u.input.saturating_sub(self.turn_input_base);
         u.turn_cached = u.cached.saturating_sub(self.turn_cached_base);
         self.emit(Ev::Usage(u));
@@ -1154,6 +1170,10 @@ impl Bridge {
 
     fn item_completed(&mut self, item: &Value) {
         let id = s(item, "id");
+        // A tool finished: the next model request starts once the last of them has.
+        if self.turn.is_some() && !matches!(item["type"].as_str(), Some("agentMessage" | "reasoning" | "userMessage")) && !self.turn_tokens.generating() {
+            self.turn_tokens.request_started(std::time::Instant::now());
+        }
         match item["type"].as_str().unwrap_or("") {
             "collabAgentToolCall" => {
                 let output = self.collab_done(item);
@@ -1676,6 +1696,7 @@ mod tests {
             children: HashMap::new(),
             usage: Usage::default(),
             turn_tokens: TurnTokens::default(),
+            reasoning_streamed: false,
             turn_base: 0,
             turn_input_base: 0,
             turn_cached_base: 0,
@@ -1703,6 +1724,23 @@ mod tests {
         n(&mut b, "thread/tokenUsage/updated", usage(560));
         let turns: Vec<(u64, u64)> = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some((u.turn, u.output)) } else { None }).collect();
         assert_eq!(turns, vec![(500, 500), (50, 500), (60, 560)]);
+    }
+
+    #[test]
+    fn requests_are_paced_by_their_exact_output() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        let usage = |total: u64, last: u64, reasoning: u64| json!({ "threadId": "main", "tokenUsage": { "total": { "outputTokens": total }, "last": { "outputTokens": last, "reasoningOutputTokens": reasoning } } });
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        n(&mut b, "item/agentMessage/delta", json!({ "threadId": "main", "itemId": "m", "delta": "x".repeat(200) }));
+        n(&mut b, "thread/tokenUsage/updated", usage(80, 80, 30));
+        // A command ran; the next request starts when it finished.
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "commandExecution", "id": "c1", "exitCode": 0, "status": "completed" } }));
+        n(&mut b, "thread/tokenUsage/updated", usage(120, 40, 0));
+        // A count that didn't grow ends no request.
+        n(&mut b, "thread/tokenUsage/updated", usage(120, 40, 0));
+        let last = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(last.turn_streamed, 120, "every token the requests made, hidden reasoning included");
     }
 
     #[test]

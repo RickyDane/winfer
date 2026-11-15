@@ -149,8 +149,8 @@ struct Shared {
     steer: Mutex<Vec<UserMsg>>,
     /// Owner of this backend's `bg` tasks (a backend started after it has its own).
     bg_owner: String,
-    /// Talks to the local model server (Settings → winfer code → Local models), not OpenAI.
-    local: bool,
+    /// Talks to the local model server (local.rs), not OpenAI.
+    local: Option<super::local::Local>,
 }
 
 /// A subagent's own conversation.
@@ -185,28 +185,6 @@ fn push_items(shared: &Shared, sub: Option<&Sub>, items: impl IntoIterator<Item 
     }
 }
 
-/// The models on the local server (Settings → winfer code → Local models), as `local/<id>`;
-/// empty when that's off or the server isn't up.
-pub fn local_models() -> Vec<ModelInfo> {
-    if !crate::local_llm::enabled() {
-        return Vec::new();
-    }
-    let address = crate::local_llm::address();
-    crate::local_llm::list(&crate::harness::config::Config::load().local)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|m| ModelInfo {
-            spec: format!("local/{}", m.id),
-            label: m.id,
-            detail: match m.context {
-                Some(c) => format!("Local · {address} · {}k context · winfer tools", c / 1000),
-                None => format!("Local · {address} · winfer tools"),
-            },
-            efforts: Some(["low", "medium", "high"].map(String::from).into()),
-        })
-        .collect()
-}
-
 pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
     if !crate::chatgpt::signed_in() {
         let _ = events.send(Ev::Exited(
@@ -214,29 +192,11 @@ pub fn run(opts: Opts, rx: Receiver<In>, events: Events) {
         ));
         return;
     }
-    run_with(opts, rx, events, false);
+    run_with(opts, rx, events, None);
 }
 
-/// The same agent loop on the local model server.
-pub fn run_local(mut opts: Opts, rx: Receiver<In>, events: Events) {
-    if opts.model.is_empty() {
-        match crate::local_llm::list(&crate::harness::config::Config::load().local) {
-            Ok(list) if !list.is_empty() => opts.model = list[0].id.clone(),
-            Ok(_) => {
-                let _ = events.send(Ev::Exited(format!("The local model server at {} lists no models.", crate::local_llm::address())));
-                return;
-            }
-            Err(e) => {
-                let _ = events.send(Ev::Exited(format!("{e}. Start it, or change its address in winfer → Settings → winfer code → Local models.")));
-                return;
-            }
-        }
-    }
-    run_with(opts, rx, events, true);
-}
-
-fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: bool) {
-    let window = if local { crate::local_llm::window(&opts.model) } else { 272_000 };
+pub(super) fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: Option<super::local::Local>) {
+    let window = if local.is_some() { crate::local_llm::window(&opts.model) } else { 272_000 };
     let session = opts.resume.clone().unwrap_or_else(new_id);
     let items = opts.resume.as_ref().map(|id| load_items(id)).unwrap_or_default();
     let shared = Arc::new(Shared {
@@ -373,7 +333,7 @@ fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: bool) {
                 shared.answers.lock().unwrap().insert(id, answers);
             }
             Cmd::SetModel(m) => {
-                let window = shared.local.then(|| crate::local_llm::window(&m));
+                let window = shared.local.is_some().then(|| crate::local_llm::window(&m));
                 let mut st = shared.state.lock().unwrap();
                 if let Some(w) = window {
                     st.usage.window = w;
@@ -567,7 +527,7 @@ fn request(shared: &Shared, tools_on: bool, sub: Option<&Sub>) -> Result<Option<
     let mut cap: Option<u64> = None;
     loop {
         let e = match request_once(shared, tools_on, sub, cap) {
-            Err(e) if shared.local && too_long(&e) => {
+            Err(e) if shared.local.is_some() && too_long(&e) => {
                 // Sending it again unchanged can't fit: ask for fewer reply tokens, once per
                 // smaller figure; with no room left for a reply the context needs compacting.
                 let next = reply_room(&e).unwrap_or_else(|| cap.unwrap_or(8_192) / 2);
@@ -613,7 +573,7 @@ fn retryable(e: &str) -> bool {
 /// The output limit for a local request of `bytes` (its JSON body): what the context window
 /// has room for after the prompt, estimated at 3 bytes a token (on the high side for code and
 /// JSON, so it rarely asks for too much), up to 32k tokens.
-fn output_budget(window: u64, bytes: usize) -> u64 {
+pub(super) fn output_budget(window: u64, bytes: usize) -> u64 {
     window.saturating_sub(bytes as u64 / 3 + 1_024).clamp(1_024, 32_768)
 }
 
@@ -651,6 +611,9 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
             (true, Some(_)) => tools::definitions(),
             (true, None) => tool_definitions(),
         };
+        if let (true, Some(local)) = (tools_on, &shared.local) {
+            tools.extend(local.tool_definitions());
+        }
         let meta = if tools_on { mcp_client::meta_tool(&shared.mcp.lock().unwrap()) } else { None };
         if sub.is_none() {
             save_setup(&shared.session, &shared.instructions, &tools, meta.as_ref());
@@ -683,16 +646,8 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
         if let Some(e) = effort {
             body["reasoning"]["effort"] = json!(e);
         }
-        if shared.local {
-            // Local servers keep nothing between requests and many reject OpenAI-only fields.
-            let o = body.as_object_mut().unwrap();
-            o.remove("include");
-            o.remove("prompt_cache_key");
-            // Without a limit, servers apply a small default that long reasoning runs into; allow
-            // what the context has room for.
-            let bytes = serde_json::to_string(o).map_or(0, |s| s.len());
-            let budget = output_budget(st.usage.window, bytes);
-            o.insert("max_output_tokens".into(), json!(cap.map_or(budget, |c| c.min(budget))));
+        if let Some(local) = &shared.local {
+            local.adapt(body.as_object_mut().unwrap(), instructions, effort.as_deref(), st.usage.window, cap);
         }
         (body, model.clone())
     };
@@ -703,8 +658,8 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
     }
     trace(&json!({ "request": { "bytes": body.to_string().len(), "items": body["input"].as_array().map(Vec::len), "prefix_hash": prefix_hash(&body) } }));
     let reader: Box<dyn std::io::Read + Send> =
-        if shared.local { Box::new(crate::local_llm::open_stream(&body)?) } else { Box::new(crate::chatgpt::open_stream(&body)?) };
-    let who = if shared.local { "the local model server" } else { "OpenAI" };
+        if shared.local.is_some() { Box::new(crate::local_llm::open_stream(&body)?) } else { Box::new(crate::chatgpt::open_stream(&body)?) };
+    let who = if shared.local.is_some() { "the local model server" } else { "OpenAI" };
     trace(&json!({ "headers_ms": started.elapsed().as_millis() as u64 }));
     let (tx, rx) = channel::<Stream>();
     std::thread::spawn(move || {
@@ -724,6 +679,10 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
     });
     let mut out = Vec::new();
     let mut partial: HashMap<String, String> = HashMap::new();
+    // The message the latest text delta belonged to, for servers whose finished item has another id.
+    let mut last_text = String::new();
+    // Whether the model's reasoning streamed (else it was made silently before its first token).
+    let mut reasoning_streamed = false;
     loop {
         if stopped(shared, sub) {
             // Keep what was said so far.
@@ -767,21 +726,37 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
             "response.output_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("").to_string();
                 partial.entry(id.clone()).or_default().push_str(&d);
+                last_text.clone_from(&id);
                 streamed(&d);
                 stream(Ev::TextDelta { id, text: d });
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("");
+                reasoning_streamed = true;
                 streamed(d);
                 stream(Ev::ReasoningDelta { id, text: d.into() });
             }
+            // A tool call's arguments are generated tokens too: they count toward the turn's output
+            // and its pace, though only the finished call shows.
+            "response.function_call_arguments.delta" => streamed(ev["delta"].as_str().unwrap_or("")),
             "response.reasoning_summary_part.added" if ev["summary_index"].as_u64().unwrap_or(0) > 0 => {
                 stream(Ev::ReasoningDelta { id, text: "\n\n".into() })
             }
             "response.output_item.done" => {
                 let item = &ev["item"];
                 if item["type"] == "message" {
-                    partial.remove(item["id"].as_str().unwrap_or(""));
+                    // The finished message ends its streamed text (the UI's caret stops blinking),
+                    // or shows it whole when the server didn't stream it.
+                    let mut id = item["id"].as_str().unwrap_or("").to_string();
+                    if !partial.contains_key(&id) && partial.contains_key(&last_text) {
+                        id.clone_from(&last_text);
+                    }
+                    let streamed = partial.remove(&id).unwrap_or_default();
+                    let full = message_text(item);
+                    let text = if full.is_empty() { streamed } else { full };
+                    if !text.is_empty() {
+                        stream(Ev::Text { id: if id.is_empty() { new_id() } else { id }, text });
+                    }
                 }
                 out.push(replayable(item.clone()));
             }
@@ -803,7 +778,8 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                     st.usage.cached += cached;
                     let turn = st.usage.output.saturating_sub(st.turn_base);
                     if sub.is_none() {
-                        st.turn.request_done(output, std::time::Instant::now());
+                        let silent = !reasoning_streamed && out.iter().any(|i| i["type"] == "reasoning");
+                        st.turn.request_done(output, std::time::Instant::now(), silent);
                     }
                     st.turn.exact(turn);
                     st.usage.turn = turn;
@@ -844,7 +820,7 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                 } else {
                     &ev
                 };
-                if shared.local {
+                if shared.local.is_some() {
                     return Err(crate::local_llm::error_message(200, &json!({ "error": error })));
                 }
                 return Err(crate::chatgpt::api_error(200, &json!({ "error": error })).1);
@@ -1106,8 +1082,13 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
     let outcome = {
         let stop = sub.map_or_else(|| shared.stop.clone(), |s| s.stop.clone());
         let reads = sub.map_or(&shared.reads, |s| &s.reads);
-        let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, call_id: &id, bg_owner: &shared.bg_owner, snapshots: &mut snapshots, reads };
-        tools::run(name, &args, &mut ctx)
+        match shared.local.as_ref().and_then(|l| l.run_tool(name, &args)) {
+            Some(outcome) => outcome,
+            None => {
+                let mut ctx = tools::Ctx { cwd: &shared.cwd, stop, output: &output, call_id: &id, bg_owner: &shared.bg_owner, snapshots: &mut snapshots, reads };
+                tools::run(name, &args, &mut ctx)
+            }
+        }
     };
     if !snapshots.is_empty() {
         let mut st = shared.state.lock().unwrap();
@@ -1285,6 +1266,11 @@ fn output_text(items: &[Value]) -> String {
         .join("\n")
 }
 
+/// The text of a finished `message` output item (its `output_text` parts).
+fn message_text(item: &Value) -> String {
+    item["content"].as_array().map_or(String::new(), |parts| parts.iter().filter_map(|p| p["text"].as_str()).collect())
+}
+
 fn display_name(name: &str) -> &str {
     match name {
         "read" | "ls" => "Read",
@@ -1295,6 +1281,7 @@ fn display_name(name: &str) -> &str {
         "grep" => "Grep",
         "glob" => "Glob",
         "fetch" | "web_fetch" => "Fetch",
+        super::local::WEB_SEARCH => "WebSearch",
         "todo" | "todo_write" => "Todos",
         "agent" => "Agent",
         tools::ASK_USER => "Question",
@@ -1472,6 +1459,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn message_text_joins_output_parts() {
+        let item = json!({ "type": "message", "content": [{ "type": "output_text", "text": "Hello " }, { "type": "output_text", "text": "there" }] });
+        assert_eq!(message_text(&item), "Hello there");
+        assert_eq!(message_text(&json!({ "type": "message" })), "");
+    }
+
+    #[test]
     fn efforts_per_openai_model() {
         assert_eq!(efforts("gpt-6.1-sol"), Some(vec!["low".to_string(), "medium".to_string(), "high".to_string(), "xhigh".to_string(), "max".to_string()]));
         assert_eq!(efforts("gpt-6-luna"), Some(vec!["none".to_string(), "low".to_string(), "medium".to_string(), "high".to_string(), "xhigh".to_string(), "max".to_string()]));
@@ -1601,7 +1595,7 @@ mod tests {
             notes: Mutex::new(Vec::new()),
         steer: Mutex::new(Vec::new()),
             bg_owner: String::new(),
-            local: false,
+            local: None,
         });
         (shared, rx, dir)
     }

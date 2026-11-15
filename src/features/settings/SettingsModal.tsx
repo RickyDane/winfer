@@ -1,3 +1,4 @@
+import { EFFORT_LABELS } from "@/features/code/EffortIcon";
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
 import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
@@ -979,6 +980,14 @@ interface LocalLlm {
   path: string;
   apiKey: string;
   contextWindow: number;
+  /** Thinking levels offered for its models, as their chat templates name them; "none" = off. */
+  efforts: string[];
+  /** Also pass the level to the chat template (`chat_template_kwargs`). */
+  templateEffort: boolean;
+  /** Thinking-token caps per level (`thinking_budget`); missing = no cap. */
+  thinkingBudgets: Record<string, number>;
+  /** Give the models a web_search tool when the server searches the web (oMLX). */
+  webSearch: boolean;
 }
 
 /** Backends whose subagents can run on a model of their own. */
@@ -1010,7 +1019,14 @@ const PERCENTS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95];
 // Models load once per app run (asking Codex and OpenAI takes a few seconds).
 let harnessModelsCache: HarnessModel[] | null = null;
 
-const DEFAULT_LOCAL: LocalLlm = { enabled: false, host: "127.0.0.1", port: 8000, path: "/v1", apiKey: "", contextWindow: 0 };
+const DEFAULT_LOCAL: LocalLlm = {
+  enabled: false, host: "127.0.0.1", port: 8000, path: "/v1", apiKey: "",
+  contextWindow: 0,
+  efforts: ["none", "low", "medium", "xhigh"],
+  templateEffort: true,
+  thinkingBudgets: { low: 1024, medium: 4096 },
+  webSearch: true,
+};
 
 /** Settings → winfer code → Local models: where an OpenAI-compatible server listens. Edits stay
  * local until they leave a field, so typing a host doesn't refetch models on every key. */
@@ -1019,6 +1035,7 @@ function LocalModelSettings({ value, onSave }: { value: LocalLlm | undefined; on
   const [draft, setDraft] = useState<LocalLlm>(saved);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [effortText, setEffortText] = useState(saved.efforts.join(", "));
   const set = (patch: Partial<LocalLlm>) => setDraft((d) => ({ ...d, ...patch }));
   const commit = (patch: Partial<LocalLlm> = {}) => {
     const next = { ...draft, ...patch };
@@ -1108,6 +1125,67 @@ function LocalModelSettings({ value, onSave }: { value: LocalLlm | undefined; on
               onChange={(e) => set({ contextWindow: Number(e.target.value.replace(/\D/g, "")) })}
               onBlur={() => commit()}
             />
+          </Row>
+          <Row
+            label="Thinking levels"
+            hint={
+              <>
+                Comma-separated, as the model's chat template names them (Qwen3.8: <span className="font-mono">low, medium, xhigh</span>).{" "}
+                <span className="font-mono">none</span> turns thinking off. Empty: only the model default. When the server shows the model's chat template (llama.cpp),
+                its own levels are used instead, and a picked level is fitted to them (e.g. <span className="font-mono">high</span> → <span className="font-mono">xhigh</span>).
+              </>
+            }
+          >
+            <input
+              aria-label="Thinking levels"
+              className={cn(inputClass, "w-48")}
+              value={effortText}
+              placeholder="none"
+              spellCheck={false}
+              onChange={(e) => setEffortText(e.target.value)}
+              onBlur={() => {
+                const efforts = [...new Set(effortText.split(/[\s,]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+                setEffortText(efforts.join(", "));
+                commit({ efforts });
+              }}
+            />
+          </Row>
+          <Row label="Send level to chat template" hint="Passes it as chat_template_kwargs.reasoning_effort, where llama.cpp, oMLX and MLX servers let the template read it. Turn off if your server rejects the field.">
+            <Toggle label="Send level to chat template" checked={draft.templateEffort} onChange={(templateEffort) => commit({ templateEffort })} />
+          </Row>
+          {draft.efforts.filter((e) => e !== "none").map((level) => (
+            <Row
+              key={level}
+              label={`Thinking budget · ${EFFORT_LABELS[level] ?? level}`}
+              hint={
+                <>
+                  Max thinking tokens at this level, sent as <span className="font-mono">thinking_budget</span> (oMLX enforces it). Empty: no cap. Too small a
+                  budget can cost accuracy.
+                </>
+              }
+            >
+              <input
+                aria-label={`Thinking budget for ${level}`}
+                className={cn(inputClass, "w-28")}
+                inputMode="numeric"
+                value={draft.thinkingBudgets[level] || ""}
+                placeholder="No cap"
+                onChange={(e) => {
+                  const n = Number(e.target.value.replace(/\D/g, ""));
+                  const thinkingBudgets = { ...draft.thinkingBudgets };
+                  if (n > 0) thinkingBudgets[level] = n;
+                  else delete thinkingBudgets[level];
+                  set({ thinkingBudgets });
+                }}
+                onBlur={() => commit()}
+              />
+            </Row>
+          ))}
+          <Row
+            label="Web search"
+            hint="Gives the models a web_search tool when the server searches the web (oMLX: its Web search settings pick the provider and result count)."
+          >
+            <Toggle label="Web search" checked={draft.webSearch} onChange={(webSearch) => commit({ webSearch })} />
           </Row>
           <Row label="Connection" hint={test ? <span className={test.ok ? "text-success" : "text-danger"}>{test.text}</span> : "Lists the server's models."}>
             <button className={buttonClass} disabled={testing} onClick={() => void runTest()}>

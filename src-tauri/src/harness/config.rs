@@ -60,11 +60,30 @@ pub struct LocalLlm {
     pub api_key: String,
     /// Tokens; 0 = what the server reports for the model.
     pub context_window: u64,
+    /// The thinking levels to offer for its models, as their chat templates name them (Qwen3.8:
+    /// low, medium, xhigh); "none" turns thinking off. Empty: only the model default.
+    pub efforts: Vec<String>,
+    /// Also pass the level to the chat template (`chat_template_kwargs`), which is where
+    /// llama.cpp, oMLX and most MLX servers let a model's template see it.
+    pub template_effort: bool,
+    /// Thinking-token caps per level, sent as `thinking_budget` (oMLX enforces it); a level
+    /// without one thinks as long as the model wants.
+    pub thinking_budgets: std::collections::BTreeMap<String, u64>,
+    /// Give the models a `web_search` tool when the server searches the web (oMLX).
+    pub web_search: bool,
 }
 
 impl Default for LocalLlm {
     fn default() -> Self {
-        LocalLlm { enabled: false, host: "127.0.0.1".into(), port: 8000, path: "/v1".into(), api_key: String::new(), context_window: 0 }
+        LocalLlm {
+            enabled: false,
+            host: "127.0.0.1".into(), port: 8000, path: "/v1".into(), api_key: String::new(),
+            context_window: 0,
+            efforts: ["none", "low", "medium", "xhigh"].map(String::from).into(),
+            template_effort: true,
+            thinking_budgets: [("low".to_string(), 1024), ("medium".to_string(), 4096)].into(),
+            web_search: true,
+        }
     }
 }
 

@@ -577,7 +577,7 @@ fn grep(cwd: &Path, args: &Value) -> Outcome {
         cmd.arg("-e").arg(pattern).arg(&path);
     } else {
         cmd = Command::new("grep");
-        cmd.args(["-rnE", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=target"]);
+        cmd.args(["-rnEI", "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=target"]);
         if args["i"].as_bool() == Some(true) {
             cmd.arg("-i");
         }
@@ -592,7 +592,7 @@ fn grep(cwd: &Path, args: &Value) -> Outcome {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
             let base = format!("{}/", cwd.display());
-            let lines: Vec<String> = text.lines().take(GREP_MAX).map(|l| l.strip_prefix(&base).or_else(|| l.strip_prefix("./")).unwrap_or(l).to_string()).collect();
+            let lines: Vec<String> = text.lines().take(GREP_MAX).map(|l| grep_line(l.strip_prefix(&base).or_else(|| l.strip_prefix("./")).unwrap_or(l))).collect();
             if lines.is_empty() {
                 let err = String::from_utf8_lossy(&out.stderr);
                 if !err.trim().is_empty() && !out.status.success() && out.status.code() != Some(1) {
@@ -605,7 +605,7 @@ fn grep(cwd: &Path, args: &Value) -> Outcome {
             if more > 0 {
                 s.push_str(&format!("\n… {more} more matches"));
             }
-            Outcome::ok(s)
+            Outcome::ok(clip(&s, GREP_CHARS))
         }
         Err(e) => Outcome::err(format!("search failed: {e}")),
     }
@@ -644,6 +644,20 @@ fn glob(cwd: &Path, args: &Value) -> Outcome {
 }
 
 const GREP_MAX: usize = 100;
+/// Characters a match line keeps: a minified bundle or generated page is one line of megabytes,
+/// and a single match in it would fill the context (rg's own cap, `-M 200`, only applies with rg).
+const GREP_LINE: usize = 300;
+/// The whole result's cap.
+const GREP_CHARS: usize = 20_000;
+
+/// A `path:line:text` match, its text cut to [`GREP_LINE`] characters.
+fn grep_line(line: &str) -> String {
+    if line.len() <= GREP_LINE {
+        return line.to_string();
+    }
+    let cut = line.floor_char_boundary(GREP_LINE);
+    format!("{} … [long line cut: {} more chars]", &line[..cut], line.len() - cut)
+}
 const GLOB_MAX: usize = 100;
 
 fn ls(path: &Path) -> Outcome {
@@ -729,6 +743,32 @@ pub fn image_base64(path: &Path) -> Option<(&'static str, String)> {
     };
     let bytes = std::fs::read(path).ok()?;
     Some((media, base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+#[cfg(test)]
+mod grep_tests {
+    use super::*;
+
+    #[test]
+    fn long_match_lines_are_cut() {
+        let dir = std::env::temp_dir().join(format!("winfer-grep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A generated page: one line of a megabyte with the match in it.
+        std::fs::write(dir.join("graph.html"), format!("<script>{} disk-container {}</script>", "x".repeat(500_000), "y".repeat(500_000))).unwrap();
+        std::fs::write(dir.join("style.css"), ".disk-container { display: flex; }\n").unwrap();
+        let out = grep(&dir, &json!({ "pattern": "disk-container" }));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(out.ok);
+        assert!(out.output.len() < 2_000, "{} chars", out.output.len());
+        assert!(out.output.contains("style.css:1:.disk-container"));
+    }
+
+    #[test]
+    fn grep_line_keeps_short_lines() {
+        assert_eq!(grep_line("a.rs:1:fn main() {}"), "a.rs:1:fn main() {}");
+        let long = format!("a.js:1:{}", "z".repeat(1_000));
+        assert!(grep_line(&long).ends_with("[long line cut: 707 more chars]"));
+    }
 }
 
 #[cfg(test)]
