@@ -128,6 +128,8 @@ interface WorkspaceState {
   view: View;
   /** Terminal font size in px (zoom with Mod+= / Mod+- / Mod+0 or Ctrl+wheel). */
   terminalFontSize: number;
+  /** Terminals draw with xterm's WebGL (GPU) renderer; off falls back to the DOM renderer. */
+  terminalGpu: boolean;
   /** Plugin page keys shown as title bar tabs, in order; the rest live in the Apps menu. null = not chosen yet. */
   pinnedPages: string[] | null;
   /** The overview tiles every session of every workspace; same shape as a workspace's layout. */
@@ -216,6 +218,7 @@ interface WorkspaceState {
   setProgressConfig: (config: { enabled?: boolean; intervalSec?: number }) => void;
   setShowPaneCost: (show: boolean) => void;
   setGlassPanes: (on: boolean) => void;
+  setTerminalGpu: (on: boolean) => void;
   setPageTabIconsOnly: (iconsOnly: boolean) => void;
   setSearchPane: (id: string | null) => void;
   setVoiceConfig: (config: { readback?: boolean; writer?: "off" | "chatgpt" | "codex" | "claude"; writerModel?: string; inputDevice?: string; liveModel?: string; liveVoice?: string; livePrompt?: string; liveAuth?: "auto" | "apikey" | "chatgpt"; liveChatgptVoice?: string }) => void;
@@ -338,6 +341,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   progressConfig: {},
   showPaneCost: false,
   glassPanes: false,
+  terminalGpu: true,
   pageTabIconsOnly: false,
   searchPaneId: null,
   recentSessions: {},
@@ -402,6 +406,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       progressConfig: ui.progress ?? {},
       showPaneCost: ui.showPaneCost ?? false,
       glassPanes: ui.glassPanes ?? false,
+      terminalGpu: ui.terminalGpu ?? true,
       pageTabIconsOnly: ui.pageTabIconsOnly ?? false,
       recentSessions: ui.recentSessions ?? {},
       paneTasks: ui.paneTasks ?? {},
@@ -659,6 +664,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setProgressConfig: (config) => set((s) => ({ progressConfig: { ...s.progressConfig, ...config } })),
   setShowPaneCost: (showPaneCost) => set({ showPaneCost }),
   setGlassPanes: (glassPanes) => set({ glassPanes }),
+  setTerminalGpu: (terminalGpu) => set({ terminalGpu }),
   setPageTabIconsOnly: (pageTabIconsOnly) => set({ pageTabIconsOnly }),
   setSearchPane: (id) => set({ searchPaneId: id }),
   setVoiceConfig: (config) => set((s) => ({ voiceConfig: { ...s.voiceConfig, ...config } })),
@@ -739,6 +745,7 @@ interface Snapshot {
     progress?: { enabled?: boolean; intervalSec?: number };
     showPaneCost?: boolean;
     glassPanes?: boolean;
+    terminalGpu?: boolean;
     pageTabIconsOnly?: boolean;
     recentSessions?: Record<string, string>;
     paneTasks?: Record<string, PaneTask>;
@@ -767,7 +774,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived, accountId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived, accountId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, glassPanes: s.glassPanes, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, glassPanes: s.glassPanes, terminalGpu: s.terminalGpu, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
   };
 }
 

@@ -40,6 +40,13 @@ useWorkspaces.subscribe((s, prev) => {
       scheduleFit(entry); // new rows/cols reach the agent through onResize
     }
   }
+  if (s.terminalGpu !== prev.terminalGpu) {
+    for (const entry of entries.values()) {
+      if (!entry.opened) continue;
+      if (s.terminalGpu) loadWebgl(entry);
+      else disposeWebgl(entry);
+    }
+  }
 });
 
 interface Entry {
@@ -509,6 +516,38 @@ function clearAllTextureAtlases() {
   for (const webgl of webglAddons) webgl.clearTextureAtlas();
 }
 
+/** Switches an opened terminal to xterm's WebGL (GPU) renderer; on failure it keeps the DOM renderer. */
+function loadWebgl(entry: Entry) {
+  if (entry.webgl) return;
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => {
+      if (entry.webgl === webgl) disposeWebgl(entry);
+    });
+    // The glyph atlas grows a page whenever a program paints glyphs in colors it hasn't
+    // cached yet; TUIs that animate in truecolor can add pages endlessly, and past a few,
+    // xterm's WebGL renderer starts drawing garbled glyphs (and slows down). Start the atlas
+    // over before that. Every addon forwards the shared atlas's events, so count them once.
+    webgl.onAddTextureAtlasCanvas(onAtlasPageAdded);
+    webgl.onRemoveTextureAtlasCanvas(onAtlasPageRemoved);
+    entry.term.loadAddon(webgl);
+    webglAddons.add(webgl);
+    entry.webgl = webgl;
+  } catch {
+    // Falls back to the DOM renderer.
+  }
+}
+
+/** Drops a terminal's WebGL renderer; xterm goes back to its DOM renderer and redraws. */
+function disposeWebgl(entry: Entry) {
+  const webgl = entry.webgl;
+  if (!webgl) return;
+  entry.webgl = undefined;
+  webglAddons.delete(webgl);
+  webgl.dispose();
+  if (!webglAddons.size) atlasPages.clear();
+}
+
 /** While a pane or panel edge is dragged, a terminal refits at most this often (and once after). */
 const DRAG_FIT_MS = 150;
 
@@ -561,24 +600,7 @@ export function attachTerminal(pane: Pane, slot: HTMLElement) {
   if (!entry.opened) {
     entry.term.open(entry.host);
     entry.opened = true;
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        webglAddons.delete(webgl);
-        webgl.dispose();
-      });
-      // The glyph atlas grows a page whenever a program paints glyphs in colors it hasn't
-      // cached yet; TUIs that animate in truecolor can add pages endlessly, and past a few,
-      // xterm's WebGL renderer starts drawing garbled glyphs (and slows down). Start the atlas
-      // over before that. Every addon forwards the shared atlas's events, so count them once.
-      webgl.onAddTextureAtlasCanvas(onAtlasPageAdded);
-      webgl.onRemoveTextureAtlasCanvas(onAtlasPageRemoved);
-      webglAddons.add(webgl);
-      entry.webgl = webgl;
-      entry.term.loadAddon(webgl);
-    } catch {
-      // Falls back to the DOM renderer.
-    }
+    if (useWorkspaces.getState().terminalGpu) loadWebgl(entry);
   }
 
   const e = entry;

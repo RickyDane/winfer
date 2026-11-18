@@ -208,7 +208,7 @@ function UpdateFooter() {
 
 /** Text size of every terminal. */
 function TerminalSettings() {
-  const { terminalFontSize, setTerminalFontSize } = useWorkspacesPick("terminalFontSize", "setTerminalFontSize");
+  const { terminalFontSize, setTerminalFontSize, terminalGpu, setTerminalGpu } = useWorkspacesPick("terminalFontSize", "setTerminalFontSize", "terminalGpu", "setTerminalGpu");
   return (
     <Card title="Terminals">
       <Row
@@ -240,6 +240,9 @@ function TerminalSettings() {
         >
           Reset
         </button>
+      </Row>
+      <Row label="GPU acceleration" hint="Draw terminals with the WebGL renderer. Turn off if text looks garbled or flickers, or to save GPU memory; the DOM renderer is slower with heavy output.">
+        <Toggle label="GPU acceleration" checked={terminalGpu} onChange={setTerminalGpu} />
       </Row>
     </Card>
   );
