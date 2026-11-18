@@ -52,6 +52,9 @@ pub struct WorktreeDiff {
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Fetching talks to remotes, which can be slow on big repos.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(300);
+/// `worktree add` checks out every file, and LFS smudge filters or a post-checkout hook can
+/// take minutes on a big repo.
+const WORKTREE_ADD_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct GitOutput {
     code: Option<i32>,
@@ -324,9 +327,9 @@ pub fn create_from_branch(
     let path_str = path.to_string_lossy().into_owned();
     match (new_branch, is_remote) {
         // --no-track: started from a remote branch, it would otherwise track one of another name.
-        (Some(name), _) => git(&repo, &["worktree", "add", "--no-track", "-b", name, &path_str, &start]),
-        (None, true) => git(&repo, &["worktree", "add", "--track", "-b", &local, &path_str, &start]),
-        (None, false) => git(&repo, &["worktree", "add", &path_str, &start]),
+        (Some(name), _) => git_with_timeout(&repo, &["worktree", "add", "--no-track", "-b", name, &path_str, &start], WORKTREE_ADD_TIMEOUT),
+        (None, true) => git_with_timeout(&repo, &["worktree", "add", "--track", "-b", &local, &path_str, &start], WORKTREE_ADD_TIMEOUT),
+        (None, false) => git_with_timeout(&repo, &["worktree", "add", &path_str, &start], WORKTREE_ADD_TIMEOUT),
     }
     .map_err(|e| {
         if e.contains("already checked out") || e.contains("is already used by worktree") {
@@ -403,7 +406,7 @@ pub fn create(
         if branch_exists(&repo, &branch) || path.exists() {
             continue;
         }
-        match git(
+        match git_with_timeout(
             &repo,
             &[
                 "worktree",
@@ -413,6 +416,7 @@ pub fn create(
                 &path.to_string_lossy(),
                 &base,
             ],
+            WORKTREE_ADD_TIMEOUT,
         ) {
             Ok(_) => {
                 seed_codegraph(&repo, &path);
