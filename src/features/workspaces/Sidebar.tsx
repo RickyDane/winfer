@@ -1,13 +1,12 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import logoUrl from "@/assets/logo.svg";
-import { Activity, Archive, ChevronRight, ChevronsDownUp, GitBranch, History, Inbox, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Activity, Archive, ChevronRight, ChevronsDownUp, Clock, Download, GitBranch, Inbox, Moon, Plus, Search, Settings, Sun } from "lucide-react";
 import { progressTitle, useProgress } from "@/features/progress/progress";
 import { useReviews } from "@/features/review/reviews";
 import { cn } from "@/lib/cn";
 import { execute } from "@/commands/bus";
 import { keysFor } from "@/commands/keymap";
-import { Spinner } from "@/components/Spinner";
 import { StatusDot } from "@/features/terminal/StatusDot";
 import { ActivityFeed } from "./ActivityFeed";
 import { ContextMenu, useContextMenu, type MenuItem } from "@/components/ContextMenu";
@@ -17,9 +16,8 @@ import { useSortable } from "./useSortable";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { PaneTitleInput } from "@/features/terminal/PaneTitleInput";
 import { WorktreeList } from "@/features/worktree/WorktreeList";
-import { ProgressBar, progressLabel } from "@/features/progress/SessionsOverview";
 import { themeById } from "@/features/theme/themes";
-import { UsageButton } from "@/features/usage/UsageMeter";
+import { useUpdates } from "@/features/updates/updater";
 import { checkoutDetails, paneTooltip, useSidebarCheckouts } from "./sidebarTooltips";
 
 /** The agent's own title (or its task), with the CLI's name in the tooltip. */
@@ -36,22 +34,29 @@ export function PaneName({ pane, className, tooltip }: { pane: Pane; className?:
   );
 }
 
-/** Thin progress bar under an agent's sidebar row. */
-function PaneProgress({ pane }: { pane: Pane }) {
-  const progress = useProgress((s) => s.byPane[pane.id]);
-  if (pane.provider === "shell" || progress?.percent == null) return null;
-  return (
-    <span className="mt-1.5 block" title={progressLabel(progress)}>
-      <ProgressBar progress={progress} status={pane.status} className="h-[3px]" />
-    </span>
-  );
+/** Right of an agent's title: its progress, or "needs you" / "done" / "error". */
+function PaneMeta({ pane }: { pane: Pane }) {
+  const percent = useProgress((s) => s.byPane[pane.id]?.percent);
+  if (pane.provider === "shell") return null;
+  if (pane.status === "needs-input") return <span className="shrink-0 text-[10.5px] font-medium text-warning">needs you</span>;
+  if (pane.status === "done") return <span className="shrink-0 text-[10.5px] text-success">done</span>;
+  if (pane.status === "error") return <span className="shrink-0 text-[10.5px] text-danger">error</span>;
+  if (percent == null || pane.status === "idle") return null;
+  return <span className="shrink-0 font-mono text-[10.5px] text-fg-subtle tabular-nums">{percent}%</span>;
 }
 
-/** Percent done of a working agent, from the progress estimates. */
-function PanePercent({ pane }: { pane: Pane }) {
-  const percent = useProgress((s) => s.byPane[pane.id]?.percent);
-  if (pane.provider === "shell" || percent == null || pane.status === "idle") return null;
-  return <span className={cn("shrink-0 font-mono text-[10px] tabular-nums", percent === 100 ? "text-success" : "text-fg-subtle")}>{percent}%</span>;
+/** The agent's mark on a rounded tile, with its status as a dot in the corner. */
+export function AgentTile({ pane, ring = "var(--color-panel)" }: { pane: Pane; ring?: string }) {
+  return (
+    <span className="relative grid size-[26px] shrink-0 place-items-center rounded-[7px] bg-hover">
+      <ProviderIcon provider={pane.provider} size={14} />
+      {pane.provider !== "shell" && (
+        <span className="absolute -right-0.5 -bottom-0.5 flex rounded-full p-[2px]" style={{ background: ring }}>
+          <StatusDot status={pane.status} />
+        </span>
+      )}
+    </span>
+  );
 }
 
 /** Second line of an agent row: its branch and what it is doing right now. */
@@ -91,56 +96,118 @@ function WorkspaceAvatar({ name, active }: { name: string; active: boolean }) {
   );
 }
 
-/** One dot per agent of a collapsed workspace: its sessions' state without opening it. */
-function WorkspaceDots({ panes }: { panes: Pane[] }) {
+/** How many agents (or sessions) a collapsed workspace has. */
+function WorkspaceCount({ panes }: { panes: Pane[] }) {
+  const agents = panes.filter((p) => p.provider !== "shell").length;
+  if (!panes.length) return null;
+  return <span className="font-mono text-[10.5px] font-normal text-fg-subtle">{agents ? `${agents} agent${agents === 1 ? "" : "s"}` : panes.length}</span>;
+}
+
+/** A collapsed workspace's agents: how many work, wait for you or are done. */
+function WorkspaceSummary({ panes }: { panes: Pane[] }) {
   const agents = panes.filter((p) => p.provider !== "shell");
-  if (agents.length === 0) return panes.length > 0 ? <span className="text-[11px] text-fg-subtle">{panes.length}</span> : null;
-  const shown = agents.slice(0, 5);
+  if (agents.length === 0) return null;
+  const count = (status: Pane["status"]) => agents.filter((p) => p.status === status).length;
+  const [working, waiting, done] = [count("working"), count("needs-input"), count("done")];
   return (
-    <span className="flex items-center gap-1" title={`${agents.length} agent${agents.length === 1 ? "" : "s"}`}>
-      {shown.map((p) => (
-        <StatusDot key={p.id} status={p.status} />
-      ))}
-      {agents.length > shown.length && <span className="text-[10px] text-fg-subtle">+{agents.length - shown.length}</span>}
-    </span>
+    <div className="-mt-1 flex flex-wrap gap-1 pb-1.5 pl-[37px] text-[11px] text-fg-subtle">
+      <span>{working} working</span>
+      {waiting > 0 && <span className="font-medium text-warning">· {waiting} need{waiting === 1 ? "s" : ""} you</span>}
+      {done > 0 && <span className="text-success">· {done} done</span>}
+    </div>
   );
 }
 
 /** Small uppercase label above a sidebar section. */
 function SectionLabel({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <div className="flex h-7 items-center justify-between pr-1 pl-2.5">
-      <span className="text-[10.5px] font-medium tracking-[0.08em] text-fg-subtle uppercase">{children}</span>
+    <div className="mt-2.5 flex h-[26px] items-center justify-between pl-1.5">
+      <span className="text-[11px] font-semibold text-fg-subtle">{children}</span>
       {action}
     </div>
   );
 }
 
-const navItem = "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] text-fg-muted transition-colors duration-150 hover:bg-hover hover:text-fg";
+const tab = "flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-fg-muted transition-colors duration-150 hover:bg-hover hover:text-fg";
 
-/** Opens the sessions overview; shows how many agents are working, with their average progress. */
-function SessionsEntry() {
+/** Search, and Sessions · Review · History. */
+function SidebarTop() {
+  const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
+  const everywhere = useWorkspaces((s) => s.view === "overview");
+  const reviews = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
+  const keys = keysFor({ type: "ui.palette" });
+  return (
+    <div className="flex flex-col gap-2 border-b border-border px-2.5 pt-2.5 pb-2">
+      <button
+        onClick={() => execute({ type: "ui.palette" })}
+        className="flex h-8 items-center gap-2 rounded-md border border-border bg-app pr-2 pl-2.5 text-left text-[12.5px] text-fg-subtle transition-colors hover:border-border-strong hover:text-fg-muted"
+      >
+        <Search size={14} />
+        <span className="flex-1">Search or jump to…</span>
+        {keys && <kbd className="rounded border border-border px-1 font-mono text-[10px]">{keys}</kbd>}
+      </button>
+      <div className="flex gap-px rounded-lg border border-border bg-app p-0.5">
+        <button onClick={() => execute({ type: "ui.overlay", overlay: "progress" })} title={`Session progress (${keysFor({ type: "ui.overlay", overlay: "progress" })})`} className={tab}>
+          <Activity size={14} className="shrink-0" />
+          Sessions
+        </button>
+        <button onClick={() => execute({ type: "ui.overlay", overlay: "review" })} title={`Review finished work (${keysFor({ type: "ui.overlay", overlay: "review" })})`} className={tab}>
+          <Inbox size={14} className="shrink-0" />
+          Review
+          {reviews > 0 && (
+            <span key={reviews} className="anim-grow min-w-4 rounded-full bg-accent px-1 text-center text-[10px] leading-4 font-semibold text-on-accent">
+              {reviews}
+            </span>
+          )}
+        </button>
+        <button onClick={() => execute({ type: "ui.overlay", overlay: "history" })} title={`Merged features (${keysFor({ type: "ui.overlay", overlay: "history" })})`} className={tab}>
+          <Clock size={14} className="shrink-0" />
+          History
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Agents waiting for you in any workspace, with Approve right there. */
+function NeedsYou() {
   const workspaces = useWorkspaces((s) => s.workspaces);
   const byPane = useProgress((s) => s.byPane);
-  const working = workspaces.flatMap((w) => w.panes).filter((p) => p.provider !== "shell" && p.status === "working");
-  const known = working.map((p) => byPane[p.id]?.percent).filter((n): n is number => n != null);
-  const average = known.length ? Math.round(known.reduce((a, b) => a + b, 0) / known.length) : null;
+  const waiting = workspaces.flatMap((w) => livePanes(w)).filter((p) => p.provider !== "shell" && p.status === "needs-input");
+  if (!waiting.length) return null;
   return (
-    <button
-      onClick={() => execute({ type: "ui.overlay", overlay: "progress" })}
-      title={`Session progress (${keysFor({ type: "ui.overlay", overlay: "progress" })})`}
-      className={navItem}
-    >
-      <Activity size={14} className="shrink-0" />
-      <span className="flex-1">Sessions</span>
-      {working.length > 0 && (
-        <span className="flex items-center gap-1.5 font-mono text-[11px] text-fg-subtle">
-          <Spinner size={10} className="text-success" />
-          {working.length}
-          {average !== null && <span className="text-fg-subtle/70">· {average}%</span>}
-        </span>
-      )}
-    </button>
+    <section className="mt-2.5 rounded-[10px] bg-warning/[0.06] p-1">
+      <div className="flex h-[26px] items-center gap-[7px] px-1.5 text-[11px] font-semibold text-warning">
+        <span className="size-[7px] animate-pulse rounded-full bg-warning" />
+        Needs you
+        <span className="font-mono font-normal text-fg-subtle">{waiting.length}</span>
+      </div>
+      {waiting.map((pane) => (
+        <div
+          key={pane.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
+          className="flex cursor-pointer items-center gap-[9px] rounded-md px-1.5 py-[7px] hover:bg-warning/[0.08]"
+        >
+          <AgentTile pane={pane} />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <PaneName pane={pane} className="text-[12.5px] text-fg" />
+            <span className="truncate text-[11.5px] text-fg-muted">{byPane[pane.id]?.step ?? "Waiting for your input"}</span>
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              execute({ type: "pane.approve", target: { id: pane.id } });
+            }}
+            title="Approve what it's asking (sends its approve key)"
+            className="h-6 shrink-0 rounded-md bg-accent px-2.5 text-[11.5px] font-medium text-on-accent hover:opacity-90"
+          >
+            Approve
+          </button>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -151,30 +218,30 @@ function AppVersion() {
     getVersion().then(setVersion, () => setVersion(null));
   }, []);
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-2.5" title={version ? `winfer ${version}` : "winfer"}>
-      <img src={logoUrl} alt="" className="size-7 shrink-0" draggable={false} />
+    <span className="flex min-w-0 items-center gap-2" title={version ? `winfer ${version}` : "winfer"}>
+      <span className="grid size-[26px] shrink-0 place-items-center rounded-[7px] bg-accent-soft">
+        <img src={logoUrl} alt="" className="size-[18px]" draggable={false} />
+      </span>
       <span className="flex min-w-0 flex-col leading-tight">
-        <span className="text-[13px] font-medium text-fg">winfer</span>
-        {version && <span className="truncate font-mono text-[10px] text-fg-subtle">v{version}</span>}
+        <span className="text-xs font-semibold text-fg">winfer</span>
+        {version && <span className="truncate font-mono text-[10px] text-fg-subtle">{version}</span>}
       </span>
     </span>
   );
 }
 
-/** Opens the review inbox; the count is finished work waiting in this workspace (in the overview: in any). */
-function ReviewEntry() {
-  const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
-  const everywhere = useWorkspaces((s) => s.view === "overview");
-  const count = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
+/** Only when an update is out: opens Settings → Updates. */
+function UpdateButton() {
+  const available = useUpdates((s) => s.available);
+  if (!available) return null;
   return (
-    <button onClick={() => execute({ type: "ui.overlay", overlay: "review" })} title={`Review finished work (${keysFor({ type: "ui.overlay", overlay: "review" })})`} className={navItem}>
-      <Inbox size={14} className="shrink-0" />
-      <span className="flex-1">Review</span>
-      {count > 0 && (
-        <span key={count} className="anim-grow min-w-[18px] rounded-full bg-accent px-1.5 text-center text-[10.5px] leading-[18px] font-semibold text-on-accent">
-          {count}
-        </span>
-      )}
+    <button
+      onClick={() => execute({ type: "ui.settings", page: "updates" })}
+      title={`Update to winfer ${available.version}`}
+      className="relative grid size-6 shrink-0 place-items-center rounded-[7px] bg-accent-soft text-accent hover:bg-accent/25"
+    >
+      <Download size={12} />
+      <span className="absolute -top-0.5 -right-0.5 size-[7px] rounded-full bg-accent ring-2 ring-panel" />
     </button>
   );
 }
@@ -223,46 +290,40 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
         onDoubleClick={() => setRenaming(pane.id)}
         onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane, () => setRenaming(pane.id)) })}
         className={cn(
-          "anim-slide relative ml-2 block w-[calc(100%-0.5rem)] cursor-pointer rounded-md px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+          "anim-slide relative flex w-full cursor-pointer items-center gap-[9px] rounded-md py-1.5 pr-1.5 pl-2 text-left text-[12.5px] transition-colors duration-150",
           focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
           drag?.id === pane.id && "opacity-50",
           pane.archived && !focused && "opacity-70",
         )}
       >
         {line && <DropLine at={line} />}
-        {/* Marks the focused session on the guide line. */}
-        {focused && <span className="absolute top-1.5 bottom-1.5 -left-2 w-0.5 -translate-x-1/2 rounded-full bg-accent" />}
         {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
         {(pane.status === "done" || pane.status === "needs-input") && (
           <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
         )}
-        <span className="flex items-center gap-2">
-          <StatusDot status={pane.status} />
-          <ProviderIcon provider={pane.provider} size={12} />
-          {renaming === pane.id ? (
-            <PaneTitleInput pane={pane} onDone={() => setRenaming(null)} className="h-5 flex-1 text-[13px]" />
-          ) : (
-            <PaneName pane={pane} tooltip={tooltip} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
-          )}
-          <PanePercent pane={pane} />
-        </span>
-        <span className="block pl-[26px]">
+        <AgentTile pane={pane} ring={focused ? "var(--color-active)" : "var(--color-panel)"} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex items-center gap-1.5">
+            {renaming === pane.id ? (
+              <PaneTitleInput pane={pane} onDone={() => setRenaming(null)} className="h-5 flex-1 text-[12.5px]" />
+            ) : (
+              <PaneName pane={pane} tooltip={tooltip} className={cn("flex-1", (pane.unseen || focused) && "font-medium text-fg")} />
+            )}
+            <PaneMeta pane={pane} />
+          </span>
           <PaneDetail pane={pane} />
-          <PaneProgress pane={pane} />
         </span>
       </div>
     );
   };
   return (
-    <div className="relative pr-1 pb-1.5 pl-[17px]">
-      {/* Guide line tying the sessions to their workspace. */}
-      <span className="absolute top-0 bottom-2.5 left-[17px] w-px bg-border" />
+    <div className="flex flex-col gap-px pt-0.5 pb-1.5">
       {live.map((pane, i) => row(pane, i, true))}
       {archived.length > 0 && (
         <div>
           <button
             onClick={() => setShowArchived((v) => !v)}
-            className="ml-2 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
+            className="flex h-7 w-full items-center gap-[9px] rounded-md pr-2 pl-[13px] text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
             title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
           >
             <Archive size={12} />
@@ -272,8 +333,18 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
           {showArchived && archived.map((pane, i) => row(pane, i, false))}
         </div>
       )}
-      {ws.panes.length === 0 && <span className="ml-2 block px-2 py-1.5 text-[12px] text-fg-subtle">No sessions yet — {keysFor({ type: "ui.overlay", overlay: "newPane" })} starts one</span>}
       <WorktreeList workspace={ws} />
+      <button
+        onClick={() => {
+          if (useWorkspaces.getState().activeWorkspaceId !== ws.id) execute({ type: "workspace.switch", target: { id: ws.id } });
+          execute({ type: "ui.overlay", overlay: "newPane" });
+        }}
+        className="group flex h-[30px] w-full items-center gap-[9px] rounded-md pr-2 pl-[13px] text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
+      >
+        <Plus size={12} />
+        <span className="flex-1">{ws.panes.length === 0 ? "No agents yet · start one" : "New agent"}</span>
+        <kbd className="invisible font-mono text-[10px] group-hover:visible">{keysFor({ type: "ui.overlay", overlay: "newPane" })}</kbd>
+      </button>
     </div>
   );
 }
@@ -328,18 +399,10 @@ export function Sidebar() {
 
   return (
     <aside style={{ width }} className="anim-slide flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
-      <div className="flex flex-col gap-px p-2">
-        <SessionsEntry />
-        <ReviewEntry />
-        <button onClick={() => execute({ type: "ui.overlay", overlay: "history" })} title={`Merged features (${keysFor({ type: "ui.overlay", overlay: "history" })})`} className={navItem}>
-          <History size={14} className="shrink-0" />
-          <span className="flex-1">History</span>
-        </button>
-      </div>
+      <SidebarTop />
 
-      <div className="mx-3 border-t border-border" />
-
-      <nav className="flex-1 overflow-y-auto px-2 pt-2 pb-2 select-none">
+      <nav className="flex-1 overflow-y-auto px-2 pb-3 select-none">
+        <NeedsYou />
         <SectionLabel
           action={
             <div className="flex items-center gap-px">
@@ -368,8 +431,7 @@ export function Sidebar() {
               key={ws.id}
               data-sort-id={ws.id}
               className={cn(
-                "relative mb-1 rounded-lg transition-[background-color,opacity] duration-150",
-                active && "bg-panel-raised ring-1 ring-border",
+                "relative transition-opacity duration-150",
                 drag?.id === ws.id && "opacity-50",
               )}
             >
@@ -383,18 +445,19 @@ export function Sidebar() {
                 onMouseEnter={() => refresh(ws.rootDir)}
                 onFocus={() => refresh(ws.rootDir)}
                 className={cn(
-                  "group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
-                  active ? "font-semibold text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+                  "group flex h-8 w-full cursor-pointer items-center gap-[9px] rounded-md px-1.5 text-left text-[13px] transition-colors duration-150 hover:bg-hover hover:text-fg",
+                  active || expanded ? "font-medium text-fg" : "text-fg-muted",
                 )}
               >
                 <WorkspaceAvatar name={ws.name} active={active} />
                 <span className="flex-1 truncate">{ws.name}</span>
-                {!expanded && <WorkspaceDots panes={livePanes(ws)} />}
+                {!expanded && <WorkspaceCount panes={livePanes(ws)} />}
                 <ChevronRight
                   size={13}
-                  className={cn("shrink-0 text-fg-subtle transition-transform duration-200", expanded ? "rotate-90" : "opacity-0 group-hover:opacity-100")}
+                  className={cn("shrink-0 text-fg-subtle transition-transform duration-200", expanded && "rotate-90")}
                 />
               </button>
+              {!expanded && <WorkspaceSummary panes={livePanes(ws)} />}
 
               {expanded && <WorkspacePanes workspace={ws} focusedPaneId={active ? focusedPaneId : null} openMenu={openMenu} />}
             </div>
@@ -404,14 +467,15 @@ export function Sidebar() {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} title={menu.target.title} items={menu.target.items} onClose={closeMenu} />}
       <ActivityFeed />
-      <footer className="flex items-center gap-1 border-t border-border bg-panel-raised/40 px-3 py-2.5">
+      <footer className="flex items-center gap-2 border-t border-border py-2 pr-2 pl-3">
         <AppVersion />
+        <UpdateButton />
+        <span className="flex-1" />
         <button onClick={toggleTheme} className={iconButton} title={`Switch to ${themeById(themeById(theme).pair).name} (more themes in Settings)`}>
           <span key={theme} className="anim-grow block">
             {themeById(theme).mode === "dark" ? <Sun size={14} /> : <Moon size={14} />}
           </span>
         </button>
-        <UsageButton onOpen={() => execute({ type: "ui.settings", page: "usage" })} title="Usage" />
         <button onClick={() => execute({ type: "ui.settings" })} className={iconButton} title={`Settings (${keysFor({ type: "ui.settings" })})`}>
           <Settings size={14} />
         </button>
