@@ -8,21 +8,158 @@ use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputSt
 use serde_json::json;
 use winfer_backend::{diagnostics, editors, provider_updates, providers, transfer};
 
-const PAGES: [(&str, &str, IconName); 13] = [
-    ("general", "General", IconName::SlidersHorizontal),
-    ("theme", "Theme", IconName::Palette),
-    ("agents", "Agents", IconName::Bot),
-    ("accounts", "Accounts", IconName::Users),
-    ("voice", "Voice", IconName::Mic),
-    ("ai", "AI", IconName::Sparkles),
-    ("mobile", "Mobile", IconName::Smartphone),
-    ("winfer-code", "winfer code", IconName::SquareTerminal),
-    ("usage", "Usage", IconName::ChartColumn),
-    ("plugins", "Plugins", IconName::Puzzle),
-    ("skills", "Skills", IconName::WandSparkles),
-    ("data", "Data", IconName::ArchiveRestore),
-    ("diagnostics", "Diagnostics", IconName::Activity),
+/// A settings page: id, label, icon and a one-line description for its header.
+type Page = (&'static str, &'static str, IconName, &'static str);
+
+/// The pages in five groups (the Graphite settings).
+const GROUPS: [(&str, &[Page]); 5] = [
+    ("Workspace", &[
+        ("general", "General", IconName::SlidersHorizontal, "Terminals, your code editor and keyboard shortcuts."),
+        ("theme", "Appearance", IconName::Palette, "Light or dark, and the theme for each."),
+    ]),
+    ("Agents", &[
+        ("agents", "Agents", IconName::Bot, "New panes, models, versions, permissions, review and progress."),
+        ("winfer-code", "winfer code", IconName::SquareTerminal, "winfer's own agent: interface, model and context."),
+    ]),
+    ("AI & voice", &[
+        ("accounts", "Accounts", IconName::Users, "Sign-ins and the accounts winfer switches between."),
+        ("ai", "AI", IconName::Sparkles, "The model winfer uses for summaries, titles and progress."),
+        ("voice", "Voice", IconName::Mic, "Talk to your agents, and have them talk back."),
+    ]),
+    ("Extensions", &[
+        ("plugins", "Plugins", IconName::Puzzle, "Panels, tools and agents others built for winfer."),
+        ("skills", "Skills", IconName::WandSparkles, "Reusable instructions every agent can load."),
+    ]),
+    ("System", &[
+        ("usage", "Usage & limits", IconName::ChartColumn, "Plan limits, spend and warnings."),
+        ("mobile", "Mobile", IconName::Smartphone, "Watch and steer agents from your phone."),
+        ("data", "Backup & transfer", IconName::ArchiveRestore, "Move your setup to another machine."),
+        ("updates", "Updates", IconName::Download, "winfer's release channel and updates."),
+        ("diagnostics", "Diagnostics", IconName::Activity, "Memory, logs and crash reports."),
+    ]),
 ];
+
+fn page_info(id: &str) -> (&'static str, Page) {
+    GROUPS.iter().find_map(|(g, pages)| pages.iter().find(|p| p.0 == id).map(|p| (*g, *p))).unwrap_or((GROUPS[0].0, GROUPS[0].1[0]))
+}
+
+/// What the search finds: page, setting and words that lead to it (the setting's hint or synonyms).
+const SEARCH_INDEX: &[(&str, &str, &str)] = &[
+    ("winfer-code", "Use TUI style", ""),
+    ("winfer-code", "Text size", ""),
+    ("winfer-code", "Model", ""),
+    ("winfer-code", "Reasoning effort", ""),
+    ("winfer-code", "Permission mode", ""),
+    ("winfer-code", "Auto-approve in panes", ""),
+    ("winfer-code", "Plan sidebar", ""),
+    ("winfer-code", "Lean setup", ""),
+    ("winfer-code", "Short Codex prompt", ""),
+    ("winfer-code", "Codex CLI panes too", ""),
+    ("winfer-code", "Skills", ""),
+    ("winfer-code", "Context compaction", ""),
+    ("winfer-code", "Micro-compact at", ""),
+    ("winfer-code", "Full compact at", ""),
+    ("winfer-code", "Tools", ""),
+    ("winfer-code", "Always-allowed commands", ""),
+    ("winfer-code", "MCP servers", "Extra servers for every backend, as JSON: { \\"),
+    ("mobile", "Phone", ""),
+    ("mobile", "Pair a phone", ""),
+    ("mobile", "Relay", ""),
+    ("mobile", "Relay URL", ""),
+    ("general", "Terminals", ""),
+    ("general", "Text size", "Also ⌘= / ⌘- / ⌘0, or ⌘ + scroll over a terminal."),
+    ("general", "Code editor", ""),
+    ("general", "Open projects and worktrees in", ""),
+    ("general", "Keyboard", ""),
+    ("general", "Keyboard shortcuts", "See every shortcut and change any of them."),
+    ("agents", "New panes", ""),
+    ("agents", "Default agent", "⌘T, split and “open a new window” start this agent."),
+    ("agents", "Always open new agents in their own worktree", ""),
+    ("agents", "Models", "The model each agent starts with in new panes."),
+    ("agents", "Versions", "Updating changes the CLI on disk; running panes keep their version until restarted."),
+    ("agents", "Check for agent updates", ""),
+    ("agents", "Auto-approve", "Agents run tools and edits without asking. Only for sandboxes or work you can undo."),
+    ("agents", "System prompt", "Given to every agent when it starts (or restarts). Leave empty for none."),
+    ("agents", "Instructions for every agent", ""),
+    ("agents", "Agent tools", "Tools agents rarely use are left out, since every tool costs context in each request."),
+    ("agents", "Review", ""),
+    ("agents", "Run tests when an agent finishes", ""),
+    ("agents", "Screenshot the dev server", "Shows the agent's running app on its review card."),
+    ("agents", "Session progress", "Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked."),
+    ("agents", "Estimate how far working agents are", ""),
+    ("agents", "Check every", ""),
+    ("data", "Export", "Saves settings, workspaces, plugins with their data, and usage history into one file to import on another machine."),
+    ("data", "Include secrets", "ChatGPT sign-in, the voice OpenAI key and plugin vault values, encrypted with a passphrase."),
+    ("data", "Export file", ""),
+    ("data", "Import", "Replaces this machine's data with an export, then restarts."),
+    ("data", "Import and restart", ""),
+    ("diagnostics", "Memory", "winfer's own resident memory, sampled every 5 seconds into the log. A steady climb before a crash points at a leak; the timeline in the export shows it."),
+    ("diagnostics", "Now / session peak", ""),
+    ("diagnostics", "Terminals", "Each live pane also holds up to 2 MB of replay scrollback in the backend, plus its terminal buffer."),
+    ("diagnostics", "Last 2 minutes", ""),
+    ("diagnostics", "Logs", "winfer.log keeps the app log (rotated at 5 MB); crash.log holds panics with backtraces. Both live in the folder below."),
+    ("diagnostics", "Log folder", ""),
+    ("diagnostics", "Sizes", ""),
+    ("diagnostics", "Verbose logging", "Also records debug lines (more detail, faster-growing log). Kept across restarts."),
+    ("diagnostics", "Copy summary", "Version, memory and the crash-log tail — paste it into a bug report."),
+    ("diagnostics", "Export for a bug report", "A zip with the summary, both logs and the memory timeline. No settings, chats or secrets."),
+    ("diagnostics", "Clear logs", ""),
+    ("diagnostics", "Latest crash", "The end of crash.log. Full backtraces are in the file and in the export."),
+    ("voice", "Live voice", ""),
+    ("voice", "Connection", ""),
+    ("voice", "OpenAI API key", ""),
+    ("voice", "Model (API key)", ""),
+    ("voice", "System prompt", "How the voice agent behaves and talks. winfer adds the current panes, workspaces and browser tabs after it; changes apply right away, also mid-conversation."),
+    ("voice", "Voice", "API key · ChatGPT plan. Applies to the next conversation."),
+    ("voice", "Input", ""),
+    ("voice", "Microphone", ""),
+    ("voice", "Read aloud", ""),
+    ("voice", "Speak agent updates aloud", "“Codex needs your input”, “Claude Code finished”."),
+    ("ai", "LLM", "Writes progress estimates, review summaries and other short texts in winfer."),
+    ("ai", "Provider", ""),
+    ("ai", "Model", ""),
+    ("ai", "ChatGPT account", "Runs the LLM below on your ChatGPT plan (Plus or Pro); no API key needed. Until you sign in, the Codex CLI's own login is used instead if Codex is installed. Set a weekly limit or disconnect winfer in ChatGPT's settings."),
+    ("theme", "Light or dark", "theme mode sun moon appearance"),
+    ("theme", "Themes", "Winfer Dark Light Tokyo Night Catppuccin Dracula Nord Gruvbox Solarized GitHub Rosé Pine One Dark"),
+    ("accounts", "Claude account", "sign in plan login"),
+    ("accounts", "ChatGPT account", "sign in plan login openai"),
+    ("accounts", "Multiple accounts", "switch account when one runs out of usage"),
+    ("plugins", "Discover plugins", "store catalog install"),
+    ("plugins", "Installed plugins", "remove update"),
+    ("plugins", "Hide names on plugin tabs", ""),
+    ("skills", "Discover skills", "store catalog install"),
+    ("skills", "Installed skills", ""),
+    ("usage", "Usage limits", "5-hour weekly rings title bar"),
+    ("usage", "Spend", "cost tokens API prices"),
+    ("usage", "Show task cost on panes", "cost header"),
+    ("updates", "Update channel", "Stable Nebula"),
+    ("updates", "Check for updates", "install download version"),
+    ("updates", "What's new", "release notes changelog"),
+    ("agents", "Auto-approve", "permissions yolo approve without asking"),
+    ("agents", "Versions", "update agent CLI"),
+    ("agents", "Session progress", "estimate how far agents are"),
+    ("winfer-code", "Permission mode", "approve ask yolo plan"),
+];
+
+/// Settings whose label, words or page match every word of `query`, best first.
+fn search_settings(query: &str) -> Vec<(&'static str, &'static str, &'static str)> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let pages = GROUPS.iter().flat_map(|(_, p)| p.iter()).map(|p| (p.0, p.1, p.3));
+    let mut hits: Vec<(u8, (&str, &str, &str))> = pages.map(|(id, label, desc)| (id, label, desc))
+        .chain(SEARCH_INDEX.iter().copied())
+        .filter_map(|(page, label, words_of)| {
+            let page_label = page_info(page).1.1;
+            let hay = format!("{label} {words_of} {page_label}").to_lowercase();
+            words.iter().all(|w| hay.contains(w.as_str())).then(|| (if label.to_lowercase().starts_with(&words[0]) { 0 } else { 1 }, (page, label, words_of)))
+        })
+        .collect();
+    hits.sort_by_key(|h| h.0);
+    let mut seen = std::collections::HashSet::new();
+    hits.into_iter().map(|h| h.1).filter(|(page, label, _)| seen.insert((*page, *label))).collect()
+}
 
 pub struct SettingsUi {
     open_select: Option<String>,
@@ -43,6 +180,7 @@ pub struct SettingsUi {
     verbose: bool,
     diagnostics_result: Option<Result<String, String>>,
     diagnostics_polled: Option<std::time::Instant>,
+    search: Entity<InputState>,
 }
 
 fn mb(bytes: f64) -> String {
@@ -57,22 +195,22 @@ pub(super) fn card(c: Colors, title: &str, description: Option<&str>) -> Div {
         .flex()
         .flex_col()
         .gap_0p5()
-        .child(div().text_size(px(13.0)).text_color(c.fg).child(title.to_string()))
+        .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(title.to_string()))
         .when_some(description.map(str::to_string), |d, t| d.child(div().text_xs().text_color(c.subtle).child(t)));
-    div().flex().flex_col().rounded_lg().border_1().border_color(c.border).bg(c.panel).child(header)
+    div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel).child(header)
 }
 
 pub(super) fn row(c: Colors, label: impl Into<SharedString>, hint: Option<String>, control: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
-        .gap_4()
+        .gap_6()
         .px_4()
-        .py_2p5()
+        .py_3()
         .border_t_1()
         .border_color(c.border)
         .child(
-            div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().text_size(px(13.0)).text_color(c.fg).child(label.into()))
+            div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(label.into()))
                 .when_some(hint, |d, t| d.child(div().text_xs().text_color(c.subtle).child(t))),
         )
         .child(div().flex().items_center().gap_2().flex_shrink_0().child(control))
@@ -120,7 +258,8 @@ impl Root {
         let passphrase = password("Passphrase", window, cx);
         let confirm = password("Repeat", window, cx);
         let import_passphrase = password("Passphrase", window, cx);
-        for input in [&passphrase, &confirm, &import_passphrase] {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
+        for input in [&passphrase, &confirm, &import_passphrase, &search] {
             cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         }
         self.settings = Some(SettingsUi {
@@ -142,6 +281,7 @@ impl Root {
             verbose: false,
             diagnostics_result: None,
             diagnostics_polled: None,
+            search,
         });
         cx.spawn(async move |this, cx| {
             let list = tauri::async_runtime::spawn(async { serde_json::to_value(editors::editors_list().await).unwrap_or_default() }).await.unwrap_or_default();
@@ -737,63 +877,156 @@ impl Root {
         self.settings_ui(window, cx);
         let c = *c;
         let page = self.state.read(cx).settings_page.clone();
-        let (id, label, _) = PAGES.iter().find(|p| p.0 == page).copied().unwrap_or(PAGES[0]);
-        let mut nav = div().w(px(192.0)).flex_shrink_0().flex().flex_col().gap_0p5().border_r_1().border_color(c.border).bg(c.panel).p_2().child(div().px_2p5().pt_2().pb_3().text_sm().child("Settings"));
-        for (pid, plabel, icon) in PAGES {
-            let selected = pid == id;
-            nav = nav.child(
-                div().id(pid).h(px(32.0)).flex().items_center().gap_2p5().rounded_md().px_2p5().text_size(px(13.0)).cursor_pointer()
-                    .text_color(if selected { c.fg } else { c.muted }).when(selected, |d| d.bg(c.active)).hover(move |d| d.bg(c.hover).text_color(c.fg))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(s) = this.settings.as_mut() {
-                            s.open_select = None;
-                        }
-                        this.update_state(cx, |s| s.settings_page = pid.to_string());
-                    }))
-                    .child(Icon::new(icon).size(px(14.0)).when(selected, |i| i.text_color(c.accent)))
-                    .child(plabel),
-            );
+        let (group, (id, label, icon, description)) = page_info(&page);
+        let search = self.settings.as_ref().map(|s| s.search.clone()).expect("settings ui");
+        let query = search.read(cx).value().trim().to_string();
+        let hits = search_settings(&query);
+        let searching = !query.is_empty();
+        let mono = crate::fonts::mono(cx);
+
+        // Navigation: search on top, then the pages in their groups.
+        let mut list = div().id("settings-nav").flex_1().min_h_0().overflow_y_scroll().flex().flex_col().px_2().pb_2();
+        for (g, pages) in GROUPS {
+            list = list.child(div().px_2p5().pt_3().pb_1().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(g.to_uppercase()));
+            for (pid, plabel, picon, _) in pages.iter().copied() {
+                let selected = !searching && pid == id;
+                let matches = hits.iter().filter(|h| h.0 == pid).count();
+                let dot = pid == "updates" && self.updates.available.is_some();
+                list = list.child(
+                    div().id(pid).h(px(30.0)).flex_shrink_0().flex().items_center().gap_2p5().rounded_md().px_2p5().text_size(px(13.0)).cursor_pointer()
+                        .text_color(if selected { c.fg } else { c.muted })
+                        .when(selected, |d| d.bg(Hsla { a: 0.14, ..c.accent }))
+                        .when(searching && matches == 0, |d| d.opacity(0.35))
+                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_settings_page(pid, window, cx)))
+                        .child(Icon::new(picon).size(px(15.0)).when(selected, |i| i.text_color(c.accent)))
+                        .child(div().flex_1().truncate().child(plabel))
+                        .when(searching && matches > 0, |d| d.child(div().font_family(mono.clone()).text_size(px(10.5)).text_color(c.subtle).child(matches.to_string())))
+                        .when(dot && !searching, |d| d.child(div().size(px(6.0)).rounded_full().bg(c.accent))),
+                );
+            }
         }
-        nav = nav.child(self.render_update_footer(c, cx));
-        let content: AnyElement = match id {
-            "general" => self.page_general(c, cx).into_any_element(),
-            "theme" => self.page_theme(c, cx).into_any_element(),
-            "agents" => self.page_agents(c, window, cx).into_any_element(),
-            "data" => self.page_data(c, cx).into_any_element(),
-            "diagnostics" => self.page_diagnostics(c, window, cx).into_any_element(),
-            "accounts" => self.page_accounts(c, window, cx).into_any_element(),
-            "voice" => self.page_voice(c, window, cx).into_any_element(),
-            "ai" => self.page_ai(c, window, cx).into_any_element(),
-            "plugins" => self.page_plugins(c, window, cx).into_any_element(),
-            "skills" => self.page_skills(c, window, cx).into_any_element(),
-            "winfer-code" => self.page_harness(c, window, cx).into_any_element(),
-            "mobile" => self.page_mobile(c, window, cx).into_any_element(),
-            "usage" => self.page_usage(c, cx).into_any_element(),
-            _ => div().text_xs().text_color(c.subtle).child(format!("The {label} page isn't in the native build yet.")).into_any_element(),
+        let search_box = div().flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_1().rounded_md().bg(c.app).border_1().border_color(c.border_strong).text_color(c.subtle)
+            .child(Icon::new(IconName::Search).size(px(13.0)))
+            .child(div().flex_1().min_w_0().child(Input::new(&search).appearance(false).text_size(px(12.5))))
+            .when(searching, |d| d.child(div().id("settings-search-clear").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(s) = this.settings.as_ref() {
+                        s.search.update(cx, |i, cx| i.set_value("", window, cx));
+                    }
+                    cx.notify();
+                }))
+                .child(Icon::new(IconName::X).size(px(12.0)))));
+        let version = self.updates.version.clone();
+        let update = self.updates.available.as_ref().map(|a| a.version.clone());
+        let foot = div().flex().items_center().justify_between().gap_2().border_t_1().border_color(c.border).px_3p5().py_2p5().text_size(px(11.0)).text_color(c.subtle)
+            .child(div().font_family(mono.clone()).child(format!("winfer {version}")))
+            .when_some(update, |d, v| d.child(div().id("settings-update-pill").flex().items_center().gap_1().rounded_full().px_2().py_0p5().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).cursor_pointer()
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(format!("winfer {v} is available")).build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| this.open_settings_page("updates", window, cx)))
+                .child(Icon::new(IconName::Download).size(px(11.0))).child("Update")));
+        let nav = div().w(px(232.0)).flex_shrink_0().flex().flex_col().border_r_1().border_color(c.border).bg(c.panel)
+            .child(div().flex().flex_col().gap_3().px_3().pt_3p5().pb_1()
+                .child(div().flex().items_center().gap_2().px_1().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg)
+                    .child(Icon::new(IconName::Settings).size(px(15.0)).text_color(c.accent)).child("Settings"))
+                .child(search_box))
+            .child(list)
+            .child(foot);
+
+        let (head, content): (Div, AnyElement) = if searching {
+            let head = div().flex().flex_col().gap_0p5()
+                .child(div().text_size(px(11.0)).text_color(c.subtle).child("SEARCH"))
+                .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("Results for “{query}”")));
+            let body = if hits.is_empty() {
+                div().flex().flex_col().items_center().gap_1p5().pt(px(80.0)).text_color(c.subtle)
+                    .child(Icon::new(IconName::Search).size(px(22.0)))
+                    .child(div().text_size(px(13.0)).text_color(c.fg).child(format!("No settings match “{query}”")))
+                    .child(div().text_size(px(12.0)).child("Try “theme”, “model” or “approve”."))
+            } else {
+                let mut rows = div().flex().flex_col().gap_1();
+                for (n, (pid, plabel, words)) in hits.into_iter().enumerate() {
+                    let (pg, (_, page_label, page_icon, _)) = page_info(pid);
+                    let crumb = if plabel == page_label { pg.to_string() } else { format!("{pg} › {page_label}") };
+                    rows = rows.child(
+                        div().id(SharedString::from(format!("hit-{n}"))).flex().items_center().gap_3().rounded_lg().px_3().py_2p5().cursor_pointer().border_1().border_color(gpui_kit::transparent_black())
+                            .hover(move |d| d.bg(c.panel).border_color(c.border))
+                            .on_click(cx.listener(move |this, _, window, cx| this.open_settings_page(pid, window, cx)))
+                            .child(div().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(c.hover).text_color(c.muted).child(Icon::new(page_icon).size(px(14.0))))
+                            .child(div().flex_1().min_w_0().flex().flex_col()
+                                .child(div().text_size(px(13.0)).text_color(c.fg).child(plabel))
+                                .when(!words.is_empty(), |d| d.child(div().truncate().text_size(px(12.0)).text_color(c.subtle).child(words))))
+                            .child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(crumb)),
+                    );
+                }
+                rows
+            };
+            (head, body.into_any_element())
+        } else {
+            let head = div().flex().items_start().gap_3p5()
+                .child(div().size(px(38.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).child(Icon::new(icon).size(px(18.0))))
+                .child(div().flex().flex_col().gap_0p5().min_w_0()
+                    .child(div().text_size(px(11.0)).text_color(c.subtle).child(group.to_uppercase()))
+                    .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(label))
+                    .child(div().text_size(px(12.5)).text_color(c.muted).child(description)));
+            let content: AnyElement = match id {
+                "general" => self.page_general(c, cx).into_any_element(),
+                "theme" => self.page_theme(c, cx).into_any_element(),
+                "agents" => self.page_agents(c, window, cx).into_any_element(),
+                "data" => self.page_data(c, cx).into_any_element(),
+                "diagnostics" => self.page_diagnostics(c, window, cx).into_any_element(),
+                "accounts" => self.page_accounts(c, window, cx).into_any_element(),
+                "voice" => self.page_voice(c, window, cx).into_any_element(),
+                "ai" => self.page_ai(c, window, cx).into_any_element(),
+                "plugins" => self.page_plugins(c, window, cx).into_any_element(),
+                "skills" => self.page_skills(c, window, cx).into_any_element(),
+                "winfer-code" => self.page_harness(c, window, cx).into_any_element(),
+                "mobile" => self.page_mobile(c, window, cx).into_any_element(),
+                "usage" => self.page_usage(c, cx).into_any_element(),
+                "updates" => self.page_updates(c, cx).into_any_element(),
+                _ => div().text_xs().text_color(c.subtle).child(format!("The {label} page isn't in the native build yet.")).into_any_element(),
+            };
+            (head, content)
         };
         Some(
-            div().id("settings-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
+            div().id("settings-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.55)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.settings_open = false)))
                 .child(
-                    div().id("settings").w(px(820.0)).h(px(620.0)).flex().overflow_hidden().rounded_xl().border_1().border_color(c.border_strong).bg(c.raised)
+                    div().id("settings").w(px(1000.0)).max_w(relative(0.94)).h(px(700.0)).max_h(relative(0.9)).flex().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(nav)
                         .child(
-                            div().flex_1().min_w_0().flex().flex_col()
+                            div().relative().flex_1().min_w_0().flex().flex_col()
+                                .child(div().flex_shrink_0().pl_8().pr(px(96.0)).pt_6().pb_4().child(head))
                                 .child(
-                                    div().h(px(48.0)).flex_shrink_0().flex().items_center().border_b_1().border_color(c.border).px_6()
-                                        .child(div().flex_1().text_sm().child(label))
-                                        .child(
-                                            div().id("settings-close").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
-                                                .on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.settings_open = false)))
-                                                .child(Icon::new(IconName::X).size(px(14.0)).text_color(c.subtle)),
-                                        ),
+                                    div().id("settings-close").absolute().top(px(16.0)).right(px(16.0)).flex().items_center().gap_1p5().rounded_md().px_1p5().py_1().cursor_pointer().text_color(c.subtle)
+                                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                                        .on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.settings_open = false)))
+                                        .child(Icon::new(IconName::X).size(px(15.0)))
+                                        .child(div().rounded_sm().border_1().border_color(c.border).px_1().font_family(mono.clone()).text_size(px(10.0)).child("esc")),
                                 )
-                                .child(div().id(SharedString::from(format!("settings-page-{id}"))).flex_1().min_h_0().overflow_y_scroll().px_6().py_5().child(content)),
+                                .child(div().id(SharedString::from(format!("settings-page-{id}-{searching}"))).flex_1().min_h_0().overflow_y_scroll().px_8().pt_1().pb_10().child(content)),
                         ),
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Development aid: open settings with this search typed in.
+    #[cfg(debug_assertions)]
+    pub(super) fn settings_ui_for_dev(&mut self, query: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui(window, cx);
+        if let Some(s) = self.settings.as_ref() {
+            s.search.update(cx, |i, cx| i.set_value(query, window, cx));
+        }
+    }
+
+    /// Opens a settings page (from the navigation or a search result) and clears the search.
+    fn open_settings_page(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(s) = self.settings.as_mut() {
+            s.open_select = None;
+            s.search.update(cx, |i, cx| i.set_value("", window, cx));
+        }
+        self.update_state(cx, |s| s.settings_page = page.to_string());
     }
 
     /// The shortcut recording in the shortcut sheet: true if the key went to it.
@@ -845,4 +1078,27 @@ fn chrono_date() -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[cfg(test)]
+mod settings_search_tests {
+    use super::{GROUPS, SEARCH_INDEX, search_settings};
+
+    #[test]
+    fn every_index_entry_is_on_a_page() {
+        let pages: Vec<&str> = GROUPS.iter().flat_map(|(_, p)| p.iter().map(|p| p.0)).collect();
+        for (page, label, _) in SEARCH_INDEX {
+            assert!(pages.contains(page), "{label} points to unknown page {page}");
+        }
+    }
+
+    #[test]
+    fn search_finds_settings_by_label_and_words() {
+        assert!(search_settings("approve").iter().any(|h| h.0 == "agents"));
+        assert!(search_settings("nebula").iter().any(|h| h.0 == "updates"));
+        assert_eq!(search_settings("text size")[0].1, "Text size");
+        assert!(search_settings("   ").is_empty());
+        assert_eq!(search_settings("auto-approve").iter().filter(|h| h.0 == "agents").count(), 1);
+        assert!(search_settings("zzz-nothing").is_empty());
+    }
 }

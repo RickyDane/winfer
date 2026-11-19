@@ -1,6 +1,7 @@
 //! The sidebar (port of `src/features/workspaces/Sidebar.tsx`, `ActivityFeed.tsx`,
-//! `sidebarMenus.ts` and `sidebarTooltips.ts`): Sessions, Review and History, the workspaces
-//! with their sessions, the "Latest" feed and the footer.
+//! `sidebarMenus.ts` and `sidebarTooltips.ts`), Graphite layout: search and the Sessions ·
+//! Review · History control, agents that need you, the workspaces with their sessions, the
+//! "Latest" feed and the footer. Collapsed, it is a 60 px icon rail.
 
 use super::commands::{Command, PaneRef, ViewTarget};
 use super::menu::MenuItem;
@@ -293,12 +294,19 @@ impl Root {
         lines.join("\n")
     }
 
+    /// The agent's brand mark on a rounded tile, with its status as a dot in the corner.
+    fn agent_tile(provider: &str, status: AgentStatus, ring: Hsla, c: Colors) -> Div {
+        let shell = provider == "shell";
+        div().relative().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(c.hover)
+            .child(crate::ui::code_pickers::mark(c, provider, 14.0, 1.0))
+            .when(!shell, |d| d.child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(8.0)).rounded_full().bg(status_color(status, &c)).border_2().border_color(ring)))
+    }
+
     fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let s = self.state.read(cx);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id) && s.active_workspace_id == pane.workspace_id;
         let label = s.pane_label(pane);
-        let progress = s.progress.get(&pane.id).filter(|e| pane.provider != "shell" && e.percent.is_some()).cloned();
-        let percent = progress.as_ref().and_then(|e| e.percent).filter(|_| pane.status != AgentStatus::Idle);
+        let percent = s.progress.get(&pane.id).filter(|_| pane.provider != "shell" && pane.status != AgentStatus::Idle).and_then(|e| e.percent);
         let branch = pane.worktree.as_ref().map(|t| t.branch.trim_start_matches("winfer/").to_string());
         let doing = if pane.status == AgentStatus::NeedsInput { Some("Needs your input".to_string()) } else { s.progress.get(&pane.id).and_then(|e| e.step.clone()) };
         let tooltip = self.pane_tooltip(pane, cx);
@@ -309,20 +317,27 @@ impl Root {
         let drag = DraggedRow { id: pane.id.clone(), label: label.clone(), workspace: false, c };
         let drop_ws = pane.workspace_id.clone();
         let emphasized = pane.unseen || focused;
-        let mut detail = div().flex().items_center().gap_1().pl(px(14.0)).text_size(px(11.0)).text_color(c.subtle).min_w_0();
+        let meta = match status {
+            AgentStatus::NeedsInput => Some(("needs you".to_string(), c.warning)),
+            AgentStatus::Done => Some(("done".to_string(), c.success)),
+            AgentStatus::Error => Some(("error".to_string(), c.danger)),
+            _ => percent.map(|n| (format!("{n}%"), c.subtle)),
+        };
+        let mut detail = div().flex().items_center().gap_1().mt(px(1.0)).text_size(px(11.0)).text_color(c.subtle).min_w_0();
         if let Some(b) = &branch {
-            detail = detail.child(div().flex().items_center().gap_1().flex_shrink(1.0).min_w_0().font_family(mono).text_size(px(10.0))
+            detail = detail.child(div().flex().items_center().gap_1().flex_shrink(1.0).min_w_0().font_family(mono.clone()).text_size(px(10.5))
                 .child(Icon::new(IconName::GitBranch).size(px(10.0)))
                 .child(div().truncate().child(b.clone())));
         }
         if branch.is_some() && doing.is_some() {
-            detail = detail.child("·");
+            detail = detail.child(div().opacity(0.6).child("·"));
         }
         if let Some(d) = &doing {
             detail = detail.child(div().flex_1().min_w_0().truncate().when(status == AgentStatus::NeedsInput, |x| x.text_color(c.warning)).child(d.clone()));
         }
-        let row = div().id(SharedString::from(format!("row-{}", pane.id))).relative().ml_2().rounded_md().px_2().py_1p5().cursor_pointer()
-            .text_size(px(13.0))
+        let ring = if focused { c.active } else { c.panel };
+        let row = div().id(SharedString::from(format!("row-{}", pane.id))).flex().items_center().gap(px(9.0)).rounded_md().pl_2().pr_1p5().py(px(6.0)).cursor_pointer()
+            .text_size(px(12.5))
             .when(focused, |d| d.bg(c.active).text_color(c.fg))
             .when(!focused, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
             .when(pane.archived && !focused, |d| d.opacity(0.7))
@@ -344,18 +359,17 @@ impl Root {
                 let title = menu_pane.worktree.as_ref().map_or(menu_pane.cwd.clone(), |t| t.branch.clone());
                 this.open_menu(e.position, Some(title), items, cx);
             }))
-            .when(focused, |d| d.child(div().absolute().top(px(6.0)).bottom(px(6.0)).left(px(-9.0)).w(px(2.0)).rounded_full().bg(c.accent)))
+            .child(Self::agent_tile(&pane.provider, status, ring, c))
             .child(
-                div().flex().items_center().gap_2()
-                    .child(div().size_1p5().flex_shrink_0().rounded_full().bg(status_color(status, &c)))
-                    .child(match renaming {
-                        Some(input) => div().flex_1().child(Input::new(&input)).into_any_element(),
-                        None => div().flex_1().min_w_0().truncate().when(emphasized, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM)).child(label).into_any_element(),
-                    })
-                    .when_some(percent, |d, n| d.child(div().flex_shrink_0().text_size(px(10.0)).text_color(if n == 100 { c.success } else { c.subtle }).child(format!("{n}%")))),
-            )
-            .when(branch.is_some() || doing.is_some(), |d| d.child(detail))
-            .when_some(progress, |d, e| d.child(div().pl(px(14.0)).mt_1p5().child(progress::progress_bar(Some(&e), status, &c).h(px(3.0)).bg(c.hover))));
+                div().flex_1().min_w_0().flex().flex_col()
+                    .child(div().flex().items_center().gap_1p5()
+                        .child(match renaming {
+                            Some(input) => div().flex_1().child(Input::new(&input)).into_any_element(),
+                            None => div().flex_1().min_w_0().truncate().when(emphasized, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM)).child(label).into_any_element(),
+                        })
+                        .when_some(meta, |d, (text, color)| d.child(div().flex_shrink_0().text_size(px(10.5)).text_color(color).when(percent.is_some() && status == AgentStatus::Working, |d| d.font_family(mono.clone())).child(text))))
+                    .when(branch.is_some() || doing.is_some(), |d| d.child(detail)),
+            );
         if !sortable {
             return row.into_any_element();
         }
@@ -379,44 +393,104 @@ impl Root {
             .into_any_element()
     }
 
-    fn nav_item(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, c: Colors) -> Stateful<Div> {
-        div().id(id).flex().items_center().gap_2p5().rounded_md().px_2p5().py_1p5().text_size(px(13.0)).text_color(c.muted).cursor_pointer()
+    /// One segment of the Sessions · Review · History control.
+    fn nav_tab(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, c: Colors) -> Stateful<Div> {
+        div().id(id).flex_1().min_w_0().h(px(28.0)).flex().items_center().justify_center().gap_1p5().rounded(px(6.0)).text_size(px(12.0)).text_color(c.muted).cursor_pointer()
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .child(Icon::new(icon).size(px(14.0)))
-            .child(div().flex_1().child(label))
+            .child(div().child(label))
+    }
+
+    fn count_badge(n: usize, c: Colors) -> Div {
+        div().min_w(px(16.0)).h(px(16.0)).px_1().flex().items_center().justify_center().rounded_full().bg(c.accent).text_size(px(10.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.on_accent).child(n.to_string())
+    }
+
+    /// Agents waiting for you, in every workspace.
+    fn waiting_panes(&self, cx: &App) -> Vec<Pane> {
+        self.state.read(cx).all_panes().filter(|p| !p.archived && p.provider != "shell" && p.status == AgentStatus::NeedsInput).cloned().collect()
+    }
+
+    fn open_reviews(&self, cx: &App) -> usize {
+        let s = self.state.read(cx);
+        let everywhere = s.view() == View::Overview;
+        self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open && (everywhere || r.workspace_id == s.active_workspace_id)).count()
     }
 
     pub(super) fn render_sidebar(&mut self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let c = *c;
         let s = self.state.read(cx);
-        let keys = |o: Overlay| commands::keys_for(&Command::Overlay { overlay: o, provider: None }, s).map_or(String::new(), |k| format!(" ({k})"));
-        let (progress_keys, review_keys, history_keys) = (keys(Overlay::Progress), keys(Overlay::Review), keys(Overlay::History));
-        let settings_keys = commands::keys_for(&Command::Settings(None), s).map_or(String::new(), |k| format!(" ({k})"));
-        let working: Vec<&Pane> = s.all_panes().filter(|p| p.provider != "shell" && p.status == AgentStatus::Working).collect();
-        let known: Vec<u32> = working.iter().filter_map(|p| s.progress.get(&p.id).and_then(|e| e.percent)).collect();
-        let average = (!known.is_empty()).then(|| (known.iter().sum::<u32>() as f32 / known.len() as f32).round() as u32);
-        let working_count = working.len();
-        let everywhere = s.view() == View::Overview;
+        let keys = |cmd: Command| commands::keys_for(&cmd, s);
+        let overlay = |o: Overlay| Command::Overlay { overlay: o, provider: None };
+        let with_keys = |label: &str, k: Option<String>| k.map_or(label.to_string(), |k| format!("{label} ({k})"));
+        let (progress_tip, review_tip, history_tip) = (
+            with_keys("Session progress", keys(overlay(Overlay::Progress))),
+            with_keys("Review finished work", keys(overlay(Overlay::Review))),
+            with_keys("Merged features", keys(overlay(Overlay::History))),
+        );
+        let settings_tip = with_keys("Settings", keys(Command::Settings(None)));
+        let palette_keys = keys(Command::Palette(None)).unwrap_or_default();
+        let new_keys = keys(overlay(Overlay::NewPane)).unwrap_or_default();
         let active_ws = s.active_workspace_id.clone();
-        let review_count = self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open && (everywhere || r.workspace_id == active_ws)).count();
+        let review_count = self.open_reviews(cx);
         let mono = crate::fonts::mono(cx);
-        let sessions = self.nav_item("nav-sessions", IconName::Activity, "Sessions", format!("Session progress{progress_keys}"), c)
-            .when(working_count > 0, |d| d.child(div().flex().items_center().gap_1p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle)
-                .child(div().size_1p5().rounded_full().bg(c.success))
-                .child(working_count.to_string())
-                .when_some(average, |d, a| d.child(format!("· {a}%")))))
+
+        // Search and the three views.
+        let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app).border_1().border_color(c.border)
+            .text_size(px(12.5)).text_color(c.subtle).cursor_pointer().hover(move |d| d.border_color(c.border_strong).text_color(c.muted))
+            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx)))
+            .child(Icon::new(IconName::Search).size(px(14.0)))
+            .child(div().flex_1().child("Search or jump to…"))
+            .when(!palette_keys.is_empty(), |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.border).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
+        let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
-        let review = self.nav_item("nav-review", IconName::Inbox, "Review", format!("Review finished work{review_keys}"), c)
-            .when(review_count > 0, |d| d.child(div().min_w(px(18.0)).rounded_full().bg(c.accent).px_1p5().text_center().text_size(px(10.5)).text_color(c.on_accent).child(review_count.to_string())))
+        let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, c)
+            .when(review_count > 0, |d| d.child(Self::count_badge(review_count, c)))
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx)));
-        let history = self.nav_item("nav-history", IconName::Undo2, "History", format!("Merged features{history_keys}"), c)
+        let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
+        let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2().border_b_1().border_color(c.border)
+            .child(search)
+            .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).border_1().border_color(c.border).child(sessions).child(review).child(history));
+
+        // Needs you: approve or open waiting agents without finding their pane.
+        let waiting = self.waiting_panes(cx);
+        let needs = (!waiting.is_empty()).then(|| {
+            let tint = Hsla { a: 0.06, ..c.warning };
+            let mut sec = div().mt_2p5().p_1().rounded_lg().bg(tint)
+                .child(div().flex().items_center().gap(px(7.0)).h(px(26.0)).px_1p5().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.warning)
+                    .child(div().size(px(7.0)).rounded_full().bg(c.warning))
+                    .child("Needs you")
+                    .child(div().font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone()).child(waiting.len().to_string())));
+            let s = self.state.read(cx);
+            for p in &waiting {
+                let ask = s.progress.get(&p.id).and_then(|e| e.step.clone()).unwrap_or_else(|| "Waiting for your input".into());
+                let (focus, approve) = (p.id.clone(), p.id.clone());
+                sec = sec.child(
+                    div().id(SharedString::from(format!("need-{}", p.id))).flex().items_center().gap(px(9.0)).rounded_md().px_1p5().py(px(7.0)).cursor_pointer()
+                        .hover(move |d| d.bg(Hsla { a: 0.08, ..c.warning }))
+                        .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
+                        .child(Self::agent_tile(&p.provider, p.status, c.panel, c))
+                        .child(div().flex_1().min_w_0().flex().flex_col()
+                            .child(div().truncate().text_size(px(12.5)).text_color(c.fg).child(s.pane_label(p)))
+                            .child(div().truncate().text_size(px(11.5)).text_color(c.muted).child(ask)))
+                        .child(div().id(SharedString::from(format!("approve-{}", p.id))).flex_shrink_0().h(px(24.0)).px_2p5().flex().items_center().rounded_md().bg(c.accent)
+                            .text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9))
+                            .tooltip(|window, cx| Tooltip::new("Approve what it's asking (sends its approve key)").build(window, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.execute(Command::Approve(PaneRef::Id(approve.clone())), window, cx);
+                            }))
+                            .child("Approve")),
+                );
+            }
+            sec
+        });
 
         let s = self.state.read(cx);
         let workspaces = s.workspaces.clone();
         let expanded_ids = s.expanded_workspaces.clone();
-        let mut list = div().flex().flex_col();
+        let mut list = div().flex().flex_col().gap_px();
         for (i, ws) in workspaces.iter().enumerate() {
             let active = ws.id == active_ws;
             let expanded = expanded_ids.contains(&ws.id);
@@ -431,22 +505,12 @@ impl Root {
             tip.push("Double-click to open · drag to reorder".into());
             let tip = tip.join("\n");
             let (toggle, menu_ws, hover_dir) = (ws.id.clone(), ws.clone(), ws.root_dir.clone());
-            let mut dots = div().flex().items_center().gap_1();
-            if agents.is_empty() {
-                if !live.is_empty() {
-                    dots = dots.child(div().text_size(px(11.0)).text_color(c.subtle).child(live.len().to_string()));
-                }
-            } else {
-                for p in agents.iter().take(5) {
-                    dots = dots.child(div().size_1p5().rounded_full().bg(status_color(p.status, &c)));
-                }
-                if agents.len() > 5 {
-                    dots = dots.child(div().text_size(px(10.0)).text_color(c.subtle).child(format!("+{}", agents.len() - 5)));
-                }
-            }
-            let header = div().id(SharedString::from(format!("ws-{}", ws.id))).flex().items_center().gap_2p5().rounded_lg().px_2().py_1p5().cursor_pointer().text_size(px(13.0))
-                .when(active, |d| d.text_color(c.fg).font_weight(FontWeight::SEMIBOLD))
-                .when(!active, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+            let count = |st: AgentStatus| agents.iter().filter(|p| p.status == st).count();
+            let (working, waiting_here, done) = (count(AgentStatus::Working), count(AgentStatus::NeedsInput), count(AgentStatus::Done));
+            let header = div().id(SharedString::from(format!("ws-{}", ws.id))).flex().items_center().gap(px(9.0)).rounded_md().px_1p5().h(px(32.0)).cursor_pointer().text_size(px(13.0))
+                .when(active || expanded, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM))
+                .when(!(active || expanded), |d| d.text_color(c.muted))
+                .hover(move |d| d.bg(c.hover).text_color(c.fg))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered {
@@ -478,13 +542,31 @@ impl Root {
                         }
                     });
                 }))
-                .child(div().size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(Hsla { a: 0.18, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).when(!active, |d| d.opacity(0.8)).child(monogram(&ws.name)))
-                .child(div().flex_1().truncate().child(ws.name.clone()))
-                .when(!expanded, |d| d.child(dots))
+                .child(div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name)))
+                .child(div().flex_1().min_w_0().truncate().child(ws.name.clone()))
+                .when(!expanded && !live.is_empty(), |d| d.child(div().text_size(px(10.5)).font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone())
+                    .child(if agents.is_empty() { format!("{}", live.len()) } else { format!("{} agent{}", agents.len(), if agents.len() == 1 { "" } else { "s" }) })))
                 .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(13.0)).text_color(c.subtle));
-            let mut group = div().relative().mb_1().rounded_lg().when(active, |d| d.bg(c.raised).border_1().border_color(c.border)).child(header);
+            let mut group = div().relative().child(header);
+            if !expanded && !agents.is_empty() {
+                let mut parts: Vec<AnyElement> = vec![div().child(format!("{working} working")).into_any_element()];
+                if waiting_here > 0 {
+                    parts.push(div().text_color(c.warning).font_weight(FontWeight::MEDIUM).child(format!("{waiting_here} need{} you", if waiting_here == 1 { "s" } else { "" })).into_any_element());
+                }
+                if done > 0 {
+                    parts.push(div().text_color(c.success).child(format!("{done} done")).into_any_element());
+                }
+                let mut line = div().flex().flex_wrap().gap_1().pl(px(37.0)).pb_1p5().mt(px(-4.0)).text_size(px(11.0)).text_color(c.subtle);
+                for (k, part) in parts.into_iter().enumerate() {
+                    if k > 0 {
+                        line = line.child("·");
+                    }
+                    line = line.child(part);
+                }
+                group = group.child(line);
+            }
             if expanded {
-                let mut panes = div().relative().pr_1().pb_1p5().pl(px(17.0)).child(div().absolute().top_0().bottom(px(10.0)).left(px(17.0)).w(px(1.0)).bg(c.border));
+                let mut panes = div().flex().flex_col().gap_px().pt_0p5().pb_1p5();
                 let live: Vec<Pane> = ws.panes.iter().filter(|p| !p.archived).cloned().collect();
                 let archived: Vec<Pane> = ws.panes.iter().filter(|p| p.archived).cloned().collect();
                 for (j, p) in live.iter().enumerate() {
@@ -494,7 +576,7 @@ impl Root {
                     let showing = self.sidebar.show_archived.contains(&ws.id);
                     let flip = ws.id.clone();
                     panes = panes.child(
-                        div().id(SharedString::from(format!("archived-{}", ws.id))).ml_2().flex().items_center().gap_2().rounded_md().px_2().py_1().text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
+                        div().id(SharedString::from(format!("archived-{}", ws.id))).flex().items_center().gap(px(9.0)).rounded_md().pl(px(13.0)).pr_2().h(px(28.0)).text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
                             .hover(move |d| d.bg(c.hover).text_color(c.fg))
                             .tooltip(move |window, cx| Tooltip::new(if showing { "Hide archived sessions" } else { "Show archived sessions" }).build(window, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -516,17 +598,28 @@ impl Root {
                 if let Some(list) = self.render_worktree_list(ws, c, cx) {
                     panes = panes.child(list);
                 }
-                if ws.panes.is_empty() {
-                    let keys = commands::keys_for(&Command::Overlay { overlay: Overlay::NewPane, provider: None }, self.state.read(cx)).unwrap_or_default();
-                    panes = panes.child(div().ml_2().px_2().py_1p5().text_size(px(12.0)).text_color(c.subtle).child(format!("No sessions yet — {keys} starts one")));
-                }
+                let target = ws.id.clone();
+                let new_keys = new_keys.clone();
+                panes = panes.child(
+                    div().id(SharedString::from(format!("new-agent-{}", ws.id))).group("new-agent").flex().items_center().gap(px(9.0)).rounded_md().pl(px(13.0)).pr_2().h(px(30.0)).text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
+                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if this.state.read(cx).active_workspace_id != target {
+                                this.execute(Command::WorkspaceSwitch(target.clone()), window, cx);
+                            }
+                            this.execute(Command::Overlay { overlay: Overlay::NewPane, provider: None }, window, cx);
+                        }))
+                        .child(Icon::new(IconName::Plus).size(px(12.0)))
+                        .child(div().flex_1().child(if ws.panes.is_empty() { "No agents yet · start one" } else { "New agent" }))
+                        .when(!new_keys.is_empty(), |d| d.child(div().invisible().group_hover("new-agent", |d| d.visible()).font_family(mono.clone()).text_size(px(10.0)).child(new_keys))),
+                );
                 group = group.child(panes);
             }
             list = list.child(group);
         }
         let any_expanded = !expanded_ids.is_empty();
-        let label = div().flex().h(px(28.0)).items_center().justify_between().pr_1().pl_2p5()
-            .child(div().text_size(px(10.5)).text_color(c.subtle).child("WORKSPACES"))
+        let label = div().flex().h(px(26.0)).mt_2p5().items_center().justify_between().pl_1p5()
+            .child(div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("Workspaces"))
             .child(div().flex().items_center()
                 .child(div().id("collapse-all").rounded_sm().p_1().text_color(c.subtle).when(!any_expanded, |d| d.opacity(0.4))
                     .when(any_expanded, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)))
@@ -539,39 +632,114 @@ impl Root {
                     .child(Icon::new(IconName::Plus).size(px(13.0)))));
 
         let feed = self.render_activity_feed(&active_ws, c, cx);
+        let footer = self.render_sidebar_footer(false, &settings_tip, c, cx);
+        let width = px(self.state.read(cx).sidebar_width as f32);
+        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+            .child(top)
+            .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_3().children(needs).child(label).child(list))
+            .children(feed)
+            .child(footer)
+    }
+
+    /// Logo, version, the update button (only when one is out), light/dark and settings.
+    fn render_sidebar_footer(&self, rail: bool, settings_tip: &str, c: Colors, cx: &mut Context<Self>) -> Div {
+        let mono = crate::fonts::mono(cx);
         let theme_id = self.state.read(cx).theme.clone();
         let def = theme::theme_by_id(&theme_id);
         let pair = theme::theme_by_id(&def.pair).name.clone();
         let dark = def.mode == "dark";
-        let icon_button = move |id: &'static str| div().id(id).rounded_md().p_1p5().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
-        let footer = div().flex().items_center().gap_1().border_t_1().border_color(c.border).px_3().py_2p5()
-            .child(div().flex_1().min_w_0().flex().items_center().gap_2p5()
-                .child(img(LOGO.clone()).size(px(28.0)).flex_shrink_0())
-                .child(div().flex().flex_col().min_w_0()
-                    .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("winfer"))
-                    .child(div().truncate().font_family(mono).text_size(px(10.0)).text_color(c.subtle).child(format!("v{}", env!("CARGO_PKG_VERSION"))))))
-            .child(icon_button("theme-toggle")
-                .tooltip(move |window, cx| Tooltip::new(format!("Switch to {pair} (more themes in Settings)")).build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    let next = theme::theme_by_id(&this.state.read(cx).theme).pair.clone();
-                    this.execute(Command::Theme(next), window, cx);
-                }))
-                .child(Icon::new(if dark { IconName::Sun } else { IconName::Moon }).size(px(14.0))))
-            .child(icon_button("usage-button")
-                .tooltip(|window, cx| Tooltip::new("Usage").build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(Some("usage".into())), window, cx)))
-                .child(Icon::new(IconName::ChartColumn).size(px(14.0))))
-            .child(icon_button("settings-button")
-                .tooltip(move |window, cx| Tooltip::new(format!("Settings{settings_keys}")).build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(None), window, cx)))
-                .child(Icon::new(IconName::Settings).size(px(14.0))));
+        let update = self.updates.available.as_ref().map(|a| a.version.clone());
+        let settings_tip = settings_tip.to_string();
+        let icon_button = move |id: &'static str| div().id(id).size(px(26.0)).flex().items_center().justify_center().rounded_md().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
+        let update_button = update.map(|version| {
+            div().id("sidebar-update").relative().size(px(24.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).cursor_pointer()
+                .hover(move |d| d.bg(Hsla { a: 0.24, ..c.accent }))
+                .tooltip(move |window, cx| Tooltip::new(format!("Update to winfer {version}")).build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ShowReleaseNotes(true), window, cx)))
+                .child(Icon::new(IconName::Download).size(px(12.0)))
+                .child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent).border_2().border_color(c.panel))
+        });
+        let theme_button = icon_button("theme-toggle")
+            .tooltip(move |window, cx| Tooltip::new(format!("Switch to {pair} (more themes in Settings)")).build(window, cx))
+            .on_click(cx.listener(|this, _, window, cx| {
+                let next = theme::theme_by_id(&this.state.read(cx).theme).pair.clone();
+                this.execute(Command::Theme(next), window, cx);
+            }))
+            .child(Icon::new(if dark { IconName::Sun } else { IconName::Moon }).size(px(14.0)));
+        let settings_button = icon_button("settings-button")
+            .tooltip(move |window, cx| Tooltip::new(settings_tip.clone()).build(window, cx))
+            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(None), window, cx)))
+            .child(Icon::new(IconName::Settings).size(px(14.0)));
+        let logo = div().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(Hsla { a: 0.14, ..c.accent }).child(img(LOGO.clone()).size(px(18.0)));
+        if rail {
+            return div().flex().flex_col().items_center().gap_1().border_t_1().border_color(c.border).py_2()
+                .child(logo).children(update_button).child(settings_button);
+        }
+        div().flex().items_center().gap_2().border_t_1().border_color(c.border).pl_3().pr_2().py_2()
+            .child(logo)
+            .child(div().flex().flex_col().min_w_0()
+                .child(div().text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("winfer"))
+                .child(div().truncate().font_family(mono).text_size(px(10.0)).text_color(c.subtle).child(env!("CARGO_PKG_VERSION"))))
+            .children(update_button)
+            .child(div().flex_1())
+            .child(theme_button)
+            .child(settings_button)
+    }
 
-        let width = px(self.state.read(cx).sidebar_width as f32);
-        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel)
-            .child(div().flex().flex_col().gap_px().p_2().child(sessions).child(review).child(history))
-            .child(div().mx_3().border_t_1().border_color(c.border))
-            .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().py_2().child(label).child(list))
-            .children(feed)
+    /// The collapsed sidebar: a 60 px icon rail with the same sections.
+    pub(super) fn render_sidebar_rail(&mut self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let c = *c;
+        let s = self.state.read(cx);
+        let settings_tip = commands::keys_for(&Command::Settings(None), s).map_or("Settings".to_string(), |k| format!("Settings ({k})"));
+        let review_count = self.open_reviews(cx);
+        let rail_button = move |id: SharedString, icon: IconName, tip: String| div().id(id).relative().size(px(36.0)).flex().items_center().justify_center().rounded_md().text_color(c.muted).cursor_pointer()
+            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+            .child(Icon::new(icon).size(px(15.0)));
+        let mut top = div().flex().flex_col().items_center().gap_1().pt_2p5().pb_2().border_b_1().border_color(c.border)
+            .child(rail_button("rail-search".into(), IconName::Search, "Search or jump to…".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx))))
+            .child(rail_button("rail-sessions".into(), IconName::Activity, "Sessions".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx))));
+        top = top.child(rail_button("rail-review".into(), IconName::Inbox, "Review".into())
+            .when(review_count > 0, |d| d.child(div().absolute().top(px(2.0)).right(px(0.0)).child(Self::count_badge(review_count, c))))
+            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx))));
+        top = top.child(rail_button("rail-history".into(), IconName::Clock, "History".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx))));
+
+        let tile_button = |this: &Self, p: &Pane, ring: Hsla, cx: &mut Context<Self>| {
+            let (focus, tip) = (p.id.clone(), this.state.read(cx).pane_label(p));
+            div().id(SharedString::from(format!("rail-{}", p.id))).p(px(5.0)).rounded_md().cursor_pointer().hover(move |d| d.bg(c.hover))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
+                .child(Self::agent_tile(&p.provider, p.status, ring, c))
+        };
+        let mut body = div().flex().flex_col().items_center().gap_1().py_2();
+        let waiting = self.waiting_panes(cx);
+        if !waiting.is_empty() {
+            let mut sec = div().flex().flex_col().items_center().w(px(44.0)).py_1().rounded_lg().bg(Hsla { a: 0.06, ..c.warning });
+            for p in &waiting {
+                sec = sec.child(tile_button(self, p, c.panel, cx));
+            }
+            body = body.child(sec);
+        }
+        let s = self.state.read(cx);
+        let workspaces = s.workspaces.clone();
+        let focused = s.focused_pane_id.clone();
+        for ws in &workspaces {
+            let color = hsla(name_hue(&ws.name) / 360.0, 0.65, 0.62, 1.0);
+            let (switch, name) = (ws.id.clone(), ws.name.clone());
+            body = body.child(div().w(px(36.0)).mt_1().border_t_1().border_color(c.border))
+                .child(div().id(SharedString::from(format!("rail-ws-{}", ws.id))).size(px(36.0)).flex().items_center().justify_center().rounded_md().cursor_pointer().hover(move |d| d.bg(c.hover))
+                    .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::WorkspaceSwitch(switch.clone()), window, cx)))
+                    .child(div().size(px(22.0)).flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name))));
+            for p in ws.panes.iter().filter(|p| !p.archived && p.provider != "shell") {
+                let on = focused.as_deref() == Some(&p.id);
+                body = body.child(tile_button(self, p, if on { c.active } else { c.panel }, cx).when(on, |d| d.bg(c.active)));
+            }
+        }
+        let footer = self.render_sidebar_footer(true, &settings_tip, c, cx);
+        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+            .child(top)
+            .child(div().id("sidebar-rail-list").flex_1().min_h_0().overflow_y_scroll().child(body))
             .child(footer)
     }
 

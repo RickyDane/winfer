@@ -383,6 +383,24 @@ impl Root {
                         s.add_pane(provider, AddPane { prompt: std::env::var("WINFER_NATIVE_PROMPT").ok(), ..AddPane::default() });
                     }
                 }
+                // Development aid: give the spawned panes these statuses (working:64:Writing tests,
+                // needs::Run prisma migrate?, done:100, …) to check how the UI shows them.
+                #[cfg(debug_assertions)]
+                if let Ok(list) = std::env::var("WINFER_NATIVE_DEMO_STATUS") {
+                    let ids: Vec<String> = s.workspaces.iter().find(|w| w.id == s.active_workspace_id).map(|w| w.panes.iter().map(|p| p.id.clone()).collect()).unwrap_or_default();
+                    for (id, spec) in ids.iter().zip(list.split(',')) {
+                        let mut parts = spec.splitn(3, ':');
+                        let status = match parts.next() { Some("working") => AgentStatus::Working, Some("needs") => AgentStatus::NeedsInput, Some("done") => AgentStatus::Done, Some("error") => AgentStatus::Error, _ => AgentStatus::Idle };
+                        let percent = parts.next().and_then(|p| p.parse().ok());
+                        let step = parts.next().map(str::to_string);
+                        if let Some(p) = s.workspaces.iter_mut().flat_map(|w| w.panes.iter_mut()).find(|p| p.id == *id) {
+                            p.status = status;
+                        }
+                        let e = s.progress.entry(id.clone()).or_default();
+                        e.percent = percent;
+                        e.step = step;
+                    }
+                }
                 cx.notify();
             });
             let found = tauri::async_runtime::spawn(providers::providers_list()).await;
@@ -1115,7 +1133,7 @@ impl Root {
             Some(view) => view.into_any_element(),
             None => self.terminal(&pane.id, cx).into_any_element(),
         };
-        let header = self.render_header(pane, index, zoomed, c, cx);
+        let (header, status_line) = self.render_header(pane, index, zoomed, c, cx);
         let search = if is_code { None } else { self.render_search(&pane.id, *c, cx) };
         let s = self.state.read(cx);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
@@ -1131,13 +1149,14 @@ impl Root {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded_md()
+            .rounded_lg()
             .border_1()
-            .border_color(if focused { Hsla { a: 0.7, ..c.accent } } else { c.border })
+            .border_color(if focused { Hsla { a: 0.5, ..c.accent } } else { c.border })
             .bg(c.panel)
             .when(dragged, |d| d.opacity(0.4))
             .child(header)
             .child(if is_code { div().flex_1().min_h_0().child(body) } else { div().flex_1().min_h_0().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body) })
+            .children(status_line)
             .children(search)
             .when_some(starting, |d, text| {
                 d.child(
@@ -1339,6 +1358,10 @@ impl Render for Root {
                 Ok("undock") => self.execute(Command::BrowserUndock, window, cx),
                 Ok("browser") => self.execute(Command::SidePanel { panel: SidePanel::Browser, show: true }, window, cx),
                 Ok("side-terminal") => self.execute(Command::SidePanel { panel: SidePanel::Terminal, show: true }, window, cx),
+                Ok(other) if other.starts_with("settings-search:") => {
+                    self.execute(Command::Settings(Some("general".into())), window, cx);
+                    self.settings_ui_for_dev(other["settings-search:".len()..].to_string(), window, cx);
+                }
                 Ok(other) if other.starts_with("settings:") => self.execute(Command::Settings(Some(other["settings:".len()..].to_string())), window, cx),
                 Ok(other) if other.starts_with("page:") => self.update_state(cx, |s| s.set_view(View::Page(other["page:".len()..].to_string()))),
                 Ok(other) if other.starts_with("file:") => {
@@ -1402,6 +1425,15 @@ impl Render for Root {
         let voice_hud = self.render_voice_hud(&c, cx);
         let toasts = self.render_toasts(&c, cx);
         let measure = cx.entity();
+        // Full sidebar with its resize handle, or the collapsed icon rail.
+        let sidebar = if sidebar_open {
+            div().flex().h_full().child(self.render_sidebar(&c, cx)).child(
+                div().id("sidebar-resize").w(px(8.0)).flex_shrink_0().cursor(CursorStyle::ResizeLeftRight)
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::Sidebar))),
+            ).into_any_element()
+        } else {
+            div().flex().h_full().child(self.render_sidebar_rail(&c, cx)).child(div().w(px(8.0)).flex_shrink_0()).into_any_element()
+        };
         div()
             .size_full()
             .flex()
@@ -1433,12 +1465,7 @@ impl Render for Root {
                     .flex()
                     .px_2()
                     .pb_2()
-                    .when(sidebar_open, |d| {
-                        d.child(self.render_sidebar(&c, cx)).child(
-                            div().id("sidebar-resize").w(px(8.0)).flex_shrink_0().cursor(CursorStyle::ResizeLeftRight)
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::Sidebar))),
-                        )
-                    })
+                    .child(sidebar)
                     .child(
                         div().flex_1().min_w_0().min_h_0().flex().flex_col().children(agent_bar).child(div()
                             .relative()

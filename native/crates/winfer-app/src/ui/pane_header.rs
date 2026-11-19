@@ -334,7 +334,9 @@ impl Root {
         items
     }
 
-    pub(super) fn render_header(&self, pane: &Pane, index: usize, zoomed: bool, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The pane's header (index, status, agent, title, progress and the buttons) and, for agents,
+    /// its status line under the terminal (workspace, branch, model, cost and context).
+    pub(super) fn render_header(&self, pane: &Pane, index: usize, zoomed: bool, c: &Colors, cx: &mut Context<Self>) -> (AnyElement, Option<AnyElement>) {
         let c = *c;
         let s = self.state.read(cx);
         let label = s.pane_label(pane);
@@ -443,41 +445,47 @@ impl Root {
         let close = button(format!("close-{id}"), IconName::X, format!("Close{close_keys}")).on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Close(t7.clone()), window, cx)));
         let drag_id = id.clone();
         let archived = pane.archived;
-        let workspace_chip = workspace_name.map(|w| {
-            div().max_w(px(128.0)).flex_shrink_0().truncate().rounded_sm().bg(c.hover).px_1p5().py_0p5().text_size(px(10.0)).text_color(c.muted).child(w)
-        });
         let bar = progress.as_ref().map(|p| progress::progress_bar(Some(p), status, &c).absolute().bottom_0().left_0().right_0().h(px(2.0)));
+        let percent = progress.as_ref().and_then(|p| p.percent).filter(|_| status != AgentStatus::Idle);
         let base = div().id(SharedString::from(format!("header-{id}"))).relative().flex_shrink_0()
             .when(!archived, |d| d.on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 this.drag = Some(Drag::Pane { id: drag_id.clone(), at: e.position });
                 cx.notify();
             })))
             .children(bar);
-        // The glass header: a floating card, title and actions on top, the pane's facts below;
-        // needing input or an error tints it.
-        let (border, fill) = match status {
-            AgentStatus::NeedsInput => (Hsla { a: 0.4, ..c.warning }, Hsla { a: 0.1, ..c.warning }),
-            AgentStatus::Error => (Hsla { a: 0.4, ..c.danger }, Hsla { a: 0.09, ..c.danger }),
-            _ => (Hsla { a: 0.1, ..c.fg }, Hsla { a: 0.07, ..c.fg }),
+        // One slim row: index, status, agent, title, progress, then the buttons. Needing input or
+        // an error tints it.
+        let tint = match status {
+            AgentStatus::NeedsInput => Some(Hsla { a: 0.08, ..c.warning }),
+            AgentStatus::Error => Some(Hsla { a: 0.08, ..c.danger }),
+            _ => None,
         };
-        let facts = div().flex().min_w_0().items_center().gap_1p5().overflow_hidden().pl_5().text_size(px(11.0)).text_color(c.muted)
-            .children(workspace_chip)
-            .child(div().flex_shrink_0().child(name))
-            .children(branch_el)
-            .children(model_el)
-            .child(div().flex_1())
-            .children(cost)
-            .children(context);
-        base.m_2().mb_0().flex().flex_col().gap_1p5().rounded_xl().border_1().border_color(border).bg(fill).px_3().py_2p5()
-            .child(div().flex().min_w_0().items_center().gap_2p5()
-                .child(div().w(px(10.0)).flex_shrink_0().font_family(mono.clone()).text_size(px(10.0)).font_weight(FontWeight::SEMIBOLD).text_color(if focused { c.accent } else { c.subtle }).child(index.to_string()))
-                .child(div().relative().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(Hsla { a: 0.25, ..c.accent })
-                    .child(div().text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(label.chars().next().map_or(String::new(), |ch| ch.to_uppercase().to_string())))
-                    .child(div().absolute().right(px(-4.0)).bottom(px(-4.0)).rounded_full().bg(c.panel).p(px(2.0)).child(div().size_1p5().rounded_full().bg(status_color(status, &c)))))
-                .child(title)
-                .children(url_el)
-                .child(div().flex().flex_shrink_0().items_center().when(!focused, |d| d.opacity(0.55)).child(menu_button).children(actions).child(close)))
-            .child(facts)
+        let header = base.h(px(34.0)).flex().items_center().gap_2().pl_2p5().pr_1p5().border_b_1().border_color(c.border).bg(c.raised)
+            .when_some(tint, |d, t| d.bg(t))
+            .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(10.5)).text_color(if focused { c.accent } else { c.subtle }).child(index.to_string()))
+            .child(div().size(px(7.0)).flex_shrink_0().rounded_full().bg(status_color(status, &c)))
+            .child(crate::ui::code_pickers::mark(c, &pane.provider, 13.0, 1.0))
+            .children(workspace_name.map(|w| div().max_w(px(112.0)).flex_shrink_0().truncate().rounded_sm().bg(c.hover).px_1p5().text_size(px(10.5)).text_color(c.muted).child(w)))
+            .child(title)
+            .when_some(percent, |d, n| d.child(div().flex().flex_shrink_0().items_center().gap_1p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.muted)
+                .child(div().w(px(32.0)).h(px(3.0)).rounded_full().bg(c.active).child(div().h_full().rounded_full().w(relative(n as f32 / 100.0)).bg(if status == AgentStatus::NeedsInput { c.warning } else if n >= 100 { c.success } else { c.accent })))
+                .child(format!("{n}%"))))
+            .children(url_el)
+            .child(div().flex().flex_shrink_0().items_center().when(!focused, |d| d.opacity(0.55)).child(menu_button).children(actions).child(close));
+        // The status line: the pane's facts, out of the header so the title has room.
+        let agent = pane.provider != "shell";
+        let line = (agent && (branch_el.is_some() || model_el.is_some() || cost.is_some() || context.is_some())).then(|| {
+            div().h(px(26.0)).flex_shrink_0().flex().items_center().gap_2().overflow_hidden().px_2().border_t_1().border_color(c.border)
+                .font_family(mono.clone()).text_size(px(10.5)).text_color(c.subtle)
+                .children(branch_el)
+                .children(context)
+                .children(cost)
+                .child(div().flex_1())
+                .children(model_el)
+                .into_any_element()
+        });
+        let _ = name;
+        (header.into_any_element(), line)
     }
 }
 

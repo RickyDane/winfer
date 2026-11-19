@@ -1,27 +1,27 @@
 @import "tailwindcss";
 
-/* Design tokens, taken from the reference screenshot (dark, low-contrast, mono). Defaults for
+/* Design tokens: the Graphite palette. Defaults for
    Winfer Dark; features/theme/themes.ts overrides them per theme. */
 @theme {
-  --color-app: #0b0b0d;
-  --color-panel: #121215;
-  --color-panel-raised: #17171b;
-  --color-hover: #1d1d22;
-  --color-active: #24242a;
-  --color-border: #26262c;
-  --color-border-strong: #33333b;
+  --color-app: #09090b;
+  --color-panel: #111113;
+  --color-panel-raised: #161619;
+  --color-hover: #1c1c20;
+  --color-active: #232328;
+  --color-border: #1f1f23;
+  --color-border-strong: #2c2c31;
 
-  --color-fg: #e6e6ea;
-  --color-fg-muted: #9a9aa3;
-  --color-fg-subtle: #6b6b74;
+  --color-fg: #ececf0;
+  --color-fg-muted: #a1a1aa;
+  --color-fg-subtle: #71717a;
 
-  --color-accent: #6d7cff;
-  --color-accent-soft: #6d7cff26;
+  --color-accent: #7c8cff;
+  --color-accent-soft: #7c8cff1f;
   --color-on-accent: #ffffff;
   --color-success: #4ade80;
-  --color-warning: #f5b544;
-  --color-danger: #f26d6d;
-  --color-claude: #d97757;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-claude: #e08b6a;
   /* Chart series per agent (validated for colorblind separation on the panel surface). */
   --color-series-claude: #cf6e4e;
   --color-series-codex: #6d7cff;

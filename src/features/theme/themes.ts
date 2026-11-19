@@ -44,12 +44,12 @@ const def = (id: string, name: string, mode: ThemeMode, pair: string, ui: Ui, an
 export const THEMES: ThemeDef[] = [
   def(
     "dark", "Winfer Dark", "dark", "light",
-    { app: "#0b0b0d", panel: "#121215", panelRaised: "#17171b", hover: "#1d1d22", active: "#24242a", border: "#26262c", borderStrong: "#33333b", fg: "#e6e6ea", fgMuted: "#9a9aa3", fgSubtle: "#6b6b74", accent: "#6d7cff", onAccent: "#ffffff", success: "#4ade80", warning: "#f5b544", danger: "#f26d6d", claude: "#d97757" },
+    { app: "#09090b", panel: "#111113", panelRaised: "#161619", hover: "#1c1c20", active: "#232328", border: "#1f1f23", borderStrong: "#2c2c31", fg: "#ececf0", fgMuted: "#a1a1aa", fgSubtle: "#71717a", accent: "#7c8cff", onAccent: "#ffffff", success: "#4ade80", warning: "#fbbf24", danger: "#f87171", claude: "#e08b6a" },
     ["#1d1d22", "#f26d6d", "#4ade80", "#f5b544", "#6d9cff", "#c08cff", "#5fd4e0", "#d4d4da", "#6b6b74", "#ff8a8a", "#7cf0a4", "#ffd07a", "#94b6ff", "#d6b0ff", "#8ce6ee", "#ffffff"],
   ),
   def(
     "light", "Winfer Light", "light", "dark",
-    { app: "#e9e9ee", panel: "#fbfbfc", panelRaised: "#ffffff", hover: "#ececf1", active: "#e2e2e9", border: "#dcdce3", borderStrong: "#c9c9d2", fg: "#1b1b21", fgMuted: "#55555f", fgSubtle: "#85858f", accent: "#4f5ff0", onAccent: "#ffffff", success: "#16a34a", warning: "#b7791f", danger: "#dc3b3b", claude: "#c2603f" },
+    { app: "#f4f4f6", panel: "#ffffff", panelRaised: "#ffffff", hover: "#f0f0f3", active: "#e8e8ed", border: "#e6e6ea", borderStrong: "#d7d7dd", fg: "#18181b", fgMuted: "#52525b", fgSubtle: "#8a8a93", accent: "#4f5ff0", onAccent: "#ffffff", success: "#16a34a", warning: "#c27c0e", danger: "#dc2626", claude: "#c2603f" },
     // Same hues as Winfer Dark, darkened so agent output stays readable on white.
     ["#1b1b21", "#c62f2f", "#1f8a46", "#9a6a00", "#2f5fd0", "#8a3fc0", "#0f7f8c", "#d4d4da", "#6b6b74", "#e04848", "#2aa35a", "#b88400", "#4a78e8", "#a55ad8", "#1897a6", "#ffffff"],
   ),

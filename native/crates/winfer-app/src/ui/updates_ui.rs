@@ -25,11 +25,11 @@ pub(super) enum Notes {
 }
 
 pub(super) struct UpdatesUi {
-    version: String,
+    pub(super) version: String,
     channel: Channel,
     checking: bool,
     error: Option<String>,
-    available: Option<Available>,
+    pub(super) available: Option<Available>,
     installed: Option<(String, Vec<ReleaseChanges>)>,
     open: Option<Notes>,
     offered: HashSet<String>,
@@ -253,33 +253,53 @@ impl Root {
     }
 
     /// App version, channel and update actions, pinned to the bottom of the settings sidebar.
-    pub(super) fn render_update_footer(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
+    /// Settings → Updates: the release channel, the available update and what's new.
+    pub(super) fn page_updates(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
         let u = &self.updates;
         let (channel, checking, version) = (u.channel, u.checking, u.version.clone());
         let available = u.available.clone();
+        let error = u.error.clone();
         let has_installed = u.installed.as_ref().is_some_and(|(v, _)| *v == version);
-        let chip = |id: &'static str, label: &'static str, on: bool, target: Channel| {
-            div().id(id).flex_1().h(px(24.0)).flex().items_center().justify_center().rounded_md().border_1().text_size(px(11.0)).cursor_pointer()
-                .border_color(if on { c.accent } else { c.border_strong }).text_color(if on { c.fg } else { c.muted })
+        let mono = crate::fonts::mono(cx);
+        let button = |id: &'static str, label: &'static str, primary: bool| {
+            div().id(id).h(px(30.0)).flex().items_center().justify_center().gap_1p5().rounded_md().px_3().text_size(px(12.5)).cursor_pointer().flex_shrink_0()
+                .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).hover(|d| d.opacity(0.9)))
+                .when(!primary, |d| d.border_1().border_color(c.border_strong).text_color(c.fg).hover(move |d| d.bg(c.hover)))
+                .child(label)
+        };
+        let hero = div().flex().items_center().gap_3p5().p_4().rounded(px(10.0)).border_1()
+            .border_color(if available.is_some() { Hsla { a: 0.35, ..c.accent } } else { c.border })
+            .bg(if available.is_some() { Hsla { a: 0.08, ..c.accent } } else { c.panel })
+            .child(div().size(px(40.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg()
+                .bg(if available.is_some() { c.accent } else { c.hover }).text_color(if available.is_some() { c.on_accent } else { c.muted })
+                .child(Icon::new(if available.is_some() { IconName::Download } else { IconName::CircleCheck }).size(px(19.0))))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(match &available {
+                    Some(a) => format!("winfer {} is available", a.version),
+                    None => "winfer is up to date".to_string(),
+                }))
+                .child(div().text_size(px(12.0)).text_color(c.muted).font_family(mono).child(match (&available, &error) {
+                    (_, Some(e)) => e.clone(),
+                    (Some(_), _) => format!("You have {version}"),
+                    (None, _) if channel == Channel::Stable && version.contains('-') => format!("{version} · moves to stable with the next stable release"),
+                    (None, _) => version.clone(),
+                })))
+            .when(available.is_some() || has_installed, |d| d.child(button("update-notes", "What's new", false).on_click(cx.listener(move |this, _, _, cx| this.show_release_notes(this.updates.available.is_some(), cx)))))
+            .child(match available {
+                Some(_) => button("update-download", "Download", true).on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
+                None => button("update-check", if checking { "Checking…" } else { "Check now" }, false).on_click(cx.listener(|this, _, _, cx| this.check_updates(false, cx))),
+            });
+        let seg = |id: &'static str, label: &'static str, target: Channel| {
+            let on = channel == target;
+            div().id(id).h(px(24.0)).px_2p5().flex().items_center().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
+                .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active))
+                .hover(move |d| d.text_color(c.fg))
                 .on_click(cx.listener(move |this, _, _, cx| this.set_update_channel(target, cx)))
                 .child(label)
         };
-        let button = |id: &'static str, label: &'static str, primary: bool| {
-            div().id(id).h(px(28.0)).w_full().flex().items_center().justify_center().gap_1p5().rounded_md().px_2p5().text_size(px(12.0)).cursor_pointer()
-                .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).hover(|d| d.opacity(0.9)))
-                .when(!primary, |d| d.border_1().border_color(c.border).text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
-                .child(label)
-        };
-        div().mt_auto().flex().flex_col().gap_1p5().border_t_1().border_color(c.border).pt_3().pb_1().px_0p5()
-            .child(div().flex().gap_1().child(chip("channel-stable", "Stable", channel == Channel::Stable, Channel::Stable)).child(chip("channel-nebula", "Nebula", channel == Channel::Nebula, Channel::Nebula)))
-            .child(div().px_2().text_size(px(11.0)).text_color(c.subtle).child(match &available {
-                Some(a) => div().flex().flex_col().child(div().child(format!("winfer {} is available", a.version))).child(div().child(format!("You have {version}"))),
-                None => div().flex().flex_col().child(div().font_family(crate::fonts::mono(cx)).child(format!("winfer {version}"))).when(channel == Channel::Stable && version.contains('-'), |d| d.child("Moves to stable with the next stable release")),
-            }))
-            .child(match available {
-                Some(_) => button("update-download", "Download", true).on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
-                None => button("update-check", if checking { "Checking…" } else { "Check for updates" }, false).on_click(cx.listener(|this, _, _, cx| this.check_updates(false, cx))),
-            })
-            .when(self.updates.available.is_some() || has_installed, |d| d.child(button("update-notes", "What's new", false).on_click(cx.listener(move |this, _, _, cx| this.show_release_notes(this.updates.available.is_some(), cx)))))
+        let channel_row = super::settings::row(c, "Channel", Some("Stable: tested releases. Nebula: every change as soon as it lands.".into()),
+            div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+                .child(seg("channel-stable", "Stable", Channel::Stable)).child(seg("channel-nebula", "Nebula", Channel::Nebula)));
+        div().flex().flex_col().gap_5().child(hero).child(super::settings::card(c, "Release channel", None).child(channel_row))
     }
 }
