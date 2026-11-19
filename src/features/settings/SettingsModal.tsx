@@ -1,7 +1,7 @@
 import { EFFORT_LABELS } from "@/features/code/EffortIcon";
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
-import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, Settings2, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, suspendSaving, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
@@ -24,6 +24,7 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
+import { searchSettings } from "@/features/settings/search";
 import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb } from "@/features/code/styles";
 import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
 import { clearDiagnostics, exportDiagnostics, getDiagnostics, mb, setVerboseLogging, type DiagnosticsInfo } from "@/features/diagnostics/diagnostics";
@@ -57,22 +58,42 @@ import {
 const Card = ({ title, description, children }: { title: string; description?: React.ReactNode; children: React.ReactNode }) => (
   <section className="space-y-2">
     <div className="px-1">
-      <h3 className="text-[13px] font-medium text-fg">{title}</h3>
-      {description && <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">{description}</p>}
+      <h3 className="text-xs font-semibold text-fg-muted">{title}</h3>
+      {description && <p className="mt-0.5 text-xs leading-relaxed text-fg-subtle">{description}</p>}
     </div>
-    <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">{children}</div>
+    <div className="divide-y divide-border overflow-hidden rounded-[10px] border border-border bg-panel">{children}</div>
   </section>
 );
 
 const Row = ({ label, hint, children, stacked }: { label: React.ReactNode; hint?: React.ReactNode; children?: React.ReactNode; stacked?: boolean }) => (
-  <div className={cn("px-3.5 py-3", stacked ? "space-y-2.5" : "flex items-center gap-4")}>
+  <div className={cn("px-4 py-3", stacked ? "space-y-2.5" : "flex items-center gap-6")}>
     <div className="min-w-0 flex-1">
-      <div className="text-[13px] text-fg">{label}</div>
+      <div className="text-[13px] font-medium text-fg">{label}</div>
       {hint && <div className="mt-0.5 text-xs leading-relaxed text-fg-subtle">{hint}</div>}
     </div>
     {children && <div className={cn("flex items-center gap-2", !stacked && "shrink-0")}>{children}</div>}
   </div>
 );
+
+/** A small segmented control (two to four choices). */
+function Segmented<T extends string>({ label, value, options, onChange, disabled }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void; disabled?: boolean }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex gap-0.5 rounded-lg border border-border bg-app p-0.5">
+      {options.map(([v, text]) => (
+        <button
+          key={v}
+          role="radio"
+          aria-checked={v === value}
+          disabled={disabled}
+          onClick={() => onChange(v)}
+          className={cn("h-6 rounded-md px-2.5 text-xs transition-colors", v === value ? "bg-active text-fg shadow-sm" : "text-fg-muted hover:text-fg")}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** Feedback under a card: green when it worked, red when it didn't. */
 const Result = ({ result }: { result: { ok: boolean; text: string } | null }) =>
@@ -157,52 +178,51 @@ function AppearanceSettings() {
 }
 
 /** App version and installing a newer release from GitHub, pinned to the bottom of the settings sidebar. */
-function UpdateFooter() {
+/** Settings → Updates: the available update, what's new and the release channel. */
+function UpdateSettings() {
   const { version, channel, checking, installing, available, installed } = useUpdates();
-  const small = "flex h-7 w-full items-center justify-center gap-1.5 rounded-md px-2.5 text-xs disabled:opacity-50";
+  const button = "flex h-[30px] shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[12.5px] disabled:opacity-50";
   return (
-    <div className="mt-auto space-y-1.5 border-t border-border px-0.5 pt-3 pb-1">
-      <Select
-        aria-label="Update channel"
-        title="Stable: tested releases. Nebula: every change as soon as it lands."
-        value={channel}
-        onChange={(e) => setUpdateChannel(e.target.value as UpdateChannel)}
-        disabled={installing}
-        className="w-full"
-      >
-        <option value="stable">Stable updates</option>
-        <option value="nebula">Nebula updates</option>
-      </Select>
-      <div className="px-2 text-[11px] text-fg-subtle">
+    <>
+      <div className={cn("flex items-center gap-3.5 rounded-[10px] border p-4", available ? "border-accent/35 bg-accent-soft" : "border-border bg-panel")}>
+        <div className={cn("grid size-10 shrink-0 place-items-center rounded-lg", available ? "bg-accent text-on-accent" : "bg-hover text-fg-muted")}>
+          {available ? <Download size={19} /> : <Check size={19} />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-fg">{available ? `winfer ${available.version} is available` : "winfer is up to date"}</div>
+          <div className="font-mono text-xs text-fg-muted">
+            {available ? `You have ${version ?? "?"}` : channel === "stable" && version?.includes("-") ? `${version} · moves to stable with the next stable release` : version}
+          </div>
+        </div>
+        {(available || installed?.version === version) && (
+          <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={cn(button, "border border-border-strong text-fg hover:bg-hover")}>
+            What's new
+          </button>
+        )}
         {available ? (
-          <>
-            <span className="font-medium text-fg">winfer {available.version}</span> is available
-            <div>You have {version ?? "?"}</div>
-          </>
+          <button onClick={() => void installUpdate()} disabled={installing} className={cn(button, "bg-accent font-medium text-on-accent hover:opacity-90")}>
+            {installing ? <Spinner size={12} /> : <Download size={13} />}
+            Install and restart
+          </button>
         ) : (
-          <>
-            <span className="font-mono">winfer {version ?? ""}</span>
-            {channel === "stable" && version?.includes("-") && <div>Moves to stable with the next stable release</div>}
-          </>
+          <button onClick={() => void checkForUpdates()} disabled={checking} className={cn(button, "border border-border-strong text-fg hover:bg-hover")}>
+            {checking && <Spinner size={12} />}
+            Check now
+          </button>
         )}
       </div>
-      {available ? (
-        <button onClick={() => void installUpdate()} disabled={installing} className={cn(small, "bg-accent font-medium text-on-accent hover:opacity-90")}>
-          {installing ? <Spinner size={12} /> : <Download size={12} />}
-          Install and restart
-        </button>
-      ) : (
-        <button onClick={() => void checkForUpdates()} disabled={checking} className={cn(small, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}>
-          {checking && <Spinner size={12} />}
-          Check for updates
-        </button>
-      )}
-      {(available || installed?.version === version) && (
-        <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={cn(small, "text-fg-muted hover:bg-hover hover:text-fg")}>
-          What's new
-        </button>
-      )}
-    </div>
+      <Card title="Release channel">
+        <Row label="Channel" hint="Stable: tested releases. Nebula: every change as soon as it lands.">
+          <Segmented<UpdateChannel>
+            label="Update channel"
+            value={channel}
+            disabled={installing}
+            options={[["stable", "Stable"], ["nebula", "Nebula"]]}
+            onChange={setUpdateChannel}
+          />
+        </Row>
+      </Card>
+    </>
   );
 }
 
@@ -1952,57 +1972,86 @@ function DiagnosticsSettings() {
   );
 }
 
-const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.ReactNode }[] = [
+type Page = { id: string; label: string; icon: LucideIcon; description: string; render: () => React.ReactNode };
+
+/** The pages in five groups (the Graphite settings). */
+const GROUPS: { label: string; pages: Page[] }[] = [
   {
-    id: "general",
-    label: "General",
-    icon: SlidersHorizontal,
-    render: () => (
-      <>
-        <TerminalSettings />
-        <EditorSettings />
-        <ShortcutSettings />
-      </>
-    ),
-  },
-  { id: "theme", label: "Theme", icon: Palette, render: () => (
-      <>
-        <AppearanceSettings />
-      </>
-    ),
+    label: "Workspace",
+    pages: [
+      {
+        id: "general",
+        label: "General",
+        icon: SlidersHorizontal,
+        description: "Terminals, your code editor and keyboard shortcuts.",
+        render: () => (
+          <>
+            <TerminalSettings />
+            <EditorSettings />
+            <ShortcutSettings />
+          </>
+        ),
+      },
+      { id: "theme", label: "Appearance", icon: Palette, description: "Light or dark, and the theme for each.", render: () => <AppearanceSettings /> },
+    ],
   },
   {
-    id: "agents",
     label: "Agents",
-    icon: Bot,
-    render: () => (
-      <>
-        <AgentSettings />
-        <ReviewSettings />
-        <ProgressSettings />
-      </>
-    ),
+    pages: [
+      {
+        id: "agents",
+        label: "Agents",
+        icon: Bot,
+        description: "New panes, models, versions, permissions, review and progress.",
+        render: () => (
+          <>
+            <AgentSettings />
+            <ReviewSettings />
+            <ProgressSettings />
+          </>
+        ),
+      },
+      { id: "winfer-code", label: "winfer code", icon: SquareTerminal, description: "winfer's own agent: interface, model and context.", render: () => <HarnessSettings /> },
+    ],
   },
-  { id: "accounts", label: "Accounts", icon: Users, render: () => <AccountsSettings /> },
-  { id: "voice", label: "Voice", icon: Mic, render: () => <VoiceSettings /> },
-  { id: "ai", label: "AI", icon: Sparkles, render: () => <AiSettings /> },
-  { id: "mobile", label: "Mobile", icon: Smartphone, render: () => <MobileSettings /> },
-  { id: "winfer-code", label: "winfer code", icon: SquareTerminal, render: () => <HarnessSettings /> },
   {
-    id: "usage",
-    label: "Usage",
-    icon: ChartColumn,
-    render: () => (
-      <UsageSettings>
-        <PaneCostSettings />
-      </UsageSettings>
-    ),
+    label: "AI & voice",
+    pages: [
+      { id: "accounts", label: "Accounts", icon: Users, description: "Sign-ins and the accounts winfer switches between.", render: () => <AccountsSettings /> },
+      { id: "ai", label: "AI", icon: Sparkles, description: "The model winfer uses for summaries, titles and progress.", render: () => <AiSettings /> },
+      { id: "voice", label: "Voice", icon: Mic, description: "Talk to your agents, and have them talk back.", render: () => <VoiceSettings /> },
+    ],
   },
-  { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettings /> },
-  { id: "skills", label: "Skills", icon: Wand2, render: () => <SkillSettings /> },
-  { id: "data", label: "Data", icon: ArchiveRestore, render: () => <DataSettings /> },
-  { id: "diagnostics", label: "Diagnostics", icon: Activity, render: () => <DiagnosticsSettings /> },
+  {
+    label: "Extensions",
+    pages: [
+      { id: "plugins", label: "Plugins", icon: Puzzle, description: "Panels, tools and agents others built for winfer.", render: () => <PluginSettings /> },
+      { id: "skills", label: "Skills", icon: Wand2, description: "Reusable instructions every agent can load.", render: () => <SkillSettings /> },
+    ],
+  },
+  {
+    label: "System",
+    pages: [
+      {
+        id: "usage",
+        label: "Usage & limits",
+        icon: ChartColumn,
+        description: "Plan limits, spend and warnings.",
+        render: () => (
+          <UsageSettings>
+            <PaneCostSettings />
+          </UsageSettings>
+        ),
+      },
+      { id: "mobile", label: "Mobile", icon: Smartphone, description: "Watch and steer agents from your phone.", render: () => <MobileSettings /> },
+      { id: "data", label: "Backup & transfer", icon: ArchiveRestore, description: "Move your setup to another machine.", render: () => <DataSettings /> },
+      { id: "updates", label: "Updates", icon: Download, description: "winfer's release channel and updates.", render: () => <UpdateSettings /> },
+      { id: "diagnostics", label: "Diagnostics", icon: Activity, description: "Memory, logs and crash reports.", render: () => <DiagnosticsSettings /> },
+    ],
+  },
 ];
+
+const PAGES: (Page & { group: string })[] = GROUPS.flatMap((g) => g.pages.map((p) => ({ ...p, group: g.label })));
 
 /** What a plugin adds, e.g. "2 tools · 1 agent · code". */
 function contributions(plugin: PluginInfo): string {
@@ -2859,44 +2908,154 @@ function SkillSettings() {
 
 export function SettingsModal() {
   const { settingsOpen, settingsPage, setSettings } = useWorkspacesPick("settingsOpen", "settingsPage", "setSettings");
+  const { available, version } = useUpdates();
+  const [query, setQuery] = useState("");
   const page = PAGES.find((p) => p.id === settingsPage) ?? PAGES[0];
+  const hits = useMemo(() => searchSettings(query, PAGES), [query]);
 
   if (!settingsOpen) return null;
-  const open = (id: string) => setSettings(true, id);
+  const searching = query.trim() !== "";
+  const open = (id: string) => {
+    setQuery("");
+    setSettings(true, id);
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && searching) {
+      e.stopPropagation();
+      setQuery("");
+    } else if (e.key === "Enter" && hits[0]) {
+      open(hits[0].page);
+    }
+  };
   return (
-    <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setSettings(false)}>
+    <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[3px]" onMouseDown={() => setSettings(false)}>
       <div
-        className="anim-dialog flex h-[min(620px,85vh)] w-[min(820px,92vw)] overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <nav className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-border bg-panel p-2">
-          <h1 className="px-2.5 pt-2 pb-3 text-sm font-semibold text-fg">Settings</h1>
-          {PAGES.map((p) => (
-            <button
-              key={p.id}
-              role="tab"
-              aria-selected={p.id === page.id}
-              onClick={() => open(p.id)}
-              className={cn(
-                "flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors",
-                p.id === page.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+        <nav className="flex w-[232px] shrink-0 flex-col border-r border-border bg-panel">
+          <div className="space-y-3 px-3 pt-3.5 pb-1">
+            <h1 className="flex items-center gap-2 px-1 text-sm font-semibold text-fg">
+              <Settings2 size={15} className="text-accent" />
+              Settings
+            </h1>
+            <label className="flex h-8 items-center gap-2 rounded-md border border-border-strong bg-app pr-1 pl-2.5 text-fg-subtle focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft">
+              <Search size={13} />
+              <input
+                autoFocus
+                type="text"
+                aria-label="Search settings"
+                placeholder="Search settings"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onKeyDown}
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12.5px] text-fg outline-none placeholder:text-fg-subtle"
+              />
+              {searching && (
+                <button onClick={() => setQuery("")} aria-label="Clear search" className="rounded p-1 hover:bg-hover hover:text-fg">
+                  <X size={12} />
+                </button>
               )}
-            >
-              <p.icon size={14} className={p.id === page.id ? "text-accent" : undefined} />
-              {p.label}
-            </button>
-          ))}
-          <UpdateFooter />
+            </label>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            {GROUPS.map((g) => (
+              <div key={g.label}>
+                <div className="px-2.5 pt-3 pb-1 text-[10.5px] font-semibold tracking-wider text-fg-subtle uppercase">{g.label}</div>
+                {g.pages.map((p) => {
+                  const selected = !searching && p.id === page.id;
+                  const matches = searching ? hits.filter((h) => h.page === p.id).length : 0;
+                  return (
+                    <button
+                      key={p.id}
+                      role="tab"
+                      aria-selected={selected}
+                      onClick={() => open(p.id)}
+                      className={cn(
+                        "flex h-[30px] w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors",
+                        selected ? "bg-accent-soft text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+                        searching && !matches && "opacity-35",
+                      )}
+                    >
+                      <p.icon size={15} className={selected ? "text-accent" : undefined} />
+                      <span className="flex-1 truncate text-left">{p.label}</span>
+                      {searching && matches > 0 && <span className="font-mono text-[10.5px] text-fg-subtle">{matches}</span>}
+                      {!searching && p.id === "updates" && available && <span className="size-1.5 rounded-full bg-accent" />}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-2 border-t border-border px-3.5 py-2.5 text-[11px] text-fg-subtle">
+            <span className="font-mono">winfer {version ?? ""}</span>
+            {available && (
+              <button onClick={() => open("updates")} title={`winfer ${available.version} is available`} className="flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-accent">
+                <Download size={11} />
+                Update
+              </button>
+            )}
+          </div>
         </nav>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-12 shrink-0 items-center border-b border-border px-6">
-            <h2 className="flex-1 text-sm font-medium text-fg">{page.label}</h2>
-            <button onClick={() => setSettings(false)} aria-label="Close settings" className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
-              <X size={14} />
-            </button>
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <button onClick={() => setSettings(false)} aria-label="Close settings" className="absolute top-4 right-4 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-fg-subtle hover:bg-hover hover:text-fg">
+            <X size={15} />
+            <kbd className="rounded border border-border px-1 font-mono text-[10px]">esc</kbd>
+          </button>
+          <header className="flex shrink-0 items-start gap-3.5 pt-6 pr-24 pb-4 pl-8">
+            {searching ? (
+              <div>
+                <div className="text-[11px] tracking-wider text-fg-subtle uppercase">Search</div>
+                <h2 className="text-lg font-semibold text-fg">Results for “{query.trim()}”</h2>
+              </div>
+            ) : (
+              <>
+                <div className="grid size-[38px] shrink-0 place-items-center rounded-lg bg-accent-soft text-accent">
+                  <page.icon size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[11px] tracking-wider text-fg-subtle uppercase">{page.group}</div>
+                  <h2 className="text-lg font-semibold text-fg">{page.label}</h2>
+                  <p className="text-[12.5px] text-fg-muted">{page.description}</p>
+                </div>
+              </>
+            )}
           </header>
-          <div key={page.id} className="anim-fade flex-1 space-y-6 overflow-y-auto px-6 py-5">
-            {page.render()}
+          <div key={searching ? "search" : page.id} className="anim-fade flex-1 space-y-6 overflow-y-auto px-8 pt-1 pb-10">
+            {searching ? (
+              hits.length ? (
+                <div className="space-y-1">
+                  {hits.map((h, i) => {
+                    const p = PAGES.find((x) => x.id === h.page)!;
+                    return (
+                      <button
+                        key={h.page + h.label}
+                        onClick={() => open(h.page)}
+                        className={cn("flex w-full items-center gap-3 rounded-[10px] border px-3 py-2.5 text-left hover:border-border hover:bg-panel", i === 0 ? "border-border bg-panel" : "border-transparent")}
+                      >
+                        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-hover text-fg-muted">
+                          <p.icon size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] text-fg">{h.label}</span>
+                          {h.words && <span className="block truncate text-xs text-fg-subtle">{h.words}</span>}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-fg-subtle">{h.label === p.label ? p.group : `${p.group} › ${p.label}`}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-1.5 pt-20 text-fg-subtle">
+                  <Search size={22} />
+                  <div className="text-[13px] text-fg">No settings match “{query.trim()}”</div>
+                  <div className="text-xs">Try “theme”, “model” or “approve”.</div>
+                </div>
+              )
+            ) : (
+              page.render()
+            )}
           </div>
         </div>
       </div>

@@ -43,103 +43,19 @@ fn page_info(id: &str) -> (&'static str, Page) {
     GROUPS.iter().find_map(|(g, pages)| pages.iter().find(|p| p.0 == id).map(|p| (*g, *p))).unwrap_or((GROUPS[0].0, GROUPS[0].1[0]))
 }
 
-/// What the search finds: page, setting and words that lead to it (the setting's hint or synonyms).
-const SEARCH_INDEX: &[(&str, &str, &str)] = &[
-    ("winfer-code", "Use TUI style", ""),
-    ("winfer-code", "Text size", ""),
-    ("winfer-code", "Model", ""),
-    ("winfer-code", "Reasoning effort", ""),
-    ("winfer-code", "Permission mode", ""),
-    ("winfer-code", "Auto-approve in panes", ""),
-    ("winfer-code", "Plan sidebar", ""),
-    ("winfer-code", "Lean setup", ""),
-    ("winfer-code", "Short Codex prompt", ""),
-    ("winfer-code", "Codex CLI panes too", ""),
-    ("winfer-code", "Skills", ""),
-    ("winfer-code", "Context compaction", ""),
-    ("winfer-code", "Micro-compact at", ""),
-    ("winfer-code", "Full compact at", ""),
-    ("winfer-code", "Tools", ""),
-    ("winfer-code", "Always-allowed commands", ""),
-    ("winfer-code", "MCP servers", "Extra servers for every backend, as JSON: { \\"),
-    ("mobile", "Phone", ""),
-    ("mobile", "Pair a phone", ""),
-    ("mobile", "Relay", ""),
-    ("mobile", "Relay URL", ""),
-    ("general", "Terminals", ""),
-    ("general", "Text size", "Also ⌘= / ⌘- / ⌘0, or ⌘ + scroll over a terminal."),
-    ("general", "Code editor", ""),
-    ("general", "Open projects and worktrees in", ""),
-    ("general", "Keyboard", ""),
-    ("general", "Keyboard shortcuts", "See every shortcut and change any of them."),
-    ("agents", "New panes", ""),
-    ("agents", "Default agent", "⌘T, split and “open a new window” start this agent."),
-    ("agents", "Always open new agents in their own worktree", ""),
-    ("agents", "Models", "The model each agent starts with in new panes."),
-    ("agents", "Versions", "Updating changes the CLI on disk; running panes keep their version until restarted."),
-    ("agents", "Check for agent updates", ""),
-    ("agents", "Auto-approve", "Agents run tools and edits without asking. Only for sandboxes or work you can undo."),
-    ("agents", "System prompt", "Given to every agent when it starts (or restarts). Leave empty for none."),
-    ("agents", "Instructions for every agent", ""),
-    ("agents", "Agent tools", "Tools agents rarely use are left out, since every tool costs context in each request."),
-    ("agents", "Review", ""),
-    ("agents", "Run tests when an agent finishes", ""),
-    ("agents", "Screenshot the dev server", "Shows the agent's running app on its review card."),
-    ("agents", "Session progress", "Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked."),
-    ("agents", "Estimate how far working agents are", ""),
-    ("agents", "Check every", ""),
-    ("data", "Export", "Saves settings, workspaces, plugins with their data, and usage history into one file to import on another machine."),
-    ("data", "Include secrets", "ChatGPT sign-in, the voice OpenAI key and plugin vault values, encrypted with a passphrase."),
-    ("data", "Export file", ""),
-    ("data", "Import", "Replaces this machine's data with an export, then restarts."),
-    ("data", "Import and restart", ""),
-    ("diagnostics", "Memory", "winfer's own resident memory, sampled every 5 seconds into the log. A steady climb before a crash points at a leak; the timeline in the export shows it."),
-    ("diagnostics", "Now / session peak", ""),
-    ("diagnostics", "Terminals", "Each live pane also holds up to 2 MB of replay scrollback in the backend, plus its terminal buffer."),
-    ("diagnostics", "Last 2 minutes", ""),
-    ("diagnostics", "Logs", "winfer.log keeps the app log (rotated at 5 MB); crash.log holds panics with backtraces. Both live in the folder below."),
-    ("diagnostics", "Log folder", ""),
-    ("diagnostics", "Sizes", ""),
-    ("diagnostics", "Verbose logging", "Also records debug lines (more detail, faster-growing log). Kept across restarts."),
-    ("diagnostics", "Copy summary", "Version, memory and the crash-log tail — paste it into a bug report."),
-    ("diagnostics", "Export for a bug report", "A zip with the summary, both logs and the memory timeline. No settings, chats or secrets."),
-    ("diagnostics", "Clear logs", ""),
-    ("diagnostics", "Latest crash", "The end of crash.log. Full backtraces are in the file and in the export."),
-    ("voice", "Live voice", ""),
-    ("voice", "Connection", ""),
-    ("voice", "OpenAI API key", ""),
-    ("voice", "Model (API key)", ""),
-    ("voice", "System prompt", "How the voice agent behaves and talks. winfer adds the current panes, workspaces and browser tabs after it; changes apply right away, also mid-conversation."),
-    ("voice", "Voice", "API key · ChatGPT plan. Applies to the next conversation."),
-    ("voice", "Input", ""),
-    ("voice", "Microphone", ""),
-    ("voice", "Read aloud", ""),
-    ("voice", "Speak agent updates aloud", "“Codex needs your input”, “Claude Code finished”."),
-    ("ai", "LLM", "Writes progress estimates, review summaries and other short texts in winfer."),
-    ("ai", "Provider", ""),
-    ("ai", "Model", ""),
-    ("ai", "ChatGPT account", "Runs the LLM below on your ChatGPT plan (Plus or Pro); no API key needed. Until you sign in, the Codex CLI's own login is used instead if Codex is installed. Set a weekly limit or disconnect winfer in ChatGPT's settings."),
-    ("theme", "Light or dark", "theme mode sun moon appearance"),
-    ("theme", "Themes", "Winfer Dark Light Tokyo Night Catppuccin Dracula Nord Gruvbox Solarized GitHub Rosé Pine One Dark"),
-    ("accounts", "Claude account", "sign in plan login"),
-    ("accounts", "ChatGPT account", "sign in plan login openai"),
-    ("accounts", "Multiple accounts", "switch account when one runs out of usage"),
-    ("plugins", "Discover plugins", "store catalog install"),
-    ("plugins", "Installed plugins", "remove update"),
-    ("plugins", "Hide names on plugin tabs", ""),
-    ("skills", "Discover skills", "store catalog install"),
-    ("skills", "Installed skills", ""),
-    ("usage", "Usage limits", "5-hour weekly rings title bar"),
-    ("usage", "Spend", "cost tokens API prices"),
-    ("usage", "Show task cost on panes", "cost header"),
-    ("updates", "Update channel", "Stable Nebula"),
-    ("updates", "Check for updates", "install download version"),
-    ("updates", "What's new", "release notes changelog"),
-    ("agents", "Auto-approve", "permissions yolo approve without asking"),
-    ("agents", "Versions", "update agent CLI"),
-    ("agents", "Session progress", "estimate how far agents are"),
-    ("winfer-code", "Permission mode", "approve ask yolo plan"),
-];
+/// What the search finds: page, setting and words that lead to it (the setting's hint or
+/// synonyms). Shared with the Tauri app.
+#[derive(serde::Deserialize)]
+struct IndexEntry {
+    page: String,
+    label: String,
+    words: String,
+}
+
+static SEARCH_INDEX: std::sync::LazyLock<Vec<(&'static str, &'static str, &'static str)>> = std::sync::LazyLock::new(|| {
+    let entries: Vec<IndexEntry> = serde_json::from_str(include_str!("../../../../../src/features/settings/searchIndex.json")).expect("searchIndex.json");
+    entries.into_iter().map(|e| (&*e.page.leak(), &*e.label.leak(), &*e.words.leak())).collect()
+});
 
 /// Settings whose label, words or page match every word of `query`, best first.
 fn search_settings(query: &str) -> Vec<(&'static str, &'static str, &'static str)> {
@@ -1087,7 +1003,7 @@ mod settings_search_tests {
     #[test]
     fn every_index_entry_is_on_a_page() {
         let pages: Vec<&str> = GROUPS.iter().flat_map(|(_, p)| p.iter().map(|p| p.0)).collect();
-        for (page, label, _) in SEARCH_INDEX {
+        for (page, label, _) in SEARCH_INDEX.iter() {
             assert!(pages.contains(page), "{label} points to unknown page {page}");
         }
     }

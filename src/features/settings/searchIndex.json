@@ -1,0 +1,472 @@
+[
+ {
+  "page": "winfer-code",
+  "label": "Use TUI style",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Text size",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Model",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Reasoning effort",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Permission mode",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Auto-approve in panes",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Plan sidebar",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Lean setup",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Short Codex prompt",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Codex CLI panes too",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Skills",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Context compaction",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Micro-compact at",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Full compact at",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Tools",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Always-allowed commands",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "MCP servers",
+  "words": "Extra servers for every backend, as JSON: { \\"
+ },
+ {
+  "page": "mobile",
+  "label": "Phone",
+  "words": ""
+ },
+ {
+  "page": "mobile",
+  "label": "Pair a phone",
+  "words": ""
+ },
+ {
+  "page": "mobile",
+  "label": "Relay",
+  "words": ""
+ },
+ {
+  "page": "mobile",
+  "label": "Relay URL",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Terminals",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Text size",
+  "words": "Also ⌘= / ⌘- / ⌘0, or ⌘ + scroll over a terminal."
+ },
+ {
+  "page": "general",
+  "label": "Code editor",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Open projects and worktrees in",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Keyboard",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Keyboard shortcuts",
+  "words": "See every shortcut and change any of them."
+ },
+ {
+  "page": "agents",
+  "label": "New panes",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Default agent",
+  "words": "⌘T, split and “open a new window” start this agent."
+ },
+ {
+  "page": "agents",
+  "label": "Always open new agents in their own worktree",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Models",
+  "words": "The model each agent starts with in new panes."
+ },
+ {
+  "page": "agents",
+  "label": "Versions",
+  "words": "Updating changes the CLI on disk; running panes keep their version until restarted."
+ },
+ {
+  "page": "agents",
+  "label": "Check for agent updates",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Auto-approve",
+  "words": "Agents run tools and edits without asking. Only for sandboxes or work you can undo."
+ },
+ {
+  "page": "agents",
+  "label": "System prompt",
+  "words": "Given to every agent when it starts (or restarts). Leave empty for none."
+ },
+ {
+  "page": "agents",
+  "label": "Instructions for every agent",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Agent tools",
+  "words": "Tools agents rarely use are left out, since every tool costs context in each request."
+ },
+ {
+  "page": "agents",
+  "label": "Review",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Run tests when an agent finishes",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Screenshot the dev server",
+  "words": "Shows the agent's running app on its review card."
+ },
+ {
+  "page": "agents",
+  "label": "Session progress",
+  "words": "Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked."
+ },
+ {
+  "page": "agents",
+  "label": "Estimate how far working agents are",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Check every",
+  "words": ""
+ },
+ {
+  "page": "data",
+  "label": "Export",
+  "words": "Saves settings, workspaces, plugins with their data, and usage history into one file to import on another machine."
+ },
+ {
+  "page": "data",
+  "label": "Include secrets",
+  "words": "ChatGPT sign-in, the voice OpenAI key and plugin vault values, encrypted with a passphrase."
+ },
+ {
+  "page": "data",
+  "label": "Export file",
+  "words": ""
+ },
+ {
+  "page": "data",
+  "label": "Import",
+  "words": "Replaces this machine's data with an export, then restarts."
+ },
+ {
+  "page": "data",
+  "label": "Import and restart",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Memory",
+  "words": "winfer's own resident memory, sampled every 5 seconds into the log. A steady climb before a crash points at a leak; the timeline in the export shows it."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Now / session peak",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Terminals",
+  "words": "Each live pane also holds up to 2 MB of replay scrollback in the backend, plus its terminal buffer."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Last 2 minutes",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Logs",
+  "words": "winfer.log keeps the app log (rotated at 5 MB); crash.log holds panics with backtraces. Both live in the folder below."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Log folder",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Sizes",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Verbose logging",
+  "words": "Also records debug lines (more detail, faster-growing log). Kept across restarts."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Copy summary",
+  "words": "Version, memory and the crash-log tail — paste it into a bug report."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Export for a bug report",
+  "words": "A zip with the summary, both logs and the memory timeline. No settings, chats or secrets."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Clear logs",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Latest crash",
+  "words": "The end of crash.log. Full backtraces are in the file and in the export."
+ },
+ {
+  "page": "voice",
+  "label": "Live voice",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Connection",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "OpenAI API key",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Model (API key)",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "System prompt",
+  "words": "How the voice agent behaves and talks. winfer adds the current panes, workspaces and browser tabs after it; changes apply right away, also mid-conversation."
+ },
+ {
+  "page": "voice",
+  "label": "Voice",
+  "words": "API key · ChatGPT plan. Applies to the next conversation."
+ },
+ {
+  "page": "voice",
+  "label": "Input",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Microphone",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Read aloud",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Speak agent updates aloud",
+  "words": "“Codex needs your input”, “Claude Code finished”."
+ },
+ {
+  "page": "ai",
+  "label": "LLM",
+  "words": "Writes progress estimates, review summaries and other short texts in winfer."
+ },
+ {
+  "page": "ai",
+  "label": "Provider",
+  "words": ""
+ },
+ {
+  "page": "ai",
+  "label": "Model",
+  "words": ""
+ },
+ {
+  "page": "ai",
+  "label": "ChatGPT account",
+  "words": "Runs the LLM below on your ChatGPT plan (Plus or Pro); no API key needed. Until you sign in, the Codex CLI's own login is used instead if Codex is installed. Set a weekly limit or disconnect winfer in ChatGPT's settings."
+ },
+ {
+  "page": "theme",
+  "label": "Light or dark",
+  "words": "theme mode sun moon appearance"
+ },
+ {
+  "page": "theme",
+  "label": "Themes",
+  "words": "Winfer Dark Light Tokyo Night Catppuccin Dracula Nord Gruvbox Solarized GitHub Rosé Pine One Dark"
+ },
+ {
+  "page": "accounts",
+  "label": "Claude account",
+  "words": "sign in plan login"
+ },
+ {
+  "page": "accounts",
+  "label": "ChatGPT account",
+  "words": "sign in plan login openai"
+ },
+ {
+  "page": "accounts",
+  "label": "Multiple accounts",
+  "words": "switch account when one runs out of usage"
+ },
+ {
+  "page": "plugins",
+  "label": "Discover plugins",
+  "words": "store catalog install"
+ },
+ {
+  "page": "plugins",
+  "label": "Installed plugins",
+  "words": "remove update"
+ },
+ {
+  "page": "plugins",
+  "label": "Hide names on plugin tabs",
+  "words": ""
+ },
+ {
+  "page": "skills",
+  "label": "Discover skills",
+  "words": "store catalog install"
+ },
+ {
+  "page": "skills",
+  "label": "Installed skills",
+  "words": ""
+ },
+ {
+  "page": "usage",
+  "label": "Usage limits",
+  "words": "5-hour weekly rings title bar"
+ },
+ {
+  "page": "usage",
+  "label": "Spend",
+  "words": "cost tokens API prices"
+ },
+ {
+  "page": "usage",
+  "label": "Show task cost on panes",
+  "words": "cost header"
+ },
+ {
+  "page": "updates",
+  "label": "Update channel",
+  "words": "Stable Nebula"
+ },
+ {
+  "page": "updates",
+  "label": "Check for updates",
+  "words": "install download version"
+ },
+ {
+  "page": "updates",
+  "label": "What's new",
+  "words": "release notes changelog"
+ },
+ {
+  "page": "agents",
+  "label": "Auto-approve",
+  "words": "permissions yolo approve without asking"
+ },
+ {
+  "page": "agents",
+  "label": "Versions",
+  "words": "update agent CLI"
+ },
+ {
+  "page": "agents",
+  "label": "Session progress",
+  "words": "estimate how far agents are"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Permission mode",
+  "words": "approve ask yolo plan"
+ }
+]
