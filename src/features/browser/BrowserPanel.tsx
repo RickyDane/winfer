@@ -3,7 +3,7 @@ import { DevicePanel } from "@/features/android/DevicePanel";
 import { ViewerPanel } from "@/features/viewer/ViewerPanel";
 import { PanelActions } from "@/features/plugins/PanelActions";
 import { keysFor } from "@/commands/keymap";
-import { AppWindow, ArrowLeft, ArrowRight, Bot, Crosshair, Download, FileText, Globe, Monitor, PanelRight, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
+import { AppWindow, ArrowLeft, ArrowRight, Bot, Code, Download, FileText, Globe, Lock, Monitor, MousePointerClick, PanelRight, Plus, Proportions, RotateCw, Smartphone, SquareTerminal, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
@@ -151,13 +151,13 @@ export function BrowserPanel() {
 
   return (
     <div ref={root} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+      <div className="flex shrink-0 items-end gap-1 border-b border-border px-2 pt-2">
+        <div className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
           {groups.map(({ workspace, tabs }, i) => (
-            <div key={workspace.id} className="flex shrink-0 items-center gap-1">
-              {i > 0 && <div className="mx-0.5 h-4 w-px shrink-0 bg-border" />}
+            <div key={workspace.id} className="flex shrink-0 items-end gap-0.5">
+              {i > 0 && <div className="mx-0.5 mb-2 h-4 w-px shrink-0 bg-border" />}
               {groups.length > 1 && (
-                <span title={workspace.rootDir} className="max-w-24 shrink-0 truncate px-0.5 text-[10px] font-medium text-fg-subtle">
+                <span title={workspace.rootDir} className="mb-2 max-w-24 shrink-0 truncate px-0.5 text-[10px] font-medium text-fg-subtle">
                   {workspace.name}
                 </span>
               )}
@@ -179,18 +179,18 @@ export function BrowserPanel() {
                   }}
                   title={`${tab.url}\n${workspace.name}${agentTabs[tab.id] ? `\n${agentTabs[tab.id].adopted ? "An agent took over this tab" : "An agent is using this tab"}` : ""}`}
                   className={cn(
-                    "group flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs",
-                    workspace.id === workspaceId && tab.id === active?.id ? "bg-active text-fg" : "text-fg-muted hover:bg-hover",
+                    "group flex h-8 max-w-44 shrink-0 items-center gap-[7px] rounded-t-lg border border-b-0 pr-1.5 pl-2.5 text-xs",
+                    workspace.id === workspaceId && tab.id === active?.id ? "border-border bg-panel-raised text-fg" : "border-transparent text-fg-subtle hover:bg-hover hover:text-fg-muted",
                     agentTabs[tab.id] && "agent-tab",
                     agentTabs[tab.id]?.adopted && "agent-adopted",
                     focusedPaneId && tabPane(browser, workspace.id, tab.id, workspaces) === focusedPaneId && "browser-linked-tab",
                   )}
                 >
                   {agentTabs[tab.id] ? <Bot size={12} className="agent-icon shrink-0" /> : <TabIcon favicon={tab.favicon} />}
-                  <span className="truncate">{label(tab)}</span>
+                  <span className="flex-1 truncate text-left">{label(tab)}</span>
                   <X
                     size={11}
-                    className="shrink-0 opacity-0 group-hover:opacity-60 hover:opacity-100"
+                    className={cn("shrink-0 rounded hover:bg-active hover:opacity-100", workspace.id === workspaceId && tab.id === active?.id ? "opacity-60" : "opacity-0 group-hover:opacity-60")}
                     onClick={(e) => {
                       e.stopPropagation();
                       void closeTab(tab.id, workspace.id);
@@ -201,12 +201,14 @@ export function BrowserPanel() {
             </div>
           ))}
         </div>
-        <IconButton title="New tab" onClick={() => void newTab()}>
-          <Plus size={14} />
-        </IconButton>
+        <span className="mb-1">
+          <IconButton title="New tab" onClick={() => void newTab()}>
+            <Plus size={14} />
+          </IconButton>
+        </span>
       </div>
 
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
+      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-panel-raised px-2">
         <IconButton title="Back" onClick={() => void history(-1)}>
           <ArrowLeft size={14} />
         </IconButton>
@@ -214,14 +216,22 @@ export function BrowserPanel() {
           <ArrowRight size={14} />
         </IconButton>
         <form
-          className={cn("mx-1 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 text-fg-subtle", agentHere && "agent-url")}
+          className={cn("mx-1 flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent bg-hover pr-2.5 pl-2 text-fg-subtle hover:border-border-strong focus-within:border-accent", agentHere && "agent-url")}
           onSubmit={(e) => {
             e.preventDefault();
             if (address.trim()) void openUrl(address, { newTab: !active, workspaceId });
             urlInput.current?.blur();
           }}
         >
-          {agentHere ? <Bot size={12} className="agent-icon shrink-0" /> : <Globe size={12} className="shrink-0" />}
+          {agentHere ? (
+            <Bot size={12} className="agent-icon shrink-0" />
+          ) : active?.url.startsWith("https://") ? (
+            <Lock size={12} className="shrink-0 text-success" aria-label="Secure connection" />
+          ) : /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)/.test(active?.url ?? "") ? (
+            <Monitor size={12} className="shrink-0" aria-label="Local dev server" />
+          ) : (
+            <Globe size={12} className="shrink-0" />
+          )}
           <input
             ref={urlInput}
             value={address}
@@ -231,7 +241,7 @@ export function BrowserPanel() {
             onKeyDown={(e) => e.key === "Escape" && urlInput.current?.blur()}
             placeholder={`Search or enter address (${keysFor({ type: "browser.focusUrl" })})`}
             spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg-muted outline-none placeholder:text-fg-subtle"
+            className="min-w-0 flex-1 bg-transparent text-[12.5px] text-fg outline-none placeholder:text-fg-subtle"
           />
           {agentHere && (
             <span className="agent-chip" title={`${who} ${agentHere.adopted ? "took over" : "is using"} this tab`}>
@@ -256,9 +266,9 @@ export function BrowserPanel() {
         <button
           title={`Pick an element and send it to the agent (${keysFor({ type: "browser.pick" })})`}
           onClick={() => void togglePick()}
-          className={cn("rounded p-1 hover:bg-hover hover:text-fg", picking ? "bg-accent-soft text-accent" : "text-fg-subtle")}
+          className={cn("grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg", picking ? "bg-accent-soft text-accent" : "text-fg-muted")}
         >
-          <Crosshair size={14} />
+          <MousePointerClick size={15} />
         </button>
         <PanelActions panel="browser" />
         <button
@@ -273,9 +283,9 @@ export function BrowserPanel() {
         <button
           title="Console and network errors"
           onClick={() => useBrowser.setState({ consoleOpen: !consoleOpen })}
-          className={cn("relative rounded p-1 hover:bg-hover hover:text-fg", consoleOpen ? "text-fg" : "text-fg-subtle")}
+          className={cn("relative grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg", consoleOpen ? "bg-accent-soft text-accent" : "text-fg-muted")}
         >
-          <SquareTerminal size={14} />
+          <Code size={15} />
           {errors > 0 && (
             <span className="absolute -top-0.5 -right-0.5 min-w-3.5 rounded-full bg-danger px-0.5 text-center text-[9px] leading-3.5 font-semibold text-white">
               {errors > 99 ? "99" : errors}
