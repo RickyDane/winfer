@@ -9,7 +9,7 @@ import { paneUsesWeb } from "@/features/code/styles";
 import { useStarting } from "./xtermRegistry";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { progressTitle, useProgress } from "@/features/progress/progress";
-import { GlassPaneHeader } from "./GlassPaneHeader";
+import { PaneHeader, PaneStatusLine } from "./PaneHeader";
 import { tabPane, useBrowser } from "@/features/browser/browser";
 
 /**
@@ -61,9 +61,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
         browserVisible && browserLinked && "browser-linked-pane",
       )}
     >
-      <GlassPaneHeader
-        {...{ pane, index, focused, zoomed, onFocus, workspaceName, name, label, renaming, setRenaming, progress, showProgress }}
-      />
+      <PaneHeader {...{ pane, index, focused, zoomed, onFocus, workspaceName, name, label, renaming, setRenaming, progress, showProgress }} />
 
       {searching && <PaneSearch paneId={pane.id} />}
       {pane.provider === "winfer" && paneUsesWeb(pane.id) ? (
@@ -75,6 +73,8 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
           <TerminalHost pane={pane} focused={focused} />
         </div>
       )}
+      {/* winfer code's web UI has a status line of its own. */}
+      {!(pane.provider === "winfer" && paneUsesWeb(pane.id)) && <PaneStatusLine pane={pane} onFocus={onFocus} />}
       {starting && (
         <div className={cn("anim-fade pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center", "top-20")}>
           <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">

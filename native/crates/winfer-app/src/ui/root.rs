@@ -1156,7 +1156,8 @@ impl Root {
             .when(dragged, |d| d.opacity(0.4))
             .child(header)
             .child(if is_code { div().flex_1().min_h_0().child(body) } else { div().flex_1().min_h_0().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body) })
-            .children(status_line)
+            // winfer code's own view has a status line of its own.
+            .children(status_line.filter(|_| !is_code))
             .children(search)
             .when_some(starting, |d, text| {
                 d.child(
