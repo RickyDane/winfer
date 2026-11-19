@@ -1,0 +1,56 @@
+//! winfer as a native GPUI app. The backend comes unchanged from the Tauri app (see
+//! `winfer-backend`), and the binary answers the same subcommands so agents can use it.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod audio;
+mod assets;
+mod backend;
+mod code;
+mod fonts;
+mod model;
+mod pdf;
+mod request;
+mod status;
+mod terminal;
+mod updates;
+mod voice;
+mod theme;
+mod ui;
+
+use winfer_backend::{harness, hooks, mcp, usage};
+
+fn run_subcommand() -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let rest = args.get(1..).unwrap_or(&[]);
+    match args.first().map(String::as_str) {
+        Some("mcp-stdio") => mcp::run_stdio(),
+        Some("mcp-filter") => std::process::exit(mcp::run_filter(rest)),
+        Some("hook") => hooks::run_hook(rest),
+        Some("statusline") => usage::run_statusline(),
+        Some("code") => harness::run(rest),
+        Some("--version") | Some("-v") | Some("-V") => println!("winfer {}", env!("CARGO_PKG_VERSION")),
+        _ => return false,
+    }
+    true
+}
+
+fn main() {
+    if run_subcommand() {
+        return;
+    }
+    // One winfer at a time: two copies would share the database and kill each other's browsers.
+    let Some(_instance) = backend::acquire_instance_lock() else {
+        eprintln!("winfer is already running");
+        return;
+    };
+    if let Err(err) = backend::start() {
+        eprintln!("winfer failed to start: {err}");
+        std::process::exit(1);
+    }
+    gpui_kit::application().with_assets(assets::AppAssets).run(|cx| {
+        gpui_kit::init(cx);
+        ui::root::bind_keys(cx);
+        ui::root::open_main_window(cx);
+        cx.on_app_quit(|_| async { backend::shutdown() }).detach();
+    });
+}

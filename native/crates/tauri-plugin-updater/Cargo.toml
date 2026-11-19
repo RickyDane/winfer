@@ -1,0 +1,8 @@
+[package]
+name = "tauri-plugin-updater"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tauri.workspace = true
+serde_json.workspace = true

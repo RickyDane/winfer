@@ -1,0 +1,1501 @@
+//! The main window (port of `src/app/AppShell.tsx`): title bar, sidebar, tiled panes, side panel.
+
+use crate::backend;
+use crate::code::session::CodeModel;
+use crate::ui::code_view::{CodeView, OpenLink};
+use crate::model::layout::{self, DropSide, LayoutNode, SplitDir, leaves};
+use crate::model::{AddPane, AgentStatus, AppState, Pane, SidePanel, View};
+use crate::status;
+use crate::terminal::{self, Event as SessionEvent, Events, SESSIONS};
+use crate::theme::{self, Colors};
+use crate::ui::browser::BrowserPanel;
+use crate::ui::viewer::ViewerPanel;
+use crate::ui::android::AndroidPanel;
+use crate::ui::terminal_view::{self, TerminalView};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::{Icon, Theme as ComponentTheme, ThemeMode};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Duration;
+use tauri::Manager;
+use winfer_backend::{providers, store};
+
+#[path = "commands.rs"]
+pub mod commands;
+#[path = "agent_api.rs"]
+mod agent_api;
+#[path = "overlays.rs"]
+mod overlays;
+#[path = "dialogs.rs"]
+mod dialogs;
+#[path = "settings.rs"]
+mod settings;
+#[path = "review.rs"]
+mod review;
+#[path = "usage.rs"]
+mod usage;
+#[path = "new_menu.rs"]
+mod new_menu;
+#[path = "pane_note.rs"]
+mod pane_note;
+#[path = "orchestration.rs"]
+mod orchestration;
+#[path = "progress.rs"]
+mod progress;
+#[path = "plugins.rs"]
+mod plugins;
+#[path = "menu.rs"]
+mod menu;
+#[path = "sidebar.rs"]
+mod sidebar;
+#[path = "pane_header.rs"]
+mod pane_header;
+#[path = "worktrees.rs"]
+mod worktrees;
+#[path = "accounts.rs"]
+mod accounts;
+#[path = "usage_page.rs"]
+mod usage_page;
+#[path = "settings_more.rs"]
+mod settings_more;
+#[path = "settings_plugins.rs"]
+mod settings_plugins;
+#[path = "settings_skills.rs"]
+mod settings_skills;
+#[path = "settings_harness.rs"]
+mod settings_harness;
+#[path = "mobile.rs"]
+mod mobile;
+#[path = "updates_ui.rs"]
+mod updates_ui;
+#[path = "voice_tools.rs"]
+pub mod voice_tools;
+#[path = "voice_ui.rs"]
+mod voice_ui;
+
+use agent_api::PendingQuestions;
+use commands::Command;
+use overlays::Entry;
+
+actions!(winfer, [ToggleSidePanel, Quit, Hide, HideOthers, Minimize, Zoom]);
+
+const GAP: f32 = 8.0;
+const MIN_SIDEBAR: f32 = 180.0;
+const MAX_SIDEBAR: f32 = 520.0;
+const MIN_SIDE_PANEL: f32 = 280.0;
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-h", Hide, None),
+        KeyBinding::new("cmd-alt-h", HideOthers, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("cmd-c", terminal_view::Copy, Some("Terminal")),
+        KeyBinding::new("cmd-v", terminal_view::Paste, Some("Terminal")),
+    ]);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Hide, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &Minimize, cx| {
+        if let Some(window) = cx.active_window() {
+            let _ = window.update(cx, |_, window, _| window.minimize_window());
+        }
+    });
+    cx.on_action(|_: &Zoom, cx| {
+        if let Some(window) = cx.active_window() {
+            let _ = window.update(cx, |_, window, _| window.zoom_window());
+        }
+    });
+    // The macOS menu bar: the standard app and window items (Hide, Minimize, Quit) and their keys.
+    cx.set_menus(vec![
+        Menu::new("winfer").items([
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Hide winfer", Hide),
+            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::separator(),
+            MenuItem::action("Quit winfer", Quit),
+        ]),
+        Menu::new("Window").items([MenuItem::action("Minimize", Minimize), MenuItem::action("Zoom", Zoom)]),
+    ]);
+}
+
+pub fn open_main_window(cx: &mut App) {
+    let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some("winfer".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.0), px(12.0))),
+        }),
+        ..Default::default()
+    };
+    cx.open_window(options, |window, cx| {
+        let view = cx.new(|cx| Root::new(window, cx));
+        cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
+    })
+    .expect("failed to open window");
+    cx.activate(true);
+}
+
+/// The browser panel as the content of its own window.
+struct UndockedBrowser {
+    browser: Entity<BrowserPanel>,
+    state: Entity<AppState>,
+    _cx: FocusHandle,
+}
+
+impl Render for UndockedBrowser {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let c = theme::colors(&self.state.read(cx).theme);
+        div().size_full().bg(c.panel).text_color(c.fg).child(self.browser.clone())
+    }
+}
+
+struct Rect {
+    id: String,
+    bounds: Bounds<Pixels>,
+}
+
+struct Gutter {
+    path: Vec<usize>,
+    index: usize,
+    dir: SplitDir,
+    bounds: Bounds<Pixels>,
+    span: f32,
+}
+
+struct GutterDrag {
+    path: Vec<usize>,
+    index: usize,
+    dir: SplitDir,
+    span: f32,
+    start: Point<Pixels>,
+    sizes: Vec<f64>,
+}
+
+enum Drag {
+    Sidebar,
+    SidePanel,
+    Gutter(GutterDrag),
+    Pane { id: String, at: Point<Pixels> },
+}
+
+fn place(node: &LayoutNode, bounds: Bounds<Pixels>, path: &mut Vec<usize>, rects: &mut Vec<Rect>, gutters: &mut Vec<Gutter>) {
+    match node {
+        LayoutNode::Leaf { pane_id } => rects.push(Rect { id: pane_id.clone(), bounds }),
+        LayoutNode::Split { dir, sizes, children } => {
+            let gaps = GAP * (children.len() as f32 - 1.0);
+            let span = if *dir == SplitDir::Row { bounds.size.width } else { bounds.size.height } / px(1.0) - gaps;
+            let mut offset = 0.0;
+            for (i, child) in children.iter().enumerate() {
+                let len = span * sizes[i] as f32;
+                let child_bounds = if *dir == SplitDir::Row {
+                    Bounds::new(point(bounds.origin.x + px(offset), bounds.origin.y), size(px(len), bounds.size.height))
+                } else {
+                    Bounds::new(point(bounds.origin.x, bounds.origin.y + px(offset)), size(bounds.size.width, px(len)))
+                };
+                path.push(i);
+                place(child, child_bounds, path, rects, gutters);
+                path.pop();
+                if i + 1 < children.len() {
+                    let gutter = if *dir == SplitDir::Row {
+                        Bounds::new(point(child_bounds.right(), bounds.origin.y), size(px(GAP), bounds.size.height))
+                    } else {
+                        Bounds::new(point(bounds.origin.x, child_bounds.bottom()), size(bounds.size.width, px(GAP)))
+                    };
+                    gutters.push(Gutter { path: path.clone(), index: i, dir: *dir, bounds: gutter, span });
+                }
+                offset += len + GAP;
+            }
+        }
+    }
+}
+
+fn drop_side(bounds: Bounds<Pixels>, at: Point<Pixels>) -> DropSide {
+    let x = (at.x - bounds.left()) / bounds.size.width;
+    let y = (at.y - bounds.top()) / bounds.size.height;
+    let edge = 0.25;
+    if x < edge {
+        DropSide::Left
+    } else if x > 1.0 - edge {
+        DropSide::Right
+    } else if y < edge {
+        DropSide::Top
+    } else if y > 1.0 - edge {
+        DropSide::Bottom
+    } else {
+        DropSide::Center
+    }
+}
+
+fn status_color(status: AgentStatus, c: &Colors) -> Hsla {
+    match status {
+        AgentStatus::Idle => c.subtle,
+        AgentStatus::Working => c.success,
+        AgentStatus::NeedsInput => c.warning,
+        AgentStatus::Done => c.accent,
+        AgentStatus::Error => c.danger,
+    }
+}
+
+pub struct Root {
+    state: Entity<AppState>,
+    events: Events,
+    terminals: HashMap<String, Entity<TerminalView>>,
+    /// winfer code panes shown as a chat: the process side and the view, and which panes chose it.
+    code_models: HashMap<String, Entity<CodeModel>>,
+    code_views: HashMap<String, Entity<CodeView>>,
+    code_choice: HashMap<String, bool>,
+    /// The browser panel's own window, while it's undocked.
+    browser_window: Option<AnyWindowHandle>,
+    updates: updates_ui::UpdatesUi,
+    voice: voice_ui::VoiceUi,
+    /// The tile area's bounds as of the last frame.
+    tile_bounds: Bounds<Pixels>,
+    drag: Option<Drag>,
+    save_task: Option<Task<()>>,
+    last_saved: String,
+    focused_view: Option<String>,
+    /// Holds the keyboard when no pane or field does, so app shortcuts always reach `handle_shortcut`.
+    focus: FocusHandle,
+    focus_outside: u8,
+    browser: Entity<BrowserPanel>,
+    viewer: Entity<ViewerPanel>,
+    android: Entity<AndroidPanel>,
+    side_open: Vec<String>,
+    side_shown: Option<String>,
+    applied_theme: Option<String>,
+    toasts: Vec<commands::Toast>,
+    questions: std::collections::VecDeque<PendingQuestions>,
+    question_serial: u64,
+    question_input: Option<Entity<gpui_kit::component::input::InputState>>,
+    question_picked: Vec<usize>,
+    palette_input: Option<Entity<gpui_kit::component::input::InputState>>,
+    palette_entries: Vec<Entry>,
+    palette_selected: usize,
+    bg_notes: HashMap<String, Vec<String>>,
+    #[cfg(debug_assertions)]
+    dev_layer_opened: bool,
+    usage: usage::UsageStore,
+    wakes_loaded: bool,
+    review: review::ReviewStore,
+    review_opened: bool,
+    history: Option<review::HistoryUi>,
+    settings: Option<settings::SettingsUi>,
+    recording: Option<String>,
+    suspend_saving: bool,
+    orchestration: orchestration::Orchestration,
+    progress_ui: progress::ProgressUi,
+    plugins: plugins::PluginHost,
+    menu: Option<menu::OpenMenu>,
+    sidebar: sidebar::SidebarUi,
+    meters: pane_header::PaneMeters,
+    search: Option<pane_header::SearchBox>,
+    worktrees: worktrees::WorktreesUi,
+    failover: accounts::Failover,
+    usage_page: usage_page::UsagePage,
+    more: settings_more::MoreSettings,
+    plugin_page: settings_plugins::PluginsPage,
+    skill_page: settings_skills::SkillsPage,
+    harness_page: settings_harness::HarnessPage,
+    mobile: mobile::MobileBridge,
+    new_pane: Option<dialogs::NewPaneDialog>,
+    model_dialog: Option<dialogs::ModelDialog>,
+    diff_dialog: Option<dialogs::DiffDialog>,
+    models: HashMap<String, Vec<dialogs::ModelInfo>>,
+    new_menu: new_menu::NewMenu,
+    pane_note: Option<pane_note::NoteUi>,
+}
+
+impl Root {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (tx, rx) = async_channel::unbounded::<SessionEvent>();
+        let state = cx.new(|_| AppState::new());
+        cx.observe(&state, |this, _, cx| {
+            this.schedule_save(cx);
+            cx.notify();
+        })
+        .detach();
+
+        let forward = tx.clone();
+        backend::app().listen_any(move |event, payload| {
+            if matches!(event, "pty://exit" | "agent://status" | "notification://action" | "mobile://request" | "mobile://changed" | "mcp://call" | "bg://note" | "usage://report") || event.starts_with("browser://") {
+                let _ = forward.try_send(SessionEvent::Backend(event.to_string(), payload.clone()));
+            }
+        });
+
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(event) = rx.recv().await {
+                if this.update_in(cx, |this, window, cx| this.on_session_event(event, window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let ticker = state.clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let finished = cx.update(|cx| status::tick(&ticker, cx));
+                if this.update(cx, |this, cx| {
+                    for id in &finished {
+                        this.agent_finished(id, cx);
+                    }
+                    this.tick_progress(cx);
+                    this.tick_meters(cx);
+                    this.tick_worktrees(cx);
+                    this.tick_failover(cx);
+                    this.deliver_bg_notes(cx);
+                    this.expire_questions(cx);
+                }).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let loading = state.clone();
+        cx.spawn(async move |_, cx| {
+            let snapshot = backend::background(|| store::state_load(backend::app().state()).map(|s| serde_json::to_value(s).unwrap_or(Value::Null))).await;
+            let snapshot = snapshot.ok().and_then(Result::ok).unwrap_or(Value::Null);
+            let _ = loading.update(cx, |s, cx| {
+                s.hydrate(snapshot);
+                theme::set_palette(&s.theme);
+                // Development aid: open panes running these providers at launch.
+                // Development aid: open (and switch to) a workspace for this folder.
+                #[cfg(debug_assertions)]
+                if let Ok(dir) = std::env::var("WINFER_NATIVE_WORKSPACE") {
+                    let name = dir.rsplit('/').find(|p| !p.is_empty()).unwrap_or("workspace").to_string();
+                    let id = s.create_workspace(&name, &dir);
+                    s.set_active_workspace(&id);
+                    if !s.expanded_workspaces.contains(&id) {
+                        s.expanded_workspaces.push(id);
+                    }
+                }
+                #[cfg(debug_assertions)]
+                if let Ok(list) = std::env::var("WINFER_NATIVE_SPAWN") {
+                    for provider in list.split(',') {
+                        s.add_pane(provider, AddPane { prompt: std::env::var("WINFER_NATIVE_PROMPT").ok(), ..AddPane::default() });
+                    }
+                }
+                cx.notify();
+            });
+            let found = tauri::async_runtime::spawn(providers::providers_list()).await;
+            if let Ok(found) = found {
+                let found = found.into_iter().map(|p| crate::model::AgentProvider { info: p.provider, installed: p.installed }).collect();
+                let _ = loading.update(cx, |s, cx| {
+                    s.providers = found;
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+
+        cx.defer_in(window, |this, _, cx| {
+            this.start_usage(cx);
+            this.start_updates(cx);
+            this.reload_plugins(cx);
+        });
+        window.activate_window();
+        let panel_state = state.clone();
+        let browser = cx.new(|cx| BrowserPanel::new(panel_state, window, cx));
+        let viewer_state = state.clone();
+        let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
+        let android_state = state.clone();
+        let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
+    }
+
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        if !self.state.read(cx).hydrated || self.suspend_saving {
+            return;
+        }
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            let _ = this.update(cx, |this, cx| {
+                let snapshot = this.state.read(cx).snapshot();
+                let json = snapshot.to_string();
+                if json == this.last_saved {
+                    return;
+                }
+                this.last_saved = json;
+                backend::background(move || {
+                    if let Ok(snapshot) = serde_json::from_value(snapshot) {
+                        let _ = store::state_save(backend::app().state(), snapshot);
+                    }
+                });
+            });
+        }));
+    }
+
+    fn on_session_event(&mut self, event: SessionEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            SessionEvent::Dirty(id) => {
+                if let Some(view) = self.terminals.get(&id) {
+                    view.update(cx, |_, cx| cx.notify());
+                } else if let Some(session) = SESSIONS.get(&id) {
+                    session.painted();
+                }
+            }
+            SessionEvent::Title(id, raw) => {
+                self.state.update(cx, |s, cx| {
+                    let Some(pane) = s.pane(&id) else { return };
+                    let provider = s.providers.iter().find(|p| p.id == pane.provider);
+                    let name = provider.map_or(String::new(), |p| p.name.clone());
+                    let command = provider.and_then(|p| p.command.clone()).unwrap_or_default();
+                    let title = crate::model::clean_agent_title(&raw, &[&name, &command, &pane.provider]);
+                    if let Some(title) = title {
+                        if let Some(pane) = s.pane_mut(&id).filter(|p| p.agent_title.as_ref() != Some(&title)) {
+                            pane.agent_title = Some(title);
+                            cx.notify();
+                        }
+                    }
+                });
+            }
+            SessionEvent::Notice(id, message) => status::notice(&self.state, &id, message, cx),
+            SessionEvent::Output(id) => {
+                status::output(&self.state, &id, cx);
+                self.check_limit_output(&id, cx);
+            }
+            SessionEvent::DevUrl(id, url) => self.state.update(cx, |s, cx| {
+                if let Some(p) = s.pane_mut(&id).filter(|p| p.dev_url.as_ref() != Some(&url)) {
+                    p.dev_url = Some(url);
+                    cx.notify();
+                }
+            }),
+            SessionEvent::OpenLink { pane_id, link, editor } => self.open_link(pane_id, link, editor, window, cx),
+            SessionEvent::Clipboard(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            SessionEvent::FirstOutput(id) => self.state.update(cx, |s, cx| {
+                s.starting.remove(&id);
+                cx.notify();
+            }),
+            SessionEvent::StartingProcess(id) => self.state.update(cx, |s, cx| {
+                s.starting.insert(id, "process");
+                cx.notify();
+            }),
+            SessionEvent::Worktree { pane_id, info } => self.state.update(cx, |s, cx| {
+                if let Some(p) = s.pane_mut(&pane_id) {
+                    p.wants_worktree = false;
+                    if let Some(info) = info {
+                        p.cwd = info.path.clone();
+                        p.worktree = Some(info);
+                    }
+                }
+                cx.notify();
+            }),
+            SessionEvent::Spawned { pane_id, busy, task } => {
+                let status = if busy { AgentStatus::Working } else { AgentStatus::Idle };
+                if self.state.read(cx).pane(&pane_id).is_some_and(|p| p.status == AgentStatus::Idle) {
+                    self.state.update(cx, |s, cx| {
+                        s.set_pane_status(&pane_id, status, true);
+                        cx.notify();
+                    });
+                }
+                if let Some(task) = task {
+                    status::set_task(&self.state, &pane_id, &task, cx);
+                }
+            }
+            SessionEvent::SpawnFailed(id) => self.state.update(cx, |s, cx| {
+                s.starting.remove(&id);
+                s.set_pane_status(&id, AgentStatus::Error, true);
+                cx.notify();
+            }),
+            SessionEvent::Backend(event, payload) if event.starts_with("browser://") => {
+                self.browser.update(cx, |b, cx| b.on_event(&event, &payload, cx));
+            }
+            SessionEvent::Backend(event, payload) => match event.as_str() {
+                "agent://status" => {
+                    if status::hook(&self.state, &payload, cx) {
+                        if let Some(id) = payload["paneId"].as_str() {
+                            self.agent_finished(id, cx);
+                        }
+                    }
+                    if let Some(id) = payload["paneId"].as_str() {
+                        self.on_meter_status(id, cx);
+                    }
+                }
+                "mcp://call" => self.on_mcp_call(payload, window, cx),
+                "notification://action" => self.on_notification_action(&payload, window, cx),
+                "mobile://request" => self.on_mobile_request(&payload, window, cx),
+                "mobile://changed" => self.on_mobile_changed(cx),
+                "usage://report" => {
+                    self.note_pane_report(&payload);
+                    self.on_usage_report(&payload, cx);
+                }
+                "bg://note" => {
+                    let (id, text) = (payload["paneId"].as_str().unwrap_or_default().to_string(), payload["text"].as_str().unwrap_or_default().to_string());
+                    self.bg_notes.entry(id).or_default().push(text);
+                    self.deliver_bg_notes(cx);
+                }
+                "pty://exit" => {
+                    let id = payload["paneId"].as_str().unwrap_or_default().to_string();
+                    let code = payload["code"].as_u64().unwrap_or(0) as u32;
+                    let pid = payload["pid"].as_u64().map(|p| p as u32);
+                    if terminal::on_exit(&id, code, pid) {
+                        if let Some(model) = self.code_models.get(&id) {
+                            model.update(cx, |m, cx| m.on_exit(code, cx));
+                        }
+                        let next = if code == 0 { AgentStatus::Done } else { AgentStatus::Error };
+                        status::report(&self.state, &id, next, Some(format!("exited with code {code}")), cx);
+                        if code == 0 {
+                            self.agent_finished(&id, cx);
+                        }
+                    }
+                    self.state.update(cx, |s, cx| {
+                        s.starting.remove(&id);
+                        cx.notify();
+                    });
+                }
+                _ => {}
+            },
+        }
+    }
+
+    fn terminal(&mut self, id: &str, cx: &mut Context<Self>) -> Entity<TerminalView> {
+        if let Some(view) = self.terminals.get(id) {
+            return view.clone();
+        }
+        let session = SESSIONS.get_or_create(id, &self.events);
+        let (state, events) = (self.state.clone(), self.events.clone());
+        let account = self.state.read(cx).pane(id).and_then(|p| self.account_for_start(&p.provider));
+        let view = cx.new(|cx| {
+            let mut v = TerminalView::new(session, state, events, cx);
+            v.start_account = account;
+            v
+        });
+        self.terminals.insert(id.to_string(), view.clone());
+        view
+    }
+
+    /// Whether a winfer pane shows the chat instead of the TUI; decided once per pane so flipping
+    /// the setting doesn't swap a running session's process.
+    pub(super) fn uses_code(&mut self, provider: &str, id: &str, cx: &App) -> bool {
+        if provider != "winfer" {
+            return false;
+        }
+        if let Some(v) = self.code_choice.get(id) {
+            return *v;
+        }
+        let on = self.state.read(cx).rest.get("codeWeb").and_then(|g| g["web"].as_bool()).unwrap_or(true) || (cfg!(debug_assertions) && std::env::var_os("WINFER_NATIVE_CODE_WEB").is_some());
+        self.code_choice.insert(id.to_string(), on);
+        on
+    }
+
+    /// The chat's process side, started on first use.
+    pub(super) fn code_model(&mut self, id: &str, cx: &mut Context<Self>) -> Option<Entity<CodeModel>> {
+        if let Some(m) = self.code_models.get(id) {
+            return Some(m.clone());
+        }
+        let s = self.state.read(cx);
+        let mut pane = s.pane(id)?.clone();
+        let settings = terminal::SpawnSettings::of(s, &pane);
+        if pane.account_id.is_none() {
+            pane.account_id = self.account_for_start(&pane.provider);
+        }
+        let session = SESSIONS.get_or_create(id, &self.events);
+        session.resize(200, 50);
+        let (events, app) = (self.events.clone(), self.state.clone());
+        let phase = if pane.wants_worktree && pane.worktree.is_none() { "worktree" } else { "process" };
+        self.state.update(cx, |s, cx| {
+            s.starting.insert(pane.id.clone(), phase);
+            cx.notify();
+        });
+        let model = cx.new(|cx| CodeModel::new(pane, settings, session, events, app, cx));
+        self.code_models.insert(id.to_string(), model.clone());
+        let pane_id = id.to_string();
+        cx.observe(&model, move |this, _, cx| this.on_code_changed(&pane_id, cx)).detach();
+        Some(model)
+    }
+
+    fn code_view(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<CodeView>> {
+        if let Some(v) = self.code_views.get(id) {
+            return Some(v.clone());
+        }
+        let model = self.code_model(id, cx)?;
+        let app = self.state.clone();
+        let view = cx.new(|cx| CodeView::new(model, app, window, cx));
+        let pane = id.to_string();
+        cx.subscribe_in(&view, window, move |this, _, OpenLink(href), window, cx| {
+            let link = if href.starts_with("http://") || href.starts_with("https://") {
+                terminal::Link::Web(href.clone())
+            } else {
+                let (path, line) = match href.rsplit_once(':') {
+                    Some((p, l)) if l.parse::<usize>().is_ok() => (p.to_string(), l.parse().ok()),
+                    _ => (href.trim_start_matches("file://").to_string(), None),
+                };
+                // A file the chat named: straight into the viewer.
+                if std::path::Path::new(&path).is_absolute() && std::path::Path::new(&path).is_file() {
+                    this.viewer.update(cx, |v, cx| v.open(path, line, false, cx));
+                    return;
+                }
+                terminal::Link::File { path, line }
+            };
+            this.open_link(pane.clone(), link, false, window, cx);
+        })
+        .detach();
+        self.code_views.insert(id.to_string(), view.clone());
+        Some(view)
+    }
+
+    /// Moves the browser panel into a window of its own, or back into the side panel.
+    pub(super) fn toggle_browser_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.browser_window.take() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            self.update_state(cx, |s| {
+                s.browser_open = true;
+                s.side_panel = Some(SidePanel::Browser);
+            });
+            cx.notify();
+            return;
+        }
+        let (browser, root, state) = (self.browser.clone(), cx.entity().downgrade(), self.state.clone());
+        let bounds = Bounds::centered(None, size(px(1000.0), px(760.0)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions { title: Some("winfer browser".into()), ..Default::default() }),
+            ..Default::default()
+        };
+        let _ = window;
+        let opened = cx.open_window(options, move |window, cx| {
+            let (browser, root, state) = (browser.clone(), root.clone(), state.clone());
+            window.on_window_should_close(cx, {
+                let root = root.clone();
+                move |_, cx| {
+                    let _ = root.update(cx, |this, cx| {
+                        this.browser_window = None;
+                        cx.notify();
+                    });
+                    true
+                }
+            });
+            let view = cx.new(|cx| UndockedBrowser { browser, state, _cx: cx.focus_handle() });
+            cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
+        });
+        if let Ok(handle) = opened {
+            self.browser_window = Some(handle.into());
+            self.update_state(cx, |s| {
+                s.browser_open = true;
+                s.side_panel = Some(SidePanel::Browser);
+            });
+            cx.notify();
+        }
+    }
+
+    fn forget_code(&mut self, id: &str) {
+        self.code_models.remove(id);
+        self.code_views.remove(id);
+    }
+
+    fn add_pane(&mut self, provider: Option<String>, opts: AddPane, cx: &mut Context<Self>) {
+        self.state.update(cx, |s, cx| {
+            let provider = provider.unwrap_or_else(|| s.default_provider_id());
+            s.add_pane(&provider, opts);
+            cx.notify();
+        });
+    }
+
+    /// Runs what the user chose in an actionable notification.
+    fn on_notification_action(&mut self, payload: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        let id = payload["paneId"].as_str().unwrap_or_default().to_string();
+        let Some(pane) = self.state.read(cx).pane(&id).cloned() else { return };
+        let name = self.state.read(cx).provider_name(&pane.provider);
+        let target = commands::PaneRef::Id(id.clone());
+        let text = payload["text"].as_str().filter(|t| !t.is_empty()).map(str::to_string);
+        let log = match (payload["action"].as_str().unwrap_or_default(), text) {
+            ("approve", _) => {
+                self.execute(Command::Approve(target), window, cx);
+                Some(format!("Approved {name} from a notification"))
+            }
+            ("decline", _) => {
+                // Esc cancels the pending request in Claude Code and Codex.
+                self.execute(Command::Interrupt(target), window, cx);
+                Some(format!("Declined {name} from a notification"))
+            }
+            ("reply", Some(text)) => {
+                let short: String = text.chars().take(80).collect();
+                self.execute(Command::SendText { target, text, submit: true }, window, cx);
+                Some(format!("Answered {name}: {short}"))
+            }
+            _ => {
+                window.activate_window();
+                cx.activate(true);
+                self.execute(Command::Focus(target), window, cx);
+                None
+            }
+        };
+        if let Some(text) = log {
+            self.update_state(cx, |s| s.log_activity(&pane.workspace_id, text, Some(pane.provider.clone())));
+        }
+    }
+
+    fn close_pane(&mut self, id: &str, cx: &mut Context<Self>) {
+        terminal::close(id);
+        self.terminals.remove(id);
+        self.forget_code(id);
+        self.code_choice.remove(id);
+        let id = id.to_string();
+        self.state.update(cx, |s, cx| {
+            s.remove_pane(&id);
+            cx.notify();
+        });
+    }
+
+    fn open_link(&mut self, pane_id: String, link: terminal::Link, editor: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match link {
+            terminal::Link::Web(url) => self.execute(Command::BrowserOpen { url, new_tab: true }, window, cx),
+            terminal::Link::File { path, line } => {
+                let s = self.state.read(cx);
+                let (cwd, roots) = match s.pane(&pane_id) {
+                    Some(p) => (p.cwd.clone(), s.workspaces.iter().find(|w| w.id == p.workspace_id).map(|w| vec![w.root_dir.clone()])),
+                    None => (self.side_terminal_pane(&pane_id, cx).map_or_else(|| "~".to_string(), |p| p.cwd), None),
+                };
+                let is_absolute = path.starts_with('/') || path.starts_with('~');
+                cx.spawn(async move |this, cx| {
+                    let query = path.clone();
+                    let found = tauri::async_runtime::spawn(async move { winfer_backend::files::files_resolve(cwd, vec![query], roots).await }).await.ok().and_then(|r| r.into_iter().next().flatten());
+                    let _ = this.update(cx, |this, cx| {
+                        let Some(found) = found else {
+                            if is_absolute {
+                                this.toast(format!("Couldn't find {path}"), cx);
+                            }
+                            return;
+                        };
+                        if editor {
+                            let chosen = this.state.read(cx).editor.clone();
+                            this.open_in_editor(found, chosen, cx);
+                        } else if found.ends_with(".html") || found.ends_with(".htm") || found.ends_with(".svg") {
+                            this.update_state(cx, |s| {
+                                s.browser_open = true;
+                                s.side_panel = Some(SidePanel::Browser);
+                            });
+                            this.browser.update(cx, |b, cx| b.open_url(format!("file://{found}"), true, None, cx)).detach();
+                        } else {
+                            this.viewer.update(cx, |v, cx| v.open(found, line, false, cx));
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+    }
+
+    fn side_terminal_pane(&self, pane_id: &str, cx: &App) -> Option<Pane> {
+        let workspace = pane_id.strip_prefix("side-terminal-")?;
+        let w = self.state.read(cx).workspaces.iter().find(|w| w.id == workspace)?;
+        Some(Pane { id: pane_id.to_string(), workspace_id: w.id.clone(), provider: "shell".to_string(), title: "Terminal".to_string(), cwd: w.root_dir.clone(), ..Default::default() })
+    }
+
+    fn side_terminal(&mut self, workspace: &str, cx: &mut Context<Self>) -> Option<Entity<TerminalView>> {
+        let id = format!("side-terminal-{workspace}");
+        let pane = self.side_terminal_pane(&id, cx)?;
+        let view = self.terminal(&id, cx);
+        view.update(cx, |v, _| v.own_pane = Some(pane));
+        Some(view)
+    }
+
+    fn close_side_terminal(&mut self, workspace: &str, cx: &mut Context<Self>) {
+        let id = format!("side-terminal-{workspace}");
+        terminal::close(&id);
+        self.terminals.remove(&id);
+        self.side_open.retain(|w| w != workspace);
+        if self.side_shown.as_deref() == Some(workspace) {
+            self.side_shown = self.side_open.last().cloned();
+        }
+        cx.notify();
+    }
+
+    fn render_side_terminal(&mut self, c: &Colors, cx: &mut Context<Self>) -> AnyElement {
+        let c = *c;
+        let active = self.state.read(cx).active_workspace_id.clone();
+        self.side_open.retain(|id| self.state.read(cx).workspaces.iter().any(|w| w.id == *id));
+        if self.side_open.is_empty() && !active.is_empty() {
+            self.side_open.push(active.clone());
+            self.side_shown = Some(active.clone());
+        }
+        let shown = self.side_shown.clone().filter(|w| self.side_open.contains(w)).or_else(|| self.side_open.last().cloned());
+        let Some(workspace) = shown else { return div().into_any_element() };
+        let Some(view) = self.side_terminal(&workspace, cx) else { return div().into_any_element() };
+        let s = self.state.read(cx);
+        let cwd = s.workspaces.iter().find(|w| w.id == workspace).map_or(String::new(), |w| w.root_dir.clone());
+        let tabs: Vec<(String, String)> = self.side_open.iter().filter_map(|id| s.workspaces.iter().find(|w| w.id == *id).map(|w| (id.clone(), w.name.clone()))).collect();
+        let show_tabs = tabs.len() > 1 || active != workspace;
+        let offer_active = !self.side_open.contains(&active);
+        let mut strip = div().flex().items_center().gap_1().h(px(32.0)).px_1p5().border_b_1().border_color(c.border);
+        for (id, name) in tabs {
+            let selected = id == workspace;
+            let (show, close) = (id.clone(), id.clone());
+            strip = strip.child(
+                div().id(SharedString::from(format!("side-tab-{id}"))).flex().items_center().gap_1p5().max_w(px(160.0)).rounded_md().px_2().h(px(24.0)).text_xs().cursor_pointer()
+                    .text_color(if selected { c.fg } else { c.muted }).when(selected, |d| d.bg(c.active))
+                    .on_click(cx.listener(move |this, _, _, cx| { this.side_shown = Some(show.clone()); cx.notify(); }))
+                    .child(div().truncate().child(name))
+                    .child(
+                        div().id(SharedString::from(format!("side-tab-x-{id}"))).cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.close_side_terminal(&close, cx); }))
+                            .child(Icon::new(IconName::X).size(px(11.0)).text_color(c.subtle)),
+                    ),
+            );
+        }
+        let add_active = active.clone();
+        let strip = strip.when(offer_active, |d| {
+            d.child(
+                div().id("side-add").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.side_open.push(add_active.clone());
+                        this.side_shown = Some(add_active.clone());
+                        cx.notify();
+                    }))
+                    .child(Icon::new(IconName::Plus).size(px(14.0)).text_color(c.subtle)),
+            )
+        });
+        let restart_id = workspace.clone();
+        let mono = crate::fonts::mono(cx);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .when(show_tabs, |d| d.child(strip))
+            .child(
+                div().flex().items_center().gap_2().border_b_1().border_color(c.border).px_3().py_1p5().text_xs().text_color(c.subtle)
+                    .child(Icon::new(IconName::FolderOpen).size(px(12.0)))
+                    .child(div().flex_1().min_w_0().truncate().font_family(mono).text_size(px(11.0)).child(cwd))
+                    .child(
+                        div().id("side-restart").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let id = format!("side-terminal-{restart_id}");
+                                this.restart_pane(&id, cx);
+                            }))
+                            .child(Icon::new(IconName::RotateCw).size(px(12.0))),
+                    ),
+            )
+            .child(div().flex_1().min_h_0().py_1p5().pr_1().pl_2p5().child(view))
+            .into_any_element()
+    }
+
+    fn render_side_panel(&mut self, c: &Colors, cx: &mut Context<Self>) -> AnyElement {
+        let c = *c;
+        let panel = self.state.read(cx).side_panel();
+        let tab = |this: &Self, cx: &mut Context<Self>, id: &'static str, icon: IconName, label: &'static str, target: SidePanel| {
+            let _ = this;
+            let active = panel == target;
+            div().id(id).flex().items_center().gap_1p5().rounded_md().px_2().py_1().text_xs().cursor_pointer()
+                .text_color(if active { c.fg } else { c.muted }).when(active, |d| d.bg(c.active)).hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::SidePanel { panel: target, show: true }, window, cx)))
+                .child(Icon::new(icon).size(px(13.0)))
+                .child(label)
+        };
+        let header = div().flex().items_center().gap_1().px_2().py_1().border_b_1().border_color(c.border)
+            .child(tab(self, cx, "side-browser", IconName::Globe, "Browser", SidePanel::Browser))
+            .child(tab(self, cx, "side-device", IconName::Smartphone, "Android", SidePanel::Device))
+            .child(tab(self, cx, "side-terminal", IconName::SquareTerminal, "Terminal", SidePanel::Terminal))
+            .child(tab(self, cx, "side-viewer", IconName::FileText, "Files", SidePanel::Viewer))
+            .child(div().flex_1())
+            .children(match panel {
+                SidePanel::Browser => self.render_panel_actions("browser", c, cx),
+                SidePanel::Device => self.render_panel_actions("android", c, cx),
+                _ => Vec::new(),
+            });
+        let body: AnyElement = match panel {
+            SidePanel::Browser if self.browser_window.is_some() => div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
+                .child("The browser is in its own window.")
+                .child(div().id("dock-browser").rounded_md().border_1().border_color(c.border_strong).px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_browser_window(window, cx))).child("Dock it back"))
+                .into_any_element(),
+            SidePanel::Browser => self.browser.clone().into_any_element(),
+            SidePanel::Viewer => self.viewer.clone().into_any_element(),
+            SidePanel::Terminal => self.render_side_terminal(&c, cx),
+            SidePanel::Device => self.android.clone().into_any_element(),
+        };
+        div().size_full().flex().flex_col().child(header).child(div().flex_1().min_h_0().child(body)).into_any_element()
+    }
+
+    /// Restarts a pane's process in place (a different model), resuming its session.
+    fn restart_pane(&mut self, id: &str, cx: &mut Context<Self>) {
+        terminal::close(id);
+        self.terminals.remove(id);
+        self.forget_code(id);
+        self.focused_view = None;
+        cx.notify();
+    }
+
+    fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_input.is_some() || !self.questions.is_empty() || self.new_pane.is_some() || self.model_dialog.is_some() || self.diff_dialog.is_some() || self.worktrees.dialog.is_some() || self.search.is_some() || self.sidebar.renaming.is_some() || self.orchestration.has_layer() || self.state.read(cx).overlay == crate::model::Overlay::Progress || self.state.read(cx).settings_open || self.history.is_some() {
+            return;
+        }
+        let focused = self.state.read(cx).focused_pane_id.clone();
+        if focused == self.focused_view {
+            return;
+        }
+        self.focused_view = focused.clone();
+        if let Some(id) = focused {
+            let provider = self.state.read(cx).pane(&id).map(|p| p.provider.clone()).unwrap_or_default();
+            if self.uses_code(&provider, &id, cx) {
+                if let Some(view) = self.code_view(&id, window, cx) {
+                    let handle = view.read(cx).focus_handle(cx);
+                    handle.focus(window, cx);
+                }
+            } else {
+                let view = self.terminal(&id, cx);
+                view.read(cx).focus.clone().focus(window, cx);
+            }
+        }
+    }
+
+    fn mouse_moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match self.drag.as_mut() {
+            Some(Drag::Sidebar) => {
+                let width = (event.position.x / px(1.0)).clamp(MIN_SIDEBAR, MAX_SIDEBAR) as f64;
+                self.state.update(cx, |s, cx| {
+                    s.sidebar_width = width.round();
+                    cx.notify();
+                });
+            }
+            Some(Drag::SidePanel) => {
+                let right = window.viewport_size().width / px(1.0) - 8.0;
+                let width = ((right - event.position.x / px(1.0)) as f64).max(MIN_SIDE_PANEL as f64);
+                self.state.update(cx, |s, cx| {
+                    s.browser_width = width.round();
+                    cx.notify();
+                });
+            }
+            Some(Drag::Gutter(drag)) => {
+                let moved = if drag.dir == SplitDir::Row { event.position.x - drag.start.x } else { event.position.y - drag.start.y };
+                let delta = ((moved / px(1.0)) / drag.span) as f64;
+                let mut sizes = drag.sizes.clone();
+                let (a, b) = (drag.index, drag.index + 1);
+                let d = delta.clamp(0.08 - sizes[a], sizes[b] - 0.08);
+                sizes[a] += d;
+                sizes[b] -= d;
+                let path = drag.path.clone();
+                let overview = self.state.read(cx).view() == View::Overview;
+                self.state.update(cx, |s, cx| {
+                    if overview {
+                        s.overview.layout = s.overview.layout.as_ref().map(|l| layout::set_sizes_at(l, &path, &sizes));
+                    } else if let Some(w) = s.active_mut() {
+                        w.layout = w.layout.as_ref().map(|l| layout::set_sizes_at(l, &path, &sizes));
+                    }
+                    cx.notify();
+                });
+            }
+            Some(Drag::Pane { at, .. }) => {
+                *at = event.position;
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    fn mouse_released(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let drag = self.drag.take();
+        if let Some(Drag::Pane { id, .. }) = drag {
+            let overview = self.state.read(cx).view() == View::Overview;
+            let tree = {
+                let s = self.state.read(cx);
+                if overview { s.overview.layout.clone() } else { s.active().and_then(|w| w.layout.clone()) }
+            };
+            if let Some(tree) = tree {
+                let mut rects = Vec::new();
+                place(&tree, self.tile_bounds, &mut Vec::new(), &mut rects, &mut Vec::new());
+                if let Some(target) = rects.iter().find(|r| r.id != id && r.bounds.contains(&event.position)) {
+                    let moved = layout::move_pane(&tree, &id, &target.id, drop_side(target.bounds, event.position));
+                    self.state.update(cx, |s, cx| {
+                        if overview {
+                            s.overview.layout = Some(moved);
+                        } else if let Some(w) = s.active_mut() {
+                            w.layout = Some(moved);
+                        }
+                        cx.notify();
+                    });
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn render_title_bar(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+        let s = self.state.read(cx);
+        let name: SharedString = s.active().map_or(String::new(), |w| w.name.clone()).into();
+        let view = s.view();
+        let live_on = self.live_voice_on();
+        let all: Vec<&Pane> = s.all_panes().collect();
+        let sessions = all.iter().filter(|p| !p.archived).count();
+        let archived = all.iter().filter(|p| p.archived).count();
+        let waiting = all.iter().any(|p| !p.archived && p.status == AgentStatus::NeedsInput);
+        let c = *c;
+        let tab = move |id: &'static str, icon: IconName, label: SharedString, active: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .rounded_md()
+                .px_2p5()
+                .py_1()
+                .text_xs()
+                .text_color(if active { c.fg } else { c.muted })
+                .when(active, |d| d.bg(c.active))
+                .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .cursor_pointer()
+                .child(Icon::new(icon).size(px(12.0)))
+                .child(label)
+        };
+        let set = |v: View| cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| this.state.update(cx, |s, cx| { s.set_view(v.clone()); cx.notify(); }));
+        div()
+            .id("title-bar")
+            .h(px(40.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .px_3()
+            .gap_2()
+            .text_color(c.subtle)
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+            .child(
+                div().flex_1().flex().items_center().pl(px(68.0)).child(
+                    div().id("toggle-sidebar").rounded_sm().p_1().hover(move |d| d.bg(c.hover).text_color(c.fg)).cursor_pointer()
+                        .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ToggleSidebar, window, cx)))
+                        .child(Icon::new(IconName::PanelLeft).size(px(15.0))),
+                ),
+            )
+            .child(
+                div().flex().items_center().gap_0p5().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_0p5()
+                    .child(tab("tab-workspace", IconName::LayoutGrid, name, view == View::Workspace).on_click(set(View::Workspace)))
+                    .child(
+                        tab("tab-overview", IconName::Layers, "Overview".into(), view == View::Overview)
+                            .child(div().text_size(px(10.0)).text_color(c.subtle).child(sessions.to_string()))
+                            .when(waiting, |d| d.child(div().size_1p5().rounded_full().bg(c.warning)))
+                            .on_click(set(View::Overview)),
+                    )
+                    .when(archived > 0 || view == View::Archive, |d| {
+                        d.child(
+                            tab("tab-archive", IconName::Archive, "Archive".into(), view == View::Archive)
+                                .child(div().text_size(px(10.0)).text_color(c.subtle).child(archived.to_string()))
+                                .on_click(set(View::Archive)),
+                        )
+                    })
+                    .children(self.render_page_tabs(c, cx)),
+            )
+            .child(
+                div().flex_1().flex().items_center().justify_end().gap_2()
+                    .child(self.render_usage_meter(c, cx))
+                    .child(
+                        div().id("live-voice").rounded_md().border_1().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .border_color(if live_on { c.accent } else { c.border }).text_color(if live_on { c.accent } else { c.subtle })
+                            .tooltip(crate::ui::code_view::tip(if live_on { "End live voice conversation" } else { "Start live voice conversation" }))
+                            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::LiveVoice, window, cx)))
+                            .child(Icon::new(IconName::AudioLines).size(px(13.0))),
+                    )
+                    .child(
+                        div().id("new-pane").flex().items_center().gap_1().rounded_md().border_1().border_color(c.border).px_2().py_1().text_xs().cursor_pointer()
+                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .tooltip(crate::ui::code_view::tip("New pane"))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_new_menu(cx)))
+                            .child(Icon::new(IconName::Plus).size(px(13.0)))
+                            .child("New"),
+                    )
+                    .child(
+                        div().id("toggle-side").rounded_sm().p_1().hover(move |d| d.bg(c.hover).text_color(c.fg)).cursor_pointer()
+                            .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(ToggleSidePanel), cx)))
+                            .child(Icon::new(IconName::PanelRight).size(px(15.0))),
+                    ),
+            )
+    }
+
+
+
+    fn render_pane(&mut self, pane: &Pane, index: usize, zoomed: bool, bounds: Bounds<Pixels>, origin: Point<Pixels>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let code = if self.uses_code(&pane.provider, &pane.id, cx) { self.code_view(&pane.id, window, cx) } else { None };
+        let is_code = code.is_some();
+        let body: AnyElement = match code {
+            Some(view) => view.into_any_element(),
+            None => self.terminal(&pane.id, cx).into_any_element(),
+        };
+        let header = self.render_header(pane, index, zoomed, c, cx);
+        let search = if is_code { None } else { self.render_search(&pane.id, *c, cx) };
+        let s = self.state.read(cx);
+        let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
+        let starting = s.starting.get(&pane.id).map(|p| if *p == "worktree" { "Creating worktree…".to_string() } else { format!("Starting {}…", s.provider_name(&pane.provider)) });
+        let dragged = matches!(&self.drag, Some(Drag::Pane { id, .. }) if *id == pane.id);
+        let c = *c;
+        div()
+            .absolute()
+            .left(bounds.origin.x - origin.x)
+            .top(bounds.origin.y - origin.y)
+            .w(bounds.size.width)
+            .h(bounds.size.height)
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded_md()
+            .border_1()
+            .border_color(if focused { Hsla { a: 0.7, ..c.accent } } else { c.border })
+            .bg(c.panel)
+            .when(dragged, |d| d.opacity(0.4))
+            .child(header)
+            .child(if is_code { div().flex_1().min_h_0().child(body) } else { div().flex_1().min_h_0().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body) })
+            .children(search)
+            .when_some(starting, |d, text| {
+                d.child(
+                    div().absolute().top(px(32.0)).left_0().right_0().bottom_0().flex().items_center().justify_center().child(
+                        div().rounded_md().border_1().border_color(c.border).bg(c.raised).px_3().py_1p5().text_xs().text_color(c.muted).child(text),
+                    ),
+                )
+            })
+    }
+
+    fn render_tiles(&mut self, tree: Option<LayoutNode>, zoomed: Option<String>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let bounds = self.tile_bounds;
+        let origin = bounds.origin;
+        let mut area = div().relative().size_full();
+        let Some(tree) = tree else {
+            let c = *c;
+            return area.child(
+                div().size_full().flex().flex_col().items_center().justify_center().gap_2().rounded_md().border_1().border_dashed().border_color(c.border).text_color(c.subtle)
+                    .child(div().text_sm().text_color(c.muted).child("No agents running"))
+                    .child(div().text_xs().child(if cfg!(target_os = "macos") { "⌘T new pane · ⇧⌘T pick provider · ⌘K commands · ⌘/ shortcuts" } else { "Ctrl+Shift+T new pane · Ctrl+Shift+K commands · Ctrl+Shift+/ shortcuts" })),
+            );
+        };
+        if bounds.size.width <= px(0.0) {
+            return area;
+        }
+        let order = leaves(&tree);
+        let mut rects = Vec::new();
+        let mut gutters = Vec::new();
+        match &zoomed {
+            Some(id) if order.contains(id) => rects.push(Rect { id: id.clone(), bounds }),
+            _ => place(&tree, bounds, &mut Vec::new(), &mut rects, &mut gutters),
+        }
+        for rect in rects {
+            let Some(pane) = self.state.read(cx).pane(&rect.id).cloned() else { continue };
+            let index = order.iter().position(|id| *id == rect.id).unwrap_or(0) + 1;
+            let element = self.render_pane(&pane, index, zoomed.as_ref() == Some(&rect.id), rect.bounds, origin, c, window, cx);
+            area = area.child(element);
+        }
+        for (i, gutter) in gutters.into_iter().enumerate() {
+            let cursor = if gutter.dir == SplitDir::Row { CursorStyle::ResizeLeftRight } else { CursorStyle::ResizeUpDown };
+            let (path, index, dir, span) = (gutter.path, gutter.index, gutter.dir, gutter.span);
+            let g = gutter.bounds;
+            area = area.child(
+                div().id(("gutter", i)).absolute().left(g.origin.x - origin.x).top(g.origin.y - origin.y).w(g.size.width).h(g.size.height).cursor(cursor)
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        let overview = this.state.read(cx).view() == View::Overview;
+                        let s = this.state.read(cx);
+                        let tree = if overview { s.overview.layout.clone() } else { s.active().and_then(|w| w.layout.clone()) };
+                        let Some(tree) = tree else { return };
+                        let node = path.iter().fold(&tree, |n, i| match n {
+                            LayoutNode::Split { children, .. } => &children[*i],
+                            leaf => leaf,
+                        });
+                        if let LayoutNode::Split { sizes, .. } = node {
+                            this.drag = Some(Drag::Gutter(GutterDrag { path: path.clone(), index, dir, span, start: e.position, sizes: sizes.clone() }));
+                        }
+                    })),
+            );
+        }
+        area
+    }
+
+    fn render_archive(&mut self, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let bounds = self.tile_bounds;
+        let archived: Vec<Pane> = self.state.read(cx).all_panes().filter(|p| p.archived).cloned().collect();
+        let mut area = div().relative().size_full();
+        let Some(tree) = layout::build_preset(layout::Preset::Grid, &archived.iter().map(|p| p.id.clone()).collect::<Vec<_>>()) else {
+            return area.child(div().size_full().flex().items_center().justify_center().text_sm().text_color(c.subtle).child("Nothing archived"));
+        };
+        let mut rects = Vec::new();
+        place(&tree, bounds, &mut Vec::new(), &mut rects, &mut Vec::new());
+        for (i, rect) in rects.into_iter().enumerate() {
+            let Some(pane) = archived.iter().find(|p| p.id == rect.id).cloned() else { continue };
+            let element = self.render_pane(&pane, i + 1, false, rect.bounds, bounds.origin, c, window, cx);
+            area = area.child(element);
+        }
+        area
+    }
+
+    fn drop_indicator(&self, c: &Colors, cx: &App) -> Option<impl IntoElement + use<>> {
+        let Some(Drag::Pane { id, at }) = &self.drag else { return None };
+        let s = self.state.read(cx);
+        let tree = if s.view() == View::Overview { s.overview.layout.clone() } else { s.active().and_then(|w| w.layout.clone()) }?;
+        let mut rects = Vec::new();
+        place(&tree, self.tile_bounds, &mut Vec::new(), &mut rects, &mut Vec::new());
+        let target = rects.iter().find(|r| r.id != *id && r.bounds.contains(at))?;
+        let side = drop_side(target.bounds, *at);
+        let b = target.bounds;
+        let (mut origin, mut extent) = (b.origin, b.size);
+        match side {
+            DropSide::Left => extent.width /= 2.0,
+            DropSide::Right => {
+                extent.width /= 2.0;
+                origin.x += extent.width;
+            }
+            DropSide::Top => extent.height /= 2.0,
+            DropSide::Bottom => {
+                extent.height /= 2.0;
+                origin.y += extent.height;
+            }
+            DropSide::Center => {}
+        }
+        let tile = self.tile_bounds.origin;
+        Some(div().absolute().left(origin.x - tile.x).top(origin.y - tile.y).w(extent.width).h(extent.height).rounded_md().bg(Hsla { a: 0.2, ..c.accent }).border_1().border_color(c.accent))
+    }
+}
+
+impl Root {
+    /// Closes the topmost modal layer; true if there was one.
+    fn close_top_layer(&mut self, _: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.close_release_notes(cx) || self.close_pane_note(cx) || self.close_menu(cx) || self.cancel_rename(cx) || self.close_search(cx) || self.close_plugin_layer(cx) || self.close_orchestration_layer(cx) {
+            return true;
+        }
+        let s = self.state.read(cx);
+        if s.palette_query.is_some() {
+            self.close_palette(cx);
+        } else if s.cheat_sheet_open {
+            self.update_state(cx, |s| s.cheat_sheet_open = false);
+            self.focused_view = None;
+        } else if s.settings_open {
+            self.update_state(cx, |s| s.settings_open = false);
+            self.focused_view = None;
+        } else if s.diff_pane_id.is_some() {
+            self.update_state(cx, |s| s.diff_pane_id = None);
+        } else if matches!(s.overlay, crate::model::Overlay::NewPane | crate::model::Overlay::Model | crate::model::Overlay::Review | crate::model::Overlay::History | crate::model::Overlay::Branch) {
+            self.update_state(cx, |s| {
+                s.overlay = crate::model::Overlay::None;
+                s.new_pane_provider = None;
+            });
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Widgets from the component library and the terminal follow the app's theme.
+    fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.state.read(cx).theme.clone();
+        if self.applied_theme.as_ref() == Some(&id) {
+            return;
+        }
+        self.applied_theme = Some(id.clone());
+        theme::set_palette(&id);
+        let def = theme::theme_by_id(&id);
+        let mode = if def.mode == "light" { ThemeMode::Light } else { ThemeMode::Dark };
+        ComponentTheme::change(mode, Some(window), cx);
+        let c = theme::colors(&id);
+        let t = ComponentTheme::global_mut(cx);
+        t.background = c.panel;
+        t.foreground = c.fg;
+        t.border = c.border;
+        t.input = c.border;
+        t.muted = c.hover;
+        t.muted_foreground = c.muted;
+        t.primary = c.accent;
+        t.primary_foreground = c.on_accent;
+        t.popover = c.raised;
+        t.popover_foreground = c.fg;
+        t.accent = c.hover;
+        t.accent_foreground = c.fg;
+        t.selection = Hsla { a: 0.35, ..c.accent };
+        t.caret = c.fg;
+        window.refresh();
+    }
+}
+
+impl Render for Root {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_theme(window, cx);
+        // A dialog that closed takes its focused field with it: without this the keyboard would
+        // belong to nothing and shortcuts would stop until the next click. A field that was just
+        // focused isn't on screen until it has rendered once, so only a second frame with focus
+        // outside the window's tree counts as lost.
+        if self.focus.contains_focused(window, cx) {
+            self.focus_outside = 0;
+        } else {
+            self.focus_outside += 1;
+            if self.focus_outside >= 2 {
+                self.focus_outside = 0;
+                self.focus.focus(window, cx);
+            } else {
+                cx.notify();
+            }
+        }
+        // Development aid: open a layer at launch, to look at it without driving the keyboard.
+        #[cfg(debug_assertions)]
+        if self.state.read(cx).hydrated && !std::mem::replace(&mut self.dev_layer_opened, true) {
+            match std::env::var("WINFER_NATIVE_LAYER").as_deref() {
+                Ok("palette") => self.execute(Command::Palette(None), window, cx),
+                Ok("new-pane") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::NewPane),
+                Ok("shortcuts") => self.execute(Command::CheatSheet, window, cx),
+                Ok("branch") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Branch),
+                Ok("race") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Race),
+                Ok("abtest") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::AbTest),
+                Ok("broadcast") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Broadcast),
+                Ok("recipes") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Recipes),
+                Ok("sessions") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Progress),
+                Ok("whats-new") => self.updates.preview(),
+                Ok("undock") => self.execute(Command::BrowserUndock, window, cx),
+                Ok("browser") => self.execute(Command::SidePanel { panel: SidePanel::Browser, show: true }, window, cx),
+                Ok("side-terminal") => self.execute(Command::SidePanel { panel: SidePanel::Terminal, show: true }, window, cx),
+                Ok(other) if other.starts_with("settings:") => self.execute(Command::Settings(Some(other["settings:".len()..].to_string())), window, cx),
+                Ok(other) if other.starts_with("page:") => self.update_state(cx, |s| s.set_view(View::Page(other["page:".len()..].to_string()))),
+                Ok(other) if other.starts_with("file:") => {
+                    let path = other["file:".len()..].to_string();
+                    self.viewer.update(cx, |v, cx| v.open(path, None, false, cx));
+                }
+                _ => {}
+            }
+        }
+        if self.state.read(cx).hydrated && !std::mem::replace(&mut self.wakes_loaded, true) {
+            self.load_wakes(cx);
+        }
+        self.sync_dialogs(window, cx);
+        self.sync_orchestration(window, cx);
+        self.sync_plugins(window, cx);
+        self.sync_search(window, cx);
+        self.sync_branch_dialog(window, cx);
+        self.sync_mobile(cx);
+        self.sync_focus(window, cx);
+        let (theme_id, view, sidebar_open, side_open, side_width, tree, zoomed) = {
+            let s = self.state.read(cx);
+            let (tree, zoomed) = match s.view() {
+                View::Overview => (s.overview.layout.clone(), s.overview.zoomed_pane_id.clone()),
+                _ => s.active().map_or((None, None), |w| (w.layout.clone(), w.zoomed_pane_id.clone())),
+            };
+            (s.theme.clone(), s.view(), s.sidebar_open, s.browser_open, s.browser_width as f32, tree, zoomed)
+        };
+        let c = theme::colors(&theme_id);
+        let tiles = match view {
+            View::Archive => self.render_archive(&c, window, cx),
+            View::Page(key) => self.render_plugin_page(&key, &c, cx),
+            _ => self.render_tiles(tree, zoomed, &c, window, cx),
+        };
+        let indicator = self.drop_indicator(&c, cx);
+        let device_on = side_open && self.state.read(cx).side_panel() == SidePanel::Device;
+        self.android.update(cx, |a, cx| a.set_visible(device_on, cx));
+        let mut side_panel = side_open.then(|| self.render_side_panel(&c, cx));
+        let palette = self.render_palette(&c, cx);
+        let sheet = self.render_cheat_sheet(&c, cx);
+        let question = self.render_question(&c, cx);
+        let new_pane = self.render_new_pane(&c, cx);
+        let model = self.render_model_dialog(&c, cx);
+        let diff = self.render_diff(&c, cx);
+        let settings = self.render_settings(&c, window, cx);
+        let review = self.render_review(&c, window, cx);
+        let history = self.render_history(&c, window, cx);
+        let race = self.render_race(&c, cx);
+        let results = self.render_race_results(&c, cx);
+        let broadcast = self.render_broadcast(&c, cx);
+        let recipes = self.render_recipes(&c, cx);
+        let sessions = self.render_sessions(&c, cx);
+        let agent_bar = self.render_agent_bar(&c, window, cx);
+        let usage_popover = self.render_usage_popover(&c, cx);
+        let new_menu = self.render_new_menu(&c, cx);
+        let pane_note = self.render_pane_note(&c, cx);
+        let apps_menu = self.render_apps_menu(&c, cx);
+        let branch_dialog = self.render_branch_dialog(&c, cx);
+        let context_menu = self.render_menu(&c, window, cx);
+        let approval = self.render_approval(&c, cx);
+        let whats_new = self.render_whats_new(&c, cx);
+        let voice_hud = self.render_voice_hud(&c, cx);
+        let toasts = self.render_toasts(&c, cx);
+        let measure = cx.entity();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(c.app)
+            .text_color(c.fg)
+            .font_family(crate::fonts::sans(cx))
+            .track_focus(&self.focus)
+            .key_context("Root")
+            .on_mouse_move(cx.listener(Self::mouse_moved))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_released))
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, _| this.note_user_activity()))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.note_user_activity();
+                if this.record_shortcut(event, cx) {
+                    cx.stop_propagation();
+                } else if this.handle_shortcut(event, window, cx) {
+                    cx.stop_propagation();
+                } else if event.keystroke.key == "escape" && this.close_top_layer(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSidePanel, window, cx| this.execute(Command::ToggleBrowser, window, cx)))
+            .child(self.render_title_bar(&c, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .px_2()
+                    .pb_2()
+                    .when(sidebar_open, |d| {
+                        d.child(self.render_sidebar(&c, cx)).child(
+                            div().id("sidebar-resize").w(px(8.0)).flex_shrink_0().cursor(CursorStyle::ResizeLeftRight)
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::Sidebar))),
+                        )
+                    })
+                    .child(
+                        div().flex_1().min_w_0().min_h_0().flex().flex_col().children(agent_bar).child(div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(
+                                canvas(
+                                    move |bounds, _, cx| {
+                                        measure.update(cx, |this, cx| {
+                                            if this.tile_bounds != bounds {
+                                                this.tile_bounds = bounds;
+                                                cx.notify();
+                                            }
+                                        });
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            )
+                            .child(tiles)
+                            .children(indicator)),
+                    )
+                    .when(side_open, |d| {
+                        d.child(
+                            div().id("side-resize").w(px(8.0)).flex_shrink_0().cursor(CursorStyle::ResizeLeftRight)
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::SidePanel))),
+                        )
+                        .child(
+                            div().w(px(side_width.max(MIN_SIDE_PANEL))).flex_shrink_0().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel).child(side_panel.take().unwrap()),
+                        )
+                    }),
+            )
+            .children(usage_popover)
+            .children(new_menu)
+            .children(pane_note)
+            .children(settings)
+            .children(review)
+            .children(history)
+            .children(race)
+            .children(results)
+            .children(broadcast)
+            .children(recipes)
+            .children(sessions)
+            .children(new_pane)
+            .children(model)
+            .children(diff)
+            .children(palette)
+            .children(sheet)
+            .children(question)
+            .children(branch_dialog)
+            .children(apps_menu)
+            .children(context_menu)
+            .children(approval)
+            .children(whats_new)
+            .children(voice_hud)
+            .children(toasts)
+    }
+}

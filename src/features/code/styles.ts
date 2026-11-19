@@ -34,7 +34,7 @@ interface CodeWebSettings extends CodeWebPrefs {
 }
 
 export const DEFAULT_PREFS: CodeWebPrefs = {
-  web: false,
+  web: true,
   showCost: true,
   showRate: true,
   showContext: true,
@@ -69,11 +69,13 @@ export const useCodeWeb = create<CodeWebSettings>()(
       name: "winfer-code-web",
       // v1: the TUI became the default (and thinking collapsed); reset both once for existing installs.
       // v2: shell cards start collapsed; reset expandShell once.
-      version: 2,
+      // v3: the web interface became the default; switch existing installs over once.
+      version: 3,
       migrate: (persisted, version) => {
         let prefs = (persisted ?? {}) as Partial<CodeWebPrefs>;
         if (version < 1) prefs = { ...prefs, web: false, expandThinking: false };
         if (version < 2) prefs = { ...prefs, expandShell: false };
+        if (version < 3) prefs = { ...prefs, web: true };
         return prefs;
       },
       partialize: ({ set: _s, setWeb: _w, ...prefs }) => prefs,

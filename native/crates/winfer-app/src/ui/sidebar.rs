@@ -1,0 +1,657 @@
+//! The sidebar (port of `src/features/workspaces/Sidebar.tsx`, `ActivityFeed.tsx`,
+//! `sidebarMenus.ts` and `sidebarTooltips.ts`): Sessions, Review and History, the workspaces
+//! with their sessions, the "Latest" feed and the footer.
+
+use super::commands::{Command, PaneRef, ViewTarget};
+use super::menu::MenuItem;
+use super::review::ReviewStatus;
+use super::*;
+use crate::model::{Overlay, Workspace};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+static LOGO: std::sync::LazyLock<Arc<Image>> = std::sync::LazyLock::new(|| Arc::new(Image::from_bytes(ImageFormat::Svg, include_bytes!("../../assets/logo.svg").to_vec())));
+
+/// A sidebar row being dragged to a new place.
+#[derive(Clone)]
+pub(super) struct DraggedRow {
+    id: String,
+    label: String,
+    workspace: bool,
+    c: Colors,
+}
+
+impl Render for DraggedRow {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let c = self.c;
+        let _ = cx;
+        div().rounded_md().border_1().border_color(c.accent).bg(c.raised).px_2().py_1().text_xs().text_color(c.fg).child(self.label.clone())
+    }
+}
+
+/// `git worktree list` per folder, read when a row is hovered (for its tooltip).
+#[derive(Default)]
+pub(super) struct SidebarUi {
+    pub renaming: Option<(String, Entity<InputState>)>,
+    show_archived: HashSet<String>,
+    feed_expanded: bool,
+    listings: HashMap<String, Option<Vec<Value>>>,
+    pending: HashSet<String>,
+}
+
+/// The last word's first letter: "orbit-web" and "orbit-api" get W and A, not two O's.
+pub fn monogram(name: &str) -> String {
+    name.split(|c: char| "-_ ./".contains(c))
+        .filter(|w| !w.is_empty())
+        .last()
+        .and_then(|w| w.chars().find(|c| c.is_ascii_alphanumeric()))
+        .map_or("·".into(), |c| c.to_ascii_uppercase().to_string())
+}
+
+/// A stable hue per workspace name (same hash as the Tauri app's).
+pub fn name_hue(name: &str) -> f32 {
+    let mut hash: i32 = 0;
+    for ch in name.encode_utf16() {
+        hash = hash.wrapping_mul(31).wrapping_add(ch as i32);
+    }
+    (hash.unsigned_abs() % 360) as f32
+}
+
+fn normalize(path: &str) -> String {
+    let value = path.replace('\\', "/").trim_end_matches('/').to_string();
+    let bytes = value.as_bytes();
+    if bytes.len() > 2 && bytes[1] == b':' && bytes[2] == b'/' { value.to_lowercase() } else { value }
+}
+
+/// Branch and checkout lines for a tooltip. Matches the directory, never a saved branch.
+pub fn checkout_details(dir: &str, listing: Option<&Option<Vec<Value>>>) -> Vec<String> {
+    let Some(listing) = listing else { return vec!["Branch: checking…".into()] };
+    let Some(list) = listing else { return vec!["Branch / worktree: unavailable".into()] };
+    let path = normalize(dir);
+    let checkout = list
+        .iter()
+        .filter(|wt| wt["prunable"] != true)
+        .filter(|wt| {
+            let p = normalize(wt["info"]["path"].as_str().unwrap_or_default());
+            path == p || path.starts_with(&format!("{p}/"))
+        })
+        .max_by_key(|wt| wt["info"]["path"].as_str().map_or(0, str::len));
+    let Some(wt) = checkout else {
+        return vec![if list.is_empty() { "Git: not a repository".into() } else { "Branch / worktree: unavailable for this directory".into() }];
+    };
+    let main = wt["isMain"] == true;
+    let mut lines = vec![
+        format!("Branch: {}", wt["info"]["branch"].as_str().unwrap_or_default()),
+        format!("{}: {}", if main { "Project checkout" } else { "Worktree" }, wt["info"]["path"].as_str().unwrap_or_default()),
+    ];
+    if !main {
+        lines.push(format!("Base branch: {}", wt["info"]["base"].as_str().unwrap_or_default()));
+    }
+    lines.push(format!("Changes: {}", if wt["dirty"] == true { "uncommitted changes" } else { "clean" }));
+    lines
+}
+
+fn status_label(status: AgentStatus) -> &'static str {
+    match status {
+        AgentStatus::Idle => "Idle",
+        AgentStatus::Working => "Working",
+        AgentStatus::NeedsInput => "Needs your input",
+        AgentStatus::Done => "Done",
+        AgentStatus::Error => "Error",
+    }
+}
+
+/// Moves `id` to `index` in `items` (the Tauri app's `moveItem`).
+pub fn move_item<T>(items: &mut Vec<T>, from: usize, index: usize) {
+    if from >= items.len() || from == index {
+        return;
+    }
+    let item = items.remove(from);
+    items.insert(index.min(items.len()), item);
+}
+
+fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Explorer" }
+}
+
+impl Root {
+    fn refresh_listing(&mut self, dir: String, cx: &mut Context<Self>) {
+        if !self.sidebar.pending.insert(dir.clone()) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let probe = dir.clone();
+            let found = tauri::async_runtime::spawn(winfer_backend::worktree::worktree_list(probe)).await;
+            let found = found.ok().and_then(Result::ok).and_then(|l| serde_json::to_value(l).ok()).and_then(|v| v.as_array().cloned());
+            let _ = this.update(cx, |this, cx| {
+                this.sidebar.pending.remove(&dir);
+                this.sidebar.listings.insert(dir, found);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn start_rename(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.state.read(cx).pane(id).map(|p| p.custom_title.clone().unwrap_or_else(|| self.state.read(cx).pane_label(p))).unwrap_or_default();
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Name this session").default_value(current));
+        let pane = id.to_string();
+        cx.subscribe_in(&input, window, move |this, input, event: &InputEvent, _, cx| match event {
+            InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                if this.sidebar.renaming.as_ref().is_some_and(|(p, _)| *p == pane) {
+                    let name = input.read(cx).value().to_string();
+                    this.sidebar.renaming = None;
+                    this.focused_view = None;
+                    this.update_state(cx, |s| s.rename_pane(&pane, &name));
+                }
+            }
+            _ => {}
+        })
+        .detach();
+        input.update(cx, |i, cx| {
+            i.focus(window, cx);
+            i.select_all(window, cx);
+        });
+        self.sidebar.renaming = Some((id.to_string(), input));
+        cx.notify();
+    }
+
+    /// Escape while renaming: keep the old name.
+    pub(super) fn cancel_rename(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.sidebar.renaming.take().is_some();
+        if open {
+            self.focused_view = None;
+            cx.notify();
+        }
+        open
+    }
+
+    pub(super) fn workspace_menu(&self, ws: &Workspace, cx: &App) -> Vec<MenuItem> {
+        let s = self.state.read(cx);
+        let agent = s.provider_name(&s.default_provider_id());
+        let id = ws.id.clone();
+        let switch = Command::WorkspaceSwitch(id.clone());
+        let spawn = |worktree: Option<bool>| Command::Spawn { provider: None, count: 1, prompt: None, worktree, model: None };
+        let mut items = vec![
+            MenuItem::command("Open", switch.clone()),
+            MenuItem::commands(format!("New {agent} here"), vec![switch.clone(), spawn(None)]),
+        ];
+        if ws.use_worktrees {
+            items.push(MenuItem::commands(format!("New {agent} without worktree"), vec![switch.clone(), spawn(Some(false))]));
+        }
+        items.push(MenuItem::commands("New worktree from a branch…", vec![switch.clone(), Command::Overlay { overlay: Overlay::Branch, provider: None }]));
+        let toggle = id.clone();
+        items.push(MenuItem::run(if ws.use_worktrees { "Stop giving new agents a worktree" } else { "Give every new agent a worktree" }, move |this, _, cx| {
+            this.update_state(cx, |s| {
+                if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == toggle) {
+                    w.use_worktrees = !w.use_worktrees;
+                }
+            });
+        }));
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::commands("Open in code editor", vec![switch, Command::EditorOpen { target: None, editor: None }]));
+        let (reveal, copy) = (ws.root_dir.clone(), ws.root_dir.clone());
+        items.push(MenuItem::run(reveal_label(), move |_, _, _| reveal_path(&reveal)));
+        items.push(MenuItem::run("Copy folder path", move |this, _, cx| this.copy_with_toast(copy.clone(), cx)));
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::command("Remove workspace…", Command::WorkspaceRemove(id)).danger());
+        items
+    }
+
+    pub(super) fn pane_menu(&self, pane: &Pane, cx: &App) -> Vec<MenuItem> {
+        let s = self.state.read(cx);
+        let provider = s.providers.iter().find(|p| p.id == pane.provider);
+        let target = PaneRef::Id(pane.id.clone());
+        let keys = |cmd: Command| commands::keys_for(&cmd, s);
+        let agent = pane.provider != "shell";
+        let mut items = vec![MenuItem::command("Focus", Command::Focus(target.clone()))];
+        if pane.archived {
+            items.push(MenuItem::command("Restore from archive", Command::Archive { target: target.clone(), restore: true }));
+        } else {
+            items.push(MenuItem::command("Zoom", Command::Zoom(target.clone())).hint(keys(Command::Zoom(PaneRef::Focused))));
+            items.push(MenuItem::commands("Show in overview", vec![Command::Focus(target.clone()), Command::View(ViewTarget::Set(View::Overview))]));
+            items.push(MenuItem::command("Archive", Command::Archive { target: target.clone(), restore: false }));
+        }
+        let rename = pane.id.clone();
+        items.push(MenuItem::run("Rename…", move |this, window, cx| this.start_rename(&rename, window, cx)));
+        if pane.custom_title.is_some() {
+            let reset = pane.id.clone();
+            items.push(MenuItem::run("Reset name", move |this, _, cx| this.update_state(cx, |s| s.rename_pane(&reset, ""))));
+        }
+        items.push(MenuItem::Separator);
+        if pane.status == AgentStatus::NeedsInput {
+            items.push(MenuItem::command("Approve request", Command::Approve(target.clone())));
+        }
+        items.push(MenuItem::command(if agent { "Interrupt" } else { "Interrupt (Ctrl-C)" }, Command::Interrupt(target.clone())).hint(keys(Command::Interrupt(PaneRef::Focused))));
+        if agent {
+            let restart = pane.id.clone();
+            let resumable = (pane.session_id.is_some() && provider.is_some_and(|p| !p.resume_session_args.is_empty()))
+                || provider.is_some_and(|p| !p.resume_args.is_empty());
+            items.push(MenuItem::run("Restart agent (resume session)", move |this, _, cx| {
+                this.update_state(cx, |s| {
+                    if let Some(p) = s.pane_mut(&restart) {
+                        p.resume = resumable;
+                        p.prompt = None;
+                    }
+                });
+                this.restart_pane(&restart, cx);
+            }));
+            if provider.is_some_and(|p| p.model_arg.is_some()) {
+                items.push(MenuItem::commands("Change model…", vec![Command::Focus(target.clone()), Command::Overlay { overlay: Overlay::Model, provider: None }]));
+            }
+        }
+        items.push(MenuItem::Separator);
+        let editor = MenuItem::command("Open in code editor", Command::EditorOpen { target: Some(target.clone()), editor: None }).hint(keys(Command::EditorOpen { target: Some(PaneRef::Focused), editor: None }));
+        match &pane.worktree {
+            Some(wt) => {
+                items.push(MenuItem::command("Show changes", Command::ShowChanges(target.clone())));
+                if self.review.reviews.iter().any(|r| r.pane_id == pane.id && r.status == ReviewStatus::Open) {
+                    items.push(MenuItem::command("Open its review", Command::Overlay { overlay: Overlay::Review, provider: None }));
+                }
+                items.push(MenuItem::command(format!("Merge into {}…", wt.base), Command::MergeWorktree(target.clone())));
+                items.push(MenuItem::Separator);
+                items.push(editor);
+                let (reveal, path, branch) = (wt.path.clone(), wt.path.clone(), wt.branch.clone());
+                items.push(MenuItem::run(reveal_label(), move |_, _, _| reveal_path(&reveal)));
+                items.push(MenuItem::run("Copy worktree path", move |this, _, cx| this.copy_with_toast(path.clone(), cx)));
+                items.push(MenuItem::run("Copy branch name", move |this, _, cx| this.copy_with_toast(branch.clone(), cx)));
+            }
+            None => {
+                items.push(editor);
+                let (reveal, path) = (pane.cwd.clone(), pane.cwd.clone());
+                items.push(MenuItem::run(reveal_label(), move |_, _, _| reveal_path(&reveal)));
+                items.push(MenuItem::run("Copy folder path", move |this, _, cx| this.copy_with_toast(path.clone(), cx)));
+            }
+        }
+        items.push(MenuItem::Separator);
+        if pane.worktree.is_some() {
+            items.push(MenuItem::command("Discard worktree…", Command::DiscardWorktree(target.clone())).danger());
+        }
+        items.push(MenuItem::command("Close", Command::Close(target)).hint(keys(Command::Close(PaneRef::Focused))).danger());
+        items
+    }
+
+    fn pane_tooltip(&self, pane: &Pane, cx: &App) -> String {
+        let s = self.state.read(cx);
+        let name = s.provider_name(&pane.provider);
+        let label = s.pane_label(pane);
+        let progress = s.progress.get(&pane.id);
+        let mut lines = vec![
+            if label == name { name.clone() } else { format!("{name}: {label}") },
+            format!("Status: {}{}", status_label(pane.status), if pane.archived { " · archived" } else { "" }),
+        ];
+        lines.extend(pane.model.as_ref().map(|m| format!("Model: {m}")));
+        lines.extend(progress.and_then(|p| p.percent).map(|n| format!("Progress: {n}%")));
+        lines.extend(progress.and_then(|p| p.step.clone()).map(|a| format!("Activity: {a}")));
+        lines.push(format!("Directory: {}", pane.cwd));
+        lines.extend(checkout_details(&pane.cwd, self.sidebar.listings.get(&pane.cwd)));
+        if pane.wants_worktree {
+            lines.push("Worktree: creation pending".into());
+        }
+        lines.join("\n")
+    }
+
+    fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, c: Colors, cx: &mut Context<Self>) -> AnyElement {
+        let s = self.state.read(cx);
+        let focused = s.focused_pane_id.as_deref() == Some(&pane.id) && s.active_workspace_id == pane.workspace_id;
+        let label = s.pane_label(pane);
+        let progress = s.progress.get(&pane.id).filter(|e| pane.provider != "shell" && e.percent.is_some()).cloned();
+        let percent = progress.as_ref().and_then(|e| e.percent).filter(|_| pane.status != AgentStatus::Idle);
+        let branch = pane.worktree.as_ref().map(|t| t.branch.trim_start_matches("winfer/").to_string());
+        let doing = if pane.status == AgentStatus::NeedsInput { Some("Needs your input".to_string()) } else { s.progress.get(&pane.id).and_then(|e| e.step.clone()) };
+        let tooltip = self.pane_tooltip(pane, cx);
+        let renaming = self.sidebar.renaming.as_ref().filter(|(id, _)| *id == pane.id).map(|(_, input)| input.clone());
+        let status = pane.status;
+        let (focus, menu_pane, rename, hover_dir) = (pane.id.clone(), pane.clone(), pane.id.clone(), pane.cwd.clone());
+        let mono = crate::fonts::mono(cx);
+        let drag = DraggedRow { id: pane.id.clone(), label: label.clone(), workspace: false, c };
+        let drop_ws = pane.workspace_id.clone();
+        let emphasized = pane.unseen || focused;
+        let mut detail = div().flex().items_center().gap_1().pl(px(14.0)).text_size(px(11.0)).text_color(c.subtle).min_w_0();
+        if let Some(b) = &branch {
+            detail = detail.child(div().flex().items_center().gap_1().flex_shrink(1.0).min_w_0().font_family(mono).text_size(px(10.0))
+                .child(Icon::new(IconName::GitBranch).size(px(10.0)))
+                .child(div().truncate().child(b.clone())));
+        }
+        if branch.is_some() && doing.is_some() {
+            detail = detail.child("·");
+        }
+        if let Some(d) = &doing {
+            detail = detail.child(div().flex_1().min_w_0().truncate().when(status == AgentStatus::NeedsInput, |x| x.text_color(c.warning)).child(d.clone()));
+        }
+        let row = div().id(SharedString::from(format!("row-{}", pane.id))).relative().ml_2().rounded_md().px_2().py_1p5().cursor_pointer()
+            .text_size(px(13.0))
+            .when(focused, |d| d.bg(c.active).text_color(c.fg))
+            .when(!focused, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+            .when(pane.archived && !focused, |d| d.opacity(0.7))
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.refresh_listing(hover_dir.clone(), cx);
+                }
+            }))
+            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                if e.click_count() == 2 {
+                    this.start_rename(&rename, window, cx);
+                } else {
+                    this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx);
+                }
+            }))
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                let items = this.pane_menu(&menu_pane, cx);
+                let title = menu_pane.worktree.as_ref().map_or(menu_pane.cwd.clone(), |t| t.branch.clone());
+                this.open_menu(e.position, Some(title), items, cx);
+            }))
+            .when(focused, |d| d.child(div().absolute().top(px(6.0)).bottom(px(6.0)).left(px(-9.0)).w(px(2.0)).rounded_full().bg(c.accent)))
+            .child(
+                div().flex().items_center().gap_2()
+                    .child(div().size_1p5().flex_shrink_0().rounded_full().bg(status_color(status, &c)))
+                    .child(match renaming {
+                        Some(input) => div().flex_1().child(Input::new(&input)).into_any_element(),
+                        None => div().flex_1().min_w_0().truncate().when(emphasized, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM)).child(label).into_any_element(),
+                    })
+                    .when_some(percent, |d, n| d.child(div().flex_shrink_0().text_size(px(10.0)).text_color(if n == 100 { c.success } else { c.subtle }).child(format!("{n}%")))),
+            )
+            .when(branch.is_some() || doing.is_some(), |d| d.child(detail))
+            .when_some(progress, |d, e| d.child(div().pl(px(14.0)).mt_1p5().child(progress::progress_bar(Some(&e), status, &c).h(px(3.0)).bg(c.hover))));
+        if !sortable {
+            return row.into_any_element();
+        }
+        row.on_drag(drag, |row, _, _, cx| cx.new(|_| row.clone()))
+            .drag_over::<DraggedRow>(move |d, dragged, _, _| if dragged.workspace { d } else { d.border_t_2().border_color(c.accent) })
+            .on_drop(cx.listener(move |this, dragged: &DraggedRow, _, cx| {
+                if dragged.workspace {
+                    return;
+                }
+                let id = dragged.id.clone();
+                this.update_state(cx, |s| {
+                    let Some(w) = s.workspaces.iter_mut().find(|w| w.id == drop_ws) else { return };
+                    let Some(pane) = w.panes.iter().find(|p| p.id == id).cloned() else { return };
+                    let (mut group, rest): (Vec<Pane>, Vec<Pane>) = w.panes.drain(..).partition(|p| p.archived == pane.archived);
+                    if let Some(from) = group.iter().position(|p| p.id == id) {
+                        move_item(&mut group, from, index);
+                    }
+                    w.panes = if pane.archived { rest.into_iter().chain(group).collect() } else { group.into_iter().chain(rest).collect() };
+                });
+            }))
+            .into_any_element()
+    }
+
+    fn nav_item(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, c: Colors) -> Stateful<Div> {
+        div().id(id).flex().items_center().gap_2p5().rounded_md().px_2p5().py_1p5().text_size(px(13.0)).text_color(c.muted).cursor_pointer()
+            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+            .child(Icon::new(icon).size(px(14.0)))
+            .child(div().flex_1().child(label))
+    }
+
+    pub(super) fn render_sidebar(&mut self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let c = *c;
+        let s = self.state.read(cx);
+        let keys = |o: Overlay| commands::keys_for(&Command::Overlay { overlay: o, provider: None }, s).map_or(String::new(), |k| format!(" ({k})"));
+        let (progress_keys, review_keys, history_keys) = (keys(Overlay::Progress), keys(Overlay::Review), keys(Overlay::History));
+        let settings_keys = commands::keys_for(&Command::Settings(None), s).map_or(String::new(), |k| format!(" ({k})"));
+        let working: Vec<&Pane> = s.all_panes().filter(|p| p.provider != "shell" && p.status == AgentStatus::Working).collect();
+        let known: Vec<u32> = working.iter().filter_map(|p| s.progress.get(&p.id).and_then(|e| e.percent)).collect();
+        let average = (!known.is_empty()).then(|| (known.iter().sum::<u32>() as f32 / known.len() as f32).round() as u32);
+        let working_count = working.len();
+        let everywhere = s.view() == View::Overview;
+        let active_ws = s.active_workspace_id.clone();
+        let review_count = self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open && (everywhere || r.workspace_id == active_ws)).count();
+        let mono = crate::fonts::mono(cx);
+        let sessions = self.nav_item("nav-sessions", IconName::Activity, "Sessions", format!("Session progress{progress_keys}"), c)
+            .when(working_count > 0, |d| d.child(div().flex().items_center().gap_1p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle)
+                .child(div().size_1p5().rounded_full().bg(c.success))
+                .child(working_count.to_string())
+                .when_some(average, |d, a| d.child(format!("· {a}%")))))
+            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
+        let review = self.nav_item("nav-review", IconName::Inbox, "Review", format!("Review finished work{review_keys}"), c)
+            .when(review_count > 0, |d| d.child(div().min_w(px(18.0)).rounded_full().bg(c.accent).px_1p5().text_center().text_size(px(10.5)).text_color(c.on_accent).child(review_count.to_string())))
+            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx)));
+        let history = self.nav_item("nav-history", IconName::Undo2, "History", format!("Merged features{history_keys}"), c)
+            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
+
+        let s = self.state.read(cx);
+        let workspaces = s.workspaces.clone();
+        let expanded_ids = s.expanded_workspaces.clone();
+        let mut list = div().flex().flex_col();
+        for (i, ws) in workspaces.iter().enumerate() {
+            let active = ws.id == active_ws;
+            let expanded = expanded_ids.contains(&ws.id);
+            let hue = name_hue(&ws.name) / 360.0;
+            let color = hsla(hue, 0.65, 0.62, 1.0);
+            let live: Vec<&Pane> = ws.panes.iter().filter(|p| !p.archived).collect();
+            let agents: Vec<&Pane> = live.iter().copied().filter(|p| p.provider != "shell").collect();
+            let listing = self.sidebar.listings.get(&ws.root_dir);
+            let mut tip = vec![ws.name.clone(), format!("Directory: {}", ws.root_dir)];
+            tip.extend(checkout_details(&ws.root_dir, listing));
+            tip.push(format!("New agents: {}", if ws.use_worktrees { "isolated worktrees" } else { "shared checkout" }));
+            tip.push("Double-click to open · drag to reorder".into());
+            let tip = tip.join("\n");
+            let (toggle, menu_ws, hover_dir) = (ws.id.clone(), ws.clone(), ws.root_dir.clone());
+            let mut dots = div().flex().items_center().gap_1();
+            if agents.is_empty() {
+                if !live.is_empty() {
+                    dots = dots.child(div().text_size(px(11.0)).text_color(c.subtle).child(live.len().to_string()));
+                }
+            } else {
+                for p in agents.iter().take(5) {
+                    dots = dots.child(div().size_1p5().rounded_full().bg(status_color(p.status, &c)));
+                }
+                if agents.len() > 5 {
+                    dots = dots.child(div().text_size(px(10.0)).text_color(c.subtle).child(format!("+{}", agents.len() - 5)));
+                }
+            }
+            let header = div().id(SharedString::from(format!("ws-{}", ws.id))).flex().items_center().gap_2p5().rounded_lg().px_2().py_1p5().cursor_pointer().text_size(px(13.0))
+                .when(active, |d| d.text_color(c.fg).font_weight(FontWeight::SEMIBOLD))
+                .when(!active, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.refresh_listing(hover_dir.clone(), cx);
+                    }
+                }))
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    if e.click_count() == 2 {
+                        this.execute(Command::WorkspaceSwitch(toggle.clone()), window, cx);
+                    } else {
+                        let id = toggle.clone();
+                        this.update_state(cx, |s| s.toggle_workspace_expanded(&id));
+                    }
+                }))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    let items = this.workspace_menu(&menu_ws, cx);
+                    this.open_menu(e.position, Some(menu_ws.root_dir.clone()), items, cx);
+                }))
+                .on_drag(DraggedRow { id: ws.id.clone(), label: ws.name.clone(), workspace: true, c }, |row, _, _, cx| cx.new(|_| row.clone()))
+                .drag_over::<DraggedRow>(move |d, dragged, _, _| if dragged.workspace { d.border_t_2().border_color(c.accent) } else { d })
+                .on_drop(cx.listener(move |this, dragged: &DraggedRow, _, cx| {
+                    if !dragged.workspace {
+                        return;
+                    }
+                    let id = dragged.id.clone();
+                    this.update_state(cx, |s| {
+                        if let Some(from) = s.workspaces.iter().position(|w| w.id == id) {
+                            move_item(&mut s.workspaces, from, i);
+                        }
+                    });
+                }))
+                .child(div().size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(Hsla { a: 0.18, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).when(!active, |d| d.opacity(0.8)).child(monogram(&ws.name)))
+                .child(div().flex_1().truncate().child(ws.name.clone()))
+                .when(!expanded, |d| d.child(dots))
+                .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(13.0)).text_color(c.subtle));
+            let mut group = div().relative().mb_1().rounded_lg().when(active, |d| d.bg(c.raised).border_1().border_color(c.border)).child(header);
+            if expanded {
+                let mut panes = div().relative().pr_1().pb_1p5().pl(px(17.0)).child(div().absolute().top_0().bottom(px(10.0)).left(px(17.0)).w(px(1.0)).bg(c.border));
+                let live: Vec<Pane> = ws.panes.iter().filter(|p| !p.archived).cloned().collect();
+                let archived: Vec<Pane> = ws.panes.iter().filter(|p| p.archived).cloned().collect();
+                for (j, p) in live.iter().enumerate() {
+                    panes = panes.child(self.render_pane_row(p, j, true, c, cx));
+                }
+                if !archived.is_empty() {
+                    let showing = self.sidebar.show_archived.contains(&ws.id);
+                    let flip = ws.id.clone();
+                    panes = panes.child(
+                        div().id(SharedString::from(format!("archived-{}", ws.id))).ml_2().flex().items_center().gap_2().rounded_md().px_2().py_1().text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
+                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .tooltip(move |window, cx| Tooltip::new(if showing { "Hide archived sessions" } else { "Show archived sessions" }).build(window, cx))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.sidebar.show_archived.remove(&flip) {
+                                    this.sidebar.show_archived.insert(flip.clone());
+                                }
+                                cx.notify();
+                            }))
+                            .child(Icon::new(IconName::Archive).size(px(12.0)))
+                            .child(div().flex_1().child(format!("Archived · {}", archived.len())))
+                            .child(Icon::new(if showing { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.0))),
+                    );
+                    if showing {
+                        for (j, p) in archived.iter().enumerate() {
+                            panes = panes.child(self.render_pane_row(p, j, false, c, cx));
+                        }
+                    }
+                }
+                if let Some(list) = self.render_worktree_list(ws, c, cx) {
+                    panes = panes.child(list);
+                }
+                if ws.panes.is_empty() {
+                    let keys = commands::keys_for(&Command::Overlay { overlay: Overlay::NewPane, provider: None }, self.state.read(cx)).unwrap_or_default();
+                    panes = panes.child(div().ml_2().px_2().py_1p5().text_size(px(12.0)).text_color(c.subtle).child(format!("No sessions yet — {keys} starts one")));
+                }
+                group = group.child(panes);
+            }
+            list = list.child(group);
+        }
+        let any_expanded = !expanded_ids.is_empty();
+        let label = div().flex().h(px(28.0)).items_center().justify_between().pr_1().pl_2p5()
+            .child(div().text_size(px(10.5)).text_color(c.subtle).child("WORKSPACES"))
+            .child(div().flex().items_center()
+                .child(div().id("collapse-all").rounded_sm().p_1().text_color(c.subtle).when(!any_expanded, |d| d.opacity(0.4))
+                    .when(any_expanded, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                    .tooltip(|window, cx| Tooltip::new("Collapse all workspaces").build(window, cx))
+                    .on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.expanded_workspaces.clear())))
+                    .child(Icon::new(IconName::ChevronsDownUp).size(px(13.0))))
+                .child(div().id("new-workspace").rounded_sm().p_1().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .tooltip(|window, cx| Tooltip::new("New workspace").build(window, cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.execute(Command::WorkspaceCreate, window, cx)))
+                    .child(Icon::new(IconName::Plus).size(px(13.0)))));
+
+        let feed = self.render_activity_feed(&active_ws, c, cx);
+        let theme_id = self.state.read(cx).theme.clone();
+        let def = theme::theme_by_id(&theme_id);
+        let pair = theme::theme_by_id(&def.pair).name.clone();
+        let dark = def.mode == "dark";
+        let icon_button = move |id: &'static str| div().id(id).rounded_md().p_1p5().text_color(c.subtle).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
+        let footer = div().flex().items_center().gap_1().border_t_1().border_color(c.border).px_3().py_2p5()
+            .child(div().flex_1().min_w_0().flex().items_center().gap_2p5()
+                .child(img(LOGO.clone()).size(px(28.0)).flex_shrink_0())
+                .child(div().flex().flex_col().min_w_0()
+                    .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("winfer"))
+                    .child(div().truncate().font_family(mono).text_size(px(10.0)).text_color(c.subtle).child(format!("v{}", env!("CARGO_PKG_VERSION"))))))
+            .child(icon_button("theme-toggle")
+                .tooltip(move |window, cx| Tooltip::new(format!("Switch to {pair} (more themes in Settings)")).build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let next = theme::theme_by_id(&this.state.read(cx).theme).pair.clone();
+                    this.execute(Command::Theme(next), window, cx);
+                }))
+                .child(Icon::new(if dark { IconName::Sun } else { IconName::Moon }).size(px(14.0))))
+            .child(icon_button("usage-button")
+                .tooltip(|window, cx| Tooltip::new("Usage").build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(Some("usage".into())), window, cx)))
+                .child(Icon::new(IconName::ChartColumn).size(px(14.0))))
+            .child(icon_button("settings-button")
+                .tooltip(move |window, cx| Tooltip::new(format!("Settings{settings_keys}")).build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(None), window, cx)))
+                .child(Icon::new(IconName::Settings).size(px(14.0))));
+
+        let width = px(self.state.read(cx).sidebar_width as f32);
+        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+            .child(div().flex().flex_col().gap_px().p_2().child(sessions).child(review).child(history))
+            .child(div().mx_3().border_t_1().border_color(c.border))
+            .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().py_2().child(label).child(list))
+            .children(feed)
+            .child(footer)
+    }
+
+    /// "Latest": what agents and you did recently in this workspace.
+    fn render_activity_feed(&self, workspace: &str, c: Colors, cx: &mut Context<Self>) -> Option<Div> {
+        let s = self.state.read(cx);
+        let events: Vec<_> = s.activity.iter().filter(|e| e.workspace_id == workspace).collect();
+        if events.is_empty() {
+            return None;
+        }
+        let expanded = self.sidebar.feed_expanded;
+        let shown = events.iter().take(if expanded { 40 } else { 4 });
+        let mut rows = div().id("activity-rows").flex().flex_col().when(expanded, |d| d.max_h(px(288.0)).overflow_y_scroll());
+        for e in shown {
+            let at = e.at.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
+            let text = e.text.clone();
+            rows = rows.child(
+                div().id(SharedString::from(format!("activity-{}", e.id))).flex().items_start().gap_2().rounded_md().px_2().py_1p5().text_size(px(12.0))
+                    .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+                    .child(div().mt(px(3.0)).size(px(10.0)).flex_shrink_0().rounded_full().bg(if e.provider.is_some() { c.accent } else { c.border_strong }))
+                    .child(div().flex_1().text_color(c.muted).line_clamp(2).child(e.text.clone()))
+                    .child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(super::dialogs::relative_time(at))),
+            );
+        }
+        let more = events.len() > 4;
+        Some(
+            div().mx_2().border_t_1().border_color(c.border).pt_2().pb_1()
+                .child(div().flex().items_center().justify_between().pr_1().pl_2p5().pb_1()
+                    .child(div().text_size(px(10.5)).text_color(c.subtle).child("LATEST"))
+                    .when(more, |d| d.child(div().id("feed-toggle").text_size(px(11.0)).text_color(c.accent).cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sidebar.feed_expanded = !this.sidebar.feed_expanded;
+                            cx.notify();
+                        }))
+                        .child(if expanded { "Show less" } else { "View all" }))))
+                .child(rows),
+        )
+    }
+}
+
+pub(super) fn reveal_path(path: &str) {
+    let path = winfer_backend::editors::expand_home(path);
+    let _ = plugins::reveal(&path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{checkout_details, monogram, move_item, name_hue};
+    use serde_json::json;
+
+    #[test]
+    fn monograms_use_the_last_word() {
+        assert_eq!(monogram("orbit-web"), "W");
+        assert_eq!(monogram("orbit-api"), "A");
+        assert_eq!(monogram("---"), "·");
+    }
+
+    #[test]
+    fn hues_are_stable() {
+        assert_eq!(name_hue("winfer"), name_hue("winfer"));
+        assert!(name_hue("a") < 360.0);
+    }
+
+    #[test]
+    fn items_move_like_the_tauri_app() {
+        let mut v = vec![1, 2, 3, 4];
+        move_item(&mut v, 0, 2);
+        assert_eq!(v, vec![2, 3, 1, 4]);
+        move_item(&mut v, 3, 0);
+        assert_eq!(v, vec![4, 2, 3, 1]);
+    }
+
+    #[test]
+    fn checkouts_match_the_deepest_folder() {
+        let list = Some(vec![
+            json!({ "info": { "path": "/r", "branch": "main", "base": "main" }, "isMain": true, "dirty": false }),
+            json!({ "info": { "path": "/r/.wt/a", "branch": "winfer/a", "base": "main" }, "isMain": false, "dirty": true }),
+        ]);
+        assert_eq!(checkout_details("/r/.wt/a/src", Some(&list)), vec!["Branch: winfer/a", "Worktree: /r/.wt/a", "Base branch: main", "Changes: uncommitted changes"]);
+        assert_eq!(checkout_details("/x", Some(&None)), vec!["Branch / worktree: unavailable"]);
+        assert_eq!(checkout_details("/x", None), vec!["Branch: checking…"]);
+    }
+}

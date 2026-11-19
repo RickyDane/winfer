@@ -1,0 +1,35 @@
+# The native GPUI build of winfer. Stands beside the Tauri app in ../src-tauri and leaves it alone:
+# `winfer-backend` compiles the Tauri app's backend modules by path, and the `tauri*` crates here
+# are small stand-ins for the parts of Tauri those modules use.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.101"
+edition = "2024"
+
+[workspace.dependencies]
+gpui-kit = { version = "0.9.1", features = ["syntect"] }
+tauri = { path = "crates/tauri" }
+tauri-macros = { path = "crates/tauri-macros" }
+tauri-plugin-updater = { path = "crates/tauri-plugin-updater" }
+tauri-plugin-opener = { path = "crates/tauri-plugin-opener" }
+winfer-backend = { path = "crates/winfer-backend" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53.2", features = ["sync", "time", "macros", "rt", "rt-multi-thread", "net", "io-util"] }
+url = "2"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+strip = true

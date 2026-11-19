@@ -1,0 +1,38 @@
+[package]
+name = "winfer-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "winfer-native"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+gpui-kit.workspace = true
+winfer-backend.workspace = true
+tauri.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+alacritty_terminal = "0.26.0"
+async-channel = "2"
+regex = "1"
+rand = "0.10.3"
+dirs = "7.0.0"
+parking_lot = "0.12"
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "ico", "gif", "webp"] }
+smallvec = "1"
+url.workspace = true
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
+base64 = "0.23.1"
+wry = "0.57"
+cpal = "0.16"
+openh264 = "0.9"
+tokio.workspace = true
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3.34"
+ureq = { version = "3.4.2", features = ["json"] }
+hayro = { version = "0.9", features = ["embed-fonts"] }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.190"

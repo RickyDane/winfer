@@ -1,0 +1,13 @@
+[package]
+name = "tauri"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tauri-macros.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+dirs = "7.0.0"
+http = "1"

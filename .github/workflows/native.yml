@@ -1,0 +1,54 @@
+name: native
+
+# Tests the GPUI build in native/ on every platform, and bundles it on a native-v* tag.
+on:
+  push:
+    branches: [main]
+    paths: ["native/**", "src-tauri/**", ".github/workflows/native.yml"]
+    tags: ["native-v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libfontconfig1-dev
+      - uses: actions/cache@v4
+        with:
+          path: native/target
+          key: native-${{ runner.os }}-${{ hashFiles('native/Cargo.lock') }}
+      - name: cargo test
+        working-directory: native
+        run: cargo test -p winfer-app
+
+  bundle:
+    if: startsWith(github.ref, 'refs/tags/native-v')
+    needs: test
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: native/scripts/bundle-macos.sh aarch64-apple-darwin
+      - run: native/scripts/bundle-macos.sh x86_64-apple-darwin
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: native/target/bundle/*.dmg
+          prerelease: ${{ contains(github.ref_name, '-') }}

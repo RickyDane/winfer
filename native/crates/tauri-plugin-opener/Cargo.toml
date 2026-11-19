@@ -1,0 +1,7 @@
+[package]
+name = "tauri-plugin-opener"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tauri.workspace = true

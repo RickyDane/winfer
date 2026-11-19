@@ -28,7 +28,7 @@ const MAX_ATLAS_PAGES = 4;
 
 // Recolor every live terminal when the app theme changes; refit them all when zoomed.
 useWorkspaces.subscribe((s, prev) => {
-  if (s.theme !== prev.theme || s.glassPanes !== prev.glassPanes) {
+  if (s.theme !== prev.theme) {
     for (const entry of entries.values()) {
       entry.term.options.theme = paneTheme();
       entry.term.options.minimumContrastRatio = terminalMinContrast(s.theme);
@@ -177,14 +177,12 @@ function rootsOf(id: string) {
 }
 
 /**
- * The terminal colors. With the glass pane design the background is transparent, so the
- * frosted pane shows through wherever an agent (Claude Code, Codex, winfer code, a shell)
+ * The terminal colors. The background is transparent, so the frosted pane shows through wherever an agent (Claude Code, Codex, winfer code, a shell)
  * paints the default background. Cells an app colors explicitly stay opaque.
  */
 function paneTheme() {
-  const { theme, glassPanes } = useWorkspaces.getState();
-  const t = terminalTheme(theme);
-  return glassPanes ? { ...t, background: "#00000000" } : t;
+  const t = terminalTheme(useWorkspaces.getState().theme);
+  return { ...t, background: "#00000000" };
 }
 
 /** `rgb:rrrr/gggg/bbbb`, the form OSC 10/11 replies use. */
@@ -202,7 +200,7 @@ function create(pane: Pane): Entry {
     scrollback: 10_000,
     macOptionIsMeta: true,
     allowProposedApi: true,
-    // Lets the glass design's transparent background through; opaque themes look the same.
+    // Lets the glass design's transparent background through.
     allowTransparency: true,
     theme: paneTheme(),
     minimumContrastRatio: terminalMinContrast(useWorkspaces.getState().theme),

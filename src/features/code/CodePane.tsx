@@ -430,7 +430,6 @@ function trackTitle(paneId: string, store: ReturnType<typeof createCodeStore>) {
 export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
   const store = storeFor(pane);
   const dark = useWorkspaces((s) => themeById(s.theme).mode) !== "light";
-  const glass = useWorkspaces((s) => s.glassPanes);
   const compact = useCodeWeb((s) => s.compact);
   const textScale = useCodeWeb((s) => s.textScale);
   const root = useRef<HTMLDivElement>(null);
@@ -472,7 +471,7 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
           className={clsx(
             "cw-pane",
             !dark && "light",
-            glass && "glass",
+            "glass",
             compact && "compact",
           )}
           style={{ colorScheme: dark ? "dark" : "light", "--cw-text": textScale } as CSSProperties}

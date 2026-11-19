@@ -504,18 +504,6 @@ function ReviewSettings() {
   );
 }
 
-/** Opt-in preview of the glass pane design. */
-function PaneDesignSettings() {
-  const glassPanes = useWorkspaces((s) => s.glassPanes);
-  return (
-    <Card title="Panes">
-      <Row label="New pane design (preview)" hint="Glass panes with a floating two-row header: title and actions on top, branch or worktree, model, dev server links, cost and context below.">
-        <Toggle label="New pane design (preview)" checked={glassPanes} onChange={(on) => useWorkspaces.getState().setGlassPanes(on)} />
-      </Row>
-    </Card>
-  );
-}
-
 /** Opt-in: each agent pane's task cost in its header. */
 function PaneCostSettings() {
   const showPaneCost = useWorkspaces((s) => s.showPaneCost);
@@ -1980,7 +1968,6 @@ const PAGES: { id: string; label: string; icon: LucideIcon; render: () => React.
   { id: "theme", label: "Theme", icon: Palette, render: () => (
       <>
         <AppearanceSettings />
-        <PaneDesignSettings />
       </>
     ),
   },

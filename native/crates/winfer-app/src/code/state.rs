@@ -1,0 +1,714 @@
+//! One winfer code pane's transcript and session state (port of `features/code/store.ts`).
+//! `apply` is the reducer the events go through.
+
+use super::names::{is_spec, remember_resolved};
+use serde_json::Value;
+use super::protocol::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn key() -> String {
+    format!("k{}", SEQ.fetch_add(1, Ordering::Relaxed) + 1)
+}
+
+#[derive(Clone, Debug)]
+pub struct Attachment {
+    /// Base64 data (no `data:` prefix); empty for a desktop path.
+    pub data: String,
+    pub mime: String,
+    pub name: String,
+    /// Local drop: the backend can read the original file directly.
+    pub path: Option<String>,
+}
+
+/// Session-local task activity, recorded even while its popover is closed.
+#[derive(Clone, Debug, Default)]
+pub struct CodeTask {
+    pub ev: TaskEv,
+    pub started_at: u64,
+    pub recent_lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sheet {
+    TaskLog,
+    Usage,
+    Status,
+    Help,
+    Mcp,
+    Login,
+    Agents,
+    Sessions,
+    Btw,
+    Compaction,
+    Model,
+    Effort,
+    Mode,
+    SubagentModel,
+}
+
+#[derive(Clone, Debug)]
+pub struct Btw {
+    pub id: String,
+    pub question: String,
+    pub answer: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Item {
+    User { key: String, text: String, at: u64, images: Vec<String> },
+    Text { key: String, text: String, streaming: bool },
+    Reasoning { key: String, text: String, streaming: bool, started: u64, ended: Option<u64> },
+    Tool { key: String, name: String, title: String, input: Value, output: String, ok: Option<bool>, diff: Option<String>, started: u64, ended: Option<u64> },
+    Notice { key: String, text: String, error: bool },
+    /// Total time the agent worked since the last user message, shown under its last response.
+    Worked { key: String, ms: u64 },
+}
+
+impl Item {
+    pub fn key(&self) -> &str {
+        match self {
+            Item::User { key, .. } | Item::Text { key, .. } | Item::Reasoning { key, .. } | Item::Tool { key, .. } | Item::Notice { key, .. } | Item::Worked { key, .. } => key,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Rate {
+    pub tokens: u64,
+    pub at: u64,
+    pub start: u64,
+    pub start_at: u64,
+}
+
+pub struct CodeState {
+    pub session: Option<String>,
+    pub model: String,
+    /// The model actually answering, when the backend resolved an alias.
+    pub actual_model: Option<String>,
+    pub models: Vec<ModelInfo>,
+    /// The `@` mention list; None until the composer first asks for it.
+    pub files: Option<Vec<String>>,
+    pub cwd: Option<String>,
+    pub backend_session: Option<String>,
+    pub title: Option<String>,
+    pub branch: Option<String>,
+    pub trim_at: u64,
+    pub compact_at: u64,
+    pub mcp: Vec<String>,
+    pub sessions: Option<Vec<SessionInfo>>,
+    /// The `/cost` sheet's context breakdown: None while it's read.
+    pub breakdown: Option<(u64, Option<Vec<ContextPart>>)>,
+    pub btw: Vec<Btw>,
+    pub sheet: Option<Sheet>,
+    pub rate: Option<Rate>,
+    pub log_task: Option<String>,
+    pub task_log: Option<(String, Option<String>, Option<String>)>,
+    pub mode: Mode,
+    pub effort: String,
+    pub sub_model: Option<String>,
+    pub sub_effort: Option<String>,
+    pub items: Vec<Item>,
+    pub approvals: Vec<Approval>,
+    pub tasks: Vec<CodeTask>,
+    pub todos: Vec<Todo>,
+    pub plan_done_at: Option<u64>,
+    pub skills: Vec<String>,
+    pub usage: Usage,
+    pub busy: bool,
+    pub turn_started: Option<u64>,
+    pub exited: Option<String>,
+    /// Commands queued for the transport (drained by the view).
+    pub outbox: Vec<Cmd>,
+}
+
+impl Default for CodeState {
+    fn default() -> Self {
+        Self {
+            session: None, model: String::new(), actual_model: None, models: Vec::new(), files: None, cwd: None, backend_session: None,
+            title: None, branch: None, trim_at: 0, compact_at: 0, mcp: Vec::new(), sessions: None, breakdown: None, btw: Vec::new(),
+            sheet: None, rate: None, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), sub_model: None, sub_effort: None,
+            items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
+            usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, outbox: Vec::new(),
+        }
+    }
+}
+
+fn close_reasoning(items: &mut [Item]) {
+    let now = now_ms();
+    for i in items {
+        if let Item::Reasoning { streaming, ended, .. } = i {
+            if *streaming {
+                *streaming = false;
+                *ended = Some(now);
+            }
+        }
+    }
+}
+
+fn find_last(items: &[Item], f: impl Fn(&Item) -> bool) -> Option<usize> {
+    items.iter().rposition(f)
+}
+
+impl CodeState {
+    pub fn notice(&mut self, text: impl Into<String>) {
+        self.items.push(Item::Notice { key: key(), text: text.into(), error: false });
+    }
+
+    pub fn set_sheet(&mut self, sheet: Option<Sheet>) {
+        if sheet == Some(Sheet::Btw) {
+            self.btw.clear();
+        }
+        self.sheet = sheet;
+    }
+
+    pub fn open_task_log(&mut self, id: &str) {
+        self.log_task = Some(id.to_string());
+        self.task_log = None;
+        self.sheet = Some(Sheet::TaskLog);
+        self.outbox.push(Cmd::TaskLog(id.to_string()));
+    }
+
+    /// Applies a command's local effect and queues it for the process.
+    pub fn send(&mut self, cmd: Cmd) {
+        match &cmd {
+            Cmd::SetMode(m) => self.mode = *m,
+            Cmd::SetModel(m) => {
+                self.model = m.clone();
+                self.actual_model = None;
+            }
+            Cmd::SetEffort(e) => self.effort = e.clone().unwrap_or_else(|| "default".into()),
+            Cmd::SetSubagent { model, effort } => {
+                self.sub_model = model.clone();
+                self.sub_effort = if model.is_some() { effort.clone() } else { None };
+            }
+            Cmd::Undo { .. } | Cmd::New => self.approvals.clear(),
+            Cmd::Btw { id, question } => {
+                self.btw = vec![Btw { id: id.clone(), question: question.clone(), answer: None, error: None }];
+                self.sheet = Some(Sheet::Btw);
+            }
+            Cmd::Sessions => self.sessions = None,
+            Cmd::ContextBreakdown { .. } => self.breakdown = None,
+            Cmd::SetCompaction { trim, compact } => {
+                self.trim_at = trim.unwrap_or(self.trim_at);
+                self.compact_at = compact.unwrap_or(self.compact_at);
+            }
+            Cmd::Approve { id, .. } | Cmd::Answer { id, .. } => self.approvals.retain(|a| a.id != *id),
+            _ => {}
+        }
+        self.outbox.push(cmd);
+    }
+
+    /// Sends a message (or steers a running turn). `images` and `files` are the attachments.
+    pub fn submit(&mut self, text: &str, attachments: &[Attachment], skill: Option<&str>) {
+        let t = text.trim();
+        if t.is_empty() && attachments.is_empty() && skill.is_none() {
+            return;
+        }
+        let is_image = |a: &&Attachment| a.path.is_none() && a.mime.starts_with("image/");
+        let images: Vec<ImageData> = attachments.iter().filter(is_image).map(|a| ImageData { mime: a.mime.clone(), data: a.data.clone() }).collect();
+        let files: Vec<FileData> = attachments.iter().filter(|a| !is_image(a)).map(|a| FileData { name: a.name.clone(), data: a.path.is_none().then(|| a.data.clone()), path: a.path.clone() }).collect();
+        let mut shown = match skill {
+            Some(s) => format!("/{s}{}", if t.is_empty() { String::new() } else { format!(" {t}") }),
+            None => t.to_string(),
+        };
+        for f in &files {
+            shown.push_str(&format!("\n[File: {}]", f.name));
+        }
+        let urls: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+        self.items.push(Item::User { key: key(), text: shown, at: now_ms(), images: urls });
+        let steer = self.busy;
+        self.send(Cmd::Send { text: t.to_string(), images, files, skill: skill.map(str::to_string), steer });
+    }
+
+    pub fn apply(&mut self, ev: Ev) {
+        match ev {
+            Ev::Session { id } => self.backend_session = Some(id),
+            Ev::Model { model } => {
+                // `--serve` reports a switch as the `backend/model` spec; backends report the model
+                // actually answering (an alias resolved: claude/opus → claude-opus-5-5).
+                if is_spec(&model) {
+                    self.model = model;
+                    self.actual_model = None;
+                } else {
+                    if !self.model.is_empty() {
+                        remember_resolved(&self.model, &model);
+                    }
+                    self.actual_model = Some(model);
+                }
+            }
+            Ev::Mode { mode } => self.mode = mode,
+            Ev::TextDelta { id, text } => match find_last(&self.items, |i| matches!(i, Item::Text { key, .. } if *key == id)) {
+                Some(i) => {
+                    if let Item::Text { text: t, .. } = &mut self.items[i] {
+                        t.push_str(&text);
+                    }
+                }
+                None => {
+                    close_reasoning(&mut self.items);
+                    self.items.push(Item::Text { key: id, text, streaming: true });
+                }
+            },
+            Ev::Text { id, text } => match find_last(&self.items, |i| matches!(i, Item::Text { key, .. } if *key == id)) {
+                Some(i) => self.items[i] = Item::Text { key: id, text, streaming: false },
+                None => {
+                    close_reasoning(&mut self.items);
+                    self.items.push(Item::Text { key: id, text, streaming: false });
+                }
+            },
+            Ev::ReasoningDelta { id, text } => match find_last(&self.items, |i| matches!(i, Item::Reasoning { key, .. } if *key == id)) {
+                Some(i) => {
+                    if let Item::Reasoning { text: t, .. } = &mut self.items[i] {
+                        t.push_str(&text);
+                    }
+                }
+                None => self.items.push(Item::Reasoning { key: id, text, streaming: true, started: now_ms(), ended: None }),
+            },
+            Ev::ToolStart { id, name, title, input } => {
+                // A backend with two reporting paths for one call must not show it twice.
+                if find_last(&self.items, |i| matches!(i, Item::Tool { key, .. } if *key == id)).is_some() {
+                    return;
+                }
+                close_reasoning(&mut self.items);
+                self.items.push(Item::Tool { key: id, name, title, input, output: String::new(), ok: None, diff: None, started: now_ms(), ended: None });
+            }
+            Ev::ToolOutput { id, chunk } => {
+                if let Some(i) = find_last(&self.items, |i| matches!(i, Item::Tool { key, .. } if *key == id)) {
+                    if let Item::Tool { output, .. } = &mut self.items[i] {
+                        output.push_str(&chunk);
+                    }
+                }
+            }
+            Ev::ToolEnd { id, ok, output, diff } => {
+                if let Some(i) = find_last(&self.items, |i| matches!(i, Item::Tool { key, .. } if *key == id)) {
+                    if let Item::Tool { output: o, ok: k, diff: d, ended, .. } = &mut self.items[i] {
+                        *k = Some(ok);
+                        if !output.is_empty() {
+                            *o = output;
+                        }
+                        *d = diff;
+                        *ended = Some(now_ms());
+                    }
+                }
+            }
+            Ev::Approval(a) => self.approvals.push(a),
+            Ev::Task(t) => {
+                let now = now_ms();
+                let i = match self.tasks.iter().position(|x| x.ev.id == t.id) {
+                    Some(i) => i,
+                    None => {
+                        self.tasks.push(CodeTask { ev: TaskEv { id: t.id.clone(), ..Default::default() }, started_at: now, recent_lines: Vec::new() });
+                        self.tasks.len() - 1
+                    }
+                };
+                let task = &mut self.tasks[i];
+                macro_rules! merge {
+                    ($($f:ident),*) => { $( if t.$f.is_some() { task.ev.$f = t.$f.clone(); } )* };
+                }
+                merge!(tool_id, title, description, agent, tools, last, status, output_file, exit_code, model);
+                if let Some(last) = &t.last {
+                    if task.recent_lines.last() != Some(last) {
+                        task.recent_lines.push(last.clone());
+                        let n = task.recent_lines.len();
+                        if n > 8 {
+                            task.recent_lines.drain(..n - 8);
+                        }
+                    }
+                }
+            }
+            Ev::Todos { todos } => {
+                let all_done = !todos.is_empty() && todos.iter().all(|t| t.status == "completed");
+                self.plan_done_at = if all_done { self.plan_done_at.or(Some(now_ms())) } else { None };
+                self.todos = todos;
+            }
+            Ev::Skills { skills } => self.skills = skills,
+            Ev::Usage(u) => {
+                let streamed = u.turn_streamed.unwrap_or(u.output);
+                let now = now_ms();
+                if self.busy {
+                    self.rate = Some(match self.rate.take() {
+                        Some(r) => Rate { tokens: streamed, at: now, ..r },
+                        None => Rate { start: streamed, start_at: now, tokens: streamed, at: now },
+                    });
+                }
+                let prev = &self.usage;
+                self.usage = Usage {
+                    context: u.context,
+                    window: if u.window > 0 { u.window } else { prev.window },
+                    input: u.input,
+                    cached: u.cached,
+                    output: u.output,
+                    cost: u.cost.or(prev.cost),
+                    turn: u.turn.or(prev.turn),
+                    turn_input: u.turn_input.or(prev.turn_input),
+                    turn_cached: u.turn_cached.or(prev.turn_cached),
+                    turn_streamed: u.turn_streamed.or(prev.turn_streamed),
+                    turn_active_ms: u.turn_active_ms.or(prev.turn_active_ms),
+                };
+            }
+            Ev::Notice { text } | Ev::BgNote { text } => self.items.push(Item::Notice { key: key(), text, error: false }),
+            Ev::Error { text } => self.items.push(Item::Notice { key: key(), text, error: true }),
+            Ev::TurnStart => {
+                self.busy = true;
+                self.turn_started = Some(now_ms());
+                self.rate = None;
+                self.usage.turn = Some(0);
+                self.usage.turn_input = Some(0);
+                self.usage.turn_cached = Some(0);
+                self.usage.turn_streamed = Some(0);
+                self.usage.turn_active_ms = Some(0);
+            }
+            Ev::TurnDone => {
+                close_reasoning(&mut self.items);
+                for i in &mut self.items {
+                    if let Item::Text { streaming, .. } = i {
+                        *streaming = false;
+                    }
+                }
+                // Follow-up turns without a new user message (queued steers, background task
+                // wake-ups) add up into one total under the latest response.
+                let last_user = find_last(&self.items, |i| matches!(i, Item::User { .. }));
+                let mut ms = self.turn_started.map_or(0, |s| now_ms().saturating_sub(s));
+                let mut idx = 0;
+                self.items.retain(|i| {
+                    let drop = match i {
+                        Item::Worked { ms: m, .. } if last_user.is_none_or(|l| idx >= l) => {
+                            ms += m;
+                            true
+                        }
+                        _ => false,
+                    };
+                    idx += 1;
+                    !drop
+                });
+                // Dropped rows sit after the user's message, so its index is unchanged.
+                let worked = self.items[last_user.map_or(0, |i| i + 1)..].iter().any(|i| matches!(i, Item::Text { .. } | Item::Tool { .. } | Item::Reasoning { .. }));
+                if worked && ms > 0 {
+                    self.items.push(Item::Worked { key: key(), ms });
+                }
+                self.busy = false;
+                self.approvals.clear();
+            }
+            Ev::Exited { text } => {
+                self.busy = false;
+                self.exited = Some(text);
+            }
+            Ev::Ready { session, backend_session, title, model, mode, effort, subagent_model, subagent_effort, cwd, branch, trim_at, compact_at, mcp } => {
+                self.actual_model = if model == self.model { self.actual_model.take() } else { None };
+                self.session = Some(session);
+                self.backend_session = backend_session;
+                self.title = title;
+                self.model = model;
+                self.mode = mode;
+                self.effort = effort.unwrap_or_else(|| "default".into());
+                self.sub_model = subagent_model;
+                self.sub_effort = subagent_effort;
+                self.cwd = Some(cwd);
+                self.branch = branch;
+                self.trim_at = trim_at.unwrap_or(self.trim_at);
+                self.compact_at = compact_at.unwrap_or(self.compact_at);
+                self.mcp = mcp.unwrap_or_else(|| std::mem::take(&mut self.mcp));
+                self.exited = None;
+            }
+            Ev::Sessions { sessions } => self.sessions = Some(sessions),
+            Ev::ContextBreakdown { tokens, parts } => self.breakdown = Some((tokens, parts)),
+            Ev::TaskLog { id, text, file } => {
+                if self.log_task.as_deref() == Some(&id) {
+                    self.task_log = Some((id, text, file));
+                }
+            }
+            Ev::Btw { id, answer, error } => {
+                for b in &mut self.btw {
+                    if b.id == id {
+                        b.answer = answer.clone();
+                        b.error = error.clone();
+                    }
+                }
+            }
+            Ev::Models { models } => self.models = models,
+            Ev::Files { files } => self.files = Some(files),
+            Ev::User { text } => self.items.push(Item::User { key: key(), text, at: now_ms(), images: Vec::new() }),
+            Ev::Answered { id } => self.approvals.retain(|a| a.id != id),
+            Ev::Cleared => {
+                self.items.clear();
+                self.approvals.clear();
+                self.tasks.clear();
+                self.todos.clear();
+                self.plan_done_at = None;
+                self.busy = false;
+                self.usage = Usage { window: self.usage.window, ..Default::default() };
+                self.rate = None;
+            }
+            Ev::Restore { transcript } => {
+                for e in transcript {
+                    self.items.push(match e.role.as_str() {
+                        "user" => Item::User { key: key(), text: e.text, at: 0, images: Vec::new() },
+                        "assistant" => Item::Text { key: key(), text: e.text, streaming: false },
+                        "tool" => {
+                            let (name, title) = e.text.split_once('\t').unwrap_or((&e.text, ""));
+                            Item::Tool { key: key(), name: name.to_string(), title: title.to_string(), input: Value::Null, output: String::new(), ok: Some(e.state.as_deref() != Some("failed")), diff: None, started: 0, ended: Some(0) }
+                        }
+                        _ => Item::Notice { key: key(), text: e.text, error: false },
+                    });
+                }
+                self.notice("Resumed session");
+            }
+            Ev::Undone { files, error } => {
+                if let Some(i) = find_last(&self.items, |i| matches!(i, Item::User { .. })) {
+                    self.items.truncate(i);
+                }
+                let files = files.unwrap_or_default();
+                match error {
+                    Some(e) => self.items.push(Item::Notice { key: key(), text: format!("Undo failed: {e}"), error: true }),
+                    None => {
+                        let extra = if files.is_empty() { String::new() } else { format!(" · reverted {}", files.join(", ")) };
+                        self.notice(format!("Undid last turn{extra}"));
+                    }
+                }
+            }
+            Ev::Account { .. } | Ev::Unknown => {}
+        }
+    }
+
+    /// Context use as a fraction of the window.
+    pub fn context_fraction(&self) -> f32 {
+        if self.usage.window == 0 { 0.0 } else { (self.usage.context as f32 / self.usage.window as f32).clamp(0.0, 1.0) }
+    }
+
+    /// Tokens per second of the running turn, once there's a second of data.
+    pub fn tokens_per_second(&self) -> Option<f32> {
+        let r = self.rate.as_ref()?;
+        let dt = r.at.saturating_sub(r.start_at) as f32 / 1000.0;
+        (dt >= 1.0 && r.tokens > r.start).then(|| (r.tokens - r.start) as f32 / dt)
+    }
+
+    pub fn export_markdown(&self) -> String {
+        let mut md = format!("# {}\n\n", self.title.as_deref().filter(|t| !t.is_empty()).unwrap_or("winfer code session"));
+        for it in &self.items {
+            match it {
+                Item::User { text, .. } => md.push_str(&format!("## You\n\n{text}\n\n")),
+                Item::Text { text, .. } => md.push_str(&format!("## Assistant\n\n{text}\n\n")),
+                Item::Tool { name, title, diff, output, .. } => {
+                    md.push_str(&format!("**{name}** `{title}`\n\n"));
+                    if let Some(d) = diff {
+                        md.push_str(&format!("```diff\n{d}\n```\n\n"));
+                    } else if !output.trim().is_empty() {
+                        md.push_str(&format!("```\n{}\n```\n\n", output.trim().chars().take(4000).collect::<String>()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        md
+    }
+}
+
+/// A plan task's glyph state for the strip above the composer.
+pub fn plan_counts(todos: &[Todo]) -> (usize, usize) {
+    (todos.iter().filter(|t| t.status == "completed").count(), todos.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    impl CodeState {
+        /// The pane status the agent bar shows: asking, working, or idle.
+        fn status(&self) -> &'static str {
+            if !self.approvals.is_empty() { "needs-input" } else if self.busy { "working" } else { "idle" }
+        }
+    }
+
+    fn ev(v: Value) -> Ev {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn unknown_events_keep_the_state() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "account", "id": "work", "label": "work@example.com" })));
+        s.apply(ev(json!({ "type": "from_a_newer_harness" })));
+        assert!(s.tasks.is_empty() && s.items.is_empty());
+    }
+
+    #[test]
+    fn deltas_stream_into_one_row_and_the_final_text_replaces_them() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "text_delta", "id": "a", "text": "par" })));
+        s.apply(ev(json!({ "type": "text_delta", "id": "a", "text": "tial" })));
+        assert!(matches!(&s.items[0], Item::Text { text, streaming: true, .. } if text == "partial"));
+        s.apply(ev(json!({ "type": "text", "id": "a", "text": "complete" })));
+        assert_eq!(s.items.len(), 1);
+        assert!(matches!(&s.items[0], Item::Text { text, streaming: false, .. } if text == "complete"));
+    }
+
+    #[test]
+    fn reasoning_ends_when_text_starts() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "reasoning_delta", "id": "r", "text": "hmm" })));
+        s.apply(ev(json!({ "type": "text_delta", "id": "t", "text": "ok" })));
+        assert!(matches!(&s.items[0], Item::Reasoning { streaming: false, ended: Some(_), .. }));
+    }
+
+    #[test]
+    fn tools_run_and_finish_once() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "tool_start", "id": "t1", "name": "Bash", "title": "ls", "input": {} })));
+        s.apply(ev(json!({ "type": "tool_start", "id": "t1", "name": "Bash", "title": "ls", "input": {} })));
+        s.apply(ev(json!({ "type": "tool_output", "id": "t1", "chunk": "a\n" })));
+        s.apply(ev(json!({ "type": "tool_end", "id": "t1", "ok": true, "output": "", "diff": null })));
+        assert_eq!(s.items.len(), 1);
+        assert!(matches!(&s.items[0], Item::Tool { output, ok: Some(true), ended: Some(_), .. } if output == "a\n"));
+    }
+
+    #[test]
+    fn a_turn_adds_up_the_time_worked() {
+        let mut s = CodeState::default();
+        s.submit("hi", &[], None);
+        s.apply(Ev::TurnStart);
+        s.turn_started = Some(now_ms() - 2000);
+        s.apply(ev(json!({ "type": "text", "id": "a", "text": "hello" })));
+        s.apply(Ev::TurnDone);
+        let worked: Vec<_> = s.items.iter().filter(|i| matches!(i, Item::Worked { .. })).collect();
+        assert_eq!(worked.len(), 1);
+        // A follow-up turn merges into the same row.
+        s.apply(Ev::TurnStart);
+        s.apply(ev(json!({ "type": "text", "id": "b", "text": "more" })));
+        s.apply(Ev::TurnDone);
+        assert_eq!(s.items.iter().filter(|i| matches!(i, Item::Worked { .. })).count(), 1);
+        assert!(!s.busy);
+    }
+
+    #[test]
+    fn a_turn_without_output_shows_no_worked_row() {
+        let mut s = CodeState::default();
+        s.submit("hi", &[], None);
+        s.apply(Ev::TurnStart);
+        s.apply(Ev::TurnDone);
+        assert!(!s.items.iter().any(|i| matches!(i, Item::Worked { .. })));
+    }
+
+    #[test]
+    fn submit_steers_while_busy_and_sends_attachments() {
+        let mut s = CodeState::default();
+        let att = vec![
+            Attachment { name: "shot.png".into(), mime: "image/png".into(), data: "aW1hZ2U=".into(), path: None },
+            Attachment { name: "notes.txt".into(), mime: "text/plain".into(), data: "aGVsbG8=".into(), path: None },
+            Attachment { name: "local.png".into(), mime: String::new(), data: String::new(), path: Some("C:\\My Files\\local.png".into()) },
+        ];
+        s.submit("review", &att, None);
+        let v = s.outbox.last().unwrap().json();
+        assert_eq!(v["type"], "send");
+        assert_eq!(v["images"], json!([{ "mime": "image/png", "data": "aW1hZ2U=" }]));
+        assert_eq!(v["files"], json!([{ "name": "notes.txt", "data": "aGVsbG8=" }, { "name": "local.png", "path": "C:\\My Files\\local.png" }]));
+        assert!(matches!(&s.items[0], Item::User { text, images, .. } if text == "review\n[File: notes.txt]\n[File: local.png]" && images.len() == 1));
+        s.busy = true;
+        s.submit("also", &[], None);
+        assert_eq!(s.outbox.last().unwrap().json()["type"], "steer");
+        s.submit("  ", &[], None);
+        assert_eq!(s.outbox.len(), 2);
+    }
+
+    #[test]
+    fn approvals_come_and_go() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "approval", "id": "x", "tool": "Bash", "title": "rm", "detail": "", "questions": [] })));
+        assert_eq!(s.status(), "needs-input");
+        s.send(Cmd::Approve { id: "x".into(), decision: Decision::Allow });
+        assert!(s.approvals.is_empty());
+        assert_eq!(s.status(), "idle");
+        s.apply(ev(json!({ "type": "approval", "id": "y", "tool": "Bash", "title": "", "detail": "", "questions": [] })));
+        s.apply(ev(json!({ "type": "answered", "id": "y" })));
+        assert!(s.approvals.is_empty());
+    }
+
+    #[test]
+    fn tasks_merge_and_keep_recent_lines() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "task", "id": "a", "title": "build", "status": "running", "last": "one" })));
+        s.apply(ev(json!({ "type": "task", "id": "a", "last": "two" })));
+        s.apply(ev(json!({ "type": "task", "id": "a", "last": "two", "status": "done" })));
+        assert_eq!(s.tasks.len(), 1);
+        let t = &s.tasks[0];
+        assert_eq!(t.ev.title.as_deref(), Some("build"));
+        assert_eq!(t.ev.status.as_deref(), Some("done"));
+        assert_eq!(t.recent_lines, ["one", "two"]);
+    }
+
+    #[test]
+    fn plan_completion_time_sticks() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "todos", "todos": [{ "content": "a", "status": "completed" }] })));
+        let at = s.plan_done_at;
+        assert!(at.is_some());
+        s.apply(ev(json!({ "type": "todos", "todos": [{ "content": "a", "status": "completed" }] })));
+        assert_eq!(s.plan_done_at, at);
+        s.apply(ev(json!({ "type": "todos", "todos": [{ "content": "a", "status": "pending" }] })));
+        assert_eq!(s.plan_done_at, None);
+        assert_eq!(plan_counts(&s.todos), (0, 1));
+    }
+
+    #[test]
+    fn model_events_tell_specs_from_resolved_ids() {
+        let mut s = CodeState::default();
+        s.apply(Ev::Model { model: "claude/opus".into() });
+        s.apply(Ev::Model { model: "claude-opus-5-6".into() });
+        assert_eq!(s.model, "claude/opus");
+        assert_eq!(s.actual_model.as_deref(), Some("claude-opus-5-6"));
+        s.apply(Ev::Model { model: "claude/sonnet".into() });
+        assert_eq!(s.actual_model, None);
+    }
+
+    #[test]
+    fn undo_drops_the_last_turn() {
+        let mut s = CodeState::default();
+        s.submit("one", &[], None);
+        s.apply(ev(json!({ "type": "text", "id": "a", "text": "r1" })));
+        s.submit("two", &[], None);
+        s.apply(ev(json!({ "type": "text", "id": "b", "text": "r2" })));
+        s.apply(ev(json!({ "type": "undone", "files": ["a.rs"] })));
+        assert_eq!(s.items.len(), 3);
+        assert!(matches!(s.items.last(), Some(Item::Notice { text, error: false, .. }) if text == "Undid last turn · reverted a.rs"));
+    }
+
+    #[test]
+    fn clearing_resets_the_session_but_not_the_window() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "usage", "context": 5000, "window": 100000, "input": 10, "cached": 0, "output": 5, "cost": 0.5 })));
+        s.submit("x", &[], None);
+        s.apply(Ev::Cleared);
+        assert!(s.items.is_empty());
+        assert_eq!(s.usage.window, 100_000);
+        assert_eq!(s.usage.context, 0);
+        assert_eq!(s.usage.cost, None);
+    }
+
+    #[test]
+    fn ready_and_restore() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "ready", "session": "s", "model": "claude/opus", "mode": "plan", "cwd": "/x", "effort": "high", "trim_at": 60 })));
+        assert_eq!((s.mode, s.trim_at, s.effort.as_str()), (Mode::Plan, 60, "high"));
+        s.apply(ev(json!({ "type": "restore", "transcript": [{ "role": "user", "text": "hi" }, { "role": "assistant", "text": "yo" }, { "role": "tool", "text": "Bash\tls", "state": "failed" }] })));
+        assert_eq!(s.items.len(), 4);
+        assert!(matches!(&s.items[2], Item::Tool { name, title, ok: Some(false), .. } if name == "Bash" && title == "ls"));
+    }
+
+    #[test]
+    fn sending_commands_updates_the_state_at_once() {
+        let mut s = CodeState::default();
+        s.send(Cmd::SetMode(Mode::Yolo));
+        s.send(Cmd::SetEffort(None));
+        s.send(Cmd::SetSubagent { model: None, effort: Some("low".into()) });
+        s.send(Cmd::SetCompaction { trim: Some(50), compact: None });
+        assert_eq!((s.mode, s.effort.as_str(), s.sub_effort.clone(), s.trim_at), (Mode::Yolo, "default", None, 50));
+        assert_eq!(s.outbox.len(), 4);
+    }
+}

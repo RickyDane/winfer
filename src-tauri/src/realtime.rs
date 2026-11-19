@@ -102,6 +102,12 @@ pub fn realtime_set_api_key(key: Option<String>) -> Result<(), String> {
     }
 }
 
+/// The stored OpenAI API key, for the native build's own realtime connection.
+#[allow(dead_code)]
+pub fn stored_api_key() -> Option<String> {
+    api_key()
+}
+
 #[tauri::command]
 pub fn realtime_has_api_key() -> bool {
     api_key().is_some()

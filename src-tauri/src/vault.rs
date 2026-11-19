@@ -49,16 +49,40 @@ pub(crate) fn service(plugin: &str) -> String {
 
 #[cfg(not(test))]
 pub(crate) mod values {
+    /// `WINFER_VAULT_FILE=path` keeps values in a JSON file instead of the OS keychain, so a second,
+    /// throwaway winfer (a test run, a recording) can't touch the real pairings and keys.
+    fn file() -> Option<std::path::PathBuf> {
+        std::env::var_os("WINFER_VAULT_FILE").map(Into::into)
+    }
+    fn read(path: &std::path::Path) -> std::collections::HashMap<String, String> {
+        std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+    fn write(path: &std::path::Path, map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+        std::fs::write(path, serde_json::to_string(map).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    }
     fn entry(service: &str, key: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(service, key).map_err(|e| e.to_string())
     }
     pub fn get(service: &str, key: &str) -> Result<String, String> {
+        if let Some(path) = file() {
+            return read(&path).get(&format!("{service}/{key}")).cloned().ok_or_else(|| "no value".to_string());
+        }
         entry(service, key)?.get_password().map_err(|e| e.to_string())
     }
     pub fn set(service: &str, key: &str, value: &str) -> Result<(), String> {
+        if let Some(path) = file() {
+            let mut map = read(&path);
+            map.insert(format!("{service}/{key}"), value.to_string());
+            return write(&path, &map);
+        }
         entry(service, key)?.set_password(value).map_err(|e| e.to_string())
     }
     pub fn delete(service: &str, key: &str) -> Result<(), String> {
+        if let Some(path) = file() {
+            let mut map = read(&path);
+            map.remove(&format!("{service}/{key}"));
+            return write(&path, &map);
+        }
         match entry(service, key)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             #[cfg(target_os = "macos")]
