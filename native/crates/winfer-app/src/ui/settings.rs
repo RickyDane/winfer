@@ -452,66 +452,74 @@ impl Root {
             panes = panes.child(row(c, "Always open new agents in their own worktree", Some(format!("Applies to the workspace “{}”.", active.name)), toggle));
         }
 
-        let agents: Vec<_> = s.providers.iter().filter(|p| p.installed && p.model_arg.is_some()).cloned().collect();
-        let mut models = card(c, "Models", Some("The model each agent starts with in new panes."));
-        for p in &agents {
-            let list = self.models.get(&p.id).cloned().unwrap_or_default();
-            let mut options = vec![(String::new(), "CLI default".to_string())];
-            options.extend(list.iter().map(|m| (m.id.clone(), m.label.clone())));
-            let chosen = s.agent_models.get(&p.id).cloned().unwrap_or_default();
-            let label = options.iter().find(|(id, _)| *id == chosen).map_or_else(|| if chosen.is_empty() { "CLI default".to_string() } else { chosen.clone() }, |(_, l)| l.clone());
-            let id = p.id.clone();
-            let control = self.select_button(&format!("model-{}", p.id), label, options, c, cx, move |this, value, cx| {
-                let id = id.clone();
-                this.update_state(cx, |s| {
-                    if value.is_empty() {
-                        s.agent_models.remove(&id);
-                    } else {
-                        s.agent_models.insert(id, value);
-                    }
-                });
-            });
-            models = models.child(row(c, p.name.clone(), None, control));
-        }
-
+        // One card per installed agent: version and update, model, auto-approve.
         let ui = self.settings.as_ref().unwrap();
         let (versions, checking, updating) = (ui.versions.clone(), ui.checking, ui.updating.clone());
-        let mut version_card = card(c, "Versions", Some("Updating changes the CLI on disk; running panes keep their version until restarted."));
-        for p in s.providers.iter().filter(|p| p.installed && p.command.is_some()) {
+        let mut agent_cards: Vec<Div> = Vec::new();
+        for p in s.providers.iter().filter(|p| p.installed && p.id != "shell" && (p.command.is_some() || p.model_arg.is_some() || !p.auto_approve_args.is_empty())) {
             let v = versions.get(&p.id);
-            let current = v.and_then(|v| v["current"].as_str()).unwrap_or_default();
+            let current = v.and_then(|v| v["current"].as_str()).unwrap_or_default().to_string();
             let (outdated, latest, updatable) = v.map_or((false, None, false), |v| (v["outdated"] == true, v["latest"].as_str().map(str::to_string), v["updatable"] == true));
-            let hint = match v {
-                None if checking => Some("Checking…".to_string()),
-                None => None,
-                Some(_) if outdated => latest.clone().map(|l| format!("{l} is available.")),
-                Some(_) if latest.is_some() => Some("Up to date.".to_string()),
-                Some(_) => None,
+            let status = match v {
+                None if checking => "Checking…".to_string(),
+                None => String::new(),
+                Some(_) if outdated => latest.clone().map_or(String::new(), |l| format!("{l} is available")),
+                Some(_) if latest.is_some() => "Up to date".to_string(),
+                Some(_) => String::new(),
             };
             let busy = updating.contains(&p.id);
             let id = p.id.clone();
-            let control = div().when(busy, |d| d.child(div().text_xs().text_color(c.subtle).child("Updating…"))).when(!busy && updatable && (outdated || latest.is_none()), |d| {
+            let update = div().when(busy, |d| d.child(div().text_xs().text_color(c.subtle).child("Updating…"))).when(!busy && updatable && (outdated || latest.is_none()), |d| {
                 d.child(plain_button(c, SharedString::from(format!("update-{id}")), if outdated { format!("Update to {}", latest.clone().unwrap_or_default()) } else { "Update".to_string() }).on_click(cx.listener(move |this, _, _, cx| this.update_provider(id.clone(), cx))))
             });
-            version_card = version_card.child(row(c, format!("{} {current}", p.name), hint, control));
-        }
-        version_card = version_card.child(row(c, "Check for agent updates", None, plain_button(c, "check-versions", if checking { "Checking…" } else { "Check now" }).on_click(cx.listener(|this, _, _, cx| this.check_versions(cx)))));
-
-        let mut auto = card(c, "Auto-approve", Some("Agents run tools and edits without asking. Only for sandboxes or work you can undo."));
-        for p in s.providers.iter().filter(|p| p.installed && !p.auto_approve_args.is_empty()) {
-            let (id, on) = (p.id.clone(), s.auto_approve.contains(&p.id));
-            let toggle = self.toggle(SharedString::from(format!("auto-{id}")), on, c, cx, move |this, cx| {
-                let id = id.clone();
-                this.update_state(cx, |s| {
-                    if !s.auto_approve.iter().any(|x| *x == id) {
-                        s.auto_approve.push(id);
-                    } else {
-                        s.auto_approve.retain(|x| *x != id);
-                    }
+            let head = div().flex().items_center().gap_3().px_4().py_3()
+                .child(div().size(px(32.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &p.id, 17.0, 1.0)))
+                .child(div().flex_1().min_w_0().flex().flex_col()
+                    .child(div().text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(p.name.clone()))
+                    .child(div().flex().gap_1p5().text_size(px(11.5)).text_color(c.subtle)
+                        .when(!current.is_empty(), |d| d.child(div().font_family(crate::fonts::mono(cx)).child(current.clone())))
+                        .when(!status.is_empty(), |d| d.child(div().text_color(if outdated { c.accent } else { c.subtle }).child(if current.is_empty() { status.clone() } else { format!("· {status}") })))))
+                .child(update);
+            let mut agent = div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel).child(head);
+            if p.model_arg.is_some() {
+                let list = self.models.get(&p.id).cloned().unwrap_or_default();
+                let mut options = vec![(String::new(), "CLI default".to_string())];
+                options.extend(list.iter().map(|m| (m.id.clone(), m.label.clone())));
+                let chosen = s.agent_models.get(&p.id).cloned().unwrap_or_default();
+                let label = options.iter().find(|(id, _)| *id == chosen).map_or_else(|| if chosen.is_empty() { "CLI default".to_string() } else { chosen.clone() }, |(_, l)| l.clone());
+                let id = p.id.clone();
+                let control = self.select_button(&format!("model-{}", p.id), label, options, c, cx, move |this, value, cx| {
+                    let id = id.clone();
+                    this.update_state(cx, |s| {
+                        if value.is_empty() {
+                            s.agent_models.remove(&id);
+                        } else {
+                            s.agent_models.insert(id, value);
+                        }
+                    });
                 });
-            });
-            auto = auto.child(row(c, format!("Start {} in auto-approve mode", p.name), None, toggle));
+                agent = agent.child(row(c, "Model", Some("What new panes start with.".to_string()), control));
+            }
+            if !p.auto_approve_args.is_empty() {
+                let (id, on) = (p.id.clone(), s.auto_approve.contains(&p.id));
+                let toggle = self.toggle(SharedString::from(format!("auto-{id}")), on, c, cx, move |this, cx| {
+                    let id = id.clone();
+                    this.update_state(cx, |s| {
+                        if !s.auto_approve.iter().any(|x| *x == id) {
+                            s.auto_approve.push(id);
+                        } else {
+                            s.auto_approve.retain(|x| *x != id);
+                        }
+                    });
+                });
+                agent = agent.child(row(c, "Auto-approve", Some("Runs tools and edits without asking. Only for sandboxes or work you can undo.".to_string()), toggle));
+            }
+            agent_cards.push(agent);
         }
+        let agents_head = div().flex().items_center().justify_between().px_1()
+            .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Your agents"))
+            .child(plain_button(c, "check-versions", if checking { "Checking…" } else { "Check for updates" }).on_click(cx.listener(|this, _, _, cx| this.check_versions(cx))));
+        let agents_section = div().flex().flex_col().gap_2p5().child(agents_head).children(agent_cards);
 
         let prompt = self.settings.as_ref().unwrap().system_prompt.clone();
         let custom = s.system_prompt.is_some();
@@ -571,7 +579,7 @@ impl Root {
             .child(row(c, "Estimate how far working agents are", None, on_toggle))
             .when(progress_on, |d| d.child(row(c, "Check every", None, interval_select)));
 
-        div().flex().flex_col().gap_6().child(panes).when(!agents.is_empty(), |d| d.child(models)).child(version_card).child(auto).child(prompt_card).child(tools).child(review).child(progress)
+        div().flex().flex_col().gap_6().child(panes).child(agents_section).child(prompt_card).child(tools).child(review).child(progress)
     }
 
     fn page_data(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
