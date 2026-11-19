@@ -1099,27 +1099,28 @@ impl BrowserPanel {
         }
     }
 
+    /// Browser-style tabs: the active one joins the toolbar below; tabs an agent is using carry a
+    /// small agent badge next to their page icon.
     fn render_tabs(&mut self, c: Colors, dark: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut strip = div().flex().items_center().gap_1().px_2().py_1();
+        let mut strip = div().flex().items_end().gap_0p5().px_2().pt_2().border_b_1().border_color(c.border);
         let workspace = self.workspace.clone().unwrap_or_default();
         let active = self.active_tab.get(&workspace).cloned();
         let now = Instant::now();
         for tab in self.tabs.get(&workspace).cloned().unwrap_or_default() {
             let is_active = active.as_ref() == Some(&tab.id);
             let agent = self.agent_tabs.get(&tab.id).is_some_and(|at| now.duration_since(*at) < AGENT_LINGER);
-            let icon: AnyElement = if agent {
-                Icon::new(IconName::Bot).size(px(12.0)).text_color(c.accent).into_any_element()
-            } else if let Some(image) = self.favicon(&tab, dark) {
-                img(image).size(px(12.0)).flex_shrink_0().into_any_element()
+            let icon: AnyElement = if let Some(image) = self.favicon(&tab, dark) {
+                img(image).size(px(14.0)).flex_shrink_0().rounded(px(3.0)).into_any_element()
             } else {
-                Icon::new(IconName::Globe).size(px(12.0)).text_color(c.subtle).into_any_element()
+                Icon::new(IconName::Globe).size(px(13.0)).text_color(c.subtle).into_any_element()
             };
             let (select, close, ws, middle) = (tab.id.clone(), tab.id.clone(), workspace.clone(), tab.id.clone());
+            let group = SharedString::from(format!("tab-group-{}", tab.id));
             strip = strip.child(
-                div().id(SharedString::from(format!("tab-{}", tab.id))).flex().items_center().gap_1p5().max_w(px(180.0)).rounded_md().px_2().py_1().text_xs().cursor_pointer()
-                    .text_color(if is_active { c.fg } else { c.muted })
-                    .when(is_active, |d| d.bg(c.active))
-                    .hover(move |d| d.bg(c.hover))
+                div().id(SharedString::from(format!("tab-{}", tab.id))).group(group.clone()).flex().items_center().gap(px(7.0)).min_w_0().flex_basis(px(160.0)).flex_shrink(1.0)
+                    .h(px(32.0)).pl_2p5().pr_1p5().mb(px(-1.0)).rounded_t(px(8.0)).border_1().border_b_0().text_size(px(12.0)).cursor_pointer()
+                    .when(is_active, |d| d.bg(c.panel).border_color(c.border).text_color(c.fg))
+                    .when(!is_active, |d| d.border_color(gpui_kit::transparent_black()).text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.muted)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_tab.insert(ws.clone(), select.clone());
                         cx.notify();
@@ -1130,9 +1131,13 @@ impl BrowserPanel {
                         this.close_tab(middle.clone());
                     }))
                     .child(icon)
-                    .child(div().flex_1().truncate().child(tab_label(&tab)))
+                    .child(div().flex_1().min_w_0().truncate().child(tab_label(&tab)))
+                    .when(agent, |d| d.child(div().size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().bg(Hsla { a: 0.16, ..c.accent })
+                        .child(Icon::new(IconName::Bot).size(px(10.0)).text_color(c.accent))))
                     .child(
-                        div().id(SharedString::from(format!("tab-close-{}", tab.id))).cursor_pointer()
+                        div().id(SharedString::from(format!("tab-close-{}", tab.id))).size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_sm().cursor_pointer()
+                            .when(!is_active, |d| d.invisible().group_hover(group.clone(), |d| d.visible()))
+                            .hover(move |d| d.bg(c.active))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.close_tab(close.clone());
@@ -1142,54 +1147,94 @@ impl BrowserPanel {
             );
         }
         strip.child(
-            div().id("new-tab").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
+            div().id("new-tab").size(px(28.0)).mb(px(2.0)).ml_0p5().flex_shrink_0().flex().items_center().justify_center().rounded_md().cursor_pointer().text_color(c.subtle)
+                .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .tooltip(|window, cx| Tooltip::new("New tab").build(window, cx))
                 .on_click(cx.listener(|this, _, _, _| this.new_tab()))
-                .child(Icon::new(IconName::Plus).size(px(13.0)).text_color(c.subtle)),
+                .child(Icon::new(IconName::Plus).size(px(14.0))),
         )
     }
 
+    /// Back, forward, reload; one rounded address field (connection, URL, certificates); the
+    /// picker, the console with its error count, and the device toggle.
     fn render_toolbar(&self, c: Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let button = move |id: &'static str, icon: IconName, on: bool| {
-            div().id(id).rounded_sm().p_1().cursor_pointer().text_color(if on { c.accent } else { c.subtle }).when(on, |d| d.bg(Hsla { a: 0.14, ..c.accent })).hover(move |d| d.bg(c.hover).text_color(c.fg)).child(Icon::new(icon).size(px(14.0)))
+            div().id(id).relative().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).cursor_pointer()
+                .text_color(if on { c.accent } else { c.muted }).when(on, |d| d.bg(Hsla { a: 0.14, ..c.accent }))
+                .hover(move |d| d.bg(c.hover).text_color(c.fg)).child(Icon::new(icon).size(px(15.0)))
         };
         let tip = |text: &'static str| move |window: &mut Window, cx: &mut App| Tooltip::new(text).build(window, cx);
         let mobile = self.is_mobile();
         let certs_off = self.workspace.as_ref().is_some_and(|w| self.invalid_certs.contains(w));
         let sized = self.active().is_some_and(|(_, t)| self.sizes.contains_key(&t.id));
         let errors = self.active().map_or(0, |(_, t)| self.console.get(&t.id).map_or(0, |l| l.iter().filter(|e| e.level == "error").count()));
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .pb_1()
-            .border_b_1()
-            .border_color(c.border)
-            .child(button("back", IconName::ArrowLeft, false).on_click(cx.listener(|this, _, _, _| this.history(-1))))
-            .child(button("forward", IconName::ArrowRight, false).on_click(cx.listener(|this, _, _, _| this.history(1))))
-            .child(div().flex_1().child(Input::new(&self.address).small()))
-            .child(button("reload", IconName::RotateCw, false).on_click(cx.listener(|this, _, _, cx| {
-                if let Some(url) = this.active().map(|(_, t)| t.url.clone()) {
-                    this.navigate(url, cx);
-                }
-            })))
-            .child(button("pick", IconName::Crosshair, self.picking).tooltip(tip("Pick an element and send it to the agent")).on_click(cx.listener(|this, _, _, cx| this.toggle_pick(cx))))
+        let url = self.active().map(|(_, t)| t.url.clone()).unwrap_or_default();
+        let local = url.contains("://localhost") || url.contains("://127.0.0.1") || url.contains("://0.0.0.0");
+        let (sec_icon, sec_color, sec_tip) = if url.starts_with("https://") {
+            (IconName::Lock, c.success, "Secure connection")
+        } else if local {
+            (IconName::Monitor, c.subtle, "Local dev server")
+        } else if url.starts_with("http://") {
+            (IconName::TriangleAlert, c.warning, "Not secure (HTTP)")
+        } else {
+            (IconName::Search, c.subtle, "Search or enter an address")
+        };
+        let omni = div().flex_1().min_w_0().h(px(30.0)).flex().items_center().gap_1p5().pl_2().pr_1().rounded_full().bg(c.hover).border_1().border_color(gpui_kit::transparent_black())
+            .hover(move |d| d.border_color(c.border_strong))
+            .child(div().id("connection").size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().text_color(sec_color)
+                .tooltip(tip(sec_tip)).child(Icon::new(sec_icon).size(px(12.0))))
+            .child(div().flex_1().min_w_0().child(Input::new(&self.address).appearance(false).small()))
             .child(
-                div().id("tls").rounded_sm().px_1().py_0p5().text_size(px(10.0)).cursor_pointer().text_color(if certs_off { c.danger } else { c.subtle })
-                    .hover(move |d| d.bg(c.hover))
+                div().id("tls").flex_shrink_0().rounded_full().px_1p5().py_0p5().text_size(px(10.0)).cursor_pointer()
+                    .text_color(if certs_off { c.danger } else { c.subtle }).when(certs_off, |d| d.bg(Hsla { a: 0.14, ..c.danger }))
+                    .hover(move |d| d.bg(c.active))
                     .tooltip(tip("Allow invalid HTTPS certificates…"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.cert_prompt = !this.cert_prompt;
                         cx.notify();
                     }))
                     .child("TLS"),
-            )
-            .child(div().relative().child(button("console", IconName::SquareTerminal, self.console_open).tooltip(tip("Console and network errors")).on_click(cx.listener(|this, _, _, cx| {
+            );
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py(px(7.0))
+            .bg(c.panel)
+            .border_b_1()
+            .border_color(c.border)
+            .child(button("back", IconName::ArrowLeft, false).tooltip(tip("Back")).on_click(cx.listener(|this, _, _, _| this.history(-1))))
+            .child(button("forward", IconName::ArrowRight, false).tooltip(tip("Forward")).on_click(cx.listener(|this, _, _, _| this.history(1))))
+            .child(button("reload", IconName::RotateCw, false).tooltip(tip("Reload")).on_click(cx.listener(|this, _, _, cx| {
+                if let Some(url) = this.active().map(|(_, t)| t.url.clone()) {
+                    this.navigate(url, cx);
+                }
+            })))
+            .child(omni)
+            .child(button("pick", IconName::MousePointer2, self.picking).tooltip(tip("Pick an element and send it to the agent")).on_click(cx.listener(|this, _, _, cx| this.toggle_pick(cx))))
+            .child(button("console", IconName::Code, self.console_open).tooltip(tip("Console and network errors")).on_click(cx.listener(|this, _, _, cx| {
                 this.console_open = !this.console_open;
                 cx.notify();
-            }))).when(errors > 0, |d| d.child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.danger))))
+            }))
+            .when(errors > 0, |d| d.child(div().absolute().top(px(1.0)).right(px(0.0)).min_w(px(14.0)).h(px(14.0)).px(px(3.0)).flex().items_center().justify_center().rounded_full().bg(c.danger)
+                .text_size(px(9.5)).font_weight(FontWeight::SEMIBOLD).text_color(gpui_kit::white()).child(errors.min(99).to_string()))))
             .when(sized || mobile, |d| d.child(button("fit", IconName::Proportions, false).tooltip(tip(if mobile { "Back to the phone size" } else { "Fit the page to the panel" })).on_click(cx.listener(|this, _, _, cx| this.fit_page(cx)))))
-            .child(button("device", if mobile { IconName::Smartphone } else { IconName::Monitor }, false).tooltip(tip(if mobile { "Desktop view" } else { "Mobile view" })).on_click(cx.listener(move |this, _, _, cx| this.set_device(!mobile, cx))))
+            .child(button("device", if mobile { IconName::Smartphone } else { IconName::Monitor }, mobile).tooltip(tip(if mobile { "Desktop view" } else { "Mobile view" })).on_click(cx.listener(move |this, _, _, cx| this.set_device(!mobile, cx))))
+    }
+
+    /// "An agent is driving this tab", while one used it in the last few seconds.
+    fn render_agent_bar(&self, c: Colors) -> Option<AnyElement> {
+        let (_, tab) = self.active()?;
+        let at = self.agent_tabs.get(&tab.id)?;
+        (Instant::now().duration_since(*at) < AGENT_LINGER).then(|| {
+            div().flex().items_center().gap_2().px_3().py_1p5().text_size(px(12.0)).text_color(c.muted)
+                .bg(Hsla { a: 0.08, ..c.accent }).border_b_1().border_color(Hsla { a: 0.22, ..c.accent })
+                .child(Icon::new(IconName::Bot).size(px(13.0)).text_color(c.accent))
+                .child(div().flex_1().truncate().child(div().text_color(c.fg).child("An agent is using this tab")))
+                .child(div().text_size(px(11.0)).text_color(c.subtle).child("its cursor shows on the page"))
+                .into_any_element()
+        })
     }
 
     fn render_console(&self, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1395,6 +1440,7 @@ impl Render for BrowserPanel {
             .flex_col()
             .child(self.render_tabs(c, dark, cx))
             .child(self.render_toolbar(c, cx))
+            .children(self.render_agent_bar(c))
             .when(certs_off || self.cert_prompt, |d| d.child(
                 div().flex_shrink_0().px_3().py_2().flex().flex_wrap().items_center().gap_2().text_size(px(11.0)).text_color(c.danger).bg(Hsla { a: 0.1, ..c.danger })
                     .child(if certs_off { "HTTPS certificate checks are off for all tabs in this workspace's browser for this browser session." } else { "Allow untrusted, expired or self-signed HTTPS certificates for all tabs in this workspace's browser? Only use this for sites you trust." })
