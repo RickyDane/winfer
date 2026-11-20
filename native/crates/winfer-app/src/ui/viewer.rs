@@ -851,13 +851,18 @@ impl Render for ViewerPanel {
         for path in current.as_ref().map_or_else(Vec::new, |g| g.docs.clone()) {
             let is_active = active.as_ref() == Some(&path);
             let label = tab_label(&path, &docs);
-            let (select, close) = (path.clone(), path.clone());
+            let (select, close, middle) = (path.clone(), path.clone(), path.clone());
             tabs = tabs.child(
                 div().id(SharedString::from(format!("doc-{path}"))).flex().items_center().gap_1p5().max_w(px(180.0)).rounded_md().px_2().py_1().text_xs().cursor_pointer()
                     .text_color(if is_active { c.fg } else { c.muted }).when(is_active, |d| d.bg(c.active)).hover(move |d| d.bg(c.hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let path = select.clone();
                         this.state.update(cx, |s, cx| { s.viewer.active = Some(path); cx.notify(); });
+                    }))
+                    // Middle click closes, like any browser or editor.
+                    .on_mouse_up(MouseButton::Middle, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close(&middle, cx);
                     }))
                     .child(div().flex_1().truncate().child(label))
                     .child(
