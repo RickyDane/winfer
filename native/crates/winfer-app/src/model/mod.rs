@@ -258,6 +258,10 @@ pub struct AppState {
     pub side_panel: Option<SidePanel>,
     pub viewer: ViewerDocs,
     pub theme: String,
+    /// "system": the theme follows the system's light/dark setting, using `theme_picks`.
+    pub theme_mode: String,
+    /// The theme picked for "dark" and "light".
+    pub theme_picks: HashMap<String, String>,
     pub view: Option<View>,
     pub terminal_font_size: f64,
     pub overview: OverviewLayout,
@@ -366,6 +370,7 @@ impl AppState {
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             side_panel: Some(SidePanel::Browser),
             theme: "dark".into(),
+            theme_mode: "manual".into(),
             view: Some(View::Workspace),
             terminal_font_size: DEFAULT_TERMINAL_FONT_SIZE,
             overview: OverviewLayout { preset_index: GRID, ..Default::default() },
@@ -439,6 +444,8 @@ impl AppState {
         self.side_panel = Some(SidePanel::parse(&str_of("sidePanel").unwrap_or_default()));
         self.viewer = ui.get("viewer").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
         self.theme = str_of("theme").unwrap_or_else(|| "dark".into());
+        self.theme_mode = if str_of("themeMode").as_deref() == Some("system") { "system".into() } else { "manual".into() };
+        self.theme_picks = map_of("themePicks");
         self.view = Some(View::parse(&str_of("view").unwrap_or_default()));
         self.terminal_font_size = num_of("terminalFontSize", DEFAULT_TERMINAL_FONT_SIZE);
         self.overview.layout = ui.get("overviewLayout").and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -471,7 +478,7 @@ impl AppState {
             "systemPrompt": self.system_prompt, "enabledTools": self.enabled_tools,
             "defaultProvider": self.default_provider, "editor": self.editor, "shortcuts": self.shortcuts,
             "browserWidth": self.browser_width, "sidebarWidth": self.sidebar_width,
-            "sidePanel": self.side_panel().name(), "viewer": self.viewer, "theme": self.theme, "view": self.view().name(),
+            "sidePanel": self.side_panel().name(), "viewer": self.viewer, "theme": self.theme, "themeMode": self.theme_mode, "themePicks": self.theme_picks, "view": self.view().name(),
             "terminalFontSize": self.terminal_font_size, "overviewLayout": self.overview.layout,
             "showPaneCost": self.show_pane_cost,
             "pageTabIconsOnly": self.page_tab_icons_only, "recentSessions": recent, "paneTasks": tasks,
@@ -753,6 +760,27 @@ impl AppState {
             self.focused_pane_id = first_pane(self.active());
         }
         self.view = Some(view);
+    }
+
+    /// Picks a theme for its light or dark mode. Following the system stays on, and the theme
+    /// only changes when it is the one for the system's current mode; otherwise it takes over.
+    pub fn pick_theme(&mut self, id: &str, system_dark: bool) {
+        let def = crate::theme::theme_by_id(id);
+        self.theme_picks.insert(def.mode.clone(), def.id.clone());
+        if self.theme_mode != "system" || def.mode == if system_dark { "dark" } else { "light" } {
+            self.theme = def.id.clone();
+        }
+    }
+
+    /// The theme to show when following the system: the pick for its mode, else the current
+    /// theme or its counterpart.
+    pub fn theme_for_system(&self, system_dark: bool) -> String {
+        let want = if system_dark { "dark" } else { "light" };
+        if let Some(pick) = self.theme_picks.get(want).filter(|p| crate::theme::theme_by_id(p).mode == want) {
+            return pick.clone();
+        }
+        let current = crate::theme::theme_by_id(&self.theme);
+        if current.mode == want { current.id.clone() } else { current.pair.clone() }
     }
 
     pub fn set_terminal_font_size(&mut self, size: f64) {

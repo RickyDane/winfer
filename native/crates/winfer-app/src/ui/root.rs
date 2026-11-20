@@ -62,6 +62,8 @@ mod accounts;
 mod usage_page;
 #[path = "settings_more.rs"]
 mod settings_more;
+#[path = "settings_resets.rs"]
+pub mod settings_resets;
 #[path = "settings_plugins.rs"]
 mod settings_plugins;
 #[path = "settings_skills.rs"]
@@ -316,6 +318,8 @@ pub struct Root {
 
 impl Root {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // The system switching between light and dark re-renders, which re-checks the theme.
+        cx.observe_window_appearance(window, |_, _, cx| cx.notify()).detach();
         let (tx, rx) = async_channel::unbounded::<SessionEvent>();
         let state = cx.new(|_| AppState::new());
         cx.observe(&state, |this, _, cx| {
@@ -1293,6 +1297,17 @@ impl Root {
 
     /// Widgets from the component library and the terminal follow the app's theme.
     fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Following the system: show the theme picked for its light or dark setting.
+        if self.state.read(cx).theme_mode == "system" {
+            let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+            let want = self.state.read(cx).theme_for_system(dark);
+            if want != self.state.read(cx).theme {
+                self.state.update(cx, |s, cx| {
+                    s.theme = want;
+                    cx.notify();
+                });
+            }
+        }
         let id = self.state.read(cx).theme.clone();
         if self.applied_theme.as_ref() == Some(&id) {
             return;
@@ -1353,6 +1368,16 @@ impl Render for Root {
                 Ok("broadcast") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Broadcast),
                 Ok("recipes") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Recipes),
                 Ok("sessions") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Progress),
+                // Development aid: some settings changed from their defaults, to see the reset marks.
+                Ok("changed") => {
+                    self.update_state(cx, |s| {
+                        s.set_terminal_font_size(15.0);
+                        s.default_provider = Some("codex".into());
+                        s.show_pane_cost = true;
+                        s.agent_models.insert("claude".into(), "opus".into());
+                    });
+                    self.execute(Command::Settings(Some("agents".into())), window, cx);
+                }
                 Ok("review") => self.demo_reviews(cx),
                 Ok("usage") => self.demo_usage(cx),
                 Ok("history") => {

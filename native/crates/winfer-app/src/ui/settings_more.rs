@@ -1,7 +1,7 @@
 //! Settings → Voice and AI (port of those pages in `features/settings/SettingsModal.tsx`).
 
 use super::review::small_button;
-use super::settings::{card, plain_button, row, stacked_row};
+use super::settings::{card, plain_button, row, row_marked, stacked_row};
 use super::*;
 use crate::audio;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
@@ -229,7 +229,7 @@ impl Root {
             .when(testing, |d| d.child(div().h(px(6.0)).w(px(160.0)).overflow_hidden().rounded_full().bg(c.hover).child(div().h_full().bg(c.success).w(relative((level * 12.0).min(1.0))))))));
         let readback = self.rest_bool("voice", "readback", false, cx);
         let read_toggle = self.toggle("readback", readback, c, cx, move |this, cx| this.set_rest("voice", "readback", json!(!readback), cx));
-        let read = card(c, "Read aloud", None).child(row(c, "Speak agent updates aloud", Some("“Codex needs your input”, “Claude Code finished”.".to_string()), read_toggle));
+        let read = card(c, "Read aloud", None).child(row_marked(c, "Speak agent updates aloud", self.reset_mark("voice.readback", c, cx), Some("“Codex needs your input”, “Claude Code finished”.".to_string()), read_toggle));
         div().flex().flex_col().gap_6().child(live).children(self.more.voice_result.as_ref().map(|r| result_text(c, r))).child(mic).child(read)
     }
 

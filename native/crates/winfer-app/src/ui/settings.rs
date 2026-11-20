@@ -2,7 +2,7 @@
 
 use super::commands::{BINDINGS, Binding, chord_for, event_chord, format_chord};
 use super::*;
-use crate::model::OPTIONAL_TOOLS;
+use crate::model::{AppState, OPTIONAL_TOOLS};
 use crate::theme::THEMES;
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use serde_json::json;
@@ -104,6 +104,11 @@ fn mb(bytes: f64) -> String {
 }
 
 pub(super) fn card(c: Colors, title: &str, description: Option<&str>) -> Div {
+    card_marked(c, title, description, None)
+}
+
+/// A card whose title carries a reset mark (see [`Root::reset_mark`]).
+pub(super) fn card_marked(c: Colors, title: &str, description: Option<&str>, mark: Option<AnyElement>) -> Div {
     let header = div()
         .px_4()
         .pt_3()
@@ -111,12 +116,17 @@ pub(super) fn card(c: Colors, title: &str, description: Option<&str>) -> Div {
         .flex()
         .flex_col()
         .gap_0p5()
-        .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(title.to_string()))
+        .child(div().flex().items_center().gap_2().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(title.to_string()).children(mark))
         .when_some(description.map(str::to_string), |d, t| d.child(div().text_xs().text_color(c.subtle).child(t)));
     div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel).child(header)
 }
 
 pub(super) fn row(c: Colors, label: impl Into<SharedString>, hint: Option<String>, control: impl IntoElement) -> Div {
+    row_marked(c, label, None, hint, control)
+}
+
+/// A row whose label carries a reset mark (see [`Root::reset_mark`]).
+pub(super) fn row_marked(c: Colors, label: impl Into<SharedString>, mark: Option<AnyElement>, hint: Option<String>, control: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
@@ -126,7 +136,7 @@ pub(super) fn row(c: Colors, label: impl Into<SharedString>, hint: Option<String
         .border_t_1()
         .border_color(c.border)
         .child(
-            div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(label.into()))
+            div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().flex().items_center().gap_2().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(label.into()).children(mark))
                 .when_some(hint, |d, t| d.child(div().text_xs().text_color(c.subtle).child(t))),
         )
         .child(div().flex().items_center().gap_2().flex_shrink_0().child(control))
@@ -378,21 +388,22 @@ impl Root {
             .flex_col()
             .gap_6()
             .child(
-                card(c, "Terminals", None).child(row(
+                card(c, "Terminals", None).child(row_marked(
                     c,
                     "Text size",
+                    self.reset_mark("terminal.size", c, cx),
                     Some("Also ⌘= / ⌘- / ⌘0, or ⌘ + scroll over a terminal.".to_string()),
                     div().flex().items_center().gap_2()
                         .child(step("font-down", "−").on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.set_terminal_font_size(s.terminal_font_size - 0.5)))))
                         .child(div().w(px(48.0)).text_center().text_xs().text_color(c.muted).child(format!("{size}px")))
-                        .child(step("font-up", "+").on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.set_terminal_font_size(s.terminal_font_size + 0.5)))))
-                        .child(plain_button(c, "font-reset", "Reset").on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.set_terminal_font_size(crate::model::DEFAULT_TERMINAL_FONT_SIZE))))),
+                        .child(step("font-up", "+").on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.set_terminal_font_size(s.terminal_font_size + 0.5))))),
                 )),
             )
-            .child(card(c, "Code editor", None).child(row(c, "Open projects and worktrees in", None, editor_select)))
-            .child(card(c, "Keyboard", None).child(row(
+            .child(card(c, "Code editor", None).child(row_marked(c, "Open projects and worktrees in", self.reset_mark("editor", c, cx), None, editor_select)))
+            .child(card(c, "Keyboard", None).child(row_marked(
                 c,
                 "Keyboard shortcuts",
+                self.reset_mark("shortcuts", c, cx),
                 Some("See every shortcut and change any of them.".to_string()),
                 plain_button(c, "edit-shortcuts", "Edit shortcuts").on_click(cx.listener(|this, _, _, cx| {
                     this.update_state(cx, |s| {
@@ -403,33 +414,50 @@ impl Root {
             )))
     }
 
-    /// Appearance: light or dark (switches to the theme's pair), then the themes of each mode.
-    fn page_theme(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
+    /// Appearance: light, dark or follow the system, then the themes of each mode.
+    fn page_theme(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let s = self.state.read(cx);
         let current = s.theme.clone();
         let def = crate::theme::theme_by_id(&current);
+        let system = s.theme_mode == "system";
         let dark = def.mode == "dark";
+        let system_dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+        // Each mode's theme: its pick, else the current theme or its counterpart.
+        let effective = |m: &str| s.theme_picks.get(m).cloned().unwrap_or_else(|| if def.mode == m { def.id.clone() } else { def.pair.clone() });
+        let (dark_pick, light_pick) = (effective("dark"), effective("light"));
         let mode_button = |id: &'static str, icon: IconName, label: &'static str, on: bool| {
             div().id(id).h(px(26.0)).px_3().flex().items_center().gap_1p5().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
                 .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active))
                 .hover(move |d| d.text_color(c.fg))
                 .child(Icon::new(icon).size(px(13.0))).child(label)
         };
-        let switch_to = |want_dark: bool| move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
-            let def = crate::theme::theme_by_id(&this.state.read(cx).theme);
-            if (def.mode == "dark") != want_dark {
-                let next = def.pair.clone();
-                this.update_state(cx, |s| s.theme = next);
-            }
+        // Light or dark picks that mode's theme and stops following the system.
+        let choose = |want_dark: bool| move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+            this.update_state(cx, |s| {
+                let cur = crate::theme::theme_by_id(&s.theme);
+                let want = if want_dark { "dark" } else { "light" };
+                let id = if cur.mode == want { cur.id.clone() } else { s.theme_picks.get(want).cloned().unwrap_or_else(|| cur.pair.clone()) };
+                s.theme_mode = "manual".into();
+                s.pick_theme(&id, want_dark);
+            });
         };
+        let follow = cx.listener(|this, _: &ClickEvent, window, cx| {
+            let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+            this.update_state(cx, |s| {
+                s.theme_mode = "system".into();
+                s.theme = s.theme_for_system(dark);
+            });
+        });
         let mode = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
-            .child(mode_button("mode-light", IconName::Sun, "Light", !dark).on_click(cx.listener(switch_to(false))))
-            .child(mode_button("mode-dark", IconName::Moon, "Dark", dark).on_click(cx.listener(switch_to(true))));
-        let grid_for = |want: &str, cx: &mut Context<Self>| {
+            .child(mode_button("mode-light", IconName::Sun, "Light", !system && !dark).on_click(cx.listener(choose(false))))
+            .child(mode_button("mode-dark", IconName::Moon, "Dark", !system && dark).on_click(cx.listener(choose(true))))
+            .child(mode_button("mode-system", IconName::Monitor, "System", system).on_click(follow));
+        let mark = self.reset_mark("theme", c, cx);
+        let grid_for = |want: &str, picked: &str, cx: &mut Context<Self>| {
             let mut grid = div().flex().flex_wrap().gap_2p5().p_3();
             for t in THEMES.iter().filter(|t| t.mode == want) {
                 let id = t.id.clone();
-                let selected = t.id == current;
+                let selected = t.id == picked;
                 let mut dots = div().flex().gap_0p5();
                 for i in 1..=5 {
                     dots = dots.child(div().size(px(7.0)).rounded_full().bg(crate::theme::hex(&t.ansi[i])));
@@ -447,7 +475,7 @@ impl Root {
                         .border_color(if selected { c.accent } else { c.border })
                         .when(selected, |d| d.shadow(vec![BoxShadow { color: Hsla { a: 0.35, ..c.accent }, offset: point(px(0.0), px(0.0)), blur_radius: px(0.0), spread_radius: px(1.0), inset: false }]))
                         .hover(move |d| d.border_color(c.border_strong))
-                        .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.theme = id.clone())))
+                        .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.pick_theme(&id, system_dark))))
                         .child(preview)
                         .child(div().flex().items_center().gap_1().border_t_1().border_color(c.border).bg(c.raised).px_2().py(px(6.0)).text_size(px(11.5)).text_color(if selected { c.fg } else { c.muted })
                             .child(div().flex_1().truncate().child(t.name.clone()))
@@ -456,14 +484,14 @@ impl Root {
             }
             grid
         };
-        let pair = crate::theme::theme_by_id(&def.pair).name.clone();
-        let dark_grid = grid_for("dark", cx);
-        let light_grid = grid_for("light", cx);
+        let hint = if system { "Follows your system's light/dark setting, with the theme picked for each below.".to_string() } else { "Also the sun/moon button in the sidebar.".to_string() };
+        let dark_grid = grid_for("dark", &dark_pick, cx);
+        let light_grid = grid_for("light", &light_pick, cx);
         div()
             .flex()
             .flex_col()
             .gap_6()
-            .child(card(c, "Mode", None).child(row(c, "Light or dark", Some(format!("Switches between {} and {pair}. Also the sun/moon button in the sidebar.", def.name)), mode)))
+            .child(card(c, "Mode", None).child(row_marked(c, "Light or dark", mark, Some(hint), mode)))
             .child(card(c, "Dark themes", None).child(dark_grid))
             .child(card(c, "Light themes", Some("Also from the command palette (⌘K, “Theme:”).")).child(light_grid))
     }
@@ -473,7 +501,7 @@ impl Root {
         let provider_options: Vec<(String, String)> = s.providers.iter().map(|p| (p.id.clone(), if p.installed { p.name.clone() } else { format!("{} (not installed)", p.name) })).collect();
         let current = s.provider_name(&s.default_provider_id());
         let default_select = self.select_button("default-agent", current, provider_options, c, cx, |this, id, cx| this.update_state(cx, |s| s.default_provider = Some(id)));
-        let mut panes = card(c, "New panes", None).child(row(c, "Default agent", Some("⌘T, split and “open a new window” start this agent.".to_string()), default_select));
+        let mut panes = card(c, "New panes", None).child(row_marked(c, "Default agent", self.reset_mark("agents.default", c, cx), Some("⌘T, split and “open a new window” start this agent.".to_string()), default_select));
         if let Some(active) = s.active() {
             let toggle = self.toggle("use-worktrees", active.use_worktrees, c, cx, |this, cx| this.update_state(cx, |s| {
                 if let Some(w) = s.active_mut() {
@@ -529,7 +557,11 @@ impl Root {
                         }
                     });
                 });
-                agent = agent.child(row(c, "Model", Some("What new panes start with.".to_string()), control));
+                let (model_id, model_changed) = (p.id.clone(), s.agent_models.contains_key(&p.id));
+                let mark = self.reset_mark_with(format!("agent-model-{}", p.id), model_changed, "Model", c, cx, move |s| {
+                    s.agent_models.remove(&model_id);
+                });
+                agent = agent.child(row_marked(c, "Model", mark, Some("What new panes start with.".to_string()), control));
             }
             if !p.auto_approve_args.is_empty() {
                 let (id, on) = (p.id.clone(), s.auto_approve.contains(&p.id));
@@ -543,7 +575,9 @@ impl Root {
                         }
                     });
                 });
-                agent = agent.child(row(c, "Auto-approve", Some("Runs tools and edits without asking. Only for sandboxes or work you can undo.".to_string()), toggle));
+                let (auto_id, auto_changed) = (p.id.clone(), s.auto_approve.contains(&p.id));
+                let mark = self.reset_mark_with(format!("agent-auto-{}", p.id), auto_changed, "Auto-approve", c, cx, move |s| s.auto_approve.retain(|x| *x != auto_id));
+                agent = agent.child(row_marked(c, "Auto-approve", mark, Some("Runs tools and edits without asking. Only for sandboxes or work you can undo.".to_string()), toggle));
             }
             agent_cards.push(agent);
         }
@@ -568,7 +602,7 @@ impl Root {
             this.toast("System prompt saved", cx);
         });
         let _ = window;
-        let prompt_card = card(c, "System prompt", Some("Given to every agent when it starts (or restarts). Leave empty for none.")).child(stacked_row(
+        let prompt_card = card_marked(c, "System prompt", Some("Given to every agent when it starts (or restarts). Leave empty for none."), self.reset_mark("agents.prompt", c, cx)).child(stacked_row(
             c,
             "Instructions for every agent",
             None,
@@ -577,7 +611,7 @@ impl Root {
             ),
         ));
 
-        let mut tools = card(c, "Agent tools", Some("Tools agents rarely use are left out, since every tool costs context in each request."));
+        let mut tools = card_marked(c, "Agent tools", Some("Tools agents rarely use are left out, since every tool costs context in each request."), self.reset_mark("agents.tools", c, cx));
         for name in OPTIONAL_TOOLS {
             let on = s.enabled_tools.iter().any(|t| t == name);
             let toggle = self.toggle(SharedString::from(format!("tool-{name}")), on, c, cx, move |this, cx| {
@@ -597,18 +631,19 @@ impl Root {
         let tests_toggle = self.toggle("review-tests", auto_tests, c, cx, move |this, cx| this.set_rest("review", "autoTests", Value::Bool(!auto_tests), cx));
         let shots_toggle = self.toggle("review-shots", shots, c, cx, move |this, cx| this.set_rest("review", "screenshots", Value::Bool(!shots), cx));
         let review = card(c, "Review", None)
-            .child(row(c, "Run tests when an agent finishes", None, tests_toggle))
-            .child(row(c, "Screenshot the dev server", Some("Shows the agent's running app on its review card.".to_string()), shots_toggle));
+            .child(row_marked(c, "Run tests when an agent finishes", self.reset_mark("review.tests", c, cx), None, tests_toggle))
+            .child(row_marked(c, "Screenshot the dev server", self.reset_mark("review.screenshots", c, cx), Some("Shows the agent's running app on its review card.".to_string()), shots_toggle));
 
         let progress_on = self.rest_bool("progress", "enabled", true, cx);
+        let mark_interval = self.reset_mark("progress.interval", c, cx);
         let interval = s.rest.get("progress").and_then(|p| p["intervalSec"].as_u64()).unwrap_or(60);
         let options: Vec<(String, String)> = [(30, "30 seconds"), (60, "minute"), (120, "2 minutes"), (300, "5 minutes")].iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
         let label = options.iter().find(|(v, _)| *v == interval.to_string()).map_or_else(String::new, |(_, l)| l.clone());
         let on_toggle = self.toggle("progress-on", progress_on, c, cx, move |this, cx| this.set_rest("progress", "enabled", Value::Bool(!progress_on), cx));
         let interval_select = self.select_button("progress-interval", label, options, c, cx, |this, v, cx| this.set_rest("progress", "intervalSec", json!(v.parse::<u64>().unwrap_or(60)), cx));
         let progress = card(c, "Session progress", Some("Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked."))
-            .child(row(c, "Estimate how far working agents are", None, on_toggle))
-            .when(progress_on, |d| d.child(row(c, "Check every", None, interval_select)));
+            .child(row_marked(c, "Estimate how far working agents are", self.reset_mark("progress.enabled", c, cx), None, on_toggle))
+            .when(progress_on, |d| d.child(row_marked(c, "Check every", mark_interval, None, interval_select)));
 
         div().flex().flex_col().gap_6().child(panes).child(agents_section).child(prompt_card).child(tools).child(review).child(progress)
     }
@@ -846,7 +881,8 @@ impl Root {
             for (pid, plabel, picon, _) in pages.iter().copied() {
                 let selected = !searching && pid == id;
                 let matches = hits.iter().filter(|h| h.0 == pid).count();
-                let dot = pid == "updates" && self.updates.available.is_some();
+                let changed_here = super::settings_resets::changed_on(self.state.read(cx), pid).len();
+                let dot = (pid == "updates" && self.updates.available.is_some()) || changed_here > 0;
                 list = list.child(
                     div().id(pid).h(px(30.0)).flex_shrink_0().flex().items_center().gap_2p5().rounded_md().px_2p5().text_size(px(13.0)).cursor_pointer()
                         .text_color(if selected { c.fg } else { c.muted })
@@ -917,15 +953,30 @@ impl Root {
             };
             (head, body.into_any_element())
         } else {
+            let changed_here = super::settings_resets::changed_on(self.state.read(cx), id).len();
+            let page_id = id;
             let head = div().flex().items_start().gap_3p5()
                 .child(div().size(px(38.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).child(Icon::new(icon).size(px(18.0))))
                 .child(div().flex().flex_col().gap_0p5().min_w_0()
                     .child(div().text_size(px(11.0)).text_color(c.subtle).child(group.to_uppercase()))
                     .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(label))
-                    .child(div().text_size(px(12.5)).text_color(c.muted).child(description)));
+                    .child(div().text_size(px(12.5)).text_color(c.muted).child(description)))
+                .when(changed_here > 0, |d| d.child(div().flex_1()).child(
+                    div().id("reset-page").flex().flex_shrink_0().items_center().gap_1p5().h(px(28.0)).px_2p5().rounded_md().border_1().border_color(c.border_strong).text_size(px(12.0)).text_color(c.muted).cursor_pointer()
+                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Put every changed setting on this page back to its default").build(window, cx))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let mut n = 0;
+                            this.update_state(cx, |s| n = super::settings_resets::reset_page(s, page_id));
+                            this.toast(format!("Reset {n} setting{}", if n == 1 { "" } else { "s" }), cx);
+                        }))
+                        .child(Icon::new(IconName::Undo2).size(px(12.0)))
+                        .child("Reset page")
+                        .child(div().rounded_full().px_1p5().bg(Hsla { a: 0.14, ..c.accent }).font_family(mono.clone()).text_size(px(10.0)).text_color(c.accent).child(changed_here.to_string())),
+                ));
             let content: AnyElement = match id {
                 "general" => self.page_general(c, cx).into_any_element(),
-                "theme" => self.page_theme(c, cx).into_any_element(),
+                "theme" => self.page_theme(c, window, cx).into_any_element(),
                 "agents" => self.page_agents(c, window, cx).into_any_element(),
                 "data" => self.page_data(c, cx).into_any_element(),
                 "diagnostics" => self.page_diagnostics(c, window, cx).into_any_element(),
@@ -973,6 +1024,30 @@ impl Root {
         if let Some(s) = self.settings.as_ref() {
             s.search.update(cx, |i, cx| i.set_value(query, window, cx));
         }
+    }
+
+    /// A dot and a Reset button for a setting that differs from its default (None when it
+    /// doesn't). `id` is an entry of [`settings_resets::RESETS`].
+    pub(super) fn reset_mark(&self, id: &'static str, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let entry = super::settings_resets::find(id)?;
+        let changed = (entry.changed)(self.state.read(cx));
+        self.reset_mark_with(id, changed, entry.label, c, cx, entry.reset)
+    }
+
+    /// The same mark for a setting with its own state, e.g. one agent's model.
+    pub(super) fn reset_mark_with(&self, id: impl std::fmt::Display, changed: bool, label: &'static str, c: Colors, cx: &mut Context<Self>, reset: impl Fn(&mut AppState) + 'static) -> Option<AnyElement> {
+        use gpui_kit::component::tooltip::Tooltip;
+        changed.then(|| {
+            div().flex().items_center().gap_1p5().font_weight(FontWeight::NORMAL)
+                .child(div().size(px(6.0)).rounded_full().bg(c.accent))
+                .child(div().id(SharedString::from(format!("reset-{id}"))).flex().items_center().gap_1().rounded_sm().px_1().text_size(px(11.0)).text_color(c.subtle).cursor_pointer()
+                    .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .tooltip(move |window, cx| Tooltip::new(format!("Put “{label}” back to its default")).build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| reset(s))))
+                    .child(Icon::new(IconName::Undo2).size(px(10.0)))
+                    .child("Reset"))
+                .into_any_element()
+        })
     }
 
     /// Opens a settings page (from the navigation or a search result) and clears the search.

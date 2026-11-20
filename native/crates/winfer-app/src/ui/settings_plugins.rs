@@ -4,7 +4,7 @@
 use super::orchestration::accent_button;
 use super::plugins::matches_search;
 use super::review::small_button;
-use super::settings::{card, plain_button, row};
+use super::settings::{card, plain_button, row, row_marked};
 use super::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use serde_json::Value;
@@ -335,7 +335,7 @@ impl Root {
             })))
             .child(plain_button(c, "plugins-reload", "Reload").on_click(cx.listener(|this, _, _, cx| this.reload_plugins(cx))));
         page.child(card(c, "Options", None)
-            .child(row(c, "Hide names on plugin tabs", Some("Plugin page tabs in the title bar show just their icon. Hover a tab to see its name.".to_string()), names))
+            .child(row_marked(c, "Hide names on plugin tabs", self.reset_mark("plugins.icons", c, cx), Some("Plugin page tabs in the title bar show just their icon. Hover a tab to see its name.".to_string()), names))
             .child(row(c, "Your own plugins", Some("A folder with a plugin.json in the plugins folder shows up here, off until you turn it on. Reload after changing one.".to_string()), buttons)))
     }
 }

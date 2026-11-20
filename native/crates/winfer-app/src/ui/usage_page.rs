@@ -460,7 +460,7 @@ impl Root {
         }
         let on = self.state.read(cx).show_pane_cost;
         let toggle = self.toggle("pane-cost", on, c, cx, |this, cx| this.update_state(cx, |s| s.show_pane_cost = !s.show_pane_cost));
-        page = page.child(settings::card(c, "Panes", None).child(settings::row(c, "Show task cost on panes", Some("Each agent shows what its task has cost so far, at API prices.".to_string()), toggle)));
+        page = page.child(settings::card(c, "Panes", None).child(settings::row_marked(c, "Show task cost on panes", self.reset_mark("usage.cost", c, cx), Some("Each agent shows what its task has cost so far, at API prices.".to_string()), toggle)));
         page.children(self.by_task(range, c, cx))
     }
 

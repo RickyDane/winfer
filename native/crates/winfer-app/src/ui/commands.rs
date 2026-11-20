@@ -841,7 +841,11 @@ impl Root {
                 }
                 None => s.settings_open = !s.settings_open,
             }),
-            C::Theme(id) => self.update_state(cx, |s| s.theme = crate::theme::theme_by_id(&id).id.clone()),
+            // Choosing a theme ends following the system and becomes the pick for its mode.
+            C::Theme(id) => self.update_state(cx, |s| {
+                s.theme_mode = "manual".into();
+                s.pick_theme(&id, false);
+            }),
             C::Overlay { overlay, provider } => {
                 let missing = match overlay {
                     _ => None,
