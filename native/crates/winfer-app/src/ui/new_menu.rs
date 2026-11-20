@@ -79,7 +79,7 @@ impl Root {
                     div().id(SharedString::from(format!("new-star-{id}"))).rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
                         .tooltip(crate::ui::code_view::tip(if is_default { "Default agent for new panes" } else { "Make this the default agent for new panes" }))
                         .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.default_provider = Some(star_id.clone()))))
-                        .child(Icon::new(IconName::Star).size(px(12.0)).text_color(if is_default { c.accent } else { Hsla { a: 0.5, ..c.subtle } })),
+                        .child(crate::ui::code_pickers::star_icon(if is_default { c.accent } else { Hsla { a: 0.5, ..c.subtle } }, 12.0)),
                 );
                 if p.model_arg.is_some() && self.models.get(&id).is_none_or(|m| !m.is_empty()) {
                     let chevron_id = id.clone();

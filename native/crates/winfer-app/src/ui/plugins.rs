@@ -968,7 +968,7 @@ impl Root {
                             this.execute(Command::View(ViewTarget::Set(View::Page(open.clone()))), window, cx);
                         })))
                     .child(div().id(("app-pin", i)).mr_1().rounded_sm().p_1().cursor_pointer().text_color(if is_pinned { c.warning } else { c.subtle })
-                        .child(Icon::new(IconName::Star).size(px(12.0)))
+                        .child(crate::ui::code_pickers::star_icon(if is_pinned { c.warning } else { c.subtle }, 12.0))
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_pin(&pin, cx)))),
             );
         }

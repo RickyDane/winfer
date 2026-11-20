@@ -12,6 +12,7 @@ macro_rules! marks {
 const SOLID: &[(&str, &[u8])] = &[
     ("solid/sparkle.svg", include_bytes!("../assets/solid/sparkle.svg")),
     ("solid/bolt.svg", include_bytes!("../assets/solid/bolt.svg")),
+    ("solid/star.svg", include_bytes!("../assets/solid/star.svg")),
     ("solid/flame.svg", include_bytes!("../assets/solid/flame.svg")),
     ("solid/mode-ask.svg", include_bytes!("../assets/solid/mode-ask.svg")),
     ("solid/mode-edit.svg", include_bytes!("../assets/solid/mode-edit.svg")),

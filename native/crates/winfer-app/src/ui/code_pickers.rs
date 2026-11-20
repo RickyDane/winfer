@@ -47,6 +47,11 @@ pub fn effort_hint(level: &str) -> &'static str {
     }
 }
 
+/// A filled star (favorites, defaults), in one colour.
+pub fn star_icon(tint: Hsla, size: f32) -> AnyElement {
+    svg().path("solid/star.svg").size(px(size)).flex_shrink_0().text_color(tint).into_any_element()
+}
+
 /// A level's solid glyph in one colour: rising bars for the steps, a flame, a bolt and a sparkle above.
 pub fn effort_glyph(tint: Hsla, level: &str, size: f32) -> AnyElement {
     let solid = |file: &str| svg().path(SharedString::from(format!("solid/{file}.svg"))).size(px(size)).flex_shrink_0().text_color(tint).into_any_element();
@@ -296,7 +301,7 @@ impl CodeView {
                     cx.notify();
                 }))
                 .when(on, |d| d.child(div().absolute().right(px(-10.0)).top(px(8.0)).w(px(2.0)).h(px(18.0)).rounded_full().bg(c.accent)))
-                .child(if id == FAVORITES { Icon::new(IconName::Star).size(px(17.0)).text_color(if on { c.warning } else { alpha(c.warning, 0.65) }).into_any_element() } else { mark(c, &id, 18.0, if on { 1.0 } else { 0.6 }) }));
+                .child(if id == FAVORITES { star_icon(if on { c.warning } else { alpha(c.warning, 0.65) }, 17.0) } else { mark(c, &id, 18.0, if on { 1.0 } else { 0.6 }) }));
         }
 
         let mut list = div().id("pk-list").flex_1().min_h_0().overflow_y_scroll().p_2().flex().flex_col().gap_0p5();
@@ -331,7 +336,7 @@ impl CodeView {
                 .child(div().id(("pk-star", i)).size(px(24.0)).flex().items_center().justify_center().rounded_md().hover(move |d| d.bg(c.active))
                     .when(!is_fav, |d| d.opacity(0.0).group_hover(group.clone(), |d| d.opacity(1.0)))
                     .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.toggle_favorite(&star, cx); }))
-                    .child(Icon::new(IconName::Star).size(px(13.0)).text_color(if is_fav { c.warning } else { c.subtle })))
+                    .child(star_icon(if is_fav { c.warning } else { c.subtle }, 13.0)))
                 .when(i < 9, |d| d.child(div().min_w(px(30.0)).h(px(20.0)).flex().items_center().justify_center().rounded_md().bg(c.hover).text_size(px(11.0)).text_color(c.subtle).child(format!("⌘{}", i + 1)))));
         }
         if total > SHOWN && query.is_empty() {

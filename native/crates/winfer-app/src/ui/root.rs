@@ -1383,6 +1383,10 @@ impl Render for Root {
                     self.update_state(cx, |s| s.theme = "light".into());
                     self.execute(Command::Settings(Some("general".into())), window, cx);
                 }
+                Ok("new-menu") => {
+                    self.new_menu.open = true;
+                    cx.notify();
+                }
                 Ok("review") => self.demo_reviews(cx),
                 Ok("usage") => self.demo_usage(cx),
                 Ok("history") => {
