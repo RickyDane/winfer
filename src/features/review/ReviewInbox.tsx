@@ -7,7 +7,7 @@ import { keysFor } from "@/commands/keymap";
 import { cn } from "@/lib/cn";
 import { pickRaceWinner } from "@/features/orchestration/RaceView";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
-import { StatusDot } from "@/features/terminal/StatusDot";
+import { AgentTile, PaneName } from "@/features/workspaces/Sidebar";
 import { closeTerminal } from "@/features/terminal/xtermRegistry";
 import { removeWorktree } from "@/features/worktree/worktree";
 import { logActivity, relativeTime } from "@/stores/activity";
@@ -20,6 +20,44 @@ import { askAgentToResolve, clearFinished, dequeue, enqueue, isPending, retry, s
 import { discardReviewed, mergeReviewed, removeReview, runTests, setReviewStatus, useReviews, type Review } from "./reviews";
 
 const button = "flex items-center gap-1 rounded-md px-2 py-1 text-xs disabled:opacity-40";
+const sectionTitle = "text-[11px] font-semibold tracking-wide text-fg-subtle uppercase";
+
+/** One finished task in the list beside the detail. */
+function ReviewItem({ review, pane, selected, onSelect }: { review: Review; pane: Pane | undefined; selected: boolean; onSelect: () => void }) {
+  const report = useConflicts((s) => s.report);
+  const conflict = !!(pane?.worktree && conflictsFor(report, pane.worktree.path).item?.baseConflicts.length);
+  const run = review.tests.state === "done" ? review.tests.value : null;
+  return (
+    <button onClick={onSelect} className={cn("flex w-full gap-2.5 rounded-lg p-2.5 text-left", selected ? "bg-active" : "hover:bg-hover", review.status !== "open" && "opacity-60")}>
+      {pane ? (
+        <AgentTile pane={pane} ring={selected ? "var(--color-active)" : "var(--color-panel-raised)"} />
+      ) : (
+        <span className="grid size-[26px] shrink-0 place-items-center rounded-[7px] bg-hover">
+          <ProviderIcon provider={review.provider} size={14} />
+        </span>
+      )}
+      <span className="min-w-0 flex-1 space-y-0.5">
+        <span className="flex items-center gap-1.5">
+          {pane ? <PaneName pane={pane} className="flex-1 text-[12.5px] font-medium text-fg" /> : <span className="flex-1 truncate text-[12.5px] font-medium text-fg">{review.prompt ?? review.provider}</span>}
+          <span className="shrink-0 text-[10.5px] text-fg-subtle">{relativeTime(review.finishedAt)}</span>
+        </span>
+        {review.branch && <span className="block truncate font-mono text-[10.5px] text-fg-subtle">{review.branch}</span>}
+        <span className="flex items-center gap-1.5 text-[10.5px]">
+          {review.stats && (
+            <>
+              <span className="text-success">+{review.stats.adds}</span>
+              <span className="text-danger">−{review.stats.dels}</span>
+            </>
+          )}
+          {run && <span className={run.ok ? "text-success" : "text-danger"}>{run.ok ? "tests pass" : "tests fail"}</span>}
+          {review.tests.state === "loading" && <span className="text-fg-subtle">testing…</span>}
+          {conflict && <span className="text-warning">conflict</span>}
+          {review.status === "merged" && <span className="text-success">merged</span>}
+        </span>
+      </span>
+    </button>
+  );
+}
 
 function Summary({ review }: { review: Review }) {
   const { summary } = review;
@@ -247,6 +285,9 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
   const waiting = queue.filter((i) => i.state === "queued");
   const position = queued?.state === "queued" ? waiting.indexOf(queued) + 1 : null;
 
+  const report = useConflicts((s) => s.report);
+  const blocked = !!(pane?.worktree && conflictsFor(report, pane.worktree.path).item?.baseConflicts.length);
+
   const sendBack = () => {
     const text = reply.trim();
     if (!text || !pane) return;
@@ -273,12 +314,13 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
   };
 
   return (
-    <article className={cn("anim-rise space-y-2.5 rounded-lg border border-border bg-panel-raised p-3 transition-opacity duration-300", !open && "opacity-60")}>
-      <header className="flex items-center gap-2 text-xs">
-        <span className="font-mono text-[11px] text-fg-subtle">{index}</span>
-        {pane && <StatusDot status={pane.status} />}
-        <ProviderIcon provider={review.provider} size={13} />
-        <span className="font-medium text-fg">{name}</span>
+    <article className={cn("anim-fade space-y-4 transition-opacity duration-300", !open && "opacity-60")}>
+      <header className="flex items-center gap-2 border-b border-border pb-3 text-xs">
+        <span className="sr-only">{index}</span>
+        <span className="grid size-[26px] shrink-0 place-items-center rounded-[7px] bg-hover">
+          <ProviderIcon provider={review.provider} size={14} />
+        </span>
+        <span className="text-sm font-semibold text-fg">{name}</span>
         {workspaceName && (
           <span className="max-w-32 shrink-0 truncate rounded bg-hover px-1.5 py-0.5 text-[10px] font-medium text-fg-muted" title={`Workspace ${workspaceName}`}>
             {workspaceName}
@@ -304,11 +346,18 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
         </button>
       </header>
 
-      {review.prompt && <p className="truncate text-[11px] text-fg-subtle">Task: {review.prompt}</p>}
+      {review.prompt && (
+        <section className="space-y-1">
+          <h3 className={sectionTitle}>Task</h3>
+          <p className="text-[12.5px] text-fg-muted">{review.prompt}</p>
+        </section>
+      )}
 
-      <div className="flex gap-3">
-        <div className="min-w-0 flex-1 space-y-2">
-          <Summary review={review} />
+      <div className="flex gap-4">
+        <div className="min-w-0 flex-1 space-y-4">
+          <section className="space-y-1.5">
+            <h3 className={sectionTitle}>What it did</h3>
+            <Summary review={review} />
           {stats && stats.files.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {stats.files.slice(0, 6).map((f) => (
@@ -319,10 +368,15 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
               {stats.files.length > 6 && <span className="px-1 text-[10px] text-fg-subtle">+{stats.files.length - 6} more</span>}
             </div>
           )}
-          <div className="flex items-center gap-2">
-            <Tests review={review} />
-          </div>
-          <ConflictNotes pane={pane} />
+          </section>
+          <section className="space-y-1.5">
+            <h3 className={sectionTitle}>Checks</h3>
+            <div className="flex items-center gap-2">
+              <Tests review={review} />
+              {review.tests.state === "idle" && !review.testCommand && <span className="text-xs text-fg-subtle">No test command found for this project</span>}
+            </div>
+            <ConflictNotes pane={pane} />
+          </section>
         </div>
         <Screenshot review={review} />
       </div>
@@ -394,10 +448,10 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
               <ListPlus size={12} /> Queue
             </button>
             <button
-              disabled={!pane?.worktree || isPending(queued)}
-              title={pane?.worktree ? `Merge into ${pane.worktree.base}` : "Only agents in their own worktree can be merged"}
+              disabled={!pane?.worktree || isPending(queued) || blocked}
+              title={blocked ? "Resolve the conflict with its base first" : pane?.worktree ? `Merge into ${pane.worktree.base}` : "Only agents in their own worktree can be merged"}
               onClick={() => pane?.worktree && void mergeReviewed(pane as Pane & { worktree: NonNullable<Pane["worktree"]> })}
-              className={cn(button, "bg-accent text-on-accent hover:opacity-90")}
+              className={cn(button, "h-7 bg-accent px-3 font-medium text-on-accent hover:opacity-90")}
             >
               <GitMerge size={12} /> Merge
             </button>
@@ -441,6 +495,7 @@ export function ReviewInbox() {
   // The overview covers every workspace; the workspace view just its own.
   const everywhere = view === "overview";
   const [, tick] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const queue = useMergeQueue((s) => s.items);
   const queueRunning = useMergeQueue((s) => s.running);
 
@@ -480,20 +535,24 @@ export function ReviewInbox() {
     .filter((r) => r.status === "open" && !r.raceId && panes.get(r.paneId)?.worktree && !isPending(queue.find((i) => i.reviewId === r.id)))
     .sort((a, b) => a.finishedAt - b.finishedAt);
   const shownQueue = queue.filter((i) => everywhere || i.workspaceId === activeWorkspaceId);
+  const selected = reviews.find((r) => r.id === selectedId) ?? reviews[0];
+  const openCount = reviews.filter((r) => r.status === "open").length;
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog flex h-fit max-h-[84vh] w-[860px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog flex h-[min(700px,86vh)] w-[1040px] max-w-[94vw] flex-col overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-          <Inbox size={14} className="text-accent" />
-          <h1 className="text-sm font-semibold text-fg">Review</h1>
-          <span className="flex-1 truncate text-xs text-fg-subtle">{everywhere ? "All workspaces" : workspace?.name}</span>
+          <Inbox size={15} className="text-accent" />
+          <h1 className="text-[15px] font-semibold text-fg">Review</h1>
+          <span className="flex-1 truncate text-xs text-fg-subtle">
+            {openCount === 1 ? "1 task finished" : openCount > 1 ? `${openCount} tasks finished` : ""} · {everywhere ? "All workspaces" : workspace?.name}
+          </span>
           <span className="text-xs text-fg-subtle">Say “what's done?” to hear it · {keysFor({ type: "ui.overlay", overlay: "review" })}</span>
           {mergeable.length > 1 && (
             <button
               onClick={() => enqueue(mergeable.map((r) => r.id))}
               title="Queue every open branch, oldest first: each brings in the base's new commits, runs the tests and merges; one that conflicts or fails stops without holding up the rest"
-              className={cn(button, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}
+              className={cn(button, "h-7 bg-accent px-3 font-medium text-on-accent hover:opacity-90")}
             >
               {queueRunning ? <Spinner size={12} /> : <ListOrdered size={12} />} Merge all ({mergeable.length})
             </button>
@@ -502,24 +561,38 @@ export function ReviewInbox() {
             <X size={14} />
           </button>
         </header>
-        <div className="space-y-3 overflow-y-auto p-4">
-          <QueuePanel items={shownQueue} />
-          {reviews.length === 0 && (
-            <p className="py-10 text-center text-xs text-fg-subtle">
-              Nothing to review yet. When an agent finishes work, its changes, a summary, tests and a screenshot of its app show up here.
-            </p>
-          )}
-          {reviews.map((r, i) => (
-            <ReviewCard
-              key={r.id}
-              review={r}
-              index={i + 1}
-              pane={panes.get(r.paneId)}
-              race={racers(r.raceId)}
-              workspaceName={everywhere ? names.get(r.workspaceId) : undefined}
-            />
-          ))}
-        </div>
+        {shownQueue.length > 0 && (
+          <div className="border-b border-border px-5 py-2">
+            <QueuePanel items={shownQueue} />
+          </div>
+        )}
+        {reviews.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-1.5 text-fg-subtle">
+            <Inbox size={24} />
+            <div className="text-[13px] text-fg">Nothing to review</div>
+            <div className="text-xs">When an agent finishes, its changes, a summary, tests and a screenshot of its app show up here.</div>
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1">
+            <div className="w-[290px] shrink-0 space-y-0.5 overflow-y-auto border-r border-border p-2">
+              {reviews.map((r) => (
+                <ReviewItem key={r.id} review={r} pane={panes.get(r.paneId)} selected={r.id === selected?.id} onSelect={() => setSelectedId(r.id)} />
+              ))}
+            </div>
+            <div className="min-w-0 flex-1 overflow-y-auto p-5">
+              {selected && (
+                <ReviewCard
+                  key={selected.id}
+                  review={selected}
+                  index={reviews.indexOf(selected) + 1}
+                  pane={panes.get(selected.paneId)}
+                  race={racers(selected.raceId)}
+                  workspaceName={everywhere ? names.get(selected.workspaceId) : undefined}
+                />
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
