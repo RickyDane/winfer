@@ -23,6 +23,17 @@ pub(super) struct ProgressUi {
     named_from: HashMap<String, String>,
     seconds: u64,
     sessions_key: String,
+    /// The Sessions panel's filter: all, working, needs you, done.
+    filter: SessionFilter,
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum SessionFilter {
+    #[default]
+    All,
+    Working,
+    Waiting,
+    Done,
 }
 
 fn tail(text: &str, count: usize) -> String {
@@ -214,55 +225,115 @@ impl Root {
             return None;
         }
         let c = *c;
-        let tracked = |p: &Pane| p.provider != "shell" && (matches!(p.status, AgentStatus::Working | AgentStatus::NeedsInput) || s.progress.get(&p.id).is_some_and(|e| e.percent.is_some()));
-        let mut body = div().flex().flex_col().gap_4();
-        if self.llm_provider(cx).is_none() {
-            body = body.child(div().text_xs().text_color(c.warning).child("Progress estimates use the prompt writer LLM, which is off in Settings."));
-        }
-        let mut any = false;
-        let s = self.state.read(cx);
+        let tracked = |p: &Pane| p.provider != "shell" && !p.archived && (matches!(p.status, AgentStatus::Working | AgentStatus::NeedsInput | AgentStatus::Done) || s.progress.get(&p.id).is_some_and(|e| e.percent.is_some()));
+        let all: Vec<Pane> = s.all_panes().filter(|p| tracked(p)).cloned().collect();
+        let count = |st: AgentStatus| all.iter().filter(|p| p.status == st).count();
+        let (working, waiting, done) = (count(AgentStatus::Working), count(AgentStatus::NeedsInput), count(AgentStatus::Done));
+        let known: Vec<u32> = all.iter().filter(|p| p.status == AgentStatus::Working).filter_map(|p| s.progress.get(&p.id).and_then(|e| e.percent)).collect();
+        let average = (!known.is_empty()).then(|| known.iter().sum::<u32>() / known.len() as u32);
+        let filter = self.progress_ui.filter;
         let mono = crate::fonts::mono(cx);
-        for w in &s.workspaces {
-            let panes: Vec<&Pane> = w.panes.iter().filter(|p| tracked(p)).collect();
-            if panes.is_empty() {
-                continue;
-            }
-            any = true;
-            let mut section = div().flex().flex_col().gap_1().child(div().px_1().text_xs().text_color(c.subtle).child(w.name.to_uppercase()));
-            for pane in panes {
-                let progress = s.progress.get(&pane.id);
-                let task = progress_title(progress).or_else(|| pane.prompt.clone()).unwrap_or_else(|| "Task unknown".into());
-                let percent = progress.and_then(|p| p.percent).map_or("—".to_string(), |p| format!("{p}%"));
-                let detail = match pane.status {
-                    AgentStatus::NeedsInput => "Waiting for you".to_string(),
-                    AgentStatus::Done => "Finished".to_string(),
-                    _ => progress.and_then(|p| p.step.clone()).unwrap_or_else(|| if progress.is_some_and(|p| p.error.is_some()) { "Couldn't estimate".into() } else { "Estimating…".into() }),
-                };
-                let updated = progress.and_then(|p| p.updated_at).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| format!("updated {}", relative_time(d.as_millis() as f64)));
-                let (id, workspace) = (pane.id.clone(), pane.workspace_id.clone());
-                section = section.child(
-                    div().id(SharedString::from(format!("session-{id}"))).flex().flex_col().gap_1p5().rounded_lg().px_3().py_2().cursor_pointer().hover(move |d| d.bg(c.hover))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.update_state(cx, |s| s.overlay = Overlay::None);
-                            this.focused_view = None;
-                            this.execute(Command::WorkspaceSwitch(workspace.clone()), window, cx);
-                            this.execute(Command::Focus(commands::PaneRef::Id(id.clone())), window, cx);
-                        }))
-                        .child(div().flex().items_center().gap_2().text_xs()
-                            .child(div().size_1p5().rounded_full().bg(status_color(pane.status, &c)))
-                            .child(div().flex_shrink_0().text_color(c.fg).child(s.provider_name(&pane.provider)))
-                            .child(div().min_w_0().flex_1().truncate().text_color(c.muted).child(task))
-                            .child(div().w(px(40.0)).text_right().font_family(mono.clone()).text_color(c.fg).child(percent)))
-                        .child(progress_bar(progress, pane.status, &c).h(px(4.0)).bg(c.hover))
-                        .child(div().flex().items_center().gap_2().text_size(px(11.0)).text_color(c.subtle)
-                            .child(div().flex_1().truncate().child(detail))
-                            .children(updated)),
-                );
-            }
-            body = body.child(section);
+
+        // Totals: one tile each, the "needs you" one tinted when it isn't zero.
+        let stat = |label: &'static str, value: String, color: Hsla| {
+            div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+                .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(value))
+                .child(div().text_size(px(11.0)).text_color(c.subtle).child(label))
+        };
+        let totals = div().flex().gap_2()
+            .child(stat("working", working.to_string(), c.fg))
+            .child(stat("need you", waiting.to_string(), if waiting > 0 { c.warning } else { c.fg }))
+            .child(stat("done", done.to_string(), if done > 0 { c.success } else { c.fg }))
+            .child(stat("avg progress", average.map_or("—".into(), |a| format!("{a}%")), c.fg));
+        let tab = |id: &'static str, label: String, value: SessionFilter, cx: &mut Context<Self>| {
+            let on = filter == value;
+            div().id(id).flex_1().h(px(26.0)).flex().items_center().justify_center().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
+                .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active)).hover(move |d| d.text_color(c.fg))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.progress_ui.filter = value;
+                    cx.notify();
+                }))
+                .child(label)
+        };
+        let tabs = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+            .child(tab("sessions-all", format!("All {}", all.len()), SessionFilter::All, cx))
+            .child(tab("sessions-working", format!("Working {working}"), SessionFilter::Working, cx))
+            .child(tab("sessions-waiting", format!("Needs you {waiting}"), SessionFilter::Waiting, cx))
+            .child(tab("sessions-done", format!("Done {done}"), SessionFilter::Done, cx));
+
+        let mut body = div().flex().flex_col().gap_1();
+        if self.llm_provider(cx).is_none() {
+            body = body.child(div().px_1().pb_2().text_xs().text_color(c.warning).child("Progress estimates use the prompt writer LLM, which is off in Settings."));
         }
-        if !any {
-            body = body.child(div().py_8().text_center().text_xs().text_color(c.subtle).child("No agent is working right now."));
+        let s = self.state.read(cx);
+        let shown: Vec<&Pane> = all.iter().filter(|p| match filter {
+            SessionFilter::All => true,
+            SessionFilter::Working => p.status == AgentStatus::Working,
+            SessionFilter::Waiting => p.status == AgentStatus::NeedsInput,
+            SessionFilter::Done => p.status == AgentStatus::Done,
+        }).collect();
+        // Waiting agents first, then working ones by progress, then the rest.
+        let mut shown = shown;
+        shown.sort_by_key(|p| (match p.status { AgentStatus::NeedsInput => 0, AgentStatus::Working => 1, _ => 2 }, std::cmp::Reverse(s.progress.get(&p.id).and_then(|e| e.percent).unwrap_or(0))));
+        for pane in shown {
+            let progress = s.progress.get(&pane.id);
+            let title = s.pane_label(pane);
+            let task = progress_title(progress).or_else(|| pane.prompt.clone()).unwrap_or_default();
+            let workspace_name = s.workspaces.iter().find(|w| w.id == pane.workspace_id).map(|w| w.name.clone()).unwrap_or_default();
+            let percent = progress.and_then(|p| p.percent);
+            let detail = match pane.status {
+                AgentStatus::NeedsInput => progress.and_then(|p| p.step.clone()).unwrap_or_else(|| "Waiting for you".into()),
+                AgentStatus::Done => "Finished — ready to review".to_string(),
+                _ => progress.and_then(|p| p.step.clone()).unwrap_or_else(|| if progress.is_some_and(|p| p.error.is_some()) { "Couldn't estimate".into() } else { "Estimating…".into() }),
+            };
+            let updated = progress.and_then(|p| p.updated_at).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| relative_time(d.as_millis() as f64));
+            let (id, workspace, approve) = (pane.id.clone(), pane.workspace_id.clone(), pane.id.clone());
+            let status = pane.status;
+            let action = match status {
+                AgentStatus::NeedsInput => Some(div().id(SharedString::from(format!("session-approve-{id}"))).h(px(24.0)).px_2p5().flex().items_center().rounded_md().bg(c.accent)
+                    .text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.execute(Command::Approve(commands::PaneRef::Id(approve.clone())), window, cx);
+                    }))
+                    .child("Approve")),
+                AgentStatus::Done => Some(div().id(SharedString::from(format!("session-review-{id}"))).h(px(24.0)).px_2p5().flex().items_center().rounded_md().border_1().border_color(c.border_strong)
+                    .text_size(px(11.5)).text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx);
+                    }))
+                    .child("Review")),
+                _ => None,
+            };
+            body = body.child(
+                div().id(SharedString::from(format!("session-{id}"))).flex().gap_3().rounded_lg().p_2p5().cursor_pointer()
+                    .when(status == AgentStatus::NeedsInput, |d| d.bg(Hsla { a: 0.06, ..c.warning }))
+                    .hover(move |d| d.bg(c.hover))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.update_state(cx, |s| s.overlay = Overlay::None);
+                        this.focused_view = None;
+                        this.execute(Command::WorkspaceSwitch(workspace.clone()), window, cx);
+                        this.execute(Command::Focus(commands::PaneRef::Id(id.clone())), window, cx);
+                    }))
+                    .child(Self::agent_tile(&pane.provider, status, c.panel, c))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap_1()
+                        .child(div().flex().items_center().gap_2()
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title))
+                            .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(11.0)).text_color(c.muted).child(percent.map_or("—".into(), |p| format!("{p}%")))))
+                        .when(!task.is_empty(), |d| d.child(div().truncate().text_size(px(11.5)).text_color(c.subtle).child(format!("{workspace_name} · {task}"))))
+                        .child(progress_bar(progress, status, &c).h(px(3.0)).bg(c.hover))
+                        .child(div().flex().items_center().gap_2().text_size(px(11.5))
+                            .child(div().flex_1().min_w_0().truncate().text_color(if status == AgentStatus::NeedsInput { c.warning } else { c.muted }).child(detail))
+                            .when_some(updated, |d, u| d.child(div().flex_shrink_0().text_color(c.subtle).child(u)))
+                            .children(action))),
+            );
+        }
+        if all.is_empty() {
+            body = body.child(div().py_10().flex().flex_col().items_center().gap_1().text_color(c.subtle)
+                .child(Icon::new(IconName::Activity).size(px(20.0)))
+                .child(div().text_size(px(13.0)).text_color(c.fg).child("No agent is working right now"))
+                .child(div().text_xs().child("Started agents show up here with how far they are.")));
         }
         let refresh = small_button(c, "sessions-refresh", "Estimate again").on_click(cx.listener(|this, _, _, cx| {
             let working: Vec<Pane> = this.state.read(cx).all_panes().filter(|p| p.provider != "shell" && p.status == AgentStatus::Working).cloned().collect();
@@ -272,17 +343,22 @@ impl Root {
             }
         }));
         let keys = commands::keys_for(&Command::Overlay { overlay: Overlay::Progress, provider: None }, self.state.read(cx));
+        // A panel on the right, so the panes stay in view.
         Some(
-            div().id("sessions-backdrop").absolute().size_full().flex().items_start().justify_center().pt(relative(0.1)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
+            div().id("sessions-backdrop").absolute().size_full().flex().justify_end().p_2().bg(hsla(0.0, 0.0, 0.0, 0.25)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)))
                 .child(
-                    div().id("sessions").w(px(760.0)).max_h(relative(0.8)).flex().flex_col().overflow_hidden().rounded_xl().border_1().border_color(c.border_strong).bg(c.panel)
+                    div().id("sessions").w(px(440.0)).max_w(relative(0.9)).h_full().flex().flex_col().overflow_hidden().rounded(px(12.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().flex().items_center().gap_2().border_b_1().border_color(c.border).px_5().py_3()
-                            .child(div().flex_1().text_sm().child("Sessions"))
-                            .when_some(keys, |d, k| d.child(div().text_xs().text_color(c.subtle).child(k)))
-                            .child(refresh))
-                        .child(div().id("sessions-list").flex_1().min_h_0().overflow_y_scroll().p_4().child(body)),
+                        .child(div().flex().flex_col().gap_3().border_b_1().border_color(c.border).px_4().pt_4().pb_3()
+                            .child(div().flex().items_center().gap_2()
+                                .child(Icon::new(IconName::Activity).size(px(15.0)).text_color(c.accent))
+                                .child(div().flex_1().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Sessions"))
+                                .when_some(keys, |d, k| d.child(div().rounded_sm().border_1().border_color(c.border).px_1().text_size(px(10.5)).text_color(c.subtle).child(k)))
+                                .child(refresh))
+                            .child(totals)
+                            .child(tabs))
+                        .child(div().id("sessions-list").flex_1().min_h_0().overflow_y_scroll().p_2().child(body)),
                 )
                 .into_any_element(),
         )

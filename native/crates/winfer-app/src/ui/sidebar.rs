@@ -295,7 +295,7 @@ impl Root {
     }
 
     /// The agent's brand mark on a rounded tile, with its status as a dot in the corner.
-    fn agent_tile(provider: &str, status: AgentStatus, ring: Hsla, c: Colors) -> Div {
+    pub(super) fn agent_tile(provider: &str, status: AgentStatus, ring: Hsla, c: Colors) -> Div {
         let shell = provider == "shell";
         div().relative().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(c.hover)
             .child(crate::ui::code_pickers::mark(c, provider, 14.0, 1.0))
