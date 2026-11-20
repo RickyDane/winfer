@@ -578,5 +578,10 @@
   "page": "diagnostics",
   "label": "Latest crash",
   "words": "The end of crash.log. Full backtraces are in the file and in the export."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Available to install",
+  "words": "Install one, then Check for updates (or restart winfer) and it shows up above."
  }
 ]

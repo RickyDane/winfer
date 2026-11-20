@@ -110,6 +110,8 @@ fn words_of_first(text: &str) -> Option<String> {
 }
 
 pub struct SettingsUi {
+    /// The page's scroll position, so a link can jump to a section (the agents to install).
+    page_scroll: ScrollHandle,
     open_select: Option<String>,
     system_prompt: Entity<EditorState>,
     editors: Vec<(String, String)>,
@@ -221,6 +223,7 @@ impl Root {
             cx.subscribe(input, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         }
         self.settings = Some(SettingsUi {
+            page_scroll: ScrollHandle::new(),
             open_select: None,
             system_prompt,
             editors: Vec::new(),
@@ -621,7 +624,29 @@ impl Root {
         let agents_head = div().flex().items_center().justify_between().px_1()
             .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Your agents"))
             .child(plain_button(c, "check-versions", if checking { "Checking…" } else { "Check for updates" }).on_click(cx.listener(|this, _, _, cx| this.check_versions(cx))));
-        let agents_section = div().flex().flex_col().gap_2p5().child(agents_head).children(agent_cards);
+        // Agents whose CLI isn't installed: what they are and how to get them.
+        let mut missing = div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel)
+            .child(div().px_4().py_3().flex().flex_col().gap_0p5()
+                .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Available to install"))
+                .child(div().text_xs().text_color(c.subtle).child("Install one, then Check for updates (or restart winfer) and it shows up above.")));
+        let mut any_missing = false;
+        for p in s.providers.iter().filter(|p| !p.installed && p.id != "shell" && p.command.is_some()) {
+            any_missing = true;
+            let command = p.command.clone().unwrap_or_default();
+            // The install command we can stand behind: an npm package, or the vendor's install script.
+            let install: Option<String> = p.update.as_ref().and_then(|u| u.npm.as_ref().map(|n| format!("npm install -g {n}")).or_else(|| u.url.as_ref().map(|url| format!("curl -fsSL {url} | bash"))));
+            let id = p.id.clone();
+            let copy = install.clone();
+            missing = missing.child(
+                div().flex().items_center().gap_3().px_4().py_2p5().border_t_1().border_color(c.border)
+                    .child(div().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &p.id, 15.0, 0.8)))
+                    .child(div().flex_1().min_w_0().flex().flex_col()
+                        .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(p.name.clone()))
+                        .child(div().truncate().font_family(crate::fonts::mono(cx)).text_size(px(11.0)).text_color(c.subtle).child(install.clone().unwrap_or_else(|| format!("Needs the `{command}` command on your PATH")))))
+                    .when_some(copy, |d, text| d.child(plain_button(c, SharedString::from(format!("copy-install-{id}")), "Copy command").on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())))))),
+            );
+        }
+        let agents_section = div().flex().flex_col().gap_2p5().child(agents_head).children(agent_cards).when(any_missing, |d| d.child(missing));
 
         let prompt = self.settings.as_ref().unwrap().system_prompt.clone();
         let custom = s.system_prompt.is_some();
@@ -906,6 +931,7 @@ impl Root {
         let page = self.state.read(cx).settings_page.clone();
         let (group, (id, label, icon, description)) = page_info(&page);
         let search = self.settings.as_ref().map(|s| s.search.clone()).expect("settings ui");
+        let scroll = self.settings.as_ref().map(|s| s.page_scroll.clone()).expect("settings ui");
         let query = search.read(cx).value().trim().to_string();
         let hits = search_settings(&query);
         let searching = !query.is_empty();
@@ -1049,7 +1075,7 @@ impl Root {
                                         .child(Icon::new(IconName::X).size(px(15.0)))
                                         .child(div().rounded_sm().border_1().border_color(c.border).px_1().font_family(mono.clone()).text_size(px(10.0)).child("esc")),
                                 )
-                                .child(div().id(SharedString::from(format!("settings-page-{id}-{searching}"))).flex_1().min_h_0().overflow_y_scroll().px_8().pt_1().pb_10().child(content)),
+                                .child(div().id(SharedString::from(format!("settings-page-{id}-{searching}"))).flex_1().min_h_0().overflow_y_scroll().track_scroll(&scroll).px_8().pt_1().pb_10().child(content)),
                         ),
                 )
                 .into_any_element(),
@@ -1089,8 +1115,27 @@ impl Root {
         })
     }
 
+    /// Scrolls the open settings page to its end once it has laid out: where "Available to install"
+    /// is on the Agents page.
+    pub(super) fn scroll_settings_to_end(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(120)).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(s) = this.settings.as_ref() {
+                    let max = s.page_scroll.max_offset();
+                    s.page_scroll.set_offset(point(px(0.0), -max.y));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Opens a settings page (from the navigation or a search result) and clears the search.
     fn open_settings_page(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(s) = self.settings.as_ref() {
+            s.page_scroll.set_offset(point(px(0.0), px(0.0)));
+        }
         if let Some(s) = self.settings.as_mut() {
             s.open_select = None;
             s.search.update(cx, |i, cx| i.set_value("", window, cx));

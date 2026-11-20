@@ -67,7 +67,11 @@ export function Welcome() {
             </button>
           ))}
           {missing > 0 && (
-            <button onClick={() => execute({ type: "ui.settings", page: "agents" })} className="h-8 px-2 text-xs text-fg-subtle hover:text-fg">
+            <button onClick={() => {
+                execute({ type: "ui.settings", page: "agents" });
+                // Once the page has rendered, scroll to the agents that can be installed.
+                window.setTimeout(() => document.getElementById("agents-to-install")?.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
+              }} className="h-8 px-2 text-xs text-fg-subtle hover:text-fg">
               + {missing} more agents you can install
             </button>
           )}

@@ -24,6 +24,8 @@ import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates 
 import { THEMES, themeById } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
+import { installCommand } from "@/features/providers/providers";
 import { searchSettings } from "@/features/settings/search";
 import { changedCounts, resetEntry, resetPage } from "@/features/settings/resets";
 import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb } from "@/features/code/styles";
@@ -433,6 +435,39 @@ function AgentSettings() {
       <SystemPromptSettings />
       <AgentToolSettings />
     </>
+  );
+}
+
+/** Agents whose CLI isn't installed: what they are and how to get them. */
+function InstallSettings() {
+  const { providers } = useWorkspacesPick("providers");
+  const missing = providers.filter((p) => !p.installed && p.id !== "shell" && p.command);
+  if (!missing.length) return null;
+  return (
+    <div id="agents-to-install">
+      <Card title="Available to install" description="Install one, then Check for updates (or restart winfer) and it shows up above.">
+        {missing.map((p) => {
+          const command = installCommand(p);
+          return (
+            <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-hover">
+                <ProviderIcon provider={p.id} size={15} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium text-fg">{p.name}</div>
+                <div className="truncate font-mono text-[11px] text-fg-subtle">{command ?? `Needs the \`${p.command}\` command on your PATH`}</div>
+              </div>
+              {command && (
+                <button onClick={() => void navigator.clipboard.writeText(command).then(() => toast("Copied the install command"))} className={buttonClass}>
+                  <Copy size={12} />
+                  Copy command
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </Card>
+    </div>
   );
 }
 
@@ -2061,6 +2096,7 @@ const GROUPS: { label: string; pages: Page[] }[] = [
         render: () => (
           <>
             <AgentSettings />
+            <InstallSettings />
             <ReviewSettings />
             <ProgressSettings />
           </>

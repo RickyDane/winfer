@@ -67,7 +67,10 @@ impl Root {
         }
         if missing > 0 {
             picks = picks.child(div().id("welcome-more-agents").flex().items_center().h(px(32.0)).px_2().text_size(px(12.0)).text_color(c.subtle).cursor_pointer().hover(move |d| d.text_color(c.fg))
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(Some("agents".into())), window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.execute(Command::Settings(Some("agents".into())), window, cx);
+                    this.scroll_settings_to_end(cx);
+                }))
                 .child(format!("+ {missing} more agents you can install")));
         }
 

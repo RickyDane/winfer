@@ -24,7 +24,16 @@ export interface Provider {
   modelCommand: string | null;
   /** Launch flags that skip permission prompts (offered as "auto-approve" in settings). */
   autoApproveArgs?: string[];
+  /** Where its newest version and updates come from: an npm package, or an install script. */
+  update?: { npm?: string | null; url?: string | null } | null;
   installed: boolean;
+}
+
+/** The command that installs an agent, when we know one we can stand behind: its npm package or the vendor's install script. */
+export function installCommand(p: Pick<Provider, "update">): string | null {
+  if (p.update?.npm) return `npm install -g ${p.update.npm}`;
+  if (p.update?.url) return `curl -fsSL ${p.update.url} | bash`;
+  return null;
 }
 
 export interface ModelInfo {

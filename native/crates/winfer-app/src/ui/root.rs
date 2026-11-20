@@ -1387,6 +1387,10 @@ impl Render for Root {
                     self.new_menu.open = true;
                     cx.notify();
                 }
+                Ok("install") => {
+                    self.execute(Command::Settings(Some("agents".into())), window, cx);
+                    self.scroll_settings_to_end(cx);
+                }
                 Ok("review") => self.demo_reviews(cx),
                 Ok("usage") => self.demo_usage(cx),
                 Ok("history") => {
