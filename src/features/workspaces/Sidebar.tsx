@@ -129,6 +129,8 @@ function SectionLabel({ children, action }: { children: React.ReactNode; action?
 }
 
 const tab = "flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-fg-muted transition-colors duration-150 hover:bg-hover hover:text-fg";
+/** A tab's label: shown when the sidebar is wide enough for all three, else the icon alone (the title says which). */
+const tabLabel = "hidden @[212px]:inline";
 
 /** Search, and Sessions · Review · History. */
 function SidebarTop() {
@@ -137,23 +139,23 @@ function SidebarTop() {
   const reviews = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
   const keys = keysFor({ type: "ui.palette" });
   return (
-    <div className="flex flex-col gap-2 border-b border-border px-2.5 pt-2.5 pb-2">
+    <div className="@container flex flex-col gap-2 border-b border-border px-2.5 pt-2.5 pb-2">
       <button
         onClick={() => execute({ type: "ui.palette" })}
         className="flex h-8 items-center gap-2 rounded-md border border-border bg-app pr-2 pl-2.5 text-left text-[12.5px] text-fg-subtle transition-colors hover:border-border-strong hover:text-fg-muted"
       >
         <Search size={14} />
-        <span className="flex-1">Search or jump to…</span>
-        {keys && <kbd className="rounded border border-border px-1 font-mono text-[10px]">{keys}</kbd>}
+        <span className="min-w-0 flex-1 truncate">Search or jump to…</span>
+        {keys && <kbd className="hidden shrink-0 rounded border border-border px-1 font-mono text-[10px] @[200px]:block">{keys}</kbd>}
       </button>
       <div className="flex gap-px rounded-lg border border-border bg-app p-0.5">
         <button onClick={() => execute({ type: "ui.overlay", overlay: "progress" })} title={`Session progress (${keysFor({ type: "ui.overlay", overlay: "progress" })})`} className={tab}>
           <Activity size={14} className="shrink-0" />
-          Sessions
+          <span className={tabLabel}>Sessions</span>
         </button>
         <button onClick={() => execute({ type: "ui.overlay", overlay: "review" })} title={`Review finished work (${keysFor({ type: "ui.overlay", overlay: "review" })})`} className={tab}>
           <Inbox size={14} className="shrink-0" />
-          Review
+          <span className={tabLabel}>Review</span>
           {reviews > 0 && (
             <span key={reviews} className="anim-grow min-w-4 rounded-full bg-accent px-1 text-center text-[10px] leading-4 font-semibold text-on-accent">
               {reviews}
@@ -162,7 +164,7 @@ function SidebarTop() {
         </button>
         <button onClick={() => execute({ type: "ui.overlay", overlay: "history" })} title={`Merged features (${keysFor({ type: "ui.overlay", overlay: "history" })})`} className={tab}>
           <Clock size={14} className="shrink-0" />
-          History
+          <span className={tabLabel}>History</span>
         </button>
       </div>
     </div>

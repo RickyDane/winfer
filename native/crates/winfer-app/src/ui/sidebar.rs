@@ -117,6 +117,11 @@ fn reveal_label() -> &'static str {
     if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Explorer" }
 }
 
+/// The sidebar width from which the Sessions · Review · History tabs show their labels, and the
+/// search its shortcut. Below, icons only (each tab still has its tooltip).
+const SIDEBAR_LABELS_MIN: f32 = 236.0;
+const SIDEBAR_HINT_MIN: f32 = 224.0;
+
 impl Root {
     fn refresh_listing(&mut self, dir: String, cx: &mut Context<Self>) {
         if !self.sidebar.pending.insert(dir.clone()) {
@@ -395,12 +400,13 @@ impl Root {
 
     /// One segment of the Sessions · Review · History control.
     /// One segment of the Sessions · Review · History control; a count takes the icon's place.
-    fn nav_tab(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, count: usize, c: Colors) -> Stateful<Div> {
+    /// Labels show when the sidebar is wide enough for all three tabs, else the icons alone.
+    fn nav_tab(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, count: usize, labels: bool, c: Colors) -> Stateful<Div> {
         div().id(id).flex_1().min_w_0().h(px(28.0)).flex().items_center().justify_center().gap_1p5().rounded(px(6.0)).text_size(px(12.0)).text_color(c.muted).cursor_pointer()
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .child(if count > 0 { Self::count_badge(count, c).into_any_element() } else { Icon::new(icon).size(px(14.0)).flex_shrink_0().into_any_element() })
-            .child(div().truncate().child(label))
+            .when(labels, |d| d.child(div().truncate().child(label)))
     }
 
     fn count_badge(n: usize, c: Colors) -> Div {
@@ -437,17 +443,20 @@ impl Root {
         let mono = crate::fonts::mono(cx);
 
         // Search and the three views.
+        // Narrow sidebar: the tabs show icons only, and the search drops its shortcut hint.
+        let sidebar_width = self.state.read(cx).sidebar_width as f32;
+        let labels = sidebar_width >= SIDEBAR_LABELS_MIN;
         let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app).border_1().border_color(c.border)
             .text_size(px(12.5)).text_color(c.subtle).cursor_pointer().hover(move |d| d.border_color(c.border_strong).text_color(c.muted))
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx)))
             .child(Icon::new(IconName::Search).size(px(14.0)))
             .child(div().flex_1().child("Search or jump to…"))
-            .when(!palette_keys.is_empty(), |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.border).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
-        let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, 0, c)
+            .when(!palette_keys.is_empty() && sidebar_width >= SIDEBAR_HINT_MIN, |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.border).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
+        let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
-        let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, review_count, c)
+        let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, review_count,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx)));
-        let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, 0, c)
+        let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
         let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2().border_b_1().border_color(c.border)
             .child(search)

@@ -130,6 +130,10 @@ pub(super) fn at_text(ms: f64, now: f64) -> String {
     if ms > now { format!("{local} (in {})", duration(ms - now)) } else { format!("{local} (passed)") }
 }
 
+/// Development aid: while set, the demo numbers stay (no refresh from the backend).
+#[cfg(debug_assertions)]
+static DEMO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// A short "when": "Mon 21:16" within the week, else the date ("Nov 30 21:16").
 pub(super) fn short_when(ms: f64, now: f64) -> String {
     let secs = (ms / 1000.0) as libc_time;
@@ -199,6 +203,10 @@ impl Root {
     }
 
     fn refresh_accounts(&mut self, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         cx.spawn(async move |this, cx| {
             let list = backend::background(|| serde_json::to_value(accounts::accounts_list()).unwrap_or_default()).await.unwrap_or_default();
             let parsed: Vec<Account> = serde_json::from_value(list).unwrap_or_default();
@@ -211,6 +219,10 @@ impl Root {
     }
 
     fn refresh_usage(&mut self, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         let accounts: Vec<Account> = self.usage.accounts.iter().filter(|a| a.enabled && a.signed_in).cloned().collect();
         let mut targets: Vec<(String, Option<String>)> = vec![("claude".to_string(), None), ("codex".to_string(), None)];
         targets.extend(accounts.iter().filter(|a| !a.id.ends_with(":default")).map(|a| (a.provider.clone(), Some(a.id.clone()))));
@@ -478,7 +490,7 @@ impl Root {
                         this.usage.popover = if this.usage.popover.as_ref() == Some(&toggle) { None } else { Some(toggle.clone()) };
                         cx.notify();
                     }))
-                    .child(usage_ring(left, color, c))
+                    .child(usage_ring(provider, left, color, 22.0, c))
                     .child(div().text_size(px(11.0)).text_color(c.muted).child(format!("{left:.0}%"))),
             );
         }
@@ -512,15 +524,36 @@ impl Root {
         }
         let accounts: Vec<&Account> = self.usage.accounts.iter().filter(|a| a.provider == provider).collect();
         if accounts.len() > 1 {
-            let mut rows = div().flex().flex_col().gap_1().pt_1()
+            let mut rows = div().flex().flex_col().gap_2().pt_1()
                 .child(div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("ACCOUNTS"));
             for a in accounts {
-                let left = tightest(self.usage.snapshots.get(&usage_key(&a.id)), now).map(|w| left_now(w, now));
+                let snapshot = self.usage.snapshots.get(&usage_key(&a.id));
+                let left = tightest(snapshot, now).map(|w| left_now(w, now));
                 let color = left.map_or(c.subtle, |l| if l < 10.0 { c.danger } else if l < 30.0 { c.warning } else { c.success });
-                rows = rows.child(div().flex().items_center().gap_2().text_xs()
-                    .child(div().size(px(6.0)).rounded_full().bg(color))
-                    .child(div().flex_1().truncate().text_color(c.muted).child(a.label.clone()))
-                    .child(div().text_color(c.subtle).child(left.map_or("no reading".into(), |l| format!("{l:.0}% left")))));
+                let mut card = div().flex().flex_col().gap_1().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_2p5()
+                    .child(div().flex().items_center().gap_2()
+                        .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color))
+                        .child(div().flex().flex_1().min_w_0().flex_col()
+                            .child(div().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(a.label.clone()))
+                            .when_some(a.email.clone(), |d, e| d.child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(e))))
+                        .child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(left.map_or("no reading".into(), |l| format!("{l:.0}% left")))));
+                // Every window of the account (5-hour, weekly, …) with when it resets.
+                for w in snapshot.map_or(&[][..], |s| s.windows.as_slice()) {
+                    let wl = left_now(w, now);
+                    let wc = if wl < 10.0 { c.danger } else if wl < 30.0 { c.warning } else { c.success };
+                    let reset = match w.resets_at {
+                        Some(r) if r > now => format!("resets {}", at_text(r, now)),
+                        Some(_) => "reset — full again".to_string(),
+                        None => String::new(),
+                    };
+                    card = card.child(div().flex().flex_col().pl(px(14.0)).text_size(px(11.0))
+                        .child(div().flex().items_baseline().gap_2()
+                            .child(div().w(px(46.0)).flex_shrink_0().truncate().text_color(c.muted).child(w.label.clone()))
+                            .child(div().flex_1().h(px(4.0)).rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(wc).w(relative((wl / 100.0).clamp(0.0, 1.0) as f32))))
+                            .child(div().w(px(62.0)).flex_shrink_0().text_right().font_family(crate::fonts::mono(cx)).text_color(wc).child(format!("{wl:.0}% left"))))
+                        .when(!reset.is_empty(), |d| d.child(div().pl(px(54.0)).text_size(px(10.5)).text_color(c.subtle).child(reset))));
+                }
+                rows = rows.child(card);
             }
             list = list.child(rows);
         }
@@ -552,11 +585,18 @@ impl Root {
     /// Development aid: usage numbers to look at, and the popover open.
     #[cfg(debug_assertions)]
     pub(super) fn demo_usage(&mut self, cx: &mut Context<Self>) {
+        DEMO.store(true, std::sync::atomic::Ordering::Relaxed);
         let now = now_ms();
         let window = |kind: &str, label: &str, used: f64, hours: f64| UsageWindow { kind: kind.into(), label: label.into(), used_percent: used, resets_at: Some(now + hours * 3_600_000.0) };
         self.usage.snapshots.insert("claude".into(), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", 78.0, 2.5), window("week", "Weekly", 36.0, 60.0)], at: now, reset_credits: None });
         self.usage.snapshots.insert("codex".into(), Snapshot { provider: "codex".into(), windows: vec![window("session", "5-hour", 22.0, 3.0), window("week", "Weekly", 91.0, 30.0)], at: now, reset_credits: None });
         self.usage.samples.insert(format!("claude:session:{}", (now + 2.5 * 3_600_000.0) as i64), vec![(now - 3_600_000.0, 50.0), (now, 78.0)]);
+        // Three Claude Code accounts with their own readings.
+        let account = |id: &str, label: &str, email: Option<&str>| Account { id: id.into(), provider: "claude".into(), label: label.into(), enabled: true, signed_in: true, email: email.map(str::to_string), exhausted_until: None, dir: String::new() };
+        self.usage.accounts = vec![account("a1", "Default", Some("dane@example.com")), account("a2", "Account 2", Some("work@example.org")), account("a3", "Account 3", None)];
+        for (id, session, week) in [("a1", 100.0, 41.0), ("a2", 99.0, 12.0), ("a3", 35.0, 60.0)] {
+            self.usage.snapshots.insert(usage_key(id), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", session, 6.3), window("week", "Weekly", week, 70.0)], at: now, reset_credits: None });
+        }
         self.usage.popover = Some("claude".into());
         cx.notify();
     }
@@ -567,9 +607,35 @@ impl Root {
     }
 }
 
-fn usage_ring(left: f64, color: Hsla, c: Colors) -> impl IntoElement {
-    let bar = (left / 100.0).clamp(0.0, 1.0) as f32;
-    div().w(px(18.0)).h(px(4.0)).rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(color).w(relative(bar)))
+/// A ring that drains as the limit is used up, with the provider's mark inside.
+pub(super) fn usage_ring(provider: &str, left: f64, color: Hsla, size: f32, c: Colors) -> impl IntoElement {
+    let fraction = (left / 100.0).clamp(0.0, 1.0) as f32;
+    let stroke = (size / 9.0).max(2.0);
+    let ring = canvas(|_, _, _| {}, move |bounds, _, window, _| {
+        let center = bounds.center();
+        let radius = (bounds.size.width.min(bounds.size.height) - px(stroke)) / 2.0;
+        // The track (a full circle), then the arc from 12 o'clock, clockwise.
+        let mut arc = |from: f32, to: f32, color: Hsla| {
+            let steps = (((to - from).abs() * 64.0).ceil() as usize).max(2);
+            let mut path = PathBuilder::stroke(px(stroke));
+            for i in 0..=steps {
+                let t = from + (to - from) * i as f32 / steps as f32;
+                let angle = t * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                let p = point(center.x + radius * angle.cos(), center.y + radius * angle.sin());
+                if i == 0 { path.move_to(p) } else { path.line_to(p) }
+            }
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        };
+        arc(0.0, 1.0, c.border_strong);
+        if fraction > 0.0 {
+            arc(0.0, fraction, color);
+        }
+    }).absolute().size_full();
+    div().relative().size(px(size)).flex_shrink_0().flex().items_center().justify_center()
+        .child(ring)
+        .child(crate::ui::code_pickers::mark(c, provider, size * 0.45, 1.0))
 }
 
 #[cfg(test)]
