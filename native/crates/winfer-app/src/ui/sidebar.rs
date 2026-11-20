@@ -394,12 +394,13 @@ impl Root {
     }
 
     /// One segment of the Sessions · Review · History control.
-    fn nav_tab(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, c: Colors) -> Stateful<Div> {
+    /// One segment of the Sessions · Review · History control; a count takes the icon's place.
+    fn nav_tab(&self, id: &'static str, icon: IconName, label: &'static str, tip: String, count: usize, c: Colors) -> Stateful<Div> {
         div().id(id).flex_1().min_w_0().h(px(28.0)).flex().items_center().justify_center().gap_1p5().rounded(px(6.0)).text_size(px(12.0)).text_color(c.muted).cursor_pointer()
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .child(Icon::new(icon).size(px(14.0)))
-            .child(div().child(label))
+            .child(if count > 0 { Self::count_badge(count, c).into_any_element() } else { Icon::new(icon).size(px(14.0)).flex_shrink_0().into_any_element() })
+            .child(div().truncate().child(label))
     }
 
     fn count_badge(n: usize, c: Colors) -> Div {
@@ -442,12 +443,11 @@ impl Root {
             .child(Icon::new(IconName::Search).size(px(14.0)))
             .child(div().flex_1().child("Search or jump to…"))
             .when(!palette_keys.is_empty(), |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.border).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
-        let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, c)
+        let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, 0, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
-        let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, c)
-            .when(review_count > 0, |d| d.child(Self::count_badge(review_count, c)))
+        let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, review_count, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx)));
-        let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, c)
+        let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, 0, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
         let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2().border_b_1().border_color(c.border)
             .child(search)

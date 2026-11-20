@@ -126,6 +126,8 @@ pub struct ReviewStore {
     pub conflicts: Option<Value>,
     /// The "send back" box of each open card.
     pub replies: HashMap<String, Entity<InputState>>,
+    /// The review shown in the detail column.
+    pub selected: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -252,6 +254,27 @@ impl Root {
 
     fn review_mut(&mut self, id: &str) -> Option<&mut Review> {
         self.review.reviews.iter_mut().find(|r| r.id == id)
+    }
+
+    /// Development aid: once the demo panes' worktrees exist, give each finished one a change
+    /// and collect its review, then open Review.
+    #[cfg(debug_assertions)]
+    pub(super) fn demo_reviews(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
+            let _ = this.update(cx, |this, cx| {
+                let done: Vec<(String, String)> = this.state.read(cx).all_panes()
+                    .filter(|p| p.status == crate::model::AgentStatus::Done)
+                    .filter_map(|p| p.worktree.as_ref().map(|w| (p.id.clone(), w.path.clone())))
+                    .collect();
+                for (id, path) in done {
+                    let _ = std::fs::write(std::path::Path::new(&path).join("THEME_TOGGLE.md"), "# Theme toggle\n\nAdds a light/dark toggle to the header.\n");
+                    this.collect_review(id, cx);
+                }
+                this.update_state(cx, |s| s.overlay = Overlay::Review);
+            });
+        })
+        .detach();
     }
 
     fn collect_review(&mut self, pane_id: String, cx: &mut Context<Self>) {
@@ -594,14 +617,53 @@ impl Root {
             self.review.replies.insert(r.id.clone(), input);
         }
         let queue = self.review.queue.clone();
-        let mut cards = div().flex().flex_col().gap_3();
-        if open.is_empty() {
-            cards = cards.child(div().py_10().text_center().text_xs().text_color(c.subtle).child("Nothing to review yet. Finished work shows up here."));
-        }
         let conflicts = self.review.conflicts.clone();
+        let selected = self.review.selected.clone().filter(|id| open.iter().any(|r| &r.id == id)).or_else(|| open.first().map(|r| r.id.clone()));
+        // Left: every finished task; right: the selected one in full.
+        let mut list = div().flex().flex_col().gap_0p5();
         for r in &open {
-            cards = cards.child(self.render_review_card(r, conflicts.as_ref(), c, mono.clone(), cx));
+            let on = selected.as_deref() == Some(&r.id);
+            let s = self.state.read(cx);
+            let title = s.pane(&r.pane_id).map(|p| s.pane_label(p)).or_else(|| r.prompt.clone()).unwrap_or_else(|| s.provider_name(&r.provider));
+            let at = r.finished_at.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
+            let conflict = conflict_note(conflicts.as_ref(), &r.dir).is_some_and(|(base, _)| base);
+            let (test_text, test_color) = match &r.tests {
+                Load::Done(Some(t)) if t.ok => ("tests pass", c.success),
+                Load::Done(Some(_)) => ("tests fail", c.danger),
+                Load::Loading => ("testing…", c.subtle),
+                _ => ("", c.subtle),
+            };
+            let pick = r.id.clone();
+            list = list.child(
+                div().id(SharedString::from(format!("review-item-{}", r.id))).flex().gap_2p5().rounded_lg().p_2p5().cursor_pointer()
+                    .when(on, |d| d.bg(c.active)).when(!on, |d| d.hover(move |d| d.bg(c.hover)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.review.selected = Some(pick.clone());
+                        cx.notify();
+                    }))
+                    .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, if on { c.active } else { c.panel }, c))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                        .child(div().flex().items_center().gap_1p5()
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title))
+                            .child(div().flex_shrink_0().text_size(px(10.5)).text_color(c.subtle).child(relative_time(at))))
+                        .when_some(r.branch.clone(), |d, b| d.child(div().truncate().font_family(mono.clone()).text_size(px(10.5)).text_color(c.subtle).child(b)))
+                        .child(div().flex().items_center().gap_1p5().text_size(px(10.5))
+                            .when_some(r.stats.as_ref().map(|st| (st.adds, st.dels)), |d, (a, del)| d.child(div().text_color(c.success).child(format!("+{a}"))).child(div().text_color(c.danger).child(format!("−{del}"))))
+                            .when(!test_text.is_empty(), |d| d.child(div().text_color(test_color).child(test_text)))
+                            .when(conflict, |d| d.child(div().text_color(c.warning).child("conflict"))))),
+            );
         }
+        let detail: AnyElement = match open.iter().find(|r| selected.as_deref() == Some(&r.id)) {
+            Some(r) => self.render_review_card(r, conflicts.as_ref(), c, mono.clone(), cx).into_any_element(),
+            None => div().size_full().flex().flex_col().items_center().justify_center().gap_1p5().text_color(c.subtle)
+                .child(Icon::new(IconName::Inbox).size(px(24.0)))
+                .child(div().text_size(px(13.0)).text_color(c.fg).child("Nothing to review"))
+                .child(div().text_xs().child("When an agent finishes, its work shows up here to merge or send back."))
+                .into_any_element(),
+        };
+        let cards = div().size_full().flex()
+            .when(!open.is_empty(), |d| d.child(div().id("review-items").w(px(290.0)).flex_shrink_0().h_full().overflow_y_scroll().border_r_1().border_color(c.border).p_2().child(list)))
+            .child(div().id("review-detail").flex_1().min_w_0().h_full().overflow_y_scroll().p_5().child(detail));
         let mut queue_list = div().flex().flex_col().gap_1();
         for item in &queue {
             let id = item.review_id.clone();
@@ -643,15 +705,19 @@ impl Root {
             div().id("review-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.overlay = Overlay::None)))
                 .child(
-                    div().id("review").w(px(880.0)).h(px(680.0)).flex().flex_col().overflow_hidden().rounded_xl().border_1().border_color(c.border_strong).bg(c.panel)
+                    div().id("review").w(px(1040.0)).max_w(relative(0.94)).h(px(700.0)).max_h(relative(0.9)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div().flex().items_center().gap_3().border_b_1().border_color(c.border).px_5().py_3()
-                                .child(div().flex_1().text_sm().child(format!("Review ({})", open.len())))
+                                .child(Icon::new(IconName::Inbox).size(px(15.0)).text_color(c.accent))
+                                .child(div().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Review"))
+                                .child(div().flex_1().text_size(px(12.0)).text_color(c.subtle).child(match open.len() { 0 => String::new(), 1 => "1 task finished".into(), n => format!("{n} tasks finished") }))
                                 .child(
                                     div().id("queue-tests").flex().items_center().gap_1p5().text_xs().text_color(c.muted).cursor_pointer()
                                         .on_click(cx.listener(|this, _, _, cx| { this.review.queue_tests = !this.review.queue_tests; cx.notify(); }))
-                                        .child(if tests_first { "☑" } else { "☐" })
+                                        .child(div().size(px(14.0)).flex().items_center().justify_center().rounded_sm().border_1()
+                                            .border_color(if tests_first { c.accent } else { c.border_strong }).when(tests_first, |d| d.bg(c.accent))
+                                            .when(tests_first, |d| d.child(Icon::new(IconName::Check).size(px(10.0)).text_color(c.on_accent))))
                                         .child("Run tests first"),
                                 )
                                 .when(mergeable.len() > 1, |d| {
@@ -673,7 +739,7 @@ impl Root {
                                     .child(queue_list),
                             )
                         })
-                        .child(div().id("review-list").flex_1().min_h_0().overflow_y_scroll().p_4().child(cards)),
+                        .child(div().flex_1().min_h_0().child(cards)),
                 )
                 .into_any_element(),
         )
@@ -701,8 +767,9 @@ impl Root {
         let agent = s.provider_name(&r.provider);
         let pane = s.pane(&r.pane_id).cloned();
         let elapsed = r.finished_at.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
-        let mut header = div().flex().items_center().gap_2().text_xs()
-            .child(div().text_color(c.fg).child(agent))
+        let mut header = div().flex().items_center().gap_2().text_xs().pb_3().border_b_1().border_color(c.border)
+            .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, c.raised, c))
+            .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(agent))
             .when_some(r.branch.clone(), |d, b| d.child(div().font_family(mono.clone()).text_color(c.subtle).truncate().child(b)))
             .child(div().flex_1())
             .child(div().text_color(c.subtle).child(relative_time(elapsed)));
@@ -723,15 +790,11 @@ impl Root {
             Load::Done(None) => div().text_xs().text_color(c.subtle).child("No test command found").into_any_element(),
             Load::Error(e) => div().text_xs().text_color(c.danger).child(e.clone()).into_any_element(),
             _ if r.test_command.is_some() => small_button(c, SharedString::from(format!("test-{id}")), "Run tests").on_click(cx.listener(move |this, _, _, cx| this.run_tests(test_id.clone(), cx))).into_any_element(),
-            _ => div().into_any_element(),
+            _ => div().text_xs().text_color(c.subtle).child("No test command found for this project").into_any_element(),
         };
-        let info = conflicts.and_then(|report| {
-            let path = r.dir.trim_end_matches('/');
-            let item = report["items"].as_array()?.iter().find(|i| i["path"].as_str().is_some_and(|p| p.trim_end_matches('/') == path))?;
-            let base: Vec<&str> = item["baseConflicts"].as_array()?.iter().filter_map(Value::as_str).collect();
-            let behind = item["behind"].as_u64().unwrap_or(0);
-            (!base.is_empty() || behind > 0).then(|| if base.is_empty() { format!("{behind} commits behind its base") } else { format!("Conflicts with its base in {}", base.join(", ")) })
-        });
+        let conflict = conflict_note(conflicts, &r.dir);
+        let blocked = conflict.as_ref().is_some_and(|(base, _)| *base);
+        let info = conflict.map(|(_, text)| text);
         let screenshot = if let Load::Done(image) = &r.screenshot { Some(image.clone()) } else { None };
         let (pane_id, merge_pane, discard_pane, changes_pane, focus_pane) = (r.pane_id.clone(), r.pane_id.clone(), r.pane_id.clone(), r.pane_id.clone(), r.pane_id.clone());
         let has_worktree = pane.as_ref().is_some_and(|p| p.worktree.is_some());
@@ -741,11 +804,16 @@ impl Root {
         let reply = self.review.replies.get(&r.id).cloned();
         let reply_id = r.id.clone();
         let can_reply = pane.is_some();
-        div().flex().flex_col().gap_2().rounded_lg().border_1().border_color(c.border).bg(c.raised).p_3()
+        let section = |label: &'static str| div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(label.to_uppercase());
+        div().flex().flex_col().gap_4()
             .child(header)
-            .when_some(r.prompt.clone(), |d, p| d.child(div().text_xs().text_color(c.subtle).truncate().child(p)))
-            .child(div().flex().gap_3().child(div().flex_1().min_w_0().flex().flex_col().gap_2().child(summary).child(tests).when_some(info, |d, t| d.child(div().text_xs().text_color(c.warning).child(t))))
-                .when_some(screenshot, |d, image| d.child(img(ImageSource::Render(image)).w(px(176.0)).h(px(112.0)).object_fit(ObjectFit::Cover).rounded_md())))
+            .when_some(r.prompt.clone(), |d, p| d.child(div().flex().flex_col().gap_1().child(section("Task")).child(div().text_size(px(12.5)).text_color(c.muted).child(p))))
+            .child(div().flex().flex_col().gap_1p5().child(section("What it did")).child(summary))
+            .child(div().flex().flex_col().gap_1p5().child(section("Checks")).child(tests)
+                .when_some(info, |d, t| d.child(div().flex().items_center().gap_1p5().rounded_md().bg(Hsla { a: 0.08, ..c.warning }).px_2p5().py_1p5().text_xs().text_color(c.warning)
+                    .child(Icon::new(IconName::TriangleAlert).size(px(12.0))).child(t))))
+            .when_some(screenshot, |d, image| d.child(div().flex().flex_col().gap_1p5().child(section("Running app"))
+                .child(img(ImageSource::Render(image)).w_full().max_w(px(520.0)).h(px(240.0)).object_fit(ObjectFit::Cover).rounded_lg().border_1().border_color(c.border))))
             .when_some(reply, |d, input| d.child(
                 div().flex().items_center().gap_1().rounded_md().border_1().border_color(c.border).bg(c.panel).px_2()
                     .child(div().flex_1().when(!can_reply, |d| d.opacity(0.5)).child(Input::new(&input).appearance(false)))
@@ -759,7 +827,11 @@ impl Root {
             .child(
                 div().flex().items_center().gap_2()
                     .when(has_worktree, |d| {
-                        d.child(small_button(c, SharedString::from(format!("merge-{}", r.id)), "Merge").on_click(cx.listener(move |this, _, window, cx| this.execute(Command::MergeWorktree(PaneRef::Id(merge_pane.clone())), window, cx))))
+                        d.child(div().id(SharedString::from(format!("merge-{}", r.id))).flex().items_center().gap_1p5().h(px(28.0)).px_3().rounded_md().text_size(px(12.5)).font_weight(FontWeight::MEDIUM)
+                            .when(!blocked, |d| d.bg(c.accent).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9))
+                                .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::MergeWorktree(PaneRef::Id(merge_pane.clone())), window, cx))))
+                            .when(blocked, |d| d.bg(c.hover).text_color(c.subtle).tooltip(crate::ui::code_view::tip("Resolve the conflict with its base first")))
+                            .child(Icon::new(IconName::GitMerge).size(px(13.0))).child("Merge"))
                             .child(small_button(c, SharedString::from(format!("enqueue-{}", r.id)), "Queue").on_click(cx.listener(move |this, _, _, cx| this.enqueue(vec![queue_id.clone()], cx))))
                             .child(small_button(c, SharedString::from(format!("changes-{}", r.id)), "Changes").on_click(cx.listener(move |this, _, window, cx| {
                                 this.update_state(cx, |s| s.overlay = Overlay::None);
@@ -886,6 +958,16 @@ impl Root {
                 .into_any_element(),
         )
     }
+}
+
+/// Whether the review's worktree conflicts with its base (true) or is only behind, and a line
+/// saying so.
+fn conflict_note(report: Option<&Value>, dir: &str) -> Option<(bool, String)> {
+    let path = dir.trim_end_matches('/');
+    let item = report?["items"].as_array()?.iter().find(|i| i["path"].as_str().is_some_and(|p| p.trim_end_matches('/') == path))?;
+    let base: Vec<&str> = item["baseConflicts"].as_array()?.iter().filter_map(Value::as_str).collect();
+    let behind = item["behind"].as_u64().unwrap_or(0);
+    (!base.is_empty() || behind > 0).then(|| (!base.is_empty(), if base.is_empty() { format!("{behind} commits behind its base") } else { format!("Conflicts with its base in {}", base.join(", ")) }))
 }
 
 pub(super) fn small_button(c: Colors, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
