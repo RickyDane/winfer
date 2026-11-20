@@ -1,10 +1,10 @@
 import { EFFORT_LABELS } from "@/features/code/EffortIcon";
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
-import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, Settings2, SlidersHorizontal, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, Settings2, SlidersHorizontal, Undo2, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
-import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, DEFAULT_TERMINAL_FONT_SIZE, defaultProviderId, suspendSaving, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
+import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, defaultProviderId, suspendSaving, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { IS_MAC, keysFor } from "@/commands/keymap";
 import { CHATGPT_VOICES, DEFAULT_CHATGPT_VOICE, DEFAULT_LIVE_MODEL, DEFAULT_LIVE_VOICE, LIVE_VOICES } from "@/features/voice/live/session";
 import { LIVE_ROLE } from "@/features/voice/live/instructions";
@@ -21,10 +21,11 @@ import { checkForUpdates, installUpdate, setUpdateChannel, showReleaseNotes, typ
 import { UsageSettings } from "@/features/usage/UsagePage";
 import { AccountsSettings } from "@/features/accounts/AccountsSettings";
 import { checkProviderUpdates, installLabel, updateProvider, useProviderUpdates } from "@/features/providers/updates";
-import { THEMES } from "@/features/theme/themes";
+import { THEMES, themeById } from "@/features/theme/themes";
 import { loadEditors, preferredEditor, useEditors } from "@/features/editors/editors";
 import { cn } from "@/lib/cn";
 import { searchSettings } from "@/features/settings/search";
+import { changedCounts, resetEntry, resetPage } from "@/features/settings/resets";
 import { MAX_TEXT_SCALE, MIN_TEXT_SCALE, setTextScale, TEXT_SCALE_STEP, useCodeWeb } from "@/features/code/styles";
 import { mobileStatus, onMobileChange, revokeDevice, setRelayUrl, startPairing, type MobileStatus, type Pairing } from "@/features/mobile/mobile";
 import { clearDiagnostics, exportDiagnostics, getDiagnostics, mb, setVerboseLogging, type DiagnosticsInfo } from "@/features/diagnostics/diagnostics";
@@ -55,20 +56,46 @@ import {
 /* Building blocks: a titled card of rows, each row a label with its hint on the left and the
    control on the right, like macOS System Settings. */
 
-const Card = ({ title, description, children }: { title: string; description?: React.ReactNode; children: React.ReactNode }) => (
+/** Shown next to a setting that differs from its default: a dot and a button that puts it back. */
+function ResetMark({ id }: { id: string }) {
+  const entry = resetEntry(id);
+  const changed = useWorkspaces((s) => !!entry?.changed(s));
+  if (!entry || !changed) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 font-normal">
+      <span title="Changed from the default" className="size-1.5 rounded-full bg-accent" />
+      <button
+        onClick={() => entry.reset(useWorkspaces.getState())}
+        title={`Put “${entry.label}” back to its default`}
+        className="inline-flex items-center gap-1 rounded px-1 text-[11px] text-fg-subtle hover:bg-hover hover:text-fg"
+      >
+        <Undo2 size={10} />
+        Reset
+      </button>
+    </span>
+  );
+}
+
+const Card = ({ title, description, children, reset }: { title: string; description?: React.ReactNode; children: React.ReactNode; reset?: string }) => (
   <section className="space-y-2">
     <div className="px-1">
-      <h3 className="text-xs font-semibold text-fg-muted">{title}</h3>
+      <h3 className="flex items-center gap-2 text-xs font-semibold text-fg-muted">
+        {title}
+        {reset && <ResetMark id={reset} />}
+      </h3>
       {description && <p className="mt-0.5 text-xs leading-relaxed text-fg-subtle">{description}</p>}
     </div>
     <div className="divide-y divide-border overflow-hidden rounded-[10px] border border-border bg-panel">{children}</div>
   </section>
 );
 
-const Row = ({ label, hint, children, stacked }: { label: React.ReactNode; hint?: React.ReactNode; children?: React.ReactNode; stacked?: boolean }) => (
+const Row = ({ label, hint, children, stacked, reset }: { label: React.ReactNode; hint?: React.ReactNode; children?: React.ReactNode; stacked?: boolean; reset?: string }) => (
   <div className={cn("px-4 py-3", stacked ? "space-y-2.5" : "flex items-center gap-6")}>
     <div className="min-w-0 flex-1">
-      <div className="text-[13px] font-medium text-fg">{label}</div>
+      <div className="flex items-center gap-2 text-[13px] font-medium text-fg">
+        {label}
+        {reset && <ResetMark id={reset} />}
+      </div>
       {hint && <div className="mt-0.5 text-xs leading-relaxed text-fg-subtle">{hint}</div>}
     </div>
     {children && <div className={cn("flex items-center gap-2", !stacked && "shrink-0")}>{children}</div>}
@@ -137,43 +164,76 @@ const inputClass = "h-7 rounded-md border border-border-strong bg-panel-raised p
 /* General */
 
 /** Color theme: a swatch per theme, showing its panel, text and terminal colors. */
-function AppearanceSettings() {
-  const { theme, setTheme } = useWorkspacesPick("theme", "setTheme");
+/** A theme as a small window in its own colors: sidebar, a pane with text, the ANSI dots and accent. */
+function ThemeTile({ t, selected, onPick }: { t: (typeof THEMES)[number]; selected: boolean; onPick: () => void }) {
   return (
-    <Card
-      title="Theme"
-      description={<>Also from the command palette ({keysFor({ type: "ui.palette" })}, “Theme:”). The sun/moon button in the sidebar switches to the light or dark counterpart.</>}
+    <button
+      onClick={onPick}
+      title={t.name}
+      aria-pressed={selected}
+      className={cn("w-[160px] overflow-hidden rounded-lg border text-left transition-colors", selected ? "border-accent ring-1 ring-accent/35" : "border-border hover:border-border-strong")}
     >
-      <div className="grid grid-cols-3 gap-2 p-3">
-        {THEMES.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTheme(t.id)}
-            title={t.name}
-            className={cn(
-              "overflow-hidden rounded-md border text-left transition-colors",
-              t.id === theme ? "border-accent ring-1 ring-accent" : "border-border hover:border-border-strong",
-            )}
-          >
-            <div className="flex items-center gap-1 px-2 py-2" style={{ background: t.ui.panel }}>
-              <span className="font-mono text-[11px]" style={{ color: t.ui.fg }}>
-                Aa
-              </span>
-              <span className="ml-auto flex gap-0.5">
-                {[t.ansi[1], t.ansi[2], t.ansi[3], t.ansi[4], t.ansi[5]].map((c, i) => (
-                  <span key={i} className="size-2 rounded-full" style={{ background: c }} />
-                ))}
-              </span>
-              <span className="h-2 w-3 rounded-sm" style={{ background: t.ui.accent }} />
-            </div>
-            <div className="flex items-center gap-1 border-t border-border bg-panel-raised px-2 py-1 text-[11px] text-fg-muted">
-              <span className="flex-1 truncate">{t.name}</span>
-              {t.id === theme && <Check size={11} className="shrink-0 text-accent" />}
-            </div>
-          </button>
-        ))}
+      <div className="flex h-16 gap-1 p-1.5" style={{ background: t.ui.app }}>
+        <span className="w-[26px] rounded-sm" style={{ background: t.ui.panel }} />
+        <span className="flex flex-1 flex-col gap-1 rounded-sm p-1.5" style={{ background: t.ui.panel }}>
+          <span className="h-1 w-11 rounded-full" style={{ background: t.ui.fg }} />
+          <span className="h-1 w-[30px] rounded-full" style={{ background: t.ui.fgMuted }} />
+          <span className="flex-1" />
+          <span className="flex items-center justify-between">
+            <span className="flex gap-0.5">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <span key={i} className="size-[7px] rounded-full" style={{ background: t.ansi[i] }} />
+              ))}
+            </span>
+            <span className="h-1.5 w-4 rounded-full" style={{ background: t.ui.accent }} />
+          </span>
+        </span>
       </div>
-    </Card>
+      <div className={cn("flex items-center gap-1 border-t border-border bg-panel-raised px-2 py-1.5 text-[11.5px]", selected ? "text-fg" : "text-fg-muted")}>
+        <span className="flex-1 truncate">{t.name}</span>
+        {selected && <Check size={12} className="shrink-0 text-accent" />}
+      </div>
+    </button>
+  );
+}
+
+/** Appearance: light, dark or follow the system, then the themes of each mode. */
+function AppearanceSettings() {
+  const { theme, themeMode, themePicks, setThemeMode, pickTheme } = useWorkspacesPick("theme", "themeMode", "themePicks", "setThemeMode", "pickTheme");
+  const mode: "light" | "dark" | "system" = themeMode === "system" ? "system" : themeById(theme).mode;
+  const choose = (next: "light" | "dark" | "system") => {
+    if (next === "system") return setThemeMode("system");
+    const cur = themeById(theme);
+    // The theme picked for that mode, else the current theme's counterpart.
+    pickTheme(cur.mode === next ? cur.id : (themePicks[next] ?? cur.pair));
+  };
+  // Each mode's theme: its pick, else the current theme or its counterpart.
+  const current = themeById(theme);
+  const effective = (m: "dark" | "light") => themePicks[m] ?? (current.mode === m ? current.id : current.pair);
+  const selected = (t: (typeof THEMES)[number]) => t.id === effective(t.mode);
+  const grid = (m: "dark" | "light") => (
+    <div className="flex flex-wrap gap-2.5 p-3">
+      {THEMES.filter((t) => t.mode === m).map((t) => (
+        <ThemeTile key={t.id} t={t} selected={selected(t)} onPick={() => pickTheme(t.id)} />
+      ))}
+    </div>
+  );
+  return (
+    <>
+      <Card title="Mode">
+        <Row
+          label="Light or dark"
+          reset="theme"
+          hint={mode === "system" ? "Follows your system's light/dark setting, with the theme picked for each below." : "Also the sun/moon button in the sidebar."}
+        >
+          <Segmented<"light" | "dark" | "system"> label="Light or dark" value={mode} options={[["light", "Light"], ["dark", "Dark"], ["system", "System"]]} onChange={choose} />
+        </Row>
+      </Card>
+      <Card title="Dark themes">{grid("dark")}</Card>
+      <Card title="Light themes" description={<>Also from the command palette ({keysFor({ type: "ui.palette" })}, “Theme:”).</>}>
+        {grid("light")}
+      </Card>
+    </>
   );
 }
 
@@ -233,6 +293,7 @@ function TerminalSettings() {
     <Card title="Terminals">
       <Row
         label="Text size"
+        reset="terminal.size"
         hint={
           <>
             Also {keysFor({ type: "terminal.zoom", delta: 1 })} / {keysFor({ type: "terminal.zoom", delta: -1 })} /{" "}
@@ -253,15 +314,8 @@ function TerminalSettings() {
         />
         <span className="font-mono text-sm text-fg-subtle">A</span>
         <span className="w-12 text-right font-mono text-xs text-fg-muted">{terminalFontSize}px</span>
-        <button
-          disabled={terminalFontSize === DEFAULT_TERMINAL_FONT_SIZE}
-          onClick={() => setTerminalFontSize(DEFAULT_TERMINAL_FONT_SIZE)}
-          className="rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          Reset
-        </button>
       </Row>
-      <Row label="GPU acceleration" hint="Draw terminals with the WebGL renderer. Turn off if text looks garbled or flickers, or to save GPU memory; the DOM renderer is slower with heavy output.">
+      <Row label="GPU acceleration" reset="terminal.gpu" hint="Draw terminals with the WebGL renderer. Turn off if text looks garbled or flickers, or to save GPU memory; the DOM renderer is slower with heavy output.">
         <Toggle label="GPU acceleration" checked={terminalGpu} onChange={setTerminalGpu} />
       </Row>
     </Card>
@@ -279,6 +333,7 @@ function EditorSettings() {
     <Card title="Code editor">
       <Row
         label="Open projects and worktrees in"
+        reset="editor"
         hint={
           editors.length
             ? `From a workspace's, agent's or worktree's right-click menu, or ${keysFor({ type: "editor.open", target: "focused" })} for the focused pane.`
@@ -296,7 +351,7 @@ function EditorSettings() {
 function ShortcutSettings() {
   return (
     <Card title="Keyboard">
-      <Row label="Keyboard shortcuts" hint="See every shortcut and change any of them.">
+      <Row label="Keyboard shortcuts" reset="shortcuts" hint="See every shortcut and change any of them.">
         <button onClick={() => useWorkspaces.getState().setCheatSheet(true)} className={buttonClass}>
           <Keyboard size={12} />
           Edit shortcuts
@@ -319,7 +374,7 @@ function AgentSettings() {
   return (
     <>
       <Card title="New panes">
-        <Row label="Default agent" hint={`${keysFor({ type: "ui.overlay", overlay: "newPane" })}, split and “open a new window” start this agent.`}>
+        <Row label="Default agent" reset="agents.default" hint={`${keysFor({ type: "ui.overlay", overlay: "newPane" })}, split and “open a new window” start this agent.`}>
           <Select value={current} onChange={(e) => setDefaultProvider(e.target.value)} className="w-44">
             {providers.map((p) => (
               <option key={p.id} value={p.id} disabled={!p.installed}>
@@ -343,7 +398,7 @@ function AgentSettings() {
         )}
       </Card>
       {agents.length > 0 && (
-        <Card title="Models" description="The model each agent starts with in new panes.">
+        <Card title="Models" reset="agents.models" description="The model each agent starts with in new panes.">
           {agents.map((p) => {
             const list = models[p.id] ?? [];
             return (
@@ -446,7 +501,7 @@ function AutoApproveSettings() {
   const agents = providers.filter((p) => p.installed && p.autoApproveArgs?.length);
   if (!agents.length) return null;
   return (
-    <Card title="Permissions" description="Applies to agents started (or restarted) after the change.">
+    <Card title="Permissions" reset="agents.autoApprove" description="Applies to agents started (or restarted) after the change.">
       {agents.map((p) => (
         <Row key={p.id} label={`Start ${p.name} in auto-approve mode`} hint="Runs tools and edits without asking, except what its config explicitly denies.">
           <Toggle label={`Start ${p.name} in auto-approve mode`} checked={autoApprove.includes(p.id)} onChange={(on) => setAutoApprove(p.id, on)} />
@@ -471,11 +526,7 @@ function SystemPromptSettings() {
       <Row
         stacked
         label="Instructions for every agent"
-        hint={systemPrompt !== null && (
-          <button onClick={() => setSystemPrompt(null)} className="text-accent hover:underline">
-            Reset to default
-          </button>
-        )}
+        reset="agents.prompt"
       >
         <textarea
           value={draft}
@@ -498,6 +549,7 @@ function AgentToolSettings() {
   return (
     <Card
       title="Agent tools"
+      reset="agents.tools"
       description="Tools agents rarely use are left out, since every tool an agent is offered takes up context in each request. Turn on the ones you want. Applies to agents started (or restarted) after the change."
     >
       {tools.map((t) => (
@@ -514,10 +566,10 @@ function ReviewSettings() {
   const { reviewConfig, setReviewConfig } = useWorkspacesPick("reviewConfig", "setReviewConfig");
   return (
     <Card title="Review inbox" description="Summaries use the LLM under AI; with it off, cards show the agent's last output instead.">
-      <Row label="Run tests when an agent finishes" hint="Runs the project's tests in the agent's worktree.">
+      <Row label="Run tests when an agent finishes" reset="review.tests" hint="Runs the project's tests in the agent's worktree.">
         <Toggle label="Run tests when an agent finishes" checked={reviewConfig.autoTests ?? false} onChange={(autoTests) => setReviewConfig({ autoTests })} />
       </Row>
-      <Row label="Screenshot the dev server" hint="Shows the agent's running app on its review card.">
+      <Row label="Screenshot the dev server" reset="review.screenshots" hint="Shows the agent's running app on its review card.">
         <Toggle label="Screenshot the dev server" checked={reviewConfig.screenshots ?? true} onChange={(screenshots) => setReviewConfig({ screenshots })} />
       </Row>
     </Card>
@@ -529,7 +581,7 @@ function PaneCostSettings() {
   const showPaneCost = useWorkspaces((s) => s.showPaneCost);
   return (
     <Card title="On panes">
-      <Row label="Show task cost on panes" hint="Each agent shows what its task has cost so far, at API prices, next to its title: its worktree's spend, or its session's when it works in a shared folder.">
+      <Row label="Show task cost on panes" reset="usage.cost" hint="Each agent shows what its task has cost so far, at API prices, next to its title: its worktree's spend, or its session's when it works in a shared folder.">
         <Toggle label="Show task cost on panes" checked={showPaneCost} onChange={(on) => useWorkspaces.getState().setShowPaneCost(on)} />
       </Row>
     </Card>
@@ -542,11 +594,11 @@ function ProgressSettings() {
   const enabled = progressConfig.enabled ?? true;
   return (
     <Card title="Session progress" description="Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked.">
-      <Row label="Estimate how far working agents are">
+      <Row label="Estimate how far working agents are" reset="progress.enabled">
         <Toggle label="Estimate progress" checked={enabled} onChange={(enabled) => setProgressConfig({ enabled })} />
       </Row>
       {enabled && (
-        <Row label="Check every">
+        <Row label="Check every" reset="progress.interval">
           <Select value={progressConfig.intervalSec ?? 60} onChange={(e) => setProgressConfig({ intervalSec: Number(e.target.value) })} className="w-36">
             <option value={30}>30 seconds</option>
             <option value={60}>minute</option>
@@ -660,7 +712,7 @@ function VoiceSettings() {
         <Microphone />
       </Card>
       <Card title="Read aloud">
-        <Row label="Speak agent updates aloud" hint="“Codex needs your input”, “Claude Code finished”.">
+        <Row label="Speak agent updates aloud" reset="voice.readback" hint="“Codex needs your input”, “Claude Code finished”.">
           <Toggle label="Speak agent updates aloud" checked={readback} onChange={(readback) => useWorkspaces.getState().setVoiceConfig({ readback })} />
         </Row>
       </Card>
@@ -2468,7 +2520,7 @@ function PluginSettings() {
           )}
 
           <Card title="Options">
-            <Row label="Hide names on plugin tabs" hint="Plugin page tabs in the title bar show just their icon. Hover a tab to see its name.">
+            <Row label="Hide names on plugin tabs" reset="plugins.icons" hint="Plugin page tabs in the title bar show just their icon. Hover a tab to see its name.">
               <Toggle label="Hide names on plugin tabs" checked={iconsOnly} onChange={(on) => useWorkspaces.getState().setPageTabIconsOnly(on)} />
             </Row>
             <Row label="Your own plugins" hint="A folder with a plugin.json in the plugins folder shows up here, off until you turn it on. Reload after changing one.">
@@ -2912,6 +2964,9 @@ export function SettingsModal() {
   const [query, setQuery] = useState("");
   const page = PAGES.find((p) => p.id === settingsPage) ?? PAGES[0];
   const hits = useMemo(() => searchSettings(query, PAGES), [query]);
+  // How many settings per page differ from their defaults (a string so the selector is stable).
+  const counts = JSON.parse(useWorkspaces((s) => JSON.stringify(changedCounts(s)))) as Record<string, number>;
+  const changedHere = counts[page.id] ?? 0;
 
   if (!settingsOpen) return null;
   const searching = query.trim() !== "";
@@ -2981,7 +3036,9 @@ export function SettingsModal() {
                       <p.icon size={15} className={selected ? "text-accent" : undefined} />
                       <span className="flex-1 truncate text-left">{p.label}</span>
                       {searching && matches > 0 && <span className="font-mono text-[10.5px] text-fg-subtle">{matches}</span>}
-                      {!searching && p.id === "updates" && available && <span className="size-1.5 rounded-full bg-accent" />}
+                      {!searching && ((p.id === "updates" && available) || counts[p.id]) && (
+                        <span title={counts[p.id] ? `${counts[p.id]} changed from the default` : undefined} className="size-1.5 rounded-full bg-accent" />
+                      )}
                     </button>
                   );
                 })}
@@ -3019,6 +3076,20 @@ export function SettingsModal() {
                   <h2 className="text-lg font-semibold text-fg">{page.label}</h2>
                   <p className="text-[12.5px] text-fg-muted">{page.description}</p>
                 </div>
+                {changedHere > 0 && (
+                  <button
+                    onClick={() => {
+                      const n = resetPage(page.id);
+                      toast(`Reset ${n} setting${n === 1 ? "" : "s"} on ${page.label}`);
+                    }}
+                    title="Put every changed setting on this page back to its default"
+                    className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border-strong px-2.5 text-xs text-fg-muted hover:bg-hover hover:text-fg"
+                  >
+                    <Undo2 size={12} />
+                    Reset page
+                    <span className="rounded-full bg-accent-soft px-1.5 font-mono text-[10px] text-accent">{changedHere}</span>
+                  </button>
+                )}
               </>
             )}
           </header>

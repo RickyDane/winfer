@@ -179,6 +179,20 @@ const TOKENS: Record<keyof Ui, string> = {
  */
 export const terminalMinContrast = (id: string): number => (themeById(id).mode === "light" ? 4.5 : 1);
 
+/** "system": the theme follows the system's light/dark setting. */
+export type ThemeFollow = "manual" | "system";
+/** The theme picked for each mode, used when the app follows the system's light/dark setting. */
+export type ThemePicks = { dark?: string; light?: string };
+
+/** The theme to show when following the system: the pick for its mode, else `current` or its counterpart. */
+export function themeForSystem(osDark: boolean, picks: ThemePicks, current: string): string {
+  const want = osDark ? "dark" : "light";
+  const pick = picks[want];
+  if (pick && isThemeId(pick) && themeById(pick).mode === want) return pick;
+  const cur = themeById(current);
+  return cur.mode === want ? cur.id : cur.pair;
+}
+
 /** Writes a theme's tokens onto <html>, overriding the defaults in globals.css. */
 export function applyTheme(id: string) {
   const { ui, mode } = themeById(id);

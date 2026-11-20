@@ -53,7 +53,7 @@ import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar, SidebarRail, SidebarResizer } from "@/features/workspaces/Sidebar";
 import { Welcome } from "@/features/workspaces/Welcome";
 import { livePanes, useActiveWorkspace, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
-import { applyTheme, themeById } from "@/features/theme/themes";
+import { applyTheme, themeById, themeForSystem } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
 import { PluginPageView, usePluginPages } from "@/features/plugins/PluginPage";
 import { PageTabs } from "@/features/plugins/PageTabs";
@@ -148,7 +148,7 @@ function LiveButton() {
 
 
 export function AppShell() {
-  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view } = useWorkspacesPick("sidebarOpen", "browserOpen", "focusedPaneId", "focusPane", "loadProviders", "updateActive", "hydrate", "theme", "view");
+  const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, themeMode, view } = useWorkspacesPick("sidebarOpen", "browserOpen", "focusedPaneId", "focusPane", "loadProviders", "updateActive", "hydrate", "theme", "themeMode", "view");
   useKeymap();
   useEscapeToClose();
   const pages = usePluginPages();
@@ -157,9 +157,23 @@ export function AppShell() {
 
   useEffect(() => {
     applyTheme(theme);
-    // Native window chrome (Windows title bar, macOS controls) follows the app.
-    void getCurrentWindow().setTheme(themeById(theme).mode).catch(() => {});
-  }, [theme]);
+    // Native window chrome (Windows title bar, macOS controls) follows the app, or the system.
+    void getCurrentWindow().setTheme(themeMode === "system" ? null : themeById(theme).mode).catch(() => {});
+  }, [theme, themeMode]);
+
+  // Following the system: show the theme picked for its light or dark setting, and switch when it does.
+  useEffect(() => {
+    if (themeMode !== "system") return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const follow = () => {
+      const s = useWorkspaces.getState();
+      const next = themeForSystem(query.matches, s.themePicks, s.theme);
+      if (next !== s.theme) useWorkspaces.setState({ theme: next });
+    };
+    follow();
+    query.addEventListener("change", follow);
+    return () => query.removeEventListener("change", follow);
+  }, [themeMode]);
 
   useEffect(() => {
     installDiagnostics();

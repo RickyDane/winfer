@@ -5,7 +5,7 @@ import { fetchModels, fetchProviders, type ModelInfo, type Provider, type Provid
 import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
 import { getHome } from "@/lib/home";
-import { DEFAULT_THEME, isThemeId, themeById } from "@/features/theme/themes";
+import { DEFAULT_THEME, isThemeId, themeById, type ThemeFollow, type ThemePicks } from "@/features/theme/themes";
 
 /** Main area: workspace tiles, the overview, the archive, or a plugin page (`page:<plugin>/<page>`). */
 export type View = "workspace" | "overview" | "archive" | `page:${string}`;
@@ -124,6 +124,10 @@ interface WorkspaceState {
   androidSerial: string | null;
   /** Color theme id (see features/theme/themes.ts). */
   theme: Theme;
+  /** "system": the theme follows the system's light/dark setting, using `themePicks`. */
+  themeMode: ThemeFollow;
+  /** The theme picked for each of light and dark. */
+  themePicks: ThemePicks;
   /** Main area: the active workspace's tiles, or the overview of every workspace's sessions. */
   view: View;
   /** Terminal font size in px (zoom with Mod+= / Mod+- / Mod+0 or Ctrl+wheel). */
@@ -206,6 +210,9 @@ interface WorkspaceState {
   setViewer: (viewer: { docs: string[]; active: string | null; activeByProject?: Record<string, string> }) => void;
   setAndroidSerial: (serial: string | null) => void;
   setTheme: (theme: Theme) => void;
+  setThemeMode: (mode: ThemeFollow) => void;
+  /** Picks a theme for its light or dark mode; when following the system, that stays on. */
+  pickTheme: (theme: Theme) => void;
   /** Switch to the theme's light/dark counterpart. */
   toggleTheme: () => void;
   setView: (view: View) => void;
@@ -330,6 +337,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   viewer: { docs: [], active: null },
   androidSerial: null,
   theme: DEFAULT_THEME,
+  themeMode: "manual",
+  themePicks: {},
   view: "workspace",
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   pinnedPages: null,
@@ -394,6 +403,8 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
       viewer: { ...ui.viewer, docs: ui.viewer?.docs ?? [], active: ui.viewer?.active ?? null },
       androidSerial: ui.androidSerial ?? null,
       theme: isThemeId(ui.theme) ? ui.theme : DEFAULT_THEME,
+      themeMode: ui.themeMode === "system" ? "system" : "manual",
+      themePicks: ui.themePicks ?? {},
       view: ui.view ?? "workspace",
       terminalFontSize: ui.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE,
       pinnedPages: ui.pinnedPages ?? null,
@@ -642,8 +653,27 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
   setSidePanel: (panel) => set({ sidePanel: panel, browserOpen: true }),
   setViewer: (viewer) => set({ viewer }),
   setAndroidSerial: (serial) => set({ androidSerial: serial }),
-  setTheme: (theme) => set({ theme: isThemeId(theme) ? theme : DEFAULT_THEME }),
-  toggleTheme: () => set((s) => ({ theme: themeById(s.theme).pair })),
+  // Picking a theme also makes it the pick for its mode, and ends "follow the system".
+  setTheme: (theme) =>
+    set((s): Partial<WorkspaceState> => {
+      const id = isThemeId(theme) ? theme : DEFAULT_THEME;
+      return { theme: id, themePicks: { ...s.themePicks, [themeById(id).mode]: id }, themeMode: "manual" };
+    }),
+  setThemeMode: (themeMode) => set({ themeMode }),
+  pickTheme: (theme) =>
+    set((s): Partial<WorkspaceState> => {
+      const id = isThemeId(theme) ? theme : DEFAULT_THEME;
+      const mode = themeById(id).mode;
+      const picks = { ...s.themePicks, [mode]: id };
+      if (s.themeMode !== "system") return { theme: id, themePicks: picks };
+      const osDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      return { themePicks: picks, ...(mode === (osDark ? "dark" : "light") ? { theme: id } : {}) };
+    }),
+  toggleTheme: () =>
+    set((s): Partial<WorkspaceState> => {
+      const id = themeById(s.theme).pair;
+      return { theme: id, themePicks: { ...s.themePicks, [themeById(id).mode]: id }, themeMode: "manual" };
+    }),
   setView: (view) =>
     set((s) => {
       // Leaving the archive: focus a pane that's on screen again.
@@ -731,6 +761,8 @@ interface Snapshot {
     viewer?: { docs?: string[]; active?: string | null; activeByProject?: Record<string, string> };
     androidSerial?: string | null;
     theme?: Theme;
+    themeMode?: ThemeFollow;
+    themePicks?: ThemePicks;
     view?: View;
     terminalFontSize?: number;
     pinnedPages?: string[] | null;
@@ -767,7 +799,7 @@ function toSnapshot(s: WorkspaceState): Snapshot {
       ...w,
       panes: panes.map(({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived, accountId }) => ({ id, provider, title, cwd, worktree, raceId, plain, model, agentTitle, customTitle, sessionId, archived, accountId })),
     })),
-    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, terminalGpu: s.terminalGpu, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
+    ui: { activeWorkspaceId: s.activeWorkspaceId, sidebarOpen: s.sidebarOpen, expandedWorkspaces: s.expandedWorkspaces, browserOpen: s.browserOpen, voice: s.voiceConfig, recipes: s.recipes, agentModels: s.agentModels, autoApprove: s.autoApprove, leanCodex: s.leanCodex, systemPrompt: s.systemPrompt, enabledTools: s.enabledTools, defaultProvider: s.defaultProvider, editor: s.editor, shortcuts: s.shortcuts, browserWidth: s.browserWidth, sidebarWidth: s.sidebarWidth, sidePanel: s.sidePanel, viewer: s.viewer, androidSerial: s.androidSerial, theme: s.theme, themeMode: s.themeMode, themePicks: s.themePicks, view: s.view, terminalFontSize: s.terminalFontSize, pinnedPages: s.pinnedPages, overviewLayout: s.overview.layout, review: s.reviewConfig, progress: s.progressConfig, showPaneCost: s.showPaneCost, terminalGpu: s.terminalGpu, pageTabIconsOnly: s.pageTabIconsOnly, recentSessions: s.recentSessions, paneTasks: openPaneTasks(s), sessionTitles: s.sessionTitles },
   };
 }
 
