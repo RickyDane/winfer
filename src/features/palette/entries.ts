@@ -63,7 +63,19 @@ export function toolContext(lastCommands: ToolContext["lastCommands"] = []): Too
 
 export function paletteEntries(): Entry[] {
   const ctx = toolContext();
-  return allTools().flatMap((tool) =>
+  // Agents waiting for you come first.
+  const s = useWorkspaces.getState();
+  const waiting: Entry[] = s.workspaces
+    .flatMap((w) => w.panes)
+    .filter((p) => !p.archived && p.provider !== "shell" && p.status === "needs-input")
+    .flatMap((p) => {
+      const label = p.title ?? providerName(s.providers, p.provider);
+      return [
+        { id: `approve:${p.id}`, title: `Approve: ${label}`, run: () => execute({ type: "pane.approve", target: { id: p.id } }) },
+        { id: `goto:${p.id}`, title: `Go to: ${label}`, run: () => execute({ type: "pane.focus", target: { id: p.id } }) },
+      ];
+    });
+  return waiting.concat(allTools().flatMap((tool) =>
     (tool.palette?.(ctx) ?? []).map((entry, i) => {
       const commands = tool.toCommands(entry.args, ctx);
       const binding = commands.length === 1 ? bindingFor(commands[0]) : undefined;
@@ -74,7 +86,7 @@ export function paletteEntries(): Entry[] {
         run: () => commands.forEach(execute),
       };
     }),
-  );
+  ));
 }
 
 /** Subsequence match; lower is better, null if no match. Rewards contiguous and word-start hits. */

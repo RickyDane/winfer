@@ -1,4 +1,5 @@
-import { FolderOpen, GitBranch, Plus, Search, Sparkles, X } from "lucide-react";
+import { Check, FolderOpen, GitBranch, Plus, Sparkles, X } from "lucide-react";
+import { ProviderIcon } from "@/features/providers/ProviderIcon";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useRef, useState } from "react";
 import { formatChord, IS_MAC } from "@/commands/keymap";
@@ -112,23 +113,54 @@ export function NewPaneDialog() {
   };
 
   const rowClass = (i: number) =>
-    cn("flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px]", i === current ? "bg-accent-soft text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
+    cn("flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px]", i === current ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
+  const key = (k: string, label: string) => (
+    <span className="flex items-center gap-1">
+      <kbd className="rounded border border-border bg-panel px-1 font-mono text-[10.5px] text-fg-muted">{k}</kbd>
+      {label}
+    </span>
+  );
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={close}>
-      <div className="anim-dialog flex h-fit max-h-[78vh] w-[560px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-          <Plus size={14} className="text-accent" />
-          <h1 className="flex-1 text-sm font-semibold text-fg">New {agent} pane</h1>
-          <span className="truncate text-xs text-fg-subtle">{workspace.name}</span>
-          <button onClick={close} className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
-            <X size={14} />
-          </button>
+      <div className="anim-dialog flex h-fit max-h-[78vh] w-[600px] flex-col overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="space-y-3 border-b border-border px-5 pt-4 pb-3.5">
+          <div className="flex items-center gap-2">
+            <span className="grid size-[26px] place-items-center rounded-lg bg-accent-soft text-accent">
+              <Plus size={14} />
+            </span>
+            <h1 className="flex-1 text-[15px] font-semibold text-fg">New {agent}</h1>
+            <span className="truncate rounded-md bg-hover px-2 py-0.5 text-[11.5px] text-fg-muted">{workspace.name}</span>
+            <button onClick={close} aria-label="Close" className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {providers
+              .filter((p) => p.installed)
+              .map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    useWorkspaces.setState({ newPaneProvider: p.id });
+                    input.current?.focus();
+                  }}
+                  className={cn(
+                    "flex h-[30px] items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] hover:border-border-strong hover:text-fg",
+                    p.id === provider ? "border-accent/60 bg-accent-soft text-fg" : "border-border bg-panel text-fg-muted",
+                  )}
+                >
+                  <ProviderIcon provider={p.id} size={14} />
+                  {p.name}
+                  {p.id === provider && <Check size={12} className="text-accent" />}
+                </button>
+              ))}
+          </div>
         </header>
 
-        <div className="border-b border-border px-5 py-2.5">
-          <div className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-2.5 focus-within:border-accent">
-            <Search size={13} className="text-fg-subtle" />
+        <div className="border-b border-border px-5">
+          <div className="flex h-[46px] items-center gap-2.5">
+            <GitBranch size={15} className="text-fg-subtle" />
             <input
               ref={input}
               value={query}
@@ -140,7 +172,7 @@ export function NewPaneDialog() {
               onKeyDown={onKey}
               disabled={busy}
               placeholder="New branch name, or find a branch…"
-              className="h-8 flex-1 bg-transparent font-mono text-[12px] text-fg outline-none placeholder:font-sans placeholder:text-fg-subtle"
+              className="h-8 flex-1 bg-transparent font-mono text-[13px] text-fg outline-none placeholder:font-sans placeholder:text-fg-subtle"
             />
             {busy && <Spinner size={12} className="text-fg-subtle" />}
           </div>
@@ -185,7 +217,12 @@ export function NewPaneDialog() {
 
         <footer className="space-y-1.5 border-t border-border px-5 py-2.5">
           {error && <p className="text-xs text-danger">{error}</p>}
-          <p className="text-[11px] text-fg-subtle">↑↓ choose · {formatChord("Enter")} open · {formatChord(IS_MAC ? "Meta+Enter" : "Ctrl+Enter")} without worktree · esc cancel</p>
+          <p className="flex items-center gap-3 text-[11px] text-fg-subtle">
+            {key("↑↓", "choose")}
+            {key(formatChord("Enter"), "open")}
+            {key(formatChord(IS_MAC ? "Meta+Enter" : "Ctrl+Enter"), "without worktree")}
+            {key("esc", "cancel")}
+          </p>
         </footer>
       </div>
     </div>
