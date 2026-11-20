@@ -28,6 +28,8 @@ pub mod commands;
 mod agent_api;
 #[path = "overlays.rs"]
 mod overlays;
+#[path = "welcome.rs"]
+mod welcome;
 #[path = "dialogs.rs"]
 mod dialogs;
 #[path = "settings.rs"]
@@ -309,6 +311,7 @@ pub struct Root {
     models: HashMap<String, Vec<dialogs::ModelInfo>>,
     new_menu: new_menu::NewMenu,
     pane_note: Option<pane_note::NoteUi>,
+    welcome_input: Option<Entity<gpui_kit::component::input::InputState>>,
 }
 
 impl Root {
@@ -426,7 +429,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome_input: None, toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -1173,12 +1176,7 @@ impl Root {
         let origin = bounds.origin;
         let mut area = div().relative().size_full();
         let Some(tree) = tree else {
-            let c = *c;
-            return area.child(
-                div().size_full().flex().flex_col().items_center().justify_center().gap_2().rounded_md().border_1().border_dashed().border_color(c.border).text_color(c.subtle)
-                    .child(div().text_sm().text_color(c.muted).child("No agents running"))
-                    .child(div().text_xs().child(if cfg!(target_os = "macos") { "⌘T new pane · ⇧⌘T pick provider · ⌘K commands · ⌘/ shortcuts" } else { "Ctrl+Shift+T new pane · Ctrl+Shift+K commands · Ctrl+Shift+/ shortcuts" })),
-            );
+            return area.child(self.render_welcome(*c, window, cx));
         };
         if bounds.size.width <= px(0.0) {
             return area;
