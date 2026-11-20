@@ -382,7 +382,7 @@ impl Root {
                 }
                 #[cfg(debug_assertions)]
                 if let Ok(list) = std::env::var("WINFER_NATIVE_SPAWN") {
-                    for provider in list.split(',') {
+                    for provider in list.split(',').filter(|p| !p.is_empty()) {
                         s.add_pane(provider, AddPane { prompt: std::env::var("WINFER_NATIVE_PROMPT").ok(), ..AddPane::default() });
                     }
                 }
