@@ -301,7 +301,9 @@ impl Root {
         let dialog = self.new_pane.as_ref()?;
         let c = *c;
         let s = self.state.read(cx);
-        let agent = s.provider_name(&self.new_pane_provider(cx));
+        let provider = self.new_pane_provider(cx);
+        let agent = s.provider_name(&provider);
+        let installed: Vec<(String, String)> = s.providers.iter().filter(|p| p.installed).map(|p| (p.id.clone(), p.name.clone())).collect();
         let ws_name = s.workspaces.iter().find(|w| w.id == dialog.workspace).map_or(String::new(), |w| w.name.clone());
         let is_repo = dialog.branches.as_ref().is_none_or(|b| !b.is_empty());
         let rows = Self::new_pane_rows(dialog, cx);
@@ -310,9 +312,9 @@ impl Root {
         let mut list = div().id("new-pane-list").max_h(px(460.0)).min_h(px(96.0)).overflow_y_scroll().p_2().flex().flex_col();
         for (i, row) in rows.iter().enumerate() {
             let target = row.clone();
-            let mut item = div().id(("new-pane-row", i)).flex().items_center().gap_2().rounded_md().px_2p5().py_1p5().text_size(px(13.0)).cursor_pointer()
+            let mut item = div().id(("new-pane-row", i)).flex().items_center().gap_2p5().rounded_lg().px_2p5().h(px(34.0)).flex_shrink_0().text_size(px(13.0)).cursor_pointer()
                 .text_color(if i == current { c.fg } else { c.muted })
-                .when(i == current, |d| d.bg(Hsla { a: 0.15, ..c.accent }))
+                .when(i == current, |d| d.bg(c.active))
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
                     if let Some(d) = this.new_pane.as_mut().filter(|d| d.index != i) {
@@ -347,11 +349,29 @@ impl Root {
             list = list.child(div().py_4().text_center().text_xs().text_color(c.subtle).child("Reading branches…"));
         }
         let count = rows.len();
+        let mut picker = div().flex().flex_wrap().gap_1p5();
+        for (id, name) in installed {
+            let on = id == provider;
+            let pick = id.clone();
+            picker = picker.child(
+                div().id(SharedString::from(format!("new-pane-agent-{id}"))).flex().items_center().gap_1p5().h(px(30.0)).px_2p5().rounded_lg().border_1().text_size(px(12.5)).cursor_pointer()
+                    .border_color(if on { Hsla { a: 0.6, ..c.accent } } else { c.border })
+                    .bg(if on { Hsla { a: 0.12, ..c.accent } } else { c.panel })
+                    .text_color(if on { c.fg } else { c.muted })
+                    .hover(move |d| d.border_color(c.border_strong).text_color(c.fg))
+                    .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.new_pane_provider = Some(pick.clone()))))
+                    .child(crate::ui::code_pickers::mark(c, &id, 14.0, 1.0))
+                    .child(name)
+                    .when(on, |d| d.child(Icon::new(IconName::Check).size(px(12.0)).text_color(c.accent))),
+            );
+        }
+        let key = |k: &'static str| div().rounded_sm().border_1().border_color(c.border).bg(c.panel).px_1().text_size(px(10.5)).text_color(c.muted).child(k);
+        let hint = |k: &'static str, label: &'static str| div().flex().items_center().gap_1().child(key(k)).child(label);
         Some(
-            div().id("new-pane-backdrop").absolute().size_full().flex().justify_center().pt(px(90.0)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
+            div().id("new-pane-backdrop").absolute().size_full().flex().items_start().justify_center().pt(px(90.0)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close_overlay(cx)))
                 .child(
-                    div().id("new-pane").w(px(560.0)).max_h(px(640.0)).flex().flex_col().rounded_xl().border_1().border_color(c.border_strong).bg(c.panel)
+                    div().id("new-pane").w(px(600.0)).max_h(px(660.0)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .capture_action(cx.listener(move |this, _: &MoveDown, _, cx| {
                             if let Some(d) = this.new_pane.as_mut() {
@@ -368,17 +388,22 @@ impl Root {
                             cx.notify();
                         }))
                         .child(
-                            div().flex().items_center().gap_2().border_b_1().border_color(c.border).px_5().py_3()
-                                .child(Icon::new(IconName::Plus).size(px(14.0)).text_color(c.accent))
-                                .child(div().flex_1().text_sm().child(format!("New {agent} pane")))
-                                .child(div().text_xs().text_color(c.subtle).truncate().child(ws_name)),
+                            div().flex().flex_col().gap_3().border_b_1().border_color(c.border).px_5().pt_4().pb_3p5()
+                                .child(div().flex().items_center().gap_2()
+                                    .child(div().size(px(26.0)).flex().items_center().justify_center().rounded_lg().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).child(Icon::new(IconName::Plus).size(px(14.0))))
+                                    .child(div().flex_1().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("New {agent}")))
+                                    .child(div().rounded_md().bg(c.hover).px_2().py_0p5().text_size(px(11.5)).text_color(c.muted).truncate().child(ws_name)))
+                                .child(picker),
                         )
-                        .child(div().border_b_1().border_color(c.border).px_5().py_2p5().child(Input::new(&dialog.input)))
+                        .child(div().flex().items_center().gap_2p5().border_b_1().border_color(c.border).px_5().h(px(46.0))
+                            .child(Icon::new(IconName::GitBranch).size(px(15.0)).text_color(c.subtle))
+                            .child(div().flex_1().child(Input::new(&dialog.input).appearance(false))))
                         .child(list)
                         .child(
                             div().flex().flex_col().gap_1p5().border_t_1().border_color(c.border).px_5().py_2p5()
                                 .when_some(dialog.error.clone(), |d, e| d.child(div().text_xs().text_color(c.danger).child(e)))
-                                .child(div().text_size(px(11.0)).text_color(c.subtle).child("↑↓ choose · ↩ open · ⌘↩ without worktree · esc cancel")),
+                                .child(div().flex().items_center().gap_3().text_size(px(11.0)).text_color(c.subtle)
+                                    .child(hint("↑↓", "choose")).child(hint("↩", "open")).child(hint(if cfg!(target_os = "macos") { "⌘↩" } else { "Ctrl+↩" }, "without worktree")).child(hint("esc", "cancel"))),
                         ),
                 )
                 .into_any_element(),
