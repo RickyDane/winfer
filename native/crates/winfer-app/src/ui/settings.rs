@@ -949,7 +949,9 @@ impl Root {
                 .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(format!("winfer {v} is available")).build(window, cx))
                 .on_click(cx.listener(|this, _, window, cx| this.open_settings_page("updates", window, cx)))
                 .child(Icon::new(IconName::Download).size(px(11.0))).child("Update")));
-        let nav = div().w(px(232.0)).flex_shrink_0().flex().flex_col().border_r_1().border_color(c.border).bg(c.panel)
+        // GPUI clips children to the window's rectangle, not its rounded shape, so the nav rounds its
+        // own left corners (the window's radius less its border).
+        let nav = div().w(px(232.0)).flex_shrink_0().flex().flex_col().rounded_tl(px(13.0)).rounded_bl(px(13.0)).border_r_1().border_color(c.border).bg(c.panel)
             .child(div().flex().flex_col().gap_3().px_3().pt_3p5().pb_1()
                 .child(div().flex().items_center().gap_2().px_1().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg)
                     .child(Icon::new(IconName::Settings).size(px(15.0)).text_color(c.accent)).child("Settings"))

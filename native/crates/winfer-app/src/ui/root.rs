@@ -1378,6 +1378,11 @@ impl Render for Root {
                     });
                     self.execute(Command::Settings(Some("agents".into())), window, cx);
                 }
+                // Development aid: the light theme with Settings open (corners, colors).
+                Ok("light-settings") => {
+                    self.update_state(cx, |s| s.theme = "light".into());
+                    self.execute(Command::Settings(Some("general".into())), window, cx);
+                }
                 Ok("review") => self.demo_reviews(cx),
                 Ok("usage") => self.demo_usage(cx),
                 Ok("history") => {
