@@ -50,7 +50,7 @@ import { loadEditors } from "@/features/editors/editors";
 import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
-import { Sidebar, SidebarResizer } from "@/features/workspaces/Sidebar";
+import { Sidebar, SidebarRail, SidebarResizer } from "@/features/workspaces/Sidebar";
 import { livePanes, useActiveWorkspace, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { applyTheme, themeById } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
@@ -223,11 +223,13 @@ export function AppShell() {
     <div className={"glass-stage flex h-full flex-col"}>
       <TitleBar />
       <main className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
-        {sidebarOpen && (
+        {sidebarOpen ? (
           <>
             <Sidebar />
             <SidebarResizer />
           </>
+        ) : (
+          <SidebarRail />
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {view === "workspace" && livePanes(workspace).some((p) => p.provider !== "shell") && (

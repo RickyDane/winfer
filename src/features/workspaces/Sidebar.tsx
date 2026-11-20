@@ -483,3 +483,62 @@ export function Sidebar() {
     </aside>
   );
 }
+
+const railButton = "relative grid size-9 place-items-center rounded-md text-fg-muted transition-colors hover:bg-hover hover:text-fg";
+
+/** The collapsed sidebar: a 60 px icon rail with the same sections. */
+export function SidebarRail() {
+  const { workspaces, focusedPaneId } = useWorkspacesPick("workspaces", "focusedPaneId");
+  const workspaceId = useWorkspaces((s) => s.activeWorkspaceId);
+  const everywhere = useWorkspaces((s) => s.view === "overview");
+  const reviews = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
+  const waiting = workspaces.flatMap((w) => livePanes(w)).filter((p) => p.provider !== "shell" && p.status === "needs-input");
+  const tile = (pane: Pane) => (
+    <button
+      key={pane.id}
+      onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
+      title={pane.title ?? pane.provider}
+      className={cn("rounded-md p-[5px] hover:bg-hover", pane.id === focusedPaneId && "bg-active")}
+    >
+      <AgentTile pane={pane} ring={pane.id === focusedPaneId ? "var(--color-active)" : "var(--color-panel)"} />
+    </button>
+  );
+  return (
+    <aside className="anim-slide flex h-full w-[60px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+      <div className="flex flex-col items-center gap-1 border-b border-border pt-2.5 pb-2">
+        <button onClick={() => execute({ type: "ui.palette" })} title="Search or jump to…" className={railButton}>
+          <Search size={15} />
+        </button>
+        <button onClick={() => execute({ type: "ui.overlay", overlay: "progress" })} title="Sessions" className={railButton}>
+          <Activity size={15} />
+        </button>
+        <button onClick={() => execute({ type: "ui.overlay", overlay: "review" })} title="Review" className={railButton}>
+          <Inbox size={15} />
+          {reviews > 0 && <span className="absolute top-0.5 right-0 min-w-4 rounded-full bg-accent px-1 text-center text-[10px] leading-4 font-semibold text-on-accent">{reviews}</span>}
+        </button>
+        <button onClick={() => execute({ type: "ui.overlay", overlay: "history" })} title="History" className={railButton}>
+          <Clock size={15} />
+        </button>
+      </div>
+      <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-2">
+        {waiting.length > 0 && <div className="flex w-11 flex-col items-center rounded-[10px] bg-warning/[0.06] py-1">{waiting.map(tile)}</div>}
+        {workspaces.map((ws) => (
+          <div key={ws.id} className="flex flex-col items-center gap-1">
+            <span className="mt-1 w-9 border-t border-border" />
+            <button onClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })} title={ws.name} className="grid size-9 place-items-center rounded-md hover:bg-hover">
+              <WorkspaceAvatar name={ws.name} active={ws.id === workspaceId} />
+            </button>
+            {livePanes(ws).filter((p) => p.provider !== "shell").map(tile)}
+          </div>
+        ))}
+      </nav>
+      <footer className="flex flex-col items-center gap-1 border-t border-border py-2">
+        <img src={logoUrl} alt="" className="size-[22px]" draggable={false} />
+        <UpdateButton />
+        <button onClick={() => execute({ type: "ui.settings" })} className={railButton} title={`Settings (${keysFor({ type: "ui.settings" })})`}>
+          <Settings size={15} />
+        </button>
+      </footer>
+    </aside>
+  );
+}
