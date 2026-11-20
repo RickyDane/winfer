@@ -66,6 +66,8 @@ pub struct UsageStore {
     pub popover: Option<String>,
     pub warned: std::collections::HashSet<String>,
     pub claude_live_at: f64,
+    /// Readings still on their way after a refresh (the Refresh button spins until they're in).
+    pub refreshing: usize,
 }
 
 pub fn used_now(w: &UsageWindow, now: f64) -> f64 {
@@ -223,6 +225,7 @@ impl Root {
         if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
+        self.refresh_accounts(cx);
         let accounts: Vec<Account> = self.usage.accounts.iter().filter(|a| a.enabled && a.signed_in).cloned().collect();
         let mut targets: Vec<(String, Option<String>)> = vec![("claude".to_string(), None), ("codex".to_string(), None)];
         targets.extend(accounts.iter().filter(|a| !a.id.ends_with(":default")).map(|a| (a.provider.clone(), Some(a.id.clone()))));
@@ -232,6 +235,7 @@ impl Root {
     }
 
     pub(super) fn refresh_one(&mut self, provider: String, account: Option<String>, cx: &mut Context<Self>) {
+        self.usage.refreshing += 1;
         cx.spawn(async move |this, cx| {
             let (p, a) = (provider.clone(), account.clone());
             let value = tauri::async_runtime::spawn(async move {
@@ -244,10 +248,17 @@ impl Root {
             .await
             .ok()
             .flatten();
-            let Some(value) = value else { return };
+            let Some(value) = value else {
+                let _ = this.update(cx, |this, cx| {
+                    this.usage.refreshing = this.usage.refreshing.saturating_sub(1);
+                    cx.notify();
+                });
+                return;
+            };
             let key = account.as_deref().map_or_else(|| provider.clone(), usage_key);
             let live_claude = provider == "claude";
             let _ = this.update(cx, |this, cx| {
+                this.usage.refreshing = this.usage.refreshing.saturating_sub(1);
                 if live_claude {
                     this.usage.claude_live_at = now_ms();
                 }
@@ -557,6 +568,12 @@ impl Root {
             }
             list = list.child(rows);
         }
+        let busy = self.usage.refreshing > 0;
+        let refresh = div().id("usage-refresh").flex().items_center().gap_1p5().h(px(26.0)).px_2().rounded_md().text_size(px(11.5)).text_color(c.muted)
+            .when(!busy, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx))))
+            .when(busy, |d| d.opacity(0.6))
+            .child(Icon::new(IconName::RefreshCw).size(px(12.0)).with_animation("usage-refresh-spin", Animation::new(Duration::from_millis(900)).repeat(), move |i, t| if busy { i.transform(Transformation::rotate(percentage(t))) } else { i }))
+            .child(if busy { "Refreshing…" } else { "Refresh" });
         let settings = div().id("usage-settings").flex().items_center().gap_1p5().pt_2().border_t_1().border_color(c.border).text_size(px(12.0)).text_color(c.accent).cursor_pointer()
             .on_click(cx.listener(|this, _, window, cx| {
                 this.usage.popover = None;
@@ -574,7 +591,8 @@ impl Root {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().flex().items_center().gap_2()
                             .child(div().size(px(26.0)).flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &provider, 14.0, 1.0)))
-                            .child(div().flex_1().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("{name} usage"))))
+                            .child(div().flex_1().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("{name} usage")))
+                            .child(refresh))
                         .child(list)
                         .child(settings),
                 )
