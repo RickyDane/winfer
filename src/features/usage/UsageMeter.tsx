@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
@@ -120,24 +120,32 @@ interface WindowProps {
   firstReset?: boolean;
 }
 
+/** A limit as a card: what's left (colored by level), a bar, when it resets and, when the pace
+ *  runs it out first, a warning. Same as the native usage popover. */
 function WindowBar({ window, outAt, firstReset }: WindowProps) {
   const left = leftNow(window);
   return (
-    <div className="space-y-1">
-      <div className="flex items-baseline gap-2 text-xs">
-        <span className="w-24 shrink-0 text-fg-muted">{window.label}</span>
-        <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-hover">
-          <span
-            className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out"
-            style={{ width: `${left}%`, background: levelColor(left) }}
-          />
+    <div className="space-y-1.5 rounded-lg border border-border bg-panel p-3">
+      <div className="flex items-baseline gap-2">
+        <span className="flex-1 text-xs text-fg-muted">{window.label}</span>
+        <span className="text-lg font-semibold" style={{ color: levelColor(left) }}>
+          {Math.round(left)}%
         </span>
-        <span className="w-16 shrink-0 text-right font-mono text-[11px] text-fg">{Math.round(left)}% left</span>
+        <span className="text-[11px] text-fg-subtle">left</span>
       </div>
-      <div className="pl-26 text-[11px] text-fg-subtle" title={window.resetsAt ? new Date(window.resetsAt).toLocaleString() : undefined}>
-        {window.resetsAt && (window.resetsAt > Date.now() ? `${firstReset ? "first resets" : "resets"} ${resetWhen(window.resetsAt)}` : "reset — full again")}
-        {outAt && <span className="text-warning"> · at this pace runs out {resetWhen(outAt)}</span>}
-      </div>
+      <span className="block h-1.5 overflow-hidden rounded-full bg-active">
+        <span className="block h-full rounded-full transition-[width,background-color] duration-700 ease-out" style={{ width: `${left}%`, background: levelColor(left) }} />
+      </span>
+      {window.resetsAt && (
+        <div className="text-[11px] text-fg-subtle" title={new Date(window.resetsAt).toLocaleString()}>
+          {window.resetsAt > Date.now() ? `${firstReset ? "first resets" : "resets"} ${resetWhen(window.resetsAt)}` : "reset — full again"}
+        </div>
+      )}
+      {outAt && (
+        <div className="flex items-center gap-1.5 rounded-md bg-warning/10 px-2 py-1 text-[11px] text-warning">
+          <AlertTriangle size={11} /> Runs out {resetWhen(outAt)} at this pace
+        </div>
+      )}
     </div>
   );
 }
