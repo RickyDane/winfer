@@ -37,10 +37,10 @@ export function DiffView() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-10" onMouseDown={() => setDiffPane(null)}>
       <div
-        className="anim-dialog flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <header className="flex items-center gap-3 px-4 py-3">
           <GitBranch size={15} className="text-accent" />
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[13px] text-fg">
@@ -86,12 +86,12 @@ export function DiffView() {
           )}
           {data && files.length === 0 && data.untracked.length === 0 && <div className="p-4 text-fg-subtle">No changes yet.</div>}
           {data?.diffTruncated && (
-            <div className="border-b border-border px-4 py-3 text-warning">
+            <div className="px-4 py-3 text-warning">
               This diff is {Math.round(data.diffBytes / 1048576)} MB — showing only its first part. Very large diffs are not sent in full.
             </div>
           )}
           {data && data.untracked.length > 0 && (
-            <section className="border-b border-border px-4 py-3">
+            <section className="px-4 py-3">
               <div className="mb-1 text-[11px] text-fg-subtle uppercase">New files (untracked)</div>
               {data.untracked.map((f) => (
                 <div key={f} className="text-success">+ {f}</div>
@@ -99,7 +99,7 @@ export function DiffView() {
             </section>
           )}
           {files.map((file) => (
-            <section key={file.name} className="border-b border-border">
+            <section key={file.name} className="">
               <div className="sticky top-0 bg-panel px-4 py-1.5 text-fg">{file.name}</div>
               <pre className="px-4 py-1">
                 {file.lines.map((line, i) => (

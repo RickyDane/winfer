@@ -66,13 +66,13 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
         ))}
       </div>
       <div className="relative min-w-0 flex-1">
-        <div className="relative h-40 rounded-md bg-app ring-1 ring-border ring-inset" onMouseLeave={() => setHover(null)}>
+        <div className="relative h-40 rounded-md bg-app shadow-sm" onMouseLeave={() => setHover(null)}>
           {ticks.map((t, i) => (
-            <div key={t} className={cn("absolute inset-x-0 border-t", i === ticks.length - 1 ? "border-border-strong" : "border-dashed border-border")} style={{ top: `${(i / (ticks.length - 1)) * 100}%` }} />
+            <div key={t} className={cn("absolute inset-x-0", i === ticks.length - 1 ? "" : "")} style={{ top: `${(i / (ticks.length - 1)) * 100}%` }} />
           ))}
           {kind === "line" && (
             <>
-              {hover !== null && <div className="absolute inset-y-0 border-l border-border-strong" style={{ left: `${((hover + 0.5) / bars.length) * 100}%` }} />}
+              {hover !== null && <div className="absolute inset-y-0" style={{ left: `${((hover + 0.5) / bars.length) * 100}%` }} />}
               <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${bars.length} 100`} preserveAspectRatio="none">
                 {lines.map((p) => (
                   <polyline
@@ -92,7 +92,7 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
                 lines.map((p) => (
                   <span
                     key={p}
-                    className="absolute size-2 -translate-1/2 rounded-full border-2 border-app"
+                    className="absolute size-2 -translate-1/2 rounded-full border-app"
                     style={{ left: `${((hover + 0.5) / bars.length) * 100}%`, top: `${y(hovered[metric][p] ?? 0)}%`, background: COLORS[p] }}
                   />
                 ))}
@@ -118,7 +118,7 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
           </div>
         {hovered && hover !== null && (
             <div
-              className="pointer-events-none absolute top-1 z-10 w-max min-w-40 rounded-md border border-border-strong bg-panel px-2.5 py-2 text-xs shadow-lg"
+              className="pointer-events-none absolute top-1 z-10 w-max min-w-40 rounded-md bg-panel px-2.5 py-2 text-xs shadow-lg"
               style={hover < bars.length / 2 ? { left: `calc(${((hover + 1) / bars.length) * 100}% + 6px)` } : { right: `calc(${((bars.length - hover) / bars.length) * 100}% + 6px)` }}
             >
               <div className="mb-1 text-fg-muted">{barLabel(hovered, range)}</div>
@@ -133,7 +133,7 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
               {totals[hover] === 0 ? (
                 <div className="text-fg-subtle">No usage</div>
               ) : (
-                <div className="mt-1 flex items-center gap-2 border-t border-border pt-1">
+                <div className="mt-1 flex items-center gap-2 pt-1">
                   <span className="flex-1 pl-4 text-fg-muted">Total</span>
                   <span className="font-mono text-fg">{formatCost(SERIES.reduce((s, p) => s + (hovered.cost[p] ?? 0), 0))}</span>
                   <span className="w-12 text-right font-mono text-fg-subtle">{formatTokens(SERIES.reduce((s, p) => s + (hovered.tokens[p] ?? 0), 0))}</span>
@@ -198,7 +198,7 @@ function ByTask({ days }: { days: number }) {
             const label = dirLabel(d.dir, panes);
             const providers = [...new Set(d.models.map((m) => m.provider))];
             return (
-              <tr key={d.dir} className="border-t border-border" title={`${d.dir}\n\n${costBreakdown(d)}`}>
+              <tr key={d.dir} className="" title={`${d.dir}\n\n${costBreakdown(d)}`}>
                 <td className="max-w-56 py-1.5">
                   <div className="truncate text-fg">{label.title}</div>
                   {label.detail && <div className="truncate font-mono text-[10px] text-fg-subtle">{label.detail}</div>}
@@ -228,7 +228,7 @@ function ByTask({ days }: { days: number }) {
 }
 
 export const Stat = ({ label, value, detail }: { label: string; value: string; detail?: string }) => (
-  <div className="min-w-0 flex-1 rounded-lg border border-border bg-panel px-3 py-2.5">
+  <div className="min-w-0 flex-1 rounded-lg bg-panel px-3 py-2.5 shadow-sm">
     <div className="text-[11px] text-fg-subtle">{label}</div>
     <div className="mt-0.5 font-mono text-lg text-fg">{value}</div>
     {detail && <div className="truncate text-[11px] text-fg-subtle">{detail}</div>}
@@ -270,7 +270,7 @@ export function UsageHistory({ children }: { children?: React.ReactNode }) {
       </p>
 
       <div className="flex items-center gap-2">
-        <div className="flex rounded-md border border-border p-0.5">
+        <div className="flex rounded-md p-0.5 shadow-sm">
           {RANGES.map((r) => (
             <button
               key={r.id}
@@ -344,7 +344,7 @@ export function UsageHistory({ children }: { children?: React.ReactNode }) {
               </thead>
               <tbody className="font-mono">
                 {models.map((m) => (
-                  <tr key={`${m.provider}/${m.model}`} className="border-t border-border">
+                  <tr key={`${m.provider}/${m.model}`} className="">
                     <td className="max-w-44 py-1.5 font-sans">
                       <span className="flex items-center gap-1.5">
                         <span className="size-2 shrink-0 rounded-sm" style={{ background: COLORS[m.provider] ?? "var(--color-fg-subtle)" }} />

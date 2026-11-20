@@ -40,7 +40,7 @@ export function ArchiveView() {
 
   if (!selected) {
     return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-pane)] border border-dashed border-border text-fg-subtle">
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-pane)] text-fg-subtle shadow-sm">
         <Archive size={18} />
         <span className="text-sm text-fg-muted">No archived sessions</span>
         <span className="max-w-sm text-center text-xs">
@@ -52,8 +52,8 @@ export function ArchiveView() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 gap-2">
-      <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
-        <header className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-xs text-fg-muted">
+      <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
+        <header className="flex h-8 shrink-0 items-center gap-2 px-3 text-xs text-fg-muted">
           <Archive size={13} />
           <span className="flex-1 font-medium text-fg">Archive</span>
           <span className="font-mono text-[10px] text-fg-subtle">{archived.length}</span>

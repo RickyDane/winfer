@@ -347,7 +347,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
           onMouseUp={mouse("mouseReleased")}
           onMouseMove={onMove}
           onContextMenu={(e) => e.preventDefault()}
-          className={cn("block h-full w-full bg-white", own && "ring-1 ring-border-strong", device === "mobile" && "rounded-xl")}
+          className={cn("block h-full w-full bg-white", own && "", device === "mobile" && "rounded-xl")}
         />
         <AgentCursor tabId={tabId} page={page} />
         {attachError && (

@@ -212,7 +212,7 @@ function Mirror({ device }: { device: Device }) {
             {error ? (
               <>
                 <span className="text-danger">{error}</span>
-                <button onClick={() => setRestart((n) => n + 1)} className="rounded-md border border-border px-2 py-1 text-fg-muted hover:bg-hover hover:text-fg">
+                <button onClick={() => setRestart((n) => n + 1)} className="rounded-md px-2 py-1 text-fg-muted hover:bg-hover hover:text-fg shadow-sm">
                   Try again
                 </button>
               </>
@@ -225,7 +225,7 @@ function Mirror({ device }: { device: Device }) {
           </div>
         )}
       </div>
-      <div className="flex shrink-0 items-center justify-center gap-1 border-t border-border py-1.5">
+      <div className="flex shrink-0 items-center justify-center gap-1 py-1.5">
         <button title="Back" onClick={() => key(KEY.back)} className="rounded p-1.5 text-fg-subtle hover:bg-hover hover:text-fg">
           <ChevronLeft size={15} />
         </button>
@@ -286,13 +286,13 @@ export function DevicePanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
+      <div className="flex h-9 shrink-0 items-center gap-2 px-2">
         <Smartphone size={13} className="shrink-0 text-fg-subtle" />
         {ready.length > 0 ? (
           <select
             value={current?.serial ?? ""}
             onChange={(e) => setAndroidSerial(e.target.value)}
-            className="h-7 min-w-0 flex-1 rounded-md border border-border bg-panel px-1.5 text-xs text-fg"
+            className="h-7 min-w-0 flex-1 rounded-md bg-panel px-1.5 text-xs text-fg shadow-sm"
           >
             {ready.map((d) => (
               <option key={d.serial} value={d.serial}>
@@ -338,7 +338,7 @@ export function DevicePanel() {
                           // Booting takes a while; the device list picks it up when it's ready.
                           .finally(() => window.setTimeout(() => setStarting(null), 30_000));
                       }}
-                      className="flex w-full items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-left text-fg hover:bg-hover disabled:opacity-50"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-fg hover:bg-hover disabled:opacity-50 shadow-sm"
                     >
                       {starting === avd ? <Spinner size={12} /> : <Smartphone size={12} />}
                       <span className="flex-1 truncate">{avd.replace(/_/g, " ")}</span>

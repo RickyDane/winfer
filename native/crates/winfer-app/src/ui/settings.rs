@@ -152,7 +152,7 @@ pub(super) fn card_marked(c: Colors, title: &str, description: Option<&str>, mar
         .gap_0p5()
         .child(div().flex().items_center().gap_2().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(title.to_string()).children(mark))
         .when_some(description.map(str::to_string), |d, t| d.child(div().text_xs().text_color(c.subtle).child(t)));
-    div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel).child(header)
+    div().flex().flex_col().rounded(px(10.0)).bg(c.panel).child(header)
 }
 
 pub(super) fn row(c: Colors, label: impl Into<SharedString>, hint: Option<String>, control: impl IntoElement) -> Div {
@@ -167,8 +167,6 @@ pub(super) fn row_marked(c: Colors, label: impl Into<SharedString>, mark: Option
         .gap_6()
         .px_4()
         .py_3()
-        .border_t_1()
-        .border_color(c.border)
         .child(
             div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().flex().items_center().gap_2().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(label.into()).children(mark))
                 .when_some(hint, |d, t| d.child(div().text_xs().text_color(c.subtle).child(t))),
@@ -183,8 +181,6 @@ pub(super) fn stacked_row(c: Colors, label: impl Into<SharedString>, hint: Optio
         .gap_2()
         .px_4()
         .py_2p5()
-        .border_t_1()
-        .border_color(c.border)
         .child(div().text_size(px(13.0)).text_color(c.fg).child(label.into()))
         .when_some(hint, |d, t| d.child(div().text_xs().text_color(c.subtle).child(t)))
         .child(control)
@@ -200,7 +196,7 @@ fn result_line(c: Colors, result: &Option<Result<String, String>>) -> Option<Div
 }
 
 pub(super) fn plain_button(c: Colors, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    div().id(id).h(px(28.0)).flex().items_center().gap_1p5().rounded_md().border_1().border_color(c.border_strong).px_2p5().text_xs().text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover)).child(label.into())
+    div().id(id).h(px(28.0)).flex().items_center().gap_1p5().rounded_md().px_2p5().text_xs().text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover)).child(label.into())
 }
 
 impl Root {
@@ -341,8 +337,6 @@ impl Root {
             .items_center()
             .gap_1()
             .rounded_md()
-            .border_1()
-            .border_color(c.border_strong)
             .bg(c.raised)
             .px_2()
             .text_xs()
@@ -356,7 +350,7 @@ impl Root {
             }))
             .child(div().flex_1().truncate().child(current))
             .child(Icon::new(IconName::ChevronDown).size(px(12.0)).text_color(c.subtle));
-        let mut list = div().id(SharedString::from(format!("select-list-{key}"))).w(px(200.0)).max_h(px(260.0)).overflow_y_scroll().rounded_md().border_1().border_color(c.border_strong).bg(c.raised).p_1()
+        let mut list = div().id(SharedString::from(format!("select-list-{key}"))).w(px(200.0)).max_h(px(260.0)).overflow_y_scroll().rounded_md().bg(c.raised).p_1()
             // The list can hang outside the settings window; it must block the mouse itself, or a
             // click on the part outside lands on the backdrop behind and closes Settings.
             .occlude()
@@ -420,7 +414,7 @@ impl Root {
         let ui = self.settings.as_ref().unwrap();
         let editors = ui.editors.clone();
         let current_editor = editors.iter().find(|(id, _)| Some(id) == chosen.as_ref()).or(editors.first()).map_or_else(|| "None installed".to_string(), |(_, n)| n.clone());
-        let step = move |id: &'static str, label: &'static str| div().id(id).w(px(26.0)).h(px(26.0)).flex().items_center().justify_center().rounded_md().border_1().border_color(c.border_strong).text_xs().cursor_pointer().hover(move |d| d.bg(c.hover)).child(label);
+        let step = move |id: &'static str, label: &'static str| div().id(id).w(px(26.0)).h(px(26.0)).flex().items_center().justify_center().rounded_md().text_xs().cursor_pointer().hover(move |d| d.bg(c.hover)).child(label);
         let editor_select = self.select_button("editor", current_editor, editors, c, cx, |this, id, cx| this.update_state(cx, |s| s.editor = Some(id)));
         div()
             .flex()
@@ -487,7 +481,7 @@ impl Root {
                 s.theme = s.theme_for_system(dark);
             });
         });
-        let mode = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+        let mode = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).bg(c.app)
             .child(mode_button("mode-light", IconName::Sun, "Light", !system && !dark).on_click(cx.listener(choose(false))))
             .child(mode_button("mode-dark", IconName::Moon, "Dark", !system && dark).on_click(cx.listener(choose(true))))
             .child(mode_button("mode-system", IconName::Monitor, "System", system).on_click(follow));
@@ -502,21 +496,32 @@ impl Root {
                     dots = dots.child(div().size(px(7.0)).rounded_full().bg(crate::theme::hex(&t.ansi[i])));
                 }
                 // A tiny window in the theme's colors: sidebar, a pane with text, the accent.
-                let preview = div().h(px(64.0)).flex().gap_1().p_1p5().bg(crate::theme::hex(&t.ui.app))
+                let preview = div().h(px(64.0)).rounded_t_lg().flex().gap_1().p_1p5().bg(crate::theme::hex(&t.ui.app))
                     .child(div().w(px(26.0)).rounded_sm().bg(crate::theme::hex(&t.ui.panel)))
                     .child(div().flex_1().flex().flex_col().gap_1().p_1p5().rounded_sm().bg(crate::theme::hex(&t.ui.panel))
                         .child(div().h(px(4.0)).w(px(44.0)).rounded_full().bg(crate::theme::hex(&t.ui.fg)))
                         .child(div().h(px(4.0)).w(px(30.0)).rounded_full().bg(crate::theme::hex(&t.ui.fg_muted)))
                         .child(div().flex_1())
                         .child(div().flex().items_center().justify_between().child(dots).child(div().h(px(6.0)).w(px(16.0)).rounded_full().bg(crate::theme::hex(&t.ui.accent)))));
+                let tile_shadow = if selected {
+                    vec![
+                        BoxShadow { color: Hsla { a: if c.light { 0.22 } else { 0.35 }, ..c.accent }, offset: point(px(0.0), px(4.0)), blur_radius: px(14.0), spread_radius: px(-2.0), inset: false },
+                        BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.3 }), offset: point(px(0.0), px(2.0)), blur_radius: px(6.0), spread_radius: px(-1.0), inset: false },
+                    ]
+                } else {
+                    vec![
+                        BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.06 } else { 0.22 }), offset: point(px(0.0), px(1.0)), blur_radius: px(4.0), spread_radius: px(-1.0), inset: false },
+                    ]
+                };
                 grid = grid.child(
-                    div().id(SharedString::from(format!("theme-{id}"))).w(px(160.0)).overflow_hidden().rounded_lg().border_1().cursor_pointer()
-                        .border_color(if selected { c.accent } else { c.border })
-                        .when(selected, |d| d.shadow(vec![BoxShadow { color: Hsla { a: 0.35, ..c.accent }, offset: point(px(0.0), px(0.0)), blur_radius: px(0.0), spread_radius: px(1.0), inset: false }]))
-                        .hover(move |d| d.border_color(c.border_strong))
+                    div().id(SharedString::from(format!("theme-{id}"))).w(px(160.0)).overflow_hidden().rounded_lg().cursor_pointer()
+                        .shadow(tile_shadow)
+                        .hover(move |d| d)
                         .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.pick_theme(&id, system_dark))))
                         .child(preview)
-                        .child(div().flex().items_center().gap_1().border_t_1().border_color(c.border).bg(c.raised).px_2().py(px(6.0)).text_size(px(11.5)).text_color(if selected { c.fg } else { c.muted })
+                        .child(div().rounded_b_lg().flex().items_center().gap_1().bg(if selected { Hsla { a: 0.15, ..c.accent } } else { c.raised }).px_2().py(px(6.0)).text_size(px(11.5))
+                            .when(selected, |d| d.font_weight(FontWeight::MEDIUM).text_color(c.fg))
+                            .when(!selected, |d| d.text_color(c.muted))
                             .child(div().flex_1().truncate().child(t.name.clone()))
                             .when(selected, |d| d.child(Icon::new(IconName::Check).size(px(12.0)).text_color(c.accent)))),
                 );
@@ -579,7 +584,7 @@ impl Root {
                         .when(!current.is_empty(), |d| d.child(div().font_family(crate::fonts::mono(cx)).child(current.clone())))
                         .when(!status.is_empty(), |d| d.child(div().text_color(if outdated { c.accent } else { c.subtle }).child(if current.is_empty() { status.clone() } else { format!("· {status}") })))))
                 .child(update);
-            let mut agent = div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel).child(head);
+            let mut agent = div().flex().flex_col().rounded(px(10.0)).bg(c.panel).child(head);
             if p.model_arg.is_some() {
                 let list = self.models.get(&p.id).cloned().unwrap_or_default();
                 let mut options = vec![(String::new(), "CLI default".to_string())];
@@ -625,7 +630,7 @@ impl Root {
             .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Your agents"))
             .child(plain_button(c, "check-versions", if checking { "Checking…" } else { "Check for updates" }).on_click(cx.listener(|this, _, _, cx| this.check_versions(cx))));
         // Agents whose CLI isn't installed: what they are and how to get them.
-        let mut missing = div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.border).bg(c.panel)
+        let mut missing = div().flex().flex_col().rounded(px(10.0)).bg(c.panel)
             .child(div().px_4().py_3().flex().flex_col().gap_0p5()
                 .child(div().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Available to install"))
                 .child(div().text_xs().text_color(c.subtle).child("Install one, then Check for updates (or restart winfer) and it shows up above.")));
@@ -638,7 +643,7 @@ impl Root {
             let id = p.id.clone();
             let copy = install.clone();
             missing = missing.child(
-                div().flex().items_center().gap_3().px_4().py_2p5().border_t_1().border_color(c.border)
+                div().flex().items_center().gap_3().px_4().py_2p5()
                     .child(div().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &p.id, 15.0, 0.8)))
                     .child(div().flex_1().min_w_0().flex().flex_col()
                         .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(p.name.clone()))
@@ -882,7 +887,7 @@ impl Root {
             .flex()
             .flex_col()
             .gap_4()
-            .when(unexpected, |d| d.child(div().rounded_lg().border_1().border_color(Hsla { a: 0.4, ..c.warning }).bg(Hsla { a: 0.1, ..c.warning }).px_3().py_2().text_xs().text_color(c.fg)
+            .when(unexpected, |d| d.child(div().rounded_lg().bg(Hsla { a: 0.1, ..c.warning }).px_3().py_2().text_xs().text_color(c.fg)
                 .child("The previous run ended without a clean exit — a crash or an out-of-memory kill. Its last memory samples are at the end of winfer.log; export the diagnostics below and attach them to a bug report.")))
             .child(memory)
             .child(card(c, "Logs", Some("winfer.log keeps the app log (rotated at 5 MB); crash.log holds panics with backtraces. Both live in the folder below."))
@@ -960,7 +965,7 @@ impl Root {
                 );
             }
         }
-        let search_box = div().flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_1().rounded_md().bg(c.app).border_1().border_color(c.border_strong).text_color(c.subtle)
+        let search_box = div().flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_1().rounded_md().bg(c.app).text_color(c.subtle)
             .child(Icon::new(IconName::Search).size(px(13.0)))
             .child(div().flex_1().min_w_0().child(Input::new(&search).appearance(false).text_size(px(12.5))))
             .when(searching, |d| d.child(div().id("settings-search-clear").rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
@@ -973,7 +978,7 @@ impl Root {
                 .child(Icon::new(IconName::X).size(px(12.0)))));
         let version = self.updates.version.clone();
         let update = self.updates.available.as_ref().map(|a| a.version.clone());
-        let foot = div().flex().items_center().justify_between().gap_2().border_t_1().border_color(c.border).px_3p5().py_2p5().text_size(px(11.0)).text_color(c.subtle)
+        let foot = div().flex().items_center().justify_between().gap_2().px_3p5().py_2p5().text_size(px(11.0)).text_color(c.subtle)
             .child(div().font_family(mono.clone()).child(format!("winfer {version}")))
             .when_some(update, |d, v| d.child(div().id("settings-update-pill").flex().items_center().gap_1().rounded_full().px_2().py_0p5().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).cursor_pointer()
                 .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(format!("winfer {v} is available")).build(window, cx))
@@ -981,7 +986,7 @@ impl Root {
                 .child(Icon::new(IconName::Download).size(px(11.0))).child("Update")));
         // GPUI clips children to the window's rectangle, not its rounded shape, so the nav rounds its
         // own left corners (the window's radius less its border).
-        let nav = div().w(px(232.0)).flex_shrink_0().flex().flex_col().rounded_tl(px(13.0)).rounded_bl(px(13.0)).border_r_1().border_color(c.border).bg(c.panel)
+        let nav = div().w(px(232.0)).flex_shrink_0().flex().flex_col().rounded_tl(px(13.0)).rounded_bl(px(13.0)).bg(c.panel)
             .child(div().flex().flex_col().gap_3().px_3().pt_3p5().pb_1()
                 .child(div().flex().items_center().gap_2().px_1().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg)
                     .child(Icon::new(IconName::Settings).size(px(15.0)).text_color(c.accent)).child("Settings"))
@@ -1004,8 +1009,8 @@ impl Root {
                     let (pg, (_, page_label, page_icon, _)) = page_info(pid);
                     let crumb = if plabel == page_label { pg.to_string() } else { format!("{pg} › {page_label}") };
                     rows = rows.child(
-                        div().id(SharedString::from(format!("hit-{n}"))).flex().items_center().gap_3().rounded_lg().px_3().py_2p5().cursor_pointer().border_1().border_color(gpui_kit::transparent_black())
-                            .hover(move |d| d.bg(c.panel).border_color(c.border))
+                        div().id(SharedString::from(format!("hit-{n}"))).flex().items_center().gap_3().rounded_lg().px_3().py_2p5().cursor_pointer()
+                            .hover(move |d| d.bg(c.panel))
                             .on_click(cx.listener(move |this, _, window, cx| this.open_settings_page(pid, window, cx)))
                             .child(div().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(c.hover).text_color(c.muted).child(Icon::new(page_icon).size(px(14.0))))
                             .child(div().flex_1().min_w_0().flex().flex_col()
@@ -1027,7 +1032,7 @@ impl Root {
                     .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(label))
                     .child(div().text_size(px(12.5)).text_color(c.muted).child(description)))
                 .when(changed_here > 0, |d| d.child(div().flex_1()).child(
-                    div().id("reset-page").flex().flex_shrink_0().items_center().gap_1p5().h(px(28.0)).px_2p5().rounded_md().border_1().border_color(c.border_strong).text_size(px(12.0)).text_color(c.muted).cursor_pointer()
+                    div().id("reset-page").flex().flex_shrink_0().items_center().gap_1p5().h(px(28.0)).px_2p5().rounded_md().text_size(px(12.0)).text_color(c.muted).cursor_pointer()
                         .hover(move |d| d.bg(c.hover).text_color(c.fg))
                         .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Put every changed setting on this page back to its default").build(window, cx))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -1062,7 +1067,7 @@ impl Root {
             div().id("settings-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.55)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.settings_open = false)))
                 .child(
-                    div().id("settings").w(px(1000.0)).max_w(relative(0.94)).h(px(700.0)).max_h(relative(0.9)).flex().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
+                    div().id("settings").w(px(1000.0)).max_w(relative(0.94)).h(px(700.0)).max_h(relative(0.9)).flex().overflow_hidden().rounded(px(14.0)).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(nav)
                         .child(
@@ -1073,7 +1078,7 @@ impl Root {
                                         .hover(move |d| d.bg(c.hover).text_color(c.fg))
                                         .on_click(cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.settings_open = false)))
                                         .child(Icon::new(IconName::X).size(px(15.0)))
-                                        .child(div().rounded_sm().border_1().border_color(c.border).px_1().font_family(mono.clone()).text_size(px(10.0)).child("esc")),
+                                        .child(div().rounded_sm().px_1().font_family(mono.clone()).text_size(px(10.0)).child("esc")),
                                 )
                                 .child(div().id(SharedString::from(format!("settings-page-{id}-{searching}"))).flex_1().min_h_0().overflow_y_scroll().track_scroll(&scroll).px_8().pt_1().pb_10().child(content)),
                         ),

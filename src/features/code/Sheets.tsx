@@ -100,7 +100,7 @@ function UsageSheet() {
   }, [usage.context, send]);
   const parts = (usage.context > 0 && breakdown?.parts?.filter((p) => p.tokens > 0)) || null;
   const partsTotal = parts?.reduce((n, p) => n + p.tokens, 0) || 1;
-  const hit = usage.input ? (usage.cached / usage.input) * 100 : 0;
+  const hit = usage.input ? Math.min(100, (usage.cached / usage.input) * 100) : 0;
   const fresh = Math.max(0, usage.input - usage.cached);
   const total = usage.input + usage.output || 1;
   const chatgpt = model.startsWith("chatgpt");

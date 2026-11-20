@@ -278,7 +278,7 @@ impl CodeView {
 
     /// Wraps a popover so it opens upward from the button it is a child of.
     fn popover(&mut self, sheet: Sheet, c: Colors, panel: Div, cx: &mut Context<Self>) -> AnyElement {
-        let panel = panel.id("cw-popover").occlude().rounded_xl().border_1().border_color(c.border_strong).bg(c.raised).shadow_lg().overflow_hidden()
+        let panel = panel.id("cw-popover").occlude().rounded_xl().bg(c.raised).shadow_lg().overflow_hidden()
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
                 this.picker.out_close = Some((sheet, Instant::now()));
                 this.set_sheet(None, cx);
@@ -312,7 +312,7 @@ impl CodeView {
         self.picker.rows = rows.iter().map(|m| m.spec.clone()).collect();
         let selected_row = self.picker.selected.map(|i| i.min(rows.len().saturating_sub(1)));
 
-        let mut rail = div().w(px(54.0)).flex_shrink_0().flex().flex_col().items_center().gap_1p5().py_2p5().border_r_1().border_color(c.border);
+        let mut rail = div().w(px(54.0)).flex_shrink_0().flex().flex_col().items_center().gap_1p5().py_2p5();
         let mut tabs: Vec<String> = vec![FAVORITES.to_string()];
         tabs.extend(backends.iter().map(|(id, _)| id.to_string()));
         for (i, id) in tabs.into_iter().enumerate() {
@@ -374,7 +374,7 @@ impl CodeView {
                 .child(if all { "Show less".to_string() } else { format!("Show {} more", total - SHOWN) }));
         }
 
-        let search = div().flex().items_center().gap_2().h(px(44.0)).px_3().border_b_1().border_color(c.border)
+        let search = div().flex().items_center().gap_2().h(px(44.0)).px_3()
             .child(Icon::new(IconName::Search).size(px(15.0)).text_color(c.subtle))
             .child(div().flex_1().when_some(self.picker.search.clone(), |d, input| d.child(Input::new(&input).appearance(false))));
 
@@ -384,7 +384,7 @@ impl CodeView {
         let effort = if st.effort.is_empty() { "default".to_string() } else { st.effort.clone() };
         let model_label = if st.model.is_empty() { String::new() } else { model_name(&st.model, st.actual_model.as_deref()) };
         let view = cx.entity();
-        let reasoning = div().w(px(196.0)).flex_shrink_0().flex().flex_col().border_l_1().border_color(c.border)
+        let reasoning = div().w(px(196.0)).flex_shrink_0().flex().flex_col()
             .child(div().flex().items_center().justify_between().h(px(44.0)).px_3().text_size(px(12.0)).text_color(c.subtle).child("Reasoning").child(div().truncate().child(model_label)))
             .child(div().id("pk-effort").flex_1().min_h_0().overflow_y_scroll().p_2().child(EffortPicker::new(c, levels, effort, move |level, _, cx| {
                 let _ = view.update(cx, |this, cx| {
@@ -411,7 +411,7 @@ impl CodeView {
         let hint = effort_hint(&effort);
         let view = cx.entity();
         let panel = div().w(px(260.0)).flex().flex_col()
-            .child(div().flex().items_center().justify_between().h(px(40.0)).px_3().border_b_1().border_color(c.border).text_size(px(12.0)).text_color(c.subtle).child("Reasoning").child(div().truncate().child(model_label)))
+            .child(div().flex().items_center().justify_between().h(px(40.0)).px_3().text_size(px(12.0)).text_color(c.subtle).child("Reasoning").child(div().truncate().child(model_label)))
             .child(div().p_2().child(EffortPicker::new(c, levels, effort, move |level, _, cx| {
                 let _ = view.update(cx, |this, cx| {
                     this.send(Cmd::SetEffort(if level == "default" { None } else { Some(level) }), cx);

@@ -441,6 +441,7 @@ async function spawn(entry: Entry) {
         session: entry.pane.resume ? entry.pane.sessionId : null,
         prompt: entry.pane.prompt,
         model: entry.pane.model,
+        effort: entry.pane.effort ?? null,
         autoApprove: useWorkspaces.getState().autoApprove.includes(entry.pane.provider),
         systemPrompt: systemPromptOf(useWorkspaces.getState()),
         plain: entry.pane.plain,

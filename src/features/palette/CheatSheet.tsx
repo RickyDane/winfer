@@ -109,18 +109,18 @@ export function CheatSheet() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={() => setCheatSheet(false)}>
-      <div className="anim-dialog flex max-h-[85vh] w-[820px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="flex items-center gap-3 border-b border-border px-6 py-3">
+      <div className="anim-dialog flex max-h-[85vh] w-[820px] flex-col rounded-xl bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="flex items-center gap-3 px-6 py-3">
           <h1 className="flex-1 text-sm font-semibold text-fg">Keyboard shortcuts</h1>
           <span className="text-xs text-fg-subtle">Click a shortcut to change it</span>
           {Object.keys(shortcuts).length > 0 && (
-            <button onClick={resetShortcuts} className="rounded-md border border-border-strong px-2 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg">
+            <button onClick={resetShortcuts} className="rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg shadow-sm">
               Reset all
             </button>
           )}
         </header>
         {(pending || message) && (
-          <div className="flex items-center gap-2 border-b border-border px-6 py-2 text-xs">
+          <div className="flex items-center gap-2 px-6 py-2 text-xs">
             {pending ? (
               <>
                 <span className="flex-1 text-warning">
@@ -163,8 +163,8 @@ export function CheatSheet() {
                         setEditing(recording ? null : r);
                       }}
                       className={cn(
-                        "min-w-16 rounded-md border px-1.5 py-0.5 text-right font-mono text-[11px]",
-                        recording ? "border-accent text-accent" : "border-transparent text-fg hover:border-border-strong",
+                        "min-w-16 rounded-md px-1.5 py-0.5 text-right font-mono text-[11px] shadow-sm",
+                        recording ? "text-accent" : "text-fg",
                         !r.chord && !recording && "text-fg-subtle",
                       )}
                     >

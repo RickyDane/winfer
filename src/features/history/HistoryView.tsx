@@ -46,7 +46,7 @@ function Entry({ merge, words, onDeleted }: { merge: MergeRecord; words: string[
   const providers = useWorkspaces((s) => s.providers);
   const [open, setOpen] = useState(false);
   return (
-    <article className={cn("anim-rise rounded-lg border", open ? "border-border bg-panel" : "border-transparent hover:bg-hover")}>
+    <article className={cn("anim-rise rounded-lg shadow-sm", open ? "bg-panel" : "hover:bg-hover")}>
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left">
         <span className="grid size-[26px] shrink-0 place-items-center rounded-md bg-success/12 text-success">
           <GitMerge size={13} />
@@ -164,7 +164,7 @@ export function HistoryView() {
 
   const total = (results ?? []).reduce((t, m) => ({ files: t.files + m.files.length, adds: t.adds + m.adds, dels: t.dels + m.dels }), { files: 0, adds: 0, dels: 0 });
   const stat = (label: string, value: string, tone = "text-fg") => (
-    <div className="flex-1 rounded-lg border border-border bg-panel p-2.5">
+    <div className="flex-1 rounded-lg bg-panel p-2.5 shadow-sm">
       <div className={cn("text-[17px] font-semibold", tone)}>{value}</div>
       <div className="text-[11px] text-fg-subtle">{label}</div>
     </div>
@@ -173,19 +173,19 @@ export function HistoryView() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog flex h-[min(640px,84vh)] w-[820px] max-w-[94vw] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="space-y-3 border-b border-border px-5 pt-4 pb-3">
+      <div className="anim-dialog flex h-[min(640px,84vh)] w-[820px] max-w-[94vw] flex-col isolate overflow-hidden rounded-[14px] bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="space-y-3 px-5 pt-4 pb-3">
           <div className="flex items-center gap-2">
             <Clock size={15} className="text-accent" />
             <h1 className="flex-1 text-[15px] font-semibold text-fg">History</h1>
-            <div className="flex gap-0.5 rounded-lg border border-border bg-app p-0.5 text-xs">
+            <div className="flex gap-0.5 rounded-lg bg-app p-0.5 text-xs shadow-sm">
               {(["workspace", "all"] as const).map((sc) => (
                 <button key={sc} onClick={() => setScope(sc)} className={cn("h-6 rounded-md px-2.5", scope === sc ? "bg-active text-fg" : "text-fg-muted hover:text-fg")}>
                   {sc === "workspace" ? (workspace?.name ?? "This workspace") : "All workspaces"}
                 </button>
               ))}
             </div>
-            <kbd className="rounded border border-border px-1 font-mono text-[10.5px] text-fg-subtle">{keysFor({ type: "ui.overlay", overlay: "history" })}</kbd>
+            <kbd className="rounded px-1 font-mono text-[10.5px] text-fg-subtle shadow-sm">{keysFor({ type: "ui.overlay", overlay: "history" })}</kbd>
             <button onClick={() => setOverlay(null)} aria-label="Close" className="rounded p-1 text-fg-subtle hover:bg-hover hover:text-fg">
               <X size={14} />
             </button>
@@ -196,7 +196,7 @@ export function HistoryView() {
             {stat("lines added", `+${total.adds}`, "text-success")}
             {stat("lines removed", `−${total.dels}`, "text-danger")}
           </div>
-          <label className="flex h-[34px] items-center gap-2 rounded-md border border-border-strong bg-app px-2.5 focus-within:border-accent">
+          <label className="flex h-[34px] items-center gap-2 rounded-md bg-app px-2.5 focus-within:ring-2 focus-within:ring-accent/40 shadow-sm">
             <Search size={13} className="text-fg-subtle" />
             <input
               ref={input}

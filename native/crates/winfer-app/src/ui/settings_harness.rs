@@ -308,7 +308,7 @@ impl Root {
             None => div().text_xs().text_color(c.subtle).child("Lists the server's models."),
         };
         let test = plain_button(c, "local-test", if testing { "Testing…" } else { "Test" }).on_click(cx.listener(move |this, _, _, cx| if !testing { this.test_local(cx) }));
-        local.child(div().flex().items_center().gap_4().px_4().py_2p5().border_t_1().border_color(c.border)
+        local.child(div().flex().items_center().gap_4().px_4().py_2p5()
             .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().text_size(px(13.0)).text_color(c.fg).child("Connection")).child(hint))
             .child(test))
     }
@@ -447,8 +447,8 @@ impl Root {
                             let name = s["name"].as_str().unwrap_or_default();
                             let label = if source == "user" { name.to_string() } else { format!("{source}:{name}") };
                             let current = picked.clone();
-                            chips = chips.child(div().id(SharedString::from(format!("lean-{id}"))).flex().h(px(24.0)).items_center().rounded_md().border_1().px_2().text_size(px(11.0)).cursor_pointer()
-                                .when(on, |d| d.border_color(c.accent).text_color(c.fg)).when(!on, |d| d.border_color(c.border_strong).text_color(c.muted))
+                            chips = chips.child(div().id(SharedString::from(format!("lean-{id}"))).flex().h(px(24.0)).items_center().rounded_md().px_2().text_size(px(11.0)).cursor_pointer()
+                                .when(on, |d| d.text_color(c.fg)).when(!on, |d| d.text_color(c.muted))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let mut next = current.clone();
                                     if let Some(i) = next.iter().position(|x| *x == id) { next.remove(i); } else { next.push(id.clone()); }

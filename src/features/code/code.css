@@ -38,7 +38,7 @@
   font-size: calc(10.5px * var(--cw-text, 1));
   padding: 0 5px;
   border-radius: 5px;
-  border: 1px solid var(--border);
+  border: none;
   background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--muted);
 }
@@ -91,7 +91,7 @@
   gap: 7px;
   padding: 7px 13px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: none;
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   font-weight: 500;
   font-size: calc(13px * var(--cw-text, 1));
@@ -107,7 +107,7 @@
 .cw-btn.primary {
   background: var(--btn-bg, linear-gradient(135deg, var(--g1), var(--g2) 60%, var(--g3)));
   color: var(--btn-fg, #fff);
-  border-color: transparent;
+
   box-shadow: 0 4px 18px -4px color-mix(in srgb, var(--g2) 60%, transparent);
 }
 .cw-btn.primary:hover {
@@ -116,7 +116,7 @@
 }
 .cw-btn.primary kbd {
   background: rgb(255 255 255 / 0.16);
-  border-color: rgb(255 255 255 / 0.2);
+
   color: inherit;
   opacity: 0.85;
 }
@@ -125,12 +125,12 @@
 }
 .cw-btn.danger:hover {
   color: var(--del);
-  border-color: color-mix(in srgb, var(--del) 40%, transparent);
+
 }
 .cw-btn.ok {
   background: color-mix(in srgb, var(--ok) 18%, transparent);
   color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+
 }
 .cw-btn.wide {
   width: 100%;
@@ -180,14 +180,14 @@
   border-radius: 999px;
   font-size: calc(12px * var(--cw-text, 1));
   color: var(--muted);
-  border: 1px solid transparent;
+  border: none;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .cw-pill:hover,
 .cw-pill.active {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--fg);
-  border-color: var(--border);
+
 }
 
 /* ——— Transcript ——— */
@@ -223,7 +223,7 @@
   padding: 8px 14px;
   color: var(--muted);
   font-size: 12px;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 8px;
 }
 /* Hundreds of restored rows must not all animate blur/compositing on mount. */
@@ -333,7 +333,7 @@ body.resizing .cw-enter {
   border-collapse: separate;
   border-spacing: 0;
   margin: 6px 0 12px;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-sm);
   overflow: hidden;
   font-size: calc(13px * var(--cw-text, 1));
@@ -342,7 +342,7 @@ body.resizing .cw-enter {
 .cw-md td {
   padding: 7px 14px;
   text-align: left;
-  border-bottom: 1px solid var(--border);
+  border: none;
 }
 .cw-md tr:last-child td {
   border-bottom: 0;
@@ -356,7 +356,7 @@ body.resizing .cw-enter {
 .cw-code {
   margin: 8px 0 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: none;
   background: var(--code-bg);
   overflow: hidden;
 }
@@ -368,7 +368,7 @@ body.resizing .cw-enter {
   font-family: var(--font-mono);
   font-size: calc(11px * var(--cw-text, 1));
   color: var(--dim);
-  border-bottom: 1px solid var(--border);
+  border: none;
 }
 .cw-code-body {
   margin: 0;
@@ -485,7 +485,7 @@ body.resizing .cw-enter {
 
 /* Tool cards */
 .cw-tool {
-  border: 1px solid transparent;
+  border: none;
   border-radius: var(--radius-sm);
   background: var(--tool-bg, color-mix(in srgb, var(--fg) 2.5%, transparent));
   overflow: hidden;
@@ -493,7 +493,7 @@ body.resizing .cw-enter {
   transition: border-color 0.3s, box-shadow 0.3s;
 }
 .cw-tool.running {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .cw-tool.running::before {
@@ -517,7 +517,7 @@ body.resizing .cw-enter {
   }
 }
 .cw-tool.failed {
-  border-color: color-mix(in srgb, var(--del) 35%, transparent);
+
 }
 .cw-tool-head {
   display: flex;
@@ -610,7 +610,7 @@ body.resizing .cw-enter {
 .cw-tool-out {
   margin: 0;
   padding: 10px 14px 12px;
-  border-top: 1px solid var(--border);
+  border: none;
   font-family: var(--font-mono);
   font-size: calc(12px * var(--cw-text, 1));
   line-height: 1.6;
@@ -632,7 +632,7 @@ body.resizing .cw-enter {
   font-family: var(--font-mono);
   font-size: calc(12px * var(--cw-text, 1));
   line-height: 1.65;
-  border-top: 1px solid var(--border);
+  border: none;
   max-height: 360px;
   overflow: auto;
   background: var(--code-bg);
@@ -687,7 +687,7 @@ body.resizing .cw-enter {
   color: var(--dim);
   padding: 3px 11px;
   border-radius: 999px;
-  border: 1px dashed var(--border);
+  border: none;
 }
 .cw-notice:has(.cw-notice-text.open) {
   border-radius: 10px;
@@ -721,15 +721,15 @@ body.resizing .cw-enter {
 }
 .cw-notice.error {
   color: var(--del);
-  border-color: color-mix(in srgb, var(--del) 40%, transparent);
+
 }
 
 /* ——— Dock: approval, status, composer ——— */
 .cw-dock {
-  max-width: 864px;
+  max-width: none;
   width: 100%;
   margin: 0 auto;
-  padding: 0 14px 6px;
+  padding: 0 10px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -737,7 +737,7 @@ body.resizing .cw-enter {
 }
 .cw-approval {
   border-radius: var(--radius);
-  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border: none;
   background: var(--surface-2);
   box-shadow: var(--shadow), 0 0 0 4px color-mix(in srgb, var(--warn) 10%, transparent);
   overflow: hidden;
@@ -777,7 +777,7 @@ body.resizing .cw-enter {
   flex-wrap: wrap;
   gap: 6px;
   padding: 10px 14px;
-  border-top: 1px solid var(--border);
+  border: none;
 }
 .cw-approval-actions .ghost {
   margin-left: auto;
@@ -799,7 +799,7 @@ body.resizing .cw-enter {
   text-align: left;
   padding: 7px 10px;
   border-radius: calc(var(--radius) - 4px);
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -809,7 +809,7 @@ body.resizing .cw-enter {
   background: color-mix(in srgb, var(--warn) 7%, transparent);
 }
 .cw-question-option.on {
-  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 .cw-question-option span {
@@ -824,7 +824,7 @@ body.resizing .cw-enter {
 .cw-question-own {
   padding: 7px 10px;
   border-radius: calc(var(--radius) - 4px);
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -870,12 +870,12 @@ body.resizing .cw-enter {
   position: relative;
   border-radius: var(--radius);
   background: var(--composer-bg, var(--surface-2));
-  border: 1px solid var(--border);
+  border: none;
   box-shadow: var(--shadow);
   transition: border-color 0.25s, box-shadow 0.25s;
 }
 .cw-composer:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+
   box-shadow: var(--shadow), 0 0 0 4px color-mix(in srgb, var(--accent) 13%, transparent);
 }
 .cw-composer.busy::before {
@@ -958,7 +958,7 @@ body.resizing .cw-enter {
   padding: 6px;
   border-radius: var(--radius);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: none;
   box-shadow: var(--shadow);
   backdrop-filter: blur(20px);
   animation: cw-approval-in 0.25s var(--ease) both;
@@ -996,7 +996,7 @@ body.resizing .cw-enter {
   padding: 6px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: none;
   box-shadow: var(--shadow);
   animation: cw-approval-in 0.25s var(--ease) both;
   z-index: 6;
@@ -1106,7 +1106,7 @@ body.resizing .cw-enter {
   --code-bg: color-mix(in srgb, var(--color-app) 55%, var(--color-panel));
   --term-bg: var(--code-bg);
   --user-bg: var(--color-hover);
-  --user-border: 1px solid var(--color-border-strong);
+  --user-border: 0;
   --btn-bg: var(--color-fg);
   --btn-fg: var(--color-panel);
   --icon-bg: var(--color-hover);
@@ -1216,10 +1216,10 @@ body.resizing .cw-enter {
   margin: 0;
   border-radius: 50%;
   background: transparent;
-  border: 1px solid var(--border);
+  border: none;
 }
 .cw-pane .cw-tool.running .cw-tool-icon {
-  border-color: var(--accent);
+
   color: var(--accent);
 }
 .cw-pane .cw-reason-head {
@@ -1233,7 +1233,7 @@ body.resizing .cw-enter {
 }
 .cw-pane .cw-tool-out,
 .cw-pane .cw-diff {
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 4px;
   margin: 2px 0 8px;
 }
@@ -1257,8 +1257,8 @@ body.resizing .cw-enter {
   padding: 11px var(--cw-gutter, 22px) 11px calc(var(--cw-gutter, 22px) + 22px);
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   border: 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  border: none;
+  border: none;
   border-radius: 0;
   font-weight: 500;
   color: var(--fg);
@@ -1274,7 +1274,7 @@ body.resizing .cw-enter {
 
 /* ——— Plan strip (todos + running subagents) ——— */
 .cw-plan {
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-sm);
   background: var(--card-bg, color-mix(in srgb, var(--surface-2) 70%, transparent));
   backdrop-filter: var(--blur);
@@ -1356,7 +1356,7 @@ body.resizing .cw-enter {
     gap: 6px;
     padding: 14px 10px;
     overflow-y: auto;
-    border-left: 1px solid var(--border);
+    border: none;
     background: var(--card-bg, color-mix(in srgb, var(--surface-2) 55%, transparent));
     backdrop-filter: var(--blur);
   }
@@ -1405,7 +1405,7 @@ body.resizing .cw-enter {
   gap: 5px;
   height: 22px;
   padding: 0 6px;
-  border: 1px solid color-mix(in srgb, var(--del) 35%, transparent);
+  border: none;
   border-radius: 6px;
   background: color-mix(in srgb, var(--del) 8%, transparent);
   color: var(--del);
@@ -1416,7 +1416,7 @@ body.resizing .cw-enter {
 }
 .cw-stop-btn:hover {
   background: color-mix(in srgb, var(--del) 18%, transparent);
-  border-color: var(--del);
+
 }
 .cw-stop-btn:active {
   transform: scale(0.93);
@@ -1429,7 +1429,7 @@ body.resizing .cw-enter {
 .cw-stop-btn .cw-spinner {
   width: 11px;
   height: 11px;
-  border-color: color-mix(in srgb, var(--del) 25%, transparent);
+
   border-top-color: var(--del);
 }
 @keyframes cw-ping-soft {
@@ -1719,7 +1719,7 @@ button.cw-foot-item.active {
   display: flex;
   flex-direction: column;
   border-radius: var(--radius);
-  border: 1px solid var(--color-border-strong);
+  border: none;
   background: var(--color-panel-raised);
   box-shadow: 0 24px 60px -16px rgb(0 0 0 / 0.55);
   animation: cw-approval-in 0.32s var(--spring) both;
@@ -1733,7 +1733,7 @@ button.cw-foot-item.active {
   align-items: center;
   gap: 8px;
   padding: 10px 10px 10px 14px;
-  border-bottom: 1px solid var(--border);
+  border: none;
   font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-sheet > header > svg {
@@ -1959,7 +1959,7 @@ button.cw-foot-item.active {
   flex-direction: column;
   padding: 9px 11px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: none;
   background: var(--card-bg);
 }
 .cw-stat-cell small {
@@ -1992,7 +1992,7 @@ button.cw-foot-item.active {
 .cw-seg button {
   padding: 4px 10px;
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: none;
   font-size: calc(12px * var(--cw-text, 1));
   font-family: var(--font-mono);
   color: var(--muted);
@@ -2003,14 +2003,14 @@ button.cw-foot-item.active {
 }
 .cw-seg button.sel {
   background: var(--accent);
-  border-color: var(--accent);
+
   color: var(--color-on-accent);
 }
 .cw-seg-input {
   width: 84px;
   padding: 4px 8px;
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   font-size: calc(12px * var(--cw-text, 1));
   font-family: var(--font-mono);
@@ -2024,10 +2024,10 @@ button.cw-foot-item.active {
 }
 .cw-seg-input:focus {
   outline: none;
-  border-color: var(--accent);
+
 }
 .cw-seg-input.sel {
-  border-color: var(--accent);
+
 }
 .cw-seg-input.sel::placeholder {
   color: var(--accent);
@@ -2101,7 +2101,7 @@ button.cw-foot-item.active {
   gap: 10px;
   padding: 8px 0;
   font-size: calc(13px * var(--cw-text, 1));
-  border-top: 1px solid var(--border);
+  border: none;
 }
 .cw-task-row:first-child {
   border-top: 0;
@@ -2145,7 +2145,7 @@ button.cw-foot-item.active {
   flex-direction: column;
   gap: 4px;
   padding: 10px 0;
-  border-top: 1px solid var(--border);
+  border: none;
   font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-btw:first-child {
@@ -2165,7 +2165,7 @@ button.cw-foot-item.active {
 }
 .cw-inline-form input {
   flex: 1;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-sm);
   background: var(--color-panel);
   padding: 6px 10px;
@@ -2173,7 +2173,7 @@ button.cw-foot-item.active {
   font-size: calc(13px * var(--cw-text, 1));
 }
 .cw-inline-form input:focus {
-  border-color: var(--accent);
+
 }
 .cw-foot-item.hot {
   color: var(--warn);
@@ -2282,13 +2282,13 @@ button.cw-foot-item.active {
   margin-bottom: 4px;
   padding: 6px 9px;
   border-radius: 7px;
-  border: 1px solid var(--border);
+  border: none;
   background: var(--color-panel);
   outline: none;
   font-size: calc(12.5px * var(--cw-text, 1));
 }
 .cw-model-search:focus {
-  border-color: var(--accent);
+
 }
 
 /* ——— Effort bars ——— */
@@ -2491,7 +2491,7 @@ button.cw-foot-item.active {
   overflow: auto;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: none;
   background: var(--term-bg);
   font-family: var(--font-mono);
   font-size: calc(12px * var(--cw-text, 1));
@@ -2526,7 +2526,7 @@ button.cw-foot-item.active {
 }
 .cw-user-images img:hover {
   transform: translateY(-1px);
-  border-color: var(--accent);
+
 }
 .cw-lightbox {
   position: absolute;
@@ -2564,7 +2564,7 @@ button.cw-foot-item.active {
   gap: 4px;
   padding: 4px 6px;
   border-radius: 999px;
-  border: 1px solid var(--color-border-strong);
+  border: none;
   background: var(--color-panel-raised);
   font-size: calc(12px * var(--cw-text, 1));
   color: var(--muted);
@@ -2803,7 +2803,7 @@ button.cw-foot-item.active {
   position: absolute;
   inset: -16px;
   border-radius: 50%;
-  border: 1px dashed color-mix(in srgb, var(--accent) 22%, transparent);
+  border: none;
   animation: cw-orbit 40s linear infinite;
 }
 @keyframes cw-orbit {
@@ -2896,14 +2896,26 @@ button.cw-foot-item.active {
 .cw-where {
   display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
   margin: 6px 0 0;
   font-family: var(--font-mono);
   font-size: calc(11.5px * var(--cw-text, 1));
   color: var(--dim);
 }
-.cw-where svg {
-  margin-left: 8px;
+.cw-where-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-where-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 .cw-tiles {
   display: flex;
@@ -2921,7 +2933,7 @@ button.cw-foot-item.active {
   min-width: 104px;
   padding: 8px 11px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: none;
   background: color-mix(in srgb, var(--card-bg) 70%, transparent);
   backdrop-filter: blur(6px);
   text-align: left;
@@ -2931,7 +2943,7 @@ button.cw-foot-item.active {
   transition: border-color 0.2s, transform 0.2s var(--ease), background 0.2s;
 }
 .cw-tile:hover {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+
   box-shadow: 0 0 18px -6px color-mix(in srgb, var(--accent) 60%, transparent);
   transform: translateY(-2px);
 }
@@ -2970,7 +2982,37 @@ button.cw-foot-item.active {
   }
   .cw-where {
     max-width: 100%;
-    overflow-wrap: anywhere;
+  }
+}
+
+/* Very narrow panes: compact the welcome header and hide orbit halo so nothing overflows. */
+@container (max-width: 340px) {
+  .cw-welcome-inner {
+    padding: 10px 10px;
+  }
+  .cw-logo-wrap {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 6px;
+  }
+  .cw-orbit {
+    display: none;
+  }
+  .cw-welcome h1 {
+    font-size: calc(16px * var(--cw-text, 1));
+  }
+  .cw-who {
+    font-size: calc(12px * var(--cw-text, 1));
+    margin-top: 6px;
+  }
+  .cw-where {
+    font-size: calc(10.5px * var(--cw-text, 1));
+  }
+}
+
+@container (max-width: 260px) {
+  .cw-logo-wrap {
+    display: none;
   }
 }
 
@@ -3002,8 +3044,49 @@ button.cw-foot-item.active {
 .cw-attachments {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px 0;
+}
+.cw-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: min(220px, 100%);
+  min-width: 0;
+  padding: 0 4px 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--hover, color-mix(in srgb, var(--fg) 6%, transparent));
+  color: var(--fg-muted, var(--dim));
+  font-size: 11.5px;
+  animation: cw-pop 0.3s var(--spring);
+}
+.cw-file-chip-icon {
+  flex-shrink: 0;
+}
+.cw-file-chip-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-file-chip button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  color: inherit;
+}
+.cw-file-chip button:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
 }
 .cw-thumb {
   position: relative;
@@ -3011,7 +3094,7 @@ button.cw-foot-item.active {
   height: 64px;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: none;
   animation: cw-pop 0.3s var(--spring);
 }
 .cw-thumb img {
@@ -3046,7 +3129,7 @@ button.cw-foot-item.active {
   opacity: 1;
 }
 .cw-composer.dragging {
-  border-color: var(--accent);
+
   border-style: dashed;
   background: color-mix(in srgb, var(--accent) 6%, var(--composer-bg, var(--surface-2)));
 }
@@ -3063,7 +3146,7 @@ label.cw-icon-btn {
   max-width: 220px;
   max-height: 160px;
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3097,7 +3180,7 @@ label.cw-icon-btn {
   background: color-mix(in srgb, var(--bg, #111) 55%, rgb(255 255 255 / 0.06));
   -webkit-backdrop-filter: blur(14px) saturate(160%);
   backdrop-filter: blur(14px) saturate(160%);
-  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  border: none;
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.08),
     0 6px 18px rgb(0 0 0 / 0.4);
@@ -3130,7 +3213,7 @@ label.cw-icon-btn {
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface-2) 92%, transparent);
   backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
+  border: none;
   box-shadow: var(--shadow);
   transform-origin: top right;
   animation: cw-bgpop-in 0.18s var(--ease) both;
@@ -3147,7 +3230,7 @@ label.cw-icon-btn {
   gap: 6px;
   padding: 5px 7px 7px;
   margin-bottom: 3px;
-  border-bottom: 1px solid var(--border);
+  border: none;
   font-size: calc(12px * var(--cw-text, 1));
   font-weight: 600;
   color: var(--fg);
@@ -3298,8 +3381,8 @@ label.cw-icon-btn {
   top: -3px;
   width: 9px;
   height: 11px;
-  border-left: 1px solid color-mix(in srgb, var(--tint) 40%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--tint) 40%, transparent);
+  border: none;
+  border: none;
   border-bottom-left-radius: 5px;
 }
 .cw-tlf-step {

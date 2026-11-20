@@ -49,7 +49,7 @@ function StartForm({ ab, onStarted }: { ab: boolean; onStarted: () => void }) {
         onChange={(e) => setPrompt(e.target.value)}
         rows={3}
         placeholder="Task for every agent, e.g. “Make the cancelled-tier guard return 403 and add a regression test”"
-        className="w-full resize-none rounded-md border border-border bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:border-accent"
+        className="w-full resize-none rounded-md bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
       />
       {ab ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -58,8 +58,8 @@ function StartForm({ ab, onStarted }: { ab: boolean; onStarted: () => void }) {
               key={p.id}
               onClick={() => setAbProvider(p.id)}
               className={cn(
-                "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
-                abProvider === p.id ? "border-accent bg-accent-soft text-accent" : "border-border text-fg hover:bg-hover",
+                "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs shadow-sm",
+                abProvider === p.id ? "bg-accent-soft text-accent" : "text-fg hover:bg-hover",
               )}
             >
               <ProviderIcon provider={p.id} size={12} />
@@ -80,7 +80,7 @@ function StartForm({ ab, onStarted }: { ab: boolean; onStarted: () => void }) {
       ) : (
       <div className="flex flex-wrap items-center gap-2">
         {providers.map((p) => (
-          <div key={p.id} className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-fg">
+          <div key={p.id} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-fg shadow-sm">
             <ProviderIcon provider={p.id} size={12} />
             <span>{p.name}</span>
             <button onClick={() => bump(p.id, -1)} className="rounded p-0.5 text-fg-subtle hover:bg-hover hover:text-fg">
@@ -174,7 +174,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
           onClick={() => openRaceResults(raceId)}
           className={cn(
             "flex items-center gap-1 rounded-md px-2 py-0.5",
-            finished ? "bg-accent text-on-accent hover:opacity-90" : "border border-border text-fg-subtle hover:bg-hover hover:text-fg",
+            finished ? "bg-accent text-on-accent hover:opacity-90" : "text-fg-subtle hover:bg-hover hover:text-fg",
           )}
           title={finished ? "Time, tokens, cost and code written, side by side" : "The agents are still working; the numbers so far"}
         >
@@ -185,7 +185,7 @@ function RaceBoard({ raceId, panes }: { raceId: string; panes: Pane[] }) {
         </button>
       </div>
       {!isolated && <p className="text-[11px] text-warning">Some agents have no worktree, so they weren't started: races and A/B tests need the folder to be a git repository.</p>}
-      <div className="divide-y divide-border rounded-lg border border-border">
+      <div className="rounded-lg shadow-sm">
         {panes.map((pane) => {
           const st = stats[pane.id];
           return (
@@ -258,7 +258,7 @@ export function RaceView() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog h-fit max-h-[80vh] w-[760px] space-y-5 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog h-fit max-h-[80vh] w-[760px] space-y-5 overflow-y-auto rounded-xl bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
           {ab ? <FlaskConical size={14} className="text-accent" /> : <Flag size={14} className="text-accent" />}
           <h1 className="text-sm font-semibold text-fg">{ab ? "A/B test" : "Race mode"}</h1>
@@ -274,7 +274,7 @@ export function RaceView() {
             ))}
           </div>
           {races.size > 0 && !showForm && (
-            <button onClick={() => setShowForm(true)} className="rounded-md border border-border-strong px-2 py-1 text-xs text-fg hover:bg-hover">
+            <button onClick={() => setShowForm(true)} className="rounded-md px-2 py-1 text-xs text-fg hover:bg-hover shadow-sm">
               {ab ? "New A/B test" : "New race"}
             </button>
           )}

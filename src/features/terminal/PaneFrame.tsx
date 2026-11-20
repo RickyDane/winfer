@@ -9,7 +9,7 @@ import { paneUsesWeb } from "@/features/code/styles";
 import { useStarting } from "./xtermRegistry";
 import { paneLabel, providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { progressTitle, useProgress } from "@/features/progress/progress";
-import { PaneHeader, PaneStatusLine } from "./PaneHeader";
+import { GlassPaneHeader } from "./GlassPaneHeader";
 import { tabPane, useBrowser } from "@/features/browser/browser";
 
 /**
@@ -53,7 +53,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
       data-browser-highlighted={browserVisible && browserLinked || undefined}
       onMouseDown={onFocus}
       className={cn(
-        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border transition-[border-color,opacity,box-shadow,background-color] duration-150",
+        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden transition-[opacity,box-shadow,background-color] duration-150",
         "pane-glass",
         isNew && "anim-grow",
         focused && "pane-glass-focused",
@@ -61,7 +61,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
         browserVisible && browserLinked && "browser-linked-pane",
       )}
     >
-      <PaneHeader {...{ pane, index, focused, zoomed, onFocus, workspaceName, name, label, renaming, setRenaming, progress, showProgress }} />
+      <GlassPaneHeader {...{ pane, index, focused, zoomed, onFocus, workspaceName, name, label, renaming, setRenaming, progress, showProgress }} />
 
       {searching && <PaneSearch paneId={pane.id} />}
       {pane.provider === "winfer" && paneUsesWeb(pane.id) ? (
@@ -73,11 +73,9 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
           <TerminalHost pane={pane} focused={focused} />
         </div>
       )}
-      {/* winfer code's web UI has a status line of its own. */}
-      {!(pane.provider === "winfer" && paneUsesWeb(pane.id)) && <PaneStatusLine pane={pane} onFocus={onFocus} />}
       {starting && (
         <div className={cn("anim-fade pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center", "top-20")}>
-          <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
+          <span className="flex items-center gap-2 rounded-md bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
             <Spinner size={13} className="text-accent" />
             {starting === "worktree" ? "Creating worktree…" : `Starting ${name}…`}
           </span>

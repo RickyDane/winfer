@@ -282,6 +282,8 @@ pub struct Root {
     palette_entries: Vec<Entry>,
     palette_selected: usize,
     bg_notes: HashMap<String, Vec<String>>,
+    bg_tasks: HashMap<String, Vec<pane_header::BgTask>>,
+    bg_popover: Option<(String, Point<Pixels>)>,
     #[cfg(debug_assertions)]
     dev_layer_opened: bool,
     usage: usage::UsageStore,
@@ -313,7 +315,7 @@ pub struct Root {
     models: HashMap<String, Vec<dialogs::ModelInfo>>,
     new_menu: new_menu::NewMenu,
     pane_note: Option<pane_note::NoteUi>,
-    welcome_input: Option<Entity<gpui_kit::component::input::InputState>>,
+    welcome: welcome::WelcomeUi,
 }
 
 impl Root {
@@ -330,7 +332,7 @@ impl Root {
 
         let forward = tx.clone();
         backend::app().listen_any(move |event, payload| {
-            if matches!(event, "pty://exit" | "agent://status" | "notification://action" | "mobile://request" | "mobile://changed" | "mcp://call" | "bg://note" | "usage://report") || event.starts_with("browser://") {
+            if matches!(event, "pty://exit" | "agent://status" | "notification://action" | "mobile://request" | "mobile://changed" | "mcp://call" | "bg://note" | "bg://task" | "usage://report") || event.starts_with("browser://") {
                 let _ = forward.try_send(SessionEvent::Backend(event.to_string(), payload.clone()));
             }
         });
@@ -433,7 +435,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome_input: None, toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -556,6 +558,9 @@ impl Root {
                     let (id, text) = (payload["paneId"].as_str().unwrap_or_default().to_string(), payload["text"].as_str().unwrap_or_default().to_string());
                     self.bg_notes.entry(id).or_default().push(text);
                     self.deliver_bg_notes(cx);
+                }
+                "bg://task" => {
+                    self.on_bg_task(&payload, cx);
                 }
                 "pty://exit" => {
                     let id = payload["paneId"].as_str().unwrap_or_default().to_string();
@@ -850,7 +855,7 @@ impl Root {
         let tabs: Vec<(String, String)> = self.side_open.iter().filter_map(|id| s.workspaces.iter().find(|w| w.id == *id).map(|w| (id.clone(), w.name.clone()))).collect();
         let show_tabs = tabs.len() > 1 || active != workspace;
         let offer_active = !self.side_open.contains(&active);
-        let mut strip = div().flex().items_center().gap_1().h(px(32.0)).px_1p5().border_b_1().border_color(c.border);
+        let mut strip = div().flex().items_center().gap_1().h(px(32.0)).px_1p5();
         for (id, name) in tabs {
             let selected = id == workspace;
             let (show, close) = (id.clone(), id.clone());
@@ -886,7 +891,7 @@ impl Root {
             .flex_col()
             .when(show_tabs, |d| d.child(strip))
             .child(
-                div().flex().items_center().gap_2().border_b_1().border_color(c.border).px_3().py_1p5().text_xs().text_color(c.subtle)
+                div().flex().items_center().gap_2().px_3().py_1p5().text_xs().text_color(c.subtle)
                     .child(Icon::new(IconName::FolderOpen).size(px(12.0)))
                     .child(div().flex_1().min_w_0().truncate().font_family(mono).text_size(px(11.0)).child(cwd))
                     .child(
@@ -914,7 +919,7 @@ impl Root {
                 .child(Icon::new(icon).size(px(13.0)))
                 .child(label)
         };
-        let header = div().flex().items_center().gap_1().px_2().py_1().border_b_1().border_color(c.border)
+        let header = div().flex().items_center().gap_1().px_2().py_1()
             .child(tab(self, cx, "side-browser", IconName::Globe, "Browser", SidePanel::Browser))
             .child(tab(self, cx, "side-device", IconName::Smartphone, "Android", SidePanel::Device))
             .child(tab(self, cx, "side-terminal", IconName::SquareTerminal, "Terminal", SidePanel::Terminal))
@@ -928,7 +933,7 @@ impl Root {
         let body: AnyElement = match panel {
             SidePanel::Browser if self.browser_window.is_some() => div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
                 .child("The browser is in its own window.")
-                .child(div().id("dock-browser").rounded_md().border_1().border_color(c.border_strong).px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
+                .child(div().id("dock-browser").rounded_md().px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_browser_window(window, cx))).child("Dock it back"))
                 .into_any_element(),
             SidePanel::Browser => self.browser.clone().into_any_element(),
@@ -1088,7 +1093,7 @@ impl Root {
                 ),
             )
             .child(
-                div().flex().items_center().gap_0p5().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_0p5()
+                div().flex().items_center().gap_0p5().rounded_lg().bg(c.panel).p_0p5()
                     .child(tab("tab-workspace", IconName::LayoutGrid, name, view == View::Workspace).on_click(set(View::Workspace)))
                     .child(
                         tab("tab-overview", IconName::Layers, "Overview".into(), view == View::Overview)
@@ -1109,14 +1114,14 @@ impl Root {
                 div().flex_1().flex().items_center().justify_end().gap_2()
                     .child(self.render_usage_meter(c, cx))
                     .child(
-                        div().id("live-voice").rounded_md().border_1().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
-                            .border_color(if live_on { c.accent } else { c.border }).text_color(if live_on { c.accent } else { c.subtle })
+                        div().id("live-voice").rounded_md().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .text_color(if live_on { c.accent } else { c.subtle })
                             .tooltip(crate::ui::code_view::tip(if live_on { "End live voice conversation" } else { "Start live voice conversation" }))
                             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::LiveVoice, window, cx)))
                             .child(Icon::new(IconName::AudioLines).size(px(13.0))),
                     )
                     .child(
-                        div().id("new-pane").flex().items_center().gap_1().rounded_md().border_1().border_color(c.border).px_2().py_1().text_xs().cursor_pointer()
+                        div().id("new-pane").flex().items_center().gap_1().rounded_md().px_2().py_1().text_xs().cursor_pointer()
                             .hover(move |d| d.bg(c.hover).text_color(c.fg))
                             .tooltip(crate::ui::code_view::tip("New pane"))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_new_menu(cx)))
@@ -1140,7 +1145,7 @@ impl Root {
             Some(view) => view.into_any_element(),
             None => self.terminal(&pane.id, cx).into_any_element(),
         };
-        let (header, status_line) = self.render_header(pane, index, zoomed, c, cx);
+        let header = self.render_header(pane, index, zoomed, c, cx);
         let search = if is_code { None } else { self.render_search(&pane.id, *c, cx) };
         let s = self.state.read(cx);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
@@ -1156,23 +1161,25 @@ impl Root {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded_lg()
-            .border_1()
-            .border_color(if focused { Hsla { a: 0.5, ..c.accent } } else { c.border })
+            .rounded_2xl()
             .bg(c.panel)
             .when(dragged, |d| d.opacity(0.4))
             .child(header)
-            .child(if is_code { div().flex_1().min_h_0().child(body) } else { div().flex_1().min_h_0().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body) })
-            // winfer code's own view has a status line of its own.
-            .children(status_line.filter(|_| !is_code))
+            .child(if is_code {
+                div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().child(body)
+            } else {
+                div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body)
+            })
             .children(search)
             .when_some(starting, |d, text| {
                 d.child(
                     div().absolute().top(px(32.0)).left_0().right_0().bottom_0().flex().items_center().justify_center().child(
-                        div().rounded_md().border_1().border_color(c.border).bg(c.raised).px_3().py_1p5().text_xs().text_color(c.muted).child(text),
+                        div().rounded_md().bg(c.raised).px_3().py_1p5().text_xs().text_color(c.muted).child(text),
                     ),
                 )
             })
+            // Paint the rounded border on top so inner views (chat/terminal/sky) can never square off the bottom corners.
+            .child(div().absolute().top_0().left_0().size_full().rounded_2xl())
     }
 
     fn render_tiles(&mut self, tree: Option<LayoutNode>, zoomed: Option<String>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -1263,14 +1270,14 @@ impl Root {
             DropSide::Center => {}
         }
         let tile = self.tile_bounds.origin;
-        Some(div().absolute().left(origin.x - tile.x).top(origin.y - tile.y).w(extent.width).h(extent.height).rounded_md().bg(Hsla { a: 0.2, ..c.accent }).border_1().border_color(c.accent))
+        Some(div().absolute().left(origin.x - tile.x).top(origin.y - tile.y).w(extent.width).h(extent.height).rounded_md().bg(Hsla { a: 0.2, ..c.accent }))
     }
 }
 
 impl Root {
     /// Closes the topmost modal layer; true if there was one.
     fn close_top_layer(&mut self, _: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.close_release_notes(cx) || self.close_pane_note(cx) || self.close_menu(cx) || self.cancel_rename(cx) || self.close_search(cx) || self.close_plugin_layer(cx) || self.close_orchestration_layer(cx) {
+        if self.close_release_notes(cx) || self.close_bg_popover(cx) || self.close_welcome_picker(cx) || self.close_pane_note(cx) || self.close_menu(cx) || self.cancel_rename(cx) || self.close_search(cx) || self.close_plugin_layer(cx) || self.close_orchestration_layer(cx) {
             return true;
         }
         let s = self.state.read(cx);
@@ -1462,6 +1469,7 @@ impl Render for Root {
         let usage_popover = self.render_usage_popover(&c, cx);
         let new_menu = self.render_new_menu(&c, cx);
         let pane_note = self.render_pane_note(&c, cx);
+        let bg_popover = self.render_bg_popover(&c, window, cx);
         let apps_menu = self.render_apps_menu(&c, cx);
         let branch_dialog = self.render_branch_dialog(&c, cx);
         let context_menu = self.render_menu(&c, window, cx);
@@ -1541,13 +1549,14 @@ impl Render for Root {
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::SidePanel))),
                         )
                         .child(
-                            div().w(px(side_width.max(MIN_SIDE_PANEL))).flex_shrink_0().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel).child(side_panel.take().unwrap()),
+                            div().w(px(side_width.max(MIN_SIDE_PANEL))).flex_shrink_0().overflow_hidden().rounded_lg().bg(c.panel).child(side_panel.take().unwrap()),
                         )
                     }),
             )
             .children(usage_popover)
             .children(new_menu)
             .children(pane_note)
+            .children(bg_popover)
             .children(settings)
             .children(review)
             .children(history)

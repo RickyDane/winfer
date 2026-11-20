@@ -60,7 +60,7 @@ export function ViewerPanel() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {projects.length > 0 && (
-        <div role="tablist" aria-label="File viewer projects" className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-1.5">
+        <div role="tablist" aria-label="File viewer projects" className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto px-1.5">
           {projects.map((group) => (
             <button
               key={group.id}
@@ -77,7 +77,7 @@ export function ViewerPanel() {
           ))}
         </div>
       )}
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-1.5">
+      <div className="flex h-9 shrink-0 items-center gap-1 px-1.5">
         <div role="tablist" aria-label="Project files" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {projectDocs.map((path) => {
             const Icon = iconFor(path);
@@ -270,7 +270,7 @@ function FileView({ path, root }: { path: string; root: string | undefined }) {
 
   return (
     <>
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
+      <div className="flex h-10 shrink-0 items-center gap-1 px-2">
         <span title={path} className="mx-1 min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-muted" dir="rtl">
           {/* rtl keeps the file name visible when the path is cut */}
           <bdi>{relativeTo(path, root)}</bdi>
@@ -401,8 +401,8 @@ function CommentComposer({ quote, onSubmit, onCancel }: { quote: string; onSubmi
   const [body, setBody] = useState("");
   const submit = () => body.trim() && onSubmit(body);
   return (
-    <div className="shrink-0 border-t border-border bg-panel-raised p-2">
-      {quote && <div className="mb-1.5 truncate border-l-2 border-accent pl-2 text-[11px] text-fg-muted">{quote}</div>}
+    <div className="shrink-0 bg-panel-raised p-2">
+      {quote && <div className="mb-1.5 truncate border-l-2 pl-2 text-[11px] text-fg-muted">{quote}</div>}
       <textarea
         autoFocus
         rows={3}
@@ -415,7 +415,7 @@ function CommentComposer({ quote, onSubmit, onCancel }: { quote: string; onSubmi
             submit();
           } else if (e.key === "Escape") onCancel();
         }}
-        className="block w-full resize-none rounded-md border border-border bg-panel px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
+        className="block w-full resize-none rounded-md bg-panel px-2 py-1.5 text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
       />
       <div className="mt-1.5 flex items-center justify-end gap-1.5">
         <span className="mr-auto text-[10px] text-fg-subtle">Saved in the file as an HTML comment · ⌘↵</span>
@@ -453,7 +453,7 @@ function SendComments({ path, count }: { path: string; count: number }) {
         </span>
       </IconButton>
       {open && (
-        <div className="absolute top-full right-0 z-20 mt-1 w-56 rounded-md border border-border bg-panel-raised p-1 shadow-lg" onMouseLeave={() => setOpen(false)}>
+        <div className="absolute top-full right-0 z-20 mt-1 w-56 rounded-md bg-panel-raised p-1 shadow-lg" onMouseLeave={() => setOpen(false)}>
           <div className="px-2 py-1 text-[10px] text-fg-subtle">Ask an agent to address your comments</div>
           {panes.length === 0 && <div className="px-2 py-1 text-xs text-fg-muted">No panes in this workspace</div>}
           {panes.map((p, i) => (

@@ -72,6 +72,8 @@ export interface CodeState {
   sheet: Sheet | null;
   /** Tokens streamed in the running turn when it started / now, and when, for tok/s. */
   rate: { tokens: number; at: number; start: number; startAt: number } | null;
+  /** Last measured tok/s, kept after the turn finishes so metrics stay visible. */
+  lastRate: number | null;
   setSheet(sheet: Sheet | null): void;
   /** Images open in the full-size preview, and which one shows. */
   preview: { images: string[]; index: number } | null;
@@ -132,6 +134,7 @@ export const createCodeStore = () =>
   btw: [],
   sheet: null,
   rate: null,
+  lastRate: null,
   setSheet: (sheet) => set(sheet === "btw" ? { sheet, btw: [] } : { sheet }),
   preview: null,
   setPreview: (preview) => set({ preview }),
@@ -295,7 +298,13 @@ export const createCodeStore = () =>
           const streamed = u.turn_streamed ?? u.output;
           const now = Date.now();
           const rate = s.busy ? (s.rate ? { ...s.rate, tokens: streamed, at: now } : { start: streamed, startAt: now, tokens: streamed, at: now }) : s.rate;
-          return { usage: { ...s.usage, ...u }, rate };
+          const nextUsage = { ...s.usage, ...u };
+          const activeMs = nextUsage.turn_active_ms ?? 0;
+          const activeToks = nextUsage.turn_streamed ?? nextUsage.turn ?? 0;
+          let measured: number | null = null;
+          if (activeMs >= 500 && activeToks > 0) measured = (activeToks / activeMs) * 1000;
+          else if (rate && rate.at - rate.startAt >= 800 && rate.tokens > rate.start) measured = ((rate.tokens - rate.start) / (rate.at - rate.startAt)) * 1000;
+          return { usage: nextUsage, rate, lastRate: measured ?? s.lastRate };
         }
         case "notice":
         case "bg_note":
@@ -359,7 +368,7 @@ export const createCodeStore = () =>
         case "answered":
           return { approvals: s.approvals.filter((a) => a.id !== ev.id) };
         case "cleared":
-          return { items: [], approvals: [], tasks: {}, todos: [], planDoneAt: null, busy: false, usage: { ...s.usage, context: 0, input: 0, cached: 0, output: 0, cost: null, turn: 0 }, rate: null };
+          return { items: [], approvals: [], tasks: {}, todos: [], planDoneAt: null, busy: false, usage: { ...s.usage, context: 0, input: 0, cached: 0, output: 0, cost: null, turn: 0 }, rate: null, lastRate: null };
         case "restore": {
           const restored: Item[] = ev.transcript.map((e): Item => {
             if (e.role === "user") return { kind: "user", key: key(), text: e.text, at: 0 };

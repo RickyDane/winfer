@@ -481,6 +481,9 @@ impl Bridge {
             "step_update" => self.on_step(&v["step_update"]),
             "result" => {
                 let r = &v["result"];
+                if !r["usage"].is_null() {
+                    self.on_usage(&r["usage"]);
+                }
                 if r["status"] != "SUCCESS" {
                     let error = r["error"].as_str().filter(|e| !e.is_empty()).unwrap_or("Antigravity reported an error.");
                     self.emit(Ev::Error(error.to_string()));
@@ -511,7 +514,9 @@ impl Bridge {
         match s["step_type"].as_str().unwrap_or("") {
             "agent_response" => {
                 if let Some(text) = s["text_delta"].as_str().filter(|t| !t.is_empty()) {
-                    self.turn.streamed(text);
+                    if self.turn.streamed(text) {
+                        self.emit_usage();
+                    }
                     self.emit(Ev::TextDelta { id: format!("t{index}"), text: text.to_string() });
                 }
             }
@@ -553,10 +558,28 @@ impl Bridge {
         }
     }
 
+    /// Streaming usage snapshot while text deltas arrive.
+    fn emit_usage(&mut self) {
+        let mut u = self.usage.clone();
+        u.turn = self.turn.now();
+        u.turn_streamed = self.turn.streamed_total();
+        u.turn_active_ms = self.turn.active_ms();
+        if u.window == 0 {
+            u.window = window(&self.model);
+        }
+        self.emit(Ev::Usage(u));
+    }
+
     /// One model request's usage (a step's).
+    /// `agy` reports `input_tokens` excluding `cache_read_tokens` (and any `cache_creation_tokens`),
+    /// so total prompt input is their sum (matching Claude/Cursor/Pi).
     fn on_usage(&mut self, u: &Value) {
-        let n = |k: &str| u[k].as_u64().unwrap_or(0);
-        let (input, output, cached) = (n("input_tokens"), n("output_tokens"), n("cache_read_tokens"));
+        let n = |a: &str, b: &str| u[a].as_u64().or_else(|| u[b].as_u64()).unwrap_or(0);
+        let raw_input = n("input_tokens", "inputTokens");
+        let output = n("output_tokens", "outputTokens");
+        let cached = n("cache_read_tokens", "cacheReadTokens");
+        let cache_write = n("cache_creation_tokens", "cacheCreationTokens").max(n("cache_write_tokens", "cacheWriteTokens"));
+        let input = raw_input + cached + cache_write;
         let total = self.turn.now();
         self.turn.exact(total + output);
         let us = &mut self.usage;
@@ -568,6 +591,7 @@ impl Bridge {
         us.turn_input += input;
         us.turn_cached += cached;
         us.turn_streamed = self.turn.streamed_total();
+        us.turn_active_ms = self.turn.active_ms();
         if us.window == 0 {
             us.window = window(&self.model);
         }
@@ -805,5 +829,23 @@ mod tests {
         assert_eq!(display_name("call_mcp_tool", &lazy), "winfer · bg");
         assert_eq!(title("call_mcp_tool", &lazy), "list");
         assert_eq!(display_name("mcp_winfer_open_url", &json!({ "url": "http://localhost:1420" })), "winfer · open_url");
+    }
+
+    #[test]
+    fn usage_counts_cached_tokens_in_input() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = Bridge {
+            events: tx, session: None, model: "gemini-4-neon".into(), system: None, busy: true, queued: 0, calls: HashMap::new(),
+            restart: false, usage: Usage::default(), turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(),
+        };
+        b.on_usage(&json!({ "input_tokens": 22_100, "cache_read_tokens": 38_900, "output_tokens": 972 }));
+        let Some(Ev::Usage(u)) = rx.try_iter().last() else { panic!("expected Usage event") };
+        assert_eq!(u.input, 61_000);
+        assert_eq!(u.turn_input, 61_000);
+        assert_eq!(u.cached, 38_900);
+        assert_eq!(u.turn_cached, 38_900);
+        assert_eq!(u.output, 972);
+        assert_eq!(u.context, 61_972);
+        assert!(u.cached <= u.input);
     }
 }

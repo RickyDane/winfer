@@ -522,7 +522,7 @@ impl Root {
             // Only warn when the pace runs it out before it resets.
             let out = runs_out_at(&provider, w, &self.usage.samples, now).filter(|o| w.resets_at.is_none_or(|r| *o < r)).map(|o| format!("Runs out in {} at this pace", duration(o - now)));
             list = list.child(
-                div().flex().flex_col().gap_1p5().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_3()
+                div().flex().flex_col().gap_1p5().rounded_lg().bg(c.panel).p_3()
                     .child(div().flex().items_baseline().gap_2()
                         .child(div().flex_1().text_size(px(12.0)).text_color(c.muted).child(w.label.clone()))
                         .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(format!("{left:.0}%")))
@@ -541,7 +541,7 @@ impl Root {
                 let snapshot = self.usage.snapshots.get(&usage_key(&a.id));
                 let left = tightest(snapshot, now).map(|w| left_now(w, now));
                 let color = left.map_or(c.subtle, |l| if l < 10.0 { c.danger } else if l < 30.0 { c.warning } else { c.success });
-                let mut card = div().flex().flex_col().gap_1().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_2p5()
+                let mut card = div().flex().flex_col().gap_1().rounded_lg().bg(c.panel).p_2p5()
                     .child(div().flex().items_center().gap_2()
                         .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color))
                         .child(div().flex().flex_1().min_w_0().flex_col()
@@ -574,7 +574,7 @@ impl Root {
             .when(busy, |d| d.opacity(0.6))
             .child(Icon::new(IconName::RefreshCw).size(px(12.0)).with_animation("usage-refresh-spin", Animation::new(Duration::from_millis(900)).repeat(), move |i, t| if busy { i.transform(Transformation::rotate(percentage(t))) } else { i }))
             .child(if busy { "Refreshing…" } else { "Refresh" });
-        let settings = div().id("usage-settings").flex().items_center().gap_1p5().pt_2().border_t_1().border_color(c.border).text_size(px(12.0)).text_color(c.accent).cursor_pointer()
+        let settings = div().id("usage-settings").flex().items_center().gap_1p5().pt_2().text_size(px(12.0)).text_color(c.accent).cursor_pointer()
             .on_click(cx.listener(|this, _, window, cx| {
                 this.usage.popover = None;
                 this.execute(super::commands::Command::Settings(Some("usage".into())), window, cx);
@@ -587,7 +587,7 @@ impl Root {
                     cx.notify();
                 }))
                 .child(
-                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).flex().flex_col().gap_3().rounded(px(12.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl().p_4()
+                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).flex().flex_col().gap_3().rounded(px(12.0)).bg(c.raised).shadow_2xl().p_4()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().flex().items_center().gap_2()
                             .child(div().size(px(26.0)).flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &provider, 14.0, 1.0)))

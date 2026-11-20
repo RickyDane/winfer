@@ -45,7 +45,7 @@ export function Overview() {
             onResize={(path, sizes) => updateOverview((o) => ({ layout: o.layout && setSizesAt(o.layout, path, sizes) }))}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center rounded-[var(--radius-pane)] border border-dashed border-border text-sm text-fg-muted">
+          <div className="flex h-full w-full items-center justify-center rounded-[var(--radius-pane)] text-sm text-fg-muted shadow-sm">
             No sessions in any workspace
           </div>
         )}

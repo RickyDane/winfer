@@ -107,7 +107,7 @@ function Tests({ review }: { review: Review }) {
   }
   if (!testCommand) return null;
   return (
-    <button onClick={() => void runTests(review.id)} className={cn(button, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}>
+    <button onClick={() => void runTests(review.id)} className={cn(button, "text-fg-muted hover:bg-hover hover:text-fg")}>
       <FlaskConical size={12} /> Run {testCommand}
     </button>
   );
@@ -122,7 +122,7 @@ function Screenshot({ review }: { review: Review }) {
     useWorkspaces.getState().setOverlay(null);
   };
   return (
-    <button onClick={open} title={`Open ${shot.url} in the browser`} className="group relative h-28 w-44 shrink-0 overflow-hidden rounded-md border border-border bg-panel">
+    <button onClick={open} title={`Open ${shot.url} in the browser`} className="group relative h-28 w-44 shrink-0 overflow-hidden rounded-md bg-panel shadow-sm">
       {shot.state === "done" ? (
         <img src={shot.value} alt={`Screenshot of ${shot.url}`} className="h-full w-full object-cover object-top" />
       ) : shot.state === "loading" ? (
@@ -230,7 +230,7 @@ function QueuePanel({ items }: { items: QueueItem[] }) {
   const done = items.filter((i) => i.state === "merged").length;
   const pending = items.filter(isPending).length;
   return (
-    <section className="space-y-2 rounded-lg border border-border bg-panel-raised p-3">
+    <section className="space-y-2 rounded-lg bg-panel-raised p-3 shadow-sm">
       <header className="flex items-center gap-2 text-xs">
         <ListOrdered size={13} className="text-accent" />
         <span className="font-medium text-fg">Merge queue</span>
@@ -315,7 +315,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
 
   return (
     <article className={cn("anim-fade space-y-4 transition-opacity duration-300", !open && "opacity-60")}>
-      <header className="flex items-center gap-2 border-b border-border pb-3 text-xs">
+      <header className="flex items-center gap-2 pb-3 text-xs">
         <span className="sr-only">{index}</span>
         <span className="grid size-[26px] shrink-0 place-items-center rounded-[7px] bg-hover">
           <ProviderIcon provider={review.provider} size={14} />
@@ -393,7 +393,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
       {open ? (
         <footer className="flex items-center gap-1.5">
           <form
-            className="flex flex-1 items-center gap-1 rounded-md border border-border bg-panel px-2 focus-within:border-accent"
+            className="flex flex-1 items-center gap-1 rounded-md bg-panel px-2 focus-within:ring-2 focus-within:ring-accent/40 shadow-sm"
             onSubmit={(e) => {
               e.preventDefault();
               sendBack();
@@ -443,7 +443,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
               disabled={!pane?.worktree || isPending(queued)}
               title={pane?.worktree ? `Add to the merge queue: brings in ${pane.worktree.base}'s new commits, runs the tests, then merges. Uncommitted changes are committed.` : "Only agents in their own worktree can be merged"}
               onClick={() => enqueue([review.id])}
-              className={cn(button, "border border-border text-fg-muted hover:bg-hover hover:text-fg")}
+              className={cn(button, "text-fg-muted hover:bg-hover hover:text-fg")}
             >
               <ListPlus size={12} /> Queue
             </button>
@@ -478,7 +478,7 @@ function ReviewCard({ review, index, pane, race, workspaceName }: { review: Revi
             )}
           </span>
           {review.status === "merged" && pane && (
-            <button onClick={() => void cleanUp()} className={cn(button, "ml-auto border border-border text-fg-muted hover:bg-hover hover:text-fg")}>
+            <button onClick={() => void cleanUp()} className={cn(button, "ml-auto text-fg-muted hover:bg-hover hover:text-fg")}>
               Close agent and delete worktree
             </button>
           )}
@@ -540,8 +540,8 @@ export function ReviewInbox() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog flex h-[min(700px,86vh)] w-[1040px] max-w-[94vw] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="flex items-center gap-2 border-b border-border px-5 py-3">
+      <div className="anim-dialog flex h-[min(700px,86vh)] w-[1040px] max-w-[94vw] flex-col isolate overflow-hidden rounded-[14px] bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="flex items-center gap-2 px-5 py-3">
           <Inbox size={15} className="text-accent" />
           <h1 className="text-[15px] font-semibold text-fg">Review</h1>
           <span className="flex-1 truncate text-xs text-fg-subtle">
@@ -562,7 +562,7 @@ export function ReviewInbox() {
           </button>
         </header>
         {shownQueue.length > 0 && (
-          <div className="border-b border-border px-5 py-2">
+          <div className="px-5 py-2">
             <QueuePanel items={shownQueue} />
           </div>
         )}
@@ -574,7 +574,7 @@ export function ReviewInbox() {
           </div>
         ) : (
           <div className="flex min-h-0 flex-1">
-            <div className="w-[290px] shrink-0 space-y-0.5 overflow-y-auto border-r border-border p-2">
+            <div className="w-[290px] shrink-0 space-y-0.5 overflow-y-auto p-2">
               {reviews.map((r) => (
                 <ReviewItem key={r.id} review={r} pane={panes.get(r.paneId)} selected={r.id === selected?.id} onSelect={() => setSelectedId(r.id)} />
               ))}

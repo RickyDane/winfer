@@ -14,7 +14,7 @@ export function RecipesView() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[14vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog h-fit w-[560px] space-y-4 rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog h-fit w-[560px] space-y-4 rounded-xl bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
           <BookOpen size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">Recipes</h1>
@@ -22,7 +22,7 @@ export function RecipesView() {
             <X size={14} />
           </button>
         </header>
-        <div className="divide-y divide-border rounded-lg border border-border">
+        <div className="rounded-lg shadow-sm">
           {recipes.map((r) => (
             <div key={r.id} className="flex items-center gap-3 px-3 py-2 text-xs">
               <div className="min-w-0 flex-1">
@@ -62,11 +62,11 @@ export function RecipesView() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={`Save “${workspace?.name ?? "this workspace"}” layout as…`}
-            className="h-8 flex-1 rounded-md border border-border bg-panel px-2.5 text-xs text-fg outline-none focus:border-accent"
+            className="h-8 flex-1 rounded-md bg-panel px-2.5 text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
           />
           <button
             disabled={!name.trim() || !workspace?.layout}
-            className="rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-fg hover:bg-hover disabled:opacity-40"
+            className="rounded-md px-2.5 py-1.5 text-xs text-fg hover:bg-hover disabled:opacity-40 shadow-sm"
           >
             Save current
           </button>

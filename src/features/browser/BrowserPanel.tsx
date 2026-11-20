@@ -151,13 +151,13 @@ export function BrowserPanel() {
 
   return (
     <div ref={root} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-end gap-1 border-b border-border px-2 pt-2">
-        <div className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
+      <div className="flex shrink-0 items-end gap-1 px-2 pt-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden pt-0.5 [scrollbar-width:none]">
           {groups.map(({ workspace, tabs }, i) => (
-            <div key={workspace.id} className="flex shrink-0 items-end gap-0.5">
-              {i > 0 && <div className="mx-0.5 mb-2 h-4 w-px shrink-0 bg-border" />}
+            <div key={workspace.id} className="flex shrink-0 items-center gap-1">
+              {i > 0 && <div className="mx-0.5 h-4 w-px shrink-0 bg-border" />}
               {groups.length > 1 && (
-                <span title={workspace.rootDir} className="mb-2 max-w-24 shrink-0 truncate px-0.5 text-[10px] font-medium text-fg-subtle">
+                <span title={workspace.rootDir} className="max-w-24 shrink-0 truncate px-0.5 text-[10px] font-medium text-fg-subtle">
                   {workspace.name}
                 </span>
               )}
@@ -179,8 +179,10 @@ export function BrowserPanel() {
                   }}
                   title={`${tab.url}\n${workspace.name}${agentTabs[tab.id] ? `\n${agentTabs[tab.id].adopted ? "An agent took over this tab" : "An agent is using this tab"}` : ""}`}
                   className={cn(
-                    "group flex h-8 max-w-44 shrink-0 items-center gap-[7px] rounded-t-lg border border-b-0 pr-1.5 pl-2.5 text-xs",
-                    workspace.id === workspaceId && tab.id === active?.id ? "border-border bg-panel-raised text-fg" : "border-transparent text-fg-subtle hover:bg-hover hover:text-fg-muted",
+                    "group flex h-[30px] max-w-44 shrink-0 items-center gap-[7px] rounded-t-lg rounded-b-none pr-1.5 pl-2.5 text-xs transition-colors",
+                    workspace.id === workspaceId && tab.id === active?.id
+                      ? "browser-tab-active font-medium text-fg"
+                      : "browser-tab-idle text-fg-muted hover:text-fg",
                     agentTabs[tab.id] && "agent-tab",
                     agentTabs[tab.id]?.adopted && "agent-adopted",
                     focusedPaneId && tabPane(browser, workspace.id, tab.id, workspaces) === focusedPaneId && "browser-linked-tab",
@@ -201,14 +203,14 @@ export function BrowserPanel() {
             </div>
           ))}
         </div>
-        <span className="mb-1">
+        <span className="pb-0.5">
           <IconButton title="New tab" onClick={() => void newTab()}>
             <Plus size={14} />
           </IconButton>
         </span>
       </div>
 
-      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-panel-raised px-2">
+      <div className="flex h-11 shrink-0 items-center gap-1 bg-panel-raised px-2">
         <IconButton title="Back" onClick={() => void history(-1)}>
           <ArrowLeft size={14} />
         </IconButton>
@@ -216,7 +218,7 @@ export function BrowserPanel() {
           <ArrowRight size={14} />
         </IconButton>
         <form
-          className={cn("mx-1 flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent bg-hover pr-2.5 pl-2 text-fg-subtle hover:border-border-strong focus-within:border-accent", agentHere && "agent-url")}
+          className={cn("mx-1 flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-full bg-hover pr-2.5 pl-2 text-fg-subtle focus-within:ring-2 focus-within:ring-accent/40 shadow-sm", agentHere && "agent-url")}
           onSubmit={(e) => {
             e.preventDefault();
             if (address.trim()) void openUrl(address, { newTab: !active, workspaceId });
@@ -401,8 +403,8 @@ export function SidePanel() {
   const tab = (active: boolean) =>
     cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
-    <aside style={{ width }} className="anim-fade flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
-      <div role="tablist" className="flex shrink-0 items-center gap-0.5 border-b border-border px-1.5 py-1">
+    <aside style={{ width }} className="anim-fade flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
+      <div role="tablist" className="flex shrink-0 items-center gap-0.5 px-1.5 py-1">
         <button role="tab" aria-selected={panel === "browser"} onClick={() => setPanel("browser")} className={tab(panel === "browser")}>
           <Globe size={12} /> Browser
         </button>

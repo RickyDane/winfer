@@ -106,7 +106,7 @@ function AccountRow({ account, index, count, ids }: { account: Account; index: n
           aria-checked={account.enabled}
           aria-label={account.enabled ? "Disable account" : "Enable account"}
           onClick={() => void updateAccount(account.id, { enabled: !account.enabled })}
-          className={cn("relative ml-1 h-5 w-9 shrink-0 rounded-full transition-colors", account.enabled ? "bg-accent" : "bg-active ring-1 ring-border-strong ring-inset")}
+          className={cn("relative ml-1 h-5 w-9 shrink-0 rounded-full transition-colors", account.enabled ? "bg-accent" : "bg-active")}
         >
           <span className={cn("absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform duration-150", account.enabled && "translate-x-4")} />
         </button>
@@ -146,7 +146,7 @@ function ProviderAccounts({ provider }: { provider: string }) {
           <Plus size={13} /> Add account
         </button>
       </div>
-      <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
+      <div className="overflow-hidden rounded-lg bg-panel shadow-sm">
         {list.map((a, i) => <AccountRow key={a.id} account={a} index={i} count={list.length} ids={ids} />)}
       </div>
     </section>

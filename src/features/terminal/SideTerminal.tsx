@@ -70,7 +70,7 @@ export function SideTerminal() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {(tabs.length > 1 || activeId !== workspace!.id) && (
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-1.5">
+        <div className="flex h-8 shrink-0 items-center gap-1 px-1.5">
           <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
             {tabs.map((w) => (
               <button key={w.id} onClick={() => openSideTerminal(w.id)} title={w.rootDir} className={tab(w.id === workspace!.id)}>
@@ -93,7 +93,7 @@ export function SideTerminal() {
           )}
         </div>
       )}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-fg-subtle">
+      <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-xs text-fg-subtle">
         <FolderOpen size={12} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]" title={pane.cwd}>
           {pane.cwd}

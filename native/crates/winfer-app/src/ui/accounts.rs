@@ -385,7 +385,7 @@ impl Root {
             let ids: Vec<String> = list.iter().map(|a| a.id.clone()).collect();
             let name = self.state.read(cx).provider_name(provider);
             let adding = self.failover.adding;
-            let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel);
+            let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel);
             for (i, account) in list.iter().enumerate() {
                 let label = self.label_input(account, window, cx);
                 let w = tightest(self.usage.snapshots.get(&usage_key(&account.id)), now).cloned();
@@ -457,7 +457,7 @@ impl Root {
                     this.account_call(move || backend_accounts::accounts_update(id, None, Some(!enabled)), cx);
                 })));
                 rows = rows.child(
-                    div().flex().items_center().gap_3().px_3p5().py_2p5().when(i > 0, |d| d.border_t_1().border_color(c.border))
+                    div().flex().items_center().gap_3().px_3p5().py_2p5().when(i > 0, |d| d)
                         .child(div().w_4().text_center().text_size(px(11.0)).text_color(c.subtle).child((i + 1).to_string()))
                         .child(div().min_w_0().flex_1().flex().flex_col().gap_0p5().child(Input::new(&label)).child(facts))
                         .child(buttons),

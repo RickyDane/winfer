@@ -96,7 +96,7 @@ function ViewTabs({ workspace }: { workspace: string }) {
   const tab = (active: boolean) =>
     cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
-    <div role="tablist" className="flex items-center gap-0.5 rounded-lg border border-border bg-panel p-0.5">
+    <div role="tablist" className="flex items-center gap-0.5 rounded-lg bg-panel p-0.5 shadow-sm">
       <button role="tab" aria-selected={view === "workspace"} onClick={() => execute({ type: "ui.view", view: "workspace" })} className={tab(view === "workspace")}>
         <LayoutGrid size={12} />
         <span className="max-w-48 truncate">{workspace}</span>
@@ -138,7 +138,7 @@ function LiveButton() {
   return (
     <button
       onClick={toggleLive}
-      className={cn("rounded-md border px-1.5 py-1 hover:bg-hover hover:text-fg", on ? "border-accent text-accent" : "border-border")}
+      className={cn("rounded-md px-1.5 py-1 hover:bg-hover hover:text-fg", on ? "bg-accent/15 text-accent shadow-sm" : "bg-panel shadow-sm")}
       title={`${on ? "End" : "Start"} live voice conversation (${keysFor({ type: "voice.live" })})`}
     >
       <AudioLines size={13} />

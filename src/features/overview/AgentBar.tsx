@@ -41,7 +41,7 @@ export function AgentBar({ panes, scope }: { panes: Pane[]; scope: { workspace: 
       <select
         value={target}
         onChange={(e) => setTarget(e.target.value as Target)}
-        className="h-7 shrink-0 rounded-md border border-border bg-panel px-1.5 text-xs text-fg"
+        className="h-7 shrink-0 rounded-md bg-panel px-1.5 text-xs text-fg shadow-sm"
         title="Which agents the message and buttons reach"
       >
         {TARGETS.map((t) => (
@@ -51,7 +51,7 @@ export function AgentBar({ panes, scope }: { panes: Pane[]; scope: { workspace: 
         ))}
       </select>
       <form
-        className="flex min-w-56 flex-1 items-center gap-1 rounded-md border border-border bg-panel px-2 focus-within:border-accent"
+        className="flex min-w-56 flex-1 items-center gap-1 rounded-md bg-panel px-2 focus-within:ring-2 focus-within:ring-accent/40 shadow-sm"
         onSubmit={(e) => {
           e.preventDefault();
           send(true);

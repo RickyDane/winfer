@@ -441,7 +441,7 @@ impl Root {
         };
         let mono = crate::fonts::mono(cx);
         let default_provider = s.default_provider_id();
-        let mut out = div().mt_1().mb_1().pl_5().child(header);
+        let mut out = div().mt_1().pt_1p5().pb_0p5().px_1().child(header);
         for (i, wt) in rows.iter().enumerate() {
             let path = wt["info"]["path"].as_str().unwrap_or_default().to_string();
             let branch = wt["info"]["branch"].as_str().unwrap_or_default().to_string();
@@ -477,11 +477,11 @@ impl Root {
             }
             let (w_open, t_open, w_menu, t_menu, w_rm, t_rm, provider, pick_path) = (ws.clone(), wt.clone(), ws.clone(), wt.clone(), ws.clone(), wt.clone(), default_provider.clone(), path.clone());
             let icon = match picked {
-                Some(on) if !is_main => div().mt_1().size_3().flex_shrink_0().rounded_sm().border_1().border_color(c.border_strong).when(on, |d| d.bg(c.accent)),
+                Some(on) if !is_main => div().mt_1().size_3().flex_shrink_0().rounded_sm().when(on, |d| d.bg(c.accent)),
                 _ => div().mt_1().flex_shrink_0().child(Icon::new(if is_main { IconName::FolderGit2 } else { IconName::GitBranch }).size(px(12.0)).text_color(if is_main { c.accent } else { c.subtle })),
             };
             out = out.child(
-                div().id(SharedString::from(format!("wt-{}-{i}", ws.id))).flex().items_center().gap_1().rounded_md().pr_1().hover(move |d| d.bg(c.hover))
+                div().id(SharedString::from(format!("wt-{}-{i}", ws.id))).flex().items_center().gap_1().rounded_md().px_1().hover(move |d| d.bg(c.hover))
                     .when(removing || (picked.is_some() && is_main), |d| d.opacity(0.5))
                     .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                         if this.worktrees.selecting.is_some() {
@@ -698,7 +698,7 @@ impl Root {
         let blocked = selected.as_ref().filter(|_| !making).and_then(|b| b["checkedOutAt"].as_str()).map(|p| p.split(['/', '\\']).filter(|s| !s.is_empty()).last().unwrap_or(p).to_string());
         let disabled = selected.is_none() || blocked.is_some() || d.busy.is_some() || new_name_empty;
         let work_on = selected.as_ref().and_then(|b| b["name"].as_str()).map(|n| if selected.as_ref().is_some_and(|b| b["remote"] == true) { n.split('/').skip(1).collect::<Vec<_>>().join("/") } else { n.to_string() });
-        let radio = |on: bool| div().size_3().rounded_full().border_1().border_color(if on { c.accent } else { c.border_strong }).when(on, |d| d.bg(c.accent));
+        let radio = |on: bool| div().size_3().rounded_full().when(on, |d| d.bg(c.accent));
         let mode = |id: &'static str, label: &'static str, on: bool, enabled: bool, tip: String| {
             div().id(id).flex().items_center().gap_1().rounded_sm().px_2().py_0p5().cursor_pointer()
                 .when(on, |d| d.bg(Hsla { a: 0.15, ..c.accent }).text_color(c.fg))
@@ -711,7 +711,7 @@ impl Root {
             (_, Some(u)) => format!("Fetch {u} first and start from its newest commits"),
             (None, None) => "Fetch the remote first and start from its newest commits".into(),
         };
-        let footer = div().flex().flex_col().gap_2p5().border_t_1().border_color(c.border).px_5().py_3()
+        let footer = div().flex().flex_col().gap_2p5().px_5().py_3()
             .child(div().flex().items_center().gap_3().text_xs().text_color(c.muted)
                 .child(div().id("work-on").flex().items_center().gap_1p5().cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -738,7 +738,7 @@ impl Root {
                     .child(div().flex_1().min_w_0().child(Input::new(&d.new_branch)))))
             .child(div().flex().items_center().gap_2().text_xs().text_color(c.muted)
                 .child("Start from")
-                .child(div().flex().rounded_md().border_1().border_color(c.border).p_0p5()
+                .child(div().flex().rounded_md().p_0p5()
                     .child(mode("from-local", "Local branch", !pull, true, "Use the branch as it is in this repo, without contacting the remote".into()).on_click(cx.listener(|this, _, _, cx| {
                         this.worktrees.latest = false;
                         cx.notify();
@@ -766,13 +766,13 @@ impl Root {
             div().id("branch-backdrop").absolute().size_full().flex().items_start().justify_center().pt(relative(0.1)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.overlay = Overlay::None)))
                 .child(
-                    div().w(px(620.0)).max_h(relative(0.78)).flex().flex_col().rounded_xl().border_1().border_color(c.border_strong).bg(c.panel)
+                    div().w(px(620.0)).max_h(relative(0.78)).flex().flex_col().rounded_xl().bg(c.panel)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().flex().items_center().gap_2().border_b_1().border_color(c.border).px_5().py_3()
+                        .child(div().flex().items_center().gap_2().px_5().py_3()
                             .child(Icon::new(IconName::GitBranch).size(px(14.0)).text_color(c.accent))
                             .child(div().flex_1().text_sm().text_color(c.fg).child("New worktree from a branch"))
                             .child(div().truncate().text_xs().text_color(c.subtle).child(ws_name)))
-                        .child(div().flex().items_center().gap_2().border_b_1().border_color(c.border).px_5().py_2p5()
+                        .child(div().flex().items_center().gap_2().px_5().py_2p5()
                             .child(div().flex_1().child(Input::new(&search)))
                             .child(small_button(c, "branch-fetch", if fetching { "Fetching…" } else { "Fetch" })
                                 .tooltip(|window, cx| Tooltip::new("Get the latest branches from the remotes (git fetch --all --prune)").build(window, cx))

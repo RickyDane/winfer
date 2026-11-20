@@ -277,6 +277,7 @@ pub fn run() {
             harness::harness_set_settings,
             harness::harness_models,
             harness::harness_claude_skills,
+            mcp::bg_stop,
             local_llm::local_llm_test,
             transfer::data_export,
             transfer::data_import_inspect,

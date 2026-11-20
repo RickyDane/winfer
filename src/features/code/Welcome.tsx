@@ -138,12 +138,12 @@ export function Welcome() {
           {m && <span className={`cw-mode-tag mode-${mode}`}>{m.label}</span>}
         </p>
         {home && (
-          <p className="cw-where">
-            {home}
+          <p className="cw-where" title={home}>
+            <span className="cw-where-path">{home}</span>
             {branch && (
-              <>
+              <span className="cw-where-branch">
                 <GitBranch size={12} /> {branch}
-              </>
+              </span>
             )}
           </p>
         )}

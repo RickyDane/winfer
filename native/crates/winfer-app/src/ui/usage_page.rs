@@ -354,11 +354,11 @@ impl Root {
     }
 
     fn segmented<T: Copy + PartialEq + 'static>(&self, id: &'static str, value: T, options: Vec<(T, String)>, c: Colors, cx: &mut Context<Self>, pick: fn(&mut Self, T, &mut Context<Self>)) -> Div {
-        let mut row = div().flex().rounded_md().border_1().border_color(c.border).p_0p5();
+        let mut row = div().flex().rounded_md().bg(c.app).p_0p5();
         for (i, (v, label)) in options.into_iter().enumerate() {
             let on = v == value;
             row = row.child(div().id((id, i)).rounded_sm().px_2().py_0p5().text_size(px(11.0)).cursor_pointer()
-                .when(on, |d| d.bg(c.active).text_color(c.fg))
+                .when(on, |d| d.bg(c.raised).text_color(c.fg))
                 .when(!on, |d| d.text_color(c.muted).hover(move |d| d.text_color(c.fg)))
                 .on_click(cx.listener(move |this, _, _, cx| pick(this, v, cx)))
                 .child(label));
@@ -367,7 +367,17 @@ impl Root {
     }
 
     fn stat(c: Colors, mono: SharedString, label: &str, value: String, detail: Option<String>) -> Div {
-        div().min_w_0().flex_1().rounded_lg().border_1().border_color(c.border).bg(c.panel).px_3().py_2p5()
+        let shadow = if c.light {
+            vec![
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.06), offset: point(px(0.0), px(2.0)), blur_radius: px(8.0), spread_radius: px(-2.0), inset: false },
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.03), offset: point(px(0.0), px(1.0)), blur_radius: px(2.0), spread_radius: px(0.0), inset: false },
+            ]
+        } else {
+            vec![
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.32), offset: point(px(0.0), px(3.0)), blur_radius: px(10.0), spread_radius: px(-2.0), inset: false },
+            ]
+        };
+        div().min_w_0().flex_1().rounded_lg().bg(c.raised).shadow(shadow).px_3().py_2p5()
             .child(div().text_size(px(11.0)).text_color(c.subtle).child(label.to_string()))
             .child(div().mt_0p5().font_family(mono).text_lg().text_color(c.fg).child(value))
             .when_some(detail, |d, t| d.child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(t)))
@@ -377,11 +387,11 @@ impl Root {
     pub(super) fn page_usage(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
         let tab = self.saved("tab", cx).unwrap_or_else(|| "usage".into());
         let tabs = [("usage", "Usage", IconName::ChartColumn), ("limits", "Limits", IconName::Gauge), ("tools", "Tools", IconName::Wrench)];
-        let mut bar = div().flex().w_auto().items_center().gap_0p5().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_0p5();
+        let mut bar = div().flex().w_auto().items_center().gap_0p5().rounded_lg().bg(c.app).p_0p5();
         for (id, label, icon) in tabs {
             let on = tab == id;
             bar = bar.child(div().id(id).flex().items_center().gap_1p5().rounded_md().px_2p5().py_1().text_xs().cursor_pointer()
-                .when(on, |d| d.bg(c.active).text_color(c.fg))
+                .when(on, |d| d.bg(c.raised).text_color(c.fg))
                 .when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
                 .on_click(cx.listener(move |this, _, _, cx| this.save("tab", id, cx)))
                 .child(Icon::new(icon).size(px(12.0)))
@@ -448,7 +458,7 @@ impl Root {
             for m in &models {
                 let cell = |v: String| div().flex_1().text_right().py_1p5().font_family(mono.clone()).text_color(c.muted).child(v);
                 let tip = format!("{} · {}", series_name(&m.provider), m.model);
-                table = table.child(div().flex().border_t_1().border_color(c.border)
+                table = table.child(div().flex()
                     .child(div().id(SharedString::from(format!("model-{}-{}", m.provider, m.model))).flex_1().flex_grow(2.0).min_w_0().flex().items_center().gap_1p5().py_1p5()
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                         .child(div().size_2().flex_shrink_0().rounded_sm().bg(series_color(&m.provider, &c)))
@@ -517,14 +527,14 @@ impl Root {
         let ticks = [max, max / 2.0, 0.0];
         let mut grid = div().absolute().inset_0();
         for (i, _) in ticks.iter().enumerate() {
-            grid = grid.child(div().absolute().left_0().right_0().top(relative(i as f32 / 2.0)).border_t_1().border_color(if i == 2 { c.border_strong } else { c.border }));
+            grid = grid.child(div().absolute().left_0().right_0().top(relative(i as f32 / 2.0)));
         }
         let mut axis = div().h(px(160.0)).flex().flex_col().justify_between().text_right().font_family(mono.clone()).text_size(px(10.0)).text_color(c.subtle);
         for t in ticks {
             axis = axis.child(fmt(t));
         }
         let card = hover.and_then(|h| bars.get(h).map(|b| (h, b.clone()))).map(|(h, bar)| {
-            let mut card = div().absolute().top_1().w(px(200.0)).rounded_md().border_1().border_color(c.border_strong).bg(c.panel).px_2p5().py_2().text_xs()
+            let mut card = div().absolute().top_1().w(px(200.0)).rounded_md().bg(c.panel).px_2p5().py_2().text_xs()
                 .child(div().mb_1().text_color(c.muted).child(bar_label(&bar, range)));
             let left = (h as f32 + 1.0) / bars.len() as f32;
             card = if h < bars.len() / 2 { card.left(relative(left)).ml(px(6.0)) } else { card.right(relative(1.0 - h as f32 / bars.len() as f32)).mr(px(6.0)) };
@@ -542,7 +552,7 @@ impl Root {
             if any {
                 let total_cost: f64 = bar.cost.values().sum();
                 let total_tokens: f64 = bar.tokens.values().sum();
-                card.child(div().mt_1().flex().items_center().gap_2().border_t_1().border_color(c.border).pt_1()
+                card.child(div().mt_1().flex().items_center().gap_2().pt_1()
                     .child(div().flex_1().pl_4().text_color(c.muted).child("Total"))
                     .child(div().font_family(mono.clone()).text_color(c.fg).child(format_cost(total_cost)))
                     .child(div().w(px(48.0)).text_right().font_family(mono.clone()).text_color(c.subtle).child(format_tokens(total_tokens))))
@@ -557,7 +567,7 @@ impl Root {
             labels = labels.child(if i == 0 { div().absolute().left_0().child(text) } else if i == bars.len() - 1 { div().absolute().right_0().child(text) } else { div().absolute().left(relative((i as f32 + 0.5) / bars.len() as f32)).child(text) });
         }
         div().flex().gap_2().child(axis).child(div().relative().min_w_0().flex_1()
-            .child(div().relative().h(px(160.0)).rounded_md().bg(c.app).border_1().border_color(c.border).child(grid).when(!stacked, |d| d.child(line_canvas)).child(columns).children(card))
+            .child(div().relative().h(px(160.0)).rounded_md().bg(c.app).child(grid).when(!stacked, |d| d.child(line_canvas)).child(columns).children(card))
             .child(labels))
     }
 
@@ -597,7 +607,7 @@ impl Root {
             let tip = format!("{dir}\n\n{}", pane_header::cost_breakdown(d, "in this worktree"));
             let cost = d["cost"].as_f64().unwrap_or(0.0);
             let priced = d["priced"] == true || cost > 0.0;
-            table = table.child(div().id(("task", i)).flex().items_center().border_t_1().border_color(c.border).py_1p5()
+            table = table.child(div().id(("task", i)).flex().items_center().py_1p5()
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .child(div().flex_1().flex_grow(3.0).min_w_0().child(div().truncate().text_color(c.fg).child(title)).when_some(detail, |x, t| x.child(div().truncate().font_family(mono.clone()).text_size(px(10.0)).text_color(c.subtle).child(t))))
                 .child(div().w(px(64.0)).flex().gap_1p5().children(providers.iter().map(|p| div().size_2().rounded_sm().bg(series_color(p, &c)))))
@@ -693,11 +703,11 @@ impl Root {
         }).absolute().size_full();
         let mut grid = div().absolute().inset_0();
         for i in 0..3 {
-            grid = grid.child(div().absolute().left_0().right_0().top(relative(i as f32 / 2.0)).border_t_1().border_color(if i == 2 { c.border_strong } else { c.border }));
+            grid = grid.child(div().absolute().left_0().right_0().top(relative(i as f32 / 2.0)));
         }
         div().flex().flex_col().gap_1()
             .child(div().flex().items_baseline().gap_2().text_xs().child(div().flex_1().text_color(c.muted).child(w.label.clone())).child(div().font_family(mono).text_size(px(11.0)).text_color(c.fg).child(format!("{}% left", left.round()))))
-            .child(div().relative().h(px(64.0)).rounded_md().bg(c.app).border_1().border_color(c.border).child(grid).child(chart))
+            .child(div().relative().h(px(64.0)).rounded_md().bg(c.app).child(grid).child(chart))
             .child(reset_line(w, out, now, c))
     }
 }
@@ -799,7 +809,7 @@ impl Root {
         let all = self.usage_page.all_tools.get(key).copied().unwrap_or(false);
         let max = rows.iter().map(|s| sort.key(s)).fold(1.0, f64::max);
         let head = |t: &'static str, w: f32| div().w(px(w)).text_right().child(t);
-        let mut table = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).text_size(px(11.0))
+        let mut table = div().flex().flex_col().overflow_hidden().rounded_lg().text_size(px(11.0))
             .child(div().flex().bg(c.panel).px_2p5().py_1p5().text_color(c.subtle).child(div().flex_1().child("Name")).child(head("Calls", 56.0)).child(head("Failed", 72.0)).child(head("Time · avg", 96.0)).child(head("Max", 56.0)).child(head("Tokens", 64.0)));
         for s in rows.iter().take(if all { rows.len() } else { 12 }) {
             let value = sort.key(s);
@@ -808,7 +818,7 @@ impl Root {
             let timed = s["timed"].as_f64().unwrap_or(0.0);
             let duration_ms = s["durationMs"].as_f64().unwrap_or(0.0);
             let cell = |w: f32| div().w(px(w)).text_right().font_family(mono.clone());
-            table = table.child(div().flex().items_center().border_t_1().border_color(c.border).px_2p5().py_1p5()
+            table = table.child(div().flex().items_center().px_2p5().py_1p5()
                 .child(div().relative().flex_1().min_w_0()
                     .child(div().absolute().top_0().bottom_0().left_0().rounded_r_sm().bg(c.hover).w(relative((value / max) as f32)))
                     .child(div().relative().truncate().font_family(mono.clone()).text_color(c.fg).child(format!("{prefix}{}", s["name"].as_str().unwrap_or_default()))))
@@ -835,12 +845,12 @@ impl Root {
         let list = rep["failures"].as_array().filter(|l| !l.is_empty())?;
         let failed = rep["failed"].as_u64().unwrap_or(0);
         let title = format!("Failed calls{}", if failed as usize > list.len() { format!(" (latest {} of {failed})", list.len()) } else { String::new() });
-        let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border);
+        let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg();
         for (i, f) in list.iter().enumerate() {
             let open = self.usage_page.open_failure == Some(i);
             let error = f["error"].as_str().unwrap_or_default().to_string();
             let first_line = error.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().to_string();
-            rows = rows.child(div().id(("failure", i)).flex().flex_col().px_2p5().py_1p5().text_size(px(11.0)).cursor_pointer().hover(move |d| d.bg(c.hover)).when(i > 0, |d| d.border_t_1().border_color(c.border))
+            rows = rows.child(div().id(("failure", i)).flex().flex_col().px_2p5().py_1p5().text_size(px(11.0)).cursor_pointer().hover(move |d| d.bg(c.hover)).when(i > 0, |d| d)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.usage_page.open_failure = if this.usage_page.open_failure == Some(i) { None } else { Some(i) };
                     cx.notify();

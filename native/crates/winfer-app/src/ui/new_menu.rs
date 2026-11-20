@@ -97,7 +97,7 @@ impl Root {
             }
             let mut block = div().flex().flex_col().child(line);
             if expanded {
-                let mut models = div().id(SharedString::from(format!("new-list-{id}"))).ml_6().pl_1().max_h(px(192.0)).overflow_y_scroll().border_l_1().border_color(c.border).flex().flex_col();
+                let mut models = div().id(SharedString::from(format!("new-list-{id}"))).ml_6().pl_1().max_h(px(192.0)).overflow_y_scroll().flex().flex_col();
                 match self.models.get(&id) {
                     None => models = models.child(div().px_2().py_1().text_xs().text_color(c.subtle).child("Loading models…")),
                     Some(list) => {
@@ -125,7 +125,7 @@ impl Root {
                     cx.notify();
                 }))
                 .child(
-                    div().id("new-menu").absolute().top(px(44.0)).right(px(44.0)).w(px(264.0)).max_h(relative(0.8)).overflow_hidden().rounded_lg().border_1().border_color(c.border_strong).bg(c.raised).p_1().shadow_lg()
+                    div().id("new-menu").absolute().top(px(44.0)).right(px(44.0)).w(px(264.0)).max_h(relative(0.8)).overflow_hidden().rounded_lg().bg(c.raised).p_1().shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(list),
                 )

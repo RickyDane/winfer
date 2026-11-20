@@ -79,16 +79,23 @@ export function PaneDetail({ pane }: { pane: Pane }) {
   );
 }
 
-/** A colored monogram per workspace, so they can be told apart at a glance. */
-function WorkspaceAvatar({ name, active }: { name: string; active: boolean }) {
+/** Subtle recessed surface for grouped workspace cards, distinct in both light and dark themes. */
+const WORKSPACE_CARD_BG = "color-mix(in srgb, var(--color-app) 68%, var(--color-panel))";
+
+function workspaceColor(name: string): string {
   let hash = 0;
   for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
   const hue = Math.abs(hash) % 360;
-  const color = `hsl(${hue} 65% 62%)`;
+  return `hsl(${hue} 65% 62%)`;
+}
+
+/** A colored monogram per workspace, so they can be told apart at a glance. */
+function WorkspaceAvatar({ name, active }: { name: string; active: boolean }) {
+  const color = workspaceColor(name);
   return (
     <span
-      className={cn("flex size-5 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold uppercase transition-opacity", !active && "opacity-80")}
-      style={{ color, background: `color-mix(in srgb, ${color} 18%, transparent)` }}
+      className={cn("flex size-[22px] shrink-0 items-center justify-center rounded-[6px] text-[11px] font-semibold uppercase transition-opacity", !active && "opacity-85")}
+      style={{ color, background: `color-mix(in srgb, ${color} 16%, transparent)` }}
     >
       {/* The last word: "orbit-web" and "orbit-api" get W and A, not two O's. */}
       {name.split(/[-_ ./]+/).filter(Boolean).pop()?.replace(/[^a-z0-9]/gi, "").charAt(0) || "·"}
@@ -110,11 +117,11 @@ function WorkspaceSummary({ panes }: { panes: Pane[] }) {
   const count = (status: Pane["status"]) => agents.filter((p) => p.status === status).length;
   const [working, waiting, done] = [count("working"), count("needs-input"), count("done")];
   return (
-    <div className="-mt-1 flex flex-wrap gap-1 pb-1.5 pl-[37px] text-[11px] text-fg-subtle">
+    <span className="mt-0.5 flex flex-wrap gap-1 pl-[30px] text-[11px] font-normal text-fg-subtle">
       <span>{working} working</span>
       {waiting > 0 && <span className="font-medium text-warning">· {waiting} need{waiting === 1 ? "s" : ""} you</span>}
       {done > 0 && <span className="text-success">· {done} done</span>}
-    </div>
+    </span>
   );
 }
 
@@ -139,16 +146,16 @@ function SidebarTop() {
   const reviews = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
   const keys = keysFor({ type: "ui.palette" });
   return (
-    <div className="@container flex flex-col gap-2 border-b border-border px-2.5 pt-2.5 pb-2">
+    <div className="@container flex flex-col gap-2 px-2.5 pt-2.5 pb-2">
       <button
         onClick={() => execute({ type: "ui.palette" })}
-        className="flex h-8 items-center gap-2 rounded-md border border-border bg-app pr-2 pl-2.5 text-left text-[12.5px] text-fg-subtle transition-colors hover:border-border-strong hover:text-fg-muted"
+        className="flex h-8 items-center gap-2 rounded-md bg-app pr-2 pl-2.5 text-left text-[12.5px] text-fg-subtle transition-colors hover:text-fg-muted shadow-sm"
       >
         <Search size={14} />
         <span className="min-w-0 flex-1 truncate">Search or jump to…</span>
-        {keys && <kbd className="hidden shrink-0 rounded border border-border px-1 font-mono text-[10px] @[200px]:block">{keys}</kbd>}
+        {keys && <kbd className="hidden shrink-0 rounded px-1 font-mono text-[10px] @[200px]:block shadow-sm">{keys}</kbd>}
       </button>
-      <div className="flex gap-px rounded-lg border border-border bg-app p-0.5">
+      <div className="flex gap-px rounded-lg bg-app p-0.5 shadow-sm">
         <button onClick={() => execute({ type: "ui.overlay", overlay: "progress" })} title={`Session progress (${keysFor({ type: "ui.overlay", overlay: "progress" })})`} className={tab}>
           <Activity size={14} className="shrink-0" />
           <span className={tabLabel}>Sessions</span>
@@ -292,7 +299,7 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
         onDoubleClick={() => setRenaming(pane.id)}
         onContextMenu={(e) => openMenu(e, { title: pane.worktree?.branch ?? pane.cwd, items: paneMenu(pane, () => setRenaming(pane.id)) })}
         className={cn(
-          "anim-slide relative flex w-full cursor-pointer items-center gap-[9px] rounded-md py-1.5 pr-1.5 pl-2 text-left text-[12.5px] transition-colors duration-150",
+          "anim-slide relative flex w-full cursor-pointer items-center gap-[9px] rounded-[7px] px-1.5 py-[5.5px] text-left text-[12.5px] transition-colors duration-150",
           focused ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
           drag?.id === pane.id && "opacity-50",
           pane.archived && !focused && "opacity-70",
@@ -301,9 +308,9 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
         {line && <DropLine at={line} />}
         {/* Keyed by status: a short highlight when an agent finishes or starts waiting. */}
         {(pane.status === "done" || pane.status === "needs-input") && (
-          <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-md" />
+          <span key={pane.status} className="anim-flash pointer-events-none absolute inset-0 rounded-[7px]" />
         )}
-        <AgentTile pane={pane} ring={focused ? "var(--color-active)" : "var(--color-panel)"} />
+        <AgentTile pane={pane} ring={focused ? "var(--color-active)" : WORKSPACE_CARD_BG} />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-1.5">
             {renaming === pane.id ? (
@@ -319,13 +326,13 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
     );
   };
   return (
-    <div className="flex flex-col gap-px pt-0.5 pb-1.5">
+    <div className="flex flex-col gap-0.5 p-1">
       {live.map((pane, i) => row(pane, i, true))}
       {archived.length > 0 && (
-        <div>
+        <div className="flex flex-col gap-0.5">
           <button
             onClick={() => setShowArchived((v) => !v)}
-            className="flex h-7 w-full items-center gap-[9px] rounded-md pr-2 pl-[13px] text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
+            className="flex h-[26px] w-full items-center gap-2 rounded-[7px] px-2 text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
             title={showArchived ? "Hide archived sessions" : "Show archived sessions"}
           >
             <Archive size={12} />
@@ -341,7 +348,7 @@ function WorkspacePanes({ workspace: ws, focusedPaneId, openMenu }: { workspace:
           if (useWorkspaces.getState().activeWorkspaceId !== ws.id) execute({ type: "workspace.switch", target: { id: ws.id } });
           execute({ type: "ui.overlay", overlay: "newPane" });
         }}
-        className="group flex h-[30px] w-full items-center gap-[9px] rounded-md pr-2 pl-[13px] text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
+        className="group flex h-7 w-full items-center gap-2 rounded-[7px] px-2 text-left text-[12px] text-fg-subtle hover:bg-hover hover:text-fg"
       >
         <Plus size={12} />
         <span className="flex-1">{ws.panes.length === 0 ? "No agents yet · start one" : "New agent"}</span>
@@ -400,7 +407,7 @@ export function Sidebar() {
   const { drag, begin, dropLine } = useSortable(moveWorkspace);
 
   return (
-    <aside style={{ width }} className="anim-slide flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
+    <aside style={{ width }} className="anim-slide flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
       <SidebarTop />
 
       <nav className="flex-1 overflow-y-auto px-2 pb-3 select-none">
@@ -424,52 +431,61 @@ export function Sidebar() {
         >
           Workspaces
         </SectionLabel>
-        {workspaces.map((ws, i) => {
-          const active = ws.id === activeWorkspaceId;
-          const expanded = expandedWorkspaces.includes(ws.id);
-          const line = dropLine(i, workspaces.length);
-          return (
-            <div
-              key={ws.id}
-              data-sort-id={ws.id}
-              className={cn(
-                "relative transition-opacity duration-150",
-                drag?.id === ws.id && "opacity-50",
-              )}
-            >
-              {line && <DropLine at={line} />}
-              <button
-                onClick={() => toggleWorkspaceExpanded(ws.id)}
-                onDoubleClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
-                onPointerDown={(e) => begin(e, ws.id)}
-                onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
-                title={[ws.name, `Directory: ${ws.rootDir}`, ...checkoutDetails(ws.rootDir, listings[ws.rootDir]), `New agents: ${ws.useWorktrees ? "isolated worktrees" : "shared checkout"}`, "Double-click to open · drag to reorder"].join("\n")}
-                onMouseEnter={() => refresh(ws.rootDir)}
-                onFocus={() => refresh(ws.rootDir)}
+        <div className="mt-1 flex flex-col gap-1.5">
+          {workspaces.map((ws, i) => {
+            const active = ws.id === activeWorkspaceId;
+            const expanded = expandedWorkspaces.includes(ws.id);
+            const line = dropLine(i, workspaces.length);
+            const wsColor = workspaceColor(ws.name);
+            return (
+              <div
+                key={ws.id}
+                data-sort-id={ws.id}
+                style={expanded ? { background: WORKSPACE_CARD_BG } : undefined}
                 className={cn(
-                  "group flex h-8 w-full cursor-pointer items-center gap-[9px] rounded-md px-1.5 text-left text-[13px] transition-colors duration-150 hover:bg-hover hover:text-fg",
-                  active || expanded ? "font-medium text-fg" : "text-fg-muted",
+                  "relative rounded-[10px] transition-colors duration-150",
+                  drag?.id === ws.id && "opacity-50",
                 )}
               >
-                <WorkspaceAvatar name={ws.name} active={active} />
-                <span className="flex-1 truncate">{ws.name}</span>
-                {!expanded && <WorkspaceCount panes={livePanes(ws)} />}
-                <ChevronRight
-                  size={13}
-                  className={cn("shrink-0 text-fg-subtle transition-transform duration-200", expanded && "rotate-90")}
-                />
-              </button>
-              {!expanded && <WorkspaceSummary panes={livePanes(ws)} />}
+                {line && <DropLine at={line} />}
+                <button
+                  onClick={() => toggleWorkspaceExpanded(ws.id)}
+                  onDoubleClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })}
+                  onPointerDown={(e) => begin(e, ws.id)}
+                  onContextMenu={(e) => openMenu(e, { title: ws.rootDir, items: workspaceMenu(ws) })}
+                  title={[ws.name, `Directory: ${ws.rootDir}`, ...checkoutDetails(ws.rootDir, listings[ws.rootDir]), `New agents: ${ws.useWorktrees ? "isolated worktrees" : "shared checkout"}`, "Double-click to open · drag to reorder"].join("\n")}
+                  onMouseEnter={() => refresh(ws.rootDir)}
+                  onFocus={() => refresh(ws.rootDir)}
+                  className={cn(
+                    "group flex w-full cursor-pointer flex-col justify-center px-2 py-1.5 text-left text-[13px] transition-colors duration-150 hover:bg-hover hover:text-fg",
+                    expanded ? "rounded-t-[10px]" : "rounded-[10px]",
+                    !expanded && active && "bg-[color-mix(in_srgb,var(--color-app)_68%,var(--color-panel))]",
+                    active || expanded ? "font-medium text-fg" : "text-fg-muted",
+                  )}
+                >
+                  <span className="flex w-full items-center gap-2">
+                    <WorkspaceAvatar name={ws.name} active={active} />
+                    <span className="flex-1 truncate">{ws.name}</span>
+                    {active && <span className="size-1.5 shrink-0 rounded-full" style={{ background: wsColor }} />}
+                    {!expanded && <WorkspaceCount panes={livePanes(ws)} />}
+                    <ChevronRight
+                      size={13}
+                      className={cn("shrink-0 text-fg-subtle transition-transform duration-200", expanded && "rotate-90")}
+                    />
+                  </span>
+                  {!expanded && <WorkspaceSummary panes={livePanes(ws)} />}
+                </button>
 
-              {expanded && <WorkspacePanes workspace={ws} focusedPaneId={active ? focusedPaneId : null} openMenu={openMenu} />}
-            </div>
-          );
-        })}
+                {expanded && <WorkspacePanes workspace={ws} focusedPaneId={active ? focusedPaneId : null} openMenu={openMenu} />}
+              </div>
+            );
+          })}
+        </div>
       </nav>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} title={menu.target.title} items={menu.target.items} onClose={closeMenu} />}
       <ActivityFeed />
-      <footer className="flex items-center gap-2 border-t border-border py-2 pr-2 pl-3">
+      <footer className="flex items-center gap-2 py-2 pr-2 pl-3">
         <AppVersion />
         <UpdateButton />
         <span className="flex-1" />
@@ -495,19 +511,19 @@ export function SidebarRail() {
   const everywhere = useWorkspaces((s) => s.view === "overview");
   const reviews = useReviews((s) => s.reviews.filter((r) => (everywhere || r.workspaceId === workspaceId) && r.status === "open").length);
   const waiting = workspaces.flatMap((w) => livePanes(w)).filter((p) => p.provider !== "shell" && p.status === "needs-input");
-  const tile = (pane: Pane) => (
+  const tile = (pane: Pane, ring: string) => (
     <button
       key={pane.id}
       onClick={() => execute({ type: "pane.focus", target: { id: pane.id } })}
       title={pane.title ?? pane.provider}
       className={cn("rounded-md p-[5px] hover:bg-hover", pane.id === focusedPaneId && "bg-active")}
     >
-      <AgentTile pane={pane} ring={pane.id === focusedPaneId ? "var(--color-active)" : "var(--color-panel)"} />
+      <AgentTile pane={pane} ring={pane.id === focusedPaneId ? "var(--color-active)" : ring} />
     </button>
   );
   return (
-    <aside className="anim-slide flex h-full w-[60px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel">
-      <div className="flex flex-col items-center gap-1 border-b border-border pt-2.5 pb-2">
+    <aside className="anim-slide flex h-full w-[60px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
+      <div className="flex flex-col items-center gap-1 pt-2.5 pb-2">
         <button onClick={() => execute({ type: "ui.palette" })} title="Search or jump to…" className={railButton}>
           <Search size={15} />
         </button>
@@ -522,19 +538,33 @@ export function SidebarRail() {
           <Clock size={15} />
         </button>
       </div>
-      <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-2">
-        {waiting.length > 0 && <div className="flex w-11 flex-col items-center rounded-[10px] bg-warning/[0.06] py-1">{waiting.map(tile)}</div>}
-        {workspaces.map((ws) => (
-          <div key={ws.id} className="flex flex-col items-center gap-1">
-            <span className="mt-1 w-9 border-t border-border" />
-            <button onClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })} title={ws.name} className="grid size-9 place-items-center rounded-md hover:bg-hover">
-              <WorkspaceAvatar name={ws.name} active={ws.id === workspaceId} />
-            </button>
-            {livePanes(ws).filter((p) => p.provider !== "shell").map(tile)}
-          </div>
-        ))}
+      <nav className="flex flex-1 flex-col items-center gap-1.5 overflow-y-auto py-2">
+        {waiting.length > 0 && <div className="flex w-11 flex-col items-center rounded-[10px] bg-warning/[0.06] py-1">{waiting.map((p) => tile(p, "var(--color-panel)"))}</div>}
+        {workspaces.map((ws) => {
+          const active = ws.id === workspaceId;
+          const wsColor = workspaceColor(ws.name);
+          const agents = livePanes(ws).filter((p) => p.provider !== "shell");
+          return (
+            <div
+              key={ws.id}
+              style={{ background: WORKSPACE_CARD_BG }}
+              className="flex w-11 flex-col items-center gap-0.5 rounded-[10px] py-1"
+            >
+              <button onClick={() => execute({ type: "workspace.switch", target: { id: ws.id } })} title={ws.name} className="relative grid size-[34px] place-items-center rounded-[7px] hover:bg-hover">
+                <WorkspaceAvatar name={ws.name} active={active} />
+                {active && <span className="absolute top-[3px] right-[3px] size-[5px] rounded-full" style={{ background: wsColor }} />}
+              </button>
+              {agents.length > 0 && (
+                <>
+                  <span className="w-6" />
+                  {agents.map((p) => tile(p, WORKSPACE_CARD_BG))}
+                </>
+              )}
+            </div>
+          );
+        })}
       </nav>
-      <footer className="flex flex-col items-center gap-1 border-t border-border py-2">
+      <footer className="flex flex-col items-center gap-1 py-2">
         <img src={logoUrl} alt="" className="size-[22px]" draggable={false} />
         <UpdateButton />
         <button onClick={() => execute({ type: "ui.settings" })} className={railButton} title={`Settings (${keysFor({ type: "ui.settings" })})`}>

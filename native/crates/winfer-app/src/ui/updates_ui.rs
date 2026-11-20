@@ -237,16 +237,16 @@ impl Root {
             div().id("whats-new-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| { this.close_release_notes(cx); }))
                 .child(
-                    div().id("whats-new").w(px(460.0)).max_h(relative(0.7)).flex().flex_col().rounded_xl().border_1().border_color(c.border_strong).bg(c.raised).shadow_lg()
+                    div().id("whats-new").w(px(460.0)).max_h(relative(0.7)).flex().flex_col().rounded_xl().bg(c.raised).shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().flex().items_start().gap_3().border_b_1().border_color(c.border).px_5().py_3()
+                        .child(div().flex().items_start().gap_3().px_5().py_3()
                             .child(div().mt(px(2.0)).child(Icon::new(IconName::Sparkles).size(px(16.0)).text_color(c.accent)))
                             .child(div().flex_1().min_w_0().flex().flex_col()
                                 .child(div().text_size(px(14.0)).text_color(c.fg).child(if upcoming { format!("winfer {version} is available") } else { format!("What's new in winfer {version}") }))
                                 .child(div().text_size(px(12.0)).text_color(c.subtle).child(subtitle)))
                             .child(div().id("notes-x").rounded_sm().p_0p5().cursor_pointer().hover(move |d| d.bg(c.hover)).on_click(cx.listener(|this, _, _, cx| { this.close_release_notes(cx); })).child(Icon::new(IconName::X).size(px(14.0)).text_color(c.subtle))))
                         .child(div().flex_1().min_h_0().flex().flex_col().child(body))
-                        .child(div().border_t_1().border_color(c.border).px_5().py_3().child(footer)),
+                        .child(div().px_5().py_3().child(footer)),
                 )
                 .into_any_element(),
         )
@@ -264,11 +264,10 @@ impl Root {
         let button = |id: &'static str, label: &'static str, primary: bool| {
             div().id(id).h(px(30.0)).flex().items_center().justify_center().gap_1p5().rounded_md().px_3().text_size(px(12.5)).cursor_pointer().flex_shrink_0()
                 .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).hover(|d| d.opacity(0.9)))
-                .when(!primary, |d| d.border_1().border_color(c.border_strong).text_color(c.fg).hover(move |d| d.bg(c.hover)))
+                .when(!primary, |d| d.text_color(c.fg).hover(move |d| d.bg(c.hover)))
                 .child(label)
         };
-        let hero = div().flex().items_center().gap_3p5().p_4().rounded(px(10.0)).border_1()
-            .border_color(if available.is_some() { Hsla { a: 0.35, ..c.accent } } else { c.border })
+        let hero = div().flex().items_center().gap_3p5().p_4().rounded(px(10.0))
             .bg(if available.is_some() { Hsla { a: 0.08, ..c.accent } } else { c.panel })
             .child(div().size(px(40.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg()
                 .bg(if available.is_some() { c.accent } else { c.hover }).text_color(if available.is_some() { c.on_accent } else { c.muted })
@@ -298,7 +297,7 @@ impl Root {
                 .child(label)
         };
         let channel_row = super::settings::row(c, "Channel", Some("Stable: tested releases. Nebula: every change as soon as it lands.".into()),
-            div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+            div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).bg(c.app)
                 .child(seg("channel-stable", "Stable", Channel::Stable)).child(seg("channel-nebula", "Nebula", Channel::Nebula)));
         div().flex().flex_col().gap_5().child(hero).child(super::settings::card(c, "Release channel", None).child(channel_row))
     }

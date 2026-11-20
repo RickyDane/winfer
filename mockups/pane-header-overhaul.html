@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>winfer · Spatial Island Pane Header (Single Island Proposal)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+
+    /* winfer Warm Dark Theme */
+    --canvas: #111211;
+    --app: #161716;
+    --pane: #1c1d1b;
+    --raised: #262724;
+    --hover: rgba(255, 255, 255, 0.07);
+    --active: rgba(255, 255, 255, 0.12);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.15);
+    --hairline: rgba(255, 255, 255, 0.06);
+
+    --fg: #ede6d6;
+    --muted: #a69f92;
+    --subtle: #78736a;
+    --faint: #4b4842;
+
+    --accent: #7ec4b6;
+    --accent-soft: rgba(126, 196, 182, 0.14);
+    --accent-border: rgba(126, 196, 182, 0.28);
+
+    --teal: #5eead4;
+    --teal-soft: rgba(94, 234, 212, 0.11);
+
+    --success: #7ec4b6;
+    --warning: #e5b84b;
+    --warning-soft: rgba(229, 184, 75, 0.14);
+    --danger: #e56b6f;
+    --danger-soft: rgba(229, 107, 111, 0.14);
+
+    --claude: #d97757;
+    --codex: #7ec4b6;
+    --agy: #60a5fa;
+    --winfer: #7ec4b6;
+
+    /* Single Spatial Island Surface */
+    --island-bg: rgba(38, 39, 36, 0.88);
+    --island-bg-unfocused: rgba(34, 35, 32, 0.78);
+    --island-border: rgba(255, 255, 255, 0.095);
+    --island-border-focused: rgba(255, 255, 255, 0.13);
+    --island-specular: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    --island-shadow:
+      0 10px 26px -8px rgba(0, 0, 0, 0.56),
+      0 3px 8px -2px rgba(0, 0, 0, 0.34),
+      0 1px 2px rgba(0, 0, 0, 0.22);
+
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.28);
+    --shadow-md: 0 12px 32px -8px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --shadow-pane: 0 18px 46px -14px rgba(0, 0, 0, 0.65);
+  }
+
+  [data-theme="light"] {
+    --canvas: #eaecf0;
+    --app: #f2f4f7;
+    --pane: #ffffff;
+    --raised: #f4f5f8;
+    --hover: rgba(18, 22, 33, 0.055);
+    --active: rgba(18, 22, 33, 0.095);
+    --border: rgba(18, 22, 33, 0.09);
+    --border-strong: rgba(18, 22, 33, 0.16);
+    --hairline: rgba(18, 22, 33, 0.07);
+
+    --fg: #181a1f;
+    --muted: #565b67;
+    --subtle: #828896;
+    --faint: #b8bec9;
+
+    --accent: #0f766e;
+    --accent-soft: rgba(15, 118, 110, 0.10);
+    --accent-border: rgba(15, 118, 110, 0.24);
+
+    --teal: #0f766e;
+    --teal-soft: rgba(15, 118, 110, 0.09);
+
+    --success: #15803d;
+    --warning: #b45309;
+    --warning-soft: rgba(217, 119, 6, 0.11);
+    --danger: #dc2626;
+    --danger-soft: rgba(220, 38, 38, 0.10);
+
+    --claude: #c25e3c;
+    --codex: #0f766e;
+    --agy: #2563eb;
+    --winfer: #0f766e;
+
+    --island-bg: rgba(248, 249, 251, 0.92);
+    --island-bg-unfocused: rgba(245, 246, 249, 0.82);
+    --island-border: rgba(15, 23, 42, 0.085);
+    --island-border-focused: rgba(15, 23, 42, 0.13);
+    --island-specular: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    --island-shadow:
+      0 8px 22px -8px rgba(15, 23, 42, 0.13),
+      0 2px 6px -1px rgba(15, 23, 42, 0.07),
+      0 1px 2px rgba(15, 23, 42, 0.04);
+
+    --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 12px 28px -8px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.06);
+    --shadow-pane: 0 14px 36px -12px rgba(15, 23, 42, 0.14);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--sans);
+    background: var(--canvas);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  /* ── Top Review Controls ────────────────────────────────────────── */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: color-mix(in srgb, var(--app) 90%, transparent);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: 4px;
+  }
+  .brand-mark {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .brand-title { font-size: 13.5px; font-weight: 600; letter-spacing: -0.015em; }
+  .brand-sub { font-size: 11px; color: var(--subtle); }
+
+  .ctrl-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 3px;
+  }
+  .ctrl-btn {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 5px 9px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.14s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .ctrl-btn:hover { color: var(--fg); background: var(--hover); }
+  .ctrl-btn.active { background: var(--pane); color: var(--fg); box-shadow: var(--shadow-sm); }
+  .ctrl-dot { width: 6px; height: 6px; border-radius: 99px; }
+  .spacer { flex: 1; }
+
+  /* ── Stage ──────────────────────────────────────────────────────── */
+  .stage {
+    max-width: 1380px;
+    margin: 0 auto;
+    padding: 26px 28px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .badge-tag {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    padding: 3px 8px;
+    border-radius: 99px;
+  }
+  .section-title h2 {
+    margin: 0;
+    font-size: 16.5px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .section-desc {
+    margin: 5px 0 0;
+    font-size: 12.5px;
+    color: var(--muted);
+    max-width: 760px;
+    line-height: 1.48;
+  }
+  .specs { display: flex; gap: 7px; flex-wrap: wrap; }
+  .spec-pill {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--subtle);
+    background: var(--raised);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+
+  /* ── Workspace Grid & Panes ─────────────────────────────────────── */
+  .workspace-grid {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr;
+    gap: 10px;
+    background: var(--app);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 10px;
+    box-shadow: var(--shadow-pane);
+  }
+  .workspace-grid.triple {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  @media (max-width: 980px) {
+    .workspace-grid, .workspace-grid.triple { grid-template-columns: 1fr; }
+  }
+
+  .pane {
+    position: relative;
+    background: var(--pane);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    min-height: 290px;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+    transition: border-color 0.2s ease;
+  }
+  .pane.compact-pane { min-height: 195px; }
+  .pane.focused {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
+  .pane-body {
+    flex: 1;
+    padding: 16px 16px 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 12px;
+    border-radius: 0 0 15px 15px;
+  }
+
+  /* =================================================================
+     THE SINGLE SPATIAL ISLAND HEADER
+     ================================================================= */
+  .island-slot {
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 12;
+  }
+
+  .island {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px 7px 8px;
+    border-radius: 12px;
+    background: var(--island-bg-unfocused);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--island-border);
+    box-shadow: var(--island-specular), var(--island-shadow);
+    transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+    min-width: 0;
+  }
+  .pane.focused .island {
+    background: var(--island-bg);
+    border-color: var(--island-border-focused);
+  }
+  .island.state-needs-input {
+    background: color-mix(in srgb, var(--warning) 11%, var(--island-bg));
+    border-color: color-mix(in srgb, var(--warning) 36%, var(--island-border));
+  }
+  .island.state-error {
+    background: color-mix(in srgb, var(--danger) 11%, var(--island-bg));
+    border-color: color-mix(in srgb, var(--danger) 36%, var(--island-border));
+  }
+
+  /* Compact height variant (toggleable in topbar) */
+  .island.density-compact {
+    padding: 5px 7px;
+    gap: 8px;
+  }
+
+  /* Integrated bottom progress filament, neatly clipped to rounded corners */
+  .island-progress {
+    position: absolute;
+    inset: 0;
+    border-radius: 11px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .island-progress > i {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px;
+    transition: width 0.35s ease;
+  }
+
+  /* Left identity cluster */
+  .island-avatar {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .island.density-compact .island-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    font-size: 11.5px;
+  }
+
+  .status-dot {
+    position: absolute;
+    right: -2.5px;
+    bottom: -2.5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 99px;
+    border: 2px solid var(--pane);
+  }
+  .status-dot.working {
+    background: var(--success);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--success) 75%, transparent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .status-dot.idle { background: var(--subtle); }
+  .status-dot.needs-input {
+    background: var(--warning);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--warning) 75%, transparent);
+  }
+  .status-dot.error { background: var(--danger); }
+  .status-dot.archived { background: var(--faint); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.52; transform: scale(0.86); }
+  }
+
+  .island-identity {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .island-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .island-idx {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--subtle);
+    background: var(--hover);
+    padding: 1px 4.5px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    line-height: 1.3;
+  }
+  .pane.focused .island-idx {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .island-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    color: var(--fg);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: text;
+  }
+  .pane:not(.focused) .island-title {
+    color: var(--muted);
+    font-weight: 550;
+  }
+  .title-input {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+    background: var(--pane);
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    padding: 0 6px;
+    outline: none;
+    width: 100%;
+  }
+
+  .island-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--subtle);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta-item.ws {
+    color: var(--fg);
+    font-weight: 550;
+    background: var(--hover);
+    padding: 0 6px;
+    border-radius: 99px;
+    font-size: 10.5px;
+    flex-shrink: 0;
+  }
+  .meta-item.branch {
+    color: var(--teal);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    background: var(--teal-soft);
+    padding: 0 6px;
+    border-radius: 99px;
+    cursor: pointer;
+    flex-shrink: 1;
+  }
+  .meta-item.branch:hover { background: color-mix(in srgb, var(--teal) 20%, transparent); }
+  .meta-item.model {
+    color: var(--muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .meta-item.model:hover { color: var(--fg); }
+  .meta-item.warn { color: var(--warning); font-family: var(--mono); font-size: 10.5px; font-weight: 500; }
+  .meta-item.err { color: var(--danger); font-family: var(--mono); font-size: 10.5px; font-weight: 500; }
+  .meta-sep { color: var(--faint); font-size: 10px; flex-shrink: 0; user-select: none; }
+
+  /* Right live & controls cluster */
+  .island-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .bg-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 8px 0 4px;
+    border-radius: 99px;
+    border: 1px solid var(--accent-border);
+    background: var(--accent-soft);
+    color: var(--fg);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.14s ease;
+  }
+  .bg-pill:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .bg-pill-icon {
+    width: 16px;
+    height: 16px;
+    border-radius: 99px;
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+  }
+  .bg-pill .mono { font-family: var(--mono); font-weight: 600; }
+  .bg-pill .dim { color: var(--muted); font-weight: 450; }
+
+  .launch-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 99px;
+    border: 1px solid var(--accent-border);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 550;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .launch-pill:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+  .telemetry-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 99px;
+    background: var(--hover);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    cursor: default;
+    flex-shrink: 0;
+  }
+  .telemetry-pill svg { transform: rotate(-90deg); }
+  .telemetry-pill .cost { color: var(--subtle); }
+  .telemetry-card {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 240px;
+    background: var(--raised);
+    border: 1px solid var(--border-strong);
+    border-radius: 11px;
+    padding: 10px 12px;
+    box-shadow: var(--shadow-md);
+    display: none;
+    z-index: 45;
+    font-family: var(--sans);
+  }
+  .telemetry-pill:hover .telemetry-card { display: block; }
+  .tc-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); padding: 2px 0; }
+  .tc-bar { height: 5px; border-radius: 99px; background: var(--hover); overflow: hidden; display: flex; margin: 7px 0; }
+
+  .island-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .actions-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
+  }
+  .pane:not(.focused) .actions-cluster { opacity: 0.48; transition: opacity 0.15s ease; }
+  .pane:hover .actions-cluster { opacity: 1; }
+
+  .icon-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--subtle);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--fg); }
+  .icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
+  .icon-btn.noted { color: var(--accent); }
+
+  .restore-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 99px;
+    border: 1px solid var(--border);
+    background: var(--hover);
+    color: var(--fg);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* Interactive BG Popover */
+  .bg-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 318px;
+    background: var(--raised);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: var(--shadow-md);
+    padding: 8px;
+    z-index: 45;
+    display: none;
+    text-align: left;
+  }
+  .bg-popover.open { display: block; }
+  .bg-pop-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .bg-pop-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 8px;
+    border-radius: 8px;
+    transition: background 0.12s;
+    cursor: pointer;
+  }
+  .bg-pop-row:hover { background: var(--hover); }
+  .bg-pop-top { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; color: var(--fg); }
+  .bg-pop-sub {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--subtle);
+    padding-left: 23px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bg-stop {
+    margin-left: auto;
+    border: none;
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  /* Realistic Pane Content (showing symmetry with bottom composer!) */
+  .chat-msg-user {
+    align-self: flex-end;
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    color: var(--fg);
+    padding: 8px 13px;
+    border-radius: 14px 14px 4px 14px;
+    font-size: 12.5px;
+    max-width: 84%;
+  }
+  .chat-msg-ai { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .chat-msg-ai code {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--hover);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--fg);
+  }
+  .term-lines { font-family: var(--mono); font-size: 11.5px; line-height: 1.68; color: var(--muted); }
+  .term-lines .ok { color: var(--success); }
+  .term-lines .dim { color: var(--subtle); }
+  .term-lines .hl { color: var(--fg); }
+
+  /* Bottom Composer (exact 8px left/right/bottom symmetry with the 8px top island!) */
+  .composer-slot {
+    padding: 4px 8px 8px;
+    flex-shrink: 0;
+  }
+  .composer-card {
+    background: var(--raised);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    padding: 10px 10px 7px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: var(--shadow-sm);
+  }
+  .composer-placeholder { font-size: 12.5px; color: var(--subtle); }
+  .composer-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .composer-send {
+    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    border-radius: 99px;
+    background: radial-gradient(circle at 35% 30%, #a78bfa, #4c1d95 75%, #1e1b4b);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">W</div>
+    <div>
+      <div class="brand-title">Single Spatial Island · Pane Header Redesign</div>
+      <div class="brand-sub">Double-click titles · Hover context ring · Click BG pill · Waiting for approval</div>
+    </div>
+  </div>
+
+  <div class="ctrl-group" id="state-group">
+    <button class="ctrl-btn active" data-state="working"><span class="ctrl-dot" style="background:var(--success)"></span>Working</button>
+    <button class="ctrl-btn" data-state="idle"><span class="ctrl-dot" style="background:var(--subtle)"></span>Idle</button>
+    <button class="ctrl-btn" data-state="needs-input"><span class="ctrl-dot" style="background:var(--warning)"></span>Needs Input</button>
+    <button class="ctrl-btn" data-state="error"><span class="ctrl-dot" style="background:var(--danger)"></span>Error</button>
+    <button class="ctrl-btn" data-state="archived"><span class="ctrl-dot" style="background:var(--faint)"></span>Archived</button>
+  </div>
+
+  <div class="ctrl-group" id="density-group">
+    <button class="ctrl-btn active" data-density="default">Default</button>
+    <button class="ctrl-btn" data-density="compact">Compact</button>
+  </div>
+
+  <div class="ctrl-group" id="toggles-group">
+    <button class="ctrl-btn active" data-toggle="bg">BG Tasks</button>
+    <button class="ctrl-btn active" data-toggle="dev">Dev URL</button>
+    <button class="ctrl-btn active" data-toggle="cost">Cost</button>
+    <button class="ctrl-btn" data-toggle="overview">Overview</button>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="ctrl-group" id="theme-group">
+    <button class="ctrl-btn active" data-theme-set="dark">Dark</button>
+    <button class="ctrl-btn" data-theme-set="light">Light</button>
+  </div>
+</header>
+
+<main class="stage" id="stage"></main>
+
+<script>
+const state = {
+  status: "working",
+  density: "default",
+  bg: true,
+  dev: true,
+  cost: true,
+  overview: false,
+  theme: "dark",
+  openPop: null,
+  titles: {
+    p1: "Launch the tauri frontend in the browser on port 1421",
+    p2: "Refactor worktree merge conflict diagnostics",
+    n1: "Fix OAuth refresh race",
+    n2: "Waiting on test approval",
+    n3: "Build failed in winfer-app",
+  },
+};
+
+const ICONS = {
+  branch: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
+  worktree: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"/><circle cx="13" cy="12" r="2"/><path d="M18 19c-2.8 0-5-2.2-5-5v8"/><circle cx="20" cy="19" r="2"/></svg>`,
+  term: `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  bot: `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg>`,
+  chevDown: `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
+  ext: `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`,
+  more: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
+  note: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/></svg>`,
+  archive: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>`,
+  zoom: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
+  plus: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>`,
+  x: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+  restore: `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h2"/><path d="M20 8v11a2 2 0 0 1-2 2h-2"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>`,
+};
+
+const MAIN_PANES = [
+  {
+    key: "p1",
+    index: 1,
+    focused: true,
+    mark: "W",
+    tint: "var(--winfer)",
+    workspace: "winfer",
+    worktree: null,
+    model: "Gemini 4",
+    context: 7,
+    cost: "$0.34",
+    progress: 68,
+    hasNote: true,
+    bg: { agents: 1, shells: 1 },
+    devUrl: "http://localhost:1421",
+    kind: "code",
+  },
+  {
+    key: "p2",
+    index: 2,
+    focused: false,
+    mark: "C",
+    tint: "var(--claude)",
+    workspace: "api-server",
+    worktree: "feat/merge-diag",
+    model: "Sonnet 4.6",
+    context: 64,
+    cost: "$1.18",
+    progress: 42,
+    hasNote: false,
+    bg: { agents: 0, shells: 1 },
+    devUrl: null,
+    kind: "terminal",
+  },
+];
+
+const STATE_STRIP = [
+  {
+    key: "n1",
+    index: 1,
+    focused: true,
+    fixedStatus: "working",
+    mark: "A",
+    tint: "var(--agy)",
+    workspace: "winfer",
+    worktree: "fix/oauth-race",
+    model: "Gemini 4",
+    context: 24,
+    cost: "$0.19",
+    progress: 74,
+    hasNote: false,
+    bg: { agents: 0, shells: 1 },
+    devUrl: null,
+    narrow: true,
+  },
+  {
+    key: "n2",
+    index: 2,
+    focused: false,
+    fixedStatus: "needs-input",
+    mark: "C",
+    tint: "var(--claude)",
+    workspace: "billing",
+    worktree: "feat/stripe-v3",
+    model: "Opus 4.6",
+    context: 71,
+    cost: "$2.04",
+    progress: 55,
+    hasNote: true,
+    bg: null,
+    devUrl: null,
+    narrow: true,
+  },
+  {
+    key: "n3",
+    index: 3,
+    focused: false,
+    fixedStatus: "error",
+    mark: "W",
+    tint: "var(--winfer)",
+    workspace: "winfer",
+    worktree: null,
+    model: "GPT-5.4",
+    context: 88,
+    cost: "$0.91",
+    progress: 100,
+    hasNote: false,
+    bg: null,
+    devUrl: null,
+    narrow: true,
+  },
+];
+
+function ctxRingSvg(pct) {
+  const r = 5.5;
+  const c = 2 * Math.PI * r;
+  const off = c * (1 - pct / 100);
+  const col = pct >= 85 ? "var(--danger)" : pct >= 60 ? "var(--warning)" : "var(--accent)";
+  return `
+    <svg width="14" height="14" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--border-strong)" stroke-width="2.2" />
+      <circle cx="8" cy="8" r="${r}" fill="none" stroke="${col}" stroke-width="2.2" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" stroke-linecap="round" />
+    </svg>`;
+}
+
+function renderBgPill(pane) {
+  if (!state.bg || !pane.bg) return "";
+  const popId = `pop-${pane.key}`;
+  const isOpen = state.openPop === popId;
+  const parts = [];
+  if (pane.bg.agents) parts.push(`<span class="mono">${pane.bg.agents}</span>${pane.narrow ? "" : ` <span class="dim">${pane.bg.agents === 1 ? "agent" : "agents"}</span>`}`);
+  if (pane.bg.shells) parts.push(`<span class="mono">${pane.bg.shells}</span>${pane.narrow ? "" : ` <span class="dim">${pane.bg.shells === 1 ? "shell" : "shells"}</span>`}`);
+  return `
+    <div style="position:relative;flex-shrink:0">
+      <button class="bg-pill" data-pop="${popId}" title="Running in background · Click for details">
+        <span class="bg-pill-icon">${pane.bg.agents ? ICONS.bot : ICONS.term}</span>
+        ${parts.join('<span style="opacity:.45">·</span>')}
+        ${ICONS.chevDown}
+      </button>
+      <div class="bg-popover ${isOpen ? "open" : ""}">
+        <div class="bg-pop-head">
+          <span>In the background</span>
+          <span style="font-family:var(--mono);font-size:10.5px;color:var(--accent)">${pane.bg.agents + pane.bg.shells} running</span>
+        </div>
+        ${pane.bg.agents ? `
+          <div class="bg-pop-row">
+            <div class="bg-pop-top">
+              <span class="bg-pill-icon">${ICONS.bot}</span>
+              <span>Codebase Explorer</span>
+              <span style="font-family:var(--mono);font-size:10px;color:var(--subtle)">0:42</span>
+              <button class="bg-stop">Stop</button>
+            </div>
+            <div class="bg-pop-sub">Reading native/crates/winfer-app/src/ui/pane_header.rs</div>
+          </div>` : ""}
+        <div class="bg-pop-row">
+          <div class="bg-pop-top">
+            <span class="bg-pill-icon">${ICONS.term}</span>
+            <span>Vite dev server (:1421)</span>
+            <span style="font-family:var(--mono);font-size:10px;color:var(--subtle)">2:14</span>
+            <button class="bg-stop">Stop</button>
+          </div>
+          <div class="bg-pop-sub">➜  Local:   http://localhost:1421/</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderTelemetry(pane) {
+  const col = pane.context >= 85 ? "var(--danger)" : pane.context >= 60 ? "var(--warning)" : "var(--fg)";
+  return `
+    <div class="telemetry-pill">
+      ${state.cost && !pane.narrow ? `<span class="cost">${pane.cost}</span><span style="opacity:.35">·</span>` : ""}
+      ${ctxRingSvg(pane.context)}
+      <span style="color:${col}">${pane.context}%</span>
+      <div class="telemetry-card">
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;font-weight:600;color:var(--fg)">
+          <span>Context window</span>
+          <span style="font-family:var(--mono);font-weight:500;color:var(--muted)">${pane.context}%</span>
+        </div>
+        <div class="tc-bar">
+          <i style="width:${Math.round(pane.context * 0.25)}%;background:#5b8def"></i>
+          <i style="width:${Math.round(pane.context * 0.45)}%;background:#3fb5a3"></i>
+          <i style="width:${Math.round(pane.context * 0.30)}%;background:#d867a8"></i>
+        </div>
+        <div class="tc-row"><span>Tools &amp; MCP</span><span style="font-family:var(--mono)">14k</span></div>
+        <div class="tc-row"><span>Tool results</span><span style="font-family:var(--mono)">31k</span></div>
+        <div class="tc-row"><span>Conversation</span><span style="font-family:var(--mono)">19k</span></div>
+        ${state.cost ? `<div class="tc-row" style="margin-top:4px;padding-top:5px;border-top:1px solid var(--hairline)"><span>Session cost</span><span style="font-family:var(--mono);color:var(--fg)">${pane.cost}</span></div>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderActions(pane, st) {
+  if (st === "archived") {
+    return `
+      <div class="actions-cluster">
+        <button class="restore-pill">${ICONS.restore} Restore</button>
+        <button class="icon-btn danger" title="Close">${ICONS.x}</button>
+      </div>`;
+  }
+  if (pane.narrow) {
+    return `
+      <div class="actions-cluster">
+        <button class="icon-btn" title="More actions">${ICONS.more}</button>
+        <button class="icon-btn" title="Zoom">${ICONS.zoom}</button>
+        <button class="icon-btn danger" title="Close">${ICONS.x}</button>
+      </div>`;
+  }
+  return `
+    <div class="actions-cluster">
+      <button class="icon-btn" title="More actions">${ICONS.more}</button>
+      <button class="icon-btn ${pane.hasNote ? "noted" : ""}" title="${pane.hasNote ? "Edit pane note" : "Add pane note"}">${ICONS.note}</button>
+      <button class="icon-btn" title="Archive">${ICONS.archive}</button>
+      <button class="icon-btn" title="Zoom">${ICONS.zoom}</button>
+      <button class="icon-btn" title="Split right">${ICONS.plus}</button>
+      <button class="icon-btn danger" title="Close">${ICONS.x}</button>
+    </div>`;
+}
+
+function renderSingleIsland(pane) {
+  const st = pane.fixedStatus ?? state.status;
+  const title = state.titles[pane.key];
+  const progressColor = st === "error" ? "var(--danger)" : st === "needs-input" ? "var(--warning)" : "var(--warning)";
+
+  const metaParts = [];
+  if (state.overview) {
+    metaParts.push(`<span class="meta-item ws">${pane.workspace}</span>`);
+  }
+  if (st === "needs-input") {
+    metaParts.push(`<span class="meta-item warn">Waiting for your input</span>`);
+  } else if (st === "error") {
+    metaParts.push(`<span class="meta-item err">Stopped with an error</span>`);
+  } else {
+    metaParts.push(pane.worktree
+      ? `<span class="meta-item branch" title="Click to show changes">${ICONS.worktree} <span>${pane.worktree}</span></span>`
+      : `<span class="meta-item">${ICONS.branch} <span>shared folder</span></span>`);
+    if (!pane.narrow) {
+      metaParts.push(`<span class="meta-sep">·</span><span class="meta-item model" title="Click to change model">${pane.model}</span>`);
+    }
+  }
+
+  return `
+    <div class="island-slot">
+      <div class="island state-${st} density-${state.density}">
+        ${st === "working" ? `<div class="island-progress"><i style="width:${pane.progress}%;background:${progressColor}"></i></div>` : ""}
+        <div class="island-avatar" style="background:color-mix(in srgb, ${pane.tint} 18%, transparent);color:${pane.tint}">
+          ${pane.mark}
+          <span class="status-dot ${st}"></span>
+        </div>
+        <div class="island-identity">
+          <div class="island-title-row">
+            <span class="island-idx">${pane.index}</span>
+            <span class="island-title" data-rename="${pane.key}" title="Double-click to rename">${title}</span>
+          </div>
+          <div class="island-meta">${metaParts.join("")}</div>
+        </div>
+        <div class="island-right">
+          ${renderBgPill(pane)}
+          ${state.dev && pane.devUrl ? `<button class="launch-pill">Launch ${ICONS.ext}</button>` : ""}
+          ${renderTelemetry(pane)}
+          <span class="island-sep"></span>
+          ${renderActions(pane, st)}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderMainPane(pane) {
+  const body = pane.kind === "code"
+    ? `
+      <div class="pane-body">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="chat-msg-user">Launch the tauri frontend in the browser on port 1421</div>
+          <div class="chat-msg-ai">
+            Started the Vite dev server on <code>http://localhost:1421</code> in a background shell.
+            Notice how the top floating island and bottom composer share the exact same <code>8px</code> inset and <code>12px</code> concentric radius.
+          </div>
+        </div>
+      </div>
+      <div class="composer-slot">
+        <div class="composer-card">
+          <div class="composer-placeholder">Message winfer code… (/ for commands, @ for files)</div>
+          <div class="composer-bar">
+            <span>⚡ Yolo</span>
+            <span>·</span>
+            <span>Gemini 4 Hydrogen</span>
+            <span>·</span>
+            <span>low</span>
+            <span class="composer-send">↑</span>
+          </div>
+        </div>
+      </div>`
+    : `
+      <div class="pane-body" style="padding-bottom:16px">
+        <div class="term-lines">
+          <div><span class="dim">~/api-server</span> <span class="ok">feat/merge-diag</span></div>
+          <div class="hl">❯ cargo test worktree::merge -- --nocapture</div>
+          <div class="dim">running 14 tests</div>
+          <div><span class="ok">ok</span>  detects_binary_conflict ... 1ms</div>
+          <div><span class="ok">ok</span>  preserves_dirty_index_on_abort ... 3ms</div>
+          <div><span class="ok">ok</span>  formats_conflict_summary ... 1ms</div>
+        </div>
+        <div style="font-family:var(--mono);font-size:10.5px;color:var(--subtle)">claude code · watching 2 files</div>
+      </div>`;
+
+  return `
+    <div class="pane ${pane.focused ? "focused" : ""}">
+      ${renderSingleIsland(pane)}
+      ${body}
+    </div>`;
+}
+
+function renderCompactPane(pane) {
+  const st = pane.fixedStatus;
+  const note = st === "needs-input"
+    ? `<div style="font-size:12px;color:var(--warning);background:var(--warning-soft);border-radius:10px;padding:10px 12px">Claude wants to run <code>cargo test --workspace</code> · Allow (Y) / Deny (N)</div>`
+    : st === "error"
+      ? `<div style="font-size:12px;color:var(--danger);background:var(--danger-soft);border-radius:10px;padding:10px 12px">Process exited with code 101 · 2 compiler errors in <code>pane_header.rs</code></div>`
+      : `<div class="term-lines"><div class="dim">~/winfer · fix/oauth-race</div><div><span class="ok">●</span> Refreshing token lock guard…</div></div>`;
+
+  return `
+    <div class="pane compact-pane ${pane.focused ? "focused" : ""}">
+      ${renderSingleIsland(pane)}
+      <div class="pane-body" style="justify-content:flex-end;padding-bottom:14px">${note}</div>
+    </div>`;
+}
+
+function render() {
+  document.documentElement.setAttribute("data-theme", state.theme);
+  document.getElementById("stage").innerHTML = `
+    <section>
+      <div class="section-head">
+        <div>
+          <div class="section-title">
+            <span class="badge-tag">Proposal</span>
+            <h2>Unified Spatial Island — Focused &amp; Unfocused Split</h2>
+          </div>
+          <p class="section-desc">
+            A single floating frosted-glass capsule inset 8px from the pane's top, left, and right edges—mirroring the bottom composer's exact geometry.
+            Identity &amp; inline metadata stay cleanly stacked on the left; live background tasks, dev URL, telemetry ring, and controls sit vertically centered on the right, with the progress filament clipped neatly along the island's bottom edge.
+          </p>
+        </div>
+        <div class="specs">
+          <span class="spec-pill">8px symmetric inset</span>
+          <span class="spec-pill">12px concentric radius</span>
+          <span class="spec-pill">1 unified floating bar</span>
+          <span class="spec-pill">GPUI + Web parity</span>
+        </div>
+      </div>
+      <div class="workspace-grid">
+        ${MAIN_PANES.map(renderMainPane).join("")}
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <div class="section-title">
+            <span class="badge-tag">States &amp; Narrow Splits</span>
+            <h2>3-Column Stress Test (Working · Needs Input · Error)</h2>
+          </div>
+          <p class="section-desc">
+            How the single island adapts gracefully in narrow panes: cost &amp; secondary labels tuck away first, keeping the status dot, title, context ring, and primary actions legible without wrapping.
+          </p>
+        </div>
+      </div>
+      <div class="workspace-grid triple">
+        ${STATE_STRIP.map(renderCompactPane).join("")}
+      </div>
+    </section>
+  `;
+}
+
+document.getElementById("state-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-state]");
+  if (!btn) return;
+  state.status = btn.dataset.state;
+  document.querySelectorAll("#state-group .ctrl-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  render();
+});
+
+document.getElementById("density-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-density]");
+  if (!btn) return;
+  state.density = btn.dataset.density;
+  document.querySelectorAll("#density-group .ctrl-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  render();
+});
+
+document.getElementById("toggles-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-toggle]");
+  if (!btn) return;
+  const k = btn.dataset.toggle;
+  state[k] = !state[k];
+  btn.classList.toggle("active", state[k]);
+  render();
+});
+
+document.getElementById("theme-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-theme-set]");
+  if (!btn) return;
+  state.theme = btn.dataset.themeSet;
+  document.querySelectorAll("#theme-group .ctrl-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  render();
+});
+
+document.addEventListener("click", (e) => {
+  const popBtn = e.target.closest("[data-pop]");
+  if (popBtn) {
+    e.stopPropagation();
+    state.openPop = state.openPop === popBtn.dataset.pop ? null : popBtn.dataset.pop;
+    render();
+    return;
+  }
+  if (!e.target.closest(".bg-popover") && state.openPop) {
+    state.openPop = null;
+    render();
+  }
+});
+
+document.addEventListener("dblclick", (e) => {
+  const el = e.target.closest("[data-rename]");
+  if (!el) return;
+  const key = el.dataset.rename;
+  const input = document.createElement("input");
+  input.className = "title-input";
+  input.value = state.titles[key];
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+  const commit = () => {
+    const v = input.value.trim();
+    if (v) state.titles[key] = v;
+    render();
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") commit();
+    if (ev.key === "Escape") render();
+  });
+});
+
+render();
+</script>
+</body>
+</html>

@@ -109,6 +109,8 @@ pub struct CodeState {
     pub btw: Vec<Btw>,
     pub sheet: Option<Sheet>,
     pub rate: Option<Rate>,
+    pub last_rate: Option<f32>,
+    pub turn_out_base: u64,
     pub log_task: Option<String>,
     pub task_log: Option<(String, Option<String>, Option<String>)>,
     pub mode: Mode,
@@ -134,7 +136,7 @@ impl Default for CodeState {
         Self {
             session: None, model: String::new(), actual_model: None, models: Vec::new(), files: None, cwd: None, backend_session: None,
             title: None, branch: None, trim_at: 0, compact_at: 0, mcp: Vec::new(), sessions: None, breakdown: None, btw: Vec::new(),
-            sheet: None, rate: None, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), sub_model: None, sub_effort: None,
+            sheet: None, rate: None, last_rate: None, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), sub_model: None, sub_effort: None,
             items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
             usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, outbox: Vec::new(),
         }
@@ -352,6 +354,9 @@ impl CodeState {
                     turn_streamed: u.turn_streamed.or(prev.turn_streamed),
                     turn_active_ms: u.turn_active_ms.or(prev.turn_active_ms),
                 };
+                if let Some(r) = self.tokens_per_second() {
+                    self.last_rate = Some(r);
+                }
             }
             Ev::Notice { text } | Ev::BgNote { text } => self.items.push(Item::Notice { key: key(), text, error: false }),
             Ev::Error { text } => self.items.push(Item::Notice { key: key(), text, error: true }),
@@ -359,6 +364,7 @@ impl CodeState {
                 self.busy = true;
                 self.turn_started = Some(now_ms());
                 self.rate = None;
+                self.turn_out_base = self.usage.output;
                 self.usage.turn = Some(0);
                 self.usage.turn_input = Some(0);
                 self.usage.turn_cached = Some(0);
@@ -366,6 +372,9 @@ impl CodeState {
                 self.usage.turn_active_ms = Some(0);
             }
             Ev::TurnDone => {
+                if let Some(r) = self.tokens_per_second() {
+                    self.last_rate = Some(r);
+                }
                 close_reasoning(&mut self.items);
                 for i in &mut self.items {
                     if let Item::Text { streaming, .. } = i {
@@ -445,6 +454,8 @@ impl CodeState {
                 self.busy = false;
                 self.usage = Usage { window: self.usage.window, ..Default::default() };
                 self.rate = None;
+                self.last_rate = None;
+                self.turn_out_base = 0;
             }
             Ev::Restore { transcript } => {
                 for e in transcript {
@@ -482,11 +493,43 @@ impl CodeState {
         if self.usage.window == 0 { 0.0 } else { (self.usage.context as f32 / self.usage.window as f32).clamp(0.0, 1.0) }
     }
 
-    /// Tokens per second of the running turn, once there's a second of data.
+    /// Input tokens for the running turn (0 if none reported yet).
+    pub fn turn_input(&self) -> u64 {
+        self.usage.turn_input.unwrap_or(0)
+    }
+
+    /// Cached input tokens for the running turn.
+    pub fn turn_cached(&self) -> u64 {
+        self.usage.turn_cached.unwrap_or(0)
+    }
+
+    /// Output tokens generated in the running turn.
+    pub fn turn_output(&self) -> u64 {
+        self.usage.turn.filter(|t| *t > 0).or(self.usage.turn_streamed.filter(|t| *t > 0)).unwrap_or_else(|| self.usage.output.saturating_sub(self.turn_out_base))
+    }
+
+    /// Tokens per second of the running turn (prefers backend-measured active time, else streamed rate).
     pub fn tokens_per_second(&self) -> Option<f32> {
-        let r = self.rate.as_ref()?;
-        let dt = r.at.saturating_sub(r.start_at) as f32 / 1000.0;
-        (dt >= 1.0 && r.tokens > r.start).then(|| (r.tokens - r.start) as f32 / dt)
+        if let Some(ms) = self.usage.turn_active_ms.filter(|ms| *ms >= 500) {
+            let toks = self.usage.turn_streamed.filter(|t| *t > 0).or(self.usage.turn.filter(|t| *t > 0))?;
+            return Some(toks as f32 / (ms as f32 / 1000.0));
+        }
+        if let Some(r) = self.rate.as_ref() {
+            let dt = r.at.saturating_sub(r.start_at) as f32 / 1000.0;
+            if dt >= 0.8 && r.tokens > r.start {
+                return Some((r.tokens - r.start) as f32 / dt);
+            }
+        }
+        if self.busy {
+            if let Some(started) = self.turn_started {
+                let dt = now_ms().saturating_sub(started) as f32 / 1000.0;
+                let out = self.turn_output();
+                if dt >= 0.8 && out > 0 {
+                    return Some(out as f32 / dt);
+                }
+            }
+        }
+        None
     }
 
     pub fn export_markdown(&self) -> String {
@@ -710,5 +753,33 @@ mod tests {
         s.send(Cmd::SetCompaction { trim: Some(50), compact: None });
         assert_eq!((s.mode, s.effort.as_str(), s.sub_effort.clone(), s.trim_at), (Mode::Yolo, "default", None, 50));
         assert_eq!(s.outbox.len(), 4);
+    }
+
+    #[test]
+    fn token_metrics_track_in_out_and_rate() {
+        let mut s = CodeState::default();
+        s.apply(Ev::TurnStart);
+        s.apply(ev(json!({
+            "type": "usage",
+            "context": 12000,
+            "window": 200000,
+            "input": 10000,
+            "cached": 4000,
+            "output": 600,
+            "turn": 600,
+            "turn_input": 10000,
+            "turn_cached": 4000,
+            "turn_streamed": 600,
+            "turn_active_ms": 10000
+        })));
+        assert_eq!(s.turn_input(), 10_000);
+        assert_eq!(s.turn_cached(), 4_000);
+        assert_eq!(s.turn_output(), 600);
+        let rate = s.tokens_per_second().expect("rate from turn_active_ms");
+        assert!((rate - 60.0).abs() < 0.01, "expected ~60 tok/s, got {rate}");
+        s.apply(Ev::TurnDone);
+        assert!((s.last_rate.expect("preserved after turn") - 60.0).abs() < 0.01);
+        s.apply(Ev::Cleared);
+        assert_eq!(s.last_rate, None);
     }
 }

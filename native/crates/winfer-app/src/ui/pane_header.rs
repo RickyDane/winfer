@@ -18,6 +18,38 @@ const PART_COLORS: [(&str, &str); 10] = [
     ("messages", "#e5735a"), ("replies", "#d867a8"), ("thinking", "#a3b85a"), ("toolCalls", "#6dbf67"), ("toolResults", "#3fb5a3"),
 ];
 
+#[derive(Clone, Debug)]
+pub(super) struct BgTask {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub cmd: String,
+    pub status: String,
+    pub log: Option<String>,
+    pub started_at: u64,
+}
+
+#[derive(Clone)]
+struct HeaderBgItem {
+    id: String,
+    title: String,
+    description: Option<String>,
+    agent: Option<String>,
+    model: Option<String>,
+    last: Option<String>,
+    recent_lines: Vec<String>,
+    started_at: u64,
+    log_file: Option<String>,
+    from_code: bool,
+}
+
+fn bg_clock(ms: u64) -> String {
+    let s = ms / 1000;
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    if h > 0 { format!("{h}:{m:02}:{:02}", s % 60) } else { format!("{m}:{:02}", s % 60) }
+}
+
 #[derive(Default)]
 pub(super) struct PaneMeters {
     /// How full each pane's context window is (`Context` in usage.ts).
@@ -194,9 +226,10 @@ impl Root {
         let p = pane.clone();
         let id = pane.id.clone();
         let mono = crate::fonts::mono(cx);
-        let bar = div().size(px(14.0)).rounded_full().border_2().border_color(Hsla { a: 0.15, ..c.fg }).child(div().size_full().rounded_full().border_2().border_color(color).opacity((used.max(3.0) / 100.0) as f32));
+        let ring_bg = Hsla { a: 0.18, ..color };
+        let bar = div().size(px(12.0)).flex_shrink_0().rounded_full().border_2().border_color(color).bg(ring_bg);
         Some(
-            div().id(SharedString::from(format!("context-{}", pane.id))).flex().flex_shrink_0().items_center().gap_1()
+            div().id(SharedString::from(format!("context-{}", pane.id))).relative().flex().flex_shrink_0().items_center().gap_1p5()
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     this.meters.hovered = hovered.then(|| id.clone());
                     if *hovered {
@@ -205,7 +238,7 @@ impl Root {
                     cx.notify();
                 }))
                 .child(bar)
-                .child(div().font_family(mono).text_size(px(10.0)).text_color(if used >= 60.0 { color } else { c.subtle }).child(format!("{}%", used.round())))
+                .child(div().font_family(mono).text_size(px(10.5)).text_color(if used >= 60.0 { color } else { c.fg }).child(format!("{}%", used.round())))
                 .when(self.meters.hovered.as_deref() == Some(&pane.id), |d| d.child(self.context_card(pane, c)))
                 .into_any_element(),
         )
@@ -256,7 +289,7 @@ impl Root {
                 body = body.child(div().text_size(px(11.0)).text_color(c.subtle).child("Reading the session…"));
             }
         }
-        div().absolute().top(px(22.0)).right_0().w(px(300.0)).flex().flex_col().gap_2p5().rounded_lg().border_1().border_color(c.border_strong).bg(c.raised).p_3()
+        div().absolute().top(px(22.0)).right_0().w(px(300.0)).flex().flex_col().gap_2p5().rounded_lg().bg(c.raised).p_3()
             .child(div().flex().items_baseline().gap_2().text_xs()
                 .child(div().flex_1().text_color(c.fg).child("Context"))
                 .child(div().text_size(px(11.0)).text_color(c.muted).child(format!("{} / {} · {}%", short_tokens(tokens), short_tokens(window), used.round()))))
@@ -334,9 +367,11 @@ impl Root {
         items
     }
 
-    /// The pane's header (index, status, agent, title, progress and the buttons) and, for agents,
-    /// its status line under the terminal (workspace, branch, model, cost and context).
-    pub(super) fn render_header(&self, pane: &Pane, index: usize, zoomed: bool, c: &Colors, cx: &mut Context<Self>) -> (AnyElement, Option<AnyElement>) {
+    /// The Single Spatial Island pane header: one floating frosted capsule inset 8px from the top,
+    /// left, and right edges of the pane. Left: provider badge + live status dot and a two-line
+    /// identity/metadata stack. Right: live bg tasks, dev server launch, unified telemetry pill,
+    /// divider, and action icons.
+    pub(super) fn render_header(&self, pane: &Pane, index: usize, zoomed: bool, c: &Colors, cx: &mut Context<Self>) -> AnyElement {
         let c = *c;
         let s = self.state.read(cx);
         let label = s.pane_label(pane);
@@ -354,9 +389,9 @@ impl Root {
         let title_tip = format!("{}\nDouble-click to rename", if label == name { name.clone() } else { format!("{name}: {label}") });
         let rename_id = id.clone();
         let title = match renaming {
-            Some(input) => div().flex_1().child(Input::new(&input)).into_any_element(),
+            Some(input) => div().flex_1().min_w_0().child(Input::new(&input)).into_any_element(),
             None => div().id(SharedString::from(format!("title-{id}"))).flex_1().min_w_0().truncate()
-                .text_size(px(13.5)).font_weight(FontWeight::SEMIBOLD).text_color(if focused { c.fg } else { c.muted })
+                .text_size(px(13.0)).font_weight(if focused { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if focused { c.fg } else { c.muted })
                 .tooltip(move |window, cx| Tooltip::new(title_tip.clone()).build(window, cx))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     if e.click_count() == 2 {
@@ -367,41 +402,55 @@ impl Root {
                 .into_any_element(),
         };
         let button = move |key: String, icon: IconName, tip: String| {
-            div().id(SharedString::from(key)).rounded_sm().p_1().text_color(c.subtle).cursor_pointer()
+            div().id(SharedString::from(key)).size(px(24.0)).flex().items_center().justify_center().rounded_md().text_color(c.subtle).cursor_pointer()
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(Icon::new(icon).size(px(13.0)))
         };
+        let pill_bg = if c.light { Hsla { a: 0.055, ..c.fg } } else { Hsla { a: 0.07, ..c.fg } };
         let context = self.context_meter(pane, c, cx);
         let cost = self.pane_cost(pane, c, cx);
         let branch = pane.worktree.as_ref().map(|t| (t.branch.trim_start_matches("winfer/").to_string(), t.path.clone()));
         let (t1, t2, t3, t4, t5, t6, t7) = (target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone());
         let menu_pane = pane.clone();
-        let branch_el = branch.map(|(b, path)| {
-            div().id(SharedString::from(format!("branch-{id}"))).flex().max_w(px(160.0)).items_center().gap_1().rounded_sm().px_1p5().py_0p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).cursor_pointer()
-                .hover(move |d| d.bg(c.hover).text_color(c.fg))
-                .tooltip(move |window, cx| Tooltip::new(format!("{path}\nClick to show changes")).build(window, cx))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::ShowChanges(t1.clone()), window, cx)))
-                .child(Icon::new(IconName::GitBranch).size(px(11.0)))
-                .child(div().truncate().child(b))
-        });
+        let branch_el = match branch {
+            Some((b, path)) => {
+                let teal = crate::theme::hex(if c.light { "#0f766e" } else { "#5eead4" });
+                div().id(SharedString::from(format!("branch-{id}"))).flex().max_w(px(176.0)).items_center().gap_1().rounded_full().bg(Hsla { a: 0.11, ..teal }).px_1p5().py(px(0.5)).font_family(mono.clone()).text_size(px(10.5)).text_color(teal).cursor_pointer()
+                    .hover(move |d| d.bg(Hsla { a: 0.20, ..teal }))
+                    .tooltip(move |window, cx| Tooltip::new(format!("{path}\nClick to show changes")).build(window, cx))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::ShowChanges(t1.clone()), window, cx)))
+                    .child(Icon::new(IconName::FolderGit2).size(px(11.0)).flex_shrink_0())
+                    .child(div().min_w_0().truncate().child(b))
+                    .into_any_element()
+            }
+            None => div().id(SharedString::from(format!("shared-{id}"))).flex().flex_shrink_0().items_center().gap_1().text_size(px(11.0)).text_color(c.subtle)
+                .tooltip(|window, cx| Tooltip::new("Works in the project folder, not its own worktree").build(window, cx))
+                .child(Icon::new(IconName::GitBranch).size(px(11.0)).flex_shrink_0())
+                .child("shared folder")
+                .into_any_element(),
+        };
         let model_el = pane.model.clone().map(|m| {
-            div().id(SharedString::from(format!("model-{id}"))).max_w(px(112.0)).truncate().rounded_sm().px_1p5().py_0p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).cursor_pointer()
-                .hover(move |d| d.bg(c.hover).text_color(c.fg))
-                .tooltip(|window, cx| Tooltip::new("Model · click to change").build(window, cx))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.execute(Command::Focus(t2.clone()), window, cx);
-                    this.execute(Command::Overlay { overlay: Overlay::Model, provider: None }, window, cx);
-                }))
-                .child(m)
+            div().flex().min_w_0().items_center().gap_1p5()
+                .child(div().text_size(px(10.0)).text_color(Hsla { a: 0.45, ..c.subtle }).child("·"))
+                .child(
+                    div().id(SharedString::from(format!("model-{id}"))).max_w(px(120.0)).truncate().text_size(px(11.0)).text_color(c.muted).cursor_pointer()
+                        .hover(move |d| d.text_color(c.fg))
+                        .tooltip(|window, cx| Tooltip::new("Model · click to change").build(window, cx))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.execute(Command::Focus(t2.clone()), window, cx);
+                            this.execute(Command::Overlay { overlay: Overlay::Model, provider: None }, window, cx);
+                        }))
+                        .child(m),
+                )
         });
         let url_el = pane.dev_url.clone().map(|u| {
             let open = u.clone();
-            div().id(SharedString::from(format!("url-{id}"))).flex().items_center().gap_1().rounded_sm().px_1p5().py_0p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.accent).cursor_pointer()
-                .hover(move |d| d.bg(Hsla { a: 0.15, ..c.accent }))
+            div().id(SharedString::from(format!("url-{id}"))).flex().flex_shrink_0().items_center().gap_1().h(px(24.0)).rounded_full().border_1().border_color(Hsla { a: 0.28, ..c.accent }).bg(Hsla { a: 0.14, ..c.accent }).px_2().text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(c.accent).cursor_pointer()
+                .hover(move |d| d.bg(Hsla { a: 0.22, ..c.accent }))
                 .tooltip(move |window, cx| Tooltip::new(format!("Open {u} in the browser panel")).build(window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::BrowserOpen { url: open.clone(), new_tab: false }, window, cx)))
@@ -416,12 +465,12 @@ impl Root {
         let workspace = workspace_name.clone();
         let restore_tip = format!("Put back into {}", workspace.clone().unwrap_or_else(|| "its workspace".into()));
         let actions: Vec<AnyElement> = if pane.archived {
-            vec![div().id(SharedString::from(format!("restore-{id}"))).flex().items_center().gap_1().rounded_sm().px_1p5().py_0p5().text_size(px(11.0)).text_color(c.muted).cursor_pointer()
-                .hover(move |d| d.bg(c.hover).text_color(c.fg))
+            vec![div().id(SharedString::from(format!("restore-{id}"))).flex().items_center().gap_1().h(px(24.0)).rounded_full().border_1().border_color(c.border).bg(pill_bg).px_2p5().text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).cursor_pointer()
+                .hover(move |d| d.bg(c.hover))
                 .tooltip(move |window, cx| Tooltip::new(restore_tip.clone()).build(window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Archive { target: t3.clone(), restore: true }, window, cx)))
-                .child(Icon::new(IconName::ArchiveRestore).size(px(12.0)))
+                .child(Icon::new(IconName::ArchiveRestore).size(px(11.5)))
                 .child("Restore")
                 .into_any_element()]
         } else {
@@ -442,50 +491,423 @@ impl Root {
                     })).into_any_element(),
             ]
         };
-        let close = button(format!("close-{id}"), IconName::X, format!("Close{close_keys}")).on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Close(t7.clone()), window, cx)));
+        let close = div().id(SharedString::from(format!("close-{id}"))).size(px(24.0)).flex().items_center().justify_center().rounded_md().text_color(c.subtle).cursor_pointer()
+            .hover(move |d| d.bg(Hsla { a: 0.14, ..c.danger }).text_color(c.danger))
+            .tooltip(move |window, cx| Tooltip::new(format!("Close{close_keys}")).build(window, cx))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Close(t7.clone()), window, cx)))
+            .child(Icon::new(IconName::X).size(px(13.0)));
         let drag_id = id.clone();
         let archived = pane.archived;
-        let bar = progress.as_ref().map(|p| progress::progress_bar(Some(p), status, &c).absolute().bottom_0().left_0().right_0().h(px(2.0)));
-        let percent = progress.as_ref().and_then(|p| p.percent).filter(|_| status != AgentStatus::Idle);
-        let base = div().id(SharedString::from(format!("header-{id}"))).relative().flex_shrink_0()
+        let workspace_chip = workspace_name.map(|w| {
+            div().max_w(px(120.0)).flex_shrink_0().truncate().rounded_full().bg(pill_bg).px_1p5().py(px(0.5)).text_size(px(10.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(w)
+        });
+        let bar = progress.as_ref().map(|p| {
+            div().absolute().left_0().right_0().bottom_0().h(px(10.0)).rounded_b_xl().overflow_hidden()
+                .child(progress::progress_bar(Some(p), status, &c).absolute().bottom_0().left_0().right_0().h(px(2.0)))
+        });
+        let fill = match status {
+            AgentStatus::NeedsInput => crate::theme::blend(c.raised, c.warning, if c.light { 0.14 } else { 0.13 }),
+            AgentStatus::Error => crate::theme::blend(c.raised, c.danger, if c.light { 0.12 } else { 0.13 }),
+            _ if c.light => crate::theme::blend(c.panel, c.fg, if focused { 0.04 } else { 0.024 }),
+            _ => crate::theme::blend(c.panel, c.fg, if focused { 0.068 } else { 0.045 }),
+        };
+        let badge_tint = match pane.provider.as_str() {
+            "claude" => c.claude,
+            "agy" => crate::theme::hex("#4f8cff"),
+            "opencode" => crate::theme::hex("#f5b544"),
+            "cursor" => crate::theme::hex("#8b5cf6"),
+            "pi" | "local" => crate::theme::hex("#22c55e"),
+            "muse" => crate::theme::hex("#fb7185"),
+            "winfer" => c.accent,
+            _ => c.muted,
+        };
+        let meta_row = match status {
+            AgentStatus::NeedsInput => div().flex().min_w_0().items_center().gap_1p5().overflow_hidden().text_size(px(11.0))
+                .children(workspace_chip)
+                .child(div().min_w_0().truncate().font_family(mono.clone()).text_size(px(10.5)).text_color(c.warning).child("Waiting for your input")),
+            AgentStatus::Error => div().flex().min_w_0().items_center().gap_1p5().overflow_hidden().text_size(px(11.0))
+                .children(workspace_chip)
+                .child(div().min_w_0().truncate().font_family(mono.clone()).text_size(px(10.5)).text_color(c.danger).child("The process stopped with an error")),
+            _ => div().flex().min_w_0().items_center().gap_1p5().overflow_hidden().text_size(px(11.0)).text_color(c.subtle)
+                .children(workspace_chip)
+                .child(branch_el)
+                .children(model_el),
+        };
+        let telemetry = (cost.is_some() || context.is_some()).then(|| {
+            let has_both = cost.is_some() && context.is_some();
+            div().flex().flex_shrink_0().items_center().gap_1p5().h(px(24.0)).px_2().rounded_full().bg(pill_bg)
+                .children(cost)
+                .when(has_both, |d| d.child(div().text_size(px(10.0)).text_color(Hsla { a: 0.45, ..c.subtle }).child("·")))
+                .children(context)
+        });
+        let island_shadow = if c.light {
+            vec![
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.10), offset: point(px(0.0), px(6.0)), blur_radius: px(16.0), spread_radius: px(-6.0), inset: false },
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.06), offset: point(px(0.0), px(2.0)), blur_radius: px(5.0), spread_radius: px(-1.0), inset: false },
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.04), offset: point(px(0.0), px(1.0)), blur_radius: px(2.0), spread_radius: px(0.0), inset: false },
+            ]
+        } else {
+            vec![
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.50), offset: point(px(0.0), px(8.0)), blur_radius: px(22.0), spread_radius: px(-6.0), inset: false },
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.30), offset: point(px(0.0), px(2.0)), blur_radius: px(6.0), spread_radius: px(-1.0), inset: false },
+                BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.20), offset: point(px(0.0), px(1.0)), blur_radius: px(2.0), spread_radius: px(0.0), inset: false },
+            ]
+        };
+        let bg_chip = self.render_bg_chip(&id, c, cx);
+        let group_id = SharedString::from(format!("hdr-grp-{id}"));
+        div()
+            .id(SharedString::from(format!("header-{id}")))
+            .group(group_id.clone())
+            .relative()
+            .flex_shrink_0()
+            .mx_2()
+            .mt_2()
+            .mb_0()
+            .flex()
+            .items_center()
+            .gap_2p5()
+            .px_2()
+            .py(px(7.0))
+            .rounded_xl()
+            .bg(fill)
+            .shadow(island_shadow)
             .when(!archived, |d| d.on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                 this.drag = Some(Drag::Pane { id: drag_id.clone(), at: e.position });
                 cx.notify();
             })))
-            .children(bar);
-        // One slim row: index, status, agent, title, progress, then the buttons. Needing input or
-        // an error tints it.
-        let tint = match status {
-            AgentStatus::NeedsInput => Some(Hsla { a: 0.08, ..c.warning }),
-            AgentStatus::Error => Some(Hsla { a: 0.08, ..c.danger }),
-            _ => None,
-        };
-        let header = base.h(px(34.0)).flex().items_center().gap_2().pl_2p5().pr_1p5().border_b_1().border_color(c.border).bg(c.raised)
-            .when_some(tint, |d, t| d.bg(t))
-            .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(10.5)).text_color(if focused { c.accent } else { c.subtle }).child(index.to_string()))
-            .child(div().size(px(7.0)).flex_shrink_0().rounded_full().bg(status_color(status, &c)))
-            .child(crate::ui::code_pickers::mark(c, &pane.provider, 13.0, 1.0))
-            .children(workspace_name.map(|w| div().max_w(px(112.0)).flex_shrink_0().truncate().rounded_sm().bg(c.hover).px_1p5().text_size(px(10.5)).text_color(c.muted).child(w)))
-            .child(title)
-            .when_some(percent, |d, n| d.child(div().flex().flex_shrink_0().items_center().gap_1p5().font_family(mono.clone()).text_size(px(11.0)).text_color(c.muted)
-                .child(div().w(px(32.0)).h(px(3.0)).rounded_full().bg(c.active).child(div().h_full().rounded_full().w(relative(n as f32 / 100.0)).bg(if status == AgentStatus::NeedsInput { c.warning } else if n >= 100 { c.success } else { c.accent })))
-                .child(format!("{n}%"))))
-            .children(url_el)
-            .child(div().flex().flex_shrink_0().items_center().when(!focused, |d| d.opacity(0.55)).child(menu_button).children(actions).child(close));
-        // The status line: the pane's facts, out of the header so the title has room.
-        let agent = pane.provider != "shell";
-        let line = (agent && (branch_el.is_some() || model_el.is_some() || cost.is_some() || context.is_some())).then(|| {
-            div().h(px(26.0)).flex_shrink_0().flex().items_center().gap_2().overflow_hidden().px_2().border_t_1().border_color(c.border)
-                .font_family(mono.clone()).text_size(px(10.5)).text_color(c.subtle)
-                .children(branch_el)
-                .children(context)
-                .children(cost)
-                .child(div().flex_1())
-                .children(model_el)
-                .into_any_element()
-        });
-        let _ = name;
-        (header.into_any_element(), line)
+            .children(bar)
+            // Left: Provider avatar + live status dot
+            .child(
+                div().relative().size(px(30.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg()
+                    .bg(Hsla { a: if c.light { 0.14 } else { 0.20 }, ..badge_tint })
+                    .child(crate::ui::code_pickers::mark(c, &pane.provider, 14.0, 1.0))
+                    .child(
+                        div().absolute().right(px(-3.0)).bottom(px(-3.0)).rounded_full().bg(fill).p(px(2.0))
+                            .child(div().size(px(6.0)).rounded_full().bg(status_color(status, &c))),
+                    ),
+            )
+            // Center: Identity two-line stack (#index + title, then branch/model/alert)
+            .child(
+                div().flex_1().min_w_0().flex().flex_col().gap(px(2.0))
+                    .child(
+                        div().flex().min_w_0().items_center().gap_1p5()
+                            .child(
+                                div().flex_shrink_0().rounded(px(4.0)).px(px(4.5)).py(px(0.5))
+                                    .bg(if focused { Hsla { a: 0.15, ..c.accent } } else { pill_bg })
+                                    .font_family(mono.clone()).text_size(px(10.0)).font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(if focused { c.accent } else { c.subtle })
+                                    .child(index.to_string()),
+                            )
+                            .child(title),
+                    )
+                    .child(meta_row),
+            )
+            // Right: Live bg tasks, dev launch, telemetry pill, divider, actions
+            .child(
+                div().flex().flex_shrink_0().items_center().gap_1p5()
+                    .children(bg_chip)
+                    .children(url_el)
+                    .children(telemetry)
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(c.border))
+                    .child(
+                        div().flex().flex_shrink_0().items_center().gap(px(1.0))
+                            .when(!focused, |d| d.opacity(0.48).group_hover(group_id, |d| d.opacity(1.0)))
+                            .child(menu_button)
+                            .children(actions)
+                            .child(close),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Updates MCP `bg` task tracking for a pane from `"bg://task"` backend events.
+    pub(super) fn on_bg_task(&mut self, payload: &Value, cx: &mut Context<Self>) {
+        let pane_id = payload["paneId"].as_str().unwrap_or_default().to_string();
+        let id = payload["id"].as_str().unwrap_or_default().to_string();
+        let status = payload["status"].as_str().unwrap_or_default().to_string();
+        if pane_id.is_empty() || id.is_empty() {
+            return;
+        }
+        let list = self.bg_tasks.entry(pane_id.clone()).or_default();
+        if let Some(existing) = list.iter_mut().find(|t| t.id == id) {
+            existing.status = status.clone();
+            if let Some(t) = payload["title"].as_str().filter(|s| !s.is_empty()) {
+                existing.title = t.to_string();
+            }
+            if let Some(d) = payload["description"].as_str().filter(|s| !s.is_empty()) {
+                existing.description = Some(d.to_string());
+            }
+            if let Some(l) = payload["log"].as_str().filter(|s| !s.is_empty()) {
+                existing.log = Some(l.to_string());
+            }
+        } else if status == "running" {
+            list.push(BgTask {
+                id,
+                title: payload["title"].as_str().unwrap_or("background task").to_string(),
+                description: payload["description"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+                cmd: payload["cmd"].as_str().unwrap_or_default().to_string(),
+                status,
+                log: payload["log"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+                started_at: crate::code::state::now_ms(),
+            });
+        }
+        list.retain(|t| t.status == "running");
+        if self.bg_popover.as_ref().is_some_and(|(p, _)| *p == pane_id) && self.running_bg_items(&pane_id, cx).is_empty() {
+            self.bg_popover = None;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn close_bg_popover(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.bg_popover.take().is_some() {
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Running subagents and background shells for a pane (from both `winfer code` and winfer's MCP `bg` tool).
+    fn running_bg_items(&self, pane_id: &str, cx: &App) -> Vec<HeaderBgItem> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        if let Some(model) = self.code_models.get(pane_id) {
+            let st = &model.read(cx).state;
+            for t in &st.tasks {
+                if t.ev.status.as_deref() != Some("running") {
+                    continue;
+                }
+                seen.insert(t.ev.id.clone());
+                let title = t.ev.title.clone().or_else(|| t.ev.description.clone()).unwrap_or_else(|| t.ev.id.clone());
+                out.push(HeaderBgItem {
+                    id: t.ev.id.clone(),
+                    title,
+                    description: t.ev.description.clone(),
+                    agent: t.ev.agent.clone(),
+                    model: t.ev.model.clone(),
+                    last: t.ev.last.clone(),
+                    recent_lines: t.recent_lines.clone(),
+                    started_at: t.started_at,
+                    log_file: t.ev.output_file.clone(),
+                    from_code: true,
+                });
+            }
+        }
+        if let Some(tasks) = self.bg_tasks.get(pane_id) {
+            for t in tasks {
+                if t.status != "running" || !seen.insert(t.id.clone()) {
+                    continue;
+                }
+                out.push(HeaderBgItem {
+                    id: t.id.clone(),
+                    title: t.title.clone(),
+                    description: t.description.clone(),
+                    agent: None,
+                    model: None,
+                    last: (!t.cmd.is_empty()).then(|| t.cmd.clone()),
+                    recent_lines: Vec::new(),
+                    started_at: t.started_at,
+                    log_file: t.log.clone(),
+                    from_code: false,
+                });
+            }
+        }
+        out
+    }
+
+    /// Compact pill on the pane header showing running subagents and background shells.
+    fn render_bg_chip(&self, pane_id: &str, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let items = self.running_bg_items(pane_id, cx);
+        if items.is_empty() {
+            return None;
+        }
+        let agents = items.iter().filter(|t| t.agent.is_some()).count();
+        let shells = items.len() - agents;
+        let open = self.bg_popover.as_ref().is_some_and(|(p, _)| p == pane_id);
+        let mut parts = Vec::new();
+        if agents > 0 {
+            parts.push(format!("{agents} subagent{}", if agents == 1 { "" } else { "s" }));
+        }
+        if shells > 0 {
+            parts.push(format!("{shells} background shell{}", if shells == 1 { "" } else { "s" }));
+        }
+        let tip = format!("{} running\nClick for details", parts.join(" · "));
+        let pid = pane_id.to_string();
+        let mono = crate::fonts::mono(cx);
+        let mut chip = div()
+            .id(SharedString::from(format!("bg-chip-{pane_id}")))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1p5()
+            .h(px(24.0))
+            .pl(px(4.0))
+            .pr_2()
+            .rounded_full()
+            .border_1()
+            .border_color(Hsla { a: if open { 0.36 } else { 0.26 }, ..c.accent })
+            .bg(Hsla { a: if open { 0.22 } else { 0.13 }, ..c.accent })
+            .text_size(px(11.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if open { c.fg } else { c.muted })
+            .cursor_pointer()
+            .hover(move |d| d.bg(Hsla { a: 0.17, ..c.accent }).text_color(c.fg))
+            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                if this.bg_popover.as_ref().is_some_and(|(p, _)| *p == pid) {
+                    this.bg_popover = None;
+                } else {
+                    this.bg_popover = Some((pid.clone(), e.position()));
+                }
+                cx.notify();
+            }))
+            .child(
+                div().relative().size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().bg(Hsla { a: 0.18, ..c.accent })
+                    .child(Icon::new(if agents > 0 { IconName::Bot } else { IconName::SquareTerminal }).size(px(10.0)).text_color(c.accent))
+                    .child(div().absolute().top(px(-1.0)).right(px(-1.0)).size(px(4.5)).rounded_full().bg(c.accent)),
+            );
+        if agents > 0 {
+            chip = chip.child(div().flex().items_center().gap_1()
+                .child(div().font_family(mono.clone()).text_color(c.fg).child(agents.to_string()))
+                .child(if agents == 1 { "agent" } else { "agents" }));
+        }
+        if agents > 0 && shells > 0 {
+            chip = chip.child(div().size(px(3.0)).rounded_full().bg(Hsla { a: 0.6, ..c.subtle }));
+        }
+        if shells > 0 {
+            chip = chip.child(div().flex().items_center().gap_1()
+                .child(div().font_family(mono).text_color(c.fg).child(shells.to_string()))
+                .child(if shells == 1 { "shell" } else { "shells" }));
+        }
+        chip = chip.child(Icon::new(if open { IconName::ChevronUp } else { IconName::ChevronDown }).size(px(11.0)).text_color(c.subtle));
+        Some(chip.into_any_element())
+    }
+
+    /// Anchored popover listing all running subagents & background shells for a pane, with log viewer and stop actions.
+    pub(super) fn render_bg_popover(&mut self, c: &Colors, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (pane_id, anchor) = self.bg_popover.clone()?;
+        let items = self.running_bg_items(&pane_id, cx);
+        if items.is_empty() {
+            self.bg_popover = None;
+            return None;
+        }
+        let c = *c;
+        let mono = crate::fonts::mono(cx);
+        let now = crate::code::state::now_ms();
+        let agents = items.iter().filter(|t| t.agent.is_some()).count();
+        let shells = items.len() - agents;
+        let win_w = window.viewport_size().width / px(1.0);
+        let width = 380.0_f32.min((win_w - 16.0).max(240.0));
+        let left = (anchor.x / px(1.0) - width + 40.0).clamp(8.0, (win_w - width - 8.0).max(8.0));
+        let top = (anchor.y / px(1.0) + 14.0).max(40.0);
+
+        let mut head = div().flex().items_center().gap_2().px_3().py_2()
+            .child(div().flex_1().text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("In the background"));
+        if agents > 0 {
+            head = head.child(div().flex().items_center().gap_1().rounded_full().bg(Hsla { a: 0.14, ..c.accent }).px_2().py(px(1.0)).text_size(px(10.5)).font_family(mono.clone()).text_color(c.accent)
+                .child(Icon::new(IconName::Bot).size(px(10.5)))
+                .child(agents.to_string()));
+        }
+        if shells > 0 {
+            head = head.child(div().flex().items_center().gap_1().rounded_full().bg(Hsla { a: 0.14, ..c.success }).px_2().py(px(1.0)).text_size(px(10.5)).font_family(mono.clone()).text_color(c.success)
+                .child(Icon::new(IconName::SquareTerminal).size(px(10.5)))
+                .child(shells.to_string()));
+        }
+
+        let mut rows = div().id("bg-pop-list").flex().flex_col().gap_1().p_1p5().max_h(px(320.0)).overflow_y_scroll();
+        for (i, item) in items.into_iter().enumerate() {
+            let is_agent = item.agent.is_some();
+            let kind_label = match (&item.agent, &item.model) {
+                (Some(a), Some(m)) => format!("{a} · {}", crate::code::names::model_name(m, None)),
+                (Some(a), None) => a.clone(),
+                (None, _) => "shell".to_string(),
+            };
+            let elapsed_str = bg_clock(now.saturating_sub(item.started_at));
+            let sub_line = if is_agent {
+                item.recent_lines.last().cloned().or_else(|| item.last.clone()).unwrap_or_else(|| "starting…".into())
+            } else {
+                item.description.clone().or_else(|| item.last.clone()).unwrap_or_else(|| "running…".into())
+            };
+            let (open_pid, open_id, open_log, open_code) = (pane_id.clone(), item.id.clone(), item.log_file.clone(), item.from_code);
+            let (stop_pid, stop_id, stop_code) = (pane_id.clone(), item.id.clone(), item.from_code);
+            let tip = item.description.clone().map(|d| format!("{d}\nClick to view output")).unwrap_or_else(|| "Click to view output".into());
+
+            rows = rows.child(
+                div().id(("bg-row", i)).flex().flex_col().gap_1().rounded_lg().px_2p5().py_2().cursor_pointer().hover(move |d| d.bg(c.hover))
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.bg_popover = None;
+                        if open_code {
+                            if let Some(model) = this.code_models.get(&open_pid) {
+                                let id = open_id.clone();
+                                model.update(cx, |m, cx| {
+                                    m.state.open_task_log(&id);
+                                    m.flush(cx);
+                                    cx.notify();
+                                });
+                            }
+                        } else if let Some(path) = &open_log {
+                            this.viewer.update(cx, |v, cx| v.open(path.clone(), None, false, cx));
+                            this.update_state(cx, |s| {
+                                s.browser_open = true;
+                                s.side_panel = Some(SidePanel::Viewer);
+                            });
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div().flex().items_center().gap_2()
+                            .child(div().size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(Hsla { a: 0.14, ..if is_agent { c.accent } else { c.success } })
+                                .child(Icon::new(if is_agent { IconName::Bot } else { IconName::SquareTerminal }).size(px(11.0)).text_color(if is_agent { c.accent } else { c.success })))
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(item.title))
+                            .child(div().flex_shrink_0().rounded_sm().bg(c.hover).px_1p5().py(px(1.0)).text_size(px(10.0)).text_color(c.subtle).child(kind_label))
+                            .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(10.5)).text_color(c.subtle).child(elapsed_str))
+                            .child(
+                                div().id(("bg-stop", i)).flex_shrink_0().flex().items_center().gap_1().h(px(22.0)).px_2().rounded_md().bg(Hsla { a: 0.10, ..c.danger }).text_size(px(10.5)).font_weight(FontWeight::MEDIUM).text_color(c.danger).cursor_pointer()
+                                    .hover(move |d| d.bg(Hsla { a: 0.22, ..c.danger }))
+                                    .tooltip(|window, cx| Tooltip::new("Stop this background task").build(window, cx))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if stop_code {
+                                            if let Some(model) = this.code_models.get(&stop_pid) {
+                                                let id = stop_id.clone();
+                                                model.update(cx, |m, cx| m.send(crate::code::protocol::Cmd::StopTask(id), cx));
+                                            }
+                                        } else {
+                                            let _ = winfer_backend::harness::bg::stop(&stop_id);
+                                            if let Some(list) = this.bg_tasks.get_mut(&stop_pid) {
+                                                list.retain(|t| t.id != stop_id);
+                                            }
+                                            if this.running_bg_items(&stop_pid, cx).is_empty() {
+                                                this.bg_popover = None;
+                                            }
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::Square).size(px(9.0)))
+                                    .child("Stop"),
+                            ),
+                    )
+                    .child(div().pl(px(28.0)).truncate().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(sub_line)),
+            );
+        }
+
+        Some(
+            div().id("bg-popover-backdrop").absolute().top_0().left_0().size_full()
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.bg_popover = None;
+                    cx.notify();
+                }))
+                .child(
+                    div().id("bg-popover").absolute().left(px(left)).top(px(top)).w(px(width)).overflow_hidden().rounded_xl().bg(c.raised).shadow_lg().occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(head)
+                        .child(rows),
+                )
+                .into_any_element(),
+        )
     }
 }
 
@@ -581,7 +1003,7 @@ impl Root {
                 .child(Icon::new(icon).size(px(13.0)))
         };
         Some(
-            div().absolute().top(px(36.0)).right(px(12.0)).flex().items_center().gap_1().rounded_md().border_1().border_color(c.border_strong).bg(c.raised).px_2().py_1()
+            div().absolute().top(px(36.0)).right(px(12.0)).flex().items_center().gap_1().rounded_md().bg(c.raised).px_2().py_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().w(px(176.0)).child(Input::new(&search.input).appearance(false)))
                 .child(div().min_w(px(40.0)).text_right().font_family(mono).text_size(px(11.0)).text_color(c.subtle).child(count))

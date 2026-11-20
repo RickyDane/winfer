@@ -33,7 +33,7 @@ export function UsageSettings({ children }: { children?: React.ReactNode }) {
   const [tab, setTab] = useSaved<UsageTab>(USAGE_TAB_KEY, ["usage", "limits", "tools"], "usage");
   return (
     <div className="space-y-6">
-      <div role="tablist" className="flex w-max items-center gap-0.5 rounded-lg border border-border bg-panel p-0.5">
+      <div role="tablist" className="flex w-max items-center gap-0.5 rounded-lg bg-panel p-0.5 shadow-sm">
         {TABS.map((t) => (
           <button
             key={t.id}

@@ -172,13 +172,18 @@ pub struct HarnessModel {
     spec: String,
     label: String,
     detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    efforts: Option<Vec<String>>,
 }
 
 /// Every model `winfer code` can use (asks Codex and the ChatGPT account: a few seconds).
 #[tauri::command]
 pub async fn harness_models() -> Vec<HarnessModel> {
     tauri::async_runtime::spawn_blocking(|| {
-        backend::all_models().into_iter().map(|m| HarnessModel { spec: m.spec, label: m.label, detail: m.detail }).collect()
+        backend::all_models()
+            .into_iter()
+            .map(|m| HarnessModel { spec: m.spec, label: m.label, detail: m.detail, efforts: m.efforts })
+            .collect()
     })
     .await
     .unwrap_or_default()

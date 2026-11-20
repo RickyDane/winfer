@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, MessageCircleQuestion, ShieldCheck, Square, X } from "lucide-react";
+import { ArrowUp, FileText, MessageCircleQuestion, ShieldCheck, Square, X } from "lucide-react";
 import clsx from "clsx";
 import { useContext } from "react";
 import { CodeStoreContext, useCode } from "./store";
@@ -353,7 +353,7 @@ export function Composer({ focused }: { focused: boolean }) {
           <>
             <span title={usage.turn_cached ? `${fmtTokens(usage.turn_cached)} of them from the prompt cache` : undefined}>
               ↑ {fmtTokens(usage.turn_input)} in
-              {!!usage.turn_cached && <span className="dim"> ({Math.round((usage.turn_cached / usage.turn_input) * 100)}% cached)</span>}
+              {!!usage.turn_cached && <span className="dim"> ({Math.min(100, Math.round((usage.turn_cached / usage.turn_input) * 100))}% cached)</span>}
             </span>
             <span className="sep">·</span>
           </>
@@ -429,24 +429,34 @@ export function Composer({ focused }: { focused: boolean }) {
         )}
         {attachments.length > 0 && (
           <div className="cw-attachments">
-            {attachments.map((a) => (
-              <div key={a.id} className="cw-thumb" title={a.name}>
-                {a.mime.startsWith("image/") ? <img
-                  src={a.url}
-                  alt={a.name}
-                  onClick={() => { const images = attachments.filter((x) => x.mime.startsWith("image/")); store.getState().setPreview({ images: images.map((x) => x.url), index: images.indexOf(a) }); }}
-                /> : <span className="cw-file-name">{a.name}</span>}
-                <button onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))} title="Remove">
-                  <X size={11} />
-                </button>
-              </div>
-            ))}
+            {attachments.map((a) =>
+              a.mime.startsWith("image/") && a.url ? (
+                <div key={a.id} className="cw-thumb" title={a.name}>
+                  <img
+                    src={a.url}
+                    alt={a.name}
+                    onClick={() => { const images = attachments.filter((x) => x.mime.startsWith("image/") && x.url); store.getState().setPreview({ images: images.map((x) => x.url), index: images.indexOf(a) }); }}
+                  />
+                  <button onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))} title="Remove">
+                    <X size={11} />
+                  </button>
+                </div>
+              ) : (
+                <div key={a.id} className="cw-file-chip" title={a.path ?? a.name}>
+                  <FileText size={12} className="cw-file-chip-icon" />
+                  <span className="cw-file-chip-name">{a.name}</span>
+                  <button onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))} title="Remove">
+                    <X size={11} />
+                  </button>
+                </div>
+              ),
+            )}
           </div>
         )}
         <textarea
           ref={ta}
           onPaste={(e) => {
-            const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+            const files = [...e.clipboardData.files];
             if (files.length) {
               e.preventDefault();
               addFiles(files);

@@ -24,10 +24,10 @@ export function WhatsNew() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={closeReleaseNotes}>
       <div
-        className="anim-dialog flex max-h-[70vh] w-[460px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex max-h-[70vh] w-[460px] flex-col rounded-xl bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <header className="flex items-start gap-3 border-b border-border px-5 py-3">
+        <header className="flex items-start gap-3 px-5 py-3">
           <Sparkles size={16} className="mt-0.5 shrink-0 text-accent" />
           <div className="min-w-0 flex-1">
             <h1 className="text-sm font-semibold text-fg">{upcoming ? `winfer ${release.version} is available` : `What's new in winfer ${release.version}`}</h1>
@@ -63,7 +63,7 @@ export function WhatsNew() {
             </section>
           ))}
         </div>
-        <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+        <footer className="flex items-center justify-end gap-2 px-5 py-3">
           {upcoming ? (
             <>
               <button onClick={closeReleaseNotes} className="rounded-md px-2.5 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg">

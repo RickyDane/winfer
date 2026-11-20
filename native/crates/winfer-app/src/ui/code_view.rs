@@ -81,6 +81,7 @@ pub struct CodeView {
     picks: HashMap<String, Vec<Vec<usize>>>,
     asked_files: bool,
     ticking: bool,
+    sky_ticking: bool,
     born: HashMap<String, u64>,
     seeded: bool,
     pub(super) picker: super::code_pickers::PickerState,
@@ -171,6 +172,55 @@ fn data_image(url: &str) -> Option<Arc<Image>> {
     Some(Arc::new(Image::from_bytes(format, bytes)))
 }
 
+fn encode_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
+    Some(out)
+}
+
+fn attachment_from_path(path: &std::path::Path) -> Option<Attachment> {
+    if path.is_dir() {
+        return None;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty())?;
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_lowercase);
+    let direct_mime = match ext.as_deref() {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        _ => None,
+    };
+    if let Some(mime) = direct_mime {
+        let bytes = std::fs::read(path).ok()?;
+        return Some(Attachment { data: base64::engine::general_purpose::STANDARD.encode(bytes), mime: mime.into(), name, path: None });
+    }
+    if matches!(ext.as_deref(), Some("bmp" | "tif" | "tiff")) {
+        if let Ok(raw) = std::fs::read(path) {
+            if let Some(png) = encode_png(&raw) {
+                return Some(Attachment { data: base64::engine::general_purpose::STANDARD.encode(png), mime: "image/png".into(), name, path: None });
+            }
+        }
+    }
+    Some(Attachment { data: String::new(), mime: String::new(), name, path: Some(path.to_string_lossy().into_owned()) })
+}
+
+fn attachment_from_clipboard_image(img: &Image, existing: usize) -> Option<Attachment> {
+    let (mime, ext, bytes) = match img.format {
+        ImageFormat::Png => ("image/png", "png", img.bytes.clone()),
+        ImageFormat::Jpeg => ("image/jpeg", "jpg", img.bytes.clone()),
+        ImageFormat::Gif => ("image/gif", "gif", img.bytes.clone()),
+        ImageFormat::Webp => ("image/webp", "webp", img.bytes.clone()),
+        _ => ("image/png", "png", encode_png(&img.bytes)?),
+    };
+    if bytes.is_empty() {
+        return None;
+    }
+    let name = if existing == 0 { format!("pasted-image.{ext}") } else { format!("pasted-image-{}.{ext}", existing + 1) };
+    Some(Attachment { data: base64::engine::general_purpose::STANDARD.encode(bytes), mime: mime.into(), name, path: None })
+}
+
 impl CodeView {
     pub fn new(model: Entity<CodeModel>, app: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 10).soft_wrap(true).submit_on_enter(true).placeholder("Message winfer code…  (/ for commands, @ for files)"));
@@ -193,7 +243,7 @@ impl CodeView {
         cx.subscribe(&model, |_, _, _: &CodeEvent, _| {}).detach();
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
-        Self { model, app, list, sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), images: Rc::new(RefCell::new(HashMap::new())), popup: 0, picks: HashMap::new(), asked_files: false, ticking: false, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None }
+        Self { model, app, list, sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), images: Rc::new(RefCell::new(HashMap::new())), popup: 0, picks: HashMap::new(), asked_files: false, ticking: false, sky_ticking: false, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None }
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut App) {
@@ -339,24 +389,57 @@ impl CodeView {
     }
 
     fn attach_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let mut added = false;
         for path in paths {
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let mime = match path.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref() {
-                Some("png") => "image/png",
-                Some("jpg" | "jpeg") => "image/jpeg",
-                Some("gif") => "image/gif",
-                Some("webp") => "image/webp",
-                _ => "",
-            };
-            let attachment = if mime.is_empty() {
-                Attachment { data: String::new(), mime: String::new(), name, path: Some(path.to_string_lossy().into_owned()) }
-            } else {
-                let Ok(bytes) = std::fs::read(&path) else { continue };
-                Attachment { data: base64::engine::general_purpose::STANDARD.encode(bytes), mime: mime.into(), name, path: None }
-            };
-            self.model.update(cx, |m, _| m.attachments.push(attachment));
+            if let Some(attachment) = attachment_from_path(&path) {
+                self.model.update(cx, |m, _| m.attachments.push(attachment));
+                added = true;
+            }
         }
-        cx.notify();
+        if added {
+            cx.notify();
+        }
+    }
+
+    /// Attaches copied files/documents or clipboard images from `item` to the composer.
+    /// Returns `true` if clipboard media/files were attached (so the textarea shouldn't also paste text).
+    fn paste_clipboard_item(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
+        let mut paths = Vec::new();
+        let mut images = Vec::new();
+        for entry in &item.entries {
+            match entry {
+                ClipboardEntry::ExternalPaths(ext) => paths.extend(ext.paths().iter().cloned()),
+                ClipboardEntry::Image(img) => images.push(img),
+                ClipboardEntry::String(_) => {}
+            }
+        }
+        if !paths.is_empty() {
+            let before = self.model.read(cx).attachments.len();
+            self.attach_paths(paths, cx);
+            return self.model.read(cx).attachments.len() > before;
+        }
+        if !images.is_empty() {
+            let mut added = false;
+            for img in images {
+                let count = self.model.read(cx).attachments.iter().filter(|a| a.name.starts_with("pasted-image")).count();
+                if let Some(att) = attachment_from_clipboard_image(img, count) {
+                    self.model.update(cx, |m, _| m.attachments.push(att));
+                    added = true;
+                }
+            }
+            if added {
+                cx.notify();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Pastes copied files/documents or clipboard images into the composer's attachments.
+    /// Returns `true` if clipboard media/files were attached (so the textarea shouldn't also paste text).
+    fn paste_attachments(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(item) = cx.read_from_clipboard() else { return false };
+        self.paste_clipboard_item(&item, cx)
     }
 
     fn pick_files(&mut self, cx: &mut Context<Self>) {
@@ -385,6 +468,32 @@ impl CodeView {
                         this.ticking = false;
                     }
                     busy
+                });
+                if !keep.unwrap_or(false) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Gently repaints the space welcome sky (twinkling stars & shooting stars) while no turn has started.
+    fn sky_tick(&mut self, cx: &mut Context<Self>) {
+        if self.sky_ticking {
+            return;
+        }
+        self.sky_ticking = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(45)).await;
+                let keep = this.update(cx, |this, cx| {
+                    let empty = this.model.read(cx).state.items.is_empty();
+                    if empty {
+                        cx.notify();
+                    } else {
+                        this.sky_ticking = false;
+                    }
+                    empty
                 });
                 if !keep.unwrap_or(false) {
                     break;
@@ -462,9 +571,15 @@ fn col(el: impl IntoElement) -> Div {
 }
 
 fn col_inset(el: impl IntoElement, tight: bool) -> Div {
-    let wrap = div().w_full().flex().justify_center();
+    let wrap = div().w_full().min_w_0().flex().justify_center();
     let wrap = if tight { wrap.px_2() } else { wrap.px_4() };
-    wrap.child(div().w_full().max_w(px(COLUMN)).child(el))
+    wrap.child(div().w_full().min_w_0().max_w(px(COLUMN)).child(el))
+}
+
+/// Edge-aligned dock wrapper so the composer (and its attached strips) matches left/right/bottom pane margins.
+fn dock_inset(el: impl IntoElement, tight: bool) -> Div {
+    let edge = if tight { px(6.0) } else { px(8.0) };
+    div().w_full().min_w_0().px(edge).child(el)
 }
 
 fn pill(c: Colors, id: impl Into<ElementId>, icon: Option<AnyElement>, label: Option<SharedString>, h: f32) -> Stateful<Div> {
@@ -527,6 +642,8 @@ struct ComposerLayout {
     show_labels: bool,
     show_model_label: bool,
     show_cost: bool,
+    show_token_metrics: bool,
+    show_rate_inline: bool,
     show_usage: bool,
     compact_v: bool,
     ultra_v: bool,
@@ -546,10 +663,53 @@ fn composer_layout(w: f32, h: f32) -> ComposerLayout {
         show_labels: w >= 500.0 && !ultra_v,
         show_model_label: w >= 360.0 && !single_row,
         show_cost: w >= 420.0 && !ultra_v,
+        show_token_metrics: w >= 560.0 && !ultra_v,
+        show_rate_inline: w >= 660.0 && !ultra_v,
         show_usage: w >= 260.0 && !single_row,
         compact_v,
         ultra_v,
         single_row,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct WelcomeLayout {
+    compact: bool,
+    show_logo: bool,
+    show_cwd: bool,
+    short_cwd: bool,
+    suggestions: usize,
+    two_col: bool,
+    compact_cards: bool,
+    show_hint: bool,
+}
+
+fn welcome_layout(w: f32, h: f32) -> WelcomeLayout {
+    let w = if w <= 1.0 { 800.0 } else { w };
+    let h = if h <= 1.0 { 600.0 } else { h };
+    let two_col = w >= 540.0;
+    let compact = w < 440.0 || h < 520.0;
+    let compact_cards = !two_col || h < 560.0;
+    let suggestions = if w < 220.0 || h < 360.0 {
+        0
+    } else if two_col {
+        if h >= 410.0 { 4 } else { 0 }
+    } else if h >= 500.0 {
+        4
+    } else if h >= 410.0 {
+        2
+    } else {
+        0
+    };
+    WelcomeLayout {
+        compact,
+        show_logo: h >= 330.0 && w >= 260.0,
+        show_cwd: h >= 260.0,
+        short_cwd: w < 460.0 || h < 440.0,
+        suggestions,
+        two_col,
+        compact_cards,
+        show_hint: w >= 420.0 && h >= 520.0,
     }
 }
 
@@ -566,7 +726,7 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
     };
     let top = if first { 0.0 } else if env.compact { 10.0 } else { 22.0 };
     enter(env, key, div().w_full().flex().flex_col().items_end().pt(px(top)).pb(px(6.0)).child(
-        div().max_w(relative(0.82)).flex().flex_col().gap_2().rounded_2xl().bg(alpha(c.accent, 0.13)).border_1().border_color(alpha(c.accent, 0.28)).px_3p5().py_2p5().text_size(env.text()).line_height(relative(1.5)).text_color(c.fg)
+        div().max_w(relative(0.82)).flex().flex_col().gap_2().rounded_2xl().bg(alpha(c.accent, 0.13)).px_3p5().py_2p5().text_size(env.text()).line_height(relative(1.5)).text_color(c.fg)
             .children(decoded.into_iter().enumerate().map(|(i, image)| {
                 let (view, full) = (env.view.clone(), image.clone());
                 div().id(("user-img", i)).max_w(px(300.0)).max_h(px(220.0)).rounded_lg().overflow_hidden().cursor_pointer()
@@ -579,7 +739,10 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
                     })
                     .child(gpui_kit::img(image).max_h(px(220.0)))
             }))
-            .when(!text.is_empty(), |d| d.child(div().whitespace_normal().child(text.to_string()))),
+            .when(!text.is_empty(), |d| d.child(
+                // Selectable like assistant text (mark, then ⌘/Ctrl+C). Keep the user's line breaks.
+                TextView::markdown(SharedString::from(format!("cw-user-{key}")), SharedString::from(text.replace('\n', "  \n"))).selectable(true),
+            )),
     ))
 }
 
@@ -615,14 +778,14 @@ fn reasoning_row(env: &Env, key: &str, text: &str, streaming: bool, started: u64
         .child(toggle_chevron(key, open, toggled, c.subtle));
     enter(env, key, div().w_full().flex().flex_col().py(px(2.0)).child(div().flex().child(head))
         .when(show_body, |d| {
-            let body = div().ml(px(7.0)).mt_1().mb_1().pl_3().border_l_2().border_color(c.border_strong).py_0p5().text_size(env.small()).line_height(relative(1.6)).text_color(c.muted).whitespace_normal().child(text.trim().to_string());
+            let body = div().ml(px(7.0)).mt_1().mb_1().pl_3().py_0p5().text_size(env.small()).line_height(relative(1.6)).text_color(c.muted).whitespace_normal().child(text.trim().to_string());
             d.child(toggle_body(key, toggled, body))
         }))
 }
 
 fn diff_block(env: &Env, diff: &str, max: usize) -> Div {
     let c = env.c;
-    let mut block = div().flex().flex_col().rounded_lg().border_1().border_color(c.border).bg(c.app).overflow_hidden().py_1().font_family(env.mono.clone()).text_size(env.small());
+    let mut block = div().flex().flex_col().rounded_lg().bg(c.app).overflow_hidden().py_1().font_family(env.mono.clone()).text_size(env.small());
     let (mut o, mut n) = (0usize, 0usize);
     let mut shown = 0;
     let lines: Vec<&str> = diff.split('\n').collect();
@@ -678,7 +841,7 @@ fn terminal_block(env: &Env, command: Option<&str>, output: &str) -> Div {
     let shown: String = if out.len() > 6000 { format!("…{}", out[out.len() - 6000..].trim_start_matches(|ch: char| !ch.is_ascii())) } else { out.to_string() };
     let lines: Vec<String> = shown.lines().map(str::to_string).collect();
     let skip = lines.len().saturating_sub(200);
-    div().rounded_lg().border_1().border_color(c.border).bg(c.app).px_3().py_2().flex().flex_col().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5)).text_color(c.muted)
+    div().rounded_lg().bg(c.app).px_3().py_2().flex().flex_col().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5)).text_color(c.muted)
         .when_some(command, |d, cmd| d.child(div().whitespace_normal().text_color(c.fg).child(format!("$ {cmd}"))))
         .when(skip > 0, |d| d.child(div().text_color(c.subtle).child(format!("… {skip} earlier lines"))))
         .children(lines.into_iter().skip(skip).map(|l| div().whitespace_normal().child(if l.is_empty() { " ".to_string() } else { l })))
@@ -689,7 +852,7 @@ fn code_block(env: &Env, text: &str, max: usize) -> Div {
     let c = env.c;
     let lines: Vec<&str> = text.lines().collect();
     let width = lines.len().min(max).to_string().len().max(2);
-    div().rounded_lg().border_1().border_color(c.border).bg(c.app).py_1p5().flex().flex_col().overflow_hidden().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5))
+    div().rounded_lg().bg(c.app).py_1p5().flex().flex_col().overflow_hidden().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5))
         .children(lines.iter().take(max).enumerate().map(|(i, l)| {
             div().flex().gap_3().px_3()
                 .child(div().w(px(8.0 * width as f32)).flex_shrink_0().text_color(c.subtle).child(format!("{:>width$}", i + 1)))
@@ -701,7 +864,7 @@ fn code_block(env: &Env, text: &str, max: usize) -> Div {
 /// `name  value` rows: a tool's arguments.
 fn fields_block(env: &Env, rows: Vec<(String, String)>) -> Div {
     let c = env.c;
-    div().rounded_lg().border_1().border_color(c.border).bg(c.app).px_3().py_2().flex().flex_col().gap_1().text_size(env.small())
+    div().rounded_lg().bg(c.app).px_3().py_2().flex().flex_col().gap_1().text_size(env.small())
         .children(rows.into_iter().map(|(k, v)| {
             div().flex().gap_3().items_start()
                 .child(div().w(px(84.0)).flex_shrink_0().text_color(c.subtle).child(k))
@@ -751,7 +914,7 @@ fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName
     let icon_sz = (sz * 0.44).clamp(11.0, 14.0);
     let icon_color = if live { gpui_kit::white() } else if light { c.muted } else { c.subtle };
     div().id("cw-send").relative().size(px(sz)).flex_shrink_0().flex().items_center().justify_center().rounded_full()
-        .when(light && !live, |d| d.border_1().border_color(alpha(c.border_strong, 0.7)))
+        .when(light && !live, |d| d)
         .shadow(shadows)
         .child(face)
         .child(Icon::new(icon).size(px(icon_sz)).text_color(icon_color))
@@ -800,12 +963,10 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
         .when_some(right, |d, r| d.child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(r)))
         .child(div().w(px(14.0)).flex_shrink_0().flex().items_center().justify_center().child(status))
         .child(toggle_chevron(key, open, toggled, c.subtle));
-    // No outline at rest; running (accent) and failed (red) still show one.
-    let edge = if running { alpha(c.accent, 0.4) } else if ok == Some(false) { alpha(c.danger, 0.35) } else { gpui_kit::transparent_black() };
-    let mut card = div().w_full().rounded_xl().border_1().border_color(edge).bg(c.raised).overflow_hidden().child(head);
+    let mut card = div().w_full().rounded_xl().bg(c.raised).overflow_hidden().child(head);
     if show_body {
         let secs = toolbody::sections(name, input, output, diff);
-        let mut body = div().border_t_1().border_color(c.border).p_2().flex().flex_col().gap_2();
+        let mut body = div().p_2().flex().flex_col().gap_2();
         if secs.is_empty() {
             body = body.child(div().px_1().py_0p5().text_size(env.small()).text_color(c.subtle).child(if running { "Waiting for output…" } else { "No details for this call." }));
         }
@@ -828,7 +989,7 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
     }
     let card: AnyElement = if running {
         let id = SharedString::from(format!("glow-{key}"));
-        card.with_animation(id, Animation::new(Duration::from_millis(1800)).repeat().with_max_fps(30.0), move |d, t| d.border_color(alpha(c.accent, 0.18 + 0.4 * breathe(t)))).into_any_element()
+        card.with_animation(id, Animation::new(Duration::from_millis(1800)).repeat().with_max_fps(30.0), move |d, _t| d).into_any_element()
     } else {
         card.into_any_element()
     };
@@ -839,7 +1000,7 @@ fn notice_row(env: &Env, key: &str, text: &str, error: bool) -> AnyElement {
     let c = env.c;
     let (icon, color) = if error { (IconName::TriangleAlert, c.danger) } else { (IconName::Info, c.subtle) };
     enter(env, key, div().w_full().flex().justify_center().py_1p5().child(
-        div().max_w(relative(0.9)).flex().items_start().gap_1p5().rounded_xl().px_3().py_1p5().border_1().border_color(if error { alpha(c.danger, 0.4) } else { c.border }).bg(if error { alpha(c.danger, 0.08) } else { c.raised }).text_size(env.small()).line_height(relative(1.5)).text_color(if error { c.danger } else { c.muted })
+        div().max_w(relative(0.9)).flex().items_start().gap_1p5().rounded_xl().px_3().py_1p5().bg(if error { alpha(c.danger, 0.08) } else { c.raised }).text_size(env.small()).line_height(relative(1.5)).text_color(if error { c.danger } else { c.muted })
             .child(div().mt(px(2.0)).child(Icon::new(icon).size(px(12.0)).text_color(color)))
             .child(div().min_w_0().whitespace_normal().child(text.to_string())),
     ))
@@ -871,39 +1032,321 @@ const SUGGESTIONS: [(IconName, &str, &str); 4] = [
     (IconName::Lightbulb, "Suggest improvements", "Review this project and suggest the three most valuable improvements."),
 ];
 
+/// Deterministic scatter matching `Welcome.tsx` so stars never jump between frames.
+fn sky_rand(i: u32, n: u32) -> f32 {
+    let v = ((i as f64 * 12.9898 + n as f64 * 78.233).sin() * 43758.5453).fract();
+    ((v + 1.0).fract()) as f32
+}
+
+/// Keeps painted stars/streaks inside the pane's 15 px bottom-left and bottom-right corner radius.
+fn inside_bottom_corners(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
+    if y <= h - r {
+        return true;
+    }
+    let dy = y - (h - r);
+    if x < r {
+        let dx = r - x;
+        return dx * dx + dy * dy <= r * r;
+    }
+    if x > w - r {
+        let dx = x - (w - r);
+        return dx * dx + dy * dy <= r * r;
+    }
+    true
+}
+
+/// Space-themed welcome background matching the Tauri web UI: soft nebula + Milky Way glow (dark mode),
+/// three depths of twinkling stars with 4-point glints on bright stars, and periodic shooting stars.
+fn render_space_sky(c: Colors, now: u64) -> AnyElement {
+    let t = (now % 86_400_000) as f32 / 1000.0;
+    let light = c.light;
+    let star_canvas = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let w = bounds.size.width / px(1.0);
+            let h = bounds.size.height / px(1.0);
+            if w <= 4.0 || h <= 4.0 {
+                return;
+            }
+            let ox = bounds.origin.x / px(1.0);
+            let oy = bounds.origin.y / px(1.0);
+            let white_star = hsla(0.0, 0.0, 1.0, 1.0);
+            let cool_star = crate::theme::hex("#b9c8ff");
+            let warm_star = crate::theme::hex("#ffe2b8");
+
+            // Three depths: far dust (110), mid stars (42), near bright stars with glint (7).
+            let layers: [(u32, u32, f32, f32, f32, f32, bool); 3] = [
+                (110, 0, 0.7, 0.8, if light { 0.16 } else { 0.30 }, 1.0, false),
+                (42, 300, 1.1, 1.2, if light { 0.24 } else { 0.58 }, -1.5, false),
+                (7, 600, 2.0, 1.2, if light { 0.34 } else { 0.92 }, 0.0, true),
+            ];
+            for (count, seed, min_s, spread, peak, drift_dir, near) in layers {
+                let drift_x = if drift_dir != 0.0 { (t * 0.035 * drift_dir).sin() * 7.0 } else { 0.0 };
+                let drift_y = if drift_dir != 0.0 { (t * 0.025 * drift_dir).cos() * 3.0 } else { 0.0 };
+                for k in 0..count {
+                    let i = k + seed;
+                    let sx = sky_rand(i, 1) * w + drift_x;
+                    let sy = sky_rand(i, 2) * h + drift_y;
+                    if sx < 1.0 || sx > w - 1.0 || sy < 1.0 || sy > h - 1.0 || !inside_bottom_corners(sx, sy, w, h, 15.0) {
+                        continue;
+                    }
+                    let sz = min_s + sky_rand(i, 3) * spread;
+                    let delay = sky_rand(i, 4) * 6.0;
+                    let period = 2.5 + sky_rand(i, 5) * 4.0;
+                    let wave = 0.5 - 0.5 * ((t + delay) * std::f32::consts::TAU / period).cos();
+                    let a = wave * peak;
+                    if a < 0.02 {
+                        continue;
+                    }
+                    let base = if light {
+                        c.fg
+                    } else {
+                        match (sky_rand(i, 6) * 6.0) as u32 {
+                            3 | 4 => cool_star,
+                            5 => warm_star,
+                            _ => white_star,
+                        }
+                    };
+                    let half = sz * 0.5;
+                    window.paint_quad(
+                        fill(Bounds::new(point(px(ox + sx - half), px(oy + sy - half)), size(px(sz), px(sz))), alpha(base, a))
+                            .corner_radii(Corners::all(px(half))),
+                    );
+                    if near && !light {
+                        // Soft halo + 4-point cross glint on the brightest stars.
+                        let halo = sz * 3.0;
+                        window.paint_quad(
+                            fill(Bounds::new(point(px(ox + sx - halo * 0.5), px(oy + sy - halo * 0.5)), size(px(halo), px(halo))), alpha(base, a * 0.20))
+                                .corner_radii(Corners::all(px(halo * 0.5))),
+                        );
+                        let glint_len = 13.0;
+                        let ga = a * 0.48;
+                        window.paint_quad(fill(
+                            Bounds::new(point(px(ox + sx - glint_len * 0.5), px(oy + sy - 0.5)), size(px(glint_len), px(1.0))),
+                            alpha(base, ga),
+                        ));
+                        window.paint_quad(fill(
+                            Bounds::new(point(px(ox + sx - 0.5), px(oy + sy - glint_len * 0.5)), size(px(1.0), px(glint_len))),
+                            alpha(base, ga),
+                        ));
+                    }
+                }
+            }
+
+            // Periodic deterministic shooting star every ~5.4 s.
+            let cycle = 5.4_f32;
+            let shot_idx = (t / cycle).floor() as u32;
+            let phase = t % cycle;
+            let dur = 0.85 + sky_rand(shot_idx + 900, 1) * 0.55;
+            if phase < dur {
+                let p = phase / dur;
+                let fade = if p < 0.14 {
+                    p / 0.14
+                } else if p > 0.65 {
+                    ((1.0 - p) / 0.35).max(0.0)
+                } else {
+                    1.0
+                };
+                let leftward = sky_rand(shot_idx + 900, 2) < 0.5;
+                let tilt = 14.0 + sky_rand(shot_idx + 900, 3) * 26.0;
+                let angle = (if leftward { 180.0 - tilt } else { tilt }).to_radians();
+                let start_x = (if leftward { 0.38 + sky_rand(shot_idx + 900, 4) * 0.55 } else { 0.07 + sky_rand(shot_idx + 900, 4) * 0.55 }) * w;
+                let start_y = (0.06 + sky_rand(shot_idx + 900, 5) * 0.45) * h;
+                let dist = (170.0 + sky_rand(shot_idx + 900, 6) * 220.0).min(w * 0.7);
+                let tail_len = 65.0 + sky_rand(shot_idx + 900, 7) * 75.0;
+                let head_d = p * dist;
+                let (dx, dy) = (angle.cos(), angle.sin());
+                let segs = 22;
+                for s in 0..segs {
+                    let frac = s as f32 / (segs - 1) as f32; // 0 = tail end, 1 = head
+                    let d = head_d - (1.0 - frac) * tail_len * (0.25 + 0.75 * p);
+                    if d < 0.0 {
+                        continue;
+                    }
+                    let px_x = start_x + dx * d;
+                    let px_y = start_y + dy * d;
+                    if px_x < 1.0 || px_x > w - 1.0 || px_y < 1.0 || px_y > h - 1.0 || !inside_bottom_corners(px_x, px_y, w, h, 15.0) {
+                        continue;
+                    }
+                    let dot = 1.2 + frac * 1.4;
+                    let seg_a = fade * frac * frac * if light { 0.55 } else { 0.92 };
+                    let col = if light { c.accent } else if frac > 0.78 { white_star } else { cool_star };
+                    window.paint_quad(
+                        fill(Bounds::new(point(px(ox + px_x - dot * 0.5), px(oy + px_y - dot * 0.5)), size(px(dot), px(dot))), alpha(col, seg_a))
+                            .corner_radii(Corners::all(px(dot * 0.5))),
+                    );
+                }
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded_b(px(15.0))
+        .overflow_hidden()
+        .when(!light, |d| {
+            d.child(
+                gpui_kit::img(super::nebula::sky_backdrop())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .rounded_b(px(15.0))
+                    .object_fit(ObjectFit::Cover),
+            )
+        })
+        .child(star_canvas)
+        .into_any_element()
+}
+
 impl CodeView {
     fn welcome(&self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
+        let lay = welcome_layout(self.pane_size.width / px(1.0), self.pane_size.height / px(1.0));
         let m = self.model.read(cx);
         let st = &m.state;
         let spec = &st.model;
         let name = if spec.is_empty() { "…".to_string() } else { model_name(spec, st.actual_model.as_deref()) };
         let backend = backend_of(spec).map_or("", |b| b.1);
         let ready = st.session.is_some() && st.exited.is_none();
-        let status = if let Some(e) = st.exited.clone() { e } else if st.session.is_none() { "Starting…".to_string() } else { format!("{name} · {backend} · {}", st.mode.label()) };
-        let cwd = st.cwd.clone().filter(|_| st.session.is_some()).map(|cwd| format!("{cwd}{}", st.branch.as_ref().map_or(String::new(), |b| format!("  ⎇ {b}"))));
+        let status = if let Some(e) = st.exited.clone() {
+            e
+        } else if st.session.is_none() {
+            "Starting…".to_string()
+        } else if lay.compact || backend.is_empty() {
+            format!("{name} · {}", st.mode.label())
+        } else {
+            format!("{name} · {backend} · {}", st.mode.label())
+        };
+        let cwd_full = st.cwd.clone().filter(|_| st.session.is_some());
+        let cwd_label = cwd_full.as_deref().map(|dir| {
+            let shown = if lay.short_cwd {
+                std::path::Path::new(dir).file_name().and_then(|n| n.to_str()).unwrap_or(dir)
+            } else {
+                dir
+            };
+            match &st.branch {
+                Some(b) => format!("{shown}  ⎇ {b}"),
+                None => shown.to_string(),
+            }
+        });
         let mono = fonts::mono(cx);
-        let mut grid = div().w_full().max_w(px(520.0)).flex().flex_wrap().gap_2().justify_center();
-        for (i, (icon, title, prompt)) in SUGGESTIONS.into_iter().enumerate() {
-            let card = div().id(("cw-suggest", i)).w(px(250.0)).flex().items_center().gap_2p5().rounded_xl().border_1().border_color(c.border).bg(c.raised).px_3().py_2p5().cursor_pointer().text_size(px(12.5)).text_color(c.muted)
-                .hover(move |d| d.bg(c.hover).border_color(alpha(c.accent, 0.5)).text_color(c.fg))
-                .when(!ready, |d| d.opacity(0.5))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if !ready {
-                        return;
-                    }
-                    this.set_input(prompt, window, cx);
-                    this.enter(window, cx);
-                }))
-                .child(div().size(px(24.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(alpha(c.accent, 0.13)).child(Icon::new(icon).size(px(13.0)).text_color(c.accent)))
-                .child(title);
-            grid = grid.child(rise(card, SharedString::from(format!("sg-{i}")), 220 + i as u64 * 70, 10.0));
-        }
-        div().size_full().flex().flex_col().items_center().justify_center().gap_4().px_4().text_color(c.subtle)
-            .child(rise(div().size(px(52.0)).flex().items_center().justify_center().rounded_2xl().bg(alpha(c.accent, 0.14)).border_1().border_color(alpha(c.accent, 0.35)).child(Icon::new(IconName::Sparkles).size(px(24.0)).text_color(c.accent)), "wl-logo", 0, 8.0))
-            .child(rise(div().flex().flex_col().items_center().gap_1().child(div().text_size(px(22.0)).text_color(c.fg).child("What should we build?")).child(div().text_size(px(12.5)).child(status))
-                .when_some(cwd, |d, cwd| d.child(div().mt_1().px_2().py_0p5().rounded_md().bg(c.raised).border_1().border_color(c.border).text_size(px(11.0)).font_family(mono).child(cwd))), "wl-title", 80, 8.0))
-            .child(grid)
-            .child(rise(div().text_size(px(11.0)).child("Type a message below, or / for commands and @ for files"), "wl-hint", 560, 4.0))
+
+        let suggestions = (lay.suggestions > 0).then(|| {
+            let mut grid = div()
+                .w_full()
+                .max_w(px(if lay.two_col { 520.0 } else { 300.0 }))
+                .flex()
+                .when(lay.two_col, |d| d.flex_wrap().justify_center().gap_2())
+                .when(!lay.two_col, |d| d.flex_col().items_center().gap_1p5());
+            for (i, (icon, title, prompt)) in SUGGESTIONS.into_iter().take(lay.suggestions).enumerate() {
+                let icon_box = if lay.compact_cards { 20.0 } else { 24.0 };
+                let icon_sz = if lay.compact_cards { 11.5 } else { 13.0 };
+                let card = div()
+                    .id(("cw-suggest", i))
+                    .when(lay.two_col, |d| d.w(px(250.0)))
+                    .when(!lay.two_col, |d| d.w_full())
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(if lay.compact_cards { 8.0 } else { 10.0 }))
+                    .rounded(px(if lay.compact_cards { 9.0 } else { 12.0 }))
+                    .bg(c.raised)
+                    .px(px(if lay.compact_cards { 10.0 } else { 12.0 }))
+                    .py(px(if lay.compact_cards { 6.0 } else { 10.0 }))
+                    .cursor_pointer()
+                    .text_size(px(if lay.compact_cards { 11.5 } else { 12.5 }))
+                    .text_color(c.muted)
+                    .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .when(!ready, |d| d.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if !ready {
+                            return;
+                        }
+                        this.set_input(prompt, window, cx);
+                        this.enter(window, cx);
+                    }))
+                    .child(div().size(px(icon_box)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(alpha(c.accent, 0.13)).child(Icon::new(icon).size(px(icon_sz)).text_color(c.accent)))
+                    .child(div().flex_1().min_w_0().truncate().child(title));
+                grid = grid.child(rise(card, SharedString::from(format!("sg-{i}")), 220 + i as u64 * 70, 10.0));
+            }
+            grid
+        });
+
+        let logo = lay.show_logo.then(|| {
+            let box_sz = if lay.compact { 36.0 } else { 52.0 };
+            let icon_sz = if lay.compact { 17.0 } else { 24.0 };
+            let radius = if lay.compact { 11.0 } else { 16.0 };
+            rise(
+                div().size(px(box_sz)).flex_shrink_0().flex().items_center().justify_center().rounded(px(radius)).bg(alpha(c.accent, 0.14)).child(Icon::new(IconName::Sparkles).size(px(icon_sz)).text_color(c.accent)),
+                "wl-logo",
+                0,
+                8.0,
+            )
+        });
+
+        let cwd_pill = if lay.show_cwd {
+            cwd_label.map(|label| {
+                let full_tip = cwd_full.clone().unwrap_or_else(|| label.clone());
+                div()
+                    .id("wl-cwd")
+                    .mt_1()
+                    .max_w_full()
+                    .overflow_hidden()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(c.raised)
+                    .text_size(px(if lay.compact { 10.5 } else { 11.0 }))
+                    .font_family(mono)
+                    .tooltip(tip(full_tip))
+                    .child(div().truncate().child(label))
+            })
+        } else {
+            None
+        };
+
+        let header_block = rise(
+            div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_1()
+                .child(div().w_full().text_center().text_size(px(if lay.compact { 16.0 } else { 22.0 })).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("What should we build?"))
+                .child(div().w_full().min_w_0().text_center().truncate().text_size(px(if lay.compact { 11.5 } else { 12.5 })).child(status))
+                .children(cwd_pill),
+            "wl-title",
+            80,
+            8.0,
+        );
+
+        let hint = lay.show_hint.then(|| {
+            rise(div().text_center().text_size(px(11.0)).child("Type a message below, or / for commands and @ for files"), "wl-hint", 560, 4.0)
+        });
+
+        div()
+            .size_full()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(if lay.compact { 10.0 } else { 16.0 }))
+            .px(px(if lay.compact { 12.0 } else { 16.0 }))
+            .py(px(if lay.compact { 8.0 } else { 16.0 }))
+            .text_color(c.subtle)
+            .children(logo)
+            .child(header_block)
+            .children(suggestions)
+            .children(hint)
             .into_any_element()
     }
 
@@ -935,7 +1378,7 @@ impl CodeView {
             .child(div().w(px(56.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(frac)).rounded_full().bg(c.success)))
             .child(div().flex_1().text_color(c.subtle).child(format!("{done} of {total}")))
             .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronUp }).size(px(12.0)).text_color(c.subtle));
-        Some(col(div().mb_2().rounded_xl().border_1().border_color(c.border).bg(c.raised).overflow_hidden().child(head).when(open, |d| d.child(list))).into_any_element())
+        Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head).when(open, |d| d.child(list)), false).into_any_element())
     }
 
     fn render_approval(&mut self, a: &Approval, c: Colors, mono: SharedString, cx: &mut Context<Self>) -> AnyElement {
@@ -943,7 +1386,7 @@ impl CodeView {
         let decide = |label: &'static str, key_hint: &'static str, decision: Decision, primary: bool, key: String, model: Entity<CodeModel>, id: String| {
             div().id(SharedString::from(key)).h(px(30.0)).flex().items_center().gap_1p5().px_3().rounded_lg().text_size(px(12.5)).cursor_pointer()
                 .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).hover(|d| d.opacity(0.88)))
-                .when(!primary, |d| d.border_1().border_color(c.border_strong).text_color(c.fg).hover(move |d| d.bg(c.hover)))
+                .when(!primary, |d| d.text_color(c.fg).hover(move |d| d.bg(c.hover)))
                 .on_click(move |_, _, cx| {
                     let (id, decision) = (id.clone(), decision.clone());
                     model.update(cx, |m, cx| m.send(Cmd::Approve { id, decision }, cx));
@@ -954,7 +1397,7 @@ impl CodeView {
         let mut body = div().flex_1().min_w_0().p_3().flex().flex_col().gap_2()
             .child(div().flex().items_center().gap_2().text_size(px(12.5)).text_color(c.warning).child(Icon::new(IconName::ShieldQuestionMark).size(px(15.0))).child(if a.questions.is_empty() { format!("{} wants to run", a.tool) } else { "winfer code is asking".to_string() }));
         if a.questions.is_empty() {
-            body = body.child(div().rounded_lg().bg(c.app).border_1().border_color(c.border).px_3().py_2().font_family(mono.clone()).text_size(px(12.0)).text_color(c.fg).whitespace_normal().child(a.title.clone()));
+            body = body.child(div().rounded_lg().bg(c.app).px_3().py_2().font_family(mono.clone()).text_size(px(12.0)).text_color(c.fg).whitespace_normal().child(a.title.clone()));
             if !a.detail.trim().is_empty() && a.detail != a.title {
                 body = body.child(div().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).max_h(px(140.0)).overflow_hidden().whitespace_normal().child(a.detail.clone()));
             }
@@ -970,9 +1413,9 @@ impl CodeView {
                 for (oi, o) in q.options.iter().enumerate() {
                     let on = picks.get(qi).is_some_and(|p| p.contains(&oi));
                     let (aid, multi) = (a.id.clone(), q.multi);
-                    options = options.child(div().id(SharedString::from(format!("q-{}-{qi}-{oi}", a.id))).flex().flex_col().gap_0p5().rounded_lg().border_1().px_3().py_1p5().cursor_pointer().text_size(px(12.5))
-                        .when(on, |d| d.border_color(c.accent).bg(alpha(c.accent, 0.14)).text_color(c.fg))
-                        .when(!on, |d| d.border_color(c.border_strong).text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                    options = options.child(div().id(SharedString::from(format!("q-{}-{qi}-{oi}", a.id))).flex().flex_col().gap_0p5().rounded_lg().px_3().py_1p5().cursor_pointer().text_size(px(12.5))
+                        .when(on, |d| d.bg(alpha(c.accent, 0.14)).text_color(c.fg))
+                        .when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(p) = this.picks.get_mut(&aid).and_then(|p| p.get_mut(qi)) {
                                 if let Some(at) = p.iter().position(|x| *x == oi) {
@@ -1005,8 +1448,8 @@ impl CodeView {
                     .child("Answer"))
                 .child(div().text_size(px(11.0)).text_color(c.subtle).child("or type an answer below")));
         }
-        let card = div().w_full().flex().mb_2().rounded_xl().border_1().border_color(alpha(c.warning, 0.55)).bg(c.raised).shadow_md().child(body);
-        col(rise(card, SharedString::from(format!("appr-{}", a.id)), 0, 14.0)).into_any_element()
+        let card = div().w_full().flex().mb_2().rounded_xl().bg(c.raised).shadow_md().child(body);
+        dock_inset(rise(card, SharedString::from(format!("appr-{}", a.id)), 0, 14.0), false).into_any_element()
     }
 
     fn render_popup(&mut self, text: &str, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1032,27 +1475,46 @@ impl CodeView {
                 .child(div().font_family(fonts::mono(cx)).text_color(if i == selected { c.accent } else { c.fg }).child(label))
                 .child(div().flex_1().min_w_0().truncate().text_size(px(11.5)).text_color(c.subtle).child(hint)));
         }
-        Some(col(rise(div().mb_2().rounded_xl().border_1().border_color(c.border_strong).bg(c.raised).shadow_md().child(list), "cw-popup", 0, 6.0)).into_any_element())
+        Some(dock_inset(rise(div().mb_2().rounded_xl().bg(c.raised).shadow_md().child(list), "cw-popup", 0, 6.0), false).into_any_element())
     }
 
-    /// Spinner row above the composer while a turn runs.
+    /// Spinner row above the composer while a turn runs: elapsed time, token in/out, cached %, tok/s.
     fn render_status(&self, c: Colors, cx: &App) -> Option<AnyElement> {
+        let (_, _, _, _, _, _, show_rate, _) = self.prefs(cx);
         let st = &self.model.read(cx).state;
         if !st.busy {
             return None;
         }
+        let lay = composer_layout(self.pane_size.width / px(1.0), self.pane_size.height / px(1.0));
+        let mono = fonts::mono(cx);
         let secs = st.turn_started.map(|s| elapsed(now_ms().saturating_sub(s)));
+        let turn_in = st.turn_input();
+        let turn_cached = st.turn_cached();
+        let turn_out = st.turn_output();
         let rate = st.tokens_per_second();
-        Some(col(rise(div().h(px(26.0)).flex().items_center().gap_2().px_1().text_size(px(11.5)).text_color(c.subtle)
+        let cache_pct = if turn_in > 0 && turn_cached > 0 { Some((((turn_cached as f64 / turn_in as f64) * 100.0).round() as u64).min(100)) } else { None };
+        let row = div().h(px(26.0)).flex().items_center().gap_1p5().px_1().text_size(px(11.5)).text_color(c.subtle)
             .child(dots(c.accent, "busy"))
             .child(div().text_color(c.muted).child("Working"))
-            .when_some(secs, |d, s| d.child(s))
-            .when_some(rate, |d, r| d.child(format!("· {r:.0} tok/s")))
-            .child(div().text_color(c.subtle).child("· esc to interrupt")), "cw-status", 0, 4.0)).into_any_element())
+            .when_some(secs, |d, s| d.child("·").child(div().font_family(mono.clone()).child(s)))
+            .when(turn_in > 0, |d| {
+                let in_label = if let (Some(pct), false) = (cache_pct, lay.tight_x) {
+                    format!("↑ {} in ({pct}% cached)", tokens(turn_in))
+                } else {
+                    format!("↑ {} in", tokens(turn_in))
+                };
+                d.child("·").child(div().font_family(mono.clone()).child(in_label))
+            })
+            .child("·")
+            .child(div().font_family(mono.clone()).child(format!("↓ {} out", tokens(turn_out))))
+            .when(show_rate, |d| d.when_some(rate, |d, r| d.child("·").child(div().font_family(mono.clone()).text_color(c.muted).child(format!("{r:.0} tok/s")))))
+            .child(div().flex_1())
+            .child(div().flex_shrink_0().text_color(c.subtle).child(if lay.tight_x { "esc" } else { "esc to interrupt" }));
+        Some(dock_inset(rise(row, "cw-status", 0, 4.0), lay.compact_v || lay.tight_x).into_any_element())
     }
 
     fn render_composer(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
-        let (_, _, _, _, show_cost, show_context, _, _) = self.prefs(cx);
+        let (_, _, _, _, show_cost, show_context, show_rate, _) = self.prefs(cx);
         let m = self.model.read(cx);
         let st = &m.state;
         let busy = st.busy;
@@ -1067,7 +1529,19 @@ impl CodeView {
         });
         let model_label = if st.model.is_empty() { "model".to_string() } else { model_name(&st.model, st.actual_model.as_deref()) };
         let effort = if st.effort.is_empty() || st.effort == "default" { "default".to_string() } else { st.effort.clone() };
-        let (mode, branch, cost, pct, window_tokens, context) = (st.mode, st.branch.clone(), st.usage.cost, st.context_fraction(), st.usage.window, st.usage.context);
+        let (mode, branch, cost, pct, window_tokens, context, total_in, total_cached, total_out) = (
+            st.mode,
+            st.branch.clone(),
+            st.usage.cost,
+            st.context_fraction(),
+            st.usage.window,
+            st.usage.context,
+            st.usage.input,
+            st.usage.cached,
+            st.usage.output,
+        );
+        let done_rate = (!busy).then_some(st.last_rate).flatten();
+        let has_done_metrics = !busy && (total_in > 0 || total_out > 0);
         let draft_empty = self.draft(cx).trim().is_empty();
         let stop = busy && draft_empty;
         let can_send = !draft_empty || !attachments.is_empty();
@@ -1120,24 +1594,157 @@ impl CodeView {
             .tooltip(tip(if stop { "Interrupt (Esc)" } else if busy { "Steer the running turn (Enter)" } else { "Send (Enter)" }))
             .on_click(cx.listener(move |this, _, window, cx| if stop { this.send(Cmd::Interrupt, cx) } else { this.enter(window, cx) }));
 
-        let mut card = div().flex().flex_col().border_1().border_color(c.border_strong).bg(c.raised).shadow_md();
-        card = if lay.compact_v { card.rounded_xl() } else { card.rounded_2xl() };
+        let mut card = div()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .bg(c.raised)
+            .border_1()
+            .border_color(alpha(c.border, 0.0))
+            .shadow_md()
+            .drag_over::<ExternalPaths>(move |d, _, _, _| d.border_color(c.accent).bg(alpha(c.accent, 0.08)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.attach_paths(paths.paths().to_vec(), cx);
+                this.focus_composer(window, cx);
+                cx.stop_propagation();
+            }));
+        card = match (lay.compact_v, attachments.is_empty()) {
+            (true, true) => card.rounded_xl(),
+            (false, true) => card.rounded_2xl(),
+            (true, false) => card.rounded_b_xl(),
+            (false, false) => card.rounded_b_2xl(),
+        };
         if !attachments.is_empty() {
-            let mut chips = div().flex().flex_wrap().gap_1p5().px_3().pt_2p5();
+            let thumb_sz = if lay.compact_v { 40.0 } else { 48.0 };
+            let chip_max = if lay.tight_x { 150.0 } else { 220.0 };
+            let mut chips = div().absolute().bottom(relative(1.0)).left_0().right_0().min_w_0().flex().flex_wrap().items_center().gap_1p5().px_3().pt_2p5().pb_1().bg(c.raised).rounded_t_2xl();
             for (i, a) in attachments.iter().enumerate() {
-                chips = chips.child(div().id(("cw-att", i)).flex().items_center().gap_1p5().h(px(24.0)).pl_2().pr_1().rounded_lg().bg(c.hover).text_size(px(11.5)).text_color(c.muted)
-                    .child(Icon::new(if a.mime.starts_with("image/") { IconName::Image } else { IconName::File }).size(px(12.0)))
-                    .child(a.name.clone())
-                    .child(div().id(("cw-att-x", i)).size(px(16.0)).flex().items_center().justify_center().rounded_md().cursor_pointer().hover(move |d| d.bg(c.active)).on_click(cx.listener(move |this, _, _, cx| { this.model.update(cx, |m, _| { if i < m.attachments.len() { m.attachments.remove(i); } }); cx.notify(); })).child(Icon::new(IconName::X).size(px(10.0)))));
+                let decoded = if a.mime.starts_with("image/") && !a.data.is_empty() {
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    a.mime.hash(&mut h);
+                    a.data.hash(&mut h);
+                    let key = format!("att-{:x}", h.finish());
+                    let mut cache = self.images.borrow_mut();
+                    cache
+                        .entry(key)
+                        .or_insert_with(|| {
+                            let url = format!("data:{};base64,{}", a.mime, a.data);
+                            data_image(&url).into_iter().collect()
+                        })
+                        .first()
+                        .cloned()
+                } else {
+                    None
+                };
+
+                if let Some(image) = decoded {
+                    let full = image.clone();
+                    chips = chips.child(
+                        div()
+                            .id(("cw-att", i))
+                            .relative()
+                            .size(px(thumb_sz))
+                            .flex_shrink_0()
+                            .rounded_lg()
+                            .overflow_hidden()
+                            .bg(c.hover)
+                            .border_1()
+                            .border_color(c.border)
+                            .cursor_pointer()
+                            .tooltip(tip(a.name.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.preview = Some(full.clone());
+                                cx.notify();
+                            }))
+                            .child(gpui_kit::img(image).size(px(thumb_sz)).object_fit(ObjectFit::Cover))
+                            .child(
+                                div()
+                                    .id(("cw-att-x", i))
+                                    .absolute()
+                                    .top(px(2.0))
+                                    .right(px(2.0))
+                                    .size(px(16.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_full()
+                                    .bg(alpha(c.panel, 0.85))
+                                    .text_color(c.fg)
+                                    .cursor_pointer()
+                                    .hover(move |d| d.bg(c.panel))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.model.update(cx, |m, _| {
+                                            if i < m.attachments.len() {
+                                                m.attachments.remove(i);
+                                            }
+                                        });
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::X).size(px(10.0))),
+                            ),
+                    );
+                } else {
+                    let tip_text = a.path.clone().unwrap_or_else(|| a.name.clone());
+                    chips = chips.child(
+                        div()
+                            .id(("cw-att", i))
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .h(px(24.0))
+                            .max_w(px(chip_max))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .pl_2()
+                            .pr_1()
+                            .rounded_lg()
+                            .bg(c.hover)
+                            .border_1()
+                            .border_color(c.border)
+                            .text_size(px(11.5))
+                            .text_color(c.muted)
+                            .tooltip(tip(tip_text))
+                            .child(Icon::new(if a.mime.starts_with("image/") { IconName::Image } else { IconName::FileText }).size(px(12.0)).flex_shrink_0())
+                            .child(div().min_w_0().flex_1().truncate().child(a.name.clone()))
+                            .child(
+                                div()
+                                    .id(("cw-att-x", i))
+                                    .size(px(16.0))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(move |d| d.bg(c.active))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.model.update(cx, |m, _| {
+                                            if i < m.attachments.len() {
+                                                m.attachments.remove(i);
+                                            }
+                                        });
+                                        cx.notify();
+                                    }))
+                                    .child(Icon::new(IconName::X).size(px(10.0))),
+                            ),
+                    );
+                }
             }
             card = card.child(chips);
         }
+        let view_for_paste = cx.entity();
+        let composer_input = Textarea::new(&self.input).appearance(false).on_paste(move |item, _, cx| {
+            view_for_paste.update(cx, |this, cx| this.paste_clipboard_item(item, cx))
+        });
         if lay.single_row && attachments.is_empty() {
             // Very short pane with horizontal room: input and compact icon controls share one row.
             card = card.child(
                 div().flex().items_end().gap_0p5().px_1p5().py_1()
                     .child(attach_btn)
-                    .child(div().flex_1().min_w_0().max_h(px(46.0)).overflow_hidden().px_1().child(Textarea::new(&self.input).appearance(false)))
+                    .child(div().flex_1().min_w_0().max_h(px(46.0)).overflow_hidden().px_1().child(composer_input))
                     .child(mode_btn)
                     .child(model_btn)
                     .children(fast_btn)
@@ -1152,7 +1759,7 @@ impl CodeView {
             } else {
                 div().px_3().pt_2p5().pb_1()
             };
-            card = card.child(input_wrap.child(Textarea::new(&self.input).appearance(false)));
+            card = card.child(input_wrap.child(composer_input));
             let bar_h = if lay.ultra_v { 28.0 } else if lay.compact_v { 31.0 } else { 36.0 };
             let toolbar = div().flex().items_center().gap_0p5().px_1p5().pb(px(if lay.compact_v { 3.0 } else { 6.0 })).h(px(bar_h))
                 .child(attach_btn)
@@ -1166,20 +1773,39 @@ impl CodeView {
                     .child(Icon::new(IconName::GitBranch).size(px(13.0)).flex_shrink_0())
                     .child(div().min_w_0().truncate().child(b)))))
                 .child(div().flex_1())
-                .when(lay.show_usage && ((show_cost && lay.show_cost && cost.is_some()) || show_context), |d| d.child(
-                    div().id("cw-usage").h(px(pill_h)).flex_shrink_0().flex().items_center().gap_1p5().px(px(if lay.show_labels { 8.0 } else { 5.0 })).mr_0p5().rounded_lg().cursor_pointer().text_size(px(11.0)).text_color(c.subtle).hover(move |d| d.bg(c.hover))
-                        .tooltip(tip(format!("{} / {} tokens", tokens(context), tokens(window_tokens))))
-                        .on_click(open(Sheet::Usage))
-                        .when(show_cost && lay.show_cost, |d| d.when_some(cost, |d, cost| d.child(format!("${cost:.2}"))))
-                        .when(show_context, |d| d
-                            .when(lay.show_meter, |d| d.child(div().w(px(40.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))))
-                            .child(format!("{}%", (pct * 100.0).round()))),
-                ))
+                .when(lay.show_usage && ((show_cost && lay.show_cost && cost.is_some()) || show_context || has_done_metrics), |d| {
+                    let mono = fonts::mono(cx);
+                    let mut tip_parts = vec![format!("Context: {} / {} tokens", tokens(context), tokens(window_tokens))];
+                    if has_done_metrics {
+                        let cached_s = if total_cached > 0 { format!(" ({} cached)", tokens(total_cached)) } else { String::new() };
+                        tip_parts.push(format!("Session: ↑ {} in{cached_s} · ↓ {} out", tokens(total_in), tokens(total_out)));
+                    }
+                    if let Some(r) = done_rate {
+                        tip_parts.push(format!("Speed: {r:.0} tok/s"));
+                    }
+                    let usage_tip = tip_parts.join("\n");
+                    d.child(
+                        div().id("cw-usage").h(px(pill_h)).flex_shrink_0().flex().items_center().gap_1p5().px(px(if lay.show_labels { 8.0 } else { 5.0 })).mr_0p5().rounded_lg().cursor_pointer().text_size(px(11.0)).text_color(c.subtle).hover(move |d| d.bg(c.hover))
+                            .tooltip(tip(usage_tip))
+                            .on_click(open(Sheet::Usage))
+                            .when(has_done_metrics && lay.show_token_metrics, |d| {
+                                d.child(div().font_family(mono.clone()).text_size(px(10.5)).child(format!("↑{} ↓{}", tokens(total_in), tokens(total_out))))
+                            })
+                            .when(!busy && show_rate && lay.show_rate_inline, |d| {
+                                d.when_some(done_rate, |d, r| d.child(div().font_family(mono.clone()).text_size(px(10.5)).child(format!("{r:.0} t/s"))))
+                            })
+                            .when(show_cost && lay.show_cost, |d| d.when_some(cost, |d, cost| d.child(format!("${cost:.2}"))))
+                            .when(show_context, |d| d
+                                .when(lay.show_meter, |d| d.child(div().w(px(40.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))))
+                                .child(format!("{}%", (pct * 100.0).round()))),
+                    )
+                })
                 .child(send_btn);
             card = card.child(toolbar);
         }
-        let outer = if lay.compact_v { div().pt_0p5().pb_1().child(card) } else { div().pt_1().pb_2().child(card) };
-        col_inset(outer, lay.tight_x).into_any_element()
+        let tight = lay.compact_v || lay.tight_x;
+        let edge = if tight { px(6.0) } else { px(8.0) };
+        dock_inset(div().pt(if lay.compact_v { px(2.0) } else { px(4.0) }).pb(edge).child(card), tight).into_any_element()
     }
 }
 
@@ -1202,6 +1828,9 @@ impl Render for CodeView {
         };
         if busy {
             self.tick(cx);
+        }
+        if items.is_empty() {
+            self.sky_tick(cx);
         }
         self.ensure_picker(window, cx);
         self.sync_list(&items, now);
@@ -1228,22 +1857,40 @@ impl Render for CodeView {
         let status = self.render_status(c, cx);
         let composer = self.render_composer(c, cx);
         let preview = self.preview.clone().map(|image| {
-            let scrim = div().id("cw-lightbox").absolute().top_0().left_0().size_full().flex().items_center().justify_center().bg(alpha(black(), 0.82)).p_6().cursor_pointer()
+            div()
+                .id("cw-lightbox")
+                .absolute()
+                .inset_0()
+                .size_full()
+                .rounded_b(px(15.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(alpha(black(), 0.82))
+                .p_6()
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.preview = None;
                     cx.notify();
                 }))
-                .child(gpui_kit::img(image).max_w_full().max_h_full().object_fit(ObjectFit::Contain));
-            rise(scrim, "cw-lightbox-in", 0, 0.0)
+                .child(gpui_kit::img(image).max_w_full().max_h_full().object_fit(ObjectFit::Contain))
+                .with_animation("cw-lightbox-in", Animation::new(Duration::from_millis(180)), |d, t| d.opacity(ease_out(t)))
         });
         let sheet_el = sheet.filter(|s| !matches!(s, Sheet::Model | Sheet::Effort | Sheet::Mode)).map(|s| self.render_sheet(s, c, mono.clone(), window, cx));
-        let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().border_1().border_color(alpha(c.danger, 0.5)).bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
+        let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
         let view_for_size = cx.entity();
         let measure = canvas(
             move |bounds, _, cx| {
                 view_for_size.update(cx, |this, cx| {
-                    let prev = composer_layout(this.pane_size.width / px(1.0), this.pane_size.height / px(1.0));
-                    let next = composer_layout(bounds.size.width / px(1.0), bounds.size.height / px(1.0));
+                    let prev = (
+                        composer_layout(this.pane_size.width / px(1.0), this.pane_size.height / px(1.0)),
+                        welcome_layout(this.pane_size.width / px(1.0), this.pane_size.height / px(1.0)),
+                    );
+                    let next = (
+                        composer_layout(bounds.size.width / px(1.0), bounds.size.height / px(1.0)),
+                        welcome_layout(bounds.size.width / px(1.0), bounds.size.height / px(1.0)),
+                    );
                     this.pane_size = bounds.size;
                     if prev != next {
                         cx.notify();
@@ -1254,8 +1901,17 @@ impl Render for CodeView {
         )
         .absolute()
         .size_full();
-        div().id("code-pane").relative().size_full().flex().flex_col().bg(c.panel).text_color(c.fg).font_family(fonts::sans(cx))
+        let space_sky = items.is_empty().then(|| render_space_sky(c, now));
+        div().id("code-pane").relative().size_full().rounded_b(px(15.0)).flex().flex_col().text_color(c.fg).font_family(fonts::sans(cx))
+            .children(space_sky)
             .child(measure)
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                let m = e.keystroke.modifiers;
+                let primary = if cfg!(target_os = "macos") { m.platform && !m.control } else { m.control && !m.platform };
+                if primary && !m.alt && !m.shift && e.keystroke.key.eq_ignore_ascii_case("v") && this.paste_attachments(cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 let k = e.keystroke.key.as_str();
                 let digit = k.parse::<usize>().ok().filter(|n| (1..=9).contains(n));
@@ -1288,8 +1944,12 @@ impl Render for CodeView {
                     }
                 }
             }))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach_paths(paths.paths().to_vec(), cx)))
-            .child(div().flex_1().min_h_0().relative().child(transcript))
+            .drag_over::<ExternalPaths>(move |d, _, _, _| d.border_2().border_color(alpha(c.accent, 0.55)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.attach_paths(paths.paths().to_vec(), cx);
+                this.focus_composer(window, cx);
+            }))
+            .child(div().flex_1().min_h_0().relative().overflow_hidden().child(transcript))
             .children(status)
             .children(plan)
             .children(approval_cards)
@@ -1304,7 +1964,48 @@ impl Render for CodeView {
 
 #[cfg(test)]
 mod tests {
-    use super::composer_layout;
+    use super::{attachment_from_clipboard_image, attachment_from_path, composer_layout, welcome_layout};
+    use gpui_kit::{Image, ImageFormat};
+
+    #[::core::prelude::v1::test]
+    fn attachments_handle_images_documents_and_skip_dirs() {
+        let dir = std::env::temp_dir().join(format!("winfer-att-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(attachment_from_path(&dir).is_none());
+
+        let doc = dir.join("very_long_document_name_for_testing_truncation.pdf");
+        std::fs::write(&doc, b"%PDF-1.4").unwrap();
+        let doc_att = attachment_from_path(&doc).expect("document attaches by path");
+        assert!(doc_att.mime.is_empty());
+        assert_eq!(doc_att.path.as_deref(), Some(doc.to_string_lossy().as_ref()));
+
+        let png_path = dir.join("shot.png");
+        let png_bytes = [0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        std::fs::write(&png_path, png_bytes).unwrap();
+        let img_att = attachment_from_path(&png_path).expect("png attaches inline");
+        assert_eq!(img_att.mime, "image/png");
+        assert!(img_att.path.is_none());
+        assert!(!img_att.data.is_empty());
+
+        let clip = Image::from_bytes(ImageFormat::Png, png_bytes.to_vec());
+        let pasted = attachment_from_clipboard_image(&clip, 0).expect("clipboard image attaches");
+        assert_eq!(pasted.name, "pasted-image.png");
+        assert_eq!(pasted.mime, "image/png");
+        let pasted2 = attachment_from_clipboard_image(&clip, 1).expect("second clipboard image numbered");
+        assert_eq!(pasted2.name, "pasted-image-2.png");
+
+        let mut tiff_bytes = Vec::new();
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut tiff_bytes), image::ImageFormat::Tiff)
+            .unwrap();
+        let tiff_clip = Image::from_bytes(ImageFormat::Tiff, tiff_bytes);
+        let pasted_tiff = attachment_from_clipboard_image(&tiff_clip, 0).expect("tiff clipboard image converts to png");
+        assert_eq!(pasted_tiff.name, "pasted-image.png");
+        assert_eq!(pasted_tiff.mime, "image/png");
+        assert!(!pasted_tiff.data.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[::core::prelude::v1::test]
     fn composer_compacts_when_narrow_or_short() {
@@ -1322,5 +2023,23 @@ mod tests {
 
         let short_narrow = composer_layout(340.0, 240.0);
         assert!(short_narrow.compact_v && short_narrow.ultra_v && !short_narrow.single_row && !short_narrow.show_labels && !short_narrow.show_model_label);
+    }
+
+    #[::core::prelude::v1::test]
+    fn welcome_compacts_when_narrow_or_short() {
+        let wide = welcome_layout(720.0, 640.0);
+        assert!(!wide.compact && wide.show_logo && wide.show_cwd && !wide.short_cwd && wide.two_col && wide.suggestions == 4 && !wide.compact_cards && wide.show_hint);
+
+        let narrow_tall = welcome_layout(250.0, 640.0);
+        assert!(narrow_tall.compact && !narrow_tall.show_logo && narrow_tall.short_cwd && !narrow_tall.two_col && narrow_tall.compact_cards && narrow_tall.suggestions == 4 && !narrow_tall.show_hint);
+
+        let narrow_mid = welcome_layout(250.0, 440.0);
+        assert!(narrow_mid.compact && narrow_mid.suggestions == 2 && narrow_mid.compact_cards);
+
+        let short = welcome_layout(500.0, 320.0);
+        assert!(short.compact && !short.show_logo && short.show_cwd && short.suggestions == 0 && !short.show_hint);
+
+        let tiny = welcome_layout(240.0, 220.0);
+        assert!(tiny.compact && !tiny.show_logo && !tiny.show_cwd && tiny.suggestions == 0 && !tiny.show_hint);
     }
 }

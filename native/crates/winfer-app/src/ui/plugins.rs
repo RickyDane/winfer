@@ -857,7 +857,7 @@ impl Root {
         let c = *c;
         let known = self.plugins.pages.iter().any(|p| p.key == key);
         let measure = cx.entity();
-        div().relative().size_full().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+        div().relative().size_full().rounded_lg().bg(c.panel)
             .child(canvas(move |bounds, _, cx| measure.update(cx, |this, _| this.plugins.page_bounds = bounds), |_, _, _, _| {}).absolute().size_full())
             .when(!known, |d| d.flex().items_center().justify_center().text_xs().text_color(c.subtle).child(if self.plugins.ready { "This page's plugin is off or gone." } else { "Loading plugins…" }))
     }
@@ -949,7 +949,7 @@ impl Root {
             View::Page(k) => Some(k),
             _ => None,
         };
-        let mut menu = div().id("apps-menu").absolute().top(px(40.0)).left(relative(0.5)).w(px(256.0)).ml(px(-128.0)).rounded_lg().border_1().border_color(c.border_strong).bg(c.raised).p_1().flex().flex_col()
+        let mut menu = div().id("apps-menu").absolute().top(px(40.0)).left(relative(0.5)).w(px(256.0)).ml(px(-128.0)).rounded_lg().bg(c.raised).p_1().flex().flex_col()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         let mut ordered: Vec<&PageInfo> = pinned.iter().filter_map(|k| self.plugins.pages.iter().find(|p| p.key == *k)).collect();
         ordered.extend(self.plugins.pages.iter().filter(|p| !pinned.contains(&p.key)));
@@ -1014,12 +1014,12 @@ impl Root {
         let subtitle = format!("{name}{}", if approval.pane_id.is_some() { " · you can also answer from your phone" } else { "" });
         Some(
             div().id("approval-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude().child(
-                div().w(px(460.0)).max_h(relative(0.7)).flex().flex_col().rounded_xl().border_1().border_color(c.border_strong).bg(c.raised)
-                    .child(div().flex().items_start().gap_3().border_b_1().border_color(c.border).px_5().py_3()
+                div().w(px(460.0)).max_h(relative(0.7)).flex().flex_col().rounded_xl().bg(c.raised)
+                    .child(div().flex().items_start().gap_3().px_5().py_3()
                         .child(Icon::new(if approval.warning { IconName::TriangleAlert } else { IconName::Info }).size(px(16.0)).text_color(if approval.warning { c.warning } else { c.accent }))
                         .child(div().min_w_0().flex_1().child(div().text_sm().text_color(c.fg).child(approval.title.clone())).child(div().text_xs().text_color(c.subtle).child(subtitle))))
                     .child(div().id("approval-message").overflow_y_scroll().px_5().py_4().text_size(px(13.0)).text_color(c.fg).child(approval.message.clone()))
-                    .child(div().flex().items_center().gap_2().border_t_1().border_color(c.border).px_5().py_3()
+                    .child(div().flex().items_center().gap_2().px_5().py_3()
                         .when(waiting > 0, |d| d.child(div().text_xs().text_color(c.subtle).child(format!("{waiting} more waiting"))))
                         .child(div().flex_1())
                         .child(small_button(c, "approval-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| this.answer_approval(false, cx))))

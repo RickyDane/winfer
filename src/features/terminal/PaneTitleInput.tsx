@@ -39,7 +39,7 @@ export function PaneTitleInput({ pane, onDone, className }: { pane: Pane; onDone
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className={cn("min-w-0 rounded border border-accent/70 bg-panel px-1 text-fg outline-none", className)}
+      className={cn("min-w-0 rounded bg-panel px-1 text-fg outline-none shadow-sm", className)}
     />
   );
 }

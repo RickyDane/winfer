@@ -20,7 +20,7 @@ regex = "1"
 rand = "0.10.3"
 dirs = "7.0.0"
 parking_lot = "0.12"
-image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "ico", "gif", "webp"] }
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "ico", "gif", "webp", "tiff", "bmp"] }
 smallvec = "1"
 url.workspace = true
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }

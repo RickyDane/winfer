@@ -160,6 +160,54 @@ pub fn working_frames(light: bool) -> &'static [Arc<Image>] {
     cache.get_or_init(|| (0..FRAMES).map(|i| Arc::new(Image::from_bytes(ImageFormat::Png, png(Kind::Stop, light, i as f32 / FRAMES as f32 * std::f32::consts::TAU)))).collect())
 }
 
+const SKY_W: u32 = 256;
+const SKY_H: u32 = 160;
+
+/// Soft transparent nebula + Milky Way glow painted behind the winfer code welcome screen in dark mode
+/// (matches `.cw-nebula` and `.cw-milkyway` in `src/features/code/code.css`).
+pub fn sky_backdrop() -> Arc<Image> {
+    static SKY: OnceLock<Arc<Image>> = OnceLock::new();
+    SKY.get_or_init(|| {
+        let mut out = Vec::with_capacity((SKY_W * SKY_H * 4) as usize);
+        let radial = |u: f32, v: f32, cx: f32, cy: f32, rx: f32, ry: f32| -> f32 {
+            let dx = (u - cx) / rx;
+            let dy = (v - cy) / ry;
+            let d = (dx * dx + dy * dy).sqrt();
+            (1.0 - smooth(0.0, 0.72, d)).powf(1.35)
+        };
+        let (ca, sa) = (25_f32.to_radians().cos(), 25_f32.to_radians().sin());
+        for py in 0..SKY_H {
+            for px in 0..SKY_W {
+                let (u, v) = (px as f32 / SKY_W as f32, py as f32 / SKY_H as f32);
+                // Three radial nebula clouds matching `.cw-nebula`.
+                let n1 = radial(u, v, 0.18, 0.12, 0.60, 0.45) * 0.17;
+                let n2 = radial(u, v, 0.85, 0.88, 0.50, 0.40) * 0.15;
+                let n3 = radial(u, v, 0.50, 1.15, 0.80, 0.50) * 0.17;
+                // Soft diagonal Milky Way band along 115deg.
+                let band = ((u - 0.5) * ca + (v - 0.5) * sa) / 0.17;
+                let mw = (-band * band * 2.4).exp() * 0.08;
+
+                // Additive premultiplied-style color layers converted to straight RGBA.
+                let r = (88.0 / 255.0) * n1 + (124.0 / 255.0) * n2 + (40.0 / 255.0) * n3 + (195.0 / 255.0) * mw;
+                let g = (80.0 / 255.0) * n1 + (140.0 / 255.0) * n2 + (70.0 / 255.0) * n3 + (202.0 / 255.0) * mw;
+                let b = (220.0 / 255.0) * n1 + (255.0 / 255.0) * n2 + (160.0 / 255.0) * n3 + (255.0 / 255.0) * mw;
+                let a = (n1 + n2 + n3 + mw).clamp(0.0, 0.42);
+                let (sr, sg, sb) = if a > 1e-4 {
+                    ((r / a).clamp(0.0, 1.0), (g / a).clamp(0.0, 1.0), (b / a).clamp(0.0, 1.0))
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+                out.extend_from_slice(&[(sr * 255.0) as u8, (sg * 255.0) as u8, (sb * 255.0) as u8, (a * 255.0) as u8]);
+            }
+        }
+        let mut bytes = Vec::new();
+        let buf = image::RgbaImage::from_raw(SKY_W, SKY_H, out).expect("sky buffer matches size");
+        image::DynamicImage::ImageRgba8(buf).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).expect("sky png encodes");
+        Arc::new(Image::from_bytes(ImageFormat::Png, bytes))
+    })
+    .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

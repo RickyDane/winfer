@@ -116,15 +116,15 @@ export function NewPaneDialog() {
     cn("flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px]", i === current ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   const key = (k: string, label: string) => (
     <span className="flex items-center gap-1">
-      <kbd className="rounded border border-border bg-panel px-1 font-mono text-[10.5px] text-fg-muted">{k}</kbd>
+      <kbd className="rounded bg-panel px-1 font-mono text-[10.5px] text-fg-muted shadow-sm">{k}</kbd>
       {label}
     </span>
   );
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={close}>
-      <div className="anim-dialog flex h-fit max-h-[78vh] w-[600px] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="space-y-3 border-b border-border px-5 pt-4 pb-3.5">
+      <div className="anim-dialog flex h-fit max-h-[78vh] w-[600px] flex-col isolate overflow-hidden rounded-[14px] bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="space-y-3 px-5 pt-4 pb-3.5">
           <div className="flex items-center gap-2">
             <span className="grid size-[26px] place-items-center rounded-lg bg-accent-soft text-accent">
               <Plus size={14} />
@@ -146,8 +146,8 @@ export function NewPaneDialog() {
                     input.current?.focus();
                   }}
                   className={cn(
-                    "flex h-[30px] items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] hover:border-border-strong hover:text-fg",
-                    p.id === provider ? "border-accent/60 bg-accent-soft text-fg" : "border-border bg-panel text-fg-muted",
+                    "flex h-[30px] items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] hover:text-fg shadow-sm",
+                    p.id === provider ? "bg-accent-soft text-fg" : "bg-panel text-fg-muted",
                   )}
                 >
                   <ProviderIcon provider={p.id} size={14} />
@@ -158,7 +158,7 @@ export function NewPaneDialog() {
           </div>
         </header>
 
-        <div className="border-b border-border px-5">
+        <div className="px-5">
           <div className="flex h-[46px] items-center gap-2.5">
             <GitBranch size={15} className="text-fg-subtle" />
             <input
@@ -215,7 +215,7 @@ export function NewPaneDialog() {
           )}
         </div>
 
-        <footer className="space-y-1.5 border-t border-border px-5 py-2.5">
+        <footer className="space-y-1.5 px-5 py-2.5">
           {error && <p className="text-xs text-danger">{error}</p>}
           <p className="flex items-center gap-3 text-[11px] text-fg-subtle">
             {key("↑↓", "choose")}

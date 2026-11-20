@@ -176,10 +176,10 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
       <p className="truncate text-xs text-fg-muted" title={panes[0]?.prompt ?? undefined}>
         {panes[0]?.prompt ?? (ab ? "A/B test" : "Race")}
       </p>
-      <div className="overflow-x-auto rounded-lg border border-border">
+      <div className="overflow-x-auto rounded-lg shadow-sm">
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-border bg-panel">
+            <tr className="bg-panel">
               <th className="w-40 px-3 py-2 text-left font-medium text-fg-subtle">
                 <button onClick={() => void load()} disabled={loading} className="rounded p-1 hover:bg-hover hover:text-fg" title="Refresh">
                   <RefreshCw size={11} className={cn(loading && "animate-spin")} />
@@ -205,7 +205,7 @@ function Results({ raceId, panes }: { raceId: string; panes: Pane[] }) {
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-border">
+          <tbody className="">
             {metrics.map((m) => {
               const best = bestOf(m);
               const base = m.values[0];
@@ -260,7 +260,7 @@ function WinnerBanner({ verdict, panes, name }: { verdict: Verdict; panes: Pane[
   const [merging, setMerging] = useState(false);
   const winner = verdict.winner !== null ? panes[verdict.winner] : null;
   return (
-    <div className={cn("flex items-center gap-2 rounded-lg border px-3 py-2 text-xs", winner ? "border-success/40 bg-success/10" : "border-border bg-panel")}>
+    <div className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-xs shadow-sm", winner ? "bg-success/10" : "bg-panel")}>
       <Trophy size={13} className={winner ? "text-success" : "text-fg-subtle"} />
       <span className="flex-1 text-fg-muted">
         {winner ? (
@@ -311,7 +311,7 @@ function Summary({ panes, metrics }: { panes: Pane[]; metrics: Metric[] }) {
   }
   if (!lines.length) return null;
   return (
-    <ul className="list-inside list-disc space-y-0.5 rounded-lg border border-border bg-panel px-3 py-2 text-xs text-fg-muted">{lines}</ul>
+    <ul className="list-inside list-disc space-y-0.5 rounded-lg bg-panel px-3 py-2 text-xs text-fg-muted shadow-sm">{lines}</ul>
   );
 }
 
@@ -325,7 +325,7 @@ export function RaceResults() {
   const ab = raceId.startsWith("ab-");
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={closeRaceResults}>
-      <div className="anim-dialog h-fit max-h-[84vh] w-[min(860px,calc(100vw-32px))] space-y-4 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog h-fit max-h-[84vh] w-[min(860px,calc(100vw-32px))] space-y-4 overflow-y-auto rounded-xl bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
           <BarChart3 size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">{ab ? "A/B test results" : "Race results"}</h1>

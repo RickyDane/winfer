@@ -37,9 +37,9 @@ export function QuestionDialog() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="wf-question-title"
-        className="anim-dialog flex max-h-[80vh] w-[500px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex max-h-[80vh] w-[500px] flex-col rounded-xl bg-panel-raised shadow-2xl"
       >
-        <header className="flex items-start gap-3 border-b border-border px-5 py-3">
+        <header className="flex items-start gap-3 px-5 py-3">
           <MessageCircleQuestion size={16} className="mt-0.5 shrink-0 text-accent" />
           <div className="min-w-0 flex-1">
             <h1 id="wf-question-title" className="text-sm font-semibold text-fg">
@@ -56,7 +56,7 @@ export function QuestionDialog() {
               key={i}
               ref={i === 0 ? firstRef : undefined}
               onClick={() => (q.multiSelect ? toggle(i) : submit(o.label))}
-              className={`flex items-start gap-2 rounded-md border px-3 py-2 text-left text-[13px] hover:bg-hover ${picked.includes(i) ? "border-accent bg-hover" : "border-border"}`}
+              className={`flex items-start gap-2 rounded-md px-3 py-2 text-left text-[13px] shadow-sm hover:bg-hover ${picked.includes(i) ? "bg-hover" : "bg-panel"}`}
             >
               <span className="w-4 shrink-0 text-fg-subtle">{q.multiSelect ? (picked.includes(i) ? "☑" : "☐") : `${i + 1}.`}</span>
               <span className="min-w-0">
@@ -76,11 +76,11 @@ export function QuestionDialog() {
               value={other}
               onChange={(e) => setOther(e.target.value)}
               placeholder={q.multiSelect ? "Something else (optional)…" : "Type your own answer…"}
-              className="w-full rounded-md border border-border bg-panel px-3 py-1.5 text-[13px] text-fg outline-none focus:border-accent"
+              className="w-full rounded-md bg-panel px-3 py-1.5 text-[13px] text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
             />
           </form>
         </div>
-        <footer className="flex items-center gap-2 border-t border-border px-5 py-3">
+        <footer className="flex items-center gap-2 px-5 py-3">
           {waiting > 0 && <span className="text-xs text-fg-subtle">{waiting} more waiting</span>}
           <span className="flex-1" />
           <button onClick={() => dismissQuestions(pending.id)} className="rounded-md px-2.5 py-1 text-xs text-fg-muted hover:bg-hover hover:text-fg">

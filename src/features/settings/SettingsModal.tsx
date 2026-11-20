@@ -87,7 +87,7 @@ const Card = ({ title, description, children, reset }: { title: string; descript
       </h3>
       {description && <p className="mt-0.5 text-xs leading-relaxed text-fg-subtle">{description}</p>}
     </div>
-    <div className="divide-y divide-border overflow-hidden rounded-[10px] border border-border bg-panel">{children}</div>
+    <div className="overflow-hidden rounded-[10px] bg-panel shadow-sm">{children}</div>
   </section>
 );
 
@@ -107,7 +107,7 @@ const Row = ({ label, hint, children, stacked, reset }: { label: React.ReactNode
 /** A small segmented control (two to four choices). */
 function Segmented<T extends string>({ label, value, options, onChange, disabled }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void; disabled?: boolean }) {
   return (
-    <div role="radiogroup" aria-label={label} className="flex gap-0.5 rounded-lg border border-border bg-app p-0.5">
+    <div role="radiogroup" aria-label={label} className="flex gap-0.5 rounded-lg bg-app p-0.5 shadow-sm">
       {options.map(([v, text]) => (
         <button
           key={v}
@@ -137,7 +137,7 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (che
       onClick={() => onChange(!checked)}
       className={cn(
         "relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-        checked ? "bg-accent" : "bg-active ring-1 ring-border-strong ring-inset",
+        checked ? "bg-accent" : "bg-active",
       )}
     >
       <span className={cn("absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform duration-150", checked && "translate-x-4")} />
@@ -150,7 +150,7 @@ function Select({ className, children, ...props }: React.SelectHTMLAttributes<HT
     <span className={cn("relative inline-flex", className)}>
       <select
         {...props}
-        className="h-7 w-full min-w-0 appearance-none truncate rounded-md border border-border-strong bg-panel-raised pr-7 pl-2.5 text-xs text-fg outline-none hover:bg-hover focus:border-accent disabled:opacity-50"
+        className="h-7 w-full min-w-0 appearance-none truncate rounded-md bg-panel-raised pr-7 pl-2.5 text-xs text-fg outline-none hover:bg-hover focus:ring-2 focus:ring-accent/40 disabled:opacity-50 shadow-sm"
       >
         {children}
       </select>
@@ -160,8 +160,8 @@ function Select({ className, children, ...props }: React.SelectHTMLAttributes<HT
 }
 
 const buttonClass =
-  "flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-panel-raised px-2.5 text-xs text-fg hover:bg-hover disabled:opacity-50";
-const inputClass = "h-7 rounded-md border border-border-strong bg-panel-raised px-2.5 font-mono text-xs text-fg outline-none focus:border-accent";
+  "flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-panel-raised px-2.5 text-xs text-fg hover:bg-hover disabled:opacity-50 shadow-sm";
+const inputClass = "h-7 rounded-md bg-panel-raised px-2.5 font-mono text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm";
 
 /* General */
 
@@ -173,7 +173,10 @@ function ThemeTile({ t, selected, onPick }: { t: (typeof THEMES)[number]; select
       onClick={onPick}
       title={t.name}
       aria-pressed={selected}
-      className={cn("w-[160px] overflow-hidden rounded-lg border text-left transition-colors", selected ? "border-accent ring-1 ring-accent/35" : "border-border hover:border-border-strong")}
+      className={cn(
+        "w-[160px] overflow-hidden rounded-lg text-left transition-all",
+        selected ? "shadow-md shadow-accent/25" : "shadow-sm hover:shadow-md",
+      )}
     >
       <div className="flex h-16 gap-1 p-1.5" style={{ background: t.ui.app }}>
         <span className="w-[26px] rounded-sm" style={{ background: t.ui.panel }} />
@@ -191,7 +194,7 @@ function ThemeTile({ t, selected, onPick }: { t: (typeof THEMES)[number]; select
           </span>
         </span>
       </div>
-      <div className={cn("flex items-center gap-1 border-t border-border bg-panel-raised px-2 py-1.5 text-[11.5px]", selected ? "text-fg" : "text-fg-muted")}>
+      <div className={cn("flex items-center gap-1 px-2 py-1.5 text-[11.5px]", selected ? "bg-accent/15 font-medium text-fg" : "bg-panel-raised text-fg-muted")}>
         <span className="flex-1 truncate">{t.name}</span>
         {selected && <Check size={12} className="shrink-0 text-accent" />}
       </div>
@@ -249,7 +252,7 @@ function UpdateSettings() {
   const button = "flex h-[30px] shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[12.5px] disabled:opacity-50";
   return (
     <>
-      <div className={cn("flex items-center gap-3.5 rounded-[10px] border p-4", available ? "border-accent/35 bg-accent-soft" : "border-border bg-panel")}>
+      <div className={cn("flex items-center gap-3.5 rounded-[10px] p-4 shadow-sm", available ? "bg-accent-soft" : "bg-panel")}>
         <div className={cn("grid size-10 shrink-0 place-items-center rounded-lg", available ? "bg-accent text-on-accent" : "bg-hover text-fg-muted")}>
           {available ? <Download size={19} /> : <Check size={19} />}
         </div>
@@ -260,7 +263,7 @@ function UpdateSettings() {
           </div>
         </div>
         {(available || installed?.version === version) && (
-          <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={cn(button, "border border-border-strong text-fg hover:bg-hover")}>
+          <button onClick={() => showReleaseNotes(available ? "available" : "installed")} className={cn(button, "text-fg hover:bg-hover")}>
             What's new
           </button>
         )}
@@ -270,7 +273,7 @@ function UpdateSettings() {
             Install and restart
           </button>
         ) : (
-          <button onClick={() => void checkForUpdates()} disabled={checking} className={cn(button, "border border-border-strong text-fg hover:bg-hover")}>
+          <button onClick={() => void checkForUpdates()} disabled={checking} className={cn(button, "text-fg hover:bg-hover")}>
             {checking && <Spinner size={12} />}
             Check now
           </button>
@@ -572,7 +575,7 @@ function SystemPromptSettings() {
           onBlur={save}
           rows={12}
           aria-label="System prompt"
-          className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:border-accent"
+          className="w-full resize-y rounded-md bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
         />
       </Row>
     </Card>
@@ -786,7 +789,7 @@ function LivePrompt() {
         onBlur={() => save(draft)}
         rows={8}
         aria-label="Live voice system prompt"
-        className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:border-accent"
+        className="w-full resize-y rounded-md bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
       />
     </Row>
   );
@@ -1671,7 +1674,7 @@ function HarnessSettings() {
             spellCheck={false}
             rows={4}
             placeholder="{}"
-            className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
+            className="w-full resize-y rounded-md bg-panel-raised px-2.5 py-2 font-mono text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
           />
         </Row>
       </Card>
@@ -1990,7 +1993,7 @@ function DiagnosticsSettings() {
   return (
     <>
       {info.previousUnexpectedExit && (
-        <p className="anim-fade rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-fg">
+        <p className="anim-fade rounded-lg bg-warning/10 px-3 py-2 text-xs leading-relaxed text-fg shadow-sm">
           The previous run ended without a clean exit — a crash or an out-of-memory kill. Its last memory
           samples are at the end of <span className="font-mono">winfer.log</span>; export the diagnostics
           below and attach them to a bug report.
@@ -2192,8 +2195,8 @@ function StoreToolbar({
     { id: "installed", label: "Installed", icon: PackageCheck },
   ];
   return (
-    <div className="sticky top-0 z-10 -mx-8 -mt-1 flex items-center gap-3 border-b border-border bg-panel-raised/95 px-8 py-3 backdrop-blur">
-      <div role="tablist" className="flex shrink-0 rounded-lg border border-border bg-panel p-0.5">
+    <div className="sticky top-0 z-10 -mx-8 -mt-1 flex items-center gap-3 bg-panel-raised/95 px-8 py-3 backdrop-blur">
+      <div role="tablist" className="flex shrink-0 rounded-lg bg-panel p-0.5 shadow-sm">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -2217,7 +2220,7 @@ function StoreToolbar({
           onChange={(e) => onQuery(e.target.value)}
           placeholder={placeholder}
           autoFocus
-          className="h-8 w-full rounded-lg border border-border-strong bg-panel pr-2.5 pl-8 text-xs text-fg outline-none focus:border-accent"
+          className="h-8 w-full rounded-lg bg-panel pr-2.5 pl-8 text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
         />
       </div>
     </div>
@@ -2226,7 +2229,7 @@ function StoreToolbar({
 
 /** "N updates are available" with an Update all button, atop an Installed tab. */
 const UpdateBanner = ({ text, label, busy, disabled, onClick }: { text: string; label: string; busy: boolean; disabled: boolean; onClick: () => void }) => (
-  <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent-soft px-3.5 py-2.5">
+  <div className="flex items-center gap-3 rounded-lg bg-accent-soft px-3.5 py-2.5 shadow-sm">
     <ArrowUpCircle size={15} className="shrink-0 text-accent" />
     <p className="flex-1 text-xs text-fg">{text}</p>
     <button disabled={disabled} onClick={onClick} className={primaryButtonClass}>
@@ -2240,7 +2243,7 @@ const UpdateBanner = ({ text, label, busy, disabled, onClick }: { text: string; 
 const SkeletonGrid = () => (
   <div className="grid grid-cols-2 gap-3">
     {[0, 1, 2, 3].map((i) => (
-      <div key={i} className="h-40 animate-pulse rounded-lg border border-border bg-panel" />
+      <div key={i} className="h-40 animate-pulse rounded-lg bg-panel shadow-sm" />
     ))}
   </div>
 );
@@ -2284,7 +2287,7 @@ const Pill = ({ children, tone = "neutral", title }: { children: React.ReactNode
 
 /** Empty or loading state in the middle of a tab. */
 const EmptyState = ({ icon: Icon, title, hint, children }: { icon: LucideIcon; title: string; hint?: React.ReactNode; children?: React.ReactNode }) => (
-  <div className="flex flex-col items-center rounded-lg border border-dashed border-border-strong px-6 py-10 text-center">
+  <div className="flex flex-col items-center rounded-lg px-6 py-10 text-center shadow-sm">
     <Icon size={20} className="text-fg-subtle" />
     <p className="mt-3 text-[13px] text-fg">{title}</p>
     {hint && <p className="mt-1 max-w-sm text-xs leading-relaxed text-fg-subtle">{hint}</p>}
@@ -2418,7 +2421,7 @@ function PluginSettings() {
                   {available.map((e) => {
                     const open = expanded === e.id;
                     return (
-                      <article key={e.id} className="group flex flex-col rounded-lg border border-border bg-panel p-3.5 transition-colors hover:border-border-strong">
+                      <article key={e.id} className="group flex flex-col rounded-lg bg-panel p-3.5 transition-colors shadow-sm">
                         <div className="flex items-start gap-3">
                           <PluginTile id={e.id} name={e.name} />
                           <div className="min-w-0 flex-1">
@@ -2500,7 +2503,7 @@ function PluginSettings() {
               <p className="px-1 text-[11px] text-fg-subtle">
                 {enabledCount} of {plugins.length} on
               </p>
-              <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
+              <div className="overflow-hidden rounded-lg bg-panel shadow-sm">
                 {installed.map((p) => {
                   const error = p.error ?? (p.enabled ? runtimeErrors[p.id] : undefined);
                   const name = p.manifest?.name ?? p.id;
@@ -2589,8 +2592,8 @@ const Chip = ({ active, onClick, children, title }: { active: boolean; onClick?:
     title={title}
     aria-pressed={active}
     className={cn(
-      "flex h-6 items-center gap-1 rounded-md border px-2 text-[11px] transition-colors",
-      active ? "border-accent/60 bg-accent/15 text-fg" : "border-border-strong text-fg-muted hover:bg-hover hover:text-fg",
+      "flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors shadow-sm",
+      active ? "bg-accent/15 text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
     )}
   >
     {active && <Check size={11} className="text-accent" />}
@@ -2737,7 +2740,7 @@ function SkillSettings() {
 
   // Where new installs go; shown on both tabs since "Add" on an installed skill uses it too.
   const installFor = (
-    <div className="flex items-start gap-3 rounded-lg border border-border bg-panel px-3.5 py-2.5">
+    <div className="flex items-start gap-3 rounded-lg bg-panel px-3.5 py-2.5 shadow-sm">
       <span className="mt-1 shrink-0 text-xs text-fg-muted">Install for</span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap gap-1.5">
@@ -2781,7 +2784,7 @@ function SkillSettings() {
                   <Chip active={source === repo} onClick={() => setSource(repo)}>
                     {repo}
                   </Chip>
-                  <button onClick={() => removeSource(repo)} aria-label={`Remove ${repo}`} className="absolute -top-1.5 -right-1.5 hidden rounded-full bg-panel-raised p-0.5 text-fg-subtle ring-1 ring-border-strong group-hover:block hover:text-danger">
+                  <button onClick={() => removeSource(repo)} aria-label={`Remove ${repo}`} className="absolute -top-1.5 -right-1.5 hidden rounded-full bg-panel-raised p-0.5 text-fg-subtle group-hover:block hover:text-danger shadow-sm">
                     <X size={9} />
                   </button>
                 </span>
@@ -2841,7 +2844,7 @@ function SkillSettings() {
                 const everywhere = have && selected.every((t) => homeSkillCopies(have).some((c) => c.target === t));
                 const open = expanded === skill.path;
                 return (
-                  <article key={skill.path} className="flex flex-col rounded-lg border border-border bg-panel p-3.5 transition-colors hover:border-border-strong">
+                  <article key={skill.path} className="flex flex-col rounded-lg bg-panel p-3.5 transition-colors shadow-sm">
                     <div className="flex items-start gap-3">
                       <PluginTile id={skill.name} name={skill.name} />
                       <div className="min-w-0 flex-1">
@@ -2909,7 +2912,7 @@ function SkillSettings() {
           {installed === null ? (
             <div className="space-y-2">
               {[0, 1, 2].map((i) => (
-                <div key={i} className="h-16 animate-pulse rounded-lg border border-border bg-panel" />
+                <div key={i} className="h-16 animate-pulse rounded-lg bg-panel shadow-sm" />
               ))}
             </div>
           ) : shownInstalled.length === 0 ? (
@@ -2924,7 +2927,7 @@ function SkillSettings() {
               <EmptyState icon={Search} title={`No installed skill matches “${query}”`} />
             )
           ) : (
-            <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
+            <div className="overflow-hidden rounded-lg bg-panel shadow-sm">
               {shownInstalled.map((skill) => {
                 const origin = skillOrigin(skill);
                 const outdated = isOutdated(skill, origin ? listings.get(origin.repo) : undefined);
@@ -3024,17 +3027,17 @@ export function SettingsModal() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[3px]" onMouseDown={() => setSettings(false)}>
       <div
-        className="anim-dialog isolate flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog isolate flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Its own rounded left corners: WebKit doesn't clip scrolling children to the dialog's radius. */}
-        <nav className="flex w-[232px] shrink-0 flex-col rounded-l-[13px] border-r border-border bg-panel">
+        <nav className="flex w-[232px] shrink-0 flex-col rounded-l-[13px] bg-panel">
           <div className="space-y-3 px-3 pt-3.5 pb-1">
             <h1 className="flex items-center gap-2 px-1 text-sm font-semibold text-fg">
               <Settings2 size={15} className="text-accent" />
               Settings
             </h1>
-            <label className="flex h-8 items-center gap-2 rounded-md border border-border-strong bg-app pr-1 pl-2.5 text-fg-subtle focus-within:border-accent focus-within:ring-3 focus-within:ring-accent-soft">
+            <label className="flex h-8 items-center gap-2 rounded-md bg-app pr-1 pl-2.5 text-fg-subtle focus-within:ring-2 focus-within:ring-accent/40 focus-within:ring-3 focus-within:ring-accent-soft shadow-sm">
               <Search size={13} />
               <input
                 autoFocus
@@ -3085,7 +3088,7 @@ export function SettingsModal() {
               </div>
             ))}
           </div>
-          <div className="flex items-center justify-between gap-2 border-t border-border px-3.5 py-2.5 text-[11px] text-fg-subtle">
+          <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 text-[11px] text-fg-subtle">
             <span className="font-mono">winfer {version ?? ""}</span>
             {available && (
               <button onClick={() => open("updates")} title={`winfer ${available.version} is available`} className="flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-accent">
@@ -3098,7 +3101,7 @@ export function SettingsModal() {
         <div className="relative flex min-w-0 flex-1 flex-col">
           <button onClick={() => setSettings(false)} aria-label="Close settings" className="absolute top-4 right-4 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-fg-subtle hover:bg-hover hover:text-fg">
             <X size={15} />
-            <kbd className="rounded border border-border px-1 font-mono text-[10px]">esc</kbd>
+            <kbd className="rounded px-1 font-mono text-[10px] shadow-sm">esc</kbd>
           </button>
           <header className="flex shrink-0 items-start gap-3.5 pt-6 pr-24 pb-4 pl-8">
             {searching ? (
@@ -3123,7 +3126,7 @@ export function SettingsModal() {
                       toast(`Reset ${n} setting${n === 1 ? "" : "s"} on ${page.label}`);
                     }}
                     title="Put every changed setting on this page back to its default"
-                    className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border-strong px-2.5 text-xs text-fg-muted hover:bg-hover hover:text-fg"
+                    className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted hover:bg-hover hover:text-fg shadow-sm"
                   >
                     <Undo2 size={12} />
                     Reset page
@@ -3143,7 +3146,7 @@ export function SettingsModal() {
                       <button
                         key={h.page + h.label}
                         onClick={() => open(h.page)}
-                        className={cn("flex w-full items-center gap-3 rounded-[10px] border px-3 py-2.5 text-left hover:border-border hover:bg-panel", i === 0 ? "border-border bg-panel" : "border-transparent")}
+                        className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left hover:bg-panel shadow-sm", i === 0 ? "bg-panel" : "")}
                       >
                         <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-hover text-fg-muted">
                           <p.icon size={14} />

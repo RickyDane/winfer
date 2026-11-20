@@ -83,6 +83,8 @@ pub struct Pane {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
     pub agent_title: Option<String>,
     #[serde(default)]
     pub custom_title: Option<String>,
@@ -355,6 +357,7 @@ pub struct AddPane {
     pub custom_title: Option<String>,
     pub workspace_id: Option<String>,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub existing_worktree: Option<WorktreeInfo>,
     pub cwd: Option<String>,
     pub resume_session: Option<String>,
@@ -650,6 +653,7 @@ impl AppState {
                 plain: opts.plain,
                 prompt: opts.prompt,
                 model,
+                effort: opts.effort,
                 ..Default::default()
             });
             let target = opts.split_from.or(if background { None } else { focused });

@@ -157,6 +157,9 @@ pub struct SpawnRequest {
     /// Model to launch with (the provider's `modelArg`); `None` uses the CLI's default.
     #[serde(default)]
     model: Option<String>,
+    /// Reasoning effort level to launch with; `None` or `"default"` uses the model's default.
+    #[serde(default)]
+    effort: Option<String>,
     /// Skip the agent's permission prompts (its `autoApproveArgs`), from settings.
     #[serde(default)]
     auto_approve: bool,
@@ -492,6 +495,24 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
             if opencode_v2 && !agent_env.is_empty() {
                 cmd.arg("--standalone");
             }
+            let effort = req.effort.as_deref().map(str::trim).filter(|e| !e.is_empty() && *e != "default");
+            let mut launch_model = req.model.clone();
+            if let Some(e) = effort {
+                match provider.id.as_str() {
+                    "winfer" | "claude" => provider.args.extend(["--effort".into(), e.to_string()]),
+                    "muse" => provider.args.extend(["--reasoning-effort".into(), e.to_string()]),
+                    "pi" => provider.args.extend(["--thinking".into(), e.to_string()]),
+                    "agy" => {
+                        if let Some(m) = launch_model.as_deref().filter(|m| !m.is_empty()) {
+                            let suffix = format!("-{e}");
+                            if !m.ends_with(&suffix) {
+                                launch_model = Some(format!("{m}{suffix}"));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             // A batch file we couldn't unwrap passes arguments through cmd.exe: only simple ones
             // survive, so JSON configs are left out and the prompt is typed in instead.
             type_prompt = launcher.batch;
@@ -505,13 +526,18 @@ fn build_command(req: &SpawnRequest, cdp_url: Option<&str>) -> Result<(CommandBu
                     mcp.extend(codex_output_cap());
                     mcp.extend(lean_codex_args(false));
                 }
+                if provider.id == "codex" {
+                    if let Some(e) = effort {
+                        mcp.extend(["-c".into(), format!("model_reasoning_effort={}", serde_json::to_string(e).unwrap_or_default())]);
+                    }
+                }
                 (mcp, hooks::provider_args(&provider.id))
             };
             cmd.args(agent_args(
                 &provider,
                 mcp,
                 hooks,
-                req.model.as_deref(),
+                launch_model.as_deref(),
                 req.resume,
                 req.session.as_deref(),
                 req.prompt.as_deref().filter(|_| !launcher.batch),
@@ -849,6 +875,7 @@ mod pipe_tests {
             session: Some("resume-test".into()),
             prompt: None,
             model: Some("claude/sonnet".into()),
+            effort: Some("high".into()),
             auto_approve: false,
             system_prompt: None,
             plain: true,
@@ -864,6 +891,7 @@ mod pipe_tests {
         assert_eq!(PathBuf::from(&argv[0]), std::env::current_exe().unwrap());
         assert_eq!(argv[1], "code");
         assert!(argv.iter().any(|a| a == "--serve"));
+        assert!(argv.windows(2).any(|w| w[0] == "--effort" && w[1] == "high"));
         assert!(argv.iter().any(|a| a == "resume-test"));
         #[cfg(windows)]
         assert!(cmd.get_env(crate::harness::CODE_ARGS_ENV).is_none());
@@ -927,6 +955,7 @@ mod tests {
             session: None,
             prompt: None,
             model: None,
+            effort: None,
             auto_approve: false,
             system_prompt: None,
             plain: false,
@@ -1032,6 +1061,7 @@ mod tests {
             session: None,
             prompt: prompt.map(Into::into),
             model: None,
+            effort: None,
             auto_approve: false,
             system_prompt: Some("Use your tools.".into()),
             plain: false,
@@ -1133,6 +1163,7 @@ mod tests {
             session: None,
             prompt: None,
             model: None,
+            effort: None,
             auto_approve: false,
             system_prompt: None,
             plain: false,

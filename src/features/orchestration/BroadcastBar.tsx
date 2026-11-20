@@ -33,7 +33,7 @@ export function BroadcastBar() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[18vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog h-fit w-[600px] space-y-3 rounded-xl border border-border-strong bg-panel-raised p-4 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog h-fit w-[600px] space-y-3 rounded-xl bg-panel-raised p-4 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <div className="text-xs font-medium tracking-wide text-fg-subtle uppercase">Send to agents</div>
         <textarea
           ref={input}
@@ -47,7 +47,7 @@ export function BroadcastBar() {
           }}
           rows={3}
           placeholder={`e.g. run the tests and fix any failures (${formatChord("Shift+Enter")} for a new line)`}
-          className="w-full resize-none rounded-md border border-border bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:border-accent"
+          className="w-full resize-none rounded-md bg-panel p-2.5 font-mono text-xs text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
         />
         <div className="flex flex-wrap items-center gap-1.5">
           {agents.length === 0 && <span className="text-xs text-fg-subtle">No agents in this workspace.</span>}
@@ -65,8 +65,8 @@ export function BroadcastBar() {
                   })
                 }
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
-                  on ? "border-accent/60 bg-accent-soft text-fg" : "border-border text-fg-subtle line-through",
+                  "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs shadow-sm",
+                  on ? "bg-accent-soft text-fg" : "text-fg-subtle line-through",
                 )}
               >
                 <ProviderIcon provider={p.provider} size={12} />

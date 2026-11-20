@@ -534,7 +534,7 @@ impl ViewerPanel {
         let button = |id: &'static str, icon: IconName, enabled: bool| {
             div().id(id).p_1().rounded_md().text_color(if enabled { c.muted } else { c.subtle }).when(enabled, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover))).child(Icon::new(icon).size(px(14.0)))
         };
-        let controls = div().flex().items_center().justify_center().gap_2().px_2().py_1().border_b_1().border_color(c.border).text_xs().text_color(c.muted)
+        let controls = div().flex().items_center().justify_center().gap_2().px_2().py_1().text_xs().text_color(c.muted)
             .child(button("pdf-prev", IconName::ChevronLeft, page > 1).on_click(cx.listener(move |this, _, _, cx| this.pdf_go(page.saturating_sub(1), zoom, cx))))
             .child(format!("Page {page} of {pages}"))
             .child(button("pdf-next", IconName::ChevronRight, page < pages).on_click(cx.listener(move |this, _, _, cx| this.pdf_go(page + 1, zoom, cx))))
@@ -703,7 +703,7 @@ impl ViewerPanel {
             if let Some(note) = block.comment {
                 let start = note.start;
                 column = column.child(
-                    div().flex().items_start().gap_2().rounded_md().bg(c.raised).border_1().border_color(c.border).px_2().py_1().text_xs()
+                    div().flex().items_start().gap_2().rounded_md().bg(c.raised).px_2().py_1().text_xs()
                         .child(div().text_color(c.accent).child(format!("@{}", note.author)))
                         .child(div().flex_1().min_w_0().text_color(c.fg).child(note.body.clone()))
                         .child(div().id(("block-note-remove", start)).cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.remove_comment_at(start, cx))).child(Icon::new(IconName::X).size(px(11.0)).text_color(c.subtle))),
@@ -715,15 +715,15 @@ impl ViewerPanel {
             let doc = path.to_string();
             let link_panel = panel.clone();
             column = column.child(
-                div().id(SharedString::from(format!("block-{path}-{}", block.start_line))).group("md-block").relative().rounded_md().px_2().py_0p5().border_1()
-                    .border_color(if active { c.accent } else { transparent_black() }).when(active, |d| d.bg(Hsla { a: 0.06, ..c.accent }))
+                div().id(SharedString::from(format!("block-{path}-{}", block.start_line))).group("md-block").relative().rounded_md().px_2().py_0p5()
+                    .when(active, |d| d.bg(Hsla { a: 0.06, ..c.accent }))
                     .child(TextView::markdown(id, SharedString::from(block.source)).selectable(true).on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
                         Some((target, line)) => { link_panel.update(cx, |this, cx| this.open(target, line, false, cx)).ok(); }
                         None if !href.starts_with('#') => cx.open_url(href),
                         None => {}
                     }))
                     .child(
-                        div().id(SharedString::from(format!("block-comment-{path}-{end}"))).absolute().top(px(2.0)).right(px(2.0)).p_1().rounded_md().bg(c.raised).border_1().border_color(c.border_strong).cursor_pointer()
+                        div().id(SharedString::from(format!("block-comment-{path}-{end}"))).absolute().top(px(2.0)).right(px(2.0)).p_1().rounded_md().bg(c.raised).cursor_pointer()
                             .opacity(0.0).group_hover("md-block", |d| d.opacity(1.0)).tooltip({ let t = SharedString::from("Comment on this block"); move |window, cx| Tooltip::new(t.clone()).build(window, cx) })
                             .on_click(cx.listener(move |this, _, window, cx| this.begin_comment(end, window, cx)))
                             .child(Icon::new(IconName::MessageSquarePlus).size(px(12.0)).text_color(c.muted)),
@@ -784,7 +784,7 @@ impl ViewerPanel {
         let copy = path.to_string();
         let reveal = path.to_string();
         let open_in = path.to_string();
-        let row = div().flex().items_center().gap_1().px_2().py_1().border_b_1().border_color(c.border)
+        let row = div().flex().items_center().gap_1().px_2().py_1()
             .child(div().flex_1().min_w_0().truncate().mx_1().text_size(px(11.0)).text_color(c.muted).child(shown));
         let row = if editing {
             row.when(self.conflict, |d| d.child(div().text_xs().text_color(c.warning).child("Changed on disk")))
@@ -832,7 +832,7 @@ impl Render for ViewerPanel {
         let font = crate::fonts::mono(cx);
         let groups = viewer_projects(&docs, &workspaces);
         let current = groups.iter().find(|g| active.as_ref().is_some_and(|a| g.docs.contains(a))).cloned();
-        let mut top = div().flex().flex_col().border_b_1().border_color(c.border);
+        let mut top = div().flex().flex_col();
         if groups.len() > 1 {
             let mut projects = div().flex().items_center().gap_1().px_2().pt_1();
             for g in &groups {
@@ -903,7 +903,7 @@ impl Render for ViewerPanel {
         for note in &comments {
             let start = note.start;
             notes = notes.child(
-                div().flex().items_start().gap_2().rounded_md().bg(c.raised).border_1().border_color(c.border).px_2().py_1().text_xs()
+                div().flex().items_start().gap_2().rounded_md().bg(c.raised).px_2().py_1().text_xs()
                     .child(div().text_color(c.accent).child(format!("@{}", note.author)))
                     .child(div().flex_1().min_w_0().text_color(c.fg).child(note.body.clone()))
                     .child(
@@ -937,12 +937,12 @@ impl Render for ViewerPanel {
             .flex_col()
             .child(top)
             .child(header)
-            .when(self.send_open, |d| d.child(div().border_b_1().border_color(c.border).p_1().child(div().px_2().text_size(px(10.0)).text_color(c.subtle).child("Ask an agent to address your comments")).child(send_list)))
+            .when(self.send_open, |d| d.child(div().p_1().child(div().px_2().text_size(px(10.0)).text_color(c.subtle).child("Ask an agent to address your comments")).child(send_list)))
             .child(div().flex_1().min_h_0().child(body))
-            .when(!comments.is_empty() && self.source, |d| d.child(div().id("viewer-notes").max_h(px(180.0)).overflow_y_scroll().border_t_1().border_color(c.border).p_2().child(notes)))
+            .when(!comments.is_empty() && self.source, |d| d.child(div().id("viewer-notes").max_h(px(180.0)).overflow_y_scroll().p_2().child(notes)))
             .when_some(composer, |d, editor| {
                 d.child(
-                    div().border_t_1().border_color(c.border).p_2().flex().flex_col().gap_1()
+                    div().p_2().flex().flex_col().gap_1()
                         .child(div().text_size(px(11.0)).text_color(c.subtle).child(format!("Comment after line {}", self.comment_line)))
                         .child(div().h(px(72.0)).child(Editor::new(&editor)))
                         .child(

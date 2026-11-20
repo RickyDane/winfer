@@ -46,6 +46,21 @@ pub fn hex(s: &str) -> Hsla {
     rgb_of(s).into()
 }
 
+/// Opaque sRGB linear blend of `over` on top of `base` (`amount` in `0.0..=1.0`), with `a = 1.0`.
+/// Keeps floating surfaces opaque so GPUI drop shadows never bleed through their interior.
+pub fn blend(base: Hsla, over: Hsla, amount: f32) -> Hsla {
+    let a = Rgba::from(base);
+    let b = Rgba::from(over);
+    let t = amount.clamp(0.0, 1.0);
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.0,
+    }
+    .into()
+}
+
 fn rgb_of(s: &str) -> Rgba {
     let h = s.trim_start_matches('#');
     let expanded: String = if h.len() == 3 { h.chars().flat_map(|c| [c, c]).collect() } else { h.to_string() };

@@ -163,19 +163,74 @@ fn chat_call(call: &Call) -> Option<Reply> {
     }
 }
 
-/// Exit notices for `bg` tasks of pane agents: the webview types them into the pane once the
-/// agent is idle (see `bgNotices.ts`).
+/// Tracks `bg` tasks of pane agents for the UI (`bg://task`) and delivers unseen exit notices
+/// (`bg://note`) once the agent is idle (see `bgNotices.ts`).
 pub fn listen_bg(app: AppHandle) {
     crate::harness::bg::listen(move |u| {
-        if let crate::harness::bg::Update::Exited { id, owner, cmd, name, code, secs, seen: false, tail } = u {
-            if owner.is_empty() {
-                return;
+        match u {
+            crate::harness::bg::Update::Started { id, owner, cmd, name, description, log, .. } => {
+                if owner.is_empty() {
+                    return;
+                }
+                let title = crate::harness::bg::label(&name, &cmd);
+                let _ = crate::diagnostics::emit_logged(
+                    &app,
+                    "bg://task",
+                    json!({
+                        "paneId": owner,
+                        "id": id,
+                        "title": title,
+                        "description": if description.trim().is_empty() { Value::Null } else { json!(description) },
+                        "cmd": cmd,
+                        "status": "running",
+                        "log": log.to_string_lossy(),
+                    }),
+                );
             }
-            let out = if tail.trim().is_empty() || tail == "(no new output)" { String::new() } else { format!(" Last output:\n{tail}") };
-            let text = format!("[winfer] Background task {} exited with code {code} after {secs}s.{out}", crate::harness::bg::mention(&id, &name, &cmd));
-            let _ = crate::diagnostics::emit_logged(&app, "bg://note", json!({ "paneId": owner, "text": text }));
+            crate::harness::bg::Update::Exited { id, owner, cmd, name, code, secs, seen, tail } => {
+                if owner.is_empty() {
+                    return;
+                }
+                let status = if code == 0 { "completed" } else { "failed" };
+                let _ = crate::diagnostics::emit_logged(
+                    &app,
+                    "bg://task",
+                    json!({
+                        "paneId": owner,
+                        "id": id,
+                        "title": crate::harness::bg::label(&name, &cmd),
+                        "status": status,
+                        "exitCode": code,
+                    }),
+                );
+                if !seen {
+                    let out = if tail.trim().is_empty() || tail == "(no new output)" { String::new() } else { format!(" Last output:\n{tail}") };
+                    let text = format!("[winfer] Background task {} exited with code {code} after {secs}s.{out}", crate::harness::bg::mention(&id, &name, &cmd));
+                    let _ = crate::diagnostics::emit_logged(&app, "bg://note", json!({ "paneId": owner, "text": text }));
+                }
+            }
+            crate::harness::bg::Update::Stopped { id, owner, cmd, name, .. } => {
+                if owner.is_empty() {
+                    return;
+                }
+                let _ = crate::diagnostics::emit_logged(
+                    &app,
+                    "bg://task",
+                    json!({
+                        "paneId": owner,
+                        "id": id,
+                        "title": crate::harness::bg::label(&name, &cmd),
+                        "status": "stopped",
+                    }),
+                );
+            }
         }
     });
+}
+
+#[tauri::command]
+pub fn bg_stop(id: String) -> bool {
+    crate::harness::bg::stop(&id)
 }
 
 /// Forwards a call to the webview and waits for its reply.

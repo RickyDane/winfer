@@ -237,7 +237,7 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
   const headerButton = "rounded px-1 py-0.5 text-[10px] font-medium text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40";
 
   return (
-    <div className="mt-1 mb-1 pl-5">
+    <div className="mt-1 px-1 pt-1.5 pb-0.5">
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -289,7 +289,7 @@ export function WorktreeList({ workspace }: { workspace: Workspace }) {
           key={wt.info.path}
           onContextMenu={(e) => !selecting && openMenu(e, wt)}
           className={cn(
-            "anim-slide group flex items-center gap-1 rounded-md pr-1 transition-opacity hover:bg-hover",
+            "anim-slide group flex items-center gap-1 rounded-md px-1 transition-opacity hover:bg-hover",
             removing.has(wt.info.path) && "pointer-events-none opacity-50",
             selecting && wt.isMain && "pointer-events-none opacity-40",
           )}

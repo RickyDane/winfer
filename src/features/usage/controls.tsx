@@ -38,7 +38,7 @@ export function Segmented<T extends string>({
   className?: string;
 }) {
   return (
-    <div className={cn("flex rounded-md border border-border p-0.5", className)}>
+    <div className={cn("flex rounded-md p-0.5 shadow-sm", className)}>
       {options.map((o) => (
         <button
           key={o.id}

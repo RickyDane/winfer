@@ -27,7 +27,7 @@ function StatTable({ title, stats, sort, prefix }: { title: string; stats: ToolS
   return (
     <div className="space-y-1.5">
       <div className="text-[11px] font-medium text-fg-muted">{title}</div>
-      <div className="overflow-hidden rounded-lg border border-border">
+      <div className="overflow-hidden rounded-lg shadow-sm">
         <table className="w-full text-[11px]">
           <thead className="bg-panel text-fg-subtle">
             <tr>
@@ -44,7 +44,7 @@ function StatTable({ title, stats, sort, prefix }: { title: string; stats: ToolS
               const value = sort === "time" ? s.durationMs : sort === "tokens" ? s.tokens : sort === "failed" ? s.failed : s.calls;
               const rate = failRate(s);
               return (
-                <tr key={s.name} className="border-t border-border">
+                <tr key={s.name} className="">
                   <td className="relative px-2.5 py-1.5">
                     <span className="absolute inset-y-1 left-0 rounded-r bg-hover" style={{ width: `${(value * 100) / max}%` }} />
                     <span className="relative font-mono text-fg">
@@ -84,7 +84,7 @@ function Failures({ report }: { report: ToolReport }) {
       <div className="text-[11px] font-medium text-fg-muted">
         Failed calls{report.failed > report.failures.length ? ` (latest ${report.failures.length} of ${report.failed})` : ""}
       </div>
-      <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+      <div className="overflow-hidden rounded-lg shadow-sm">
         {report.failures.map((f, i) => (
           <button key={i} onClick={() => setOpen(open === i ? null : i)} className="block w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-hover">
             <div className="flex items-baseline gap-2">
@@ -141,7 +141,7 @@ export function ToolStats() {
       </p>
 
       <div className="flex items-center gap-2">
-        <div className="flex rounded-md border border-border p-0.5">
+        <div className="flex rounded-md p-0.5 shadow-sm">
           {RANGES.map((r) => (
             <button key={r.id} onClick={() => pick(r.id)} className={cn("rounded px-2.5 py-1 text-xs", range === r.id ? "bg-active text-fg" : "text-fg-muted hover:text-fg")}>
               {r.label}

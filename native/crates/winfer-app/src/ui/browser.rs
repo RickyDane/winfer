@@ -346,6 +346,8 @@ pub struct BrowserPanel {
     panel_bounds: Bounds<Pixels>,
     #[cfg(debug_assertions)]
     dev_url_opened: bool,
+    /// A blank replacement tab was requested after the last tab closed; cleared once any tab exists.
+    blank_pending: bool,
 }
 
 impl BrowserPanel {
@@ -406,6 +408,7 @@ impl BrowserPanel {
             panel_bounds: Bounds::default(),
             #[cfg(debug_assertions)]
             dev_url_opened: false,
+            blank_pending: false,
         }
     }
 
@@ -507,7 +510,16 @@ impl BrowserPanel {
                 self.active_tab.remove(&workspace);
             }
         }
-        self.tabs.insert(workspace, tabs);
+        self.tabs.insert(workspace.clone(), tabs);
+        // Never leave the browser without a tab: once the last one overall closes, open a blank one.
+        if self.tabs.values().any(|t| !t.is_empty()) {
+            self.blank_pending = false;
+        } else if !std::mem::replace(&mut self.blank_pending, true) {
+            tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                let _ = browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), workspace, "about:blank".to_string()).await;
+            });
+        }
         // Development aid: load this page once the browser is up.
         #[cfg(debug_assertions)]
         if let Some(url) = std::env::var("WINFER_NATIVE_URL").ok().filter(|_| !std::mem::replace(&mut self.dev_url_opened, true)) {
@@ -1099,13 +1111,21 @@ impl BrowserPanel {
         }
     }
 
-    /// Browser-style tabs: the active one joins the toolbar below; tabs an agent is using carry a
-    /// small agent badge next to their page icon.
+    /// Browser-style tabs with darker tab surfaces and subtle elevation shadows; tabs an agent is
+    /// using carry a small agent badge next to their page icon.
     fn render_tabs(&mut self, c: Colors, dark: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut strip = div().flex().items_end().gap_0p5().px_2().pt_2().border_b_1().border_color(c.border);
+        let mut strip = div().flex().items_end().gap_1().px_2().pt_2();
         let workspace = self.workspace.clone().unwrap_or_default();
         let active = self.active_tab.get(&workspace).cloned();
         let now = Instant::now();
+        let active_bg = c.raised; // same surface as the toolbar below, so the tab joins it
+        let idle_bg = if c.light { theme::blend(c.panel, c.fg, 0.04) } else { theme::blend(c.panel, black(), 0.18) };
+        let idle_hover_bg = if c.light { theme::blend(c.panel, c.fg, 0.068) } else { theme::blend(c.panel, black(), 0.26) };
+        let idle_shadow = if c.light {
+            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.05), offset: point(px(0.0), px(1.0)), blur_radius: px(2.0), spread_radius: px(0.0), inset: false }]
+        } else {
+            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.24), offset: point(px(0.0), px(1.0)), blur_radius: px(3.0), spread_radius: px(0.0), inset: false }]
+        };
         for tab in self.tabs.get(&workspace).cloned().unwrap_or_default() {
             let is_active = active.as_ref() == Some(&tab.id);
             let agent = self.agent_tabs.get(&tab.id).is_some_and(|at| now.duration_since(*at) < AGENT_LINGER);
@@ -1118,9 +1138,9 @@ impl BrowserPanel {
             let group = SharedString::from(format!("tab-group-{}", tab.id));
             strip = strip.child(
                 div().id(SharedString::from(format!("tab-{}", tab.id))).group(group.clone()).flex().items_center().gap(px(7.0)).min_w_0().flex_basis(px(160.0)).flex_shrink(1.0)
-                    .h(px(32.0)).pl_2p5().pr_1p5().mb(px(-1.0)).rounded_t(px(8.0)).border_1().border_b_0().text_size(px(12.0)).cursor_pointer()
-                    .when(is_active, |d| d.bg(c.panel).border_color(c.border).text_color(c.fg))
-                    .when(!is_active, |d| d.border_color(gpui_kit::transparent_black()).text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.muted)))
+                    .h(px(30.0)).pl_2p5().pr_1p5().rounded_tl_lg().rounded_tr_lg().rounded_bl(px(0.0)).rounded_br(px(0.0)).text_size(px(12.0)).cursor_pointer()
+                    .when(is_active, |d| d.bg(active_bg).font_weight(FontWeight::MEDIUM).text_color(c.fg))
+                    .when(!is_active, |d| d.bg(idle_bg).shadow(idle_shadow.clone()).text_color(c.muted).hover(move |d| d.bg(idle_hover_bg).text_color(c.fg)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_tab.insert(ws.clone(), select.clone());
                         cx.notify();
@@ -1147,7 +1167,7 @@ impl BrowserPanel {
             );
         }
         strip.child(
-            div().id("new-tab").size(px(28.0)).mb(px(2.0)).ml_0p5().flex_shrink_0().flex().items_center().justify_center().rounded_md().cursor_pointer().text_color(c.subtle)
+            div().id("new-tab").size(px(28.0)).ml_0p5().mb_0p5().flex_shrink_0().flex().items_center().justify_center().rounded_md().cursor_pointer().text_color(c.subtle)
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
                 .tooltip(|window, cx| Tooltip::new("New tab").build(window, cx))
                 .on_click(cx.listener(|this, _, _, _| this.new_tab()))
@@ -1179,8 +1199,8 @@ impl BrowserPanel {
         } else {
             (IconName::Search, c.subtle, "Search or enter an address")
         };
-        let omni = div().flex_1().min_w_0().h(px(30.0)).flex().items_center().gap_1p5().pl_2().pr_1().rounded_full().bg(c.hover).border_1().border_color(gpui_kit::transparent_black())
-            .hover(move |d| d.border_color(c.border_strong))
+        let omni = div().flex_1().min_w_0().h(px(30.0)).flex().items_center().gap_1p5().pl_2().pr_1().rounded_full().bg(c.hover)
+            .hover(move |d| d)
             .child(div().id("connection").size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().text_color(sec_color)
                 .tooltip(tip(sec_tip)).child(Icon::new(sec_icon).size(px(12.0))))
             .child(div().flex_1().min_w_0().child(Input::new(&self.address).appearance(false).small()))
@@ -1201,9 +1221,7 @@ impl BrowserPanel {
             .gap_1()
             .px_2()
             .py(px(7.0))
-            .bg(c.panel)
-            .border_b_1()
-            .border_color(c.border)
+            .bg(c.raised)
             .child(button("back", IconName::ArrowLeft, false).tooltip(tip("Back")).on_click(cx.listener(|this, _, _, _| this.history(-1))))
             .child(button("forward", IconName::ArrowRight, false).tooltip(tip("Forward")).on_click(cx.listener(|this, _, _, _| this.history(1))))
             .child(button("reload", IconName::RotateCw, false).tooltip(tip("Reload")).on_click(cx.listener(|this, _, _, cx| {
@@ -1229,7 +1247,7 @@ impl BrowserPanel {
         let at = self.agent_tabs.get(&tab.id)?;
         (Instant::now().duration_since(*at) < AGENT_LINGER).then(|| {
             div().flex().items_center().gap_2().px_3().py_1p5().text_size(px(12.0)).text_color(c.muted)
-                .bg(Hsla { a: 0.08, ..c.accent }).border_b_1().border_color(Hsla { a: 0.22, ..c.accent })
+                .bg(Hsla { a: 0.08, ..c.accent })
                 .child(Icon::new(IconName::Bot).size(px(13.0)).text_color(c.accent))
                 .child(div().flex_1().truncate().child(div().text_color(c.fg).child("An agent is using this tab")))
                 .child(div().text_size(px(11.0)).text_color(c.subtle).child("its cursor shows on the page"))
@@ -1247,13 +1265,13 @@ impl BrowserPanel {
         }
         for e in &entries {
             let color = match e.level.as_str() { "error" => c.danger, "warning" => c.warning, "info" => c.accent, _ => c.muted };
-            list = list.child(div().flex().gap_2().border_b_1().border_color(Hsla { a: 0.5, ..c.border }).py_0p5()
+            list = list.child(div().flex().gap_2().py_0p5()
                 .child(div().w(px(48.0)).flex_shrink_0().text_color(color).child(e.level.clone()))
                 .child(div().flex_1().min_w_0().whitespace_normal().text_color(c.fg).child(e.text.clone()))
                 .when_some(e.source.as_ref().map(|s| s.rsplit('/').next().unwrap_or(s).to_string()), |d, s| d.child(div().max_w(px(120.0)).flex_shrink_0().truncate().text_color(c.subtle).child(s))));
         }
         let small = |id: &'static str, icon: IconName, label: &'static str| div().id(id).flex().items_center().gap_1().rounded_sm().px_1p5().py_0p5().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).child(Icon::new(icon).size(px(11.0))).child(label);
-        Some(div().h(px(190.0)).flex_shrink_0().flex().flex_col().border_b_1().border_color(c.border).bg(c.panel)
+        Some(div().h(px(190.0)).flex_shrink_0().flex().flex_col().bg(c.panel)
             .child(div().flex().items_center().gap_2().px_2p5().py_1p5().text_size(px(11.0)).text_color(c.subtle)
                 .child(div().flex_1().child(format!("Console · {} entries", entries.len())))
                 .child(small("console-send", IconName::Send, "Send errors to agent").on_click(cx.listener(|this, _, _, cx| this.send_console(cx))))
@@ -1297,7 +1315,7 @@ impl BrowserPanel {
         let at = |x: f32, y: f32| (rect.origin.x - origin.x + rect.size.width * (x / a.width.max(1) as f32), rect.origin.y - origin.y + rect.size.height * (y / a.height.max(1) as f32));
         let (x, y) = at(cursor.x, cursor.y);
         let ripple = cursor.pressed.filter(|p| p.elapsed() < Duration::from_millis(900)).map(|p| {
-            div().absolute().left(x - px(14.0)).top(y - px(14.0)).size(px(28.0)).rounded_full().border_2().border_color(c.accent)
+            div().absolute().left(x - px(14.0)).top(y - px(14.0)).size(px(28.0)).rounded_full()
                 .with_animation(SharedString::from(format!("ripple-{}", p.elapsed().as_nanos() / 1_000_000_000u128)), Animation::new(Duration::from_millis(700)), |d, t| d.opacity(1.0 - t))
         });
         Some(div().absolute().size_full().children(ripple).child(div().absolute().left(x).top(y).child(Icon::new(IconName::MousePointer2).size(px(20.0)).text_color(c.accent))).into_any_element())

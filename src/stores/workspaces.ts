@@ -48,6 +48,8 @@ export interface Pane {
   prompt: string | null;
   /** Model the agent runs with; null means the CLI's default. */
   model: string | null;
+  /** Reasoning effort level the agent launched with; null means model default. */
+  effort?: string | null;
   /** Title the agent gave its terminal (Claude Code: the session's topic), cleaned up. */
   agentTitle: string | null;
   /** Name the user gave the session; replaces the agent's title wherever the pane is shown. */
@@ -170,7 +172,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; effort?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
   ) => string;
   removePane: (id: string) => void;
   /** Moves a pane out of its workspace's tiles into the archive; its process keeps running. */
@@ -515,6 +517,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             plain: opts?.plain ?? false,
             prompt: opts?.prompt ?? null,
             model: opts?.model ?? get().agentModels[provider] ?? null,
+            effort: opts?.effort ?? null,
             archived: false,
           },
         ],

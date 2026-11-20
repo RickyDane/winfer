@@ -37,12 +37,12 @@ export function ModelPicker() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[14vh]" onMouseDown={close}>
-      <div className="anim-dialog flex h-fit max-h-[60vh] w-[480px] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog flex h-fit max-h-[60vh] w-[480px] flex-col overflow-hidden rounded-xl bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         {!pane || !provider?.modelArg ? (
           <div className="p-5 text-xs text-fg-muted">{pane ? `${providerName(providers, pane.provider)} can't switch models.` : "Focus an agent pane first."}</div>
         ) : (
           <>
-            <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-xs text-fg-subtle">
+            <div className="flex items-center gap-2 px-4 py-2.5 text-xs text-fg-subtle">
               <Cpu size={13} />
               <span>
                 Model for {providerName(providers, pane.provider)}
@@ -58,7 +58,7 @@ export function ModelPicker() {
                 if (e.key === "Enter" && query.trim()) choose(filtered[0]?.id ?? query.trim());
               }}
               placeholder={list.length ? "Search models, or type a model name" : "Type a model name"}
-              className="h-10 border-b border-border bg-transparent px-4 font-mono text-xs text-fg outline-none placeholder:text-fg-subtle"
+              className="h-10 bg-transparent px-4 font-mono text-xs text-fg outline-none placeholder:text-fg-subtle"
             />
             <div className="overflow-y-auto p-1.5">
               {loading && (

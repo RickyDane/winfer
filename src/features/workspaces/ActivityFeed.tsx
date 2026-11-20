@@ -19,7 +19,7 @@ export function ActivityFeed() {
   const shown = expanded ? events.slice(0, 40) : events.slice(0, 4);
 
   return (
-    <section className="mx-2 border-t border-border pt-2 pb-1">
+    <section className="mx-2 pt-2 pb-1">
       <div className="flex items-center justify-between pr-1 pl-2.5 pb-1">
         <span className="text-[10.5px] font-medium tracking-[0.08em] text-fg-subtle uppercase">Latest</span>
         {events.length > 4 && (

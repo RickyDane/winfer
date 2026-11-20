@@ -30,7 +30,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
         <p className="max-w-md truncate font-mono text-[11px] text-danger">{this.state.error.message}</p>
         <button
           onClick={() => window.location.reload()}
-          className="flex h-7 items-center rounded-md border border-border-strong bg-panel-raised px-2.5 text-xs text-fg hover:bg-hover"
+          className="flex h-7 items-center rounded-md bg-panel-raised px-2.5 text-xs text-fg hover:bg-hover shadow-sm"
         >
           Reload interface
         </button>

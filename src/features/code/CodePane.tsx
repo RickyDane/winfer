@@ -24,6 +24,8 @@ import { Composer } from "./Composer";
 import { MockTransport } from "./mock";
 import { CODE_WEB_DEMO, stepTextScale, useCodeWeb } from "./styles";
 import { ModelPicker, Sheets, SubagentPicker, SUBAGENT_BACKENDS } from "./Sheets";
+
+const fmtTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 import { backendOf, baseSpec, fastSpec, isFast, modelName } from "./names";
 import { Lightbox } from "./Lightbox";
 import { EFFORT_HINTS, EFFORT_LABELS, EffortIcon, effortOptions } from "./EffortIcon";
@@ -249,7 +251,9 @@ function SubagentMenu({ model }: { model: string }) {
 
 /** The TUI's bottom status line: mode, model, effort, context, branch. */
 function Footer({ pane }: { pane: Pane }) {
-  const { mode, model, models, actualModel, effort, usage, send, setSheet } = useCode();
+  const { busy, mode, model, models, actualModel, effort, usage, lastRate, send, setSheet } = useCode();
+  const doneRate = busy ? null : lastRate;
+  const hasDoneMetrics = !busy && (usage.input > 0 || usage.output > 0);
   const fast = isFast(model);
   const fastTwin = fastSpec(model, models);
   const prefs = useCodeWeb();
@@ -316,11 +320,15 @@ function Footer({ pane }: { pane: Pane }) {
           <span className="cw-foot-label">{pane.worktree.branch}</span>
         </span>
       )}
-      {!fresh && ((prefs.showCost && usage.cost != null) || prefs.showContext) && (
+      {!fresh && ((prefs.showCost && usage.cost != null) || prefs.showContext || hasDoneMetrics) && (
         <button
           className={clsx("cw-foot-item", prefs.showContext && pct > 0.8 && "hot")}
           onClick={() => setSheet("usage")}
           title={[
+            hasDoneMetrics
+              ? `Session: ↑ ${fmtTokens(usage.input)} in${usage.cached ? ` (${fmtTokens(usage.cached)} cached)` : ""} · ↓ ${fmtTokens(usage.output)} out`
+              : null,
+            doneRate != null ? `Speed: ${doneRate.toFixed(0)} tok/s` : null,
             prefs.showCost && usage.cost != null
               ? "Session cost (API pricing; your plan may cover it)"
               : null,
@@ -332,6 +340,14 @@ function Footer({ pane }: { pane: Pane }) {
             .filter(Boolean)
             .join(" · ")}
         >
+          {hasDoneMetrics && (
+            <span className="cw-foot-label dim font-mono">
+              ↑{fmtTokens(usage.input)} ↓{fmtTokens(usage.output)}
+            </span>
+          )}
+          {!busy && prefs.showRate && doneRate != null && (
+            <span className="cw-foot-label dim font-mono">{doneRate.toFixed(0)} t/s</span>
+          )}
           {prefs.showCost && usage.cost != null && (
             <span className="cw-foot-cost dim">${usage.cost.toFixed(2)}</span>
           )}

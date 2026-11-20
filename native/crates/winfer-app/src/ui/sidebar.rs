@@ -28,7 +28,7 @@ impl Render for DraggedRow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = self.c;
         let _ = cx;
-        div().rounded_md().border_1().border_color(c.accent).bg(c.raised).px_2().py_1().text_xs().text_color(c.fg).child(self.label.clone())
+        div().rounded_md().bg(c.raised).px_2().py_1().text_xs().text_color(c.fg).child(self.label.clone())
     }
 }
 
@@ -58,6 +58,20 @@ pub fn name_hue(name: &str) -> f32 {
         hash = hash.wrapping_mul(31).wrapping_add(ch as i32);
     }
     (hash.unsigned_abs() % 360) as f32
+}
+
+/// Linear sRGB mix of `over` onto `base` (matches CSS `color-mix(in srgb, over t%, base)`).
+fn mix_color(base: Hsla, over: Hsla, t: f32) -> Hsla {
+    let a = Rgba::from(base);
+    let b = Rgba::from(over);
+    let inv = 1.0 - t;
+    Rgba {
+        r: a.r * inv + b.r * t,
+        g: a.g * inv + b.g * t,
+        b: a.b * inv + b.b * t,
+        a: a.a * inv + b.a * t,
+    }
+    .into()
 }
 
 fn normalize(path: &str) -> String {
@@ -304,10 +318,10 @@ impl Root {
         let shell = provider == "shell";
         div().relative().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(c.hover)
             .child(crate::ui::code_pickers::mark(c, provider, 14.0, 1.0))
-            .when(!shell, |d| d.child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(8.0)).rounded_full().bg(status_color(status, &c)).border_2().border_color(ring)))
+            .when(!shell, |d| d.child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(8.0)).rounded_full().bg(status_color(status, &c))))
     }
 
-    fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, c: Colors, cx: &mut Context<Self>) -> AnyElement {
+    fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, surface: Hsla, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let s = self.state.read(cx);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id) && s.active_workspace_id == pane.workspace_id;
         let label = s.pane_label(pane);
@@ -340,8 +354,8 @@ impl Root {
         if let Some(d) = &doing {
             detail = detail.child(div().flex_1().min_w_0().truncate().when(status == AgentStatus::NeedsInput, |x| x.text_color(c.warning)).child(d.clone()));
         }
-        let ring = if focused { c.active } else { c.panel };
-        let row = div().id(SharedString::from(format!("row-{}", pane.id))).flex().items_center().gap(px(9.0)).rounded_md().pl_2().pr_1p5().py(px(6.0)).cursor_pointer()
+        let ring = if focused { c.active } else { surface };
+        let row = div().id(SharedString::from(format!("row-{}", pane.id))).flex().items_center().gap(px(9.0)).rounded(px(7.0)).px_1p5().py(px(5.5)).cursor_pointer()
             .text_size(px(12.5))
             .when(focused, |d| d.bg(c.active).text_color(c.fg))
             .when(!focused, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
@@ -379,7 +393,7 @@ impl Root {
             return row.into_any_element();
         }
         row.on_drag(drag, |row, _, _, cx| cx.new(|_| row.clone()))
-            .drag_over::<DraggedRow>(move |d, dragged, _, _| if dragged.workspace { d } else { d.border_t_2().border_color(c.accent) })
+            .drag_over::<DraggedRow>(move |d, dragged, _, _| if dragged.workspace { d } else { d })
             .on_drop(cx.listener(move |this, dragged: &DraggedRow, _, cx| {
                 if dragged.workspace {
                     return;
@@ -446,21 +460,21 @@ impl Root {
         // Narrow sidebar: the tabs show icons only, and the search drops its shortcut hint.
         let sidebar_width = self.state.read(cx).sidebar_width as f32;
         let labels = sidebar_width >= SIDEBAR_LABELS_MIN;
-        let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app).border_1().border_color(c.border)
-            .text_size(px(12.5)).text_color(c.subtle).cursor_pointer().hover(move |d| d.border_color(c.border_strong).text_color(c.muted))
+        let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app)
+            .text_size(px(12.5)).text_color(c.subtle).cursor_pointer().hover(move |d| d.text_color(c.muted))
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx)))
             .child(Icon::new(IconName::Search).size(px(14.0)))
             .child(div().flex_1().child("Search or jump to…"))
-            .when(!palette_keys.is_empty() && sidebar_width >= SIDEBAR_HINT_MIN, |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.border).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
+            .when(!palette_keys.is_empty() && sidebar_width >= SIDEBAR_HINT_MIN, |d| d.child(div().px_1().rounded_sm().font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
         let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
         let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, review_count,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx)));
         let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
-        let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2().border_b_1().border_color(c.border)
+        let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2()
             .child(search)
-            .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).border_1().border_color(c.border).child(sessions).child(review).child(history));
+            .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).child(sessions).child(review).child(history));
 
         // Needs you: approve or open waiting agents without finding their pane.
         let waiting = self.waiting_panes(cx);
@@ -499,7 +513,8 @@ impl Root {
         let s = self.state.read(cx);
         let workspaces = s.workspaces.clone();
         let expanded_ids = s.expanded_workspaces.clone();
-        let mut list = div().flex().flex_col().gap_px();
+        let card_bg = mix_color(c.panel, c.app, 0.68);
+        let mut list = div().mt_1().flex().flex_col().gap_1p5();
         for (i, ws) in workspaces.iter().enumerate() {
             let active = ws.id == active_ws;
             let expanded = expanded_ids.contains(&ws.id);
@@ -516,7 +531,34 @@ impl Root {
             let (toggle, menu_ws, hover_dir) = (ws.id.clone(), ws.clone(), ws.root_dir.clone());
             let count = |st: AgentStatus| agents.iter().filter(|p| p.status == st).count();
             let (working, waiting_here, done) = (count(AgentStatus::Working), count(AgentStatus::NeedsInput), count(AgentStatus::Done));
-            let header = div().id(SharedString::from(format!("ws-{}", ws.id))).flex().items_center().gap(px(9.0)).rounded_md().px_1p5().h(px(32.0)).cursor_pointer().text_size(px(13.0))
+            let summary = (!expanded && !agents.is_empty()).then(|| {
+                let mut parts: Vec<AnyElement> = vec![div().child(format!("{working} working")).into_any_element()];
+                if waiting_here > 0 {
+                    parts.push(div().text_color(c.warning).font_weight(FontWeight::MEDIUM).child(format!("{waiting_here} need{} you", if waiting_here == 1 { "s" } else { "" })).into_any_element());
+                }
+                if done > 0 {
+                    parts.push(div().text_color(c.success).child(format!("{done} done")).into_any_element());
+                }
+                let mut line = div().flex().flex_wrap().gap_1().pl(px(30.0)).mt(px(2.0)).text_size(px(11.0)).font_weight(FontWeight::NORMAL).text_color(c.subtle);
+                for (k, part) in parts.into_iter().enumerate() {
+                    if k > 0 {
+                        line = line.child("·");
+                    }
+                    line = line.child(part);
+                }
+                line
+            });
+            let top_row = div().flex().items_center().gap_2()
+                .child(div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name)))
+                .child(div().flex_1().min_w_0().truncate().child(ws.name.clone()))
+                .when(active, |d| d.child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color)))
+                .when(!expanded && !live.is_empty(), |d| d.child(div().text_size(px(10.5)).font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone())
+                    .child(if agents.is_empty() { format!("{}", live.len()) } else { format!("{} agent{}", agents.len(), if agents.len() == 1 { "" } else { "s" }) })))
+                .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(13.0)).text_color(c.subtle));
+            let header = div().id(SharedString::from(format!("ws-{}", ws.id))).flex().flex_col().justify_center().px_2().py(px(6.0)).cursor_pointer().text_size(px(13.0))
+                .when(expanded, |d| d.rounded_t(px(10.0)))
+                .when(!expanded, |d| d.rounded(px(10.0)))
+                .when(!expanded && active, |d| d.bg(card_bg))
                 .when(active || expanded, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM))
                 .when(!(active || expanded), |d| d.text_color(c.muted))
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
@@ -539,7 +581,7 @@ impl Root {
                     this.open_menu(e.position, Some(menu_ws.root_dir.clone()), items, cx);
                 }))
                 .on_drag(DraggedRow { id: ws.id.clone(), label: ws.name.clone(), workspace: true, c }, |row, _, _, cx| cx.new(|_| row.clone()))
-                .drag_over::<DraggedRow>(move |d, dragged, _, _| if dragged.workspace { d.border_t_2().border_color(c.accent) } else { d })
+                .drag_over::<DraggedRow>(move |d, dragged, _, _| if dragged.workspace { d } else { d })
                 .on_drop(cx.listener(move |this, dragged: &DraggedRow, _, cx| {
                     if !dragged.workspace {
                         return;
@@ -551,41 +593,23 @@ impl Root {
                         }
                     });
                 }))
-                .child(div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name)))
-                .child(div().flex_1().min_w_0().truncate().child(ws.name.clone()))
-                .when(!expanded && !live.is_empty(), |d| d.child(div().text_size(px(10.5)).font_weight(FontWeight::NORMAL).text_color(c.subtle).font_family(mono.clone())
-                    .child(if agents.is_empty() { format!("{}", live.len()) } else { format!("{} agent{}", agents.len(), if agents.len() == 1 { "" } else { "s" }) })))
-                .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(13.0)).text_color(c.subtle));
-            let mut group = div().relative().child(header);
-            if !expanded && !agents.is_empty() {
-                let mut parts: Vec<AnyElement> = vec![div().child(format!("{working} working")).into_any_element()];
-                if waiting_here > 0 {
-                    parts.push(div().text_color(c.warning).font_weight(FontWeight::MEDIUM).child(format!("{waiting_here} need{} you", if waiting_here == 1 { "s" } else { "" })).into_any_element());
-                }
-                if done > 0 {
-                    parts.push(div().text_color(c.success).child(format!("{done} done")).into_any_element());
-                }
-                let mut line = div().flex().flex_wrap().gap_1().pl(px(37.0)).pb_1p5().mt(px(-4.0)).text_size(px(11.0)).text_color(c.subtle);
-                for (k, part) in parts.into_iter().enumerate() {
-                    if k > 0 {
-                        line = line.child("·");
-                    }
-                    line = line.child(part);
-                }
-                group = group.child(line);
-            }
+                .child(top_row)
+                .children(summary);
+            let mut group = div().relative().rounded(px(10.0))
+                .when(expanded, |d| d.bg(card_bg))
+                .child(header);
             if expanded {
-                let mut panes = div().flex().flex_col().gap_px().pt_0p5().pb_1p5();
+                let mut panes = div().flex().flex_col().gap_0p5().p_1();
                 let live: Vec<Pane> = ws.panes.iter().filter(|p| !p.archived).cloned().collect();
                 let archived: Vec<Pane> = ws.panes.iter().filter(|p| p.archived).cloned().collect();
                 for (j, p) in live.iter().enumerate() {
-                    panes = panes.child(self.render_pane_row(p, j, true, c, cx));
+                    panes = panes.child(self.render_pane_row(p, j, true, card_bg, c, cx));
                 }
                 if !archived.is_empty() {
                     let showing = self.sidebar.show_archived.contains(&ws.id);
                     let flip = ws.id.clone();
                     panes = panes.child(
-                        div().id(SharedString::from(format!("archived-{}", ws.id))).flex().items_center().gap(px(9.0)).rounded_md().pl(px(13.0)).pr_2().h(px(28.0)).text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
+                        div().id(SharedString::from(format!("archived-{}", ws.id))).flex().items_center().gap_2().rounded(px(7.0)).px_2().h(px(26.0)).text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
                             .hover(move |d| d.bg(c.hover).text_color(c.fg))
                             .tooltip(move |window, cx| Tooltip::new(if showing { "Hide archived sessions" } else { "Show archived sessions" }).build(window, cx))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -600,7 +624,7 @@ impl Root {
                     );
                     if showing {
                         for (j, p) in archived.iter().enumerate() {
-                            panes = panes.child(self.render_pane_row(p, j, false, c, cx));
+                            panes = panes.child(self.render_pane_row(p, j, false, card_bg, c, cx));
                         }
                     }
                 }
@@ -610,7 +634,7 @@ impl Root {
                 let target = ws.id.clone();
                 let new_keys = new_keys.clone();
                 panes = panes.child(
-                    div().id(SharedString::from(format!("new-agent-{}", ws.id))).group("new-agent").flex().items_center().gap(px(9.0)).rounded_md().pl(px(13.0)).pr_2().h(px(30.0)).text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
+                    div().id(SharedString::from(format!("new-agent-{}", ws.id))).group("new-agent").flex().items_center().gap_2().rounded(px(7.0)).px_2().h(px(28.0)).text_size(px(12.0)).text_color(c.subtle).cursor_pointer()
                         .hover(move |d| d.bg(c.hover).text_color(c.fg))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.state.read(cx).active_workspace_id != target {
@@ -643,7 +667,7 @@ impl Root {
         let feed = self.render_activity_feed(&active_ws, c, cx);
         let footer = self.render_sidebar_footer(false, &settings_tip, c, cx);
         let width = px(self.state.read(cx).sidebar_width as f32);
-        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel)
             .child(top)
             .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_3().children(needs).child(label).child(list))
             .children(feed)
@@ -666,7 +690,7 @@ impl Root {
                 .tooltip(move |window, cx| Tooltip::new(format!("Update to winfer {version}")).build(window, cx))
                 .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ShowReleaseNotes(true), window, cx)))
                 .child(Icon::new(IconName::Download).size(px(12.0)))
-                .child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent).border_2().border_color(c.panel))
+                .child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent))
         });
         let theme_button = icon_button("theme-toggle")
             .tooltip(move |window, cx| Tooltip::new(format!("Switch to {pair} (more themes in Settings)")).build(window, cx))
@@ -681,10 +705,10 @@ impl Root {
             .child(Icon::new(IconName::Settings).size(px(14.0)));
         let logo = div().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(Hsla { a: 0.14, ..c.accent }).child(img(LOGO.clone()).size(px(18.0)));
         if rail {
-            return div().flex().flex_col().items_center().gap_1().border_t_1().border_color(c.border).py_2()
+            return div().flex().flex_col().items_center().gap_1().py_2()
                 .child(logo).children(update_button).child(settings_button);
         }
-        div().flex().items_center().gap_2().border_t_1().border_color(c.border).pl_3().pr_2().py_2()
+        div().flex().items_center().gap_2().pl_3().pr_2().py_2()
             .child(logo)
             .child(div().flex().flex_col().min_w_0()
                 .child(div().text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("winfer"))
@@ -705,7 +729,7 @@ impl Root {
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .child(Icon::new(icon).size(px(15.0)));
-        let mut top = div().flex().flex_col().items_center().gap_1().pt_2p5().pb_2().border_b_1().border_color(c.border)
+        let mut top = div().flex().flex_col().items_center().gap_1().pt_2p5().pb_2()
             .child(rail_button("rail-search".into(), IconName::Search, "Search or jump to…".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx))))
             .child(rail_button("rail-sessions".into(), IconName::Activity, "Sessions".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx))));
         top = top.child(rail_button("rail-review".into(), IconName::Inbox, "Review".into())
@@ -720,7 +744,7 @@ impl Root {
                 .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
                 .child(Self::agent_tile(&p.provider, p.status, ring, c))
         };
-        let mut body = div().flex().flex_col().items_center().gap_1().py_2();
+        let mut body = div().flex().flex_col().items_center().gap_1p5().py_2();
         let waiting = self.waiting_panes(cx);
         if !waiting.is_empty() {
             let mut sec = div().flex().flex_col().items_center().w(px(44.0)).py_1().rounded_lg().bg(Hsla { a: 0.06, ..c.warning });
@@ -731,22 +755,32 @@ impl Root {
         }
         let s = self.state.read(cx);
         let workspaces = s.workspaces.clone();
+        let active_ws = s.active_workspace_id.clone();
         let focused = s.focused_pane_id.clone();
+        let card_bg = mix_color(c.panel, c.app, 0.68);
         for ws in &workspaces {
+            let active = ws.id == active_ws;
             let color = hsla(name_hue(&ws.name) / 360.0, 0.65, 0.62, 1.0);
             let (switch, name) = (ws.id.clone(), ws.name.clone());
-            body = body.child(div().w(px(36.0)).mt_1().border_t_1().border_color(c.border))
-                .child(div().id(SharedString::from(format!("rail-ws-{}", ws.id))).size(px(36.0)).flex().items_center().justify_center().rounded_md().cursor_pointer().hover(move |d| d.bg(c.hover))
+            let ws_agents: Vec<&Pane> = ws.panes.iter().filter(|p| !p.archived && p.provider != "shell").collect();
+            let mut pill = div().w(px(44.0)).flex().flex_col().items_center().gap_0p5().py_1().rounded(px(10.0))
+                .bg(card_bg)
+                .child(div().id(SharedString::from(format!("rail-ws-{}", ws.id))).relative().size(px(34.0)).flex().items_center().justify_center().rounded(px(7.0)).cursor_pointer().hover(move |d| d.bg(c.hover))
                     .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
                     .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::WorkspaceSwitch(switch.clone()), window, cx)))
-                    .child(div().size(px(22.0)).flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name))));
-            for p in ws.panes.iter().filter(|p| !p.archived && p.provider != "shell") {
-                let on = focused.as_deref() == Some(&p.id);
-                body = body.child(tile_button(self, p, if on { c.active } else { c.panel }, cx).when(on, |d| d.bg(c.active)));
+                    .child(div().size(px(22.0)).flex().items_center().justify_center().rounded(px(6.0)).bg(Hsla { a: 0.16, ..color }).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(monogram(&ws.name)))
+                    .when(active, |d| d.child(div().absolute().top(px(3.0)).right(px(3.0)).size(px(5.0)).rounded_full().bg(color))));
+            if !ws_agents.is_empty() {
+                pill = pill.child(div().w(px(24.0)));
+                for p in ws_agents {
+                    let on = focused.as_deref() == Some(&p.id);
+                    pill = pill.child(tile_button(self, p, if on { c.active } else { card_bg }, cx).when(on, |d| d.bg(c.active)));
+                }
             }
+            body = body.child(pill);
         }
         let footer = self.render_sidebar_footer(true, &settings_tip, c, cx);
-        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel)
             .child(top)
             .child(div().id("sidebar-rail-list").flex_1().min_h_0().overflow_y_scroll().child(body))
             .child(footer)
@@ -775,7 +809,7 @@ impl Root {
         }
         let more = events.len() > 4;
         Some(
-            div().mx_2().border_t_1().border_color(c.border).pt_2().pb_1()
+            div().mx_2().pt_2().pb_1()
                 .child(div().flex().items_center().justify_between().pr_1().pl_2p5().pb_1()
                     .child(div().text_size(px(10.5)).text_color(c.subtle).child("LATEST"))
                     .when(more, |d| d.child(div().id("feed-toggle").text_size(px(11.0)).text_color(c.accent).cursor_pointer()

@@ -151,9 +151,9 @@ function AppsMenu({ pages, pinned, unpinned, tab, iconsOnly }: { pages: PluginPa
         <ChevronDown size={11} className="text-fg-subtle" />
       </button>
       {open && (
-        <div role="menu" className="anim-menu absolute left-1/2 top-full z-[70] mt-1.5 w-64 -translate-x-1/2 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
+        <div role="menu" className="anim-menu absolute left-1/2 top-full z-[70] mt-1.5 w-64 -translate-x-1/2 rounded-lg bg-panel-raised p-1 shadow-xl">
           {pages.length > 6 && (
-            <div className="mb-1 flex items-center gap-1.5 rounded-md border border-border px-2 py-1">
+            <div className="mb-1 flex items-center gap-1.5 rounded-md px-2 py-1 shadow-sm">
               <Search size={12} className="text-fg-subtle" />
               <input
                 ref={input}

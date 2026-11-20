@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { useStore } from "zustand";
+import { create, useStore } from "zustand";
 import { Bot, ChevronDown, SquareTerminal } from "lucide-react";
 import clsx from "clsx";
 import { useWorkspaces, type Pane } from "@/stores/workspaces";
@@ -8,22 +10,76 @@ import { themeById } from "@/features/theme/themes";
 import { storeFor } from "./CodePane";
 import { BgTasks } from "./BgTasks";
 import { paneUsesWeb, useCodeWeb } from "./styles";
-import type { createCodeStore } from "./store";
+import type { CodeTask, createCodeStore } from "./store";
 
-/* The pane header's activity chip for a winfer code pane: how many subagents and background
-   shells are running. Clicking it opens their detailed timeline in a popover anchored to the chip. */
+/* The pane header's activity chip: how many subagents and background shells are running
+   (both winfer code tasks and winfer MCP `bg` tasks). Clicking opens their popover. */
 
 const W = 400;
 const halt = (e: React.SyntheticEvent) => e.stopPropagation();
 
-export function BgIndicator({ pane }: { pane: Pane }) {
-  if (pane.provider !== "winfer" || !paneUsesWeb(pane.id)) return null;
-  return <Indicator store={storeFor(pane)} />;
+interface McpBgPayload {
+  paneId: string;
+  id: string;
+  title?: string;
+  description?: string | null;
+  cmd?: string;
+  status: string;
+  log?: string;
+  exitCode?: number;
 }
 
-function Indicator({ store }: { store: ReturnType<typeof createCodeStore> }) {
+const useMcpBg = create<{ byPane: Record<string, CodeTask[]> }>(() => ({ byPane: {} }));
+
+let mcpListenerReady = false;
+function ensureMcpBgListener() {
+  if (mcpListenerReady) return;
+  mcpListenerReady = true;
+  void listen<McpBgPayload>("bg://task", ({ payload }) => {
+    if (!payload?.paneId || !payload?.id) return;
+    useMcpBg.setState((s) => {
+      const prev = s.byPane[payload.paneId] ?? [];
+      if (payload.status !== "running") {
+        const next = prev.filter((t) => t.id !== payload.id);
+        return { byPane: { ...s.byPane, [payload.paneId]: next } };
+      }
+      const existing = prev.find((t) => t.id === payload.id);
+      const task: CodeTask = {
+        id: payload.id,
+        title: payload.title || existing?.title || payload.id,
+        description: payload.description ?? existing?.description,
+        status: "running",
+        last: payload.cmd || existing?.last,
+        output_file: payload.log || existing?.output_file,
+        startedAt: existing?.startedAt ?? Date.now(),
+        recentLines: existing?.recentLines ?? [],
+      };
+      const next = existing ? prev.map((t) => (t.id === payload.id ? task : t)) : [...prev, task];
+      return { byPane: { ...s.byPane, [payload.paneId]: next } };
+    });
+  }).catch(() => {});
+}
+
+export function BgIndicator({ pane }: { pane: Pane }) {
+  useEffect(ensureMcpBgListener, []);
+  const mcpTasks = useMcpBg((s) => s.byPane[pane.id]) ?? [];
+  const isCode = pane.provider === "winfer" && paneUsesWeb(pane.id);
+  if (isCode) return <CodeIndicator store={storeFor(pane)} mcpTasks={mcpTasks} paneId={pane.id} />;
+  if (mcpTasks.length === 0) return null;
+  return <IndicatorView tasks={mcpTasks} paneId={pane.id} />;
+}
+
+function CodeIndicator({ store, mcpTasks, paneId }: { store: ReturnType<typeof createCodeStore>; mcpTasks: CodeTask[]; paneId: string }) {
   const taskMap = useStore(store, (s) => s.tasks);
-  const tasks = Object.values(taskMap);
+  const tasks = useMemo(() => {
+    const codeList = Object.values(taskMap);
+    const seen = new Set(codeList.map((t) => t.id));
+    return [...codeList, ...mcpTasks.filter((t) => !seen.has(t.id))];
+  }, [taskMap, mcpTasks]);
+  return <IndicatorView tasks={tasks} store={store} paneId={paneId} />;
+}
+
+function IndicatorView({ tasks, store, paneId }: { tasks: CodeTask[]; store?: ReturnType<typeof createCodeStore>; paneId: string }) {
   const live = tasks.filter((t) => t.status === "running");
   const agents = live.filter((t) => t.agent).length;
   const shells = live.length - agents;
@@ -47,10 +103,10 @@ function Indicator({ store }: { store: ReturnType<typeof createCodeStore> }) {
         title={`${parts.join(" · ")} running\nClick for details`}
         aria-expanded={open}
         className={clsx(
-          "group/bg flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border pr-1.5 pl-[3px] text-[11px] font-medium tabular-nums transition-colors",
+          "group/bg flex h-[22px] shrink-0 items-center gap-1.5 rounded-full pr-1.5 pl-[3px] text-[11px] font-medium tabular-nums transition-colors shadow-sm",
           open
-            ? "border-accent/45 bg-accent/20 text-fg"
-            : "border-accent/25 bg-accent/10 text-fg-muted hover:border-accent/40 hover:bg-accent/15 hover:text-fg",
+            ? "bg-accent/20 text-fg"
+            : "bg-accent/10 text-fg-muted hover:bg-accent/15 hover:text-fg",
         )}
       >
         {/* The kind of work going on, inside a turning ring: it reads as "busy" without blinking. */}
@@ -95,9 +151,20 @@ function Indicator({ store }: { store: ReturnType<typeof createCodeStore> }) {
             tasks={tasks}
             openLog={(id) => {
               setOpen(false);
-              store.getState().openTaskLog(id);
+              if (store && store.getState().tasks[id]) {
+                store.getState().openTaskLog(id);
+              }
             }}
-            stop={(id) => store.getState().send({ type: "stop_task", id })}
+            stop={(id) => {
+              if (store && store.getState().tasks[id]) {
+                store.getState().send({ type: "stop_task", id });
+              } else {
+                void invoke("bg_stop", { id });
+                useMcpBg.setState((s) => ({
+                  byPane: { ...s.byPane, [paneId]: (s.byPane[paneId] ?? []).filter((t) => t.id !== id) },
+                }));
+              }
+            }}
           />
         </Popover>
       )}

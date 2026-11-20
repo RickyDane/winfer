@@ -76,7 +76,7 @@ export function PaneNote({ paneId }: { paneId: string }) {
             e.stopPropagation();
             if (e.key === "Escape") { e.preventDefault(); close(); }
           }}
-          className="anim-menu fixed z-[70] flex max-h-[calc(100vh-16px)] w-80 max-w-[calc(100vw-16px)] flex-col gap-2 overflow-auto rounded-lg border border-border-strong bg-panel-raised p-3 text-fg shadow-xl"
+          className="anim-menu fixed z-[70] flex max-h-[calc(100vh-16px)] w-80 max-w-[calc(100vw-16px)] flex-col gap-2 overflow-auto rounded-lg bg-panel-raised p-3 text-fg shadow-xl"
         >
           <div className="flex items-center justify-between">
             <span id={`${id}-title`} className="text-xs font-medium">Pane note</span>
@@ -90,7 +90,7 @@ export function PaneNote({ paneId }: { paneId: string }) {
             value={note}
             onChange={(e) => setSaved(usePaneNotes.getState().setNote(paneId, e.target.value))}
             rows={6}
-            className="min-h-20 w-full resize-none rounded border border-border bg-panel p-2 text-xs outline-none focus:border-accent"
+            className="min-h-20 w-full resize-none rounded bg-panel p-2 text-xs outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
           />
           <p id={`${id}-hint`} className="text-[11px] text-fg-subtle">Only for you. Not shared with the agent. Saves automatically.</p>
           {!saved && <p role="alert" className="text-[11px] text-warning">Could not save locally. This note is only kept for this session.</p>}

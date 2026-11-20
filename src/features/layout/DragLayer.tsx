@@ -27,7 +27,7 @@ export function DragLayer() {
     <div className="pointer-events-none fixed inset-0 z-[60]">
       {zone && (
         <div
-          className="absolute rounded-[var(--radius-pane)] border-2 border-accent bg-accent/15 transition-all duration-75"
+          className="absolute rounded-[var(--radius-pane)] bg-accent/15 transition-all duration-75"
           style={zone}
         >
           <span className="absolute top-2 left-2 rounded bg-accent px-1.5 py-0.5 text-[11px] font-medium text-on-accent">
@@ -37,7 +37,7 @@ export function DragLayer() {
       )}
       {pane && (
         <div
-          className="absolute flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-raised px-2 py-1 text-xs text-fg shadow-xl"
+          className="absolute flex items-center gap-1.5 rounded-md bg-panel-raised px-2 py-1 text-xs text-fg shadow-xl"
           style={{ left: x + 12, top: y + 12 }}
         >
           <ProviderIcon provider={pane.provider} size={12} />

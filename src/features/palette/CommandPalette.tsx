@@ -76,10 +76,10 @@ function Palette({ initialQuery, onClose }: { initialQuery: string; onClose: () 
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[12vh]" onMouseDown={close}>
       <div
-        className="anim-dialog flex h-fit max-h-[min(540px,70vh)] w-[620px] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog flex h-fit max-h-[min(540px,70vh)] w-[620px] flex-col isolate overflow-hidden rounded-[14px] bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <label className="flex h-[50px] shrink-0 items-center gap-2.5 border-b border-border px-4 text-fg-subtle">
+        <label className="flex h-[50px] shrink-0 items-center gap-2.5 px-4 text-fg-subtle">
           <Search size={16} />
           <input
             ref={input}
@@ -107,12 +107,12 @@ function Palette({ initialQuery, onClose }: { initialQuery: string; onClose: () 
                   <Icon size={13} />
                 </span>
                 <span className="flex-1 truncate">{entry.title}</span>
-                {entry.keys && <kbd className="rounded border border-border bg-panel px-1.5 py-px font-mono text-[10.5px] text-fg-subtle">{entry.keys}</kbd>}
+                {entry.keys && <kbd className="rounded bg-panel px-1.5 py-px font-mono text-[10.5px] text-fg-subtle shadow-sm">{entry.keys}</kbd>}
               </button>
             );
           })}
         </div>
-        <div className="flex h-[34px] shrink-0 items-center gap-3 border-t border-border px-4 text-[11px] text-fg-subtle">
+        <div className="flex h-[34px] shrink-0 items-center gap-3 px-4 text-[11px] text-fg-subtle">
           <span>↑↓ choose</span>
           <span>↵ run</span>
           <span>esc close</span>

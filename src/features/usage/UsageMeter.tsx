@@ -125,7 +125,7 @@ interface WindowProps {
 function WindowBar({ window, outAt, firstReset }: WindowProps) {
   const left = leftNow(window);
   return (
-    <div className="space-y-1.5 rounded-lg border border-border bg-panel p-3">
+    <div className="space-y-1.5 rounded-lg bg-panel p-3 shadow-sm">
       <div className="flex items-baseline gap-2">
         <span className="flex-1 text-xs text-fg-muted">{window.label}</span>
         <span className="text-lg font-semibold" style={{ color: levelColor(left) }}>
@@ -187,7 +187,7 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
         <span className="font-mono text-[11px] text-fg">{Math.round(left)}% left</span>
       </div>
       <div
-        className="relative h-16 rounded-md bg-app ring-1 ring-border ring-inset"
+        className="relative h-16 rounded-md bg-app shadow-sm"
         onMouseMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
           const f = (e.clientX - r.left) / r.width;
@@ -197,9 +197,9 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
         onMouseLeave={() => setHover(null)}
       >
         {[0, 50, 100].map((t) => (
-          <div key={t} className={cn("absolute inset-x-0 border-t", t === 100 ? "border-border-strong" : "border-dashed border-border")} style={{ top: `${t}%` }} />
+          <div key={t} className={cn("absolute inset-x-0", t === 100 ? "" : "")} style={{ top: `${t}%` }} />
         ))}
-        {live && <div className="absolute inset-y-0 border-l border-dashed border-border-strong" style={{ left: `${x(now) / 10}%` }} title="Now" />}
+        {live && <div className="absolute inset-y-0" style={{ left: `${x(now) / 10}%` }} title="Now" />}
         <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 1000 100" preserveAspectRatio="none">
           <polygon points={`${x(points[0][0])},100 ${line} ${x(now)},100`} fill={color} opacity={0.12} />
           <polyline points={line} fill="none" stroke={color} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
@@ -207,12 +207,12 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
             <line x1={x(now)} y1={100 - left} x2={x(outAt)} y2={100} stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
           )}
         </svg>
-        <span className="absolute size-2 -translate-1/2 rounded-full border-2 border-app" style={{ left: `${x(now) / 10}%`, top: `${100 - left}%`, background: color }} />
+        <span className="absolute size-2 -translate-1/2 rounded-full border-app" style={{ left: `${x(now) / 10}%`, top: `${100 - left}%`, background: color }} />
         {hoverAt !== null && (
           <>
-            <div className="absolute inset-y-0 border-l border-fg-subtle" style={{ left: `${hover! * 100}%` }} />
+            <div className="absolute inset-y-0" style={{ left: `${hover! * 100}%` }} />
             <div
-              className="pointer-events-none absolute -top-1 z-10 w-max -translate-y-full rounded-md border border-border-strong bg-panel px-2 py-1 text-[11px] shadow-lg"
+              className="pointer-events-none absolute -top-1 z-10 w-max -translate-y-full rounded-md bg-panel px-2 py-1 text-[11px] shadow-lg"
               style={hover! < 0.5 ? { left: `${hover! * 100}%` } : { right: `${(1 - hover!) * 100}%` }}
             >
               <span className="text-fg-muted">{clock(hoverAt, long)}</span> <span className="font-mono text-fg">{Math.round(at(hoverAt))}% left</span>
@@ -282,7 +282,7 @@ function CodexResets({ count }: { count: number }) {
 
   if (count <= 0 && !message) return null;
   return (
-    <div className="space-y-1.5 rounded-md border border-border bg-hover/40 p-2 text-[11px]">
+    <div className="space-y-1.5 rounded-md bg-hover/40 p-2 text-[11px] shadow-sm">
       <div className="flex items-center gap-2">
         <RotateCcw size={12} className="text-fg-muted" />
         <span className="flex-1 text-fg-muted">{count > 0 ? `${count} limit reset${count === 1 ? "" : "s"} available` : "Limit resets"}</span>
@@ -312,7 +312,7 @@ function CodexResets({ count }: { count: number }) {
   );
 }
 
-const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl";
+const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg bg-panel-raised p-3 shadow-xl";
 
 /** Every agent's limits (its accounts pooled) as bars or lines.
  *  `accounts` adds what each account has left under its agent (collapsed behind a toggle
@@ -403,7 +403,7 @@ export function AccountBreakdown({ members, samples, provider, providerLabel, st
   const [open, setOpen] = useState(!startCollapsed);
   const bodyId = useId();
   return (
-    <div className="border-t border-border pt-2">
+    <div className="pt-2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -430,15 +430,15 @@ export function AccountBreakdown({ members, samples, provider, providerLabel, st
       {open && (
         <div id={bodyId}>
           {members.map((m, i) => (
-            <div key={m.id} className={cn("py-1.5", i > 0 && "border-t border-border/50", !m.counted && "opacity-60")}>
+            <div key={m.id} className={cn("py-1.5", i > 0 && "", !m.counted && "opacity-60")}>
             <div className="flex items-center gap-2">
               <span className="relative shrink-0" title={[`${providerLabel} · ${m.label}`, m.email].filter(Boolean).join(" · ")}>
                 {m.snapshot?.windows.length ? (
                   <AccountRing snapshot={m.snapshot} />
                 ) : (
-                  <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full border border-dashed border-border-strong font-mono text-[8px] text-fg-subtle">—</span>
+                  <span className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full font-mono text-[8px] text-fg-subtle shadow-sm">—</span>
                 )}
-                <span className="absolute -right-1 -bottom-1 flex rounded-full bg-panel-raised p-[2px] shadow-sm ring-1 ring-border-strong">
+                <span className="absolute -right-1 -bottom-1 flex rounded-full bg-panel-raised p-[2px] shadow-sm">
                   <ProviderIcon provider={provider} size={8} />
                 </span>
               </span>
@@ -603,7 +603,7 @@ export function UsageButton({ onOpen, title }: { onOpen: () => void; title: stri
               <PreviewSection title="Usage" onOpen={() => openTab("usage")}>
                 <UsageSummary />
               </PreviewSection>
-              <PreviewSection title="Limits" onOpen={() => openTab("limits")} className="border-t border-border pt-3">
+              <PreviewSection title="Limits" onOpen={() => openTab("limits")} className="pt-3">
                 <Limits accounts accountsCollapsed spend={false} />
               </PreviewSection>
             </div>
@@ -656,7 +656,7 @@ export function ContextMeter({ paneId, provider, ring }: { paneId: string; provi
     <span ref={anchor} className="flex shrink-0 items-center gap-1" onMouseEnter={enter} onMouseLeave={leave}>
       {ring ? (
         <svg viewBox="0 0 16 16" className="size-3.5 -rotate-90">
-          <circle cx="8" cy="8" r="6" fill="none" strokeWidth="2.5" className="stroke-white/15" />
+          <circle cx="8" cy="8" r="6" fill="none" strokeWidth="2.5" className="stroke-border-strong" />
           <circle
             cx="8"
             cy="8"
@@ -684,7 +684,7 @@ export function ContextMeter({ paneId, provider, ring }: { paneId: string; provi
       {hover &&
         createPortal(
           <div
-            className="anim-menu pointer-events-none fixed z-[1000] space-y-2.5 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl"
+            className="anim-menu pointer-events-none fixed z-[1000] space-y-2.5 rounded-lg bg-panel-raised p-3 shadow-xl"
             style={{ left: hover.left, top: hover.top, width: CONTEXT_CARD_WIDTH }}
           >
             <div className="flex items-baseline gap-2 text-xs">

@@ -82,8 +82,8 @@ export function BranchDialog() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog flex h-fit max-h-[78vh] w-[620px] flex-col rounded-xl border border-border-strong bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="flex items-center gap-2 border-b border-border px-5 py-3">
+      <div className="anim-dialog flex h-fit max-h-[78vh] w-[620px] flex-col rounded-xl bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="flex items-center gap-2 px-5 py-3">
           <GitBranch size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">New worktree from a branch</h1>
           <span className="truncate text-xs text-fg-subtle">{workspace.name}</span>
@@ -92,8 +92,8 @@ export function BranchDialog() {
           </button>
         </header>
 
-        <div className="flex items-center gap-2 border-b border-border px-5 py-2.5">
-          <div className="flex flex-1 items-center gap-2 rounded-md border border-border bg-panel-raised px-2.5 focus-within:border-accent">
+        <div className="flex items-center gap-2 px-5 py-2.5">
+          <div className="flex flex-1 items-center gap-2 rounded-md bg-panel-raised px-2.5 focus-within:ring-2 focus-within:ring-accent/40 shadow-sm">
             <Search size={13} className="text-fg-subtle" />
             <input
               ref={search}
@@ -112,7 +112,7 @@ export function BranchDialog() {
             }}
             disabled={busy !== null}
             title="Get the latest branches from the remotes (git fetch --all --prune)"
-            className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-50 shadow-sm"
           >
             {busy === "fetch" ? <Spinner size={12} /> : <CloudDownload size={12} />} Fetch
           </button>
@@ -152,7 +152,7 @@ export function BranchDialog() {
           )}
         </div>
 
-        <footer className="space-y-2.5 border-t border-border px-5 py-3">
+        <footer className="space-y-2.5 px-5 py-3">
           <div className="flex items-center gap-3 text-xs text-fg-muted">
             <label className="flex items-center gap-1.5">
               <input type="radio" checked={newBranch === null} onChange={() => setNewBranch(null)} />
@@ -166,13 +166,13 @@ export function BranchDialog() {
                 onChange={(e) => setNewBranch(e.target.value)}
                 onFocus={() => newBranch === null && setNewBranch("")}
                 placeholder="feature/my-idea"
-                className="h-6 min-w-0 flex-1 rounded border border-border bg-panel-raised px-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                className="h-6 min-w-0 flex-1 rounded bg-panel-raised px-1.5 font-mono text-[11px] text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
               />
             </label>
           </div>
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <span>Start from</span>
-            <div className="flex rounded-md border border-border p-0.5">
+            <div className="flex rounded-md p-0.5 shadow-sm">
               <button
                 onClick={() => setLatest(false)}
                 className={cn("flex items-center gap-1 rounded px-2 py-0.5", !pull ? "bg-accent-soft text-fg" : "hover:text-fg")}
@@ -206,7 +206,7 @@ export function BranchDialog() {
             <button
               onClick={() => void create("workspace")}
               disabled={!selected || !!blocked || busy !== null || newBranch === ""}
-              className="flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1.5 text-xs text-fg hover:bg-hover disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-fg hover:bg-hover disabled:opacity-40 shadow-sm"
               title="Create the worktree and make it a workspace of its own"
             >
               {busy === "workspace" ? <Spinner size={12} /> : <FolderPlus size={12} />} New workspace from it

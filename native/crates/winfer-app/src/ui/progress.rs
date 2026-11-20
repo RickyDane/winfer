@@ -236,7 +236,7 @@ impl Root {
 
         // Totals: one tile each, the "needs you" one tinted when it isn't zero.
         let stat = |label: &'static str, value: String, color: Hsla| {
-            div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+            div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().bg(c.panel)
                 .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(value))
                 .child(div().text_size(px(11.0)).text_color(c.subtle).child(label))
         };
@@ -255,7 +255,7 @@ impl Root {
                 }))
                 .child(label)
         };
-        let tabs = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+        let tabs = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).bg(c.app)
             .child(tab("sessions-all", format!("All {}", all.len()), SessionFilter::All, cx))
             .child(tab("sessions-working", format!("Working {working}"), SessionFilter::Working, cx))
             .child(tab("sessions-waiting", format!("Needs you {waiting}"), SessionFilter::Waiting, cx))
@@ -297,7 +297,7 @@ impl Root {
                         this.execute(Command::Approve(commands::PaneRef::Id(approve.clone())), window, cx);
                     }))
                     .child("Approve")),
-                AgentStatus::Done => Some(div().id(SharedString::from(format!("session-review-{id}"))).h(px(24.0)).px_2p5().flex().items_center().rounded_md().border_1().border_color(c.border_strong)
+                AgentStatus::Done => Some(div().id(SharedString::from(format!("session-review-{id}"))).h(px(24.0)).px_2p5().flex().items_center().rounded_md()
                     .text_size(px(11.5)).text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover))
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
@@ -348,13 +348,13 @@ impl Root {
             div().id("sessions-backdrop").absolute().size_full().flex().justify_end().p_2().bg(hsla(0.0, 0.0, 0.0, 0.25)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)))
                 .child(
-                    div().id("sessions").w(px(440.0)).max_w(relative(0.9)).h_full().flex().flex_col().overflow_hidden().rounded(px(12.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
+                    div().id("sessions").w(px(440.0)).max_w(relative(0.9)).h_full().flex().flex_col().overflow_hidden().rounded(px(12.0)).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().flex().flex_col().gap_3().border_b_1().border_color(c.border).px_4().pt_4().pb_3()
+                        .child(div().flex().flex_col().gap_3().px_4().pt_4().pb_3()
                             .child(div().flex().items_center().gap_2()
                                 .child(Icon::new(IconName::Activity).size(px(15.0)).text_color(c.accent))
                                 .child(div().flex_1().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Sessions"))
-                                .when_some(keys, |d, k| d.child(div().rounded_sm().border_1().border_color(c.border).px_1().text_size(px(10.5)).text_color(c.subtle).child(k)))
+                                .when_some(keys, |d, k| d.child(div().rounded_sm().px_1().text_size(px(10.5)).text_color(c.subtle).child(k)))
                                 .child(refresh))
                             .child(totals)
                             .child(tabs))

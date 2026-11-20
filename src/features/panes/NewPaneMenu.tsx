@@ -27,14 +27,14 @@ export function NewPaneMenu() {
     <div ref={root} className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-hover hover:text-fg"
+        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs hover:bg-hover hover:text-fg shadow-sm"
         title="New pane"
       >
         <Plus size={13} />
         <span>New</span>
       </button>
       {open && (
-        <div className="anim-menu absolute right-0 z-50 mt-1 w-64 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
+        <div className="anim-menu absolute right-0 z-50 mt-1 w-64 rounded-lg bg-panel-raised p-1 shadow-xl">
           {providers.map((p) => (
             <div key={p.id}>
               <div className="flex items-center">
@@ -78,7 +78,7 @@ export function NewPaneMenu() {
                 )}
               </div>
               {expanded === p.id && (
-                <div className="mb-1 ml-6 max-h-48 overflow-y-auto border-l border-border pl-1">
+                <div className="mb-1 ml-6 max-h-48 overflow-y-auto pl-1">
                   {(models[p.id] ?? []).map((m) => (
                     <button
                       key={m.id}

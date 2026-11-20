@@ -49,7 +49,7 @@ export const THEMES: ThemeDef[] = [
   ),
   def(
     "light", "Winfer Light", "light", "dark",
-    { app: "#f4f4f6", panel: "#ffffff", panelRaised: "#ffffff", hover: "#f0f0f3", active: "#e8e8ed", border: "#e6e6ea", borderStrong: "#d7d7dd", fg: "#18181b", fgMuted: "#52525b", fgSubtle: "#8a8a93", accent: "#4f5ff0", onAccent: "#ffffff", success: "#16a34a", warning: "#c27c0e", danger: "#dc2626", claude: "#c2603f" },
+    { app: "#ececf0", panel: "#f5f5f8", panelRaised: "#ffffff", hover: "#eaeaf0", active: "#e0e0e7", border: "#e6e6ea", borderStrong: "#d7d7dd", fg: "#18181b", fgMuted: "#52525b", fgSubtle: "#8a8a93", accent: "#4f5ff0", onAccent: "#ffffff", success: "#16a34a", warning: "#c27c0e", danger: "#dc2626", claude: "#c2603f" },
     // Same hues as Winfer Dark, darkened so agent output stays readable on white.
     ["#1b1b21", "#c62f2f", "#1f8a46", "#9a6a00", "#2f5fd0", "#8a3fc0", "#0f7f8c", "#d4d4da", "#6b6b74", "#e04848", "#2aa35a", "#b88400", "#4a78e8", "#a55ad8", "#1897a6", "#ffffff"],
   ),
@@ -125,7 +125,7 @@ export const THEMES: ThemeDef[] = [
   ),
   def(
     "github-light", "GitHub Light", "light", "github-dark",
-    { app: "#f6f8fa", panel: "#ffffff", panelRaised: "#ffffff", hover: "#f3f4f6", active: "#eaeef2", border: "#d8dee4", borderStrong: "#d0d7de", fg: "#1f2328", fgMuted: "#59636e", fgSubtle: "#818b98", accent: "#0969da", onAccent: "#ffffff", success: "#1a7f37", warning: "#9a6700", danger: "#d1242f", claude: "#bc4c00" },
+    { app: "#eaeef2", panel: "#f6f8fa", panelRaised: "#ffffff", hover: "#edf0f4", active: "#e2e7ec", border: "#d8dee4", borderStrong: "#d0d7de", fg: "#1f2328", fgMuted: "#59636e", fgSubtle: "#818b98", accent: "#0969da", onAccent: "#ffffff", success: "#1a7f37", warning: "#9a6700", danger: "#d1242f", claude: "#bc4c00" },
     ["#24292f", "#cf222e", "#116329", "#4d2d00", "#0969da", "#8250df", "#1b7c83", "#6e7781", "#57606a", "#a40e26", "#1a7f37", "#633c01", "#218bff", "#a475f9", "#3192aa", "#8c959f"],
   ),
 ];

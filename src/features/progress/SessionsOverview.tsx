@@ -70,7 +70,7 @@ export function SessionsOverview() {
     execute({ type: "pane.focus", target: { id: pane.id } });
   };
   const stat = (label: string, value: string, tone?: string) => (
-    <div className="flex-1 rounded-lg border border-border bg-panel p-2.5">
+    <div className="flex-1 rounded-lg bg-panel p-2.5 shadow-sm">
       <div className={cn("text-lg font-semibold text-fg", tone)}>{value}</div>
       <div className="text-[11px] text-fg-subtle">{label}</div>
     </div>
@@ -79,12 +79,12 @@ export function SessionsOverview() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-end bg-black/25 p-2" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-slide flex h-full w-[440px] max-w-[90vw] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="space-y-3 border-b border-border px-4 pt-4 pb-3">
+      <div className="anim-slide flex h-full w-[440px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <header className="space-y-3 px-4 pt-4 pb-3">
           <div className="flex items-center gap-2">
             <Activity size={15} className="text-accent" />
             <h1 className="flex-1 text-[15px] font-semibold text-fg">Sessions</h1>
-            <kbd className="rounded border border-border px-1 font-mono text-[10.5px] text-fg-subtle">{keysFor({ type: "ui.overlay", overlay: "progress" })}</kbd>
+            <kbd className="rounded px-1 font-mono text-[10.5px] text-fg-subtle shadow-sm">{keysFor({ type: "ui.overlay", overlay: "progress" })}</kbd>
             <button
               title="Estimate again now"
               disabled={refreshing}
@@ -106,7 +106,7 @@ export function SessionsOverview() {
             {stat("done", String(done), done > 0 ? "text-success" : undefined)}
             {stat("avg progress", average != null ? `${average}%` : "—")}
           </div>
-          <div role="tablist" className="flex gap-0.5 rounded-lg border border-border bg-app p-0.5">
+          <div role="tablist" className="flex gap-0.5 rounded-lg bg-app p-0.5 shadow-sm">
             {tabs.map(([id, label, n]) => (
               <button key={id} role="tab" aria-selected={filter === id} onClick={() => setFilter(id)} className={cn("h-[26px] flex-1 rounded-md text-xs", filter === id ? "bg-active text-fg" : "text-fg-muted hover:text-fg")}>
                 {label} {n}
@@ -165,7 +165,7 @@ export function SessionsOverview() {
                           e.stopPropagation();
                           execute({ type: "ui.overlay", overlay: "review" });
                         }}
-                        className="h-6 shrink-0 rounded-md border border-border-strong px-2.5 text-[11.5px] text-fg hover:bg-hover"
+                        className="h-6 shrink-0 rounded-md px-2.5 text-[11.5px] text-fg hover:bg-hover shadow-sm"
                       >
                         Review
                       </button>

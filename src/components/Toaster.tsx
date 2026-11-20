@@ -20,8 +20,8 @@ export function Toaster() {
         <div
           key={t.id}
           className={cn(
-            "anim-rise pointer-events-auto flex w-full items-start gap-2 rounded-lg border bg-panel-raised px-3 py-2 shadow-xl",
-            t.kind === "error" ? "border-danger/40" : "border-border-strong",
+            "anim-rise pointer-events-auto flex w-full items-start gap-2 rounded-lg px-3 py-2 shadow-xl",
+            t.kind === "error" ? "bg-panel-raised shadow-danger/15" : "bg-panel-raised",
           )}
         >
           <span className="mt-0.5 shrink-0">{ICON[t.kind]}</span>

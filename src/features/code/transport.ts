@@ -71,6 +71,7 @@ export class PtyTransport implements Transport {
             session: pane.resume ? pane.sessionId : null,
             prompt: pane.prompt,
             model: pane.model,
+            effort: pane.effort ?? null,
             autoApprove: s.autoApprove.includes(pane.provider),
             systemPrompt: systemPromptOf(s),
             plain: pane.plain,

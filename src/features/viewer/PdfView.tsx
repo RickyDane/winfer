@@ -103,11 +103,11 @@ export default function PdfView({ path, revision }: { path: string; revision: nu
   return (
     <div ref={container} className="flex h-full min-h-0 flex-col">
       {pdf && (
-        <div className="flex shrink-0 items-center justify-center gap-2 border-b border-border px-2 py-1 text-xs text-fg-muted" aria-label="PDF controls">
+        <div className="flex shrink-0 items-center justify-center gap-2 px-2 py-1 text-xs text-fg-muted" aria-label="PDF controls">
           <button title="Previous page" className={buttonClass} disabled={page <= 1} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={14} /></button>
           <span aria-live="polite">Page {page} of {pdf.numPages}</span>
           <button title="Next page" className={buttonClass} disabled={page >= pdf.numPages} onClick={() => setPage((p) => p + 1)}><ChevronRight size={14} /></button>
-          <span className="mx-1 h-3 border-l border-border" />
+          <span className="mx-1 h-3" />
           <button title="Zoom out" className={buttonClass} disabled={zoom <= 0.25} onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}><Minus size={14} /></button>
           <button title="Fit to width" className="rounded px-1 py-0.5 hover:bg-hover" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
           <button title="Zoom in" className={buttonClass} disabled={zoom >= 3} onClick={() => setZoom((z) => Math.min(3, z + 0.25))}><Plus size={14} /></button>

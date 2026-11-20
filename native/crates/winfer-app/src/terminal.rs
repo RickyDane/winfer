@@ -686,7 +686,7 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
         let request = json!({
             "paneId": pane.id, "providerId": pane.provider, "cwd": pane.cwd, "workspaceId": pane.workspace_id,
             "resume": pane.resume, "session": if pane.resume { pane.session_id.clone() } else { None },
-            "prompt": pane.prompt, "model": pane.model, "autoApprove": settings.auto_approve,
+            "prompt": pane.prompt, "model": pane.model, "effort": pane.effort, "autoApprove": settings.auto_approve,
             "systemPrompt": settings.system_prompt, "plain": pane.plain, "lean": settings.lean,
             "hiddenTools": settings.hidden_tools, "account": pane.account_id, "cols": size.cols, "rows": size.rows,
             "serve": session.is_code(),
