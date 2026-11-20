@@ -44,6 +44,36 @@ fn preset_name(p: Preset) -> &'static str {
     }
 }
 
+/// An icon for a palette entry, from its title.
+fn palette_icon(title: &str) -> IconName {
+    let starts = |p: &str| title.starts_with(p);
+    if starts("Approve") {
+        IconName::Check
+    } else if starts("Go to") || starts("Focus") {
+        IconName::ArrowRight
+    } else if starts("New pane") || starts("New") {
+        IconName::Plus
+    } else if starts("Split") {
+        IconName::PanelRight
+    } else if starts("Close") {
+        IconName::X
+    } else if starts("Theme") {
+        IconName::Palette
+    } else if starts("Layout") {
+        IconName::LayoutGrid
+    } else if starts("Settings") || starts("Open settings") {
+        IconName::Settings
+    } else if starts("Browser") || starts("Open URL") {
+        IconName::Globe
+    } else if starts("Workspace") || starts("Switch") {
+        IconName::FolderOpen
+    } else if title.contains("model") || title.contains("Model") {
+        IconName::Cpu
+    } else {
+        IconName::Zap
+    }
+}
+
 fn palette_entries(s: &AppState, recipes: Vec<(String, String)>) -> Vec<Entry> {
     use Command as C;
     let mut plain: Vec<(String, Vec<Command>)> = Vec::new();
@@ -51,6 +81,12 @@ fn palette_entries(s: &AppState, recipes: Vec<(String, String)>) -> Vec<Entry> {
     let overlay = |o| C::Overlay { overlay: o, provider: None };
     let focused = || PaneRef::Focused;
 
+    // Agents waiting for you come first.
+    for pane in s.all_panes().filter(|p| !p.archived && p.provider != "shell" && p.status == crate::model::AgentStatus::NeedsInput) {
+        let label = s.pane_label(pane);
+        add(&format!("Approve: {label}"), C::Approve(PaneRef::Id(pane.id.clone())));
+        add(&format!("Go to: {label}"), C::Focus(PaneRef::Id(pane.id.clone())));
+    }
     for p in s.providers.iter().filter(|p| p.installed) {
         add(&format!("New pane: {}", p.name), C::Overlay { overlay: Overlay::NewPane, provider: Some(p.id.clone()) });
     }
@@ -206,10 +242,15 @@ impl Root {
         }
         for (i, entry) in results.iter().take(200).enumerate() {
             let e = &self.palette_entries[*entry];
+            let waiting = e.title.starts_with("Approve: ") || e.title.starts_with("Go to: ");
             list = list.child(
-                div().id(("palette-row", i)).flex().items_center().rounded_md().px_3().py_2().text_size(px(13.0)).cursor_pointer()
+                div().id(("palette-row", i)).flex().items_center().gap_2p5().rounded_lg().px_2p5().h(px(34.0)).flex_shrink_0().text_size(px(13.0)).cursor_pointer()
                     .text_color(if i == selected { c.fg } else { c.muted })
                     .when(i == selected, |d| d.bg(c.active))
+                    .child(div().size(px(24.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md()
+                        .bg(if waiting { Hsla { a: 0.14, ..c.warning } } else { c.hover })
+                        .text_color(if waiting { c.warning } else if i == selected { c.accent } else { c.subtle })
+                        .child(Icon::new(palette_icon(&e.title)).size(px(13.0))))
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
                         if this.palette_selected != i {
                             this.palette_selected = i;
@@ -218,7 +259,7 @@ impl Root {
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| this.run_palette(i, window, cx)))
                     .child(div().flex_1().truncate().child(e.title.clone()))
-                    .when_some(e.keys.clone(), |d, k| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(k))),
+                    .when_some(e.keys.clone(), |d, k| d.child(div().rounded_sm().border_1().border_color(c.border).bg(c.panel).px_1p5().py(px(1.0)).text_size(px(10.5)).text_color(c.subtle).child(k))),
             );
         }
         let total = results.len();
@@ -230,7 +271,7 @@ impl Root {
                 .child(
                     div()
                         .id("palette")
-                        .w(px(560.0)).max_h(px(520.0)).flex().flex_col().overflow_hidden().rounded_xl().border_1().border_color(c.border_strong).bg(c.raised)
+                        .w(px(620.0)).max_h(px(540.0)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .capture_action(cx.listener(move |this, _: &MoveDown, _, cx| {
                             this.palette_selected = (this.palette_selected + 1).min(total.saturating_sub(1));
@@ -242,8 +283,12 @@ impl Root {
                             cx.stop_propagation();
                             cx.notify();
                         }))
-                        .child(div().p_2().border_b_1().border_color(c.border).child(Input::new(&input).appearance(false)))
-                        .child(list),
+                        .child(div().flex().items_center().gap_2p5().px_4().h(px(50.0)).flex_shrink_0().border_b_1().border_color(c.border)
+                            .child(Icon::new(IconName::Search).size(px(16.0)).text_color(c.subtle))
+                            .child(div().flex_1().child(Input::new(&input).appearance(false).text_size(px(15.0)))))
+                        .child(list.flex_1().min_h_0())
+                        .child(div().flex().items_center().gap_3().px_4().h(px(34.0)).flex_shrink_0().border_t_1().border_color(c.border).text_size(px(11.0)).text_color(c.subtle)
+                            .child("↑↓ choose").child("↵ run").child("esc close").child(div().flex_1()).child(format!("{total} commands"))),
                 )
                 .into_any_element(),
         )
