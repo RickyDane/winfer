@@ -56,13 +56,22 @@ fn hexc(s: &str) -> [f32; 3] {
     [((v >> 16) & 255) as f32 / 255.0, ((v >> 8) & 255) as f32 / 255.0, (v & 255) as f32 / 255.0]
 }
 
+fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+}
+
 /// The RGBA pixels of a nebula, its clouds drifted to `phase` (radians); a full turn returns to the start.
-fn paint(kind: Kind, phase: f32) -> Vec<u8> {
+/// Dark themes paint additive dye clouds on deep space with a dark rim; light themes wash luminous
+/// pigments onto an airy base so the button doesn't sit like a black hole on a light composer.
+fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
     let (ox, oy) = (phase.cos() * 0.55, phase.sin() * 0.55);
-    let (bg, dye1, dye2, dye3, strength) = match kind {
-        Kind::Ready => (hexc("#07030f"), hexc("#5b21b6"), hexc("#d946ef"), hexc("#38bdf8"), 1.0),
-        Kind::Stop => (hexc("#0f0403"), hexc("#9a3412"), hexc("#e11d48"), hexc("#fbbf24"), 1.0),
-        Kind::Idle => (hexc("#07050f"), hexc("#3b2a7a"), hexc("#5b2a86"), hexc("#1d4e89"), 0.55),
+    let (bg, dye1, dye2, dye3, strength) = match (kind, light) {
+        (Kind::Ready, false) => (hexc("#07030f"), hexc("#5b21b6"), hexc("#d946ef"), hexc("#38bdf8"), 1.0),
+        (Kind::Stop, false) => (hexc("#0f0403"), hexc("#9a3412"), hexc("#e11d48"), hexc("#fbbf24"), 1.0),
+        (Kind::Idle, false) => (hexc("#07050f"), hexc("#3b2a7a"), hexc("#5b2a86"), hexc("#1d4e89"), 0.55),
+        (Kind::Ready, true) => (hexc("#6366f1"), hexc("#8b5cf6"), hexc("#e879f9"), hexc("#38bdf8"), 1.0),
+        (Kind::Stop, true) => (hexc("#e11d48"), hexc("#f97316"), hexc("#fb7185"), hexc("#fde047"), 1.0),
+        (Kind::Idle, true) => (hexc("#eef0f8"), hexc("#b4c0f8"), hexc("#dfc4fb"), hexc("#bae6fd"), 0.65),
     };
     let mut out = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for py in 0..SIZE {
@@ -75,24 +84,44 @@ fn paint(kind: Kind, phase: f32) -> Vec<u8> {
             let d2 = fbm(x + 5.2, y + 1.3, 2);
             let d3 = fbm(x - 3.7, y + 8.1, 3);
             let (a1, a2, a3) = (smooth(0.28, 0.78, d1), smooth(0.4, 0.85, d2) * 0.9, smooth(0.5, 0.9, d3).powi(2) * 0.8);
-            let mut rgb = bg;
-            for k in 0..3 {
-                rgb[k] += (dye1[k] * a1 + dye2[k] * a2 + dye3[k] * a3) * strength;
-            }
-            // A brighter core where the dust is thickest.
-            let core = smooth(0.55, 1.0, (d1 + d2) * 0.5) * 0.35 * strength;
-            for c in rgb.iter_mut() {
-                *c += core;
-            }
-            // Dark rim: deep space at the edge, the glow in the middle.
+            let core = smooth(0.55, 1.0, (d1 + d2) * 0.5);
             let (dx, dy) = (u - 0.5, v - 0.5);
             let r = (dx * dx + dy * dy).sqrt() * 2.0;
-            let rim = 1.0 - smooth(0.55, 1.05, r) * 0.82;
-            // Stars.
             let star = hash(px as i32, py as i32, 99);
             let twinkle = if star > 0.9965 { 0.6 + 0.4 * hash(px as i32, py as i32, 7) } else { 0.0 };
-            for c in rgb.iter_mut() {
-                *c = (*c * rim + twinkle * if kind == Kind::Idle { 0.5 } else { 1.0 }).clamp(0.0, 1.0).powf(0.92);
+
+            let mut rgb = if light {
+                let mut c = mix(bg, dye1, (a1 * 0.75 * strength).clamp(0.0, 1.0));
+                c = mix(c, dye2, (a2 * 0.70 * strength).clamp(0.0, 1.0));
+                c = mix(c, dye3, (a3 * 0.62 * strength).clamp(0.0, 1.0));
+                let lift = core * if kind == Kind::Idle { 0.08 } else { 0.22 };
+                for ch in c.iter_mut() {
+                    *ch += lift;
+                }
+                let rim_depth = if kind == Kind::Idle { 0.09 } else { 0.20 };
+                let rim = 1.0 - smooth(0.55, 1.05, r) * rim_depth;
+                let star_k = if kind == Kind::Idle { 0.18 } else { 0.55 };
+                for ch in c.iter_mut() {
+                    *ch = (*ch * rim + twinkle * star_k).clamp(0.0, 1.0);
+                }
+                c
+            } else {
+                let mut c = bg;
+                for k in 0..3 {
+                    c[k] += (dye1[k] * a1 + dye2[k] * a2 + dye3[k] * a3) * strength;
+                }
+                let lift = core * 0.35 * strength;
+                for ch in c.iter_mut() {
+                    *ch += lift;
+                }
+                let rim = 1.0 - smooth(0.55, 1.05, r) * 0.82;
+                for ch in c.iter_mut() {
+                    *ch = (*ch * rim + twinkle * if kind == Kind::Idle { 0.5 } else { 1.0 }).clamp(0.0, 1.0).powf(0.92);
+                }
+                c
+            };
+            for ch in rgb.iter_mut() {
+                *ch = ch.clamp(0.0, 1.0);
             }
             out.extend_from_slice(&[(rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8, 255]);
         }
@@ -100,17 +129,19 @@ fn paint(kind: Kind, phase: f32) -> Vec<u8> {
     out
 }
 
-fn png(kind: Kind, phase: f32) -> Vec<u8> {
+fn png(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let buf = image::RgbaImage::from_raw(SIZE, SIZE, paint(kind, phase)).expect("buffer matches size");
+    let buf = image::RgbaImage::from_raw(SIZE, SIZE, paint(kind, light, phase)).expect("buffer matches size");
     image::DynamicImage::ImageRgba8(buf).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).expect("png encodes");
     bytes
 }
 
 /// The nebula for a button state, painted on first use.
-pub fn image(kind: Kind) -> Arc<Image> {
-    static CACHE: OnceLock<[Arc<Image>; 3]> = OnceLock::new();
-    let all = CACHE.get_or_init(|| [Kind::Ready, Kind::Idle, Kind::Stop].map(|k| Arc::new(Image::from_bytes(ImageFormat::Png, png(k, 0.0)))));
+pub fn image(kind: Kind, light: bool) -> Arc<Image> {
+    static DARK: OnceLock<[Arc<Image>; 3]> = OnceLock::new();
+    static LIGHT: OnceLock<[Arc<Image>; 3]> = OnceLock::new();
+    let cache = if light { &LIGHT } else { &DARK };
+    let all = cache.get_or_init(|| [Kind::Ready, Kind::Idle, Kind::Stop].map(|k| Arc::new(Image::from_bytes(ImageFormat::Png, png(k, light, 0.0)))));
     match kind {
         Kind::Ready => all[0].clone(),
         Kind::Idle => all[1].clone(),
@@ -122,9 +153,11 @@ pub fn image(kind: Kind) -> Arc<Image> {
 const FRAMES: usize = 36;
 
 /// The looping drift of the working (ember) nebula, painted on first use: shown in turn while a session is working.
-pub fn working_frames() -> &'static [Arc<Image>] {
-    static CACHE: OnceLock<Vec<Arc<Image>>> = OnceLock::new();
-    CACHE.get_or_init(|| (0..FRAMES).map(|i| Arc::new(Image::from_bytes(ImageFormat::Png, png(Kind::Stop, i as f32 / FRAMES as f32 * std::f32::consts::TAU)))).collect())
+pub fn working_frames(light: bool) -> &'static [Arc<Image>] {
+    static DARK: OnceLock<Vec<Arc<Image>>> = OnceLock::new();
+    static LIGHT: OnceLock<Vec<Arc<Image>>> = OnceLock::new();
+    let cache = if light { &LIGHT } else { &DARK };
+    cache.get_or_init(|| (0..FRAMES).map(|i| Arc::new(Image::from_bytes(ImageFormat::Png, png(Kind::Stop, light, i as f32 / FRAMES as f32 * std::f32::consts::TAU)))).collect())
 }
 
 #[cfg(test)]
@@ -133,7 +166,7 @@ mod tests {
 
     #[test]
     fn paints_a_dark_rim_and_a_lit_middle() {
-        let p = paint(Kind::Ready, 0.0);
+        let p = paint(Kind::Ready, false, 0.0);
         assert_eq!(p.len(), (SIZE * SIZE * 4) as usize);
         let lum = |x: u32, y: u32| {
             let i = ((y * SIZE + x) * 4) as usize;
@@ -145,7 +178,22 @@ mod tests {
     }
 
     #[test]
+    fn light_mode_is_visibly_lighter_in_every_state() {
+        let mean_lum = |p: &[u8]| -> u32 {
+            let sum: u64 = p.chunks_exact(4).map(|px| px[0] as u64 + px[1] as u64 + px[2] as u64).sum();
+            (sum / (SIZE as u64 * SIZE as u64 * 3)) as u32
+        };
+        for kind in [Kind::Idle, Kind::Ready, Kind::Stop] {
+            let dark = mean_lum(&paint(kind, false, 0.0));
+            let light = mean_lum(&paint(kind, true, 0.0));
+            assert!(light > dark + 40, "light ({light}) should be clearly brighter than dark ({dark})");
+        }
+        assert!(mean_lum(&paint(Kind::Idle, true, 0.0)) > 190);
+    }
+
+    #[test]
     fn encodes_png() {
-        assert_eq!(&png(Kind::Stop, 1.0)[1..4], b"PNG");
+        assert_eq!(&png(Kind::Stop, false, 1.0)[1..4], b"PNG");
+        assert_eq!(&png(Kind::Stop, true, 1.0)[1..4], b"PNG");
     }
 }

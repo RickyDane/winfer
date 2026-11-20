@@ -63,9 +63,29 @@ export function Collapse({
   children: ReactNode;
 }) {
   const [mounted, setMounted] = useState(open);
-  if (open && !mounted) setMounted(true);
+  // Defer adding `.open` by one frame on the very first open so the browser paints the
+  // collapsed 0fr / opacity 0 state first and runs the opening transition cleanly.
+  const [shown, setShown] = useState(open);
+  useEffect(() => {
+    if (!open) {
+      setShown(false);
+      return;
+    }
+    if (!mounted) {
+      setMounted(true);
+      let raf2 = 0;
+      const raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => setShown(true));
+      });
+      return () => {
+        cancelAnimationFrame(raf1);
+        cancelAnimationFrame(raf2);
+      };
+    }
+    setShown(true);
+  }, [open, mounted]);
   return (
-    <div className={clsx("cw-collapse", open && "open")}>
+    <div className={clsx("cw-collapse", shown && "open")}>
       <div>{mounted && children}</div>
     </div>
   );
@@ -179,6 +199,7 @@ const ToolCard = memo(function ToolCard({ item }: { item: Extract<Item, { kind: 
         "cw-tool cw-enter",
         running && "running",
         item.ok === false && "failed",
+        expanded && hasBody && "open",
       )}
     >
       <button
@@ -256,7 +277,7 @@ const Reasoning = memo(function Reasoning({ item }: { item: Extract<Item, { kind
   useTicker(item.streaming);
   const took = secs((item.ended ?? Date.now()) - item.started);
   return (
-    <div className="cw-reason cw-enter">
+    <div className={clsx("cw-reason cw-enter", open && "open")}>
       <button className="cw-reason-head" onClick={() => setOpen(!open)}>
         <Brain size={14} />
         <span className={clsx(item.streaming && "cw-shimmer")}>

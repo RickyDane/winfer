@@ -487,13 +487,79 @@ pub fn run_filter(args: &[String]) -> i32 {
     child.wait().ok().and_then(|s| s.code()).unwrap_or(1)
 }
 
-/// CLI arguments that register `servers` with an agent (Claude Code or Codex; OpenCode and pi:
-/// [`agent_env`]).
+/// Formats `servers` (`name → { command, args, env }` or `{ url, headers }`) as Antigravity's
+/// `mcp_config.json` (`{ "mcpServers": ... }`).
+pub fn agy_mcp_config(servers: &serde_json::Map<String, Value>) -> Value {
+    let mut out = serde_json::Map::new();
+    for (name, spec) in servers {
+        let mut entry = serde_json::Map::new();
+        if let Some(url) = spec["serverUrl"].as_str().or_else(|| spec["url"].as_str()) {
+            entry.insert("serverUrl".into(), json!(url));
+            if let Some(headers) = spec.get("headers").filter(|v| v.as_object().is_some_and(|m| !m.is_empty())) {
+                entry.insert("headers".into(), headers.clone());
+            }
+        } else if let Some(cmd) = spec["command"].as_str() {
+            entry.insert("command".into(), json!(cmd));
+            if let Some(args) = spec.get("args").filter(|v| v.as_array().is_some_and(|a| !a.is_empty())) {
+                entry.insert("args".into(), args.clone());
+            }
+            if let Some(env) = spec.get("env").filter(|v| v.as_object().is_some_and(|m| !m.is_empty())) {
+                entry.insert("env".into(), env.clone());
+            }
+        } else {
+            continue;
+        }
+        // winfer's calls can wait on the user (`ask_user`) or a long `bg` read; Antigravity
+        // defaults to 3 minutes per tool call.
+        if name == "winfer" {
+            entry.insert("timeoutSeconds".into(), json!(ASK_WAIT.as_secs() + 60));
+        }
+        // codegraph's single explore tool is meant to be eagerly loaded up front.
+        if name == CODEGRAPH {
+            entry.insert("tools".into(), json!({ "codegraph_explore": { "eager": true } }));
+        }
+        out.insert(name.clone(), Value::Object(entry));
+    }
+    json!({ "mcpServers": out })
+}
+
+/// Writes an Antigravity workspace directory (`<dir>/.agents/mcp_config.json`) under the system
+/// temp directory so `agy --add-dir <dir>` loads these MCP servers without touching global or
+/// project configs.
+pub fn write_agy_mcp_dir(key: &str, servers: &serde_json::Map<String, Value>) -> std::io::Result<std::path::PathBuf> {
+    let safe: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' }).collect();
+    let dir = std::env::temp_dir().join("winfer-agy-mcp").join(if safe.is_empty() { "default" } else { &safe });
+    let agents = dir.join(".agents");
+    std::fs::create_dir_all(&agents)?;
+    let bytes = serde_json::to_vec_pretty(&agy_mcp_config(servers)).unwrap_or_else(|_| b"{}".to_vec());
+    std::fs::write(agents.join("mcp_config.json"), bytes)?;
+    Ok(dir)
+}
+
+/// CLI arguments that register `servers` with an agent (Claude Code, Codex or Antigravity;
+/// OpenCode and pi: [`agent_env`]).
 pub fn agent_args(provider_id: &str, servers: &[Server]) -> Vec<String> {
     if servers.is_empty() {
         return Vec::new();
     }
     match provider_id {
+        "agy" => {
+            let map: serde_json::Map<String, Value> = servers
+                .iter()
+                .map(|s| {
+                    let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+                    (s.name.to_string(), json!({ "command": s.command, "args": s.args, "env": env }))
+                })
+                .collect();
+            let key = servers
+                .iter()
+                .find_map(|s| s.env.iter().find(|(k, _)| *k == "WINFER_PANE_ID").map(|(_, v)| v.clone()))
+                .unwrap_or_else(|| format!("pid-{}", std::process::id()));
+            match write_agy_mcp_dir(&key, &map) {
+                Ok(dir) => vec!["--add-dir".into(), dir.to_string_lossy().into_owned()],
+                Err(_) => Vec::new(),
+            }
+        }
         "claude" => {
             let config: serde_json::Map<String, Value> = servers
                 .iter()
@@ -792,11 +858,23 @@ mod tests {
         assert!(codex.contains(&r#"mcp_servers.winfer.command="/app/winfer""#.to_string()));
         assert!(codex.contains(&r#"mcp_servers.winfer.env={WINFER_PANE_ID="p-1"}"#.to_string()));
         assert!(codex.contains(&"mcp_servers.winfer.tool_timeout_sec=3660".to_string()));
-        assert!(agent_args("agy", &servers).is_empty());
+        let agy = agent_args("agy", &servers);
+        assert_eq!(agy.len(), 2);
+        assert_eq!(agy[0], "--add-dir");
+        let agy_cfg: Value = serde_json::from_str(&std::fs::read_to_string(std::path::Path::new(&agy[1]).join(".agents/mcp_config.json")).unwrap()).unwrap();
+        assert_eq!(agy_cfg["mcpServers"]["winfer"]["command"], "/app/winfer");
+        assert_eq!(agy_cfg["mcpServers"]["winfer"]["args"], json!(["mcp-stdio"]));
+        assert_eq!(agy_cfg["mcpServers"]["winfer"]["env"]["WINFER_PANE_ID"], "p-1");
+        assert_eq!(agy_cfg["mcpServers"]["winfer"]["timeoutSeconds"], 3660);
+        let _ = std::fs::remove_dir_all(&agy[1]);
         assert!(config["mcpServers"]["winfer"].get("alwaysLoad").is_none());
         let cg = [Server { name: CODEGRAPH, command: "/bin/codegraph".into(), args: vec!["serve".into(), "--mcp".into()], env: Vec::new() }];
         let config: Value = serde_json::from_str(&agent_args("claude", &cg)[1]).unwrap();
         assert_eq!(config["mcpServers"]["codegraph"]["alwaysLoad"], true);
+        let agy_cg = agent_args("agy", &cg);
+        let agy_cg_cfg: Value = serde_json::from_str(&std::fs::read_to_string(std::path::Path::new(&agy_cg[1]).join(".agents/mcp_config.json")).unwrap()).unwrap();
+        assert_eq!(agy_cg_cfg["mcpServers"]["codegraph"]["tools"]["codegraph_explore"]["eager"], true);
+        let _ = std::fs::remove_dir_all(&agy_cg[1]);
     }
 
     #[test]

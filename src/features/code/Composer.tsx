@@ -10,7 +10,7 @@ import { COMMANDS, MODES, type Approval } from "./protocol";
 import { DiffView } from "./Transcript";
 import { elapsed } from "../usage/toolStats";
 import { mentionAt, rankFiles } from "./mentions";
-import { composerHeight } from "./composerHeight";
+import { composerHeight, composerMaxHeight } from "./composerHeight";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
@@ -301,24 +301,30 @@ export function Composer({ focused }: { focused: boolean }) {
     // that measurement counts the placeholder, which wraps to many lines when
     // the pane mounts hidden/narrow (engines differ), leaving a clean session
     // with a huge composer that nothing re-measured while text stayed empty.
-    const h = composerHeight(textRef.current, el.scrollHeight);
+    const paneH = dropTarget.current?.closest(".cw-pane")?.clientHeight;
+    const h = composerHeight(textRef.current, el.scrollHeight, composerMaxHeight(paneH));
     el.style.height = h == null ? "" : h + "px";
   };
   // Re-fit when the text changes, and also when font size (text scale) or the
   // compact (started) styling changes the line height at unchanged width.
   useEffect(fit, [text, textScale, started]);
   // A resumed session can mount while the pane is still hidden/narrow, so the
-  // first measurement can be off. Re-fit on width changes.
+  // first measurement can be off. Re-fit on width changes, or when pane height tightens.
   useEffect(() => {
     const el = ta.current;
     if (!el) return;
+    const pane = dropTarget.current?.closest(".cw-pane");
     let w = el.clientWidth;
+    let ph = pane?.clientHeight ?? 0;
     const ro = new ResizeObserver(() => {
-      if (el.clientWidth === w) return;
+      const nextPh = pane?.clientHeight ?? 0;
+      if (el.clientWidth === w && nextPh === ph) return;
       w = el.clientWidth;
+      ph = nextPh;
       fit();
     });
     ro.observe(el);
+    if (pane) ro.observe(pane);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

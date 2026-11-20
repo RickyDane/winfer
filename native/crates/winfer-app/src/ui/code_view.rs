@@ -35,6 +35,8 @@ pub(super) struct Env {
     pub compact: bool,
     pub view: WeakEntity<CodeView>,
     pub flipped: Rc<HashSet<String>>,
+    /// Rows currently animating an open (`true`) or close (`false`) toggle, with a monotonic id.
+    pub toggled: Rc<HashMap<String, (u64, bool)>>,
     pub expand_thinking: bool,
     pub expand_shell: bool,
     pub images: Rc<RefCell<HashMap<String, Vec<Arc<Image>>>>>,
@@ -70,6 +72,9 @@ pub struct CodeView {
     input: Entity<TextareaState>,
     seen_rev: u64,
     flipped: HashSet<String>,
+    toggled: HashMap<String, (u64, bool)>,
+    toggle_seq: u64,
+    pane_size: Size<Pixels>,
     images: Rc<RefCell<HashMap<String, Vec<Arc<Image>>>>>,
     popup: usize,
     /// Per approval id and question: the picked option indexes.
@@ -127,10 +132,11 @@ fn tool_icon(name: &str) -> IconName {
     }
 }
 
-fn signature(item: &Item, env_flipped: &HashSet<String>, now: u64) -> u64 {
+fn signature(item: &Item, env_flipped: &HashSet<String>, env_toggled: &HashMap<String, (u64, bool)>, now: u64) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     item.key().hash(&mut h);
     env_flipped.contains(item.key()).hash(&mut h);
+    env_toggled.get(item.key()).hash(&mut h);
     match item {
         Item::User { text, images, .. } => (text.len(), images.len()).hash(&mut h),
         Item::Text { text, streaming, .. } => (text.len(), *streaming).hash(&mut h),
@@ -187,7 +193,7 @@ impl CodeView {
         cx.subscribe(&model, |_, _, _: &CodeEvent, _| {}).detach();
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
-        Self { model, app, list, sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, images: Rc::new(RefCell::new(HashMap::new())), popup: 0, picks: HashMap::new(), asked_files: false, ticking: false, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None }
+        Self { model, app, list, sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), images: Rc::new(RefCell::new(HashMap::new())), popup: 0, picks: HashMap::new(), asked_files: false, ticking: false, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None }
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut App) {
@@ -309,11 +315,27 @@ impl CodeView {
         self.model.update(cx, |m, cx| m.send(cmd, cx));
     }
 
-    fn toggle(&mut self, key: &str, cx: &mut Context<Self>) {
+    fn toggle(&mut self, key: &str, was_open: bool, cx: &mut Context<Self>) {
         if !self.flipped.remove(key) {
             self.flipped.insert(key.to_string());
         }
+        let opening = !was_open;
+        self.toggle_seq = self.toggle_seq.wrapping_add(1);
+        let seq = self.toggle_seq;
+        let k = key.to_string();
+        self.toggled.insert(k.clone(), (seq, opening));
         cx.notify();
+        let wait = if opening { 230 } else { 175 };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(wait)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.toggled.get(&k).is_some_and(|(s, _)| *s == seq) {
+                    this.toggled.remove(&k);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn attach_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
@@ -381,7 +403,7 @@ impl CodeView {
 
     /// Splices what changed since the last frame into the list state.
     fn sync_list(&mut self, items: &[Item], now: u64) {
-        let sigs: Vec<u64> = items.iter().map(|i| signature(i, &self.flipped, now)).collect();
+        let sigs: Vec<u64> = items.iter().map(|i| signature(i, &self.flipped, &self.toggled, now)).collect();
         let first = sigs.iter().zip(&self.sigs).position(|(a, b)| a != b).unwrap_or(sigs.len().min(self.sigs.len()));
         if first < self.sigs.len() || sigs.len() != self.sigs.len() {
             self.list.splice(first..self.sigs.len(), sigs.len() - first);
@@ -436,15 +458,99 @@ fn dots(color: Hsla, id: &str) -> AnimationElement<Div> {
 
 /// A column-width wrapper: content centered, never wider than `COLUMN`.
 fn col(el: impl IntoElement) -> Div {
-    div().w_full().flex().justify_center().px_4().child(div().w_full().max_w(px(COLUMN)).child(el))
+    col_inset(el, false)
 }
 
-fn pill(c: Colors, id: impl Into<ElementId>, icon: Option<AnyElement>, label: impl Into<SharedString>) -> Stateful<Div> {
-    let mut d = div().id(id).h(px(26.0)).flex().items_center().gap_1p5().rounded_lg().px_2().text_size(px(12.0)).text_color(c.muted).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
+fn col_inset(el: impl IntoElement, tight: bool) -> Div {
+    let wrap = div().w_full().flex().justify_center();
+    let wrap = if tight { wrap.px_2() } else { wrap.px_4() };
+    wrap.child(div().w_full().max_w(px(COLUMN)).child(el))
+}
+
+fn pill(c: Colors, id: impl Into<ElementId>, icon: Option<AnyElement>, label: Option<SharedString>, h: f32) -> Stateful<Div> {
+    let icon_only = label.is_none();
+    let mut d = div().id(id).h(px(h)).flex().items_center().justify_center().rounded_lg().text_size(px(12.0)).text_color(c.muted).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg));
+    d = if icon_only { d.px_1p5() } else { d.gap_1p5().px_2() };
     if let Some(i) = icon {
         d = d.child(i);
     }
-    d.child(label.into())
+    if let Some(text) = label {
+        d = d.child(div().min_w_0().truncate().child(text));
+    }
+    d
+}
+
+/// Chevron that smoothly rotates 0 ↔ 90° when a row is toggled open or closed.
+fn toggle_chevron(key: &str, open: bool, toggled: Option<(u64, bool)>, color: Hsla) -> AnyElement {
+    let icon = Icon::new(IconName::ChevronRight).size(px(11.0)).text_color(color);
+    if let Some((seq, opening)) = toggled {
+        let dur = if opening { 200 } else { 160 };
+        let id = SharedString::from(format!("ch-{key}-{seq}"));
+        icon.with_animation(id, Animation::new(Duration::from_millis(dur)), move |i, t| {
+            let e = ease_out(t);
+            let frac = if opening { e } else { 1.0 - e };
+            i.rotate(radians(frac * std::f32::consts::FRAC_PI_2))
+        })
+        .into_any_element()
+    } else if open {
+        icon.rotate(radians(std::f32::consts::FRAC_PI_2)).into_any_element()
+    } else {
+        icon.into_any_element()
+    }
+}
+
+/// Subtle fade + vertical glide for a tool/reasoning body opening or closing.
+fn toggle_body(key: &str, toggled: Option<(u64, bool)>, body: Div) -> AnyElement {
+    if let Some((seq, opening)) = toggled {
+        let dur = if opening { 210 } else { 160 };
+        let id = SharedString::from(format!("tb-{key}-{seq}"));
+        let animated = body.with_animation(id, Animation::new(Duration::from_millis(dur)), move |d, t| {
+            let e = ease_out(t);
+            if opening {
+                d.opacity(e).relative().top(px(-5.0 * (1.0 - e)))
+            } else {
+                d.opacity(1.0 - e).relative().top(px(-4.0 * e))
+            }
+        });
+        div().overflow_hidden().child(animated).into_any_element()
+    } else {
+        body.into_any_element()
+    }
+}
+
+/// Responsive layout flags for the composer as the pane shrinks horizontally or vertically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ComposerLayout {
+    tight_x: bool,
+    show_branch: bool,
+    show_meter: bool,
+    show_labels: bool,
+    show_model_label: bool,
+    show_cost: bool,
+    show_usage: bool,
+    compact_v: bool,
+    ultra_v: bool,
+    single_row: bool,
+}
+
+fn composer_layout(w: f32, h: f32) -> ComposerLayout {
+    let w = if w <= 1.0 { 800.0 } else { w };
+    let h = if h <= 1.0 { 600.0 } else { h };
+    let compact_v = h < 380.0;
+    let ultra_v = h < 270.0;
+    let single_row = ultra_v && w >= 420.0;
+    ComposerLayout {
+        tight_x: w < 440.0,
+        show_branch: w >= 620.0 && !ultra_v,
+        show_meter: w >= 540.0 && !ultra_v,
+        show_labels: w >= 500.0 && !ultra_v,
+        show_model_label: w >= 360.0 && !single_row,
+        show_cost: w >= 420.0 && !ultra_v,
+        show_usage: w >= 260.0 && !single_row,
+        compact_v,
+        ultra_v,
+        single_row,
+    }
 }
 
 /// Plays the entrance animation on rows that appeared in the last moment.
@@ -492,6 +598,8 @@ fn text_row(env: &Env, key: &str, text: &str, _streaming: bool) -> AnyElement {
 fn reasoning_row(env: &Env, key: &str, text: &str, streaming: bool, started: u64, ended: Option<u64>) -> AnyElement {
     let c = env.c;
     let open = env.open(key, streaming || env.expand_thinking);
+    let toggled = env.toggled.get(key).copied();
+    let show_body = open || matches!(toggled, Some((_, false)));
     let secs = ended.unwrap_or(env.now).saturating_sub(started);
     let label = if streaming { "Thinking…".to_string() } else { format!("Thought for {}", elapsed(secs)) };
     let label = if started == 0 && !streaming { "Thought".to_string() } else { label };
@@ -500,13 +608,16 @@ fn reasoning_row(env: &Env, key: &str, text: &str, streaming: bool, started: u64
     let name = div().text_size(env.small()).text_color(if streaming { c.accent } else { c.muted }).child(label);
     let head = div().id(SharedString::from(format!("r-{key}"))).flex().items_center().gap_1p5().h(px(26.0)).px_1p5().ml(px(-6.0)).rounded_lg().cursor_pointer().hover(move |d| d.bg(c.hover))
         .on_click(move |_, _, cx| {
-            let _ = view.update(cx, |v, cx| v.toggle(&k, cx));
+            let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
         })
         .child(if streaming { icon.with_animation(SharedString::from(format!("rp-{key}")), Animation::new(Duration::from_millis(1600)).repeat().with_max_fps(30.0), |i, t| i.opacity(0.45 + 0.55 * breathe(t))).into_any_element() } else { icon.into_any_element() })
         .child(if streaming { name.with_animation(SharedString::from(format!("rn-{key}")), Animation::new(Duration::from_millis(1600)).repeat().with_max_fps(30.0), |d, t| d.opacity(0.55 + 0.45 * breathe(t))).into_any_element() } else { name.into_any_element() })
-        .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(11.0)).text_color(c.subtle));
+        .child(toggle_chevron(key, open, toggled, c.subtle));
     enter(env, key, div().w_full().flex().flex_col().py(px(2.0)).child(div().flex().child(head))
-        .when(open, |d| d.child(div().ml(px(7.0)).mt_1().mb_1().pl_3().border_l_2().border_color(c.border_strong).py_0p5().text_size(env.small()).line_height(relative(1.6)).text_color(c.muted).whitespace_normal().child(text.trim().to_string()))))
+        .when(show_body, |d| {
+            let body = div().ml(px(7.0)).mt_1().mb_1().pl_3().border_l_2().border_color(c.border_strong).py_0p5().text_size(env.small()).line_height(relative(1.6)).text_color(c.muted).whitespace_normal().child(text.trim().to_string());
+            d.child(toggle_body(key, toggled, body))
+        }))
 }
 
 fn diff_block(env: &Env, diff: &str, max: usize) -> Div {
@@ -600,21 +711,34 @@ fn fields_block(env: &Env, rows: Vec<(String, String)>) -> Div {
 
 /// The send button: a small painted nebula (`ui::nebula`) in a round, glowing frame; ember-red while
 /// it can interrupt, dim when there's nothing to send.
-fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName) -> Stateful<Div> {
+fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName, sz: f32) -> Stateful<Div> {
     use super::nebula::{self, Kind};
     let live = ready || stop;
+    let light = c.light;
     let kind = if stop { Kind::Stop } else if ready { Kind::Ready } else { Kind::Idle };
-    let glow = if stop { theme::hex("#fb7185") } else { theme::hex("#a855f7") };
-    let mut shadows = vec![BoxShadow { color: alpha(gpui_kit::white(), if live { 0.14 } else { 0.05 }), offset: point(px(0.0), px(1.0)), blur_radius: px(1.0), spread_radius: px(0.0), inset: true }];
+    let glow = if stop { theme::hex("#fb7185") } else if light { theme::hex("#818cf8") } else { theme::hex("#a855f7") };
+    let mut shadows = vec![BoxShadow {
+        color: alpha(gpui_kit::white(), if light { if live { 0.35 } else { 0.6 } } else if live { 0.14 } else { 0.05 }),
+        offset: point(px(0.0), px(1.0)),
+        blur_radius: px(1.0),
+        spread_radius: px(0.0),
+        inset: true,
+    }];
     if live {
-        shadows.push(BoxShadow { color: alpha(glow, 0.4), offset: point(px(0.0), px(2.0)), blur_radius: px(12.0), spread_radius: px(0.0), inset: false });
+        shadows.push(BoxShadow {
+            color: alpha(glow, if light { 0.32 } else { 0.4 }),
+            offset: point(px(0.0), px(2.0)),
+            blur_radius: px(if light { 10.0 } else { 12.0 }),
+            spread_radius: px(0.0),
+            inset: false,
+        });
     }
     // While the session works the clouds drift: a loop of pre-painted frames, each faded into the
     // next so the motion is smooth at 60 fps.
     let face: AnyElement = if stop && animate {
         div().absolute().top_0().left_0().size_full().rounded_full().overflow_hidden()
             .with_animation("send-drift", Animation::new(Duration::from_millis(6000)).repeat().with_max_fps(60.0), move |d, t| {
-                let frames = nebula::working_frames();
+                let frames = nebula::working_frames(light);
                 let pos = (t * frames.len() as f32).min(frames.len() as f32 - 0.001);
                 let (i, mix) = (pos as usize, pos.fract());
                 d.child(gpui_kit::img(frames[i].clone()).size_full().rounded_full().object_fit(ObjectFit::Cover))
@@ -622,12 +746,15 @@ fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName
             })
             .into_any_element()
     } else {
-        gpui_kit::img(nebula::image(kind)).absolute().top_0().left_0().size_full().rounded_full().object_fit(ObjectFit::Cover).into_any_element()
+        gpui_kit::img(nebula::image(kind, light)).absolute().top_0().left_0().size_full().rounded_full().object_fit(ObjectFit::Cover).into_any_element()
     };
-    div().id("cw-send").relative().size(px(32.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full()
+    let icon_sz = (sz * 0.44).clamp(11.0, 14.0);
+    let icon_color = if live { gpui_kit::white() } else if light { c.muted } else { c.subtle };
+    div().id("cw-send").relative().size(px(sz)).flex_shrink_0().flex().items_center().justify_center().rounded_full()
+        .when(light && !live, |d| d.border_1().border_color(alpha(c.border_strong, 0.7)))
         .shadow(shadows)
         .child(face)
-        .child(Icon::new(icon).size(px(14.0)).text_color(if live { gpui_kit::white() } else { c.subtle }))
+        .child(Icon::new(icon).size(px(icon_sz)).text_color(icon_color))
         .when(live, |d| d.cursor_pointer().hover(|d| d.opacity(0.9)))
 }
 
@@ -647,6 +774,8 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
     let running = ended.is_none() && ok.is_none();
     let default_open = running && name == "Bash" && env.expand_shell;
     let open = env.open(key, default_open);
+    let toggled = env.toggled.get(key).copied();
+    let show_body = open || matches!(toggled, Some((_, false)));
     let tint = if ok == Some(false) { c.danger } else { tool_tint(c, name) };
     let status: AnyElement = match ok {
         Some(true) => Icon::new(IconName::Check).size(px(13.0)).text_color(c.success).into_any_element(),
@@ -662,7 +791,7 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
     let (view, k) = (env.view.clone(), key.to_string());
     let head = div().id(SharedString::from(format!("t-{key}"))).w_full().flex().items_center().gap_2().h(px(34.0)).px_2p5().cursor_pointer().hover(move |d| d.bg(alpha(c.hover, 0.6)))
         .on_click(move |_, _, cx| {
-            let _ = view.update(cx, |v, cx| v.toggle(&k, cx));
+            let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
         })
         .child(div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(alpha(tint, 0.14)).child(Icon::new(tool_icon(name)).size(px(13.0)).text_color(tint)))
         .child(div().flex_shrink_0().text_size(env.small()).text_color(c.fg).child(name.to_string()))
@@ -670,11 +799,11 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
         .when_some(counts, |d, (a, r)| d.child(div().flex().flex_shrink_0().gap_1().text_size(px(11.0)).font_family(env.mono.clone()).child(div().text_color(c.success).child(format!("+{a}"))).child(div().text_color(c.danger).child(format!("−{r}")))))
         .when_some(right, |d, r| d.child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(r)))
         .child(div().w(px(14.0)).flex_shrink_0().flex().items_center().justify_center().child(status))
-        .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(11.0)).text_color(c.subtle));
+        .child(toggle_chevron(key, open, toggled, c.subtle));
     // No outline at rest; running (accent) and failed (red) still show one.
     let edge = if running { alpha(c.accent, 0.4) } else if ok == Some(false) { alpha(c.danger, 0.35) } else { gpui_kit::transparent_black() };
     let mut card = div().w_full().rounded_xl().border_1().border_color(edge).bg(c.raised).overflow_hidden().child(head);
-    if open {
+    if show_body {
         let secs = toolbody::sections(name, input, output, diff);
         let mut body = div().border_t_1().border_color(c.border).p_2().flex().flex_col().gap_2();
         if secs.is_empty() {
@@ -695,7 +824,7 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
                 Section::Output(o) => terminal_block(env, None, &o).into_any_element(),
             });
         }
-        card = card.child(body);
+        card = card.child(toggle_body(key, toggled, body));
     }
     let card: AnyElement = if running {
         let id = SharedString::from(format!("glow-{key}"));
@@ -800,7 +929,7 @@ impl CodeView {
         }
         let frac = if total == 0 { 0.0 } else { done as f32 / total as f32 };
         let head = div().id("cw-plan-head").flex().items_center().gap_2().h(px(34.0)).px_3().cursor_pointer().text_size(px(12.0)).text_color(c.muted)
-            .on_click(cx.listener(|this, _, _, cx| this.toggle("plan", cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle("plan", open, cx)))
             .child(Icon::new(IconName::ListTodo).size(px(13.0)).text_color(c.accent))
             .child(div().text_color(c.fg).child("Plan"))
             .child(div().w(px(56.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(frac)).rounded_full().bg(c.success)))
@@ -830,7 +959,7 @@ impl CodeView {
                 body = body.child(div().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).max_h(px(140.0)).overflow_hidden().whitespace_normal().child(a.detail.clone()));
             }
             if let Some(d) = a.diff.as_deref().filter(|d| !d.trim().is_empty()) {
-                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()) };
+                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()) };
                 body = body.child(diff_block(&env, d, 40));
             }
             body = body.child(div().flex().gap_2().pt_0p5().child(decide("Allow", "Y", Decision::Allow, true, format!("allow-{id}"), model.clone(), id.clone())).child(decide("Always allow", "A", Decision::Always, false, format!("always-{id}"), model.clone(), id.clone())).child(decide("Deny", "N", Decision::Deny, false, format!("deny-{id}"), model.clone(), id.clone())));
@@ -952,7 +1081,47 @@ impl CodeView {
         let mode_pop = (open_sheet == Some(Sheet::Mode)).then(|| self.mode_popover(c, cx));
         let mode_color = if matches!(mode, Mode::Yolo | Mode::YoloPlan) { c.warning } else { c.muted };
 
-        let mut card = div().flex().flex_col().rounded_2xl().border_1().border_color(c.border_strong).bg(c.raised).shadow_md();
+        let lay = composer_layout(self.pane_size.width / px(1.0), self.pane_size.height / px(1.0));
+        let pill_h = if lay.ultra_v { 22.0 } else if lay.compact_v { 24.0 } else { 26.0 };
+        let send_sz = if lay.ultra_v { 24.0 } else if lay.compact_v { 26.0 } else { 32.0 };
+        let attach_sz = if lay.ultra_v { 22.0 } else if lay.compact_v { 24.0 } else { 28.0 };
+        let attach_btn = div().id("cw-attach").size(px(attach_sz)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().cursor_pointer().text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)).tooltip(tip("Attach files or images")).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))).child(Icon::new(IconName::Paperclip).size(px(if lay.ultra_v { 13.0 } else { 15.0 })));
+        let mode_btn = div().relative().flex_shrink_0().children(mode_pop).child(
+            pill(c, "cw-mode", Some(super::code_pickers::mode_glyph(mode_color, mode, 14.0)), lay.show_labels.then(|| SharedString::from(mode.label())), pill_h)
+                .text_color(mode_color)
+                .tooltip(tip(format!("Mode: {} · Shift+Tab to cycle", mode.label())))
+                .when(open_sheet == Some(Sheet::Mode), |d| d.bg(c.hover).text_color(c.fg))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Mode, cx))),
+        );
+        let model_tip = format!("Model: {model_label}");
+        let model_btn = div().relative().min_w_0().children(model_pop).child(
+            pill(c, "cw-model", model_backend.map(|b| super::code_pickers::mark(c, b, 14.0, 1.0)), lay.show_model_label.then(|| SharedString::from(model_label)), pill_h)
+                .max_w(px(if lay.show_labels { 200.0 } else { 130.0 }))
+                .tooltip(tip(model_tip))
+                .when(open_sheet == Some(Sheet::Model), |d| d.bg(c.hover).text_color(c.fg))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Model, cx))),
+        );
+        let fast_btn = fast.map(|(on, listed, target)| {
+            pill(c, "cw-fast", Some(Icon::new(IconName::Zap).size(px(13.0)).text_color(if on { c.warning } else { c.subtle }).into_any_element()), lay.show_labels.then(|| SharedString::from("Fast")), pill_h)
+                .flex_shrink_0()
+                .when(on, |d| d.text_color(c.warning).bg(alpha(c.warning, 0.12)))
+                .when(!on && !listed, |d| d.opacity(0.6))
+                .tooltip(tip(if on { "Fast mode is on: about 2x speed, higher usage. Click to turn off" } else if listed { "Turn on fast mode: about 2x speed, higher usage" } else { "Try fast mode. Codex doesn't list a fast tier for this model, so it may not apply" }))
+                .on_click(cx.listener(move |this, _, window, cx| this.pick_model(&target, window, cx)))
+        });
+        let effort_tip = format!("Reasoning effort: {}", super::code_pickers::effort_label(&effort_id));
+        let effort_btn = div().relative().flex_shrink_0().children(effort_pop).child(
+            pill(c, "cw-effort", Some(super::code_pickers::effort_glyph(c.muted, &effort_id, 14.0)), lay.show_labels.then(|| SharedString::from(effort)), pill_h)
+                .tooltip(tip(effort_tip))
+                .when(open_sheet == Some(Sheet::Effort), |d| d.bg(c.hover).text_color(c.fg))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Effort, cx))),
+        );
+        let send_btn = nebula_send(c, stop, can_send, animate_send, if stop { IconName::Square } else { IconName::ArrowUp }, send_sz)
+            .tooltip(tip(if stop { "Interrupt (Esc)" } else if busy { "Steer the running turn (Enter)" } else { "Send (Enter)" }))
+            .on_click(cx.listener(move |this, _, window, cx| if stop { this.send(Cmd::Interrupt, cx) } else { this.enter(window, cx) }));
+
+        let mut card = div().flex().flex_col().border_1().border_color(c.border_strong).bg(c.raised).shadow_md();
+        card = if lay.compact_v { card.rounded_xl() } else { card.rounded_2xl() };
         if !attachments.is_empty() {
             let mut chips = div().flex().flex_wrap().gap_1p5().px_3().pt_2p5();
             for (i, a) in attachments.iter().enumerate() {
@@ -963,36 +1132,54 @@ impl CodeView {
             }
             card = card.child(chips);
         }
-        card = card.child(div().px_3().pt_2p5().pb_1().child(Textarea::new(&self.input).appearance(false)));
-        let toolbar = div().flex().items_center().gap_0p5().px_1p5().pb_1p5().h(px(36.0))
-            .child(div().id("cw-attach").size(px(28.0)).flex().items_center().justify_center().rounded_lg().cursor_pointer().text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)).tooltip(tip("Attach files or images")).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))).child(Icon::new(IconName::Paperclip).size(px(15.0))))
-            .child(div().w(px(1.0)).h(px(14.0)).mx_1().bg(c.border))
-            .child(div().relative().children(mode_pop).child(pill(c, "cw-mode", Some(super::code_pickers::mode_glyph(mode_color, mode, 14.0)), mode.label()).text_color(mode_color).when(open_sheet == Some(Sheet::Mode), |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Mode, cx)))))
-            .child(div().relative().children(model_pop).child(pill(c, "cw-model", model_backend.map(|b| super::code_pickers::mark(c, b, 14.0, 1.0)), model_label).when(open_sheet == Some(Sheet::Model), |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Model, cx)))))
-            .when_some(fast, |d, (on, listed, target)| d.child(
-                pill(c, "cw-fast", Some(Icon::new(IconName::Zap).size(px(13.0)).text_color(if on { c.warning } else { c.subtle }).into_any_element()), "Fast")
-                    .when(on, |d| d.text_color(c.warning).bg(alpha(c.warning, 0.12)))
-                    .when(!on && !listed, |d| d.opacity(0.6))
-                    .tooltip(tip(if on { "Fast mode is on: about 2x speed, higher usage. Click to turn off" } else if listed { "Turn on fast mode: about 2x speed, higher usage" } else { "Try fast mode. Codex doesn't list a fast tier for this model, so it may not apply" }))
-                    .on_click(cx.listener(move |this, _, window, cx| this.pick_model(&target, window, cx))),
-            ))
-            .child(div().relative().children(effort_pop).child(pill(c, "cw-effort", Some(super::code_pickers::effort_glyph(c.muted, &effort_id, 14.0)), effort).when(open_sheet == Some(Sheet::Effort), |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Effort, cx)))))
-            .when_some(branch, |d, b| d.child(div().id("cw-branch").h(px(26.0)).max_w(px(160.0)).flex().items_center().gap_1p5().px_2().rounded_lg().text_size(px(12.0)).text_color(c.subtle)
-                .tooltip(tip(format!("Branch {b}")))
-                .child(Icon::new(IconName::GitBranch).size(px(13.0)).flex_shrink_0())
-                .child(div().min_w_0().truncate().child(b))))
-            .child(div().flex_1())
-            .child(div().id("cw-usage").h(px(26.0)).flex().items_center().gap_2().px_2().mr_1().rounded_lg().cursor_pointer().text_size(px(11.0)).text_color(c.subtle).hover(move |d| d.bg(c.hover))
-                .tooltip(tip(format!("{} / {} tokens", tokens(context), tokens(window_tokens))))
-                .on_click(open(Sheet::Usage))
-                .when(show_cost, |d| d.when_some(cost, |d, cost| d.child(format!("${cost:.2}"))))
-                .when(show_context, |d| d.child(div().w(px(40.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))).child(format!("{}%", (pct * 100.0).round()))))
-            
-            .child(nebula_send(c, stop, can_send, animate_send, if stop { IconName::Square } else { IconName::ArrowUp })
-                .tooltip(tip(if stop { "Interrupt (Esc)" } else if busy { "Steer the running turn (Enter)" } else { "Send (Enter)" }))
-                .on_click(cx.listener(move |this, _, window, cx| if stop { this.send(Cmd::Interrupt, cx) } else { this.enter(window, cx) })));
-        card = card.child(toolbar);
-        col(div().pt_1().pb_2().child(card)).into_any_element()
+        if lay.single_row && attachments.is_empty() {
+            // Very short pane with horizontal room: input and compact icon controls share one row.
+            card = card.child(
+                div().flex().items_end().gap_0p5().px_1p5().py_1()
+                    .child(attach_btn)
+                    .child(div().flex_1().min_w_0().max_h(px(46.0)).overflow_hidden().px_1().child(Textarea::new(&self.input).appearance(false)))
+                    .child(mode_btn)
+                    .child(model_btn)
+                    .children(fast_btn)
+                    .child(effort_btn)
+                    .child(send_btn),
+            );
+        } else {
+            let input_wrap = if lay.ultra_v {
+                div().px_2p5().pt_1().pb_0p5().max_h(px(48.0)).overflow_hidden()
+            } else if lay.compact_v {
+                div().px_2p5().pt_1p5().pb_0p5().max_h(px(96.0)).overflow_hidden()
+            } else {
+                div().px_3().pt_2p5().pb_1()
+            };
+            card = card.child(input_wrap.child(Textarea::new(&self.input).appearance(false)));
+            let bar_h = if lay.ultra_v { 28.0 } else if lay.compact_v { 31.0 } else { 36.0 };
+            let toolbar = div().flex().items_center().gap_0p5().px_1p5().pb(px(if lay.compact_v { 3.0 } else { 6.0 })).h(px(bar_h))
+                .child(attach_btn)
+                .when(lay.show_labels, |d| d.child(div().w(px(1.0)).h(px(14.0)).mx_1().bg(c.border)))
+                .child(mode_btn)
+                .child(model_btn)
+                .children(fast_btn)
+                .child(effort_btn)
+                .when(lay.show_branch, |d| d.when_some(branch, |d, b| d.child(div().id("cw-branch").h(px(pill_h)).max_w(px(160.0)).flex().items_center().gap_1p5().px_2().rounded_lg().text_size(px(12.0)).text_color(c.subtle)
+                    .tooltip(tip(format!("Branch {b}")))
+                    .child(Icon::new(IconName::GitBranch).size(px(13.0)).flex_shrink_0())
+                    .child(div().min_w_0().truncate().child(b)))))
+                .child(div().flex_1())
+                .when(lay.show_usage && ((show_cost && lay.show_cost && cost.is_some()) || show_context), |d| d.child(
+                    div().id("cw-usage").h(px(pill_h)).flex_shrink_0().flex().items_center().gap_1p5().px(px(if lay.show_labels { 8.0 } else { 5.0 })).mr_0p5().rounded_lg().cursor_pointer().text_size(px(11.0)).text_color(c.subtle).hover(move |d| d.bg(c.hover))
+                        .tooltip(tip(format!("{} / {} tokens", tokens(context), tokens(window_tokens))))
+                        .on_click(open(Sheet::Usage))
+                        .when(show_cost && lay.show_cost, |d| d.when_some(cost, |d, cost| d.child(format!("${cost:.2}"))))
+                        .when(show_context, |d| d
+                            .when(lay.show_meter, |d| d.child(div().w(px(40.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))))
+                            .child(format!("{}%", (pct * 100.0).round()))),
+                ))
+                .child(send_btn);
+            card = card.child(toolbar);
+        }
+        let outer = if lay.compact_v { div().pt_0p5().pb_1().child(card) } else { div().pt_1().pb_2().child(card) };
+        col_inset(outer, lay.tight_x).into_any_element()
     }
 }
 
@@ -1018,7 +1205,7 @@ impl Render for CodeView {
         }
         self.ensure_picker(window, cx);
         self.sync_list(&items, now);
-        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), expand_thinking, expand_shell, images: self.images.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()) };
+        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()) };
         let model = self.model.clone();
         let transcript: AnyElement = if items.is_empty() {
             self.welcome(c, cx)
@@ -1051,7 +1238,24 @@ impl Render for CodeView {
         });
         let sheet_el = sheet.filter(|s| !matches!(s, Sheet::Model | Sheet::Effort | Sheet::Mode)).map(|s| self.render_sheet(s, c, mono.clone(), window, cx));
         let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().border_1().border_color(alpha(c.danger, 0.5)).bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
+        let view_for_size = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                view_for_size.update(cx, |this, cx| {
+                    let prev = composer_layout(this.pane_size.width / px(1.0), this.pane_size.height / px(1.0));
+                    let next = composer_layout(bounds.size.width / px(1.0), bounds.size.height / px(1.0));
+                    this.pane_size = bounds.size;
+                    if prev != next {
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div().id("code-pane").relative().size_full().flex().flex_col().bg(c.panel).text_color(c.fg).font_family(fonts::sans(cx))
+            .child(measure)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 let k = e.keystroke.key.as_str();
                 let digit = k.parse::<usize>().ok().filter(|n| (1..=9).contains(n));
@@ -1095,5 +1299,28 @@ impl Render for CodeView {
             .child(composer)
             .children(sheet_el)
             .children(preview)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::composer_layout;
+
+    #[::core::prelude::v1::test]
+    fn composer_compacts_when_narrow_or_short() {
+        let wide = composer_layout(760.0, 620.0);
+        assert!(wide.show_branch && wide.show_labels && wide.show_model_label && wide.show_meter && wide.show_cost && !wide.compact_v && !wide.single_row);
+
+        let mid = composer_layout(460.0, 620.0);
+        assert!(!mid.show_branch && !mid.show_labels && !mid.show_meter && mid.show_model_label && mid.show_cost);
+
+        let narrow = composer_layout(320.0, 620.0);
+        assert!(narrow.tight_x && !narrow.show_labels && !narrow.show_model_label && !narrow.show_cost && narrow.show_usage);
+
+        let short_wide = composer_layout(600.0, 240.0);
+        assert!(short_wide.compact_v && short_wide.ultra_v && short_wide.single_row && !short_wide.show_labels && !short_wide.show_model_label);
+
+        let short_narrow = composer_layout(340.0, 240.0);
+        assert!(short_narrow.compact_v && short_narrow.ultra_v && !short_narrow.single_row && !short_narrow.show_labels && !short_narrow.show_model_label);
     }
 }

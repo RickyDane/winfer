@@ -14,16 +14,61 @@ use crate::harness::diff;
 use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, Todo, TurnTokens, Usage, UserMsg};
 use crate::harness::tools::short_path;
 
-/// The models `cursor-agent` offers, as `cursor/<model>` specs; empty when it isn't installed.
+/// Base model slug with any effort suffix removed (keeping `-fast` so the fast-mode toggle still
+/// pairs each model with its fast twin).
+fn base_id(id: &str) -> String {
+    let (stem, fast) = match id.strip_suffix("-fast") {
+        Some(s) => (s, "-fast"),
+        None => (id, ""),
+    };
+    let base = LEVELS.iter().find_map(|l| stem.strip_suffix(&format!("-{l}"))).unwrap_or(stem);
+    format!("{base}{fast}")
+}
+
+/// Drops trailing effort words or parentheticals from a Cursor model's display label.
+fn clean_label(label: &str) -> String {
+    let mut s = label.trim().to_string();
+    if let Some(open) = s.rfind('(') {
+        if let Some(inside) = s[open + 1..].strip_suffix(')') {
+            let tag = inside.trim().to_ascii_lowercase();
+            if matches!(tag.as_str(), "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "extra" | "extra high" | "extra-high" | "max") {
+                s = s[..open].trim_end().to_string();
+            }
+        }
+    }
+    for suffix in [" Extra High", " Extra-High", " XHigh", " Minimal", " Medium", " High", " Low", " None", " Max"] {
+        if s.len() > suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix) {
+            s.truncate(s.len() - suffix.len());
+            break;
+        }
+    }
+    s.trim_end().to_string()
+}
+
+/// Consolidates Cursor's per-effort model variants by base slug (keeping `-fast` twins).
+fn consolidate(list: &[(String, String)]) -> Vec<ModelInfo> {
+    let ids: Vec<String> = list.iter().map(|(id, _)| id.clone()).collect();
+    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    for (id, label) in list {
+        let base = base_id(id);
+        if seen.contains(&base) {
+            continue;
+        }
+        seen.push(base.clone());
+        let model_efforts = efforts(&base, &ids);
+        let label = if model_efforts.as_ref().is_some_and(|e| !e.is_empty()) { clean_label(label) } else { label.clone() };
+        out.push(ModelInfo { detail: format!("Cursor · {base}"), spec: format!("cursor/{base}"), efforts: model_efforts, label });
+    }
+    out
+}
+
+/// The models `cursor-agent` offers, consolidated by base slug as `cursor/<model>` specs; empty when it isn't installed.
 pub fn models() -> Vec<ModelInfo> {
     if crate::env::find_command("cursor-agent").is_none() {
         return Vec::new();
     }
-    let list = listed();
-    let ids: Vec<String> = list.iter().map(|(id, _)| id.clone()).collect();
-    list.into_iter()
-        .map(|(id, label)| ModelInfo { detail: format!("Cursor · {id}"), spec: format!("cursor/{id}"), efforts: efforts(&id, &ids), label })
-        .collect()
+    consolidate(&listed())
 }
 
 /// `cursor-agent --list-models` as (id, label), asked once (it takes a second or two).
@@ -78,7 +123,8 @@ fn run_with_timeout(args: &[&str], cwd: Option<&std::path::Path>, timeout: std::
 }
 
 /// Effort levels as they appear in Cursor's model ids (`gpt-5.5-low`, `claude-opus-5-5-xhigh-fast`).
-const LEVELS: [&str; 8] = ["none", "minimal", "low", "medium", "high", "xhigh", "extra-high", "max"];
+/// Longer suffixes (`extra-high`) come before shorter ones they end with (`high`).
+const LEVELS: [&str; 8] = ["extra-high", "xhigh", "none", "minimal", "low", "medium", "high", "max"];
 
 /// The variant of `model` with effort `effort`, if Cursor lists one. Cursor bakes effort into
 /// the model id (its `model[effort=…]` overrides aren't accepted for these), so the effort
@@ -100,6 +146,25 @@ fn with_effort(model: &str, effort: &str, ids: &[String]) -> Option<String> {
         candidates.push(format!("{base}{fast}"));
     }
     candidates.into_iter().find(|c| ids.iter().any(|id| id == c))
+}
+
+/// Resolves a consolidated base slug (or exact variant) + optional effort to a concrete Cursor id.
+fn resolve_variant(model: &str, effort: Option<&str>, ids: &[String]) -> String {
+    if let Some(e) = effort {
+        if let Some(hit) = with_effort(model, e, ids) {
+            return hit;
+        }
+    }
+    if ids.is_empty() || ids.iter().any(|id| id == model) {
+        return model.to_string();
+    }
+    for pref in ["medium", "high", "low"] {
+        if let Some(hit) = with_effort(model, pref, ids) {
+            return hit;
+        }
+    }
+    let target = base_id(model);
+    ids.iter().find(|id| base_id(id) == target).cloned().unwrap_or_else(|| model.to_string())
 }
 
 /// The efforts `model` has variants for (None when it has no sibling with another effort: then
@@ -261,18 +326,15 @@ impl Bridge {
         true
     }
 
-    /// The model to pass, with the effort setting applied when Cursor has that variant.
+    /// The model to pass, resolved to an exact Cursor variant id (applying effort, or the base
+    /// model's default variant when a consolidated base slug isn't listed directly).
     fn model_arg(&self) -> Option<String> {
         let model = self.model.trim();
         if model.is_empty() {
             return None;
         }
-        let effort = self.effort.as_deref().filter(|e| !e.is_empty());
-        let ids: Vec<String> = match effort {
-            Some(_) => listed().into_iter().map(|(id, _)| id).collect(),
-            None => Vec::new(),
-        };
-        Some(effort.and_then(|e| with_effort(model, e, &ids)).unwrap_or_else(|| model.to_string()))
+        let ids: Vec<String> = listed().into_iter().map(|(id, _)| id).collect();
+        Some(resolve_variant(model, self.effort.as_deref().filter(|e| !e.is_empty()), &ids))
     }
 
     fn check_effort(&self) {
@@ -721,6 +783,30 @@ mod tests {
         assert_eq!(with_effort("claude-opus-5-5-low", "xhigh", &ids).as_deref(), Some("claude-opus-5-5-xhigh"));
         assert_eq!(with_effort("gpt-5.3-codex-high", "medium", &ids).as_deref(), Some("gpt-5.3-codex"));
         assert_eq!(with_effort("auto", "high", &ids), None);
+    }
+
+    #[test]
+    fn consolidates_effort_variants_and_resolves_base_slug() {
+        let raw: Vec<(String, String)> = [
+            ("gpt-5.5-low", "GPT-5.5 Low"),
+            ("gpt-5.5-high", "GPT-5.5 High"),
+            ("gpt-5.5-low-fast", "GPT-5.5 Low Fast"),
+            ("gpt-5.5-extra-high-fast", "GPT-5.5 Extra High Fast"),
+            ("auto", "Auto"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        let out = consolidate(&raw);
+        let specs: Vec<&str> = out.iter().map(|m| m.spec.as_str()).collect();
+        assert_eq!(specs, ["cursor/gpt-5.5", "cursor/gpt-5.5-fast", "cursor/auto"]);
+        assert_eq!(out[0].label, "GPT-5.5");
+        assert_eq!(out[0].efforts, Some(vec!["low".into(), "high".into()]));
+        assert_eq!(out[1].efforts, Some(vec!["low".into(), "xhigh".into()]));
+        let ids: Vec<String> = raw.into_iter().map(|(id, _)| id).collect();
+        assert_eq!(resolve_variant("gpt-5.5", None, &ids), "gpt-5.5-high");
+        assert_eq!(resolve_variant("gpt-5.5", Some("low"), &ids), "gpt-5.5-low");
+        assert_eq!(resolve_variant("gpt-5.5-fast", Some("xhigh"), &ids), "gpt-5.5-extra-high-fast");
     }
 
     #[test]

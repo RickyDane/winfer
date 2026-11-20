@@ -56,6 +56,7 @@ fn rgb_of(s: &str) -> Rgba {
 /// A theme's colors, ready to paint.
 #[derive(Clone, Copy)]
 pub struct Colors {
+    pub light: bool,
     pub app: Hsla,
     pub panel: Hsla,
     pub raised: Hsla,
@@ -75,8 +76,10 @@ pub struct Colors {
 }
 
 pub fn colors(id: &str) -> Colors {
-    let u = &theme_by_id(id).ui;
+    let def = theme_by_id(id);
+    let u = &def.ui;
     Colors {
+        light: def.mode == "light",
         app: hex(&u.app),
         panel: hex(&u.panel),
         raised: hex(&u.panel_raised),

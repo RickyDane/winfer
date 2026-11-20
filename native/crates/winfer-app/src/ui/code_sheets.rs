@@ -205,7 +205,7 @@ impl CodeView {
     fn sheet_effort(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let m = self.model.read(cx);
         let st = &m.state;
-        let offered = st.models.iter().find(|i| base_spec(&i.spec) == base_spec(&st.model)).and_then(|i| i.efforts.clone());
+        let offered = super::code_pickers::match_model(&st.models, &st.model).and_then(|i| i.efforts.clone());
         let levels: Vec<String> = match offered {
             Some(l) if !l.is_empty() => std::iter::once("default".to_string()).chain(l).collect(),
             Some(_) => vec!["default".to_string()],

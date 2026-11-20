@@ -14,9 +14,13 @@ const BACKEND_EFFORTS: Record<string, string[]> = {
   agy: ["low", "medium", "high"],
 };
 
+const EFFORT_SUFFIX_RE = /-(?:minimal|low|medium|high|xhigh|extra-high|max)$/;
+
 /** The efforts to offer for model `spec`, highest first, ending with "default". */
 export function effortOptions(models: ModelInfo[], spec: string): string[] {
-  const listed = models.find((m) => m.spec === spec)?.efforts;
+  const direct = models.find((m) => m.spec === spec);
+  const matched = direct ?? models.find((m) => m.spec === spec.replace(EFFORT_SUFFIX_RE, ""));
+  const listed = matched?.efforts;
   const known = listed ?? BACKEND_EFFORTS[spec.split("/")[0]];
   if (!known) return [...ALL_EFFORTS.filter((e) => e !== "ultra" && e !== "none"), "default"];
   // Known levels in their usual order; any new one a backend reports goes on top.

@@ -73,6 +73,18 @@ pub fn effort_glyph(tint: Hsla, level: &str, size: f32) -> AnyElement {
     }
 }
 
+/// Matches a model spec in `models`, also falling back to stripping any legacy trailing effort
+/// suffix (`agy/gemini-4-neon-xhigh` → `agy/gemini-4-neon`).
+pub(super) fn match_model<'a>(models: &'a [ModelInfo], spec: &str) -> Option<&'a ModelInfo> {
+    let target = base_spec(spec);
+    models.iter().find(|i| base_spec(&i.spec) == target).or_else(|| {
+        let stripped = ["-minimal", "-low", "-medium", "-high", "-xhigh", "-extra-high", "-max"]
+            .iter()
+            .find_map(|s| target.strip_suffix(s))?;
+        models.iter().find(|i| base_spec(&i.spec) == stripped)
+    })
+}
+
 /// The levels a model offers, "default" first.
 pub fn effort_levels(offered: Option<Vec<String>>) -> Vec<String> {
     match offered {
@@ -153,7 +165,8 @@ pub struct PickerState {
     pub search: Option<Entity<InputState>>,
     /// The rail's selection: a backend id or the favourites star.
     pub tab: Option<String>,
-    pub selected: usize,
+    /// Keyboard-focused row index (from arrow keys or search); None lets the active model highlight alone.
+    pub selected: Option<usize>,
     pub show_all: bool,
     /// The specs on screen, in order, for ⌘1–9 and the arrow keys.
     pub rows: Vec<String>,
@@ -172,7 +185,7 @@ impl CodeView {
             return;
         }
         self.picker.tab = None;
-        self.picker.selected = 0;
+        self.picker.selected = None;
         self.picker.show_all = false;
         self.set_sheet(Some(sheet), cx);
     }
@@ -182,13 +195,15 @@ impl CodeView {
         let open = self.model.read(cx).state.sheet == Some(Sheet::Model);
         if open && self.picker.search.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search models…"));
-            cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
+            cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
-                    this.picker.selected = 0;
+                    let has_query = !input.read(cx).value().trim().is_empty();
+                    this.picker.selected = has_query.then_some(0);
                     cx.notify();
                 }
                 InputEvent::PressEnter { .. } => {
-                    let spec = this.picker.rows.get(this.picker.selected).cloned();
+                    let idx = this.picker.selected.unwrap_or(0);
+                    let spec = this.picker.rows.get(idx).cloned();
                     if let Some(spec) = spec {
                         this.pick_model(&spec, window, cx);
                     }
@@ -206,6 +221,7 @@ impl CodeView {
 
     pub(super) fn pick_model(&mut self, spec: &str, _window: &mut Window, cx: &mut Context<Self>) {
         let spec = spec.to_string();
+        self.picker.selected = None;
         self.send(Cmd::SetModel(spec), cx);
         cx.notify();
     }
@@ -223,7 +239,17 @@ impl CodeView {
 
     pub(super) fn move_selection(&mut self, down: bool, cx: &mut Context<Self>) {
         let last = self.picker.rows.len().saturating_sub(1);
-        self.picker.selected = if down { (self.picker.selected + 1).min(last) } else { self.picker.selected.saturating_sub(1) };
+        let next = match self.picker.selected {
+            Some(cur) => if down { (cur + 1).min(last) } else { cur.saturating_sub(1) },
+            None => {
+                let current = self.model.read(cx).state.model.clone();
+                let models = self.model.read(cx).state.models.clone();
+                let active_spec = match_model(&models, &current).map(|m| m.spec.as_str()).unwrap_or(current.as_str());
+                let cur = self.picker.rows.iter().position(|r| r == active_spec).unwrap_or(0);
+                if down { (cur + 1).min(last) } else { cur.saturating_sub(1) }
+            }
+        };
+        self.picker.selected = Some(next);
         cx.notify();
     }
 
@@ -284,7 +310,7 @@ impl CodeView {
             rows.truncate(SHOWN);
         }
         self.picker.rows = rows.iter().map(|m| m.spec.clone()).collect();
-        let selected_row = self.picker.selected.min(rows.len().saturating_sub(1));
+        let selected_row = self.picker.selected.map(|i| i.min(rows.len().saturating_sub(1)));
 
         let mut rail = div().w(px(54.0)).flex_shrink_0().flex().flex_col().items_center().gap_1p5().py_2p5().border_r_1().border_color(c.border);
         let mut tabs: Vec<String> = vec![FAVORITES.to_string()];
@@ -296,7 +322,7 @@ impl CodeView {
                 .when(on, |d| d.bg(c.hover)).hover(move |d| d.bg(c.hover))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.picker.tab = Some(pick.clone());
-                    this.picker.selected = 0;
+                    this.picker.selected = None;
                     this.picker.show_all = false;
                     cx.notify();
                 }))
@@ -312,21 +338,23 @@ impl CodeView {
         for (i, info) in rows.iter().enumerate() {
             let spec = info.spec.clone();
             let name = if info.label.is_empty() { model_name(&spec, None) } else { info.label.clone() };
-            let on = base_spec(&current) == spec;
+            let on = base_spec(&current) == spec || match_model(&models, &current).is_some_and(|m| m.spec == spec);
             let twin = fast_spec(&spec, &models);
             let on_fast = twin.as_deref() == Some(current.as_str());
+            let active = on || on_fast;
             let is_fav = fav.contains(&spec);
             let backend = backend_of(&spec).map_or("", |b| b.0);
             let tier = model_tier(&spec, &info.detail);
             let group = SharedString::from(format!("pk-row-{i}"));
             let (pick, star, zap) = (spec.clone(), spec.clone(), twin.clone().map(|t| if on_fast { spec.clone() } else { t }));
             list = list.child(div().id(("pk-row", i)).group(group.clone()).h(px(36.0)).flex().items_center().gap_2p5().px_2p5().rounded_lg().cursor_pointer().text_size(px(13.0)).text_color(c.fg)
-                .when(i == selected_row, |d| d.bg(c.hover))
-                .hover(move |d| d.bg(c.hover))
+                .when(active, |d| d.bg(alpha(c.accent, 0.12)))
+                .when(!active && selected_row == Some(i), |d| d.bg(c.hover))
+                .hover(move |d| if active { d.bg(alpha(c.accent, 0.16)) } else { d.bg(c.hover) })
                 .on_click(cx.listener(move |this, _, window, cx| this.pick_model(&pick, window, cx)))
                 .child(mark(c, backend, 16.0, 1.0))
                 .child(div().min_w_0().truncate().child(name))
-                .when(on || on_fast, |d| d.child(Icon::new(IconName::Check).size(px(13.0)).text_color(c.muted)))
+                .when(active, |d| d.child(Icon::new(IconName::Check).size(px(13.0)).text_color(c.accent)))
                 .when(matches!(tier, ModelTier::Fast), |d| d.child(div().text_size(px(10.0)).px_1p5().rounded_full().bg(alpha(c.warning, 0.14)).text_color(c.warning).child("light")))
                 .child(div().flex_1())
                 .when_some(zap, |d, z| d.child(div().id(("pk-fast", i)).size(px(24.0)).flex().items_center().justify_center().rounded_md().hover(move |d| d.bg(c.active))
@@ -351,7 +379,7 @@ impl CodeView {
             .child(div().flex_1().when_some(self.picker.search.clone(), |d, input| d.child(Input::new(&input).appearance(false))));
 
         let st = &self.model.read(cx).state;
-        let offered = models.iter().find(|i| base_spec(&i.spec) == base_spec(&st.model)).and_then(|i| i.efforts.clone());
+        let offered = match_model(&models, &st.model).and_then(|i| i.efforts.clone());
         let levels = effort_levels(offered);
         let effort = if st.effort.is_empty() { "default".to_string() } else { st.effort.clone() };
         let model_label = if st.model.is_empty() { String::new() } else { model_name(&st.model, st.actual_model.as_deref()) };
@@ -376,7 +404,7 @@ impl CodeView {
 
     pub(super) fn effort_popover(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let st = &self.model.read(cx).state;
-        let offered = st.models.iter().find(|i| base_spec(&i.spec) == base_spec(&st.model)).and_then(|i| i.efforts.clone());
+        let offered = match_model(&st.models, &st.model).and_then(|i| i.efforts.clone());
         let levels = effort_levels(offered);
         let effort = if st.effort.is_empty() { "default".to_string() } else { st.effort.clone() };
         let model_label = if st.model.is_empty() { String::new() } else { model_name(&st.model, st.actual_model.as_deref()) };

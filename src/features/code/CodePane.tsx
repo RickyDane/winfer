@@ -197,12 +197,12 @@ function ModelMenu({ label, model }: { label: string; model: string }) {
   return (
     <div className="cw-menu" ref={ref}>
       <button
-        className={clsx("cw-foot-item", open && "active")}
+        className={clsx("cw-foot-item cw-model-btn", open && "active")}
         onClick={() => setSheet(open ? null : "model")}
-        title="Model (/model)"
+        title={`Model: ${label} (/model)`}
       >
         <ProviderIcon provider={backendOf(model)?.logo ?? "winfer"} size={12} />
-        {label}
+        <span className="cw-foot-label cw-model-label">{label}</span>
       </button>
       {open && (
         <div className="cw-pop cw-model-pop">
@@ -236,7 +236,7 @@ function SubagentMenu({ model }: { model: string }) {
         title={label ? `Subagents run on ${label}${subEffort ? ` · ${subEffort}` : ""} (/subagent-model)` : "Subagents run on the main model (/subagent-model)"}
       >
         <Workflow size={12} />
-        {label ?? "same"}
+        <span className="cw-foot-label">{label ?? "same"}</span>
       </button>
       {open && (
         <div className="cw-pop cw-model-pop">
@@ -263,7 +263,7 @@ function Footer({ pane }: { pane: Pane }) {
     <div className="cw-foot">
       <Menu
         label="Permission mode"
-        title={`${m.hint} · shift+tab to cycle`}
+        title={`Mode: ${m.label} — ${m.hint} · shift+tab to cycle`}
         className={clsx("mode", `mode-${mode}`)}
         value={mode}
         items={MODES.map((x) => ({
@@ -277,7 +277,7 @@ function Footer({ pane }: { pane: Pane }) {
         }
       >
         <ModeIcon mode={mode} size={12} />
-        {m.label}
+        <span className="cw-foot-label">{m.label}</span>
       </Menu>
       <ModelMenu label={modelLabel} model={model} />
       {fastTwin && (
@@ -288,11 +288,12 @@ function Footer({ pane }: { pane: Pane }) {
           onClick={() => send({ type: "set_model", model: fast ? baseSpec(model) : fastTwin })}
         >
           <Zap size={12} fill={fast ? "currentColor" : "none"} />
-          Fast
+          <span className="cw-foot-label">Fast</span>
         </button>
       )}
       <Menu
         label="Reasoning effort"
+        title={`Reasoning effort: ${EFFORT_LABELS[effort] ?? effort}`}
         value={effort}
         items={effortOptions(models, model).map((e) => ({
           id: e,
@@ -305,14 +306,14 @@ function Footer({ pane }: { pane: Pane }) {
         }
       >
         <EffortIcon effort={effort} size={12} />
-        <span className="dim">{EFFORT_LABELS[effort] ?? effort}</span>
+        <span className="cw-foot-label dim">{EFFORT_LABELS[effort] ?? effort}</span>
       </Menu>
       <SubagentMenu model={model} />
       <span className="grow" />
       {pane.worktree && (
-        <span className="cw-foot-item dim">
+        <span className="cw-foot-item cw-foot-branch dim" title={`Branch ${pane.worktree.branch}`}>
           <GitBranch size={12} />
-          {pane.worktree.branch}
+          <span className="cw-foot-label">{pane.worktree.branch}</span>
         </span>
       )}
       {!fresh && ((prefs.showCost && usage.cost != null) || prefs.showContext) && (
@@ -332,7 +333,7 @@ function Footer({ pane }: { pane: Pane }) {
             .join(" · ")}
         >
           {prefs.showCost && usage.cost != null && (
-            <span className="dim">${usage.cost.toFixed(2)}</span>
+            <span className="cw-foot-cost dim">${usage.cost.toFixed(2)}</span>
           )}
           {prefs.showContext && (
             <>
