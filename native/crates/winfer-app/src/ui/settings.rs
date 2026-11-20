@@ -353,7 +353,11 @@ impl Root {
             }))
             .child(div().flex_1().truncate().child(current))
             .child(Icon::new(IconName::ChevronDown).size(px(12.0)).text_color(c.subtle));
-        let mut list = div().id(SharedString::from(format!("select-list-{key}"))).w(px(200.0)).max_h(px(260.0)).overflow_y_scroll().rounded_md().border_1().border_color(c.border_strong).bg(c.raised).p_1();
+        let mut list = div().id(SharedString::from(format!("select-list-{key}"))).w(px(200.0)).max_h(px(260.0)).overflow_y_scroll().rounded_md().border_1().border_color(c.border_strong).bg(c.raised).p_1()
+            // The list can hang outside the settings window; it must block the mouse itself, or a
+            // click on the part outside lands on the backdrop behind and closes Settings.
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         if open {
             for (i, (value, label)) in options.into_iter().enumerate() {
                 let (on_pick, picked) = (on_pick.clone(), value.clone());
