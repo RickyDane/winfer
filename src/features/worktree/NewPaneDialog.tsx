@@ -123,7 +123,7 @@ export function NewPaneDialog() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={close}>
-      <div className="anim-dialog flex h-fit max-h-[78vh] w-[600px] flex-col overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog flex h-fit max-h-[78vh] w-[600px] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="space-y-3 border-b border-border px-5 pt-4 pb-3.5">
           <div className="flex items-center gap-2">
             <span className="grid size-[26px] place-items-center rounded-lg bg-accent-soft text-accent">

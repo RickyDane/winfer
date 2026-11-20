@@ -540,7 +540,7 @@ export function ReviewInbox() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog flex h-[min(700px,86vh)] w-[1040px] max-w-[94vw] flex-col overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog flex h-[min(700px,86vh)] w-[1040px] max-w-[94vw] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2 border-b border-border px-5 py-3">
           <Inbox size={15} className="text-accent" />
           <h1 className="text-[15px] font-semibold text-fg">Review</h1>

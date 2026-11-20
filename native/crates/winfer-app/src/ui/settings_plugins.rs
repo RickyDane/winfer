@@ -163,11 +163,12 @@ impl Root {
         };
         let updates: Vec<Value> = plugins.iter().filter_map(latest_for).collect();
         let not_installed: Vec<Value> = catalog.iter().flatten().filter(|e| !plugins.iter().any(|p| p["id"] == e["id"])).cloned().collect();
-        let tab_button = |id: &'static str, label: String, on: bool, dot: bool, cx: &mut Context<Self>| {
+        // `value` is the tab it opens ("discover" / "installed"); `id` only names the element.
+        let tab_button = |id: &'static str, value: &'static str, label: String, on: bool, dot: bool, cx: &mut Context<Self>| {
             div().id(id).flex().items_center().gap_1p5().rounded_md().px_2p5().py_1().text_xs().cursor_pointer()
                 .when(on, |d| d.bg(c.active).text_color(c.fg)).when(!on, |d| d.text_color(c.muted).hover(move |d| d.text_color(c.fg)))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.plugin_page.tab = Some(id);
+                    this.plugin_page.tab = Some(value);
                     cx.notify();
                 }))
                 .child(label)
@@ -176,8 +177,8 @@ impl Root {
         let discover_label = catalog.as_ref().map_or("Discover".to_string(), |_| format!("Discover {}", not_installed.len()));
         let toolbar = div().flex().items_center().gap_3()
             .child(div().flex().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_0p5()
-                .child(tab_button("plugins-discover", discover_label, tab == "discover", false, cx))
-                .child(tab_button("plugins-installed", format!("Installed {}", plugins.len()), tab == "installed", !updates.is_empty(), cx)))
+                .child(tab_button("plugins-discover", "discover", discover_label, tab == "discover", false, cx))
+                .child(tab_button("plugins-installed", "installed", format!("Installed {}", plugins.len()), tab == "installed", !updates.is_empty(), cx)))
             .child(div().flex_1().child(Input::new(&search)));
         let page = div().flex().flex_col().gap_5().child(toolbar);
         if tab == "discover" {
@@ -228,7 +229,9 @@ impl Root {
             return out.child(empty(if not_installed.is_empty() { "You have every plugin from the store".into() } else { "Nothing in the store matches".to_string() }));
         }
         let busy = self.plugin_page.busy.clone();
-        let mut grid = div().flex().flex_wrap().gap_3();
+        // Two even columns that fill the page: each cell is half the width, with the gap as padding
+        // (the grid's negative margin takes the outer padding back).
+        let mut grid = div().flex().flex_wrap().mx(px(-6.0));
         for e in shown {
             let id = str_of(&e["id"]).to_string();
             let open = self.plugin_page.expanded.as_ref() == Some(&id);
@@ -240,7 +243,7 @@ impl Root {
             let label = if busy.as_ref() == Some(&id) { "Installing…" } else { "Install" };
             let entry = e.clone();
             let enabled = busy.is_none();
-            grid = grid.child(div().w(px(250.0)).flex().flex_col().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_3p5()
+            grid = grid.child(div().w(relative(0.5)).p(px(6.0)).child(div().size_full().flex().flex_col().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_3p5()
                 .child(div().truncate().text_size(px(13.0)).text_color(c.fg).child(str_of(&e["name"]).to_string()))
                 .child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(format!("{author}{version}")))
                 .child(div().id(SharedString::from(format!("desc-{id}"))).mt_2p5().text_xs().text_color(c.muted).cursor_pointer().when(!open, |d| d.line_clamp(3))
@@ -255,7 +258,7 @@ impl Root {
                         if enabled {
                             this.install_plugin(entry.clone(), false, window, cx);
                         }
-                    })))));
+                    }))))));
         }
         out.child(grid)
     }

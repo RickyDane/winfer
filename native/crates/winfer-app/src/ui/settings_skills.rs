@@ -230,11 +230,12 @@ impl Root {
         let installed = self.skill_page.installed.clone();
         let listing = self.skill_page.listings.get(&source).cloned();
         let outdated: Vec<Value> = installed.iter().flatten().filter(|sk| origin_of(sk).is_some_and(|o| is_outdated(sk, self.skill_page.listings.get(s(&o["repo"]))))).cloned().collect();
-        let tab_button = |id: &'static str, label: String, on: bool, dot: bool, cx: &mut Context<Self>| {
+        // `value` is the tab it opens ("discover" / "installed"); `id` only names the element.
+        let tab_button = |id: &'static str, value: &'static str, label: String, on: bool, dot: bool, cx: &mut Context<Self>| {
             div().id(id).flex().items_center().gap_1p5().rounded_md().px_2p5().py_1().text_xs().cursor_pointer()
                 .when(on, |d| d.bg(c.active).text_color(c.fg)).when(!on, |d| d.text_color(c.muted).hover(move |d| d.text_color(c.fg)))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.skill_page.tab = Some(id);
+                    this.skill_page.tab = Some(value);
                     cx.notify();
                 }))
                 .child(label)
@@ -244,8 +245,8 @@ impl Root {
         let have = installed.as_ref().map_or("Installed".to_string(), |l| format!("Installed {}", l.len()));
         let toolbar = div().flex().items_center().gap_3()
             .child(div().flex().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_0p5()
-                .child(tab_button("skills-discover", discover, tab == "discover", false, cx))
-                .child(tab_button("skills-installed", have, tab == "installed", !outdated.is_empty(), cx)))
+                .child(tab_button("skills-discover", "discover", discover, tab == "discover", false, cx))
+                .child(tab_button("skills-installed", "installed", have, tab == "installed", !outdated.is_empty(), cx)))
             .child(div().flex_1().child(Input::new(&search)));
         let selected = self.skill_targets(cx);
         let mut chips = div().flex().flex_wrap().gap_1p5();
@@ -320,7 +321,8 @@ impl Root {
                 out = out.child(note(if all.is_empty() { format!("{source} has no skills. No folder in it has a SKILL.md.") } else { format!("No skill in {source} matches “{query}”") }));
             }
             let busy = self.skill_page.busy.clone();
-            let mut grid = div().flex().flex_wrap().gap_3();
+            // Two even columns that fill the page (see the plugins page).
+            let mut grid = div().flex().flex_wrap().mx(px(-6.0));
             for skill in shown {
                 let name = s(&skill["name"]).to_string();
                 let path = s(&skill["path"]).to_string();
@@ -341,7 +343,7 @@ impl Root {
                 }
                 let (repo, entry) = (s(&listing["repo"]).to_string(), skill.clone());
                 let for_text = format!("For {}", self.target_names(&copies));
-                grid = grid.child(div().w(px(250.0)).flex().flex_col().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_3p5()
+                grid = grid.child(div().w(relative(0.5)).p(px(6.0)).child(div().size_full().flex().flex_col().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_3p5()
                     .child(div().truncate().text_size(px(12.0)).text_color(c.fg).child(name.clone()))
                     .child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(format!("{path} · {files} file{}", if files == 1 { "" } else { "s" })))
                     .child(div().id(SharedString::from(format!("skill-desc-{path}"))).mt_2p5().text_xs().text_color(c.muted).cursor_pointer().when(!open, |d| d.line_clamp(3))
@@ -357,7 +359,7 @@ impl Root {
                             if can {
                                 this.install_skill(repo.clone(), entry.clone(), outdated, into.clone(), cx);
                             }
-                        }))))));
+                        })))))));
             }
             out = out.child(grid);
         } else {

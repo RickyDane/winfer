@@ -4,11 +4,12 @@
   "version": "0.1.101",
   "type": "module",
   "scripts": {
+    "gen:settings-index": "node scripts/gen-settings-index.mjs",
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "node scripts/gen-settings-index.mjs --check && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "node scripts/gen-settings-index.mjs --check && vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

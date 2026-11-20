@@ -173,7 +173,7 @@ export function HistoryView() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog flex h-[min(640px,84vh)] w-[820px] max-w-[94vw] flex-col overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog flex h-[min(640px,84vh)] w-[820px] max-w-[94vw] flex-col isolate overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="space-y-3 border-b border-border px-5 pt-4 pb-3">
           <div className="flex items-center gap-2">
             <Clock size={15} className="text-accent" />

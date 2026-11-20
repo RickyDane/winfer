@@ -557,7 +557,7 @@ impl Root {
             labels = labels.child(if i == 0 { div().absolute().left_0().child(text) } else if i == bars.len() - 1 { div().absolute().right_0().child(text) } else { div().absolute().left(relative((i as f32 + 0.5) / bars.len() as f32)).child(text) });
         }
         div().flex().gap_2().child(axis).child(div().relative().min_w_0().flex_1()
-            .child(div().relative().h(px(160.0)).child(grid).when(!stacked, |d| d.child(line_canvas)).child(columns).children(card))
+            .child(div().relative().h(px(160.0)).rounded_md().bg(c.app).border_1().border_color(c.border).child(grid).when(!stacked, |d| d.child(line_canvas)).child(columns).children(card))
             .child(labels))
     }
 
@@ -697,7 +697,7 @@ impl Root {
         }
         div().flex().flex_col().gap_1()
             .child(div().flex().items_baseline().gap_2().text_xs().child(div().flex_1().text_color(c.muted).child(w.label.clone())).child(div().font_family(mono).text_size(px(11.0)).text_color(c.fg).child(format!("{}% left", left.round()))))
-            .child(div().relative().h(px(64.0)).child(grid).child(chart))
+            .child(div().relative().h(px(64.0)).rounded_md().bg(c.app).border_1().border_color(c.border).child(grid).child(chart))
             .child(reset_line(w, out, now, c))
     }
 }

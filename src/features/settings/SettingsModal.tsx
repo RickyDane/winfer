@@ -229,10 +229,13 @@ function AppearanceSettings() {
           <Segmented<"light" | "dark" | "system"> label="Light or dark" value={mode} options={[["light", "Light"], ["dark", "Dark"], ["system", "System"]]} onChange={choose} />
         </Row>
       </Card>
-      <Card title="Dark themes">{grid("dark")}</Card>
-      <Card title="Light themes" description={<>Also from the command palette ({keysFor({ type: "ui.palette" })}, “Theme:”).</>}>
-        {grid("light")}
-      </Card>
+      {/* Only the themes of the selected mode; System shows both, one for each. */}
+      {mode !== "light" && <Card title={mode === "system" ? "Dark theme" : "Dark themes"}>{grid("dark")}</Card>}
+      {mode !== "dark" && (
+        <Card title={mode === "system" ? "Light theme" : "Light themes"} description={<>Also from the command palette ({keysFor({ type: "ui.palette" })}, “Theme:”).</>}>
+          {grid("light")}
+        </Card>
+      )}
     </>
   );
 }
@@ -532,7 +535,7 @@ function SystemPromptSettings() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={save}
-          rows={4}
+          rows={12}
           aria-label="System prompt"
           className="w-full resize-y rounded-md border border-border-strong bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:border-accent"
         />
@@ -2153,7 +2156,7 @@ function StoreToolbar({
     { id: "installed", label: "Installed", icon: PackageCheck },
   ];
   return (
-    <div className="sticky -top-5 z-10 -mx-6 -mt-5 flex items-center gap-3 border-b border-border bg-panel-raised/95 px-6 py-3 backdrop-blur">
+    <div className="sticky top-0 z-10 -mx-8 -mt-1 flex items-center gap-3 border-b border-border bg-panel-raised/95 px-8 py-3 backdrop-blur">
       <div role="tablist" className="flex shrink-0 rounded-lg border border-border bg-panel p-0.5">
         {tabs.map((t) => (
           <button
@@ -2985,10 +2988,11 @@ export function SettingsModal() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[3px]" onMouseDown={() => setSettings(false)}>
       <div
-        className="anim-dialog flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl"
+        className="anim-dialog isolate flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <nav className="flex w-[232px] shrink-0 flex-col border-r border-border bg-panel">
+        {/* Its own rounded left corners: WebKit doesn't clip scrolling children to the dialog's radius. */}
+        <nav className="flex w-[232px] shrink-0 flex-col rounded-l-[13px] border-r border-border bg-panel">
           <div className="space-y-3 px-3 pt-3.5 pb-1">
             <h1 className="flex items-center gap-2 px-1 text-sm font-semibold text-fg">
               <Settings2 size={15} className="text-accent" />

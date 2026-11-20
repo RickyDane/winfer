@@ -66,7 +66,7 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
         ))}
       </div>
       <div className="relative min-w-0 flex-1">
-        <div className="relative h-40" onMouseLeave={() => setHover(null)}>
+        <div className="relative h-40 rounded-md bg-app ring-1 ring-border ring-inset" onMouseLeave={() => setHover(null)}>
           {ticks.map((t, i) => (
             <div key={t} className={cn("absolute inset-x-0 border-t", i === ticks.length - 1 ? "border-border-strong" : "border-dashed border-border")} style={{ top: `${(i / (ticks.length - 1)) * 100}%` }} />
           ))}
@@ -92,7 +92,7 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
                 lines.map((p) => (
                   <span
                     key={p}
-                    className="absolute size-2 -translate-1/2 rounded-full border-2 border-panel-raised"
+                    className="absolute size-2 -translate-1/2 rounded-full border-2 border-app"
                     style={{ left: `${((hover + 0.5) / bars.length) * 100}%`, top: `${y(hovered[metric][p] ?? 0)}%`, background: COLORS[p] }}
                   />
                 ))}

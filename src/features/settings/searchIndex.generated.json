@@ -1,0 +1,582 @@
+[
+ {
+  "page": "general",
+  "label": "Terminals",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Text size",
+  "words": "terminal.zoom terminal.zoom terminal.zoom Ctrl"
+ },
+ {
+  "page": "general",
+  "label": "GPU acceleration",
+  "words": "Draw terminals with the WebGL renderer. Turn off if text looks garbled or flickers, to save GPU memory; DOM renderer is slower heavy output."
+ },
+ {
+  "page": "general",
+  "label": "Code editor",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Open projects and worktrees in",
+  "words": "s, agent editor.open focused No supported editor found (VS Code, Cursor, Zed, Visual Studio, JetBrains IDEs, Sublime Text, Xcode…)."
+ },
+ {
+  "page": "general",
+  "label": "Keyboard",
+  "words": ""
+ },
+ {
+  "page": "general",
+  "label": "Keyboard shortcuts",
+  "words": "See every shortcut and change any of them."
+ },
+ {
+  "page": "theme",
+  "label": "Mode",
+  "words": ""
+ },
+ {
+  "page": "theme",
+  "label": "Light or dark",
+  "words": "system Follows your system's light/dark setting, with the theme picked for each below. Also the sun/moon button in the sidebar."
+ },
+ {
+  "page": "theme",
+  "label": "system Dark theme Dark themes",
+  "words": ""
+ },
+ {
+  "page": "theme",
+  "label": "system Light theme Light themes",
+  "words": "ui.palette"
+ },
+ {
+  "page": "agents",
+  "label": "New panes",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Default agent",
+  "words": "ui.overlay newPane"
+ },
+ {
+  "page": "agents",
+  "label": "Always open new agents in their own worktree",
+  "words": "pane.spawn default"
+ },
+ {
+  "page": "agents",
+  "label": "Models",
+  "words": "The model each agent starts with in new panes."
+ },
+ {
+  "page": "agents",
+  "label": "Versions",
+  "words": "Updating changes the CLI on disk; running panes keep their version until restarted."
+ },
+ {
+  "page": "agents",
+  "label": "ml-1.5 font-mono text-[11px] text-fg-subtle",
+  "words": "Checking… Up to date."
+ },
+ {
+  "page": "agents",
+  "label": "Check for agent updates",
+  "words": "winfer also checks every few hours and tells you when one is out."
+ },
+ {
+  "page": "agents",
+  "label": "Permissions",
+  "words": "Applies to agents started (or restarted) after the change."
+ },
+ {
+  "page": "agents",
+  "label": "System prompt",
+  "words": "Given to every agent when it starts (or restarts). Claude Code and Codex get it as a system prompt; other agents get it in front of their first message. Leave it empty to add nothing."
+ },
+ {
+  "page": "agents",
+  "label": "Instructions for every agent",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Agent tools",
+  "words": "Tools agents rarely use are left out, since every tool an agent is offered takes up context in each request. Turn on the ones you want. Applies to agents started (or restarted) after the change."
+ },
+ {
+  "page": "agents",
+  "label": "Review inbox",
+  "words": "Summaries use the LLM under AI; with it off, cards show the agent's last output instead."
+ },
+ {
+  "page": "agents",
+  "label": "Run tests when an agent finishes",
+  "words": "Runs the project's tests in agent's worktree."
+ },
+ {
+  "page": "agents",
+  "label": "Screenshot the dev server",
+  "words": "Shows the agent's running app on its review card."
+ },
+ {
+  "page": "agents",
+  "label": "Session progress",
+  "words": "Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked."
+ },
+ {
+  "page": "agents",
+  "label": "Estimate how far working agents are",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Estimate progress",
+  "words": ""
+ },
+ {
+  "page": "agents",
+  "label": "Check every",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "winfer code",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Loading…",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Use TUI style",
+  "words": "New winfer code panes show the terminal UI. Turn off for web interface (timeline of tool calls, inline diffs and approvals). Same sessions, settings hooks; open keep what they started with. For font-mono in a terminal). sessions start with these; /model, /effort, /mode /compaction change them from inside session too. Text size"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Context meter",
+  "words": "How full the context window is, in status line. Click it for breakdown (also /cost)."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Cost",
+  "words": "The session's cost in the status line, when backend reports one (API pricing; your plan may cover it)."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Tokens per second",
+  "words": "Streaming speed next to the working indicator."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Plan above the composer",
+  "words": "The agent's todo list and running subagents."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Show thinking",
+  "words": "Open the model's reasoning instead of collapsing it."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Live shell output",
+  "words": "Open a command's output while it runs."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Compact layout",
+  "words": "Tighter spacing in the transcript."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Text size",
+  "words": "terminal.zoom terminal.zoom terminal.zoom Ctrl"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Model",
+  "words": "Automatic uses your ChatGPT account when signed in (Settings → AI), else Claude Code or Codex."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Reasoning effort",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Permission mode",
+  "words": "yolo Nothing asks before editing files or running commands. Shift+Tab cycles it inside a session."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Auto-approve in panes",
+  "words": "winfer code panes start in yolo mode (--yolo), overriding the permission above. Applies to started or restarted after change. Start mode: nothing asks before editing files running commands."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Plan sidebar",
+  "words": "Shows the agent's plan in a sidebar on right when pane is wide enough, TUI and web UI; otherwise it stays above prompt. /sidebar toggles inside session."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Lean setup",
+  "words": "Starts agents with fewer tools and skills, so every request is smaller. Applies to sessions started (or restarted) after the change."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Claude Code",
+  "words": "When winfer code runs a Claude model: a short system prompt and only the tools coding needs (Bash, Read, Edit, Write, Grep, Glob, the plan tools, Agent, plus Skill when it has skills; no user MCP servers). In the bench: 71% fewer input tokens, 79% fewer at full price, same pass rate. Project CLAUDE.md and project skills still load."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Lean Claude Code",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Codex",
+  "words": "When winfer code runs a Codex model: no ChatGPT apps, plugins and their skills, bundled skills, image generation, computer use, Codex's own browser or goals, no permission, apps and collaboration-mode instructions, only the skills picked below, and each tool result capped at 4k tokens. winfer's tools stay. In the bench: 37% fewer input tokens, same pass rate."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Lean Codex",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Short Codex prompt",
+  "words": "Also swaps Codex's built-in system prompt (about 5k tokens) for a short one. In the bench: 52% fewer input tokens instead of 37%, same pass rate on 12 tasks, but Codex loses its own guidance tools."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Codex CLI panes too",
+  "words": "Gives Codex CLI panes (not just winfer code) the same lean setup and output cap, with Codex's built-in prompt. Off by default: Codex runs as you configured it. A setup other sessions don't share may miss Codex's prompt cache, so it can cost more."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Lean Codex CLI panes",
+  "words": ""
+ },
+ {
+  "page": "winfer-code",
+  "label": "Skills",
+  "words": "Loads all your skills (Claude Code also gets your user settings, hooks and plugins). Each skill's description goes into every request. Loads only the skills you pick below (Claude Code without your user settings, hooks or plugins). Picking none turns skills off. Claude Code's built-in skills and project skills still come along."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Context compaction",
+  "words": "When a conversation fills the model's context window, these keep it going and save tokens."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Micro-compact at",
+  "words": "Trims old tool output and file contents from earlier turns. Claude Code and Codex are briefly restarted between turns to apply it."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Full compact at",
+  "words": "text-warning At or below micro-compact's level, so micro-compact never runs. Summarizes the conversation; Claude Code and Codex are asked to compact. With the ChatGPT account, winfer code uses its own tools; Claude Code and Codex use theirs. git, cargo, pnpm"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Tools",
+  "words": "With the ChatGPT account, winfer code uses its own tools; Claude Code and Codex use theirs."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Always-allowed commands",
+  "words": "Commands starting with these run without asking, e.g. git, cargo, pnpm (ChatGPT account)."
+ },
+ {
+  "page": "winfer-code",
+  "label": "MCP servers",
+  "words": "Extra servers for every backend, as JSON: font-mono { \"name\": { \"command\": \"…\", \"args\": [], \"env\": {} } } . winfer's own server is added automatically in panes. {}"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Use local models",
+  "words": "font-mono Run winfer code on a model served from your machine or network (vLLM, LM Studio, Ollama, llama.cpp, mtplx…), with winfer's own tools. The server needs the OpenAI Responses API ( /v1/responses local/&lt;model&gt; 127.0.0.1 Host"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Host / Port",
+  "words": "font-mono"
+ },
+ {
+  "page": "winfer-code",
+  "label": "API path",
+  "words": "Where the OpenAI-compatible API lives on the server."
+ },
+ {
+  "page": "winfer-code",
+  "label": "API key",
+  "words": "Sent as a bearer token. Most local servers don't need one."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Context window",
+  "words": "Tokens, for the context meter and compaction. Automatic uses what the server reports for the model (else 32k)."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Thinking levels",
+  "words": "Comma-separated, as the model's chat template names them (Qwen3.8: font-mono low, medium, xhigh font-mono none turns thinking off. Empty: only the model default. When the server shows the model's chat template (llama.cpp), its own levels are used instead, and a picked level is fitted to them (e.g. font-mono high font-mono xhigh"
+ },
+ {
+  "page": "winfer-code",
+  "label": "Send level to chat template",
+  "words": "Passes it as chat_template_kwargs.reasoning_effort, where llama.cpp, oMLX and MLX servers let the template read it. Turn off if your server rejects field."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Web search",
+  "words": "Gives the models a web_search tool when server searches web (oMLX: its Web search settings pick provider and result count)."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Connection",
+  "words": "text-success text-danger Lists the server's models."
+ },
+ {
+  "page": "ai",
+  "label": "ChatGPT account",
+  "words": "Runs the LLM below on your ChatGPT plan (Plus or Pro); no API key needed. Until you sign in, the Codex CLI's own login is used instead if Codex is installed. Set a weekly limit or disconnect winfer in ChatGPT's settings."
+ },
+ {
+  "page": "ai",
+  "label": "flex items-center gap-2 grid size-5 place-items-center rounded-full bg-success/15 text-success Signed in",
+  "words": ""
+ },
+ {
+  "page": "ai",
+  "label": "Not signed in",
+  "words": "signin Finish signing in in your browser…"
+ },
+ {
+  "page": "ai",
+  "label": "LLM",
+  "words": "Writes progress estimates, review summaries and other short texts in winfer."
+ },
+ {
+  "page": "ai",
+  "label": "Provider",
+  "words": "claude Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings. codex Runs Codex headless with your Codex login, read-only and without your Codex config."
+ },
+ {
+  "page": "ai",
+  "label": "Model",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Input",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Read aloud",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Speak agent updates aloud",
+  "words": "“Codex needs your input”, “Claude Code finished”."
+ },
+ {
+  "page": "voice",
+  "label": "Live voice",
+  "words": "voice.live"
+ },
+ {
+  "page": "voice",
+  "label": "Connection",
+  "words": "text-warning s realtime model, which operates winfer directly (fastest; billed to the API account). The ChatGPT plan runs its voice model on the Codex CLI codex login and your ChatGPT sign-in sk-… OpenAI API key"
+ },
+ {
+  "page": "voice",
+  "label": "OpenAI API key",
+  "words": "Stored in the keychain. Create one at platform.openai.com → API keys."
+ },
+ {
+  "page": "voice",
+  "label": "Model (API key)",
+  "words": ""
+ },
+ {
+  "page": "voice",
+  "label": "Voice",
+  "words": "API key · ChatGPT plan. Applies to the next conversation."
+ },
+ {
+  "page": "voice",
+  "label": "System prompt",
+  "words": "text-accent hover:underline Reset to default"
+ },
+ {
+  "page": "voice",
+  "label": "Microphone",
+  "words": "mt-1.5 block h-1.5 w-40 overflow-hidden rounded-full bg-hover block h-full bg-success transition-[width] duration-75 ) : ( result && text-success text-danger"
+ },
+ {
+  "page": "plugins",
+  "label": "Options",
+  "words": ""
+ },
+ {
+  "page": "plugins",
+  "label": "Hide names on plugin tabs",
+  "words": "Plugin page tabs in the title bar show just their icon. Hover a tab to see its name."
+ },
+ {
+  "page": "plugins",
+  "label": "Your own plugins",
+  "words": "A folder with a plugin.json in the plugins folder shows up here, off until you turn it on. Reload after changing one."
+ },
+ {
+  "page": "usage",
+  "label": "On panes",
+  "words": ""
+ },
+ {
+  "page": "usage",
+  "label": "Show task cost on panes",
+  "words": "Each agent shows what its task has cost so far, at API prices, next to title: worktree's spend, or session's when it works in a shared folder."
+ },
+ {
+  "page": "mobile",
+  "label": "Phone",
+  "words": "Follow your agents from your phone: get a notification when one finishes or asks something, read its thread and answer it. Messages are end-to-end encrypted; the relay only passes them on."
+ },
+ {
+  "page": "mobile",
+  "label": "Pair a phone",
+  "words": "Scan the code with your phone's camera, open the page and add it to your Home Screen. On iPhone, notifications need iOS 16.4 or later and the Home Screen app."
+ },
+ {
+  "page": "mobile",
+  "label": "Relay",
+  "words": "Where winfer and your phones meet. Change it only if you run your own relay (relay/ in the winfer repo)."
+ },
+ {
+  "page": "mobile",
+  "label": "Relay URL",
+  "words": ""
+ },
+ {
+  "page": "data",
+  "label": "Export",
+  "words": "Saves settings, workspaces, plugins with their data, and usage history into one file to import on another machine. Agent sign-ins, paired phones, browser logins and winfer code chats stay here."
+ },
+ {
+  "page": "data",
+  "label": "Include secrets",
+  "words": "ChatGPT sign-in, the voice OpenAI key and plugin vault values, encrypted with a passphrase you'll enter when importing."
+ },
+ {
+  "page": "data",
+  "label": "Passphrase",
+  "words": "The passphrases don't match. At least 8 characters. It can't be recovered. Leave empty to import without the secrets."
+ },
+ {
+  "page": "data",
+  "label": "Export file",
+  "words": ""
+ },
+ {
+  "page": "data",
+  "label": "Import",
+  "words": "Replaces this machine's data with an export, then restarts. Paths under the other machine's home folder are moved to this one's."
+ },
+ {
+  "page": "data",
+  "label": "Import and restart",
+  "words": ""
+ },
+ {
+  "page": "updates",
+  "label": "Release channel",
+  "words": ""
+ },
+ {
+  "page": "updates",
+  "label": "Channel",
+  "words": "Stable: tested releases. Nebula: every change as soon as it lands."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Diagnostics",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Loading…",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Memory",
+  "words": "winfer's own resident memory, sampled every 5 seconds into the log. A steady climb before a crash points at a leak; the timeline in the export shows it."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Now / session peak",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Terminals",
+  "words": "Each live pane also holds up to 2 MB of replay scrollback in the backend, plus its xterm buffer in the webview."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Last 2 minutes",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Logs",
+  "words": "winfer.log keeps the app and webview log (rotated at 5 MB); crash.log holds panics with backtraces — on Windows also a minidump per native crash. Both live in the folder below."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Log folder",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Sizes",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Verbose logging",
+  "words": "Also records debug lines (more detail, faster-growing log). Kept across restarts."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Copy summary",
+  "words": "Version, memory and the crash-log tail — paste it into a bug report."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Export for a bug report",
+  "words": "A zip with the summary, both logs and the memory timeline. No settings, chats or secrets."
+ },
+ {
+  "page": "diagnostics",
+  "label": "Clear logs",
+  "words": ""
+ },
+ {
+  "page": "diagnostics",
+  "label": "Latest crash",
+  "words": "The end of crash.log. Full backtraces are in the file and in the export."
+ }
+]

@@ -187,7 +187,7 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
         <span className="font-mono text-[11px] text-fg">{Math.round(left)}% left</span>
       </div>
       <div
-        className="relative h-16"
+        className="relative h-16 rounded-md bg-app ring-1 ring-border ring-inset"
         onMouseMove={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
           const f = (e.clientX - r.left) / r.width;
@@ -207,7 +207,7 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
             <line x1={x(now)} y1={100 - left} x2={x(outAt)} y2={100} stroke="var(--color-warning)" strokeWidth={1.5} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
           )}
         </svg>
-        <span className="absolute size-2 -translate-1/2 rounded-full border-2 border-panel-raised" style={{ left: `${x(now) / 10}%`, top: `${100 - left}%`, background: color }} />
+        <span className="absolute size-2 -translate-1/2 rounded-full border-2 border-app" style={{ left: `${x(now) / 10}%`, top: `${100 - left}%`, background: color }} />
         {hoverAt !== null && (
           <>
             <div className="absolute inset-y-0 border-l border-fg-subtle" style={{ left: `${hover! * 100}%` }} />

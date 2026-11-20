@@ -52,29 +52,61 @@ struct IndexEntry {
     words: String,
 }
 
+/// The index: searchIndex.generated.json (every label and hint on the pages, made by
+/// `scripts/gen-settings-index.mjs`) plus searchIndex.json (words people use for a setting that
+/// its page doesn't). Entries with the same page and label are merged. Shared with the Tauri app.
 static SEARCH_INDEX: std::sync::LazyLock<Vec<(&'static str, &'static str, &'static str)>> = std::sync::LazyLock::new(|| {
-    let entries: Vec<IndexEntry> = serde_json::from_str(include_str!("../../../../../src/features/settings/searchIndex.json")).expect("searchIndex.json");
-    entries.into_iter().map(|e| (&*e.page.leak(), &*e.label.leak(), &*e.words.leak())).collect()
+    let mut merged: Vec<(String, String, String)> = Vec::new();
+    for json in [include_str!("../../../../../src/features/settings/searchIndex.json"), include_str!("../../../../../src/features/settings/searchIndex.generated.json")] {
+        let entries: Vec<IndexEntry> = serde_json::from_str(json).expect("settings search index");
+        for e in entries {
+            match merged.iter_mut().find(|m| m.0 == e.page && m.1 == e.label) {
+                Some(m) => {
+                    m.2.push(' ');
+                    m.2.push_str(&e.words);
+                }
+                None => merged.push((e.page, e.label, e.words)),
+            }
+        }
+    }
+    merged.into_iter().map(|(p, l, w)| (&*p.leak(), &*l.leak(), &*w.leak())).collect()
 });
 
-/// Settings whose label, words or page match every word of `query`, best first.
+/// Lower-case words (letters and digits) of a text: "Auto-approve (yolo)" → auto, approve, yolo.
+fn words_of(text: &str) -> Vec<String> {
+    text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+/// Every query word starts a word of the text: "host" finds "Host / Port", "port" not "Export".
+fn matches_words(text: &str, query: &[String]) -> bool {
+    let hay = words_of(text);
+    query.iter().all(|q| hay.iter().any(|w| w.starts_with(q.as_str())))
+}
+
+/// Settings whose label, words or page match every word of `query`; labels starting with the
+/// first word come first.
 fn search_settings(query: &str) -> Vec<(&'static str, &'static str, &'static str)> {
-    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let words = words_of(query);
     if words.is_empty() {
         return Vec::new();
     }
     let pages = GROUPS.iter().flat_map(|(_, p)| p.iter()).map(|p| (p.0, p.1, p.3));
-    let mut hits: Vec<(u8, (&str, &str, &str))> = pages.map(|(id, label, desc)| (id, label, desc))
-        .chain(SEARCH_INDEX.iter().copied())
+    let mut hits: Vec<(u8, (&str, &str, &str))> = pages.chain(SEARCH_INDEX.iter().copied())
         .filter_map(|(page, label, words_of)| {
             let page_label = page_info(page).1.1;
-            let hay = format!("{label} {words_of} {page_label}").to_lowercase();
-            words.iter().all(|w| hay.contains(w.as_str())).then(|| (if label.to_lowercase().starts_with(&words[0]) { 0 } else { 1 }, (page, label, words_of)))
+            matches_words(&format!("{label} {words_of} {page_label}"), &words).then(|| {
+                let rank = if words_of_first(label).is_some_and(|w| w.starts_with(&words[0])) { 0 } else if matches_words(label, &words) { 1 } else { 2 };
+                (rank, (page, label, words_of))
+            })
         })
         .collect();
     hits.sort_by_key(|h| h.0);
     let mut seen = std::collections::HashSet::new();
     hits.into_iter().map(|h| h.1).filter(|(page, label, _)| seen.insert((*page, *label))).collect()
+}
+
+fn words_of_first(text: &str) -> Option<String> {
+    words_of(text).into_iter().next()
 }
 
 pub struct SettingsUi {
@@ -492,8 +524,9 @@ impl Root {
             .flex_col()
             .gap_6()
             .child(card(c, "Mode", None).child(row_marked(c, "Light or dark", mark, Some(hint), mode)))
-            .child(card(c, "Dark themes", None).child(dark_grid))
-            .child(card(c, "Light themes", Some("Also from the command palette (⌘K, “Theme:”).")).child(light_grid))
+            // Only the themes of the selected mode; System shows both, one for each.
+            .when(system || dark, |d| d.child(card(c, if system { "Dark theme" } else { "Dark themes" }, None).child(dark_grid)))
+            .when(system || !dark, |d| d.child(card(c, if system { "Light theme" } else { "Light themes" }, Some("Also from the command palette (⌘K, “Theme:”).")).child(light_grid)))
     }
 
     fn page_agents(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -606,7 +639,7 @@ impl Root {
             c,
             "Instructions for every agent",
             None,
-            div().flex().flex_col().gap_2().child(div().h(px(120.0)).child(Editor::new(&prompt))).child(
+            div().flex().flex_col().gap_2().child(Editor::new(&prompt).h(px(220.0))).child(
                 div().flex().gap_2().justify_end().when(custom, |d| d.child(plain_button(c, "prompt-reset", "Reset to default").on_click(reset_prompt))).child(plain_button(c, "prompt-save", "Save").on_click(save_prompt)),
             ),
         ));
@@ -1112,7 +1145,7 @@ fn chrono_date() -> String {
 
 #[cfg(test)]
 mod settings_search_tests {
-    use super::{GROUPS, SEARCH_INDEX, search_settings};
+    use super::{GROUPS, SEARCH_INDEX, matches_words, search_settings};
 
     #[test]
     fn every_index_entry_is_on_a_page() {
@@ -1128,6 +1161,10 @@ mod settings_search_tests {
         assert!(search_settings("nebula").iter().any(|h| h.0 == "updates"));
         assert_eq!(search_settings("text size")[0].1, "Text size");
         assert!(search_settings("   ").is_empty());
+        assert!(search_settings("local").iter().any(|h| h.0 == "winfer-code" && h.1 == "Use local models"));
+        assert!(search_settings("host").iter().any(|h| h.0 == "winfer-code" && h.1 == "Host / Port"));
+        assert!(matches_words("Host / Port", &["port".to_string()]));
+        assert!(!matches_words("Export", &["port".to_string()]));
         assert_eq!(search_settings("auto-approve").iter().filter(|h| h.0 == "agents").count(), 1);
         assert!(search_settings("zzz-nothing").is_empty());
     }
