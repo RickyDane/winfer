@@ -403,38 +403,69 @@ impl Root {
             )))
     }
 
+    /// Appearance: light or dark (switches to the theme's pair), then the themes of each mode.
     fn page_theme(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
         let s = self.state.read(cx);
         let current = s.theme.clone();
-        let mut grid = div().flex().flex_wrap().gap_2().p_3();
-        for t in THEMES.iter() {
-            let id = t.id.clone();
-            let selected = t.id == current;
-            let mut dots = div().flex().gap_0p5().ml_auto();
-            for i in 1..=5 {
-                dots = dots.child(div().size_2().rounded_full().bg(crate::theme::hex(&t.ansi[i])));
+        let def = crate::theme::theme_by_id(&current);
+        let dark = def.mode == "dark";
+        let mode_button = |id: &'static str, icon: IconName, label: &'static str, on: bool| {
+            div().id(id).h(px(26.0)).px_3().flex().items_center().gap_1p5().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
+                .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active))
+                .hover(move |d| d.text_color(c.fg))
+                .child(Icon::new(icon).size(px(13.0))).child(label)
+        };
+        let switch_to = |want_dark: bool| move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+            let def = crate::theme::theme_by_id(&this.state.read(cx).theme);
+            if (def.mode == "dark") != want_dark {
+                let next = def.pair.clone();
+                this.update_state(cx, |s| s.theme = next);
             }
-            grid = grid.child(
-                div().id(SharedString::from(format!("theme-{id}"))).w(px(172.0)).overflow_hidden().rounded_md().border_1().border_color(if selected { c.accent } else { c.border }).cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.theme = id.clone())))
-                    .child(
-                        div().flex().items_center().gap_1().px_2().py_2().bg(crate::theme::hex(&t.ui.panel))
-                            .child(div().text_size(px(11.0)).text_color(crate::theme::hex(&t.ui.fg)).child("Aa"))
-                            .child(dots)
-                            .child(div().h_2().w_3().rounded_sm().bg(crate::theme::hex(&t.ui.accent))),
-                    )
-                    .child(
-                        div().flex().items_center().gap_1().border_t_1().border_color(c.border).bg(c.raised).px_2().py_1().text_size(px(11.0)).text_color(c.muted)
+        };
+        let mode = div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+            .child(mode_button("mode-light", IconName::Sun, "Light", !dark).on_click(cx.listener(switch_to(false))))
+            .child(mode_button("mode-dark", IconName::Moon, "Dark", dark).on_click(cx.listener(switch_to(true))));
+        let grid_for = |want: &str, cx: &mut Context<Self>| {
+            let mut grid = div().flex().flex_wrap().gap_2p5().p_3();
+            for t in THEMES.iter().filter(|t| t.mode == want) {
+                let id = t.id.clone();
+                let selected = t.id == current;
+                let mut dots = div().flex().gap_0p5();
+                for i in 1..=5 {
+                    dots = dots.child(div().size(px(7.0)).rounded_full().bg(crate::theme::hex(&t.ansi[i])));
+                }
+                // A tiny window in the theme's colors: sidebar, a pane with text, the accent.
+                let preview = div().h(px(64.0)).flex().gap_1().p_1p5().bg(crate::theme::hex(&t.ui.app))
+                    .child(div().w(px(26.0)).rounded_sm().bg(crate::theme::hex(&t.ui.panel)))
+                    .child(div().flex_1().flex().flex_col().gap_1().p_1p5().rounded_sm().bg(crate::theme::hex(&t.ui.panel))
+                        .child(div().h(px(4.0)).w(px(44.0)).rounded_full().bg(crate::theme::hex(&t.ui.fg)))
+                        .child(div().h(px(4.0)).w(px(30.0)).rounded_full().bg(crate::theme::hex(&t.ui.fg_muted)))
+                        .child(div().flex_1())
+                        .child(div().flex().items_center().justify_between().child(dots).child(div().h(px(6.0)).w(px(16.0)).rounded_full().bg(crate::theme::hex(&t.ui.accent)))));
+                grid = grid.child(
+                    div().id(SharedString::from(format!("theme-{id}"))).w(px(160.0)).overflow_hidden().rounded_lg().border_1().cursor_pointer()
+                        .border_color(if selected { c.accent } else { c.border })
+                        .when(selected, |d| d.shadow(vec![BoxShadow { color: Hsla { a: 0.35, ..c.accent }, offset: point(px(0.0), px(0.0)), blur_radius: px(0.0), spread_radius: px(1.0), inset: false }]))
+                        .hover(move |d| d.border_color(c.border_strong))
+                        .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.theme = id.clone())))
+                        .child(preview)
+                        .child(div().flex().items_center().gap_1().border_t_1().border_color(c.border).bg(c.raised).px_2().py(px(6.0)).text_size(px(11.5)).text_color(if selected { c.fg } else { c.muted })
                             .child(div().flex_1().truncate().child(t.name.clone()))
-                            .when(selected, |d| d.child(Icon::new(IconName::Check).size(px(11.0)).text_color(c.accent))),
-                    ),
-            );
-        }
+                            .when(selected, |d| d.child(Icon::new(IconName::Check).size(px(12.0)).text_color(c.accent)))),
+                );
+            }
+            grid
+        };
+        let pair = crate::theme::theme_by_id(&def.pair).name.clone();
+        let dark_grid = grid_for("dark", cx);
+        let light_grid = grid_for("light", cx);
         div()
             .flex()
             .flex_col()
             .gap_6()
-            .child(card(c, "Theme", Some("Also from the command palette (⌘K, “Theme:”).")).child(grid))
+            .child(card(c, "Mode", None).child(row(c, "Light or dark", Some(format!("Switches between {} and {pair}. Also the sun/moon button in the sidebar.", def.name)), mode)))
+            .child(card(c, "Dark themes", None).child(dark_grid))
+            .child(card(c, "Light themes", Some("Also from the command palette (⌘K, “Theme:”).")).child(light_grid))
     }
 
     fn page_agents(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
