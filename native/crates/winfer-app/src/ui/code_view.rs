@@ -671,7 +671,9 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
         .when_some(right, |d, r| d.child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(r)))
         .child(div().w(px(14.0)).flex_shrink_0().flex().items_center().justify_center().child(status))
         .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(11.0)).text_color(c.subtle));
-    let mut card = div().w_full().rounded_xl().border_1().border_color(if running { alpha(c.accent, 0.4) } else { c.border }).bg(c.raised).overflow_hidden().child(head);
+    // No outline at rest; running (accent) and failed (red) still show one.
+    let edge = if running { alpha(c.accent, 0.4) } else if ok == Some(false) { alpha(c.danger, 0.35) } else { gpui_kit::transparent_black() };
+    let mut card = div().w_full().rounded_xl().border_1().border_color(edge).bg(c.raised).overflow_hidden().child(head);
     if open {
         let secs = toolbody::sections(name, input, output, diff);
         let mut body = div().border_t_1().border_color(c.border).p_2().flex().flex_col().gap_2();

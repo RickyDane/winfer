@@ -480,7 +480,7 @@ body.resizing .cw-enter {
 
 /* Tool cards */
 .cw-tool {
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--tool-bg, color-mix(in srgb, var(--fg) 2.5%, transparent));
   overflow: hidden;
@@ -512,7 +512,7 @@ body.resizing .cw-enter {
   }
 }
 .cw-tool.failed {
-  border-color: color-mix(in srgb, var(--del) 35%, var(--border));
+  border-color: color-mix(in srgb, var(--del) 35%, transparent);
 }
 .cw-tool-head {
   display: flex;
