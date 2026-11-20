@@ -491,29 +491,45 @@ impl Root {
         let now = now_ms();
         let name = self.name_of(&provider, cx);
         let snapshot = self.usage.snapshots.get(&provider)?;
-        let mut list = div().flex().flex_col().gap_3();
+        let mut list = div().flex().flex_col().gap_2();
         for w in &snapshot.windows {
             let left = left_now(w, now);
             let color = if left < 10.0 { c.danger } else if left < 30.0 { c.warning } else { c.success };
-            let reset = w.resets_at.filter(|r| *r > now).map_or(String::new(), |r| format!("resets {}", at_text(r, now)));
-            let out = runs_out_at(&provider, w, &self.usage.samples, now).map(|o| format!("runs out in {} at this pace", duration(o - now)));
+            let reset = w.resets_at.filter(|r| *r > now).map(|r| format!("resets {}", at_text(r, now)));
+            // Only warn when the pace runs it out before it resets.
+            let out = runs_out_at(&provider, w, &self.usage.samples, now).filter(|o| w.resets_at.is_none_or(|r| *o < r)).map(|o| format!("Runs out in {} at this pace", duration(o - now)));
             list = list.child(
-                div().flex().flex_col().gap_1()
-                    .child(div().flex().text_xs().child(div().flex_1().text_color(c.fg).child(w.label.clone())).child(div().text_color(c.muted).child(format!("{left:.0}% left"))))
-                    .child(div().h(px(4.0)).w_full().rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(color).w(relative((left / 100.0) as f32))))
-                    .child(div().text_size(px(11.0)).text_color(c.subtle).child(reset))
-                    .when_some(out, |d, t| d.child(div().text_size(px(11.0)).text_color(c.warning).child(t))),
+                div().flex().flex_col().gap_1p5().rounded_lg().border_1().border_color(c.border).bg(c.panel).p_3()
+                    .child(div().flex().items_baseline().gap_2()
+                        .child(div().flex_1().text_size(px(12.0)).text_color(c.muted).child(w.label.clone()))
+                        .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(format!("{left:.0}%")))
+                        .child(div().text_size(px(11.0)).text_color(c.subtle).child("left")))
+                    .child(div().h(px(6.0)).w_full().rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(color).w(relative((left / 100.0).clamp(0.0, 1.0) as f32))))
+                    .when_some(reset, |d, t| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(t)))
+                    .when_some(out, |d, t| d.child(div().flex().items_center().gap_1p5().mt_0p5().rounded_md().bg(Hsla { a: 0.1, ..c.warning }).px_2().py_1().text_size(px(11.0)).text_color(c.warning)
+                        .child(Icon::new(IconName::TriangleAlert).size(px(11.0))).child(t))),
             );
         }
         let accounts: Vec<&Account> = self.usage.accounts.iter().filter(|a| a.provider == provider).collect();
         if accounts.len() > 1 {
-            let mut rows = div().flex().flex_col().gap_1().pt_2().border_t_1().border_color(c.border).child(div().text_xs().text_color(c.subtle).child("Accounts"));
+            let mut rows = div().flex().flex_col().gap_1().pt_1()
+                .child(div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("ACCOUNTS"));
             for a in accounts {
-                let state = tightest(self.usage.snapshots.get(&usage_key(&a.id)), now).map_or("no reading".to_string(), |w| format!("{:.0}% left", left_now(w, now)));
-                rows = rows.child(div().flex().text_xs().child(div().flex_1().truncate().text_color(c.muted).child(a.label.clone())).child(div().text_color(c.subtle).child(state)));
+                let left = tightest(self.usage.snapshots.get(&usage_key(&a.id)), now).map(|w| left_now(w, now));
+                let color = left.map_or(c.subtle, |l| if l < 10.0 { c.danger } else if l < 30.0 { c.warning } else { c.success });
+                rows = rows.child(div().flex().items_center().gap_2().text_xs()
+                    .child(div().size(px(6.0)).rounded_full().bg(color))
+                    .child(div().flex_1().truncate().text_color(c.muted).child(a.label.clone()))
+                    .child(div().text_color(c.subtle).child(left.map_or("no reading".into(), |l| format!("{l:.0}% left")))));
             }
             list = list.child(rows);
         }
+        let settings = div().id("usage-settings").flex().items_center().gap_1p5().pt_2().border_t_1().border_color(c.border).text_size(px(12.0)).text_color(c.accent).cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.usage.popover = None;
+                this.execute(super::commands::Command::Settings(Some("usage".into())), window, cx);
+            }))
+            .child("Usage & limits settings").child(Icon::new(IconName::ArrowRight).size(px(12.0)));
         Some(
             div().id("usage-backdrop").absolute().size_full().occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -521,13 +537,28 @@ impl Root {
                     cx.notify();
                 }))
                 .child(
-                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(320.0)).flex().flex_col().gap_3().rounded_lg().border_1().border_color(c.border_strong).bg(c.raised).p_4()
+                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).flex().flex_col().gap_3().rounded(px(12.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl().p_4()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().text_sm().child(format!("{name} usage")))
-                        .child(list),
+                        .child(div().flex().items_center().gap_2()
+                            .child(div().size(px(26.0)).flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &provider, 14.0, 1.0)))
+                            .child(div().flex_1().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("{name} usage"))))
+                        .child(list)
+                        .child(settings),
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Development aid: usage numbers to look at, and the popover open.
+    #[cfg(debug_assertions)]
+    pub(super) fn demo_usage(&mut self, cx: &mut Context<Self>) {
+        let now = now_ms();
+        let window = |kind: &str, label: &str, used: f64, hours: f64| UsageWindow { kind: kind.into(), label: label.into(), used_percent: used, resets_at: Some(now + hours * 3_600_000.0) };
+        self.usage.snapshots.insert("claude".into(), Snapshot { provider: "claude".into(), windows: vec![window("session", "5-hour", 78.0, 2.5), window("week", "Weekly", 36.0, 60.0)], at: now, reset_credits: None });
+        self.usage.snapshots.insert("codex".into(), Snapshot { provider: "codex".into(), windows: vec![window("session", "5-hour", 22.0, 3.0), window("week", "Weekly", 91.0, 30.0)], at: now, reset_credits: None });
+        self.usage.samples.insert(format!("claude:session:{}", (now + 2.5 * 3_600_000.0) as i64), vec![(now - 3_600_000.0, 50.0), (now, 78.0)]);
+        self.usage.popover = Some("claude".into());
+        cx.notify();
     }
 
     /// A pane's account for its next start: the first with usage left.

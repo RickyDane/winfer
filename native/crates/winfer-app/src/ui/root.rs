@@ -1354,6 +1354,7 @@ impl Render for Root {
                 Ok("recipes") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Recipes),
                 Ok("sessions") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Progress),
                 Ok("review") => self.demo_reviews(cx),
+                Ok("usage") => self.demo_usage(cx),
                 Ok("history") => {
                     if let Some((id, name)) = self.state.read(cx).active().map(|w| (w.id.clone(), w.name.clone())) {
                         review::demo_history(&id, &name);
