@@ -902,16 +902,27 @@ impl Root {
         let records = ui.records.clone();
         let mono = crate::fonts::mono(cx);
         let mut list = div().flex().flex_col().gap_1();
+        let mut totals = (0usize, 0usize, 0u64, 0u64);
+        let mut last_day: Option<String> = None;
         match &records {
             None => list = list.child(div().py_4().text_center().text_xs().text_color(c.subtle).child("Loading…")),
             Some(found) if found.is_empty() => list = list.child(div().py_8().text_center().text_xs().text_color(c.subtle).child("Nothing merged yet, or nothing matches.")),
             Some(found) => {
                 for r in found {
+                    let files = r["files"].as_array().map_or(0, Vec::len);
+                    totals = (totals.0 + 1, totals.1 + files, totals.2 + r["adds"].as_u64().unwrap_or(0), totals.3 + r["dels"].as_u64().unwrap_or(0));
+                    let day = day_label(r["mergedAt"].as_f64().unwrap_or(0.0));
+                    if last_day.as_ref() != Some(&day) {
+                        list = list.child(div().px_3().pt_3().pb_1().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(day.to_uppercase()));
+                        last_day = Some(day);
+                    }
                     let id = r["id"].as_str().unwrap_or_default().to_string();
                     let open = expanded.as_ref() == Some(&id);
                     let toggle = id.clone();
                     let delete = id.clone();
-                    let meta = format!("{} · {} · {} files +{} −{} · {}", r["workspace"].as_str().unwrap_or_default(), r["branch"].as_str().unwrap_or_default(), r["files"].as_array().map_or(0, Vec::len), r["adds"], r["dels"], relative_time(r["mergedAt"].as_f64().unwrap_or(0.0)));
+                    let meta = format!("{} · {}", r["workspace"].as_str().unwrap_or_default(), r["branch"].as_str().unwrap_or_default());
+                    let (adds, dels) = (r["adds"].as_u64().unwrap_or(0), r["dels"].as_u64().unwrap_or(0));
+                    let when = relative_time(r["mergedAt"].as_f64().unwrap_or(0.0));
                     let body = open.then(|| {
                         div().flex().flex_col().gap_1().pt_1().text_xs().text_color(c.muted)
                             .when_some(r["summary"].as_str().map(str::to_string), |d, t| d.child(div().text_color(c.fg).child(t)))
@@ -925,38 +936,83 @@ impl Root {
                             })))
                     });
                     list = list.child(
-                        div().id(SharedString::from(format!("history-{id}"))).flex().flex_col().rounded_md().px_3().py_2().cursor_pointer().hover(move |d| d.bg(c.hover))
+                        div().id(SharedString::from(format!("history-{id}"))).flex().flex_col().rounded_lg().px_3().py_2p5().cursor_pointer()
+                            .when(open, |d| d.bg(c.panel).border_1().border_color(c.border)).when(!open, |d| d.hover(move |d| d.bg(c.hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(ui) = this.history.as_mut() {
                                     ui.expanded = if ui.expanded.as_ref() == Some(&toggle) { None } else { Some(toggle.clone()) };
                                 }
                                 cx.notify();
                             }))
-                            .child(div().text_size(px(13.0)).text_color(c.fg).truncate().child(r["title"].as_str().unwrap_or_default().to_string()))
-                            .child(div().text_xs().text_color(c.subtle).truncate().child(meta))
-                            .children(body),
+                            .child(div().flex().items_center().gap_2p5()
+                                .child(div().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(Hsla { a: 0.12, ..c.success }).text_color(c.success).child(Icon::new(IconName::GitMerge).size(px(13.0))))
+                                .child(div().flex_1().min_w_0().flex().flex_col()
+                                    .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).truncate().child(r["title"].as_str().unwrap_or_default().to_string()))
+                                    .child(div().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).truncate().child(meta)))
+                                .child(div().flex().flex_shrink_0().items_center().gap_1p5().text_size(px(11.0))
+                                    .child(div().text_color(c.subtle).child(format!("{files} files")))
+                                    .child(div().text_color(c.success).child(format!("+{adds}")))
+                                    .child(div().text_color(c.danger).child(format!("−{dels}")))
+                                    .child(div().w(px(56.0)).text_right().text_color(c.subtle).child(when))))
+                            .children(body.map(|b| b.pl(px(36.0)))),
                     );
                 }
             }
         }
+        let stat = |label: &'static str, value: String, color: Hsla| {
+            div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().border_1().border_color(c.border).bg(c.panel)
+                .child(div().text_size(px(17.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(value))
+                .child(div().text_size(px(11.0)).text_color(c.subtle).child(label))
+        };
+        let scope = |id: &'static str, label: &'static str, on: bool, this: bool, cx: &mut Context<Self>| {
+            div().id(id).h(px(24.0)).px_2p5().flex().items_center().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
+                .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active)).hover(move |d| d.text_color(c.fg))
+                .on_click(cx.listener(move |this_root, _, _, cx| {
+                    if let Some(ui) = this_root.history.as_mut() {
+                        ui.this_workspace = this;
+                    }
+                    this_root.search_history(cx);
+                }))
+                .child(label)
+        };
         Some(
             div().id("history-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.overlay = Overlay::None)))
                 .child(
-                    div().id("history").w(px(760.0)).h(px(600.0)).flex().flex_col().overflow_hidden().rounded_xl().border_1().border_color(c.border_strong).bg(c.panel)
+                    div().id("history").w(px(820.0)).max_w(relative(0.94)).h(px(640.0)).max_h(relative(0.9)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.border_strong).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(div().flex().items_center().gap_3().border_b_1().border_color(c.border).px_5().py_3().child(div().flex_1().text_sm().child("History of merged features"))
-                            .child(small_button(c, "history-scope", if this_workspace { "This workspace" } else { "All workspaces" }).on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(ui) = this.history.as_mut() {
-                                    ui.this_workspace = !ui.this_workspace;
-                                }
-                                this.search_history(cx);
-                            }))))
-                        .child(div().border_b_1().border_color(c.border).px_5().py_2p5().child(Input::new(&input)))
+                        .child(div().flex().flex_col().gap_3().border_b_1().border_color(c.border).px_5().pt_4().pb_3()
+                            .child(div().flex().items_center().gap_2()
+                                .child(Icon::new(IconName::Clock).size(px(15.0)).text_color(c.accent))
+                                .child(div().flex_1().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("History"))
+                                .child(div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.border).bg(c.app)
+                                    .child(scope("history-this", "This workspace", this_workspace, true, cx))
+                                    .child(scope("history-all", "All workspaces", !this_workspace, false, cx))))
+                            .child(div().flex().gap_2()
+                                .child(stat("merged", totals.0.to_string(), c.fg))
+                                .child(stat("files changed", totals.1.to_string(), c.fg))
+                                .child(stat("lines added", format!("+{}", totals.2), c.success))
+                                .child(stat("lines removed", format!("−{}", totals.3), c.danger)))
+                            .child(div().flex().items_center().gap_2().h(px(34.0)).px_2p5().rounded_md().border_1().border_color(c.border_strong).bg(c.app)
+                                .child(Icon::new(IconName::Search).size(px(13.0)).text_color(c.subtle))
+                                .child(div().flex_1().child(Input::new(&input).appearance(false)))))
                         .child(div().id("history-list").flex_1().min_h_0().overflow_y_scroll().p_2().child(list)),
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// "Today", "Yesterday", "3 days ago", … for grouping merges.
+fn day_label(at_ms: f64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
+    let days = ((now / 86_400_000.0).floor() - (at_ms / 86_400_000.0).floor()).max(0.0) as u64;
+    match days {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        2..=6 => format!("{days} days ago"),
+        7..=13 => "Last week".into(),
+        _ => format!("{} weeks ago", days / 7),
     }
 }
 
@@ -987,6 +1043,29 @@ fn decode_screenshot(value: &str) -> Result<Arc<RenderImage>, String> {
         pixel.swap(0, 2);
     }
     Ok(Arc::new(RenderImage::new(smallvec![image::Frame::new(rgba)])))
+}
+
+/// Development aid: a few merges to look at in History.
+#[cfg(debug_assertions)]
+pub(super) fn demo_history(workspace_id: &str, workspace: &str) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    let demos = [
+        (0.1, "Dark mode toggle", "winfer/dark-mode", "claude", 6, 214, 31),
+        (2.0, "Fix checkout redirect loop", "winfer/checkout-fix", "codex", 3, 48, 22),
+        (26.0, "Persist session titles", "winfer/session-titles", "claude", 4, 96, 12),
+        (75.0, "CSV export for invoices", "winfer/csv-export", "codex", 5, 160, 8),
+    ];
+    for (hours, title, branch, provider, files, adds, dels) in demos {
+        let merge = json!({
+            "id": crate::model::new_id("merge"), "mergedAt": now - (hours * 3_600_000.0) as i64, "workspaceId": workspace_id, "workspace": workspace,
+            "repo": "/tmp/orbit-demo", "branch": branch, "base": "main", "commitSha": null, "provider": provider,
+            "title": title, "summary": format!("{title}, with tests."), "task": title, "files": (0..files).map(|i| format!("src/file{i}.ts")).collect::<Vec<_>>(),
+            "adds": adds, "dels": dels, "tests": "pnpm test passed", "cost": null, "tokens": null,
+        });
+        if let Ok(record) = serde_json::from_value(merge) {
+            let _ = store::history_add(backend::app().state(), record);
+        }
+    }
 }
 
 fn record_merge(snapshot: MergeSnapshot) {

@@ -1354,6 +1354,12 @@ impl Render for Root {
                 Ok("recipes") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Recipes),
                 Ok("sessions") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::Progress),
                 Ok("review") => self.demo_reviews(cx),
+                Ok("history") => {
+                    if let Some((id, name)) = self.state.read(cx).active().map(|w| (w.id.clone(), w.name.clone())) {
+                        review::demo_history(&id, &name);
+                    }
+                    self.update_state(cx, |s| s.overlay = crate::model::Overlay::History);
+                }
                 Ok("whats-new") => self.updates.preview(),
                 Ok("undock") => self.execute(Command::BrowserUndock, window, cx),
                 Ok("browser") => self.execute(Command::SidePanel { panel: SidePanel::Browser, show: true }, window, cx),
