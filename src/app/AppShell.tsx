@@ -51,6 +51,7 @@ import { leaves, setSizesAt } from "@/features/layout/tree";
 import { TileView } from "@/features/layout/TileView";
 import { PaneFrame } from "@/features/terminal/PaneFrame";
 import { Sidebar, SidebarRail, SidebarResizer } from "@/features/workspaces/Sidebar";
+import { Welcome } from "@/features/workspaces/Welcome";
 import { livePanes, useActiveWorkspace, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
 import { applyTheme, themeById } from "@/features/theme/themes";
 import { loadPlugins, startPluginEvents } from "@/features/plugins/plugins";
@@ -145,17 +146,6 @@ function LiveButton() {
   );
 }
 
-function EmptyWorkspace() {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-pane)] border border-dashed border-border text-fg-subtle">
-      <span className="text-sm text-fg-muted">No agents running</span>
-      <span className="text-xs">
-        {keysFor({ type: "ui.overlay", overlay: "newPane" })} new pane · {keysFor({ type: "ui.palette", query: "New pane: " })} pick provider ·{" "}
-        {keysFor({ type: "ui.palette" })} commands · {keysFor({ type: "ui.cheatSheet" })} shortcuts
-      </span>
-    </div>
-  );
-}
 
 export function AppShell() {
   const { sidebarOpen, browserOpen, focusedPaneId, focusPane, loadProviders, updateActive, hydrate, theme, view } = useWorkspacesPick("sidebarOpen", "browserOpen", "focusedPaneId", "focusPane", "loadProviders", "updateActive", "hydrate", "theme", "view");
@@ -252,7 +242,7 @@ export function AppShell() {
                 onResize={(path, sizes) => updateActive((w) => ({ layout: w.layout && setSizesAt(w.layout, path, sizes) }))}
               />
             ) : (
-              <EmptyWorkspace />
+              <Welcome />
             )}
           </div>
         </div>
