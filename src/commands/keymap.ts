@@ -91,7 +91,7 @@ const SPECS: BindingSpec[] = [
   { keys: "Mod+-", title: "Smaller text", group: "Layout", repeat: true, command: { type: "terminal.zoom", delta: -1 } },
   { keys: "Mod+0", title: "Default text size", group: "Layout", command: { type: "terminal.zoom", delta: 0 } },
   { keys: "Mod+Ctrl+=", win: "Ctrl+Shift+Alt+=", title: "Equalize panes", group: "Layout", command: { type: "layout.equalize" } },
-  { keys: "Mod+Ctrl+L", title: "Next layout preset", group: "Layout", command: { type: "layout.preset", name: "next" } },
+  { keys: "Mod+Ctrl+L", win: "Ctrl+Shift+Alt+L", title: "Next layout preset", group: "Layout", command: { type: "layout.preset", name: "next" } },
   ...DIGITS.map(
     (n): BindingSpec => ({ keys: `Mod+Ctrl+${n}`, win: `Ctrl+Alt+${n}`, title: `Switch to workspace ${n}`, group: "Workspaces", command: { type: "workspace.switch", target: { index: n } } }),
   ),
