@@ -121,6 +121,7 @@ pub fn run_command(text: &str, s: &mut CodeState) -> Option<Effect> {
 }
 
 /// Commands matching what's typed after the slash, for the composer's popup.
+#[cfg(test)]
 pub fn matching(prefix: &str) -> Vec<(&'static str, &'static str)> {
     let p = prefix.trim_start_matches('/').to_lowercase();
     COMMANDS.iter().filter(|(c, _)| c[1..].starts_with(&p)).copied().collect()

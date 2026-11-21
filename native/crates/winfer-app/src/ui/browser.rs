@@ -303,8 +303,15 @@ fn cdp_key(key: &str, typed: Option<&str>) -> (String, String, u32) {
     }
 }
 
+/// Asks the app to move the browser into its own window, or back into the side panel.
+pub struct ToggleWindow;
+
+impl EventEmitter<ToggleWindow> for BrowserPanel {}
+
 pub struct BrowserPanel {
     state: Entity<AppState>,
+    /// Shown in a window of its own (set by the app shell).
+    pub undocked: bool,
     tabs: HashMap<String, Vec<Tab>>,
     active_tab: HashMap<String, String>,
     workspace: Option<String>,
@@ -373,6 +380,7 @@ impl BrowserPanel {
         .detach();
         Self {
             state,
+            undocked: false,
             tabs: HashMap::new(),
             active_tab: HashMap::new(),
             workspace: None,
@@ -1115,17 +1123,35 @@ impl BrowserPanel {
     /// Browser-style tabs with darker tab surfaces and subtle elevation shadows; tabs an agent is
     /// using carry a small agent badge next to their page icon.
     fn render_tabs(&mut self, c: Colors, dark: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut strip = div().flex().items_end().gap_1().px_2().pt_2();
+        // Clipped at the strip's bottom edge so tab shadows never spill onto the toolbar below.
+        let mut strip = div().flex().items_end().gap_1().px_2().pt_2().overflow_hidden();
         let workspace = self.workspace.clone().unwrap_or_default();
         let active = self.active_tab.get(&workspace).cloned();
         let now = Instant::now();
         let active_bg = c.raised; // same surface as the toolbar below, so the tab joins it
-        let idle_bg = if c.light { theme::blend(c.panel, c.fg, 0.04) } else { theme::blend(c.panel, black(), 0.18) };
-        let idle_hover_bg = if c.light { theme::blend(c.panel, c.fg, 0.068) } else { theme::blend(c.panel, black(), 0.26) };
-        let idle_shadow = if c.light {
-            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.05), offset: point(px(0.0), px(1.0)), blur_radius: px(2.0), spread_radius: px(0.0), inset: false }]
+        let idle_bg = if c.light { theme::blend(c.panel, c.fg, 0.04) } else {
+            // A fixed step below the panel (about what Winfer Dark gets), not a proportional blend,
+            // so themes with lighter panels keep their tint instead of turning near-black.
+            let p = Rgba::from(c.panel);
+            let step = 0.043;
+            Rgba { r: (p.r - step).max(0.0), g: (p.g - step).max(0.0), b: (p.b - step).max(0.0), a: 1.0 }.into()
+        };
+        // Hover lifts the tab toward the active surface (lighter in both themes).
+        let idle_hover_bg = theme::blend(idle_bg, active_bg, 0.6);
+        // A faint outline keeps tabs readable in dark mode, where a black shadow doesn't show.
+        let edge = hsla(0.0, 0.0, 0.0, 0.0);
+        // Inactive tabs get a faint outline (dark on light, light on dark) so they read as separate tabs.
+        let idle_edge = if c.light { hsla(0.0, 0.0, 0.0, 0.06) } else { hsla(0.0, 0.0, 1.0, 0.06) };
+        let active_shadow = if c.light {
+            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.14), offset: point(px(0.0), px(0.0)), blur_radius: px(3.0), spread_radius: px(0.0), inset: false }]
         } else {
-            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.24), offset: point(px(0.0), px(1.0)), blur_radius: px(3.0), spread_radius: px(0.0), inset: false }]
+            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.8), offset: point(px(0.0), px(0.0)), blur_radius: px(5.0), spread_radius: px(0.0), inset: false }]
+        };
+        // Inactive tabs get a lighter shadow in light mode.
+        let idle_shadow = if c.light {
+            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.05), offset: point(px(0.0), px(0.0)), blur_radius: px(2.0), spread_radius: px(0.0), inset: false }]
+        } else {
+            active_shadow.clone()
         };
         for tab in self.tabs.get(&workspace).cloned().unwrap_or_default() {
             let is_active = active.as_ref() == Some(&tab.id);
@@ -1140,8 +1166,10 @@ impl BrowserPanel {
             strip = strip.child(
                 div().id(SharedString::from(format!("tab-{}", tab.id))).group(group.clone()).flex().items_center().gap(px(7.0)).min_w_0().flex_basis(px(160.0)).flex_shrink(1.0)
                     .h(px(30.0)).pl_2p5().pr_1p5().rounded_tl_lg().rounded_tr_lg().rounded_bl(px(0.0)).rounded_br(px(0.0)).text_size(px(12.0)).cursor_pointer()
+                    .shadow(if is_active { active_shadow.clone() } else { idle_shadow.clone() })
+                    .border_1().border_b_0().border_color(if is_active { edge } else { idle_edge })
                     .when(is_active, |d| d.bg(active_bg).font_weight(FontWeight::MEDIUM).text_color(c.fg))
-                    .when(!is_active, |d| d.bg(idle_bg).shadow(idle_shadow.clone()).text_color(c.muted).hover(move |d| d.bg(idle_hover_bg).text_color(c.fg)))
+                    .when(!is_active, |d| d.bg(idle_bg).text_color(c.muted).hover(move |d| d.bg(idle_hover_bg).text_color(c.fg)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_tab.insert(ws.clone(), select.clone());
                         cx.notify();
@@ -1240,6 +1268,9 @@ impl BrowserPanel {
                 .text_size(px(9.5)).font_weight(FontWeight::SEMIBOLD).text_color(gpui_kit::white()).child(errors.min(99).to_string()))))
             .when(sized || mobile, |d| d.child(button("fit", IconName::Proportions, false).tooltip(tip(if mobile { "Back to the phone size" } else { "Fit the page to the panel" })).on_click(cx.listener(|this, _, _, cx| this.fit_page(cx)))))
             .child(button("device", if mobile { IconName::Smartphone } else { IconName::Monitor }, mobile).tooltip(tip(if mobile { "Desktop view" } else { "Mobile view" })).on_click(cx.listener(move |this, _, _, cx| this.set_device(!mobile, cx))))
+            .child(button("undock", if self.undocked { IconName::PanelRight } else { IconName::AppWindow }, false)
+                .tooltip(tip(if self.undocked { "Dock the browser back into the side panel" } else { "Undock the browser into its own window" }))
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(ToggleWindow))))
     }
 
     /// "An agent is driving this tab", while one used it in the last few seconds.

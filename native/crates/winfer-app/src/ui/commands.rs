@@ -809,7 +809,18 @@ impl Root {
                     s.browser_open = true;
                     s.side_panel = Some(SidePanel::Browser);
                 });
-                self.browser.update(cx, |b, cx| b.focus_address(window, cx));
+                if let Some(handle) = self.browser_window {
+                    // In its own window: bring that forward and focus the address bar there.
+                    let browser = self.browser.clone();
+                    cx.defer(move |cx| {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.activate_window();
+                            browser.update(cx, |b, cx| b.focus_address(window, cx));
+                        });
+                    });
+                } else {
+                    self.browser.update(cx, |b, cx| b.focus_address(window, cx));
+                }
             }
             C::ToggleSidebar => self.update_state(cx, |s| s.sidebar_open = !s.sidebar_open),
             C::ToggleBrowser => self.update_state(cx, |s| s.browser_open = !s.browser_open),

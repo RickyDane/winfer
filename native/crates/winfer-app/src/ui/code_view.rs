@@ -13,7 +13,7 @@ use crate::model::AppState;
 use crate::theme::{self, Colors};
 use base64::Engine;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
+use gpui_kit::component::{Icon, Sizable, Size as KitSize};
 use gpui_kit::component::input::{Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, MoveDown, MoveUp, OutdentInline, Position, Textarea, TextareaState};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::tooltip::Tooltip;
@@ -521,7 +521,7 @@ pub(super) fn attachment_from_clipboard_image(img: &Image, existing: usize) -> O
 
 impl CodeView {
     pub fn new(model: Entity<CodeModel>, app: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 10).soft_wrap(true).submit_on_enter(true).placeholder("Message winfer code…  (/ for commands, @ for files)"));
+        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3).soft_wrap(true).submit_on_enter(true).placeholder("Message winfer code…  (/ for commands, @ for files)"));
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| match event {
             InputEvent::PressEnter { shift: false, secondary: false } => this.enter(window, cx),
             InputEvent::Change => {
@@ -1020,7 +1020,8 @@ fn pill(c: Colors, id: impl Into<ElementId>, icon: Option<AnyElement>, label: Op
         d = d.child(i);
     }
     if let Some(text) = label {
-        d = d.child(div().min_w_0().truncate().child(text));
+        // Fixed line box + 1px nudge: glyphs without descenders ("Sonnet") otherwise ride high next to the icon.
+        d = d.child(div().min_w_0().truncate().line_height(px(14.0)).pt(px(1.0)).child(text));
     }
     d
 }
@@ -2292,9 +2293,12 @@ impl CodeView {
             .min_w_0()
             .flex()
             .flex_col()
-            .bg(c.composer)
-            .border_color(c.border)
-            .shadow_md()
+            .bg(c.raised)
+            .border_color(c.edge)
+            .shadow(vec![
+                gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.14 } else { 0.55 }), offset: gpui::point(px(0.0), px(8.0)), blur_radius: px(24.0), spread_radius: px(-2.0), inset: false },
+                gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.40 }), offset: gpui::point(px(0.0), px(2.0)), blur_radius: px(6.0), spread_radius: px(0.0), inset: false },
+            ])
             .drag_over::<ExternalPaths>(move |d, _, _, _| d.border_color(c.accent).bg(alpha(c.accent, 0.08)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx);
@@ -2323,11 +2327,11 @@ impl CodeView {
                 .px_3()
                 .pt_2p5()
                 .pb_1()
-                .bg(c.composer)
+                .bg(c.raised)
                 .border_t_1()
                 .border_l_1()
                 .border_r_1()
-                .border_color(c.border);
+                .border_color(c.edge);
             let mut chips = if lay.compact_v { chips_base.rounded_t_xl() } else { chips_base.rounded_t_2xl() };
             for (i, a) in attachments.iter().enumerate() {
                 let decoded = if a.mime.starts_with("image/") && !a.data.is_empty() {
@@ -2445,7 +2449,10 @@ impl CodeView {
             card = card.child(chips);
         }
         let view_for_paste = cx.entity();
-        let composer_input = Textarea::new(&self.input).appearance(false).on_paste(move |item, _, cx| {
+        // Composer text follows the web UI text scale (Settings → winfer code), like the transcript.
+        let scale = self.prefs(cx).0;
+        // Textarea sizes its own text from `Size` (Size::Size(s) renders at s * 0.875), so the parent's text size is ignored.
+        let composer_input = Textarea::new(&self.input).with_size(KitSize::Size(px(13.5 * scale / 0.875))).appearance(false).on_paste(move |item, _, cx| {
             view_for_paste.update(cx, |this, cx| this.paste_clipboard_item(item, cx))
         });
         if lay.single_row && attachments.is_empty() {
@@ -2461,12 +2468,20 @@ impl CodeView {
                     .child(send_btn),
             );
         } else {
+            // Line the text up with the paperclip glyph below: toolbar inset (6) + the icon's inset in
+            // its button, minus the textarea's own 10px left padding, plus a little breathing room.
+            const EXTRA: f32 = 3.0;
+            let clip_sz = if lay.ultra_v { 13.0 } else { 15.0 };
+            let input_pl = px((6.0 + (attach_sz - clip_sz) / 2.0 - 10.0f32).max(0.0) + EXTRA);
+            // The textarea's own 8px plus the line's leading already roughly matches the left
+            // inset, so the top gets the same extra room plus 2px to look even.
+            let input_wrap = div().pl(input_pl).pt(px(EXTRA + 2.0));
             let input_wrap = if lay.ultra_v {
-                div().px_2p5().pt_1().pb_0p5().max_h(px(48.0)).overflow_hidden()
+                input_wrap.pr_2p5().pb_0p5().max_h(px(48.0)).overflow_hidden()
             } else if lay.compact_v {
-                div().px_2p5().pt_1p5().pb_0p5().max_h(px(96.0)).overflow_hidden()
+                input_wrap.pr_2p5().pb_0p5().max_h(px(96.0)).overflow_hidden()
             } else {
-                div().px_3().pt_2p5().pb_1()
+                input_wrap.pr_3().pb_1()
             };
             card = card.child(input_wrap.child(composer_input));
             let bar_h = if lay.ultra_v { 28.0 } else if lay.compact_v { 31.0 } else { 36.0 };

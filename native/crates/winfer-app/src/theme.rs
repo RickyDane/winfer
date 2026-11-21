@@ -75,8 +75,6 @@ pub struct Colors {
     pub app: Hsla,
     pub panel: Hsla,
     pub raised: Hsla,
-    /// The chat composer card: `raised`, except darker in Winfer Dark.
-    pub composer: Hsla,
     pub hover: Hsla,
     pub active: Hsla,
     pub border: Hsla,
@@ -103,7 +101,6 @@ pub fn colors(id: &str) -> Colors {
         app: hex(&u.app),
         panel: hex(&u.panel),
         raised: hex(&u.panel_raised),
-        composer: if def.id == "dark" { hex("#0c0c0e") } else { hex(&u.panel_raised) },
         hover: hex(&u.hover),
         active: hex(&u.active),
         border,

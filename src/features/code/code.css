@@ -1652,6 +1652,8 @@ button.cw-foot-item.active {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
+  line-height: 1.3;
+  align-self: center;
 }
 
 @container (max-height: 460px) {

@@ -298,7 +298,7 @@ impl Root {
                     .child(div().mt(px(7.0)).size(px(6.0)).flex_shrink_0().rounded_full().bg(Hsla { a: 0.7, ..c.accent }))
                     .child(div().flex_1().min_w_0().flex().flex_wrap().items_center().gap_1p5()
                         .when_some(area, |d, a| d.child(div().px_1p5().rounded_sm().bg(c.hover).text_size(px(11.0)).text_color(c.muted).child(a)))
-                        .child(div().whitespace_normal().child(text))));
+                        .child(div().min_w_0().max_w_full().whitespace_normal().child(text))));
             }
             body = body.child(div().flex().flex_col().gap_2().when(several, |d| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(r.version.to_uppercase()))).child(list));
         }

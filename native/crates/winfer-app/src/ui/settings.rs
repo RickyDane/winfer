@@ -1574,7 +1574,7 @@ impl Root {
             let page_id = id;
             let head = div().flex().items_center().gap_2p5()
                 .child(div().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).child(Icon::new(icon).size(px(15.0))))
-                .child(div().flex().items_baseline().gap_2().min_w_0()
+                .child(div().flex().items_center().gap_2().min_w_0()
                     .child(div().flex_shrink_0().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(label))
                     .child(div().truncate().text_size(px(12.0)).text_color(c.muted).child(description)))
                 .when(changed_here > 0, |d| d.child(div().flex_1()).child(

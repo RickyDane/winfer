@@ -3278,7 +3278,7 @@ export function SettingsModal() {
                 <div className="grid size-7 shrink-0 place-items-center rounded-md bg-accent-soft text-accent">
                   <page.icon size={15} />
                 </div>
-                <div className="flex min-w-0 items-baseline gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                   <h2 className="shrink-0 text-[15px] font-semibold text-fg">{page.label}</h2>
                   <p className="truncate text-xs text-fg-muted" title={page.description}>{page.description}</p>
                 </div>

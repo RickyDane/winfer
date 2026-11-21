@@ -6,7 +6,12 @@ use winfer_backend::{android, browser, chatgpt_voice, diagnostics, env, harness,
 
 /// Own folder and identifier: this build runs beside the Tauri app without sharing its database,
 /// hooks or browser profiles.
-pub const IDENTIFIER: &str = "dev.winfer.native";
+const DEFAULT_IDENTIFIER: &str = "dev.winfer.native";
+
+/// `WINFER_NATIVE_IDENTIFIER` overrides it, to run a second copy with its own data and lock.
+pub fn identifier() -> String {
+    std::env::var("WINFER_NATIVE_IDENTIFIER").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| DEFAULT_IDENTIFIER.into())
+}
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 
@@ -21,7 +26,7 @@ pub fn background<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 
 /// Held for as long as this process runs; `None` if another winfer holds it.
 pub fn acquire_instance_lock() -> Option<std::fs::File> {
-    let dir = dirs::data_dir()?.join(IDENTIFIER);
+    let dir = dirs::data_dir()?.join(identifier());
     std::fs::create_dir_all(&dir).ok()?;
     let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("instance.lock")).ok()?;
     file.try_lock().ok()?;
@@ -29,7 +34,7 @@ pub fn acquire_instance_lock() -> Option<std::fs::File> {
 }
 
 pub fn start() -> Result<(), String> {
-    let app = AppHandle::new(IDENTIFIER);
+    let app = AppHandle::new(&identifier());
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     diagnostics::install_panic_hook(data_dir.join("logs"));
     std::thread::spawn(|| {

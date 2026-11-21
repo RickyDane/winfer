@@ -514,8 +514,7 @@ impl Root {
         let fill = match status {
             AgentStatus::NeedsInput => crate::theme::blend(c.raised, c.warning, if c.light { 0.14 } else { 0.13 }),
             AgentStatus::Error => crate::theme::blend(c.raised, c.danger, if c.light { 0.12 } else { 0.13 }),
-            _ if c.light => crate::theme::blend(c.panel, c.fg, if focused { 0.04 } else { 0.024 }),
-            _ => crate::theme::blend(c.panel, c.fg, if focused { 0.068 } else { 0.045 }),
+            _ => c.raised,
         };
         let badge_tint = match pane.provider.as_str() {
             "claude" => c.claude,
@@ -577,6 +576,8 @@ impl Root {
             .py(px(7.0))
             .rounded_xl()
             .bg(fill)
+            .border_1()
+            .border_color(c.edge)
             .shadow(island_shadow)
             .when_some(pane_header_cursor(archived, dragging), |d, cursor| d.cursor(cursor))
             .when(!archived, |d| {

@@ -212,11 +212,11 @@ fn paint_sky_bgra(light: bool, accent: Hsla) -> Vec<u8> {
                 (r, g, b, (acc_w + n3).clamp(0.0, 0.42))
             } else {
                 // Three radial nebula clouds matching `.cw-nebula`.
-                let n1 = radial(u, v, 0.18, 0.12, 0.45, 0.32) * 0.09;
-                let n2 = radial(u, v, 0.85, 0.88, 0.40, 0.30) * 0.08;
-                let n3 = radial(u, v, 0.50, 1.15, 0.65, 0.38) * 0.09;
+                let n1 = radial(u, v, 0.18, 0.12, 0.45, 0.32) * 0.03;
+                let n2 = radial(u, v, 0.85, 0.88, 0.40, 0.30) * 0.027;
+                let n3 = radial(u, v, 0.50, 1.15, 0.65, 0.38) * 0.03;
                 // Soft diagonal Milky Way band along 115deg.
-                let mw = (-band * band * 2.4).exp() * 0.08;
+                let mw = (-band * band * 2.4).exp() * 0.025;
                 let r = (88.0 / 255.0) * n1 + (124.0 / 255.0) * n2 + (40.0 / 255.0) * n3 + (195.0 / 255.0) * mw;
                 let g = (80.0 / 255.0) * n1 + (140.0 / 255.0) * n2 + (70.0 / 255.0) * n3 + (202.0 / 255.0) * mw;
                 let b = (220.0 / 255.0) * n1 + (255.0 / 255.0) * n2 + (160.0 / 255.0) * n3 + (255.0 / 255.0) * mw;

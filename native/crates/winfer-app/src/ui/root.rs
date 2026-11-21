@@ -8,7 +8,7 @@ use crate::model::{AddPane, AgentStatus, AppState, Pane, SidePanel, View};
 use crate::status;
 use crate::terminal::{self, Event as SessionEvent, Events, SESSIONS};
 use crate::theme::{self, Colors};
-use crate::ui::browser::BrowserPanel;
+use crate::ui::browser::{BrowserPanel, ToggleWindow};
 use crate::ui::viewer::ViewerPanel;
 use crate::ui::android::AndroidPanel;
 use crate::ui::terminal_view::{self, TerminalView};
@@ -151,13 +151,69 @@ pub fn open_main_window(cx: &mut App) {
 struct UndockedBrowser {
     browser: Entity<BrowserPanel>,
     state: Entity<AppState>,
-    _cx: FocusHandle,
+    root: WeakEntity<Root>,
+    /// The main window, where app shortcuts pressed here are run.
+    main: AnyWindowHandle,
 }
 
 impl Render for UndockedBrowser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = theme::colors(&self.state.read(cx).theme);
-        div().size_full().bg(c.panel).text_color(c.fg).child(self.browser.clone())
+        div()
+            .size_full()
+            .bg(c.panel)
+            .text_color(c.fg)
+            .font_family(crate::fonts::sans(cx))
+            // App shortcuts (⌘L, ⌘⇧U, ⌘⇧C, …) work from this window too.
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let root = this.root.clone();
+                let handled = this.main.update(cx, |_, window, cx| root.update(cx, |r, cx| r.handle_shortcut(event, window, cx)).unwrap_or(false));
+                if handled.unwrap_or(false) {
+                    cx.stop_propagation();
+                }
+            }))
+            .child(self.browser.clone())
+    }
+}
+
+/// Where the undocked browser window was last, kept across launches (like the Tauri app's).
+mod browser_bounds {
+    use gpui_kit::*;
+    use serde::{Deserialize, Serialize};
+    use tauri::Manager;
+
+    /// Logical (point) coordinates.
+    #[derive(Serialize, Deserialize)]
+    struct Saved {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    }
+
+    fn path() -> Option<std::path::PathBuf> {
+        crate::backend::app().path().app_data_dir().ok().map(|d| d.join("browser-window.json"))
+    }
+
+    /// The saved place, if it's still on a connected screen.
+    pub fn load(cx: &App) -> Option<Bounds<Pixels>> {
+        let b: Saved = serde_json::from_slice(&std::fs::read(path()?).ok()?).ok()?;
+        if !(b.width >= 100.0 && b.height >= 100.0 && b.x.is_finite() && b.y.is_finite()) {
+            return None;
+        }
+        let bounds = Bounds::new(point(px(b.x), px(b.y)), size(px(b.width), px(b.height)));
+        cx.displays().iter().any(|d| d.bounds().intersects(&bounds)).then_some(bounds)
+    }
+
+    pub fn save(window: &Window) {
+        let b = window.window_bounds().get_bounds();
+        let saved = Saved { x: f32::from(b.origin.x), y: f32::from(b.origin.y), width: f32::from(b.size.width), height: f32::from(b.size.height) };
+        if saved.width < 100.0 || saved.height < 100.0 {
+            return;
+        }
+        if let (Some(path), Ok(json)) = (path(), serde_json::to_vec(&saved)) {
+            let _ = std::fs::write(path, json);
+        }
     }
 }
 
@@ -435,6 +491,7 @@ impl Root {
         window.activate_window();
         let panel_state = state.clone();
         let browser = cx.new(|cx| BrowserPanel::new(panel_state, window, cx));
+        cx.subscribe_in(&browser, window, |this, _, _: &ToggleWindow, window, cx| this.toggle_browser_window(window, cx)).detach();
         let viewer_state = state.clone();
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
@@ -677,9 +734,20 @@ impl Root {
     }
 
     /// Moves the browser panel into a window of its own, or back into the side panel.
+    /// `window` is the main window (shortcuts pressed in the browser's window are run there).
     pub(super) fn toggle_browser_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(handle) = self.browser_window.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            // Deferred: this may run from a key press in that very window, which is busy until it returns.
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| {
+                    browser_bounds::save(window);
+                    window.remove_window();
+                });
+            });
+            self.browser.update(cx, |b, cx| {
+                b.undocked = false;
+                cx.notify();
+            });
             self.update_state(cx, |s| {
                 s.browser_open = true;
                 s.side_panel = Some(SidePanel::Browser);
@@ -687,37 +755,56 @@ impl Root {
             cx.notify();
             return;
         }
-        let (browser, root, state) = (self.browser.clone(), cx.entity().downgrade(), self.state.clone());
-        let bounds = Bounds::centered(None, size(px(1000.0), px(760.0)), cx);
+        let (browser, root, state, main) = (self.browser.clone(), cx.entity().downgrade(), self.state.clone(), window.window_handle());
+        let bounds = browser_bounds::load(cx).unwrap_or_else(|| Bounds::centered(None, size(px(1100.0), px(800.0)), cx));
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(360.0), px(300.0))),
             titlebar: Some(TitlebarOptions { title: Some("winfer browser".into()), ..Default::default() }),
             ..Default::default()
         };
-        let _ = window;
         let opened = cx.open_window(options, move |window, cx| {
             let (browser, root, state) = (browser.clone(), root.clone(), state.clone());
             window.on_window_should_close(cx, {
                 let root = root.clone();
-                move |_, cx| {
+                move |window, cx| {
+                    // Closed by its own close button: the browser goes back into the side panel.
+                    browser_bounds::save(window);
                     let _ = root.update(cx, |this, cx| {
                         this.browser_window = None;
+                        this.browser.update(cx, |b, cx| {
+                            b.undocked = false;
+                            cx.notify();
+                        });
                         cx.notify();
                     });
                     true
                 }
             });
-            let view = cx.new(|cx| UndockedBrowser { browser, state, _cx: cx.focus_handle() });
+            let view = cx.new(|_| UndockedBrowser { browser, state, root, main });
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
         });
         if let Ok(handle) = opened {
             self.browser_window = Some(handle.into());
+            self.browser.update(cx, |b, cx| {
+                b.undocked = true;
+                cx.notify();
+            });
             self.update_state(cx, |s| {
                 s.browser_open = true;
                 s.side_panel = Some(SidePanel::Browser);
             });
             cx.notify();
         }
+    }
+
+    /// Brings the undocked browser window to the front.
+    pub(super) fn raise_browser_window(&self, cx: &mut Context<Self>) {
+        let Some(handle) = self.browser_window else { return };
+        // Deferred: this may run from a key press in that very window.
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        });
     }
 
     fn forget_code(&mut self, id: &str) {
@@ -936,9 +1023,13 @@ impl Root {
             });
         let body: AnyElement = match panel {
             SidePanel::Browser if self.browser_window.is_some() => div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
+                .child(Icon::new(IconName::AppWindow).size(px(20.0)))
                 .child("The browser is in its own window.")
-                .child(div().id("dock-browser").rounded_md().border_1().border_color(c.edge).px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_browser_window(window, cx))).child("Dock it back"))
+                .child(div().flex().gap_2()
+                    .child(div().id("show-browser-window").rounded_md().border_1().border_color(c.edge).px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
+                        .on_click(cx.listener(|this, _, _, cx| this.raise_browser_window(cx))).child("Show window"))
+                    .child(div().id("dock-browser").rounded_md().border_1().border_color(c.edge).px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
+                        .on_click(cx.listener(|this, _, window, cx| this.toggle_browser_window(window, cx))).child("Dock it back")))
                 .into_any_element(),
             SidePanel::Browser => self.browser.clone().into_any_element(),
             SidePanel::Viewer => self.viewer.clone().into_any_element(),
@@ -1177,8 +1268,14 @@ impl Root {
         let dragged = matches!(&self.drag, Some(Drag::Pane { id, active: true, .. }) if *id == pane.id);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
         let c = *c;
+        let pane_id = pane.id.clone();
         div()
             .absolute()
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                if this.state.read(cx).focused_pane_id.as_deref() != Some(pane_id.as_str()) {
+                    this.update_state(cx, |s| s.focus_pane(&pane_id));
+                }
+            }))
             .left(bounds.origin.x - origin.x)
             .top(bounds.origin.y - origin.y)
             .w(bounds.size.width)
