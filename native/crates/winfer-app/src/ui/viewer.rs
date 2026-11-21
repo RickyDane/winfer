@@ -1009,12 +1009,15 @@ mod link_tests {
 
     #[test]
     fn resolves_links() {
-        assert_eq!(link_target("https://a.dev/x", "/d/a.md"), None);
-        assert_eq!(link_target("mailto:a@b.c", "/d/a.md"), None);
-        assert_eq!(link_target("#top", "/d/a.md"), None);
-        assert_eq!(link_target("b%20c.md#intro", "/d/a.md"), Some(("/d/b c.md".into(), None)));
-        assert_eq!(link_target("src/x.rs:12", "/d/a.md"), Some(("/d/src/x.rs".into(), Some(12))));
-        assert_eq!(link_target("/e/x.rs#L3", "/d/a.md"), Some(("/e/x.rs".into(), Some(3))));
-        assert_eq!(link_target("file:///e/x.rs", "/d/a.md"), Some(("/e/x.rs".into(), None)));
+        // As paths, so Windows' joined `\` compares equal to `/`.
+        let link = |href: &str| link_target(href, "/d/a.md").map(|(p, line)| (std::path::PathBuf::from(p), line));
+        let path = |p: &str, line: Option<usize>| Some((std::path::PathBuf::from(p), line));
+        assert_eq!(link("https://a.dev/x"), None);
+        assert_eq!(link("mailto:a@b.c"), None);
+        assert_eq!(link("#top"), None);
+        assert_eq!(link("b%20c.md#intro"), path("/d/b c.md", None));
+        assert_eq!(link("src/x.rs:12"), path("/d/src/x.rs", Some(12)));
+        assert_eq!(link("/e/x.rs#L3"), path("/e/x.rs", Some(3)));
+        assert_eq!(link("file:///e/x.rs"), path("/e/x.rs", None));
     }
 }

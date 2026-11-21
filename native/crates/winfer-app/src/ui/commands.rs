@@ -174,7 +174,7 @@ pub static BINDINGS: LazyLock<Vec<Binding>> = LazyLock::new(|| {
     add("Mod+=", None, "Bigger text".into(), "Layout", true, None, fixed(C::TerminalZoom(1)));
     add("Mod+-", None, "Smaller text".into(), "Layout", true, None, fixed(C::TerminalZoom(-1)));
     add("Mod+0", None, "Default text size".into(), "Layout", false, None, fixed(C::TerminalZoom(0)));
-    add("Mod+Ctrl+=", None, "Equalize panes".into(), "Layout", false, None, fixed(C::LayoutEqualize));
+    add("Mod+Ctrl+=", Some("Ctrl+Shift+Alt+="), "Equalize panes".into(), "Layout", false, None, fixed(C::LayoutEqualize));
     add("Mod+Ctrl+L", None, "Next layout preset".into(), "Layout", false, None, fixed(C::LayoutPreset(None)));
     for n in 1..=9 {
         let win = format!("Ctrl+Alt+{n}");
