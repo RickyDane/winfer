@@ -138,9 +138,7 @@ static DEMO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(
 
 /// A short "when": "Mon 21:16" within the week, else the date ("Nov 30 21:16").
 pub(super) fn short_when(ms: f64, now: f64) -> String {
-    let secs = (ms / 1000.0) as libc_time;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&secs, &mut tm) };
+    let tm = local_tm(ms);
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let time = format!("{:02}:{:02}", tm.tm_hour, tm.tm_min);
@@ -148,14 +146,20 @@ pub(super) fn short_when(ms: f64, now: f64) -> String {
 }
 
 pub(super) fn local_time(ms: f64) -> String {
-    let secs = (ms / 1000.0) as libc_time;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&secs, &mut tm) };
+    let tm = local_tm(ms);
     format!("{:04}-{:02}-{:02} {:02}:{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min)
 }
 
-#[allow(non_camel_case_types)]
-type libc_time = libc::time_t;
+/// The local calendar time of a Unix time in ms.
+fn local_tm(ms: f64) -> libc::tm {
+    let secs = (ms / 1000.0) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    #[cfg(unix)]
+    unsafe { libc::localtime_r(&secs, &mut tm) };
+    #[cfg(windows)]
+    unsafe { libc::localtime_s(&mut tm, &secs) };
+    tm
+}
 
 fn round1(n: f64) -> f64 {
     (n * 10.0).round() / 10.0

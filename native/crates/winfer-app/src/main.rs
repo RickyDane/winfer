@@ -38,8 +38,22 @@ fn main() {
     if run_subcommand() {
         return;
     }
+    // Started by an update (updates::relaunch): the old copy is still quitting, so wait for it to let
+    // go of the instance lock. Not passed on to the agents' processes.
+    let relaunched = std::env::var_os(updates::RELAUNCH_ENV).is_some();
+    if relaunched {
+        // SAFETY: no other threads yet.
+        unsafe { std::env::remove_var(updates::RELAUNCH_ENV) };
+    }
+    let wait_until = std::time::Instant::now() + std::time::Duration::from_secs(if relaunched { 30 } else { 0 });
+    let instance = loop {
+        match backend::acquire_instance_lock() {
+            None if std::time::Instant::now() < wait_until => std::thread::sleep(std::time::Duration::from_millis(200)),
+            lock => break lock,
+        }
+    };
     // One winfer at a time: two copies would share the database and kill each other's browsers.
-    let Some(_instance) = backend::acquire_instance_lock() else {
+    let Some(_instance) = instance else {
         eprintln!("winfer is already running");
         return;
     };

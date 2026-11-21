@@ -1,14 +1,15 @@
 name: release
 
-# Builds macOS, Windows and Linux bundles for a tag and publishes them as a GitHub release. The tag is
-# the version (stamped into the app here, so the files in the repo don't need bumping) and picks
-# the channel:
+# Builds macOS, Windows and Linux bundles for a tag and publishes them as a GitHub release: the Tauri
+# app's (bundle) and the native GPUI build's (native-bundle, from native/). The tag is the version
+# (stamped into both apps here, so the files in the repo don't need bumping) and picks the channel:
 #   nebula    v0.1.102-57  every push to main (nebula.yml); a pre-release, published to the
 #                          Nebula feed (nebula-channel release's latest.json)
 #   stable    v0.1.102     promoted from a Nebula build (stable.yml); the latest release
 #                          (releases/latest/download/latest.json), also published to the Nebula feed
-# Users pick which feed their app follows in settings, whichever build they installed.
-# Run manually to rebuild an existing tag.
+# Users pick which feed their app follows in settings, whichever build they installed. Each app has
+# its own feed on those releases: latest.json for the Tauri app, latest-native.json for the native
+# one (native/crates/winfer-app/src/updates.rs). Run manually to rebuild an existing tag.
 on:
   workflow_call:
     inputs:
@@ -270,6 +271,8 @@ jobs:
           add() { platforms=$(jq --arg k "$1" --argjson v "$(entry "$2")" '.[$k] = $v' <<<"$platforms"); }
           for f in *.sig; do
             case "$f" in
+              # The native build's, which latest-native.json lists (native-updater-json).
+              winfer-native-*) ;;
               *aarch64*.app.tar.gz.sig) add darwin-aarch64 "$f" ;;
               *.app.tar.gz.sig) add darwin-x86_64 "$f" ;;
               *-setup.exe.sig) add windows-x86_64-nsis "$f"; add windows-x86_64 "$f" ;;
@@ -334,3 +337,238 @@ jobs:
           fi
           id=${{ needs.release.outputs.id }}
           gh api -X PATCH "repos/${{ github.repository }}/releases/$id" -f make_latest=true >/dev/null
+
+  # The native GPUI build (native/) of the same version, into the same release. Apart from the Tauri
+  # bundles: either app failing to build doesn't hold back the other's release or feed.
+  native-bundle:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            target: aarch64-apple-darwin
+          - platform: macos-15
+            target: x86_64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.platform }}
+    env:
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      # The workspace version is the app's (CARGO_PKG_VERSION, which updates.rs compares).
+      - name: Stamp version
+        shell: bash
+        run: |
+          if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            echo "::error::Tag $TAG isn't vX.Y.Z (stable) or vX.Y.Z-N (Nebula)"
+            exit 1
+          fi
+          VERSION=${TAG#v} perl -0pi -e 's/^version = ".*"$/version = "$ENV{VERSION}"/m' native/Cargo.toml
+          git diff --stat
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/sccache
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libfontconfig1-dev
+
+      # The Tauri bundle job's Developer ID and notarization secrets (see there). tauri-action
+      # imports the certificate itself; here it goes into a throwaway keychain for codesign, and
+      # bundle-macos.sh signs, notarizes and staples.
+      - name: macOS signing and notarization credentials
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_CERTIFICATE_PASSWORD" ]; then
+            echo "::warning::No Developer ID certificate secrets; building ad-hoc signed and not notarized"
+            exit 0
+          fi
+          put() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_ENV"; }
+          keychain="$RUNNER_TEMP/winfer-native.keychain-db"
+          password=$(openssl rand -hex 16)
+          printf '%s' "$APPLE_CERTIFICATE" | tr -d '\r\n ' | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$APPLE_SIGNING_IDENTITY
+          [ -n "$identity" ] || identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -n1)
+          [ -n "$identity" ] || { echo "::error::No Developer ID Application identity in APPLE_CERTIFICATE"; exit 1; }
+          put WINFER_SIGN_IDENTITY "$identity"
+          if [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            key_path="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$key_path"
+            chmod 600 "$key_path"
+            put APPLE_API_KEY "$APPLE_API_KEY"
+            put APPLE_API_ISSUER "$APPLE_API_ISSUER"
+            put APPLE_API_KEY_PATH "$key_path"
+          elif [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            put APPLE_ID "$APPLE_ID"
+            put APPLE_PASSWORD "$APPLE_PASSWORD"
+            put APPLE_TEAM_ID "$APPLE_TEAM_ID"
+          else
+            echo "::error::Developer ID certificate set but no notarization credentials (APPLE_API_* or APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID)"
+            exit 1
+          fi
+          put WINFER_NOTARIZE 1
+
+      # macOS: winfer.app as .dmg and .app.tar.gz; Windows: the .exe; Linux: a .tar.gz of the binary.
+      - name: Build
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            macOS) bash native/scripts/bundle-macos.sh ${{ matrix.target }} ;;
+            Windows) bash native/scripts/bundle-windows.sh ${{ matrix.target }} ;;
+            Linux) bash native/scripts/bundle-linux.sh ${{ matrix.target }} ;;
+          esac
+
+      - name: Verify signature and notarization
+        if: runner.os == 'macOS' && env.WINFER_NOTARIZE == '1'
+        shell: bash
+        run: |
+          app=native/target/bundle/winfer.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          info=$(codesign -dv --verbose=4 "$app" 2>&1)
+          grep -q 'Authority=Developer ID Application' <<<"$info" || { echo "::error::Not Developer ID signed"; exit 1; }
+          grep -q 'flags=.*runtime' <<<"$info" || { echo "::error::Hardened runtime missing"; exit 1; }
+          retry() {
+            local n=0
+            until "$@"; do
+              n=$((n + 1))
+              [ "$n" -ge 5 ] && return 1
+              echo "::warning::$1 failed (attempt $n/5), retrying in $((n * 15))s"
+              sleep $((n * 15))
+            done
+          }
+          retry xcrun stapler validate "$app"
+          retry spctl --assess --type execute --verbose=4 "$app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: native/target/bundle/winfer-native-*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: sccache stats
+        if: always()
+        shell: bash
+        run: sccache --show-stats
+
+  # Signs the native update bundles with the Tauri app's updater key (the native app checks them
+  # against tauri.conf.json's pubkey), uploads everything to the release and writes
+  # latest-native.json: the release's, which stable apps read once it's the latest, and the
+  # nebula-channel release's, which Nebula apps read.
+  native-updater-json:
+    needs: [release, native-bundle]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      # For the tauri CLI's signer.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-bundles
+          merge-multiple: true
+
+      - name: Sign the update bundles and upload them to the release
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          shopt -s nullglob
+          # What installed apps download (the .dmg is only for first installs).
+          for f in native-bundles/*.app.tar.gz native-bundles/winfer-native-windows-*.exe native-bundles/winfer-native-linux-*.tar.gz; do
+            pnpm tauri signer sign "$f"
+          done
+          ls -l native-bundles
+          gh release upload "$TAG" native-bundles/* --clobber
+
+      - name: Write latest-native.json
+        run: |
+          cd native-bundles
+          base="https://github.com/$GH_REPO/releases/download/$TAG"
+          platforms='{}'
+          add() { platforms=$(jq --arg k "$1" --arg sig "$(cat "$2.sig")" --arg url "$base/$2" '.[$k] = {signature: $sig, url: $url}' <<<"$platforms"); }
+          # Keys as in the Tauri app's latest.json (updates.rs: platform()).
+          for sig in *.sig; do
+            f=${sig%.sig}
+            case "$f" in
+              winfer-native-macos-*.app.tar.gz) arch=${f#winfer-native-macos-}; add "darwin-${arch%.app.tar.gz}" "$f" ;;
+              winfer-native-windows-*.exe) arch=${f#winfer-native-windows-}; add "windows-${arch%.exe}" "$f" ;;
+              winfer-native-linux-*.tar.gz) arch=${f#winfer-native-linux-}; add "linux-${arch%.tar.gz}" "$f" ;;
+            esac
+          done
+          for k in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64; do
+            jq -e --arg k "$k" 'has($k)' <<<"$platforms" >/dev/null || { echo "::error::No signed native bundle for $k"; exit 1; }
+          done
+          cd ..
+          jq -n \
+            --arg version "${TAG#v}" \
+            --arg notes "$(gh release view "$TAG" --json body -q .body)" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $date, platforms: $platforms}' > latest-native.json
+          cat latest-native.json
+          gh release upload "$TAG" latest-native.json --clobber
+
+      # As the Tauri app's feed (updater-json): Nebula and stable builds both, never replacing a newer one.
+      - name: Publish to the Nebula channel
+        run: |
+          key() {
+            local core=${1%%-*} pre=
+            [[ $1 == *-* ]] && pre=${1#*-}
+            IFS=. read -r a b c <<<"$core"
+            if [ -n "$pre" ]; then printf '%06d.%06d.%06d.0%06d' "$a" "$b" "$c" "$pre"; else printf '%06d.%06d.%06d.1' "$a" "$b" "$c"; fi
+          }
+          # updater-json creates the feed's release too; whichever job gets there first does.
+          if ! gh release view "$FEED_TAG" >/dev/null 2>&1; then
+            gh release create "$FEED_TAG" --prerelease --latest=false --target "$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" -q .object.sha)" \
+              --title "Nebula channel" --notes "Update feed for Nebula builds of winfer. Download the newest pre-release instead." \
+              || gh release view "$FEED_TAG" >/dev/null
+          fi
+          mkdir feed
+          current=$(gh release download "$FEED_TAG" --pattern latest-native.json --dir feed >/dev/null 2>&1 && jq -r .version feed/latest-native.json || true)
+          if [ -n "$current" ] && [[ $(key "$current") > $(key "${TAG#v}") ]]; then
+            echo "The Nebula channel already has native $current; leaving it"
+            exit 0
+          fi
+          gh release upload "$FEED_TAG" latest-native.json --clobber

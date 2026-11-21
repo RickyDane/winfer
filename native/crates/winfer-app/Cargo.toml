@@ -33,6 +33,11 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 futures-util = "0.3.34"
 ureq = { version = "3.4.2", features = ["json"] }
 hayro = { version = "0.9", features = ["embed-fonts"] }
-
-[target."cfg(unix)".dependencies]
+# Local time on every platform (localtime_r, and localtime_s on Windows).
 libc = "0.2.190"
+# Checks an update's signature against the Tauri app's updater key (see updates.rs).
+minisign-verify = "0.2"
+
+[dev-dependencies]
+# Signs test bundles as `tauri signer sign` does.
+minisign = "0.9"

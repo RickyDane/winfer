@@ -1,12 +1,24 @@
-//! App updates and release notes (port of `features/updates/releaseNotes.ts` and the checking half
-//! of `updater.ts`). The native build checks GitHub releases tagged `native-v<version>` (Nebula
-//! builds carry a numeric pre-release, `native-v0.2.0-7`) and points at the platform's download; it
-//! doesn't replace itself, since the build isn't signed for in-place updates yet.
+//! App updates and release notes (port of `features/updates/releaseNotes.ts` and `updater.ts`).
+//! Native builds ship in the Tauri app's GitHub releases (vX.Y.Z stable, vX.Y.Z-N Nebula; see
+//! .github/workflows/release.yml) with an update feed of their own, latest-native.json, and are
+//! signed with the Tauri app's updater key. Installing downloads this platform's bundle, checks its
+//! signature, puts it in place of the running app and relaunches into it.
 
+use base64::Engine as _;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub const REPO: &str = "RickyDane/winfer";
-pub const TAG_PREFIX: &str = "native-v";
+pub const TAG_PREFIX: &str = "v";
+/// The native builds' feed, next to the Tauri app's latest.json on the same releases.
+pub const FEED_FILE: &str = "latest-native.json";
+/// Set on the copy started after an update, which waits for this one to quit (main.rs).
+pub const RELAUNCH_ENV: &str = "WINFER_RELAUNCHED";
+/// Most an update bundle may weigh.
+const MAX_BUNDLE: u64 = 1 << 30;
 
 /// One release's changes, as the "What's new" dialog lists them.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +52,14 @@ impl Channel {
     /// The channel of a build, from its version (Nebula builds are versioned X.Y.Z-N).
     pub fn of_version(version: &str) -> Channel {
         if version.contains('-') { Channel::Nebula } else { Channel::Stable }
+    }
+
+    /// The feed on the latest (stable) release, or on the release each Nebula build replaces.
+    pub fn feed(self) -> String {
+        match self {
+            Channel::Stable => format!("https://github.com/{REPO}/releases/latest/download/{FEED_FILE}"),
+            Channel::Nebula => format!("https://github.com/{REPO}/releases/download/nebula-channel/{FEED_FILE}"),
+        }
     }
 }
 
@@ -116,12 +136,6 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct Asset {
-    pub name: String,
-    pub browser_download_url: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct Release {
     pub tag_name: String,
     #[serde(default)]
@@ -130,16 +144,16 @@ pub struct Release {
     pub draft: bool,
     #[serde(default)]
     pub prerelease: bool,
-    #[serde(default)]
-    pub html_url: String,
-    #[serde(default)]
-    pub assets: Vec<Asset>,
 }
 
 impl Release {
-    /// The version a native release carries, or None for other releases in the repo (the Tauri app's).
+    /// The version of a vX.Y.Z or vX.Y.Z-N release, or None for the repo's other releases (the
+    /// Nebula feed's).
     pub fn version(&self) -> Option<String> {
-        self.tag_name.strip_prefix(TAG_PREFIX).map(str::to_string)
+        let v = self.tag_name.strip_prefix(TAG_PREFIX)?;
+        let (core, pre) = v.split_once('-').map_or((v, None), |(c, p)| (c, Some(p)));
+        let number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        (core.split('.').count() == 3 && core.split('.').all(number) && pre.is_none_or(number)).then(|| v.to_string())
     }
 }
 
@@ -162,42 +176,224 @@ pub fn releases_between(releases: &[Release], from: Option<&str>, to: &str) -> V
     out
 }
 
-/// The newest release on `channel` newer than `current`.
-pub fn newer<'a>(releases: &'a [Release], current: &str, channel: Channel) -> Option<&'a Release> {
-    releases
-        .iter()
-        .filter(|r| !r.draft && (channel == Channel::Nebula || !r.prerelease))
-        .filter_map(|r| Some((r.version()?, r)))
-        .filter(|(v, _)| compare_versions(v, current) == std::cmp::Ordering::Greater)
-        .max_by(|(a, _), (b, _)| compare_versions(a, b))
-        .map(|(_, r)| r)
+/// An update feed as release.yml writes it (the shape of the Tauri app's latest.json).
+#[derive(Clone, Debug, Deserialize)]
+pub struct Feed {
+    pub version: String,
+    #[serde(default)]
+    pub platforms: HashMap<String, Bundle>,
 }
 
-/// The download for this platform among a release's assets, else the release page.
-pub fn download_url(release: &Release) -> String {
-    let (os, arch): (&[&str], &[&str]) = if cfg!(target_os = "macos") {
-        (&["macos", "darwin", "mac", ".dmg"], if cfg!(target_arch = "aarch64") { &["arm64", "aarch64"] } else { &["x86_64", "x64", "amd64", "intel"] })
-    } else if cfg!(target_os = "windows") {
-        (&["windows", "win", ".msi", ".exe"], &["x86_64", "x64", "amd64"])
-    } else {
-        (&["linux", ".appimage", ".deb"], if cfg!(target_arch = "aarch64") { &["arm64", "aarch64"] } else { &["x86_64", "x64", "amd64"] })
+/// One platform's update: a .app.tar.gz (macOS), the .exe (Windows) or a .tar.gz of the binary
+/// (Linux), and its minisign signature.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Bundle {
+    pub url: String,
+    pub signature: String,
+}
+
+/// This build's key in a feed's platforms: darwin-aarch64, windows-x86_64, linux-x86_64, …
+pub fn platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        os => os,
     };
-    let lower = |a: &Asset| a.name.to_lowercase();
-    let for_os = |a: &&Asset| os.iter().any(|k| lower(a).contains(k));
-    let matches: Vec<&Asset> = release.assets.iter().filter(for_os).collect();
-    matches.iter().find(|a| arch.iter().any(|k| lower(a).contains(k))).or(matches.first()).map_or_else(|| release.html_url.clone(), |a| a.browser_download_url.clone())
+    format!("{os}-{}", std::env::consts::ARCH)
+}
+
+/// The bundle `feed` offers this build: only for a newer version (so never a downgrade: a Nebula
+/// build switched to stable waits for the stable release of its version), and only if it has one
+/// for this platform.
+pub fn offered(feed: &Feed, current: &str) -> Option<Bundle> {
+    if compare_versions(&feed.version, current) != std::cmp::Ordering::Greater {
+        return None;
+    }
+    feed.platforms.get(&platform()).cloned()
+}
+
+/// The release page of a version, for downloading it by hand.
+pub fn release_page(version: &str) -> String {
+    format!("https://github.com/{REPO}/releases/tag/{TAG_PREFIX}{version}")
+}
+
+fn agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder().timeout_global(Some(timeout)).build().into()
+}
+
+/// The channel's feed (blocking). None while there's none: the latest stable release predates
+/// native builds, or its native bundles are still building.
+pub fn fetch_feed(channel: Channel) -> Result<Option<Feed>, String> {
+    match agent(Duration::from_secs(15)).get(&channel.feed()).header("User-Agent", "winfer").call() {
+        Ok(mut res) => res.body_mut().read_json::<Feed>().map(Some).map_err(|e| e.to_string()),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(e) => Err(format!("GitHub answered: {e}")),
+    }
 }
 
 /// All releases of the repo (blocking: call off the UI thread).
 pub fn fetch_releases() -> Result<Vec<Release>, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(15))).build().into();
-    let mut res = agent
+    let mut res = agent(Duration::from_secs(15))
         .get(&format!("https://api.github.com/repos/{REPO}/releases?per_page=100"))
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "winfer")
         .call()
         .map_err(|e| format!("GitHub answered: {e}"))?;
     res.body_mut().read_json::<Vec<Release>>().map_err(|e| e.to_string())
+}
+
+/// The Tauri app's updater key (plugins.updater.pubkey), which signs the native bundles too.
+fn updater_pubkey() -> String {
+    let conf: serde_json::Value = serde_json::from_str(include_str!("../../../../src-tauri/tauri.conf.json")).unwrap_or_default();
+    conf["plugins"]["updater"]["pubkey"].as_str().unwrap_or_default().to_string()
+}
+
+/// Checks `data` against a signature from `tauri signer sign`, as the Tauri updater does: the key
+/// and the signature are base64 of minisign's text files.
+pub fn verify(data: &[u8], signature: &str, pubkey: &str) -> Result<(), String> {
+    let text = |b64: &str| base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok().and_then(|b| String::from_utf8(b).ok());
+    let key = text(pubkey).and_then(|k| minisign_verify::PublicKey::decode(&k).ok()).ok_or("the update key is invalid")?;
+    let sig = text(signature).and_then(|s| minisign_verify::Signature::decode(&s).ok()).ok_or("the update's signature is invalid")?;
+    key.verify(data, &sig, true).map_err(|_| "the download doesn't match its signature".to_string())
+}
+
+/// What an update replaces: the .app bundle on macOS, else the executable.
+fn install_target() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if cfg!(target_os = "macos") {
+        // …/winfer.app/Contents/MacOS/winfer
+        let exe = exe.canonicalize().map_err(|e| e.to_string())?;
+        let app = exe.ancestors().nth(3).filter(|a| a.extension().is_some_and(|e| e == "app"));
+        return app.map(Path::to_path_buf).ok_or_else(|| "winfer isn't running from its app bundle".to_string());
+    }
+    Ok(exe)
+}
+
+/// Where an install unpacks: beside what it replaces, so moving it into place is a rename.
+fn staging_dir(target: &Path) -> Option<PathBuf> {
+    Some(target.parent()?.join(format!(".winfer-update-{}", std::process::id())))
+}
+
+/// Downloads `bundle`, checks its signature and puts it in place of the running app, reporting
+/// (bytes so far, total) as it downloads. Returns the executable to relaunch. Blocking.
+pub fn install(bundle: &Bundle, progress: impl Fn(u64, Option<u64>)) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        return Err("development builds don't update themselves".into());
+    }
+    let target = install_target()?;
+    let staging = staging_dir(&target).ok_or("winfer's folder isn't known")?;
+    std::fs::create_dir_all(&staging).map_err(|e| format!("can't write to {}: {e}", staging.parent().unwrap_or(&staging).display()))?;
+    let result = download(&bundle.url, progress).and_then(|data| {
+        verify(&data, &bundle.signature, &updater_pubkey())?;
+        swap_in(&target, &staging, &data)
+    });
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+fn download(url: &str, progress: impl Fn(u64, Option<u64>)) -> Result<Vec<u8>, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(15)))
+        .timeout_recv_response(Some(Duration::from_secs(30)))
+        .timeout_recv_body(Some(Duration::from_secs(30 * 60)))
+        .build()
+        .into();
+    let mut res = agent.get(url).header("User-Agent", "winfer").call().map_err(|e| format!("download failed: {e}"))?;
+    let total = res.body().content_length();
+    let mut reader = res.body_mut().with_config().limit(MAX_BUNDLE).reader();
+    let mut data = Vec::with_capacity(total.unwrap_or(0).min(MAX_BUNDLE) as usize);
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("download failed: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+        progress(data.len() as u64, total);
+    }
+    Ok(data)
+}
+
+/// Moves `target` aside and `new` into its place, putting `target` back if that fails.
+fn replace(target: &Path, new: &Path, aside: &Path) -> Result<(), String> {
+    std::fs::rename(target, aside).map_err(|e| format!("can't move {} aside: {e}", target.display()))?;
+    std::fs::rename(new, target).map_err(|e| {
+        let _ = std::fs::rename(aside, target);
+        format!("can't put the update in place: {e}")
+    })
+}
+
+/// Unpacks the .tar.gz of winfer.app (macOS) or the winfer binary (Linux) over `target`.
+#[cfg(not(windows))]
+fn swap_in(target: &Path, staging: &Path, archive: &[u8]) -> Result<PathBuf, String> {
+    let file = staging.join("update.tar.gz");
+    let unpacked = staging.join("new");
+    std::fs::write(&file, archive).and_then(|_| std::fs::create_dir_all(&unpacked)).map_err(|e| e.to_string())?;
+    let out = std::process::Command::new("tar").arg("-xzf").arg(&file).arg("-C").arg(&unpacked).output().map_err(|e| format!("can't run tar: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("can't unpack the update: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    if cfg!(target_os = "macos") {
+        let app = std::fs::read_dir(&unpacked).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e == "app")).ok_or("the update has no app in it")?;
+        replace(target, &app, &staging.join("old.app"))?;
+        // The bundle's executable, under whatever name this copy was started as.
+        let name = std::env::current_exe().ok().and_then(|e| e.file_name().map(|n| n.to_os_string())).unwrap_or_else(|| "winfer".into());
+        let exe = target.join("Contents/MacOS").join(&name);
+        Ok(if exe.exists() { exe } else { target.join("Contents/MacOS/winfer") })
+    } else {
+        use std::os::unix::fs::PermissionsExt;
+        let binary = unpacked.join("winfer");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("the update has no winfer binary in it: {e}"))?;
+        replace(target, &binary, &staging.join("old"))?;
+        Ok(target.to_path_buf())
+    }
+}
+
+/// The .old beside the .exe, where the replaced one waits to be deleted.
+#[cfg(windows)]
+fn old_exe(exe: &Path) -> PathBuf {
+    let mut name = exe.as_os_str().to_os_string();
+    name.push(".old");
+    PathBuf::from(name)
+}
+
+/// The bundle is the new .exe. Windows can't delete or overwrite a running .exe but can rename it,
+/// so the old one moves to .old and is deleted on the next start (`cleanup`).
+#[cfg(windows)]
+fn swap_in(target: &Path, staging: &Path, exe: &[u8]) -> Result<PathBuf, String> {
+    let new = staging.join("winfer.exe");
+    std::fs::write(&new, exe).map_err(|e| e.to_string())?;
+    let old = old_exe(target);
+    let _ = std::fs::remove_file(&old);
+    replace(target, &new, &old)?;
+    Ok(target.to_path_buf())
+}
+
+/// Removes what an update left behind: an install that didn't finish, and the replaced .exe.
+pub fn cleanup() {
+    let Ok(target) = install_target() else { return };
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(old_exe(&target));
+    if let Some(dir) = target.parent().and_then(|d| std::fs::read_dir(d).ok()) {
+        for entry in dir.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(".winfer-update-") {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+/// Starts the installed update. It waits for this copy to quit (RELAUNCH_ENV) before taking over.
+pub fn relaunch(exe: &Path) -> Result<(), String> {
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.env(RELAUNCH_ENV, "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if let Some(home) = dirs::home_dir() {
+        cmd.current_dir(home);
+    }
+    // Its own process group, so closing the terminal this copy was started from doesn't take it along.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    cmd.spawn().map(drop).map_err(|e| format!("can't start the new version: {e}"))
 }
 
 #[cfg(test)]
@@ -208,7 +404,7 @@ mod tests {
     const BODY: &str = "### Changes\n- Plugins: add Telegram, answer agents from your phone\n- Settings: start agents in auto-approve mode\n\n---\n### Install\nUnsigned builds.\n\n- not a change\n";
 
     fn rel(tag: &str, body: &str) -> Release {
-        Release { tag_name: format!("{TAG_PREFIX}{tag}"), body: Some(body.into()), draft: false, prerelease: tag.contains('-'), html_url: String::new(), assets: Vec::new() }
+        Release { tag_name: format!("{TAG_PREFIX}{tag}"), body: Some(body.into()), draft: false, prerelease: tag.contains('-') }
     }
 
     #[test]
@@ -237,7 +433,7 @@ mod tests {
 
     #[test]
     fn lists_what_changed_between_versions() {
-        let releases = vec![rel("0.1.44", "- four"), rel("0.1.43", "- three"), rel("0.1.42", "- two"), rel("0.1.41", "- one"), Release { draft: true, ..rel("0.1.45", "- draft") }, Release { tag_name: "v9.9.9".into(), ..rel("0", "- tauri") }];
+        let releases = vec![rel("0.1.44", "- four"), rel("0.1.43", "- three"), rel("0.1.42", "- two"), rel("0.1.41", "- one"), Release { draft: true, ..rel("0.1.45", "- draft") }, Release { tag_name: "nebula-channel".into(), ..rel("0", "- feed") }];
         let got = releases_between(&releases, Some("0.1.41"), "0.1.43");
         assert_eq!(got, [ReleaseChanges { version: "0.1.43".into(), changes: vec!["three".into()] }, ReleaseChanges { version: "0.1.42".into(), changes: vec!["two".into()] }]);
         assert_eq!(releases_between(&releases, None, "0.1.44"), [ReleaseChanges { version: "0.1.44".into(), changes: vec!["four".into()] }]);
@@ -249,25 +445,87 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_newer_release_on_a_channel() {
-        let releases = vec![rel("0.1.44", ""), rel("0.1.45-2", ""), rel("0.1.43", "")];
-        assert_eq!(newer(&releases, "0.1.43", Channel::Stable).and_then(Release::version).as_deref(), Some("0.1.44"));
-        assert_eq!(newer(&releases, "0.1.43", Channel::Nebula).and_then(Release::version).as_deref(), Some("0.1.45-2"));
-        assert!(newer(&releases, "0.1.44", Channel::Stable).is_none());
+    fn reads_versions_from_release_tags() {
+        let version = |tag: &str| Release { tag_name: tag.into(), ..rel("", "") }.version();
+        assert_eq!(version("v0.1.107").as_deref(), Some("0.1.107"));
+        assert_eq!(version("v0.1.107-132").as_deref(), Some("0.1.107-132"));
+        for other in ["nebula-channel", "native-v0.1.0", "v0.1", "v0.1.2-rc1", "v0.1.2-"] {
+            assert_eq!(version(other), None, "{other}");
+        }
+    }
+
+    fn feed(version: &str, platforms: &[&str]) -> Feed {
+        let bundle = |p: &&str| (p.to_string(), Bundle { url: format!("https://example/{p}"), signature: "sig".into() });
+        Feed { version: version.into(), platforms: platforms.iter().map(bundle).collect() }
+    }
+
+    #[test]
+    fn offers_only_a_newer_build_for_this_platform() {
+        let here = platform();
+        assert_eq!(offered(&feed("0.1.44", &[&here]), "0.1.43").map(|b| b.url), Some(format!("https://example/{here}")));
+        assert!(offered(&feed("0.1.43", &[&here]), "0.1.43").is_none());
+        // Never a downgrade: a Nebula build on the stable channel waits for its stable release.
+        assert!(offered(&feed("0.1.43", &[&here]), "0.1.44-7").is_none());
+        assert!(offered(&feed("0.1.44", &[&here]), "0.1.44-7").is_some());
+        assert!(offered(&feed("0.1.44", &["plan9-mips"]), "0.1.43").is_none());
         assert_eq!(Channel::of_version("0.1.102-7"), Channel::Nebula);
     }
 
     #[test]
-    fn picks_this_platforms_download() {
-        let mut r = rel("0.2.0", "");
-        r.html_url = "https://example/release".into();
-        assert_eq!(download_url(&r), "https://example/release");
-        let asset = |n: &str| Asset { name: n.into(), browser_download_url: format!("https://example/{n}") };
-        r.assets = vec![asset("winfer-linux-x86_64.AppImage"), asset("winfer-macos-arm64.dmg"), asset("winfer-macos-x86_64.dmg"), asset("winfer-windows-x64.msi")];
-        let url = download_url(&r);
+    fn reads_the_feed_release_yml_writes() {
+        let json = r#"{"version":"0.1.108-3","notes":"- x","pub_date":"2026-11-21T00:00:00Z","platforms":{"darwin-aarch64":{"signature":"c2ln","url":"https://github.com/RickyDane/winfer/releases/download/v0.1.108-3/winfer-native-macos-aarch64.app.tar.gz"}}}"#;
+        let f: Feed = serde_json::from_str(json).unwrap();
+        assert_eq!(f.version, "0.1.108-3");
+        assert_eq!(f.platforms["darwin-aarch64"].signature, "c2ln");
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            assert_eq!(url, "https://example/winfer-macos-arm64.dmg");
+            assert_eq!(platform(), "darwin-aarch64");
         }
-        assert!(url.starts_with("https://example/"));
+        assert!(Channel::Stable.feed().ends_with("/releases/latest/download/latest-native.json"));
+        assert!(Channel::Nebula.feed().ends_with("/releases/download/nebula-channel/latest-native.json"));
+    }
+
+    #[test]
+    fn checks_signatures_like_the_tauri_updater() {
+        // `tauri signer sign` writes base64 of minisign's signature file; the key is base64 of its public key file.
+        let b64 = |s: String| base64::engine::general_purpose::STANDARD.encode(s);
+        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let pubkey = b64(pair.pk.to_box().unwrap().to_string());
+        let data = b"winfer.app.tar.gz".to_vec();
+        let signature = b64(minisign::sign(Some(&pair.pk), &pair.sk, std::io::Cursor::new(&data), None, None).unwrap().to_string());
+        assert_eq!(verify(&data, &signature, &pubkey), Ok(()));
+        assert!(verify(b"tampered", &signature, &pubkey).is_err());
+        let other = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        assert!(verify(&data, &signature, &b64(other.pk.to_box().unwrap().to_string())).is_err());
+        assert!(verify(&data, "not base64", &pubkey).is_err());
+        // The real key, from tauri.conf.json, decodes.
+        assert_ne!(verify(&data, &signature, &updater_pubkey()), Err("the update key is invalid".to_string()));
+    }
+
+    /// Unpacks a bundle over an installed copy the way an update does, in a scratch folder.
+    #[cfg(not(windows))]
+    #[test]
+    fn swaps_the_update_in_for_the_installed_copy() {
+        let root = std::env::temp_dir().join(format!("winfer-swap-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (installed, build) = (root.join("Applications"), root.join("build"));
+        // macOS replaces the whole .app; Linux the binary.
+        let (target, packed, inner) = if cfg!(target_os = "macos") { (installed.join("winfer.app"), build.join("winfer.app"), "winfer.app/Contents/MacOS/winfer") } else { (installed.join("winfer"), build.join("winfer"), "winfer") };
+        for (base, text) in [(&installed, "old"), (&build, "new")] {
+            let file = base.join(inner);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, text).unwrap();
+        }
+        let archive = root.join("update.tar.gz");
+        let ok = std::process::Command::new("tar").arg("-czf").arg(&archive).arg("-C").arg(&build).arg(packed.file_name().unwrap()).status().unwrap();
+        assert!(ok.success());
+        let staging = staging_dir(&target).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        let exe = swap_in(&target, &staging, &std::fs::read(&archive).unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(installed.join(inner)).unwrap(), "new");
+        assert_eq!(exe, installed.join(inner));
+        // A broken download leaves the installed copy alone.
+        assert!(swap_in(&target, &staging, b"not a tar.gz").is_err());
+        assert_eq!(std::fs::read_to_string(installed.join(inner)).unwrap(), "new");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

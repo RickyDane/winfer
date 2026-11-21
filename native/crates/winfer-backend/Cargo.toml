@@ -37,6 +37,10 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 [target."cfg(unix)".dependencies]
 libc = "0.2.190"
 
+# notify.rs falls back to it on Linux.
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
+tauri-plugin-notification.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6.15"
 security-framework = "3.7.0"
