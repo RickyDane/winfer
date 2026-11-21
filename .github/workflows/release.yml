@@ -444,7 +444,8 @@ jobs:
         run: |
           case "$RUNNER_OS" in
             macOS) bash native/scripts/bundle-macos.sh ${{ matrix.target }} ;;
-            Windows) bash native/scripts/bundle-windows.sh ${{ matrix.target }} ;;
+            # Without sccache: gpui's rustc command line is too long for it to start on Windows (os error 206).
+            Windows) env -u RUSTC_WRAPPER bash native/scripts/bundle-windows.sh ${{ matrix.target }} ;;
             Linux) bash native/scripts/bundle-linux.sh ${{ matrix.target }} ;;
           esac
 

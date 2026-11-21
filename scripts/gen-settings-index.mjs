@@ -39,7 +39,9 @@ const TAGS = ["Row", "Card", "Toggle", "Field", "Segmented", "Select", "Checkbox
 const LABEL_PROPS = ["label", "title"];
 const TEXT_PROPS = ["hint", "description", "placeholder", "aria-label", "tooltip"];
 
-const sources = FILES.map((f) => readFileSync(join(root, f), "utf8"));
+// LF, whatever the checkout: Windows ones have CRLF.
+const lf = (s) => s.replace(/\r\n/g, "\n");
+const sources = FILES.map((f) => lf(readFileSync(join(root, f), "utf8")));
 
 /** Every top-level `function Name(` in the files, with its source. */
 const functions = new Map();
@@ -132,7 +134,7 @@ const json = JSON.stringify([...merged.values()], null, 1) + "\n";
 const target = join(root, "src/features/settings/searchIndex.generated.json");
 
 if (process.argv.includes("--check")) {
-  if (readFileSync(target, "utf8") !== json) {
+  if (lf(readFileSync(target, "utf8")) !== json) {
     console.error("searchIndex.generated.json is out of date: run `node scripts/gen-settings-index.mjs`");
     process.exit(1);
   }
