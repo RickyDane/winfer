@@ -21,7 +21,7 @@
     "claude-haiku-5-5": { "input": 0.1, "cached": 0.01, "output": 0.5 }
   },
   "winfer-chatgpt": {
-    "label": "winfer code \u00b7 ChatGPT",
+    "label": "winfer code · ChatGPT",
     "argv": [
       "{winfer}",
       "code",
@@ -56,7 +56,7 @@
     "parser": "winfer"
   },
   "winfer-claude": {
-    "label": "winfer code \u00b7 Claude",
+    "label": "winfer code · Claude",
     "argv": [
       "{winfer}",
       "code",
@@ -89,10 +89,12 @@
       ]
     },
     "parser": "winfer",
-    "requires": ["claude"]
+    "requires": [
+      "claude"
+    ]
   },
   "winfer-codex": {
-    "label": "winfer code \u00b7 Codex",
+    "label": "winfer code · Codex",
     "argv": [
       "{winfer}",
       "code",
@@ -126,7 +128,45 @@
       ]
     },
     "parser": "winfer",
-    "requires": ["codex"]
+    "requires": [
+      "codex"
+    ]
+  },
+  "winfer-agy": {
+    "label": "winfer code · Antigravity",
+    "argv": [
+      "{winfer}",
+      "code",
+      "-p",
+      "--json",
+      "--mode",
+      "yolo",
+      "-m",
+      "agy/{model}",
+      "{prompt}"
+    ],
+    "model": "gemini-4-neon",
+    "models": [
+      "gemini-4-neon",
+      "gemini-4-argon",
+      "gemini-4-hydrogen"
+    ],
+    "effort": {
+      "argv": [
+        "--effort",
+        "{effort}"
+      ],
+      "levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "parser": "winfer",
+    "requires": [
+      "agy"
+    ]
   },
   "codex": {
     "label": "Codex",
@@ -196,6 +236,35 @@
       ]
     },
     "parser": "claude"
+  },
+  "agy": {
+    "label": "Antigravity",
+    "argv": [
+      "agy",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--model",
+      "{model}",
+      "-p",
+      "{prompt}"
+    ],
+    "model": "gemini-4-neon",
+    "models": [
+      "gemini-4-neon",
+      "gemini-4-argon",
+      "gemini-4-hydrogen"
+    ],
+    "effort": {
+      "model": "{model}-{effort}",
+      "levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "parser": "agy"
   },
   "pi": {
     "label": "pi",

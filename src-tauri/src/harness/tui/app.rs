@@ -661,6 +661,20 @@ impl App {
                 }
                 None => self.items.push(Item::new(Block::Reasoning { id, text, started: Instant::now(), ended: None })),
             },
+            Ev::ReasoningEnd { id } => {
+                if id.is_empty() {
+                    self.end_reasoning();
+                } else if let Some(item) = self.find(|b| matches!(b, Block::Reasoning { id: i, .. } if *i == id)) {
+                    if let Block::Reasoning { ended, .. } = &mut item.block {
+                        if ended.is_none() {
+                            *ended = Some(Instant::now());
+                            item.touch();
+                        }
+                    }
+                } else {
+                    self.end_reasoning();
+                }
+            }
             Ev::ToolStart { id, name, title, .. } => {
                 self.end_reasoning();
                 if is_subagent(&name) {
@@ -673,8 +687,13 @@ impl App {
                 }
                 match self.find(|b| matches!(b, Block::Tool { id: i, .. } if *i == id)) {
                     Some(item) => {
-                        if let Block::Tool { title: t, .. } = &mut item.block {
-                            *t = title;
+                        if let Block::Tool { name: n, title: t, .. } = &mut item.block {
+                            if !name.is_empty() {
+                                *n = name;
+                            }
+                            if !title.is_empty() {
+                                *t = title;
+                            }
                         }
                         item.touch();
                     }

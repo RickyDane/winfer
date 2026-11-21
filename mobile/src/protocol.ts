@@ -18,6 +18,36 @@ export interface PaneRequest {
 /** "Type something." / "Other" rows open a text field instead of answering. */
 export const isFreeText = (o: RequestOption) => /^(type something|something else|other|custom|write (your own|my own))\b/i.test(o.label.trim());
 
+/** A winfer code agent's model and reasoning effort (other agents don't send it). */
+export interface PaneConfig {
+  /** The model's spec, as `ModelOption.id`. */
+  model: string;
+  /** The model's display name. */
+  label: string;
+  effort: string;
+  /** The levels the current model takes, "default" first. */
+  efforts: string[];
+  /** The chat's permission mode ("Yolo", "Ask"…), and whether it runs without asking. */
+  mode?: string;
+  yolo?: boolean;
+  cwd?: string | null;
+  branch?: string | null;
+}
+
+/** The desktop's color theme (winfer's themes.json entry), so the phone matches it. */
+export interface Theme {
+  id: string;
+  mode: "dark" | "light";
+  ui: Record<string, string>;
+}
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  detail?: string;
+  efforts: string[];
+}
+
 export interface Pane {
   id: string;
   title: string;
@@ -32,6 +62,7 @@ export interface Pane {
   updatedAt: number;
   request: PaneRequest | null;
   reply: string | null;
+  config?: PaneConfig | null;
 }
 
 export interface Message {
@@ -70,6 +101,8 @@ export type PhoneMsg =
   | { t: "send"; paneId: string; text: string }
   | { t: "approve" | "decline" | "interrupt"; paneId: string }
   | { t: "choose"; paneId: string; option: number; text?: string }
+  | { t: "config.get"; paneId: string }
+  | { t: "pane.set"; paneId: string; model?: string; effort?: string }
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string }
   | { t: "pane.close"; paneId: string }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
@@ -77,9 +110,10 @@ export type PhoneMsg =
 
 export type DesktopMsg =
   | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string }
-  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string }
+  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string; theme?: Theme }
   | { t: "status"; pane: Pane; silent?: boolean }
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
+  | { t: "config"; id?: string; paneId: string; models: ModelOption[] }
   | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
   | { t: "error"; id?: string; error: string };
 

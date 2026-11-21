@@ -1181,6 +1181,7 @@ impl Bridge {
                 self.emit(Ev::ToolEnd { id, ok, output, diff: None });
             }
             "agentMessage" => self.emit(Ev::Text { id, text: s(item, "text") }),
+            "reasoning" => self.emit(Ev::ReasoningEnd { id }),
             "commandExecution" => {
                 let ok = item["exitCode"].as_i64() == Some(0) || item["status"] == "completed" && item["exitCode"].is_null();
                 self.commands.remove(&id);
@@ -1852,5 +1853,16 @@ mod tests {
         assert_eq!(args[1], r#"mcp_servers.winfer_x.command="/w""#);
         assert_eq!(args[3], r#"mcp_servers.winfer_x.args=["mcp-stdio"]"#);
         assert_eq!(args[5], r#"mcp_servers.winfer_x.env={A="1"}"#);
+    }
+
+    #[test]
+    fn reasoning_item_completion_emits_reasoning_end() {
+        let (mut b, rx) = bridge();
+        b.thread = Some("main".into());
+        b.on_notification("item/reasoning/summaryTextDelta", &json!({ "threadId": "main", "itemId": "r1", "delta": "thinking" }));
+        b.on_notification("item/completed", &json!({ "threadId": "main", "item": { "type": "reasoning", "id": "r1" } }));
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(evs.iter().any(|e| matches!(e, Ev::ReasoningDelta { id, .. } if id == "r1")));
+        assert!(evs.iter().any(|e| matches!(e, Ev::ReasoningEnd { id } if id == "r1")), "{evs:?}");
     }
 }

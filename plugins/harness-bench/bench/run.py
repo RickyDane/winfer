@@ -341,6 +341,22 @@ def parse_claude(out):
     return i, c, o, tools, cost
 
 
+def parse_agy(out):
+    i = c = o = tools = 0
+    for e in lines(out):
+        if e.get("event") == "step_update":
+            s = e.get("step_update", {})
+            if s.get("step_type") == "tool" and s.get("state") == "DONE":
+                tools += 1
+        elif e.get("event") == "result":
+            u = e.get("result", {}).get("usage", {})
+            # Cache reads aren't part of input_tokens.
+            c = u.get("cache_read_tokens", 0)
+            i = u.get("input_tokens", 0) + c
+            o = u.get("output_tokens", 0) + u.get("thinking_tokens", 0)
+    return i, c, o, tools, None
+
+
 def parse_codex(out):
     i = c = o = tools = 0
     for e in lines(out):
@@ -387,7 +403,7 @@ def parse_opencode(out):
     return i, c, o, tools, cost or None
 
 
-PARSERS = {"winfer": parse_winfer, "claude": parse_claude, "codex": parse_codex, "pi": parse_pi, "opencode": parse_opencode, "none": lambda out: (0, 0, 0, 0, None)}
+PARSERS = {"winfer": parse_winfer, "claude": parse_claude, "codex": parse_codex, "pi": parse_pi, "agy": parse_agy, "opencode": parse_opencode, "none": lambda out: (0, 0, 0, 0, None)}
 
 
 def estimate_cost(model, tokens_in, cached, tokens_out):

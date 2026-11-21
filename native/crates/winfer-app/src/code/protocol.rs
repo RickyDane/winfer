@@ -215,6 +215,7 @@ pub enum Ev {
     TextDelta { id: String, text: String },
     Text { id: String, text: String },
     ReasoningDelta { id: String, text: String },
+    ReasoningEnd { #[serde(default)] id: String },
     ToolStart { id: String, name: String, #[serde(default)] title: String, #[serde(default)] input: Value },
     ToolOutput { id: String, chunk: String },
     ToolEnd { id: String, #[serde(default)] ok: bool, #[serde(default)] output: String, #[serde(default)] diff: Option<String> },

@@ -2,8 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import type { DesktopClient } from "../client";
 import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
-import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText } from "./common";
+import { Composer, Pill, PillIcon } from "./Composer";
+import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
 import { Markdown } from "./Markdown";
+import { EffortIcon, EffortPicker, ModelPicker, Sheet, backendOf, effortLabel } from "./Pickers";
+import { Sky } from "./Sky";
 
 type Block = { kind: "msg"; msg: Message } | { kind: "tools"; msgs: Message[] };
 
@@ -34,6 +37,13 @@ function toolState(m: Message, active: boolean): ToolState {
 /** Runs longer than this fold their earlier steps behind one row. */
 const FOLD = 5;
 
+const clock = (ms: number) => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+};
+
+/** Consecutive tool calls as the desktop's chat shows them: cards whose icons a line joins. */
 function Steps({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: boolean; legacyLive: boolean; fresh: boolean }) {
   // Sessions that don't report states: the last call of the last group runs while the agent works.
   const states = msgs.map((m, i) => (m.state ? toolState(m, active) : legacyLive && i === msgs.length - 1 ? "running" : "unknown"));
@@ -41,72 +51,66 @@ function Steps({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: b
   // Fold by count, not by state, so a run doesn't jump when its last step finishes.
   const hidden = !all && msgs.length > FOLD + 1 ? msgs.length - FOLD : 0;
   const names = [...new Set(msgs.slice(0, hidden).map((m) => m.tool ?? "tool"))];
+  const rows = msgs.slice(hidden);
   return (
-    <div className={`steps${fresh ? " fresh" : ""}`}>
+    <div className={`tools${fresh ? " fresh" : ""}`}>
       {hidden > 0 && (
-        <button className="step more" onClick={() => (haptic(5), setAll(true))}>
-          <span className="step-icon">
-            <Icon name="chevron" size={12} />
-          </span>
-          <span className="step-name">{hidden} earlier steps</span>
-          <span className="step-arg">{names.slice(0, 3).join(", ")}</span>
-        </button>
+        <div className="tool-wrap" data-down>
+          <button className="tool more" onClick={() => (haptic(5), setAll(true))}>
+            <span className="tool-badge">
+              <Icon name="chevron" size={13} />
+            </span>
+            <span className="tool-name">{hidden} earlier steps</span>
+            <span className="tool-title">{names.slice(0, 3).join(", ")}</span>
+          </button>
+        </div>
       )}
-      {msgs.slice(hidden).map((m, i) => (
-        <Step key={m.id} m={m} state={states[hidden + i]} />
+      {rows.map((m, i) => (
+        <ToolRow key={m.id} m={m} state={states[hidden + i]} up={hidden > 0 || i > 0} down={i < rows.length - 1} />
       ))}
     </div>
   );
 }
 
-/** One tool call on the rail; tapping it unclamps the argument. */
-function Step({ m, state }: { m: Message; state: ToolState }) {
+/** One tool call: its tinted icon, name and argument, time and outcome; tap for the whole argument. */
+function ToolRow({ m, state, up, down }: { m: Message; state: ToolState; up: boolean; down: boolean }) {
   const [open, setOpen] = useState(false);
+  const running = state === "running";
+  useTick(running ? 1000 : 0);
+  const tint = state === "failed" ? "var(--danger)" : toolTint(m.tool);
+  const text = toolText(m.tool, m.text);
   return (
-    <button className="step" data-state={state} data-open={open} aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className="step-icon">
-        <Icon name={toolIcon(m.tool)} size={12} />
-      </span>
-      <span className="step-name">{m.tool ?? "Tool"}</span>
-      <span className="step-arg">{toolText(m.tool, m.text)}</span>
-      {m.background && <span className="step-tag">bg</span>}
-      <span className="step-status" aria-label={state}>
-        {state === "running" ? (
-          <span className="spinner" />
-        ) : state === "done" ? (
-          <Icon name="check" size={14} />
-        ) : state === "failed" ? (
-          <Icon name="x" size={14} />
-        ) : state === "stopped" ? (
-          <Icon name="minus" size={14} />
-        ) : null}
-      </span>
-    </button>
+    <div className="tool-wrap" data-up={(up && !open) || undefined} data-down={(down && !open) || undefined}>
+      <div className="tool-card" data-open={open} data-state={state}>
+        <button className="tool" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <span className="tool-badge" style={{ "--tint": tint } as CSSProperties}>
+            <Icon name={toolIcon(m.tool)} size={13} />
+          </span>
+          <span className="tool-name">{m.tool ?? "Tool"}</span>
+          <span className="tool-title">{text}</span>
+          {m.background && <span className="tool-tag">bg</span>}
+          {running && m.ts && <span className="tool-time">{clock(Date.now() - m.ts)}</span>}
+          <span className="tool-status" aria-label={state}>
+            {running ? <span className="spinner" /> : state === "done" ? <Icon name="check" size={13} /> : state === "failed" ? <Icon name="x" size={13} /> : state === "stopped" ? <Icon name="minus" size={13} /> : null}
+          </span>
+          <Icon name="right" size={12} className="tool-chev" />
+        </button>
+        {open && <pre className="tool-body">{text || "No details for this call."}</pre>}
+      </div>
+    </div>
   );
 }
 
-const clock = (ms: number) => {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(s / 60);
-  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}:${String(s % 60).padStart(2, "0")}`;
-};
-
-/** Above the composer while the agent works: an orb, "Working", the time and the call in flight. */
-function StatusLine({ pane, current, thinking }: { pane: Pane; current: Message | null; thinking: boolean }) {
+/** The desktop's working row: a spinner, "Working" (or "Thinking"), the time and the call in flight. */
+function WorkingRow({ pane, current, thinking }: { pane: Pane; current: Message | null; thinking: boolean }) {
   useTick(1000);
   const what = current ? `${current.tool ?? "Tool"} ${toolText(current.tool, current.text)}` : pane.message;
   return (
-    <div className="status-line" role="status">
+    <div className="working" role="status">
       <span className="orb" aria-hidden />
       <span className="shimmer">{thinking ? "Thinking" : "Working"}</span>
-      <span className="sep">·</span>
       <span className="num">{clock(Date.now() - (current?.ts ?? pane.updatedAt))}</span>
-      {what && (
-        <>
-          <span className="sep">·</span>
-          <span className="status-what">{what}</span>
-        </>
-      )}
+      {what && <span className="working-what">{what}</span>}
     </div>
   );
 }
@@ -115,7 +119,7 @@ function StatusLine({ pane, current, thinking }: { pane: Pane; current: Message 
 function Background({ items }: { items: Message[] }) {
   useTick(1000);
   return (
-    <div className="bg-box" role="status">
+    <div className="bg-card" role="status">
       <div className="bg-head">
         <span className="spinner" aria-hidden />
         <b>Background</b>
@@ -124,7 +128,9 @@ function Background({ items }: { items: Message[] }) {
       <ul>
         {items.map((m) => (
           <li key={m.id}>
-            <Icon name={toolIcon(m.tool)} size={13} />
+            <span className="tool-badge sm" style={{ "--tint": toolTint(m.tool) } as CSSProperties}>
+              <Icon name={toolIcon(m.tool)} size={11} />
+            </span>
             <b>{m.tool ?? "Task"}</b>
             <span className="bg-text">{toolText(m.tool, m.text)}</span>
             {m.ts && <span className="num">{clock(Date.now() - m.ts)}</span>}
@@ -135,20 +141,59 @@ function Background({ items }: { items: Message[] }) {
   );
 }
 
-/** Where the turn ended, as a quiet divider at the bottom of the chat. */
+/** Where the turn ended, as the desktop's "Worked for…" divider. */
 function EndMark({ pane }: { pane: Pane }) {
   useTick(30_000);
   const when = ago(pane.updatedAt) === "now" ? "just now" : `${ago(pane.updatedAt)} ago`;
   return (
     <div className="end-mark" data-status={pane.status}>
-      <Icon name={pane.status === "done" ? "check" : "x"} size={12} />
-      {pane.status === "done" ? "Finished" : "Stopped with an error"} · {when}
+      <span>
+        <Icon name={pane.status === "done" ? "check" : "alert"} size={11} />
+        {pane.status === "done" ? "Finished" : "Stopped with an error"} · {when}
+      </span>
+    </div>
+  );
+}
+
+/** The desktop's starter prompts on a fresh session. */
+export const SUGGESTIONS: { icon: IconName; title: string; prompt: string }[] = [
+  { icon: "compass", title: "Explore this codebase", prompt: "Give me a tour of this project: structure, entry points and how it fits together." },
+  { icon: "bug", title: "Find and fix a bug", prompt: "Look for a likely bug in this project and fix it, explaining what was wrong." },
+  { icon: "flask", title: "Write tests", prompt: "Find the least-tested important code here and add good tests for it." },
+  { icon: "bulb", title: "Suggest improvements", prompt: "Review this project and suggest the three most valuable improvements." },
+];
+
+/** A fresh session: "What should we build?", who answers and where, and four ways to start. */
+export function Welcome({ status, where, onPick, disabled }: { status: string; where?: string | null; onPick?: (prompt: string) => void; disabled?: boolean }) {
+  return (
+    <div className="welcome">
+      <div className="welcome-head">
+        <h1>What should we build?</h1>
+        <p>{status}</p>
+        {where && <code className="welcome-where">{where}</code>}
+      </div>
+      {onPick && (
+        <div className="suggest">
+          {SUGGESTIONS.map((sg, i) => (
+            <button key={sg.title} className="suggest-card" style={{ animationDelay: `${0.22 + i * 0.07}s` }} disabled={disabled} onClick={() => onPick(sg.prompt)}>
+              <span className="suggest-icon">
+                <Icon name={sg.icon} size={14} />
+              </span>
+              <span>{sg.title}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="welcome-hint">Type a message below, and it's sent to the agent on your desktop</p>
     </div>
   );
 }
 
 const QUICK_DONE = ["Continue", "Run the tests", "Commit this", "Summarize the changes"];
 const QUICK_Q = ["Yes", "No", "You decide", "Explain the options"];
+
+/** `/Users/me/code/app` → `~/code/app`. */
+export const homePath = (p: string) => p.replace(/^\/(Users|home)\/[^/]+/, "~");
 
 export function Thread({ client, paneId }: { client: DesktopClient; paneId: string }) {
   const state = useClient(client);
@@ -162,6 +207,8 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const [picked, setPicked] = useState<number | null>(null);
   /** A "Type something" row the composer answers. */
   const [typing, setTyping] = useState<number | null>(null);
+  const [picker, setPicker] = useState<"model" | "effort" | "menu" | null>(null);
+  const [confirm, setConfirm] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
@@ -278,19 +325,92 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const quick = !draft && !req && pane?.status === "done" ? QUICK_DONE : !draft && req?.kind === "question" && !options.length ? QUICK_Q : null;
   const mode = working && !draft.trim() ? "stop" : draft.trim() ? "send" : "idle";
 
-  const hint = typing !== null ? "Sent as your own answer" : working ? "Steers the agent at its next step" : req?.kind === "question" ? "Or answer in your own words" : "Typed into the agent on your desktop";
+
+  const cfg = pane?.config ?? null;
+  const backend = cfg ? backendOf(cfg.model) : null;
+  const empty = !!thread && messages.length === 0 && !pane?.reply;
+  const where = cfg?.cwd ? `${homePath(cfg.cwd)}${cfg.branch ? `  ⎇ ${cfg.branch}` : ""}` : null;
+  const welcomeStatus = [cfg?.label || info?.name, backend?.name !== cfg?.label ? backend?.name : null, cfg?.mode].filter(Boolean).join(" · ") || "Ready";
+
+  const sendPrompt = (text: string) => {
+    if (!ready || busy) return;
+    haptic(8);
+    stick.current = true;
+    setErr(null);
+    setBusy("send");
+    client
+      .sendMessage(paneId, text)
+      .catch((e: Error) => setErr(e.message))
+      .finally(() => setBusy(null));
+  };
+
+  const closeSession = () => {
+    if (!pane) return;
+    if (pane.status === "working" && !confirm) return setConfirm(true);
+    haptic([10, 30, 10]);
+    setPicker(null);
+    void client.request({ t: "pane.close", paneId: pane.id }).catch(() => {});
+    go("/");
+  };
+
+  const pills = pane ? (
+    cfg ? (
+      <>
+        {cfg.mode && <Pill icon={<PillIcon name={cfg.yolo ? "bolt" : "shield"} />} label={cfg.mode} tone={cfg.yolo ? "warn" : undefined} title={`Mode: ${cfg.mode}`} />}
+        <Pill
+          icon={backend ? <ProviderMark provider={backend.id} size={14} /> : <PillIcon name="sparkle" />}
+          label={cfg.label || "Model"}
+          title={`Model: ${cfg.label || "default"}`}
+          disabled={!ready}
+          onClick={() => (haptic(5), setPicker("model"))}
+        />
+        {cfg.efforts.length > 1 && (
+          <Pill icon={<EffortIcon effort={cfg.effort} />} label={cfg.effort === "default" ? "default" : cfg.effort} title={`Reasoning effort: ${effortLabel(cfg.effort)}`} disabled={!ready} onClick={() => (haptic(5), setPicker("effort"))} />
+        )}
+        {cfg.branch && <Pill icon={<PillIcon name="branch" />} label={cfg.branch} title={`Branch: ${cfg.branch}`} />}
+      </>
+    ) : (
+      info && <Pill icon={<span style={{ color: info.mark, display: "grid" }}><ProviderMark provider={pane.provider} size={14} /></span>} label={info.name} />
+    )
+  ) : null;
 
   return (
-    <div className="screen">
-      <header className="bar">
+    <div className="screen thread" data-empty={empty || undefined}>
+      {empty && <Sky />}
+      <header className="pane-head">
         <button className="icon-btn" aria-label="Back" onClick={() => go("/")}>
-          <Icon name="back" />
+          <Icon name="back" size={19} />
         </button>
         {pane && <Avatar pane={pane} small morph />}
-        <div className="bar-title">
+        <div className="pane-title">
           <b style={{ viewTransitionName: vtName("tt", paneId) } as CSSProperties}>{pane?.title ?? "Agent"}</b>
-          <span>{pane ? [pane.workspace, info?.name].filter(Boolean).join(" · ") : state.panes.length ? "This agent's pane was closed" : "Loading…"}</span>
+          <span className="pane-meta">
+            {pane ? (
+              <>
+                <span className="chip-ws">{pane.workspace}</span>
+                {cfg?.branch ? (
+                  <span className="meta-item">
+                    <Icon name="branch" size={11} /> {cfg.branch}
+                  </span>
+                ) : (
+                  info && <span className="meta-item">{info.name}</span>
+                )}
+                <span className="meta-status" data-status={pane.status}>
+                  {STATUS_LABEL[pane.status]}
+                </span>
+              </>
+            ) : state.panes.length ? (
+              "This agent's pane was closed"
+            ) : (
+              "Loading…"
+            )}
+          </span>
         </div>
+        {pane && (
+          <button className="icon-btn" aria-label="More" onClick={() => (haptic(5), setConfirm(false), setPicker("menu"))}>
+            <Icon name="more" size={18} />
+          </button>
+        )}
       </header>
 
       <div
@@ -314,15 +434,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               <Markdown text={pane.reply} />
             </div>
           )}
-          {thread && messages.length === 0 && !pane?.reply && (
-            <div className="empty">
-              <span className="empty-mark">
-                <img src="./icons/logo.svg" alt="" />
-              </span>
-              <h3>A fresh start</h3>
-              <p className="sub">Send a message and it's typed into the agent on your desktop.</p>
-            </div>
-          )}
+          {empty && <Welcome status={welcomeStatus} where={where} disabled={!ready || !!busy} onPick={pane?.request ? undefined : sendPrompt} />}
           {all.map((b, i) => {
             if (b.kind === "tools")
               return <Steps key={`t-${b.msgs[0].id}`} msgs={b.msgs} active={active} legacyLive={working && i === all.length - 1} fresh={isFresh(b.msgs[0].id)} />;
@@ -341,16 +453,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               </div>
             );
           })}
-          {working && thinking && (
-            <div className="steps">
-              <div className="step reason">
-                <span className="step-icon">
-                  <Icon name="sparkle" size={12} />
-                </span>
-                <span className="shimmer">Thinking</span>
-              </div>
-            </div>
-          )}
+          {pane && working && <WorkingRow pane={pane} current={current} thinking={thinking} />}
           {pane && background.length > 0 && <Background items={background} />}
           {pane && !working && (pane.status === "done" || pane.status === "error") && messages.length > 0 && <EndMark pane={pane} />}
         </div>
@@ -371,31 +474,17 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
           </button>
         )}
         {req?.kind === "approval" && (
-          <div className="request" key={`a-${req.text}`}>
-            <div className="request-head">
-              <Icon name="shield" size={18} />
-              <div>
-                <b>Permission request</b>
-                <small>{info?.name ?? "The agent"} wants to run this</small>
-              </div>
+          <div className="ask" key={`a-${req.text}`}>
+            <div className="ask-head">
+              <Icon name="shield" size={15} />
+              <span>{info?.name ?? "The agent"} wants to run</span>
             </div>
-            <pre className="request-code">{req.text}</pre>
-            {extra.length > 1 && (
-              <div className="options">
-                {extra.slice(1).map((o) => (
-                  <button key={o.n} className="option" data-picked={picked === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
-                    <span className="opt-n">{o.n}</span>
-                    <span className="opt-body">
-                      <b>{o.label}</b>
-                    </span>
-                    {picked === o.n && <span className="spinner" />}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="actions">
+            <div className="ask-scroll">
+              <pre className="ask-code">{req.text}</pre>
+            </div>
+            <div className="ask-actions">
               <button className="btn primary" disabled={!ready || !!busy || picked !== null} onClick={() => void act("approve").catch(() => {})}>
-                {busy === "approve" ? <span className="spinner" /> : <Icon name="check" size={15} />} Approve
+                {busy === "approve" && <span className="spinner" />} Allow
               </button>
               {extra[0] && (
                 <button className="btn" disabled={!ready || !!busy || picked !== null} onClick={() => void choose(extra[0])}>
@@ -403,45 +492,53 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
                   <span className="btn-text">{extra[0].label}</span>
                 </button>
               )}
-              <button className="btn ghost danger" disabled={!ready || !!busy || picked !== null} onClick={() => void act("decline").catch(() => {})}>
+              <button className="btn" disabled={!ready || !!busy || picked !== null} onClick={() => void act("decline").catch(() => {})}>
                 Deny
               </button>
             </div>
-          </div>
-        )}
-        {req?.kind === "question" && (
-          <div className="request" key={`q-${req.text}`}>
-            <div className="request-head">
-              <Icon name="question" size={18} />
-              <div>
-                <b>{req.text}</b>
-                <small>{info?.name ?? "The agent"} asks</small>
-              </div>
-            </div>
-            {options.length > 0 && (
-              <div className="options" data-busy={picked !== null}>
-                {options.filter((o) => !isFreeText(o)).map((o) => (
-                  <button key={o.n} className="option" data-picked={picked === o.n} disabled={!ready || (picked !== null && picked !== o.n)} onClick={() => void choose(o)}>
-                    <span className="opt-n">{o.n}</span>
-                    <span className="opt-body">
-                      <b>{o.label}</b>
-                      {o.detail && <small>{o.detail}</small>}
-                    </span>
+            {extra.length > 1 && (
+              <div className="ask-more">
+                {extra.slice(1).map((o) => (
+                  <button key={o.n} className="choice" data-picked={picked === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
+                    <b>{o.label}</b>
                     {picked === o.n && <span className="spinner" />}
-                  </button>
-                ))}
-                {options.filter(isFreeText).map((o) => (
-                  <button key={o.n} className="option free" data-picked={typing === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
-                    <span className="opt-n">
-                      <Icon name="pencil" size={11} />
-                    </span>
-                    <span className="opt-body">
-                      <b>{typing === o.n ? "Type your answer below" : "Or type your own answer"}</b>
-                    </span>
                   </button>
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {req?.kind === "question" && (
+          <div className="ask" key={`q-${req.text}`}>
+            <div className="ask-head">
+              <Icon name="shield" size={15} />
+              <span>{info?.name ?? "The agent"} is asking</span>
+            </div>
+            <div className="ask-scroll">
+              <QuestionText text={req.text} />
+              {options.length > 0 && (
+                <div className="choices" data-busy={picked !== null}>
+                  {options.filter((o) => !isFreeText(o)).map((o) => (
+                    <button key={o.n} className="choice" data-picked={picked === o.n} disabled={!ready || (picked !== null && picked !== o.n)} onClick={() => void choose(o)}>
+                      <span className="choice-body">
+                        <b>{o.label}</b>
+                        {o.detail && <small>{o.detail}</small>}
+                      </span>
+                      {picked === o.n && <span className="spinner" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="ask-foot">
+              {options.filter(isFreeText).map((o) => (
+                <button key={o.n} className="choice-free" data-on={typing === o.n} disabled={!ready || picked !== null} onClick={() => void choose(o)}>
+                  <Icon name="pencil" size={12} />
+                  {typing === o.n ? "Type your answer below" : "or type an answer below"}
+                </button>
+              ))}
+              {!options.some(isFreeText) && <span className="ask-hint">or type an answer below</span>}
+            </div>
           </div>
         )}
         {err && <div className="inline-error">{err}</div>}
@@ -462,56 +559,56 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             ))}
           </div>
         )}
-        {pane && working && <StatusLine pane={pane} current={current} thinking={thinking} />}
-        <div className="composer" data-busy={working || undefined}>
-          <textarea
-            ref={input}
-            rows={1}
-            value={draft}
-            enterKeyHint="send"
-            placeholder={typingLabel ? `${typingLabel.replace(/\.$/, "")}…` : req?.kind === "question" ? "Type your answer…" : working ? "Steer the agent…" : "Message the agent…"}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              e.target.style.height = "auto";
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px`;
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void act("send").catch(() => {});
-            }}
-          />
-          <div className="composer-bar">
-            <span className="hint">{hint}</span>
-            <button
-              className="send"
-              data-mode={mode}
-              aria-label={mode === "stop" ? "Interrupt" : "Send"}
-              disabled={!ready || !!busy || mode === "idle"}
-              onClick={() => void act(mode === "stop" ? "interrupt" : "send").catch(() => {})}
-            >
-              <Icon name={mode === "stop" ? "stop" : "send"} size={mode === "stop" ? 18 : 16} />
+        <Composer
+          inputRef={input}
+          value={draft}
+          onChange={setDraft}
+          busy={working}
+          mode={mode}
+          disabled={!ready || !!busy}
+          onSend={() => void act(mode === "stop" ? "interrupt" : "send").catch(() => {})}
+          placeholder={typingLabel ? `${typingLabel.replace(/\.$/, "")}…` : req?.kind === "question" ? "Type your answer…" : working ? "Steer the agent…" : `Message ${info?.name ?? "the agent"}…`}
+          pills={pills}
+        />
+      </footer>
+      {picker === "model" && pane && cfg && <ModelPicker client={client} pane={pane} config={cfg} online={ready} onClose={() => setPicker(null)} />}
+      {picker === "effort" && pane && cfg && <EffortPicker client={client} pane={pane} config={cfg} online={ready} onClose={() => setPicker(null)} />}
+      {picker === "menu" && pane && (
+        <Sheet label="Agent" title={pane.title} sub={`${pane.workspace} · ${STATUS_LABEL[pane.status]}`} onClose={() => setPicker(null)}>
+          <div className="sheet-body">
+            {cfg && (
+              <>
+                <button className="menu-item" onClick={() => setPicker("model")}>
+                  {backend ? <ProviderMark provider={backend.id} size={16} /> : <Icon name="sparkle" size={16} />} Model
+                  <span className="menu-value">{cfg.label}</span>
+                </button>
+                {cfg.efforts.length > 1 && (
+                  <button className="menu-item" onClick={() => setPicker("effort")}>
+                    <EffortIcon effort={cfg.effort} size={16} /> Reasoning effort
+                    <span className="menu-value">{effortLabel(cfg.effort)}</span>
+                  </button>
+                )}
+              </>
+            )}
+            <button className="menu-item danger" disabled={!ready} onClick={closeSession}>
+              <Icon name="x" size={16} /> {confirm ? "Stop the agent and close?" : "Close session"}
             </button>
           </div>
-        </div>
-        {pane && (
-          <div className="foot">
-            <span className="foot-item mode" data-status={pane.status}>
-              {STATUS_LABEL[pane.status]}
-            </span>
-            {info && (
-              <span className="foot-item prov" style={{ color: info.mark }}>
-                <ProviderMark provider={pane.provider} size={12} />
-                <span>{info.name}</span>
-              </span>
-            )}
-            <span className="foot-item dim">
-              <Icon name="folder" size={12} />
-              <span>{pane.workspace}</span>
-            </span>
-            <span className="grow" />
-            <span className="foot-item dim">{ago(pane.updatedAt)}</span>
-          </div>
-        )}
-      </footer>
+        </Sheet>
+      )}
+    </div>
+  );
+}
+
+/** A question's text: its header line (a form's "Style (1/2)") small above the question. */
+function QuestionText({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const header = lines.length > 1 && lines[0].length < 60 && !/\?\s*$/.test(lines[0]) ? lines[0] : null;
+  const body = header ? lines.slice(1).join("\n") : text;
+  return (
+    <div className="ask-q">
+      {header && <span className="ask-label">{header}</span>}
+      <p>{body}</p>
     </div>
   );
 }

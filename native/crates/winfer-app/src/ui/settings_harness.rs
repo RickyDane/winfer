@@ -333,6 +333,12 @@ impl Root {
         self.toggle(SharedString::from(format!("web-{key}")), on, c, cx, move |this, cx| this.set_rest("codeWeb", key, json!(!on), cx))
     }
 
+    pub(super) fn page_local_models(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        self.load_harness(window, cx);
+        let local = self.local_card(c, window, cx);
+        div().flex().flex_col().gap_6().child(local)
+    }
+
     pub(super) fn page_harness(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.load_harness(window, cx);
         let st = self.harness_page.settings.clone().unwrap();
@@ -478,8 +484,7 @@ impl Root {
         let tools = card(c, "Tools", Some(&card_description("Tools")))
             .child(row(c, "Always-allowed commands", hint("Always-allowed commands"), div().w(px(224.0)).child(Input::new(&i.0))))
             .child(stacked_row(c, "MCP servers", Some("Extra servers for every backend, as JSON: { \"name\": { \"command\": \"…\", \"args\": [], \"env\": {} } }. winfer's own server is added automatically in panes.".to_string()), Textarea::new(&i.1)));
-        let local = self.local_card(c, window, cx);
-        div().flex().flex_col().gap_6().child(defaults).child(local).child(lean).child(compaction).child(tools).children(self.harness_page.result.as_ref().and_then(|r| r.as_ref().err()).map(|e| div().px_1().text_xs().text_color(c.danger).child(e.clone())))
+        div().flex().flex_col().gap_6().child(defaults).child(lean).child(compaction).child(tools).children(self.harness_page.result.as_ref().and_then(|r| r.as_ref().err()).map(|e| div().px_1().text_xs().text_color(c.danger).child(e.clone())))
     }
 
     fn refresh_mobile(&mut self, cx: &mut Context<Self>) {

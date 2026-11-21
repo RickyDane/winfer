@@ -40,6 +40,8 @@ struct Serve {
     saved: Saved,
     /// Assistant messages by id: their entry in `saved.transcript`.
     assistant: HashMap<String, usize>,
+    /// Tool calls by id: their entry in `saved.transcript` (upserted as streaming titles arrive).
+    tools: HashMap<String, usize>,
     busy: bool,
     /// Approvals waiting for an answer, oldest first.
     pending: Vec<String>,
@@ -151,6 +153,7 @@ impl Serve {
         self.model = model;
         self.actual_model.clear();
         self.assistant.clear();
+        self.tools.clear();
         self.pending.clear();
         out(&json!({ "type": "restore", "transcript": saved.transcript.iter().map(|e| json!({ "role": e.role, "text": e.text, "state": e.state })).collect::<Vec<_>>() }));
         let resume = saved.backend_session.clone();
@@ -208,6 +211,7 @@ impl Serve {
     fn fresh_session(&mut self) {
         self.saved = Saved { id: session::new_id(), cwd: self.cwd.to_string_lossy().into_owned(), model: self.spec(), ..Default::default() };
         self.assistant.clear();
+        self.tools.clear();
     }
 
     fn user_message(&mut self, text: &str) {
@@ -255,8 +259,15 @@ impl Serve {
                     self.saved.transcript.push(Entry { role: "assistant".into(), text, ..Default::default() });
                 }
             },
-            Ev::ToolStart { name, title, .. } => {
-                self.saved.transcript.push(Entry { role: "tool".into(), text: format!("{name}\t{title}"), state: Some("done".into()), ..Default::default() });
+            Ev::ToolStart { id, name, title, .. } => {
+                let text = format!("{name}\t{title}");
+                match self.tools.get(&id).copied() {
+                    Some(i) if i < self.saved.transcript.len() => self.saved.transcript[i].text = text,
+                    _ => {
+                        self.tools.insert(id, self.saved.transcript.len());
+                        self.saved.transcript.push(Entry { role: "tool".into(), text, state: Some("done".into()), ..Default::default() });
+                    }
+                }
             }
             Ev::Approval(a) => {
                 self.pending.push(a.id.clone());
@@ -278,6 +289,7 @@ impl Serve {
                 if let Some(i) = self.saved.transcript.iter().rposition(|e| e.role == "user") {
                     self.saved.transcript.truncate(i);
                     self.assistant.retain(|_, v| *v < i);
+                    self.tools.retain(|_, v| *v < i);
                 }
                 self.save();
             }
@@ -566,6 +578,7 @@ pub fn run(launch: Launch) -> i32 {
         generation: 0,
         saved: Saved::default(),
         assistant: HashMap::new(),
+        tools: HashMap::new(),
         busy: false,
         pending: Vec::new(),
         task_files: HashMap::new(),

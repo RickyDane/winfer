@@ -7,6 +7,7 @@ mod assets;
 mod backend;
 mod code;
 mod fonts;
+mod mermaid;
 mod model;
 mod pdf;
 mod request;

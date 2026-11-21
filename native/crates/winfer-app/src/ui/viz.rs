@@ -115,7 +115,7 @@ fn block(s: &Style, id: &str, b: &Block, width: f32) -> AnyElement {
     let id = format!("viz-{id}");
     // Narrative text sits between the cards without a frame of its own.
     if let Kind::Text(md) = &b.kind {
-        return div().w_full().px_0p5().text_size(s.body()).text_color(c.fg).child(TextView::markdown(SharedString::from(id), SharedString::from(md.clone())).selectable(true)).into_any_element();
+        return div().w_full().px_0p5().text_size(s.body()).text_color(c.fg).child(TextView::markdown(SharedString::from(id), SharedString::from(md.clone())).style(super::code_view::md_style(c)).selectable(true)).into_any_element();
     }
     let body = match &b.kind {
         Kind::Stats(items) => stats(s, items).into_any_element(),

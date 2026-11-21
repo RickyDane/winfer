@@ -1,10 +1,11 @@
 // `?mock=1`: an in-memory desktop so the UI runs without relay or winfer.
 import { BaseClient } from "./client";
-import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
+import type { DesktopMsg, Message, ModelOption, Pane, PhoneMsg, Provider, Workspace } from "./protocol";
 
 const now = Date.now();
 const min = 60_000;
 
+const LEVELS = ["default", "low", "medium", "high", "xhigh", "max"];
 const PANES: Pane[] = [
   {
     id: "p-auth",
@@ -64,6 +65,19 @@ const PANES: Pane[] = [
     reply: null,
   },
   {
+    id: "p-wc",
+    workspaceId: "w-winfer",
+    title: "winfer code · mobile",
+    workspace: "winfer",
+    provider: "winfer",
+    status: "idle",
+    message: null,
+    updatedAt: now - 30 * min,
+    request: null,
+    reply: null,
+    config: { model: "claude/sonnet", label: "Sonnet 5.5", effort: "high", efforts: LEVELS, mode: "Yolo", yolo: true, cwd: "/Users/me/code/winfer", branch: "main" },
+  },
+  {
     id: "p-idle",
     workspaceId: "w-winfer",
     title: "shell",
@@ -75,6 +89,12 @@ const PANES: Pane[] = [
     request: null,
     reply: null,
   },
+];
+
+const MODELS: ModelOption[] = [
+  { id: "claude/opus", name: "Opus 5.5", detail: "Most capable, for complex work", efforts: LEVELS },
+  { id: "claude/sonnet", name: "Sonnet 5.5", detail: "Best everyday balance of speed and skill", efforts: LEVELS },
+  { id: "claude/haiku", name: "Haiku 5", detail: "Fastest, for quick answers", efforts: ["default"] },
 ];
 
 const WORKSPACES: Workspace[] = [
@@ -242,6 +262,17 @@ export class MockClient extends BaseClient {
         this.push(msg.paneId, { role: "user", text: answer });
         this.update(msg.paneId, { status: "working", message: `Going with ${answer.toLowerCase()}…`, request: null });
         this.finishLater(msg.paneId, `Done — migrations are now **${answer.toLowerCase()}**.`);
+        return { t: "ack", id, ok: true };
+      }
+      case "config.get":
+        return { t: "config", id, paneId: msg.paneId, models: MODELS };
+      case "pane.set": {
+        const pane = this.panes.find((p) => p.id === msg.paneId);
+        const model = MODELS.find((m) => m.id === (msg.model ?? pane?.config?.model));
+        if (!pane?.config || !model) return { t: "ack", id, ok: false, error: "That model isn't available." };
+        const effort = msg.effort ?? (model.efforts.includes(pane.config.effort) ? pane.config.effort : "default");
+        if (!model.efforts.includes(effort)) return { t: "ack", id, ok: false, error: "That model doesn't take that effort." };
+        this.update(msg.paneId, { config: { ...pane.config, model: model.id, label: model.name, effort, efforts: model.efforts } });
         return { t: "ack", id, ok: true };
       }
       case "push.subscribe":

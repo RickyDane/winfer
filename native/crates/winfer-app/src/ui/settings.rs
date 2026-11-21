@@ -20,6 +20,7 @@ const GROUPS: [(&str, &[Page]); 5] = [
     ("Agents", &[
         ("agents", "Agents", IconName::Bot, "New panes, models, versions, permissions, review and progress."),
         ("winfer-code", "winfer code", IconName::SquareTerminal, "winfer's own agent: interface, model and context."),
+        ("local-models", "Local models", IconName::Cpu, "Run winfer code on a model served from your machine or network."),
     ]),
     ("AI & voice", &[
         ("accounts", "Accounts", IconName::Users, "Sign-ins and the accounts winfer switches between."),
@@ -52,6 +53,9 @@ struct IndexEntry {
     words: String,
 }
 
+/// Labels of the local model settings (their page in the native build is "local-models").
+const LOCAL_LABELS: [&str; 5] = ["Use local models", "Host / Port", "API key", "Send level to chat template", "Web search"];
+
 /// The index: searchIndex.generated.json (every label and hint on the pages, made by
 /// `scripts/gen-settings-index.mjs`) plus searchIndex.json (words people use for a setting that
 /// its page doesn't). Entries with the same page and label are merged. Shared with the Tauri app.
@@ -60,12 +64,14 @@ static SEARCH_INDEX: std::sync::LazyLock<Vec<(&'static str, &'static str, &'stat
     for json in [include_str!("../../../../../src/features/settings/searchIndex.json"), include_str!("../../../../../src/features/settings/searchIndex.generated.json")] {
         let entries: Vec<IndexEntry> = serde_json::from_str(json).expect("settings search index");
         for e in entries {
-            match merged.iter_mut().find(|m| m.0 == e.page && m.1 == e.label) {
+            // The native build keeps the local model settings on their own page.
+            let page = if e.page == "winfer-code" && LOCAL_LABELS.contains(&e.label.as_str()) { "local-models".to_string() } else { e.page };
+            match merged.iter_mut().find(|m| m.0 == page && m.1 == e.label) {
                 Some(m) => {
                     m.2.push(' ');
                     m.2.push_str(&e.words);
                 }
-                None => merged.push((e.page, e.label, e.words)),
+                None => merged.push((page, e.label, e.words)),
             }
         }
     }
@@ -1602,6 +1608,7 @@ impl Root {
                 "plugins" => self.page_plugins(c, window, cx).into_any_element(),
                 "skills" => self.page_skills(c, window, cx).into_any_element(),
                 "winfer-code" => self.page_harness(c, window, cx).into_any_element(),
+                "local-models" => self.page_local_models(c, window, cx).into_any_element(),
                 "mobile" => self.page_mobile(c, window, cx).into_any_element(),
                 "usage" => self.page_usage(c, cx).into_any_element(),
                 "updates" => self.page_updates(c, cx).into_any_element(),
@@ -1767,8 +1774,8 @@ mod settings_search_tests {
         assert!(search_settings("nebula").iter().any(|h| h.0 == "updates"));
         assert_eq!(search_settings("text size")[0].1, "Text size");
         assert!(search_settings("   ").is_empty());
-        assert!(search_settings("local").iter().any(|h| h.0 == "winfer-code" && h.1 == "Use local models"));
-        assert!(search_settings("host").iter().any(|h| h.0 == "winfer-code" && h.1 == "Host / Port"));
+        assert!(search_settings("local").iter().any(|h| h.0 == "local-models" && h.1 == "Use local models"));
+        assert!(search_settings("host").iter().any(|h| h.0 == "local-models" && h.1 == "Host / Port"));
         assert!(matches_words("Host / Port", &["port".to_string()]));
         assert!(!matches_words("Export", &["port".to_string()]));
         assert_eq!(search_settings("auto-approve").iter().filter(|h| h.0 == "agents").count(), 1);

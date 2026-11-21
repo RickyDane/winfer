@@ -2,6 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import { restoreTheme } from "./theme";
+
+restoreTheme();
 
 // Service workers need a secure context (https or localhost). Not in dev: its cache would
 // serve stale modules over Vite's.

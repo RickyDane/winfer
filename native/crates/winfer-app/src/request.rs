@@ -36,6 +36,8 @@ static SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 static OPTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:[❯>›▶]\s*)?(?:[☐☑✓✔◯◉●○]\s*)?(\d{1,2})[.)]\s+(.+)$").unwrap());
 /// Key hints under a picker ("Enter to select · ↑/↓ to navigate · Esc to cancel").
 static FOOTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)enter to (select|confirm|submit)|esc to (cancel|go back)|↑/↓|tab to |ctrl\+").unwrap());
+/// A multi-select row's checkbox ("[ ] Label", "[x] Label").
+static CHECKBOX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[[ xX✓✔]?\]\s*").unwrap());
 static ENDS_QUESTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\?\s*$").unwrap());
 static QUESTION_PAREN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\?\s*\(").unwrap());
 static LIST_ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+\.|❯|>)\s").unwrap());
@@ -63,18 +65,26 @@ pub fn read_options(lines: &[String]) -> Option<(Vec<RequestOption>, usize)> {
         let mut j = i;
         while j < lines.len() {
             if let Some(o) = OPTION.captures(&lines[j]).filter(|o| o[1].parse::<usize>().ok() == Some(options.len() + 1)) {
-                options.push(RequestOption { n: options.len() + 1, label: o[2].trim().to_string(), detail: None });
+                options.push(RequestOption { n: options.len() + 1, label: CHECKBOX.replace(o[2].trim(), "").to_string(), detail: None });
                 j += 1;
                 continue;
             }
-            // One description line per option; anything else ends the list.
+            // A description under an option, which the TUI wraps over a few lines; anything else
+            // ends the list. Only the first line may not read as a question (one under the list).
             let line = &lines[j];
-            if let Some(last) = options.last_mut().filter(|l| l.detail.is_none())
+            if let Some(last) = options.last_mut()
                 && line.chars().count() > 2
                 && !FOOTER.is_match(line)
-                && !ENDS_QUESTION.is_match(line)
+                && (last.detail.is_some() || !ENDS_QUESTION.is_match(line))
+                && last.detail.as_ref().is_none_or(|d| d.chars().count() < 240)
             {
-                last.detail = Some(line.clone());
+                match &mut last.detail {
+                    Some(d) => {
+                        d.push(' ');
+                        d.push_str(line);
+                    }
+                    None => last.detail = Some(line.clone()),
+                }
                 j += 1;
                 continue;
             }
@@ -139,6 +149,14 @@ mod tests {
         let options = r.options.unwrap();
         assert_eq!(options.len(), 2);
         assert_eq!(options[1].label, "No, and tell Claude");
+    }
+
+    #[test]
+    fn wrapped_descriptions_do_not_cut_the_options_short() {
+        let screen = "☐ Style\n\nWhich look should it have?\n\n❯ 1. Classic\n     Platinum-grey, beveled windows with a long\n     description that wraps onto a second line\n  2. Modern\n     Glass blur\n  3. [ ] Pixel\n  4. Type something.\n──────\n  5. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel";
+        let options = describe_request(screen, None).options.unwrap();
+        assert_eq!(options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), ["Classic", "Modern", "Pixel", "Type something.", "Chat about this"]);
+        assert_eq!(options[0].detail.as_deref(), Some("Platinum-grey, beveled windows with a long description that wraps onto a second line"));
     }
 
     #[test]

@@ -137,6 +137,10 @@ struct Call {
     kind: String,
     input: Value,
     started: bool,
+    /// Last emitted (name, title, has_input) so updates only re-emit when richer info arrives.
+    last_name: String,
+    last_title: String,
+    last_has_input: bool,
     /// Output text already shown.
     shown: usize,
     /// The file before a `write`, for its diff.
@@ -602,9 +606,9 @@ impl Bridge {
         self.emit(Ev::Approval(Approval { id: key, tool: name, title, detail, diff, ..Default::default() }));
     }
 
-    /// Records what a `tool_call` / `tool_call_update` tells about a call, and shows its card once
-    /// its input is complete: when it runs or asks (a pending call's input is still partial).
-    fn track(&mut self, t: &Value, asking: bool) {
+    /// Records what a `tool_call` / `tool_call_update` tells about a call, showing its card
+    /// immediately (even while `pending` / streaming arguments) and refining it as input arrives.
+    fn track(&mut self, t: &Value, _asking: bool) {
         let Some(id) = t["toolCallId"].as_str() else { return };
         let call = self.calls.entry(id.to_string()).or_default();
         if let Some(name) = t["name"].as_str() {
@@ -618,16 +622,22 @@ impl Bridge {
         if t["rawInput"].as_object().is_some_and(|o| !o.is_empty()) {
             call.input = t["rawInput"].clone();
         }
-        let running = !matches!(t["status"].as_str(), None | Some("pending"));
-        if !call.started && (asking || running) {
+        if call.name == "write" && call.before.is_none() {
+            call.before = call.input["path"].as_str().or(call.input["filePath"].as_str()).map(|p| std::fs::read_to_string(p).unwrap_or_default());
+        }
+        let mut title = title(&call.name, &call.input);
+        if title.is_empty() {
+            title = t["title"].as_str().filter(|s| *s != call.name).unwrap_or("").to_string();
+        }
+        let has_input = call.input.as_object().is_some_and(|o| !o.is_empty());
+        let changed = !call.started || call.name != call.last_name || (!title.is_empty() && title != call.last_title) || (has_input && !call.last_has_input);
+        if changed {
             call.started = true;
-            if call.name == "write" {
-                call.before = call.input["path"].as_str().map(|p| std::fs::read_to_string(p).unwrap_or_default());
+            call.last_name = call.name.clone();
+            if !title.is_empty() {
+                call.last_title = title.clone();
             }
-            let mut title = title(&call.name, &call.input);
-            if title.is_empty() {
-                title = t["title"].as_str().filter(|s| *s != call.name).unwrap_or("").to_string();
-            }
+            call.last_has_input = call.last_has_input || has_input;
             let ev = Ev::ToolStart { id: id.to_string(), name: call.name.clone(), title, input: call.input.clone() };
             let _ = self.events.send(ev);
         }
@@ -869,7 +879,8 @@ mod tests {
         let evs: Vec<Ev> = rx.try_iter().collect();
         assert!(matches!(&evs[0], Ev::TurnStart));
         assert!(evs.iter().any(|e| matches!(e, Ev::TextDelta { text, .. } if text == "pong")));
-        assert!(evs.iter().any(|e| matches!(e, Ev::ToolStart { title, .. } if title == "ls")));
+        assert!(evs.iter().any(|e| matches!(e, Ev::ToolStart { id, name, title, .. } if id == "c1" && name == "shell" && title.is_empty())));
+        assert!(evs.iter().any(|e| matches!(e, Ev::ToolStart { id, title, .. } if id == "c1" && title == "ls")));
         assert!(evs.iter().any(|e| matches!(e, Ev::ToolEnd { ok: true, output, .. } if output == "a.txt\n")));
         assert!(evs.iter().any(|e| matches!(e, Ev::Usage(u) if u.input == 100 && u.cached == 90 && u.context == 100 && u.window == 1000)));
         assert!(matches!(evs.last(), Some(Ev::TurnDone)));

@@ -276,9 +276,36 @@ impl CodeState {
                 }
                 None => self.items.push(Item::Reasoning { key: id, text, streaming: true, started: now_ms(), ended: None }),
             },
+            Ev::ReasoningEnd { id } => {
+                if !id.is_empty() {
+                    if let Some(i) = find_last(&self.items, |i| matches!(i, Item::Reasoning { key, .. } if *key == id)) {
+                        if let Item::Reasoning { streaming, ended, .. } = &mut self.items[i] {
+                            *streaming = false;
+                            if ended.is_none() {
+                                *ended = Some(now_ms());
+                            }
+                        }
+                        return;
+                    }
+                }
+                close_reasoning(&mut self.items);
+            }
             Ev::ToolStart { id, name, title, input } => {
-                // A backend with two reporting paths for one call must not show it twice.
-                if find_last(&self.items, |i| matches!(i, Item::Tool { key, .. } if *key == id)).is_some() {
+                // Upsert so early streaming tool starts refine their name/title/input in place
+                // without duplicating the card when a second reporting path or final payload arrives.
+                if let Some(i) = find_last(&self.items, |i| matches!(i, Item::Tool { key, .. } if *key == id)) {
+                    if let Item::Tool { name: n, title: t, input: inp, .. } = &mut self.items[i] {
+                        if !name.is_empty() {
+                            *n = name;
+                        }
+                        if !title.is_empty() {
+                            *t = title;
+                        }
+                        let has_input = !input.is_null() && !input.as_object().is_some_and(serde_json::Map::is_empty);
+                        if has_input {
+                            *inp = input;
+                        }
+                    }
                     return;
                 }
                 close_reasoning(&mut self.items);
@@ -607,6 +634,27 @@ mod tests {
         s.apply(ev(json!({ "type": "reasoning_delta", "id": "r", "text": "hmm" })));
         s.apply(ev(json!({ "type": "text_delta", "id": "t", "text": "ok" })));
         assert!(matches!(&s.items[0], Item::Reasoning { streaming: false, ended: Some(_), .. }));
+    }
+
+    #[test]
+    fn reasoning_end_closes_thinking_and_tool_start_upserts_in_place() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "reasoning_delta", "id": "r1", "text": "planning" })));
+        s.apply(ev(json!({ "type": "reasoning_end", "id": "r1" })));
+        assert!(matches!(&s.items[0], Item::Reasoning { streaming: false, ended: Some(_), .. }));
+
+        // Streaming tool start with empty title, refined once path streams in, then finalized with full input.
+        s.apply(ev(json!({ "type": "tool_start", "id": "w1", "name": "Write", "title": "", "input": {} })));
+        let Item::Tool { started, .. } = &s.items[1] else { panic!("expected tool") };
+        let orig_started = *started;
+        s.apply(ev(json!({ "type": "tool_start", "id": "w1", "name": "Write", "title": "src/big.rs", "input": { "file_path": "src/big.rs" } })));
+        s.apply(ev(json!({ "type": "tool_start", "id": "w1", "name": "Write", "title": "src/big.rs", "input": { "file_path": "src/big.rs", "content": "fn main() {}" } })));
+        assert_eq!(s.items.len(), 2);
+        assert!(matches!(
+            &s.items[1],
+            Item::Tool { name, title, input, started, .. }
+                if name == "Write" && title == "src/big.rs" && input["content"] == "fn main() {}" && *started == orig_started
+        ));
     }
 
     #[test]

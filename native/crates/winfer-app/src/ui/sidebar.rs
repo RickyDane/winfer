@@ -341,7 +341,7 @@ impl Root {
             AgentStatus::Error => Some(("error".to_string(), c.danger)),
             _ => percent.map(|n| (format!("{n}%"), c.subtle)),
         };
-        let mut detail = div().flex().items_center().gap_1().mt(px(1.0)).text_size(px(11.0)).text_color(c.subtle).min_w_0();
+        let mut detail = div().flex().items_center().gap_1().line_height(px(13.0)).text_size(px(11.0)).text_color(c.subtle).min_w_0();
         if let Some(b) = &branch {
             detail = detail.child(div().flex().items_center().gap_1().flex_shrink(1.0).min_w_0().font_family(mono.clone()).text_size(px(10.5))
                 .child(Icon::new(IconName::GitBranch).size(px(10.0)))
@@ -379,7 +379,7 @@ impl Root {
             .child(Self::agent_tile(&pane.provider, status, c))
             .child(
                 div().flex_1().min_w_0().flex().flex_col()
-                    .child(div().flex().items_center().gap_1p5()
+                    .child(div().flex().items_center().gap_1p5().line_height(px(15.0))
                         .child(match renaming {
                             Some(input) => div().flex_1().child(Input::new(&input)).into_any_element(),
                             None => div().flex_1().min_w_0().truncate().when(emphasized, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM)).child(super::title_swap::title("side", &pane.id, &label)).into_any_element(),

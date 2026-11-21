@@ -223,6 +223,16 @@ impl Live {
     }
 }
 
+/// A tool call currently streaming its JSON arguments (`content_block_start` → `input_json_delta`).
+struct StreamedTool {
+    id: String,
+    raw_name: String,
+    display: String,
+    last_title: String,
+    last_desc: String,
+    parser: super::partial_json::PartialJsonFields,
+}
+
 struct Bridge {
     model: String,
     events: Events,
@@ -234,6 +244,10 @@ struct Bridge {
     pending: HashMap<String, (Value, Value)>,
     /// Ids and kinds ("text", "thinking", "tool_use") of the streamed message's blocks, by index.
     blocks: HashMap<u64, (String, String)>,
+    /// Tool-use blocks currently streaming arguments, by block index.
+    streamed_tools: HashMap<u64, StreamedTool>,
+    /// Tool ids emitted during streaming that haven't yet arrived in a finalized `assistant` message.
+    pending_streamed: std::collections::HashSet<String>,
     /// Streamed text blocks already matched to their final text.
     finalized: std::collections::HashSet<String>,
     message: String,
@@ -389,6 +403,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         shell_names: HashMap::new(),
         pending: HashMap::new(),
         blocks: HashMap::new(),
+        streamed_tools: HashMap::new(),
+        pending_streamed: Default::default(),
         finalized: Default::default(),
         message: String::new(),
         live: Live::default(),
@@ -772,6 +788,7 @@ impl Bridge {
                         }
                         Some("tool_use") => {
                             let tool_id = block["id"].as_str().unwrap_or("").to_string();
+                            self.pending_streamed.remove(&tool_id);
                             let name = block["name"].as_str().unwrap_or("tool").to_string();
                             let input = block["input"].clone();
                             if name == "TodoWrite" {
@@ -908,6 +925,10 @@ impl Bridge {
                 self.busy = false;
                 self.settled = true;
                 self.blocks.clear();
+                self.streamed_tools.clear();
+                for id in self.pending_streamed.drain() {
+                    let _ = self.events.send(Ev::ToolEnd { id, ok: false, output: String::new(), diff: None });
+                }
                 self.finalized.clear();
                 self.emit(Ev::TurnDone);
             }
@@ -1036,6 +1057,7 @@ impl Bridge {
     fn on_stream(&mut self, e: &Value) {
         match e["type"].as_str().unwrap_or("") {
             "message_start" => {
+                self.streamed_tools.clear();
                 if let Some(model) = e["message"]["model"].as_str() {
                     self.set_model(model);
                 }
@@ -1072,8 +1094,32 @@ impl Bridge {
             }
             "content_block_start" => {
                 let index = e["index"].as_u64().unwrap_or(0);
-                let kind = e["content_block"]["type"].as_str().unwrap_or("");
+                let cb = &e["content_block"];
+                let kind = cb["type"].as_str().unwrap_or("");
                 self.blocks.insert(index, (format!("{}:{index}", self.message), kind.to_string()));
+                if kind == "tool_use" {
+                    let tool_id = cb["id"].as_str().unwrap_or("").to_string();
+                    let raw_name = cb["name"].as_str().unwrap_or("tool").to_string();
+                    if !tool_id.is_empty() {
+                        let display = display_name(&raw_name);
+                        let init_input = cb["input"].as_object().filter(|o| !o.is_empty()).map(|_| cb["input"].clone()).unwrap_or_else(|| json!({}));
+                        let init_title = title(&raw_name, &init_input);
+                        let init_desc = init_input["description"].as_str().unwrap_or("").to_string();
+                        self.pending_streamed.insert(tool_id.clone());
+                        self.emit(Ev::ToolStart { id: tool_id.clone(), name: display.clone(), title: init_title.clone(), input: init_input });
+                        self.streamed_tools.insert(
+                            index,
+                            StreamedTool {
+                                id: tool_id,
+                                raw_name,
+                                display,
+                                last_title: init_title,
+                                last_desc: init_desc,
+                                parser: Default::default(),
+                            },
+                        );
+                    }
+                }
             }
             "content_block_delta" => {
                 let index = e["index"].as_u64().unwrap_or(0);
@@ -1088,7 +1134,33 @@ impl Bridge {
                 match d["type"].as_str() {
                     Some("text_delta") => self.emit(Ev::TextDelta { id, text: d["text"].as_str().unwrap_or("").into() }),
                     Some("thinking_delta") => self.emit(Ev::ReasoningDelta { id, text: d["thinking"].as_str().unwrap_or("").into() }),
+                    Some("input_json_delta") => {
+                        let chunk = d["partial_json"].as_str().unwrap_or("");
+                        if let Some(st) = self.streamed_tools.get_mut(&index) {
+                            if st.parser.feed(chunk) {
+                                let partial = st.parser.value();
+                                let next_title = title(&st.raw_name, &partial);
+                                let next_desc = partial["description"].as_str().unwrap_or("").to_string();
+                                if next_title != st.last_title || next_desc != st.last_desc {
+                                    st.last_title = next_title.clone();
+                                    st.last_desc = next_desc;
+                                    let ev = Ev::ToolStart { id: st.id.clone(), name: st.display.clone(), title: next_title, input: partial };
+                                    let _ = self.events.send(ev);
+                                }
+                            }
+                        }
+                    }
                     _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let index = e["index"].as_u64().unwrap_or(0);
+                self.streamed_tools.remove(&index);
+                if let Some((id, kind)) = self.blocks.get(&index) {
+                    if kind == "thinking" {
+                        let id = id.clone();
+                        self.emit(Ev::ReasoningEnd { id });
+                    }
                 }
             }
             _ => {}
@@ -1293,6 +1365,8 @@ mod tests {
             shell_names: HashMap::new(),
             pending: HashMap::new(),
             blocks: HashMap::new(),
+            streamed_tools: HashMap::new(),
+            pending_streamed: Default::default(),
             finalized: Default::default(),
             message: String::new(),
             live: Live::default(),
@@ -1690,5 +1764,45 @@ mod tests {
         assert!(p.created(&json!({ "subject": "Next thing" }), "Task #3 created successfully: Next thing"));
         assert_eq!(p.todos().iter().map(|t| t.content.as_str()).collect::<Vec<_>>(), ["Next thing"]);
         assert_eq!(title("TaskUpdate", &json!({ "taskId": "1", "status": "in_progress" })), "#1 in progress");
+    }
+
+    #[test]
+    fn streams_reasoning_end_and_early_tool_use_updates() {
+        let (mut b, rx) = bridge();
+        let lines = [
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Planning the write"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Write","input":{}}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"/repo/src/"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"big.rs\",\"content\":\""}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"fn main() {}\n"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_stop","index":1}}"#,
+        ];
+        for l in lines {
+            b.on_line(&serde_json::from_str(l).unwrap());
+        }
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        // Thinking closed on content_block_stop.
+        assert!(evs.iter().any(|e| matches!(e, Ev::ReasoningEnd { id } if id == "m1:0")), "{evs:?}");
+        // ToolStart emitted immediately on content_block_start, then refined once file_path finished.
+        let starts: Vec<(&str, &str, &str)> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Ev::ToolStart { id, name, title, .. } => Some((id.as_str(), name.as_str(), title.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 2, "{starts:?}");
+        assert_eq!(starts[0], ("toolu_1", "Write", ""));
+        assert_eq!(starts[1].0, "toolu_1");
+        assert_eq!(starts[1].1, "Write");
+        assert!(starts[1].2.ends_with("big.rs"), "{:?}", starts[1]);
+
+        // If the turn ends without the tool ever executing (interrupted mid-stream), it is closed.
+        b.on_line(&json!({ "type": "result", "is_error": false, "usage": {} }));
+        let tail: Vec<Ev> = rx.try_iter().collect();
+        assert!(tail.iter().any(|e| matches!(e, Ev::ToolEnd { id, ok: false, .. } if id == "toolu_1")), "{tail:?}");
     }
 }

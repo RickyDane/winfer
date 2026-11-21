@@ -163,6 +163,16 @@ struct Live {
     done: u64,
 }
 
+#[derive(Default)]
+struct StreamedTool {
+    id: String,
+    raw_name: String,
+    last_display: String,
+    last_title: String,
+    last_desc: String,
+    parser: super::partial_json::PartialJsonFields,
+}
+
 struct Bridge {
     events: Events,
     proc: LineProcess,
@@ -173,6 +183,10 @@ struct Bridge {
     allowed: HashSet<String>,
     asks: HashMap<String, Ask>,
     calls: HashMap<String, Call>,
+    /// Tool calls currently streaming arguments in the assistant message, by content index.
+    streamed_tools: HashMap<u64, StreamedTool>,
+    /// Early-emitted streamed tool ids that haven't started executing yet.
+    pending_streamed: HashSet<String>,
     busy: bool,
     /// Counts assistant messages, for text ids.
     message: u64,
@@ -205,6 +219,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         allowed: opts.allowed_commands.iter().map(|c| format!("bash:{c}")).collect(),
         asks: HashMap::new(),
         calls: HashMap::new(),
+        streamed_tools: HashMap::new(),
+        pending_streamed: HashSet::new(),
         busy: false,
         message: 0,
         live: Live::default(),
@@ -254,6 +270,10 @@ impl Bridge {
     }
 
     fn turn_done(&mut self) {
+        self.streamed_tools.clear();
+        for id in self.pending_streamed.drain() {
+            let _ = self.events.send(Ev::ToolEnd { id, ok: false, output: String::new(), diff: None });
+        }
         self.busy = false;
         self.emit(Ev::TurnDone);
         self.write(json!({ "id": "stats", "type": "get_session_stats" }));
@@ -335,7 +355,10 @@ impl Bridge {
                 self.emit(Ev::TurnStart);
             }
             "agent_settled" => self.turn_done(),
-            "message_start" if v["message"]["role"] == "assistant" => self.message += 1,
+            "message_start" if v["message"]["role"] == "assistant" => {
+                self.message += 1;
+                self.streamed_tools.clear();
+            }
             "message_update" => self.on_update(&v["assistantMessageEvent"]),
             "message_end" if v["message"]["role"] == "assistant" => self.on_message_end(&v["message"]),
             "tool_execution_start" => self.on_tool_start(v),
@@ -461,7 +484,8 @@ impl Bridge {
     }
 
     fn on_update(&mut self, e: &Value) {
-        let id = format!("m{}:{}", self.message, e["contentIndex"].as_u64().unwrap_or(0));
+        let index = e["contentIndex"].as_u64().unwrap_or(0);
+        let id = format!("m{}:{index}", self.message);
         let delta = e["delta"].as_str().unwrap_or("");
         if !delta.is_empty() && self.live.turn.streamed(delta) {
             self.emit_usage();
@@ -470,7 +494,43 @@ impl Bridge {
             "text_delta" => self.emit(Ev::TextDelta { id, text: delta.to_string() }),
             "text_end" => self.emit(Ev::Text { id, text: e["content"].as_str().unwrap_or("").to_string() }),
             "thinking_delta" => self.emit(Ev::ReasoningDelta { id, text: delta.to_string() }),
+            "thinking_end" => self.emit(Ev::ReasoningEnd { id }),
+            "toolcall_start" | "toolcall_delta" | "toolcall_end" => self.on_toolcall_stream(index, e, delta),
             _ => {}
+        }
+    }
+
+    fn on_toolcall_stream(&mut self, index: u64, e: &Value, delta: &str) {
+        let tc = if e["toolCall"].is_object() { &e["toolCall"] } else { &e["partial"]["content"][index as usize] };
+        let entry = self.streamed_tools.entry(index).or_default();
+        if let Some(tid) = tc["id"].as_str().filter(|s| !s.is_empty()) {
+            entry.id = tid.to_string();
+        }
+        if let Some(name) = tc["name"].as_str().filter(|s| !s.is_empty()) {
+            entry.raw_name = name.to_string();
+        }
+        let parsed_delta = if !delta.is_empty() { entry.parser.feed(delta) } else { false };
+        let Some(tid) = (!entry.id.is_empty()).then(|| entry.id.clone()) else { return };
+        let Some(raw_name) = (!entry.raw_name.is_empty()).then(|| entry.raw_name.clone()) else { return };
+        let args = if tc["arguments"].as_object().is_some_and(|o| !o.is_empty()) {
+            tc["arguments"].clone()
+        } else {
+            entry.parser.value()
+        };
+        let display = display_name(&raw_name);
+        let next_title = title(&raw_name, &args);
+        let next_desc = args["description"].as_str().unwrap_or("").to_string();
+        let first = entry.last_display.is_empty();
+        if first || display != entry.last_display || (!next_title.is_empty() && next_title != entry.last_title) || (!next_desc.is_empty() && next_desc != entry.last_desc) || (parsed_delta && !next_title.is_empty() && entry.last_title.is_empty()) {
+            entry.last_display = display.clone();
+            if !next_title.is_empty() {
+                entry.last_title = next_title.clone();
+            }
+            if !next_desc.is_empty() {
+                entry.last_desc = next_desc;
+            }
+            self.pending_streamed.insert(tid.clone());
+            let _ = self.events.send(Ev::ToolStart { id: tid, name: display, title: next_title, input: args });
         }
     }
 
@@ -501,6 +561,7 @@ impl Bridge {
 
     fn on_tool_start(&mut self, v: &Value) {
         let id = v["toolCallId"].as_str().unwrap_or("").to_string();
+        self.pending_streamed.remove(&id);
         let name = v["toolName"].as_str().unwrap_or("tool").to_string();
         let input = v["args"].clone();
         if name == "update_plan" {

@@ -70,10 +70,11 @@ export function useClient(client: DesktopClient): ClientState {
   return useSyncExternalStore(client.subscribe, client.getState);
 }
 
-/** Re-render every `ms` (for relative timestamps). */
+/** Re-render every `ms` (for relative timestamps); 0 stops. */
 export function useTick(ms: number) {
   const [, set] = useState(0);
   useEffect(() => {
+    if (ms <= 0) return;
     const t = setInterval(() => set((n) => n + 1), ms);
     return () => clearInterval(t);
   }, [ms]);

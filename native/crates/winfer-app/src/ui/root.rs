@@ -1471,6 +1471,10 @@ impl Root {
         t.accent_foreground = c.fg;
         t.selection = Hsla { a: 0.35, ..c.accent };
         t.caret = c.fg;
+        t.table_head = c.hover;
+        t.table_head_foreground = c.muted;
+        t.table_hover = c.hover;
+        t.table_row_border = c.border;
         let hl = std::sync::Arc::make_mut(&mut t.highlight_theme);
         hl.style.editor_background = Some(c.panel);
         hl.style.editor_gutter_background = Some(c.panel);
@@ -1478,6 +1482,7 @@ impl Root {
         hl.style.editor_active_line = Some(c.hover);
         hl.style.editor_line_number = Some(c.subtle);
         hl.style.editor_active_line_number = Some(c.fg);
+        ComponentTheme::sync_base(cx);
         window.refresh();
     }
 }

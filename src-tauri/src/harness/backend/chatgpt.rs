@@ -599,6 +599,100 @@ const MAX_CONTINUES: usize = 3;
 /// Sent when an answer hit the output limit, so the model picks up where it stopped.
 const CONTINUE: &str = "[winfer] Your last answer hit the output token limit and was cut off. Continue where you left off; keep reasoning brief and act (call tools or answer) sooner.";
 
+/// Tracks `function_call` items streaming arguments inside one Responses API request, emitting
+/// an early `Ev::ToolStart` on `output_item.added` and updating it as metadata fields stream in.
+#[derive(Default)]
+struct StreamedCalls {
+    by_item: HashMap<String, StreamedCall>,
+    emitted: Vec<String>,
+}
+
+struct StreamedCall {
+    call_id: String,
+    raw_name: String,
+    last_display: String,
+    last_title: String,
+    last_desc: String,
+    parser: super::partial_json::PartialJsonFields,
+}
+
+impl StreamedCalls {
+    fn on_added(&mut self, item: &Value, emit: &mut impl FnMut(Ev)) {
+        if item["type"] != "function_call" {
+            return;
+        }
+        let item_id = item["id"].as_str().unwrap_or("").to_string();
+        let call_id = item["call_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(&item_id).to_string();
+        let raw_name = item["name"].as_str().unwrap_or("").to_string();
+        if call_id.is_empty() || raw_name.is_empty() {
+            return;
+        }
+        let key = if item_id.is_empty() { call_id.clone() } else { item_id };
+        let mut sc = StreamedCall {
+            call_id: call_id.clone(),
+            raw_name: raw_name.clone(),
+            last_display: if raw_name == "mcp" { "MCP".to_string() } else { display_name(&raw_name).to_string() },
+            last_title: String::new(),
+            last_desc: String::new(),
+            parser: Default::default(),
+        };
+        if let Some(args) = item["arguments"].as_str().filter(|s| !s.is_empty()) {
+            sc.parser.feed(args);
+        }
+        let partial = sc.parser.value();
+        let (display, title, desc) = Self::describe(&sc.raw_name, &partial);
+        sc.last_display = display.clone();
+        sc.last_title = title.clone();
+        sc.last_desc = desc;
+        self.emitted.push(call_id.clone());
+        emit(Ev::ToolStart { id: call_id, name: display, title, input: partial });
+        self.by_item.insert(key, sc);
+    }
+
+    fn on_delta(&mut self, item_id: &str, delta: &str, emit: &mut impl FnMut(Ev)) {
+        let Some(sc) = self.by_item.get_mut(item_id) else { return };
+        if !sc.parser.feed(delta) {
+            return;
+        }
+        let partial = sc.parser.value();
+        let (display, title, desc) = Self::describe(&sc.raw_name, &partial);
+        if display != sc.last_display || title != sc.last_title || desc != sc.last_desc {
+            sc.last_display = display.clone();
+            sc.last_title = title.clone();
+            sc.last_desc = desc;
+            emit(Ev::ToolStart { id: sc.call_id.clone(), name: display, title, input: partial });
+        }
+    }
+
+    fn close_unrun(&mut self, completed_items: &[Value], emit: &mut impl FnMut(Ev)) {
+        for call_id in self.emitted.drain(..) {
+            let will_run = completed_items.iter().any(|i| i["type"] == "function_call" && i["call_id"].as_str() == Some(call_id.as_str()));
+            if !will_run {
+                emit(Ev::ToolEnd { id: call_id, ok: false, output: String::new(), diff: None });
+            }
+        }
+        self.by_item.clear();
+    }
+
+    fn describe(raw_name: &str, partial: &Value) -> (String, String, String) {
+        let desc = partial["description"].as_str().unwrap_or("").to_string();
+        if raw_name == "mcp" {
+            let server = partial["server"].as_str().unwrap_or("");
+            let tool = partial["tool"].as_str().unwrap_or("");
+            let display = if server.is_empty() {
+                "MCP".to_string()
+            } else if tool.is_empty() {
+                format!("{server} · tools")
+            } else {
+                format!("{server} · {tool}")
+            };
+            let title = if tool.is_empty() { String::new() } else { tools::title("", &partial["args"]) };
+            return (display, title, desc);
+        }
+        (display_name(raw_name).to_string(), tools::title(raw_name, partial), desc)
+    }
+}
+
 /// One model request; see [`request`].
 fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<u64>) -> Result<Option<Vec<Value>>, String> {
     if let Some(start) = shared.mcp_start.lock().unwrap().take() {
@@ -679,12 +773,18 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
     });
     let mut out = Vec::new();
     let mut partial: HashMap<String, String> = HashMap::new();
+    let mut streamed_calls = StreamedCalls::default();
     // The message the latest text delta belonged to, for servers whose finished item has another id.
     let mut last_text = String::new();
     // Whether the model's reasoning streamed (else it was made silently before its first token).
     let mut reasoning_streamed = false;
     loop {
         if stopped(shared, sub) {
+            if sub.is_none() {
+                streamed_calls.close_unrun(&[], &mut |e| {
+                    let _ = shared.events.send(e);
+                });
+            }
             // Keep what was said so far.
             for (_, text) in partial {
                 if !text.is_empty() {
@@ -696,8 +796,22 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
         }
         let ev = match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Stream::Event(v)) => v,
-            Ok(Stream::Failed(e)) => return Err(e),
-            Ok(Stream::End) | Err(RecvTimeoutError::Disconnected) => return Err(format!("The answer from {who} stopped before it finished.")),
+            Ok(Stream::Failed(e)) => {
+                if sub.is_none() {
+                    streamed_calls.close_unrun(&[], &mut |ev| {
+                        let _ = shared.events.send(ev);
+                    });
+                }
+                return Err(e);
+            }
+            Ok(Stream::End) | Err(RecvTimeoutError::Disconnected) => {
+                if sub.is_none() {
+                    streamed_calls.close_unrun(&[], &mut |ev| {
+                        let _ = shared.events.send(ev);
+                    });
+                }
+                return Err(format!("The answer from {who} stopped before it finished."));
+            }
             Err(RecvTimeoutError::Timeout) => continue,
         };
         let emit = |e: Ev| {
@@ -736,15 +850,29 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                 streamed(d);
                 stream(Ev::ReasoningDelta { id, text: d.into() });
             }
+            "response.output_item.added" => {
+                if sub.is_none() {
+                    streamed_calls.on_added(&ev["item"], &mut |e| emit(e));
+                }
+            }
             // A tool call's arguments are generated tokens too: they count toward the turn's output
-            // and its pace, though only the finished call shows.
-            "response.function_call_arguments.delta" => streamed(ev["delta"].as_str().unwrap_or("")),
+            // and its pace, and early metadata fields update the active tool step while streaming.
+            "response.function_call_arguments.delta" => {
+                let d = ev["delta"].as_str().unwrap_or("");
+                streamed(d);
+                if sub.is_none() {
+                    streamed_calls.on_delta(&id, d, &mut |e| emit(e));
+                }
+            }
             "response.reasoning_summary_part.added" if ev["summary_index"].as_u64().unwrap_or(0) > 0 => {
                 stream(Ev::ReasoningDelta { id, text: "\n\n".into() })
             }
             "response.output_item.done" => {
                 let item = &ev["item"];
-                if item["type"] == "message" {
+                if item["type"] == "reasoning" {
+                    let rid = item["id"].as_str().filter(|s| !s.is_empty()).unwrap_or(&id).to_string();
+                    stream(Ev::ReasoningEnd { id: rid });
+                } else if item["type"] == "message" {
                     // The finished message ends its streamed text (the UI's caret stops blinking),
                     // or shows it whole when the server didn't stream it.
                     let mut id = item["id"].as_str().unwrap_or("").to_string();
@@ -761,6 +889,9 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                 out.push(replayable(item.clone()));
             }
             "response.completed" | "response.incomplete" => {
+                if sub.is_none() {
+                    streamed_calls.close_unrun(&out, &mut |e| emit(e));
+                }
                 let r = &ev["response"];
                 let u = &r["usage"];
                 trace(&json!({ "done_ms": started.elapsed().as_millis() as u64, "usage": u }));
@@ -811,6 +942,9 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                 return Ok(Some(out));
             }
             "response.failed" | "error" => {
+                if sub.is_none() {
+                    streamed_calls.close_unrun(&[], &mut |e| emit(e));
+                }
                 // `response.failed` nests it; an `error` event is `{ error: {…} }` or carries
                 // `code`/`message` itself (the Responses API streaming spec, local servers).
                 let error = if ev["response"]["error"].is_object() {
@@ -1862,5 +1996,40 @@ mod tests {
         ] {
             assert!(!retryable(e), "{e}");
         }
+    }
+
+    #[test]
+    fn streams_early_function_calls_and_closes_unrun_ones() {
+        let mut sc = StreamedCalls::default();
+        let mut evs = Vec::new();
+        let mut push = |e: Ev| evs.push(e);
+        // Write tool streams path early, then large content.
+        sc.on_added(&json!({ "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "write", "arguments": "" }), &mut push);
+        sc.on_delta("fc_1", r#"{"path":"src/big.rs","content":""#, &mut push);
+        sc.on_delta("fc_1", &"line\n".repeat(400), &mut push);
+        // MCP tool resolves server + tool + args.title as it streams.
+        sc.on_added(&json!({ "type": "function_call", "id": "fc_2", "call_id": "call_2", "name": "mcp", "arguments": "" }), &mut push);
+        sc.on_delta("fc_2", r#"{"server":"winfer","tool":"visualize","args":{"title":"Perf Report","blocks":["#, &mut push);
+        let starts: Vec<(&str, &str, &str)> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Ev::ToolStart { id, name, title, .. } => Some((id.as_str(), name.as_str(), title.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            starts,
+            [
+                ("call_1", "Write", ""),
+                ("call_1", "Write", "src/big.rs"),
+                ("call_2", "MCP", ""),
+                ("call_2", "winfer · visualize", "Perf Report"),
+            ]
+        );
+        // Only call_1 completed; call_2 was cut off and gets closed.
+        evs.clear();
+        sc.close_unrun(&[json!({ "type": "function_call", "call_id": "call_1" })], &mut |e| evs.push(e));
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Ev::ToolEnd { id, ok: false, .. } if id == "call_2"));
     }
 }

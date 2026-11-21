@@ -8,7 +8,9 @@ use crate::code::session::CodeModel;
 use std::collections::HashSet;
 use super::*;
 use crate::model::Workspace;
+use crate::code::names::model_name;
 use crate::request::{AgentRequest, RequestOption, describe_request};
+use crate::ui::code_pickers::{effort_levels, match_model};
 use serde_json::{Value, json};
 use std::time::Instant;
 use winfer_backend::mobile;
@@ -34,6 +36,8 @@ pub(super) struct MobileBridge {
     /// Phones reading a chat pane's thread, with when each lease ends; they get its changes live.
     watching: HashMap<String, HashMap<String, Instant>>,
     push_pending: HashSet<String>,
+    /// A chat pane's model, effort, mode and branch at the last look, to tell the phones when it changes.
+    chat_cfg: HashMap<String, String>,
 }
 
 fn now_ms() -> f64 {
@@ -77,6 +81,37 @@ pub fn question_request(p: &agent_api::PendingQuestions) -> AgentRequest {
     let mut options: Vec<RequestOption> = q.options.iter().enumerate().map(|(i, o)| RequestOption { n: i + 1, label: o.label.clone(), detail: o.description.clone() }).collect();
     options.push(RequestOption { n: options.len() + 1, label: "Type something".into(), detail: None });
     AgentRequest { kind: "question", text: format!("{head}{}{multi}", q.question), options: Some(options) }
+}
+
+/// A chat pane's model and effort as the phone shows them.
+fn chat_config(state: &crate::code::state::CodeState) -> Value {
+    let offered = match_model(&state.models, &state.model).and_then(|i| i.efforts.clone());
+    json!({
+        "model": state.model,
+        "label": if state.model.is_empty() { String::new() } else { model_name(&state.model, state.actual_model.as_deref()) },
+        "effort": if state.effort.is_empty() { "default" } else { state.effort.as_str() },
+        "efforts": effort_levels(offered),
+        "mode": state.mode.label(),
+        "yolo": matches!(state.mode, crate::code::protocol::Mode::Yolo | crate::code::protocol::Mode::YoloPlan),
+        "cwd": state.cwd,
+        "branch": state.branch,
+    })
+}
+
+/// The desktop's theme, so the phone wears the same colors.
+fn theme_json(id: &str) -> Value {
+    let def = crate::theme::theme_by_id(id);
+    json!({ "id": def.id, "mode": def.mode, "ui": def.ui })
+}
+
+/// The models a chat pane offers, each with the effort levels it takes.
+fn chat_models(state: &crate::code::state::CodeState) -> Vec<Value> {
+    state.models.iter().map(|m| json!({
+        "id": m.spec,
+        "name": if m.label.is_empty() { model_name(&m.spec, None) } else { m.label.clone() },
+        "detail": m.detail,
+        "efforts": effort_levels(m.efforts.clone()),
+    })).collect()
 }
 
 impl Root {
@@ -131,6 +166,13 @@ impl Root {
         }
         if !asking {
             self.mobile.answers.remove(id);
+        }
+        let cfg = self.chat(id).map(|m| chat_config(&m.read(cx).state).to_string());
+        if let Some(cfg) = cfg
+            && self.mobile.chat_cfg.get(id) != Some(&cfg)
+            && self.mobile.chat_cfg.insert(id.to_string(), cfg).is_some()
+        {
+            self.mobile_broadcast(id, true, cx);
         }
         let was = self.mobile.chat_asking.contains(id);
         if asking != was {
@@ -203,12 +245,13 @@ impl Root {
             request = Some(AgentRequest { kind: "approval", text: format!("{title}\n\n{text}"), options: None });
             reply = None;
         }
+        let config = self.chat(&pane.id).map(|m| chat_config(&m.read(cx).state));
         json!({
             "id": pane.id, "title": s.pane_label(pane),
             "workspace": s.workspaces.iter().find(|w| w.id == pane.workspace_id).map_or("", |w| w.name.as_str()),
             "workspaceId": pane.workspace_id, "archived": pane.archived,
             "provider": if pane.provider == "shell" { None } else { Some(pane.provider.clone()) },
-            "status": status, "message": message, "updatedAt": updated, "request": request, "reply": reply,
+            "status": status, "message": message, "updatedAt": updated, "request": request, "reply": reply, "config": config,
         })
     }
 
@@ -217,7 +260,7 @@ impl Root {
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)).collect();
         let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
-        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id() })
+        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme) })
     }
 
     fn signature(snapshot: &Value) -> String {
@@ -273,6 +316,7 @@ impl Root {
             s.workspaces.iter().map(|w| json!([w.id, w.name, ordered(w).iter().map(|p| p.id.clone()).collect::<Vec<_>>()])).collect::<Vec<_>>(),
             s.providers.iter().filter(|p| p.installed).map(|p| p.id.clone()).collect::<Vec<_>>(),
             s.default_provider,
+            s.theme,
         ]).to_string();
         if !self.mobile.started {
             self.mobile.started = true;
@@ -366,6 +410,40 @@ impl Root {
         let short = |t: &str, n: usize| t.chars().take(n).collect::<String>();
         let log = |this: &mut Self, text: String, cx: &mut Context<Self>| this.update_state(cx, |s| s.log_activity(&pane.workspace_id, text, Some(pane.provider.clone())));
         match kind.as_str() {
+            "config.get" => {
+                let Some(model) = self.chat(&pane.id) else {
+                    return reply(json!({ "t": "config", "paneId": pane.id, "models": [] }));
+                };
+                reply(json!({ "t": "config", "paneId": pane.id, "models": chat_models(&model.read(cx).state) }));
+            }
+            "pane.set" => {
+                let Some(model) = self.chat(&pane.id) else {
+                    return reply(json!({ "t": "ack", "ok": false, "error": "Only winfer code agents have a model to change." }));
+                };
+                let (wanted_model, wanted_effort) = (req["model"].as_str().filter(|m| !m.is_empty()), req["effort"].as_str().filter(|e| !e.is_empty()));
+                let st = { let s = &model.read(cx).state; (s.model.clone(), s.models.clone()) };
+                let spec = wanted_model.map_or(st.0.clone(), str::to_string);
+                if wanted_model.is_some() && !st.1.iter().any(|m| m.spec == spec) {
+                    return reply(json!({ "t": "ack", "ok": false, "error": "That model isn't available." }));
+                }
+                if let Some(level) = wanted_effort {
+                    let offered = effort_levels(match_model(&st.1, &spec).and_then(|i| i.efforts.clone()));
+                    if !offered.iter().any(|l| l == level) {
+                        return reply(json!({ "t": "ack", "ok": false, "error": "That model doesn't take that effort." }));
+                    }
+                }
+                model.update(cx, |m, cx| {
+                    if wanted_model.is_some() {
+                        m.send(Cmd::SetModel(spec.clone()), cx);
+                    }
+                    if let Some(level) = wanted_effort {
+                        m.send(Cmd::SetEffort((level != "default").then(|| level.to_string())), cx);
+                    }
+                });
+                log(self, format!("Set {} from your phone", [wanted_model.map(|m| model_name(m, None)), wanted_effort.map(|e| format!("{e} effort"))].into_iter().flatten().collect::<Vec<_>>().join(" · ")), cx);
+                self.mobile_broadcast(&pane.id, true, cx);
+                reply(ok);
+            }
             "thread.get" => {
                 let limit = req["limit"].as_u64().unwrap_or(200).clamp(1, 500) as usize;
                 // A running chat has its transcript in memory: send that, and keep sending it as it grows.

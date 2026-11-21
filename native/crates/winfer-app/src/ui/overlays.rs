@@ -485,29 +485,77 @@ impl Root {
             return None;
         }
         let c = *c;
-        let mut stack = div().absolute().bottom(px(16.0)).right(px(16.0)).flex().flex_col().gap_2().items_end();
-        for (i, toast) in self.toasts.iter().enumerate() {
+        let cards = self.toasts.iter().enumerate().map(|(i, toast)| {
             let button = toast.action.clone().map(|(label, action)| {
-                div().id(("toast-action", i)).rounded_md().bg(c.accent).px_2().py_0p5().text_color(c.on_accent).cursor_pointer().child(label).on_click(cx.listener(move |this, _, window, cx| {
-                    this.execute(action.clone(), window, cx);
-                }))
+                toast_action_button(("toast-action", i).into(), label, &c)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.execute(action.clone(), window, cx);
+                    }))
+                    .into_any_element()
             });
-            let shadow = BoxShadow {
-                color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.25 }),
-                offset: point(px(0.0), px(2.0)),
-                blur_radius: px(8.0),
-                spread_radius: px(0.0),
-                inset: false,
-            };
-            stack = stack.child(div().flex().items_center().gap_2().max_w(px(420.0)).rounded_md().bg(c.raised).border_1().border_color(c.border).shadow(vec![shadow]).px_3().py_1p5().text_xs().text_color(c.fg).child(toast.text.clone()).children(button));
-        }
-        Some(stack.into_any_element())
+            toast_card(toast.text.clone(), button, &c).into_any_element()
+        });
+        Some(toast_stack(cards).into_any_element())
     }
+}
+
+const TOAST_MAX_W: f32 = 420.0;
+
+fn toast_stack(cards: impl IntoIterator<Item = AnyElement>) -> Div {
+    div()
+        .absolute()
+        .bottom(px(16.0))
+        .right(px(16.0))
+        .left(px(16.0))
+        .flex()
+        .flex_col()
+        .items_end()
+        .child(div().w_full().max_w(px(TOAST_MAX_W)).flex().flex_col().gap_2().items_end().children(cards))
+}
+
+fn toast_action_button(id: ElementId, label: SharedString, c: &Colors) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .whitespace_nowrap()
+        .rounded_md()
+        .bg(c.accent)
+        .px_2()
+        .py_0p5()
+        .text_color(c.on_accent)
+        .cursor_pointer()
+        .child(label)
+}
+
+fn toast_card(text: SharedString, button: Option<AnyElement>, c: &Colors) -> Div {
+    let shadow = BoxShadow {
+        color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.25 }),
+        offset: point(px(0.0), px(2.0)),
+        blur_radius: px(8.0),
+        spread_radius: px(0.0),
+        inset: false,
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .max_w_full()
+        .rounded_md()
+        .bg(c.raised)
+        .border_1()
+        .border_color(c.border)
+        .shadow(vec![shadow])
+        .px_3()
+        .py_1p5()
+        .text_xs()
+        .text_color(c.fg)
+        .child(div().min_w_0().flex_shrink(1.0).overflow_hidden().whitespace_normal().child(text))
+        .children(button)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::score;
+    use super::{TOAST_MAX_W, score, toast_action_button, toast_card, toast_stack};
 
     #[test]
     fn scoring_prefers_word_starts() {
@@ -516,5 +564,145 @@ mod tests {
         let start = score("sr", "Split right").unwrap();
         let middle = score("pi", "Split right").unwrap();
         assert!(start < middle);
+    }
+
+    #[gpui_kit::test]
+    fn toasts_wrap_text_and_keep_action_inside_bounds(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{Bounds, Context, InteractiveElement, IntoElement, Modifiers, MouseButton, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, point, px};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        #[derive(Default)]
+        struct Measured {
+            card: Option<Bounds<Pixels>>,
+            button: Option<Bounds<Pixels>>,
+            bg_clicked: bool,
+        }
+
+        struct ToastHarness {
+            width: f32,
+            text: SharedString,
+            action: Option<SharedString>,
+            measured: Rc<RefCell<Measured>>,
+        }
+
+        impl Render for ToastHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let c = crate::theme::colors("dark");
+                let m_card = self.measured.clone();
+                let m_btn = self.measured.clone();
+                let m_bg = self.measured.clone();
+                let button = self.action.clone().map(|label| {
+                    toast_action_button(("toast-action", 0usize).into(), label, &c)
+                        .relative()
+                        .child(canvas(move |b, _, _| { m_btn.borrow_mut().button = Some(b); }, |_, _, _, _| {}).absolute().inset_0())
+                        .into_any_element()
+                });
+                let card = toast_card(self.text.clone(), button, &c)
+                    .relative()
+                    .child(canvas(move |b, _, _| { m_card.borrow_mut().card = Some(b); }, |_, _, _, _| {}).absolute().inset_0())
+                    .into_any_element();
+                div()
+                    .relative()
+                    .w(px(self.width))
+                    .h(px(300.0))
+                    .child(
+                        div()
+                            .id("bg-target")
+                            .absolute()
+                            .bottom(px(16.0))
+                            .left(px(16.0))
+                            .size(px(40.0))
+                            .on_click(move |_, _, _| {
+                                m_bg.borrow_mut().bg_clicked = true;
+                            }),
+                    )
+                    .child(toast_stack([card]))
+            }
+        }
+
+        cx.update(gpui_kit::init);
+
+        let measure = |cx: &mut gpui_kit::TestAppContext, width: f32, text: &'static str, action: Option<&'static str>| {
+            let measured = Rc::new(RefCell::new(Measured::default()));
+            let m = measured.clone();
+            let (_, vcx) = cx.add_window_view(move |_, _| ToastHarness {
+                width,
+                text: text.into(),
+                action: action.map(Into::into),
+                measured: m,
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            // Click bottom-left background target to verify the toast stack doesn't eat clicks outside cards.
+            vcx.simulate_mouse_down(point(px(30.0), px(270.0)), MouseButton::Left, Modifiers::default());
+            vcx.simulate_mouse_up(point(px(30.0), px(270.0)), MouseButton::Left, Modifiers::default());
+            vcx.run_until_parked();
+            let m = measured.borrow();
+            (m.card.expect("card measured"), m.button, m.bg_clicked)
+        };
+
+        // 1. Long toast + action button (reproduces the Settings -> Voice toast overflow).
+        let (card, btn, bg_clicked) = measure(
+            cx,
+            900.0,
+            "Add an OpenAI API key in Settings → Voice to use live voice.",
+            Some("Open settings"),
+        );
+        let btn = btn.expect("button measured");
+        assert!(card.size.width <= px(TOAST_MAX_W + 0.5), "card width {} exceeded max {}", f32::from(card.size.width), TOAST_MAX_W);
+        assert!(card.right() <= px(900.0 - 15.5), "card right {} overflowed viewport", f32::from(card.right()));
+        assert!(btn.right() <= card.right() - px(10.0), "button right {} overflowed card right {}", f32::from(btn.right()), f32::from(card.right()));
+        assert!(btn.left() >= card.left() + px(10.0), "button left {} outside card left {}", f32::from(btn.left()), f32::from(card.left()));
+        assert!(btn.size.width > px(50.0) && btn.size.height < px(28.0), "action button should stay single-line and unshrunk: {}x{}", f32::from(btn.size.width), f32::from(btn.size.height));
+        assert!(card.size.height > btn.size.height + px(8.0), "expected wrapped multiline card, got card_h={} btn_h={}", f32::from(card.size.height), f32::from(btn.size.height));
+        assert!(bg_clicked, "toast stack must not block clicks outside toast cards");
+
+        // 2. Short toast without action hugs content instead of stretching to max width or collapsing.
+        let (short_card, _, _) = measure(cx, 900.0, "Copied to the clipboard", None);
+        assert!(short_card.size.width > px(80.0) && short_card.size.width < px(260.0), "short toast width unexpected: {}", f32::from(short_card.size.width));
+        assert!(short_card.right() <= px(900.0 - 15.5));
+
+        // 3. Short toast with action hugs content and keeps the action inside.
+        let (short_action_card, short_action_btn, _) = measure(cx, 900.0, "Race finished", Some("Results"));
+        let short_action_btn = short_action_btn.expect("button measured");
+        assert!(short_action_card.size.width < px(260.0), "short action toast stretched unexpectedly: {}", f32::from(short_action_card.size.width));
+        assert!(short_action_btn.right() <= short_action_card.right() - px(10.0));
+
+        // 4. Long toast without action wraps within max width.
+        let (long_plain_card, _, _) = measure(
+            cx,
+            900.0,
+            "Live voice on a ChatGPT plan needs WebRTC, which the native build doesn't have yet. Add an OpenAI API key in Settings → Voice to use live voice.",
+            None,
+        );
+        assert!(long_plain_card.size.width <= px(TOAST_MAX_W + 0.5));
+        assert!(long_plain_card.right() <= px(900.0 - 15.5));
+        assert!(long_plain_card.size.height > short_card.size.height + px(8.0));
+
+        // 5. Very long unbreakable string + action still keeps button inside card.
+        let (unbreakable_card, unbreakable_btn, _) = measure(
+            cx,
+            900.0,
+            "https://example.com/very/long/unbreakable/path/without/any/spaces/at/all/for/testing/overflow/behavior",
+            Some("Open settings"),
+        );
+        let unbreakable_btn = unbreakable_btn.expect("button measured");
+        assert!(unbreakable_card.size.width <= px(TOAST_MAX_W + 0.5));
+        assert!(unbreakable_btn.right() <= unbreakable_card.right() - px(10.0), "button right {} overflowed card right {}", f32::from(unbreakable_btn.right()), f32::from(unbreakable_card.right()));
+
+        // 6. Narrow window smaller than TOAST_MAX_W keeps toast within viewport margins.
+        let (narrow_card, narrow_btn, _) = measure(
+            cx,
+            320.0,
+            "Add an OpenAI API key in Settings → Voice to use live voice.",
+            Some("Open settings"),
+        );
+        let narrow_btn = narrow_btn.expect("button measured");
+        assert!(narrow_card.left() >= px(15.5), "narrow card left {} overflowed left margin", f32::from(narrow_card.left()));
+        assert!(narrow_card.right() <= px(320.0 - 15.5), "narrow card right {} overflowed right margin", f32::from(narrow_card.right()));
+        assert!(narrow_btn.right() <= narrow_card.right() - px(10.0), "narrow button right {} overflowed card right {}", f32::from(narrow_btn.right()), f32::from(narrow_card.right()));
     }
 }

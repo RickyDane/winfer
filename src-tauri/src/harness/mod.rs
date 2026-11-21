@@ -328,6 +328,8 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
     // Background subagents still running, and whether the turn is over: the run ends once both
     // are done, and after a last report the backend may start a turn on it.
     let mut running: std::collections::HashSet<String> = Default::default();
+    let mut printed_tools: std::collections::HashSet<String> = Default::default();
+    let mut pending_tools: std::collections::HashMap<String, String> = Default::default();
     let mut idle = false;
     loop {
         let ev = if idle && running.is_empty() {
@@ -357,7 +359,24 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
                 let _ = writeln!(out);
                 wrote = false;
             }
-            Ev::ToolStart { name, title, .. } if !json => eprintln!("\x1b[2m● {name} {title}\x1b[0m"),
+            Ev::ToolStart { id, name, title, .. } if !json => {
+                if !printed_tools.contains(&id) {
+                    if !title.is_empty() {
+                        printed_tools.insert(id.clone());
+                        pending_tools.remove(&id);
+                        eprintln!("\x1b[2m● {name} {title}\x1b[0m");
+                    } else {
+                        pending_tools.insert(id, name);
+                    }
+                }
+            }
+            Ev::ToolEnd { id, .. } if !json => {
+                if let Some(name) = pending_tools.remove(&id) {
+                    if printed_tools.insert(id) {
+                        eprintln!("\x1b[2m● {name}\x1b[0m");
+                    }
+                }
+            }
             Ev::Approval(a) => {
                 if !json {
                     eprintln!("\x1b[33m✗ declined {}: {} (use --mode auto-edit or --yolo)\x1b[0m", a.tool, a.title);
@@ -405,6 +424,7 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::TextDelta { id, text } => json!({ "type": "text_delta", "id": id, "text": text }),
         Ev::Text { id, text } => json!({ "type": "text", "id": id, "text": text }),
         Ev::ReasoningDelta { id, text } => json!({ "type": "reasoning_delta", "id": id, "text": text }),
+        Ev::ReasoningEnd { id } => json!({ "type": "reasoning_end", "id": id }),
         Ev::ToolStart { id, name, title, input } => json!({ "type": "tool_start", "id": id, "name": name, "title": title, "input": input }),
         Ev::ToolOutput { id, chunk } => json!({ "type": "tool_output", "id": id, "chunk": chunk }),
         Ev::ToolEnd { id, ok, output, diff } => json!({ "type": "tool_end", "id": id, "ok": ok, "output": output, "diff": diff }),

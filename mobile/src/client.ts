@@ -1,3 +1,4 @@
+import { applyTheme } from "./theme";
 import type { DesktopMsg, Message, Pane, PhoneMsg, Provider, ThreadSource, Workspace } from "./protocol";
 
 export interface Thread {
@@ -94,6 +95,7 @@ export abstract class BaseClient implements DesktopClient {
         this.set({ welcome: { desktop: msg.desktop, version: msg.version, vapidPublicKey: msg.vapidPublicKey }, error: null });
         break;
       case "panes":
+        if (msg.theme) applyTheme(msg.theme);
         this.set({
           panes: msg.panes,
           ...(msg.workspaces && { workspaces: msg.workspaces }),
@@ -132,6 +134,7 @@ export abstract class BaseClient implements DesktopClient {
         if (!msg.id) this.set({ error: msg.error });
         break;
       case "ack":
+      case "config":
         break;
     }
   }

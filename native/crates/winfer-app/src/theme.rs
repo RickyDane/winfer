@@ -1,10 +1,10 @@
 //! Color themes, the Tauri app's definitions exported to JSON (`assets/themes.json`).
 
 use gpui_kit::{Hsla, Rgba, rgba};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::{LazyLock, RwLock};
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ui {
     pub app: String,

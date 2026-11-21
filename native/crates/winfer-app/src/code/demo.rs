@@ -94,6 +94,13 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
             steps.push((300, Ev(json!({ "type": "text", "id": "va1", "text": "Two crates make up 60% of the build." }))));
             steps.push((200, Ev(json!({ "type": "turn_done" }))));
         }
+        "table" => {
+            steps.truncate(2);
+            steps.push((300, Type("Compare the build profiles\r")));
+            steps.push((300, Ev(json!({ "type": "turn_start" }))));
+            steps.push((400, Ev(json!({ "type": "text", "id": "ta1", "text": "Here is how the profiles compare:\n\n| Profile | Time | Size | Notes |\n|:--------|-----:|-----:|:-----:|\n| debug | 9.1 s | 212 MB | fast incremental |\n| release | 41.2 s | 38 MB | `lto = thin` |\n| bench | 44.8 s | 41 MB | **slowest** |\n\nUse `release` for shipping and `debug` while iterating." }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
         "model" => steps.push((1200, Type("/model\r"))),
         "mode" => steps.push((1200, Type("/mode\r"))),
         "effort" => steps.push((1200, Type("/effort\r"))),

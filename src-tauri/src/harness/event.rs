@@ -19,6 +19,8 @@ pub enum Ev {
     /// The full text of a message, when the backend sends it whole (replaces the deltas).
     Text { id: String, text: String },
     ReasoningDelta { id: String, text: String },
+    /// Reasoning block finished streaming (so the UI can leave "Thinking…" before the next block).
+    ReasoningEnd { id: String },
     ToolStart { id: String, name: String, title: String, input: Value },
     ToolOutput { id: String, chunk: String },
     /// `diff` is a unified diff for file edits.

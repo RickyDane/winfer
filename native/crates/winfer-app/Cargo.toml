@@ -34,6 +34,7 @@ ureq = { version = "3.4.2", features = ["json"] }
 hayro = { version = "0.9", features = ["embed-fonts"] }
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 svg2pdf = { version = "0.13", default-features = false, features = ["text"] }
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 # Local time on every platform (localtime_r, and localtime_s on Windows).
 libc = "0.2.190"
 # Checks an update's signature against the Tauri app's updater key (see updates.rs).

@@ -10,6 +10,7 @@ pub mod local;
 pub mod microcompact;
 pub mod muse;
 pub mod opencode;
+pub(super) mod partial_json;
 pub mod pi;
 
 use std::io::{BufRead, BufReader, Read};

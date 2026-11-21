@@ -14,6 +14,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -89,6 +90,139 @@ pub fn remove_comment(text: &str, start: usize) -> String {
     format!("{}{}", &text[..from], &text[to..])
 }
 
+/// A GitHub-style alert / callout blockquote (`> [!NOTE]`, `> [!IMPORTANT]`, …).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl AlertKind {
+    fn parse(tag: &str) -> Option<Self> {
+        match tag.to_ascii_uppercase().as_str() {
+            "NOTE" => Some(Self::Note),
+            "TIP" => Some(Self::Tip),
+            "IMPORTANT" => Some(Self::Important),
+            "WARNING" => Some(Self::Warning),
+            "CAUTION" => Some(Self::Caution),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Tip => "Tip",
+            Self::Important => "Important",
+            Self::Warning => "Warning",
+            Self::Caution => "Caution",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Self::Note => IconName::Info,
+            Self::Tip => IconName::Lightbulb,
+            Self::Important => IconName::MessageSquareWarning,
+            Self::Warning => IconName::TriangleAlert,
+            Self::Caution => IconName::OctagonAlert,
+        }
+    }
+
+    fn color(self, c: Colors) -> Hsla {
+        match self {
+            Self::Note => theme::hex(if c.light { "#0969da" } else { "#58a6ff" }),
+            Self::Tip => c.success,
+            Self::Important => theme::hex(if c.light { "#8250df" } else { "#a371f7" }),
+            Self::Warning => c.warning,
+            Self::Caution => c.danger,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AlertBlock {
+    pub kind: AlertKind,
+    pub body: String,
+}
+
+fn strip_quote_prefix(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let rest = trimmed.strip_prefix('>')?;
+    Some(rest.strip_prefix(' ').unwrap_or(rest))
+}
+
+fn parse_alert_opener(line: &str) -> Option<(AlertKind, &str)> {
+    let inner = strip_quote_prefix(line)?.trim_start();
+    let rest = inner.strip_prefix("[!")?;
+    let (tag, after) = rest.split_once(']')?;
+    let kind = AlertKind::parse(tag)?;
+    let trailing = if after.is_empty() {
+        ""
+    } else if after.starts_with(char::is_whitespace) {
+        after.trim_start()
+    } else {
+        return None;
+    };
+    Some((kind, trailing))
+}
+
+/// Parses a GitHub-style alert blockquote (`> [!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` / `[!CAUTION]`).
+pub fn parse_alert(source: &str) -> Option<AlertBlock> {
+    let mut lines = source.lines();
+    let first = lines.next()?;
+    let (kind, first_rest) = parse_alert_opener(first)?;
+    let mut body_lines: Vec<&str> = Vec::new();
+    if !first_rest.is_empty() {
+        body_lines.push(first_rest);
+    }
+    for line in lines {
+        if let Some(quoted) = strip_quote_prefix(line) {
+            body_lines.push(quoted);
+        } else {
+            let t = line.trim_start();
+            if t.starts_with('#') || t.starts_with("```") || t.starts_with("~~~") {
+                return None;
+            }
+            body_lines.push(line);
+        }
+    }
+    while body_lines.first().is_some_and(|l| l.trim().is_empty()) {
+        body_lines.remove(0);
+    }
+    Some(AlertBlock { kind, body: body_lines.join("\n") })
+}
+
+/// Extracts the inner diagram markup of a closed `mermaid` fenced code block.
+pub fn parse_mermaid_fence(source: &str) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    if lines.len() < 2 {
+        return None;
+    }
+    let first = lines[0].trim();
+    let ch = first.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let n = first.chars().take_while(|c| *c == ch).count();
+    if n < 3 {
+        return None;
+    }
+    let lang = first[n..].trim().split_whitespace().next()?;
+    if !lang.eq_ignore_ascii_case("mermaid") {
+        return None;
+    }
+    let last = lines.last()?.trim();
+    let close_n = last.chars().take_while(|c| *c == ch).count();
+    if close_n < n || !last[close_n..].trim().is_empty() {
+        return None;
+    }
+    Some(lines[1..lines.len() - 1].join("\n"))
+}
+
 /// A top-level block of a markdown file: its lines (1-based, inclusive) and source, or a review
 /// comment standing on its own.
 #[derive(Clone, Debug, PartialEq)]
@@ -100,7 +234,7 @@ pub struct MdBlock {
 }
 
 /// Splits markdown into the blocks a reader can comment on: runs of lines set apart by blank
-/// lines, with fenced code kept whole.
+/// lines, with fenced code kept whole and GitHub alerts / top-level fences isolated.
 pub fn md_blocks(text: &str) -> Vec<MdBlock> {
     let mut blocks = Vec::new();
     let mut current: Vec<&str> = Vec::new();
@@ -128,8 +262,12 @@ pub fn md_blocks(text: &str) -> Vec<MdBlock> {
             current.push(line);
             if trimmed.starts_with(open.as_str()) && trimmed.trim_start_matches(open.chars().next().unwrap_or('`')).trim().is_empty() {
                 fence = None;
+                flush(&mut current, start, &mut blocks, &mut starts);
             }
         } else if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            if !current.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+                flush(&mut current, start, &mut blocks, &mut starts);
+            }
             if current.is_empty() {
                 start = i + 1;
                 starts.push(offset);
@@ -141,6 +279,20 @@ pub fn md_blocks(text: &str) -> Vec<MdBlock> {
         } else if line.trim().is_empty() {
             flush(&mut current, start, &mut blocks, &mut starts);
         } else {
+            let in_alert = current.first().is_some_and(|l| parse_alert_opener(l).is_some());
+            let starts_new_alert = parse_alert_opener(line).is_some();
+            let breaks_alert = in_alert
+                && strip_quote_prefix(line).is_none()
+                && (trimmed.starts_with('#')
+                    || trimmed.starts_with("- ")
+                    || trimmed.starts_with("* ")
+                    || trimmed.starts_with("+ ")
+                    || trimmed.starts_with("---")
+                    || trimmed.starts_with("***")
+                    || trimmed.starts_with("___"));
+            if !current.is_empty() && (starts_new_alert || breaks_alert) {
+                flush(&mut current, start, &mut blocks, &mut starts);
+            }
             if current.is_empty() {
                 start = i + 1;
                 starts.push(offset);
@@ -277,6 +429,18 @@ enum Content {
     Pdf { bytes: Arc<Vec<u8>>, pages: usize },
 }
 
+#[derive(Clone, Hash, Eq, PartialEq)]
+struct MermaidKey {
+    theme: String,
+    source: String,
+}
+
+enum MermaidState {
+    Pending,
+    Ready { image: Arc<Image>, width: f32, height: f32 },
+    Failed(String),
+}
+
 pub struct ViewerPanel {
     state: Entity<AppState>,
     shown: Option<String>,
@@ -293,6 +457,9 @@ pub struct ViewerPanel {
     send_open: bool,
     poll: Option<Task<()>>,
     pdf: PdfView,
+    mermaid_cache: HashMap<MermaidKey, MermaidState>,
+    mermaid_source: HashSet<usize>,
+    mermaid_zoom: HashMap<usize, f32>,
 }
 
 /// Which page of a PDF shows, how far in, and the rendered result.
@@ -314,7 +481,7 @@ impl Default for PdfView {
 impl ViewerPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |this, _, cx| this.sync(cx)).detach();
-        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default() }
+        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new() }
     }
 
     /// Shows `path` (absolute), opening its tab; `background` leaves the side panel as it is.
@@ -356,6 +523,8 @@ impl ViewerPanel {
             self.conflict = false;
             self.source = false;
             self.send_open = false;
+            self.mermaid_source.clear();
+            self.mermaid_zoom.clear();
             self.load(cx);
             self.start_polling(cx);
         }
@@ -535,7 +704,7 @@ impl ViewerPanel {
 
     fn apply_jump(&mut self, cx: &mut Context<Self>) {
         if self.jump.is_some() && matches!(self.content, Content::Text { .. }) {
-            if matches!(extension(self.shown.as_deref().unwrap_or_default()).as_str(), "md" | "markdown" | "mdx") {
+            if matches!(extension(self.shown.as_deref().unwrap_or_default()).as_str(), "md" | "markdown" | "mdx" | "mmd" | "mermaid") {
                 self.source = true;
             }
             cx.notify();
@@ -715,8 +884,316 @@ impl ViewerPanel {
         cx.notify();
     }
 
+    fn ensure_mermaid(&mut self, theme_id: &str, code: &str, cx: &mut Context<Self>) -> &MermaidState {
+        let key = MermaidKey { theme: theme_id.to_string(), source: code.to_string() };
+        if !self.mermaid_cache.contains_key(&key) {
+            if self.mermaid_cache.len() >= 64 {
+                self.mermaid_cache.clear();
+            }
+            self.mermaid_cache.insert(key.clone(), MermaidState::Pending);
+            let k = key.clone();
+            cx.spawn(async move |this, cx| {
+                let (src, th) = (k.source.clone(), k.theme.clone());
+                let res = backend::background(move || crate::mermaid::render_png(&src, &th))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r);
+                let _ = this.update(cx, |this, cx| {
+                    let state = match res {
+                        Ok(d) => MermaidState::Ready {
+                            image: Arc::new(Image::from_bytes(ImageFormat::Png, d.png)),
+                            width: d.width,
+                            height: d.height,
+                        },
+                        Err(err) => MermaidState::Failed(err),
+                    };
+                    this.mermaid_cache.insert(k, state);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        self.mermaid_cache.get(&key).expect("mermaid state inserted")
+    }
+
+    fn render_alert(&self, id: SharedString, alert: AlertBlock, doc: String, link_panel: WeakEntity<Self>, c: Colors) -> AnyElement {
+        let accent = alert.kind.color(c);
+        let bg = theme::blend(c.panel, accent, if c.light { 0.06 } else { 0.09 });
+        let border = Hsla { a: if c.light { 0.25 } else { 0.22 }, ..accent };
+        let mut inner = div()
+            .flex_1()
+            .min_w_0()
+            .px_3()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_size(px(12.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(accent)
+                    .child(Icon::new(alert.kind.icon()).size(px(14.0)).text_color(accent))
+                    .child(alert.kind.label()),
+            );
+        if !alert.body.trim().is_empty() {
+            inner = inner.child(
+                TextView::markdown(id, SharedString::from(alert.body))
+                    .selectable(true)
+                    .on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
+                        Some((target, line)) => {
+                            link_panel.update(cx, |this, cx| this.open(target, line, false, cx)).ok();
+                        }
+                        None if !href.starts_with('#') => cx.open_url(href),
+                        None => {}
+                    }),
+            );
+        }
+        div()
+            .w_full()
+            .rounded_md()
+            .overflow_hidden()
+            .bg(bg)
+            .border_1()
+            .border_color(border)
+            .flex()
+            .flex_row()
+            .child(div().w(px(3.0)).flex_shrink_0().bg(accent))
+            .child(inner)
+            .into_any_element()
+    }
+
+    fn render_mermaid_card(
+        &mut self,
+        key_id: String,
+        block_line: usize,
+        raw_fence: String,
+        code: &str,
+        theme_id: &str,
+        allow_source_toggle: bool,
+        pad_right_for_comment: bool,
+        c: Colors,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let show_source = allow_source_toggle && self.mermaid_source.contains(&block_line);
+        let zoom = self.mermaid_zoom.get(&block_line).copied();
+        let copy = code.to_string();
+        let mut actions = div().flex().items_center().gap_1().when(pad_right_for_comment, |d| d.mr_6());
+        if !show_source {
+            let cur = zoom.unwrap_or(1.0);
+            let can_out = zoom.map_or(true, |z| z > 0.25);
+            let can_in = cur < 3.0;
+            let zoom_label = match zoom {
+                None => "Fit".to_string(),
+                Some(z) => format!("{}%", (z * 100.0).round()),
+            };
+            let zoom_tip = SharedString::from(if zoom.is_none() { "Actual size (100%)" } else { "Fit to width" });
+            actions = actions
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{key_id}-zout")))
+                        .rounded_sm()
+                        .p_1()
+                        .text_color(if can_out { c.subtle } else { Hsla { a: 0.35, ..c.subtle } })
+                        .when(can_out, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !can_out {
+                                return;
+                            }
+                            let next = (this.mermaid_zoom.get(&block_line).copied().unwrap_or(1.0) - 0.25).clamp(0.25, 3.0);
+                            this.mermaid_zoom.insert(block_line, next);
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::Minus).size(px(11.0))),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{key_id}-zfit")))
+                        .rounded_sm()
+                        .px_1()
+                        .py_0p5()
+                        .text_size(px(10.5))
+                        .text_color(if zoom.is_some() { c.accent } else { c.muted })
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .tooltip(move |window, cx| Tooltip::new(zoom_tip.clone()).build(window, cx))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.mermaid_zoom.remove(&block_line).is_none() {
+                                this.mermaid_zoom.insert(block_line, 1.0);
+                            }
+                            cx.notify();
+                        }))
+                        .child(zoom_label),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{key_id}-zin")))
+                        .rounded_sm()
+                        .p_1()
+                        .text_color(if can_in { c.subtle } else { Hsla { a: 0.35, ..c.subtle } })
+                        .when(can_in, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !can_in {
+                                return;
+                            }
+                            let next = (this.mermaid_zoom.get(&block_line).copied().unwrap_or(1.0) + 0.25).clamp(0.25, 3.0);
+                            this.mermaid_zoom.insert(block_line, next);
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::Plus).size(px(11.0))),
+                )
+                .child(div().h(px(11.0)).w(px(1.0)).mx_0p5().bg(c.border));
+        }
+        if allow_source_toggle {
+            let toggle_tip = SharedString::from(if show_source { "Show diagram" } else { "Show source" });
+            actions = actions.child(
+                div()
+                    .id(SharedString::from(format!("{key_id}-toggle")))
+                    .rounded_sm()
+                    .p_1()
+                    .cursor_pointer()
+                    .text_color(if show_source { c.accent } else { c.subtle })
+                    .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .tooltip(move |window, cx| Tooltip::new(toggle_tip.clone()).build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.mermaid_source.remove(&block_line) {
+                            this.mermaid_source.insert(block_line);
+                        }
+                        cx.notify();
+                    }))
+                    .child(Icon::new(if show_source { IconName::Eye } else { IconName::Code }).size(px(12.0))),
+            );
+        }
+        actions = actions.child(
+            div()
+                .id(SharedString::from(format!("{key_id}-copy")))
+                .rounded_sm()
+                .p_1()
+                .cursor_pointer()
+                .text_color(c.subtle)
+                .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .tooltip(|window, cx| Tooltip::new("Copy mermaid source").build(window, cx))
+                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))
+                .child(Icon::new(IconName::Copy).size(px(12.0))),
+        );
+        let toolbar = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px_2p5()
+            .py_1()
+            .border_b_1()
+            .border_color(c.border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_size(px(11.0))
+                    .text_color(c.muted)
+                    .child(Icon::new(IconName::Workflow).size(px(12.0)).text_color(c.subtle))
+                    .child("mermaid"),
+            )
+            .child(actions);
+
+        let body: AnyElement = if show_source {
+            div()
+                .p_2()
+                .child(TextView::markdown(SharedString::from(format!("{key_id}-src")), SharedString::from(raw_fence)).selectable(true))
+                .into_any_element()
+        } else {
+            match self.ensure_mermaid(theme_id, code, cx) {
+                MermaidState::Pending => div()
+                    .p_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(c.subtle)
+                    .child("Rendering diagram…")
+                    .into_any_element(),
+                MermaidState::Ready { image, width, height } => {
+                    let aspect = (*width / height.max(1.0)).max(0.05);
+                    let (img_w, img_h) = (*width, *height);
+                    let image = image.clone();
+                    if let Some(z) = zoom {
+                        div()
+                            .id(SharedString::from(format!("{key_id}-scroll")))
+                            .w_full()
+                            .overflow_x_scroll()
+                            .p_3()
+                            .child(
+                                div()
+                                    .w(px(img_w * z))
+                                    .h(px(img_h * z))
+                                    .flex_shrink_0()
+                                    .child(img(image).size_full().object_fit(ObjectFit::Contain)),
+                            )
+                            .into_any_element()
+                    } else {
+                        div()
+                            .w_full()
+                            .p_3()
+                            .flex()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .w(px(img_w))
+                                    .max_w_full()
+                                    .aspect_ratio(aspect)
+                                    .child(img(image).size_full().object_fit(ObjectFit::Contain)),
+                            )
+                            .into_any_element()
+                    }
+                }
+                MermaidState::Failed(err) => {
+                    let err = err.clone();
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1p5()
+                        .p_2p5()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .text_xs()
+                                .text_color(c.danger)
+                                .child(Icon::new(IconName::TriangleAlert).size(px(13.0)).text_color(c.danger))
+                                .child(format!("Couldn't render Mermaid diagram: {err}")),
+                        )
+                        .child(TextView::markdown(SharedString::from(format!("{key_id}-fallback")), SharedString::from(raw_fence)).selectable(true))
+                        .into_any_element()
+                }
+            }
+        };
+
+        div()
+            .w_full()
+            .rounded_md()
+            .overflow_hidden()
+            .bg(c.raised)
+            .border_1()
+            .border_color(c.edge)
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .child(body)
+            .into_any_element()
+    }
+
+    fn render_mermaid_file(&mut self, path: &str, text: SharedString, theme_id: &str, c: Colors, cx: &mut Context<Self>) -> AnyElement {
+        let raw_fence = format!("```mermaid\n{text}\n```");
+        let card = self.render_mermaid_card(format!("mmd-file-{path}"), 0, raw_fence, text.as_ref(), theme_id, false, false, c, cx);
+        div().id("viewer-mermaid").size_full().overflow_y_scroll().p_4().child(card).into_any_element()
+    }
+
     /// Rendered markdown, one block at a time so a reader can comment on the one they mean.
-    fn render_markdown(&self, path: &str, text: SharedString, c: Colors, cx: &mut Context<Self>) -> AnyElement {
+    fn render_markdown(&mut self, path: &str, text: SharedString, theme_id: &str, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let panel = cx.entity().downgrade();
         let commenting = self.composing.is_some().then_some(self.comment_line);
         let mut column = div().flex().flex_col().gap_2();
@@ -735,14 +1212,36 @@ impl ViewerPanel {
             let active = commenting == Some(end);
             let doc = path.to_string();
             let link_panel = panel.clone();
+            let block_body: AnyElement = if let Some(alert) = parse_alert(&block.source) {
+                self.render_alert(id, alert, doc, link_panel, c)
+            } else if let Some(code) = parse_mermaid_fence(&block.source) {
+                self.render_mermaid_card(
+                    format!("mmd-{path}-{}", block.start_line),
+                    block.start_line,
+                    block.source,
+                    &code,
+                    theme_id,
+                    true,
+                    true,
+                    c,
+                    cx,
+                )
+            } else {
+                TextView::markdown(id, SharedString::from(block.source))
+                    .selectable(true)
+                    .on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
+                        Some((target, line)) => {
+                            link_panel.update(cx, |this, cx| this.open(target, line, false, cx)).ok();
+                        }
+                        None if !href.starts_with('#') => cx.open_url(href),
+                        None => {}
+                    })
+                    .into_any_element()
+            };
             column = column.child(
                 div().id(SharedString::from(format!("block-{path}-{}", block.start_line))).group("md-block").relative().rounded_md().px_2().py_0p5().border_1()
                     .when(active, |d| d.bg(Hsla { a: 0.06, ..c.accent }))
-                    .child(TextView::markdown(id, SharedString::from(block.source)).selectable(true).on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
-                        Some((target, line)) => { link_panel.update(cx, |this, cx| this.open(target, line, false, cx)).ok(); }
-                        None if !href.starts_with('#') => cx.open_url(href),
-                        None => {}
-                    }))
+                    .child(block_body)
                     .child(
                         div().id(SharedString::from(format!("block-comment-{path}-{end}"))).absolute().top(px(2.0)).right(px(2.0)).p_1().rounded_md().bg(c.raised).border_1().border_color(c.edge).cursor_pointer()
                             .opacity(0.0).group_hover("md-block", |d| d.opacity(1.0)).tooltip({ let t = SharedString::from("Comment on this block"); move |window, cx| Tooltip::new(t.clone()).build(window, cx) })
@@ -780,7 +1279,7 @@ impl ViewerPanel {
             .into_any_element()
     }
 
-    fn render_header(&self, path: &str, is_markdown: bool, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_header(&self, path: &str, is_markdown: bool, has_source_toggle: bool, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let _ = window;
         let button = move |id: &'static str, icon: IconName, active: bool| {
             div().id(id).rounded_sm().p_1().cursor_pointer().text_color(if active { c.accent } else { c.subtle }).when(active, |d| d.bg(Hsla { a: 0.15, ..c.accent })).hover(move |d| d.bg(c.hover).text_color(c.fg)).child(Icon::new(icon).size(px(13.0)))
@@ -806,7 +1305,7 @@ impl ViewerPanel {
                         .child("Cancel"),
                 )
         } else {
-            row.when(is_markdown, |d| d.child(button("viewer-source", IconName::Code, self.source).on_click(cx.listener(|this, _, _, cx| { this.source = !this.source; cx.notify(); }))))
+            row.when(has_source_toggle, |d| d.child(button("viewer-source", IconName::Code, self.source).on_click(cx.listener(|this, _, _, cx| { this.source = !this.source; cx.notify(); }))))
                 .when(matches!(self.content, Content::Text { .. }), |d| d.child(button("viewer-edit", IconName::Pencil, false).on_click(cx.listener(|this, _, window, cx| this.begin_edit(window, cx)))))
                 .when(is_markdown, |d| d.child(button("viewer-comment", IconName::MessageSquarePlus, false).on_click(cx.listener(|this, _, window, cx| {
                     let last = if let Content::Text { line_count, .. } = &this.content { *line_count } else { 0 };
@@ -832,9 +1331,9 @@ impl ViewerPanel {
 
 impl Render for ViewerPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (c, docs, active, workspaces) = {
+        let (theme_id, c, docs, active, workspaces) = {
             let s = self.state.read(cx);
-            (theme::colors(&s.theme), s.viewer.docs.clone(), s.viewer.active.clone(), s.workspaces.clone())
+            (s.theme.clone(), theme::colors(&s.theme), s.viewer.docs.clone(), s.viewer.active.clone(), s.workspaces.clone())
         };
         let font = crate::fonts::mono(cx);
         let groups = viewer_projects(&docs, &workspaces);
@@ -888,14 +1387,23 @@ impl Render for ViewerPanel {
         let Some(path) = active else {
             return div().size_full().flex().flex_col().child(top).child(div().flex_1().flex().items_center().justify_center().text_xs().text_color(c.subtle).child("No file open")).into_any_element();
         };
-        let is_markdown = matches!(extension(&path).as_str(), "md" | "markdown" | "mdx");
-        let header = self.render_header(&path, is_markdown, c, window, cx);
+        let ext = extension(&path);
+        let is_markdown = matches!(ext.as_str(), "md" | "markdown" | "mdx");
+        let is_mermaid = matches!(ext.as_str(), "mmd" | "mermaid");
+        let header = self.render_header(&path, is_markdown, is_markdown || is_mermaid, c, window, cx);
         let body: AnyElement = match &self.content {
             Content::Loading => div().p_4().text_xs().text_color(c.subtle).child("Loading…").into_any_element(),
             Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
             Content::Pdf { pages, .. } => self.render_pdf_view(*pages, c, cx),
             Content::Image(p) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
-            Content::Text { text, .. } if !self.editing && is_markdown && !self.source => self.render_markdown(&path, text.clone(), c, cx),
+            Content::Text { text, .. } if !self.editing && is_markdown && !self.source => {
+                let text = text.clone();
+                self.render_markdown(&path, text, &theme_id, c, cx)
+            }
+            Content::Text { text, .. } if !self.editing && is_mermaid && !self.source => {
+                let text = text.clone();
+                self.render_mermaid_file(&path, text, &theme_id, c, cx)
+            }
             Content::Text { text, modified, line_count, .. } => {
                 let (text, modified, line_count) = (text.clone(), *modified, *line_count);
                 self.render_code(&path, text, modified, line_count, font.clone(), window, cx)
@@ -964,7 +1472,55 @@ impl Render for ViewerPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_comments, format_comment, insert_comment, remove_comment, tab_label};
+    use super::{AlertBlock, AlertKind, find_comments, format_comment, insert_comment, parse_alert, parse_mermaid_fence, remove_comment, tab_label};
+
+    #[test]
+    fn parses_github_alerts() {
+        assert_eq!(
+            parse_alert("> [!NOTE]\n> Useful info."),
+            Some(AlertBlock { kind: AlertKind::Note, body: "Useful info.".into() })
+        );
+        assert_eq!(
+            parse_alert("> [!IMPORTANT] Target version\n> compiles `src-tauri/src/`"),
+            Some(AlertBlock { kind: AlertKind::Important, body: "Target version\ncompiles `src-tauri/src/`".into() })
+        );
+        assert_eq!(
+            parse_alert("> [!note]\n>\n> - item one\n> - item two"),
+            Some(AlertBlock { kind: AlertKind::Note, body: "- item one\n- item two".into() })
+        );
+        assert_eq!(parse_alert("> [!TIP]\n> Try this").unwrap().kind, AlertKind::Tip);
+        assert_eq!(parse_alert("> [!WARNING]\n> Watch out").unwrap().kind, AlertKind::Warning);
+        assert_eq!(parse_alert("> [!CAUTION]\n> Danger").unwrap().kind, AlertKind::Caution);
+        assert_eq!(parse_alert("> Just a regular quote"), None);
+        assert_eq!(parse_alert("> [!UNKNOWN]\n> Nope"), None);
+        assert_eq!(parse_alert("> [!NOTE]no-space"), None);
+    }
+
+    #[test]
+    fn parses_mermaid_fences() {
+        assert_eq!(
+            parse_mermaid_fence("```mermaid\nflowchart LR\n    A --> B\n```"),
+            Some("flowchart LR\n    A --> B".into())
+        );
+        assert_eq!(
+            parse_mermaid_fence("~~~Mermaid\nsequenceDiagram\n    A->>B: hi\n~~~"),
+            Some("sequenceDiagram\n    A->>B: hi".into())
+        );
+        assert_eq!(parse_mermaid_fence("```rust\nfn main() {}\n```"), None);
+        assert_eq!(parse_mermaid_fence("```mermaid\nflowchart LR\n    A --> B"), None);
+    }
+
+    #[test]
+    fn splits_adjacent_alerts_and_fences() {
+        let text = "## Review\n> [!IMPORTANT]\n> First\n> [!NOTE]\n> Second\n```mermaid\ngraph TD\nA-->B\n```\nAfter\n";
+        let blocks = super::md_blocks(text);
+        assert_eq!(blocks.len(), 5);
+        assert_eq!(blocks[0].source, "## Review");
+        assert_eq!(parse_alert(&blocks[1].source).unwrap().kind, AlertKind::Important);
+        assert_eq!(parse_alert(&blocks[2].source).unwrap().kind, AlertKind::Note);
+        assert_eq!(parse_mermaid_fence(&blocks[3].source).as_deref(), Some("graph TD\nA-->B"));
+        assert_eq!(blocks[4].source, "After");
+    }
 
     #[test]
     fn markdown_splits_into_blocks_and_keeps_fences_whole() {

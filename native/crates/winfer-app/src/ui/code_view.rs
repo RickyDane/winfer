@@ -17,7 +17,7 @@ use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::{Icon, Sizable, Size as KitSize};
 use gpui_kit::component::input::{Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, MoveDown, MoveUp, OutdentInline, Position, Textarea, TextareaState};
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis};
-use gpui_kit::component::text::TextView;
+use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -342,22 +342,23 @@ fn describe_step_raw(step: Option<&Item>) -> String {
         Some(Item::Tool { name, title, input, .. }) => {
             let desc = input.get("description").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
             let title = title.trim();
-            match name.as_str() {
-                "Read" => {
+            let lower = name.to_ascii_lowercase();
+            match lower.as_str() {
+                "read" | "ls" | "list" => {
                     let f = file_label(title);
                     if f.is_empty() { "Reading file".into() } else { format!("Reading {f}") }
                 }
-                "Edit" => {
+                "edit" | "multiedit" | "notebookedit" => {
                     let f = file_label(title);
                     if f.is_empty() { "Editing file".into() } else { format!("Editing {f}") }
                 }
-                "Write" => {
+                "write" => {
                     let f = file_label(title);
                     if f.is_empty() { "Writing file".into() } else { format!("Writing {f}") }
                 }
-                "Grep" => if title.is_empty() { "Searching files".into() } else { format!("Searching {}", truncate_chars(title, 36)) },
-                "Glob" => if title.is_empty() { "Finding files".into() } else { format!("Finding {}", truncate_chars(title, 36)) },
-                "Bash" => {
+                "grep" => if title.is_empty() { "Searching files".into() } else { format!("Searching {}", truncate_chars(title, 36)) },
+                "glob" | "find" => if title.is_empty() { "Finding files".into() } else { format!("Finding {}", truncate_chars(title, 36)) },
+                "bash" | "shell" | "powershell" => {
                     if !desc.is_empty() {
                         truncate_chars(desc, 48)
                     } else {
@@ -365,7 +366,7 @@ fn describe_step_raw(step: Option<&Item>) -> String {
                         if cmd.is_empty() { "Running command".into() } else { format!("Running {}", truncate_chars(cmd, 40)) }
                     }
                 }
-                "Agent" => {
+                "agent" | "task" => {
                     if !desc.is_empty() {
                         truncate_chars(desc, 48)
                     } else if !title.is_empty() {
@@ -374,12 +375,22 @@ fn describe_step_raw(step: Option<&Item>) -> String {
                         "Running subagent".into()
                     }
                 }
-                "WebSearch" => if title.is_empty() { "Searching the web".into() } else { format!("Searching web · {}", truncate_chars(title, 34)) },
-                "WebFetch" => {
+                "websearch" | "codesearch" => if title.is_empty() { "Searching the web".into() } else { format!("Searching web · {}", truncate_chars(title, 34)) },
+                "webfetch" | "fetch" => {
                     let h = host_label(title);
                     if h.is_empty() { "Fetching page".into() } else { format!("Fetching {h}") }
                 }
-                "TodoWrite" | "UpdatePlan" => "Updating plan".into(),
+                "todowrite" | "updateplan" | "todos" | "taskcreate" | "taskupdate" => "Updating plan".into(),
+                "askuserquestion" | "question" => "Asking a question".into(),
+                "exitplanmode" => "Presenting plan".into(),
+                "background" => if title.is_empty() { "Managing background task".into() } else { truncate_chars(title, 48) },
+                n if n.ends_with(" · visualize") || n == "visualize" => {
+                    if !title.is_empty() {
+                        format!("Visualizing {}", truncate_chars(title, 36))
+                    } else {
+                        "Creating visualization".into()
+                    }
+                }
                 _ => {
                     if !desc.is_empty() {
                         truncate_chars(desc, 48)
@@ -467,8 +478,10 @@ fn signature(item: &Item, env_flipped: &HashSet<String>, env_toggled: &HashMap<S
                 (now / 1000).hash(&mut h);
             }
         }
-        Item::Tool { output, ok, diff, ended, .. } => {
-            (output.len(), *ok, diff.as_ref().map(String::len), ended.is_some()).hash(&mut h);
+        Item::Tool { name, title, input, output, ok, diff, ended, .. } => {
+            let desc = input.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let input_keys = input.as_object().map_or(0, serde_json::Map::len);
+            (name.as_str(), title.as_str(), desc, input_keys, output.len(), *ok, diff.as_ref().map(String::len), ended.is_some()).hash(&mut h);
             if ended.is_none() {
                 (now / 1000).hash(&mut h);
             }
@@ -1228,10 +1241,19 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
     ))
 }
 
+/// Markdown tables in the app's palette: no fill of their own, the card edge, and a header tinted like hovered rows.
+pub(super) fn md_style(c: Colors) -> TextViewStyle {
+    let mut table = StyleRefinement::default().bg(gpui::transparent_black());
+    table.border_color = Some(c.edge);
+    let mut head = StyleRefinement::default().bg(c.hover).text_color(c.muted);
+    head.text.font_weight = Some(FontWeight::MEDIUM);
+    TextViewStyle::default().table(table).table_head(head)
+}
+
 fn text_row(env: &Env, key: &str, text: &str, _streaming: bool) -> AnyElement {
     let c = env.c;
     enter(env, key, div().w_full().py(px(if env.compact { 4.0 } else { 8.0 })).px_0p5().text_size(px(13.5 * env.scale)).line_height(relative(1.62)).text_color(c.fg)
-        .child(TextView::markdown(SharedString::from(format!("cw-md-{key}")), SharedString::from(crate::code::links::linkify(text, env.cwd.as_deref()))).selectable(true).on_link_click({
+        .child(TextView::markdown(SharedString::from(format!("cw-md-{key}")), SharedString::from(crate::code::links::linkify(text, env.cwd.as_deref()))).style(md_style(c)).selectable(true).on_link_click({
             let view = env.view.clone();
             move |href, _, _, cx| {
                 let href = href.to_string();
@@ -3211,6 +3233,23 @@ mod tests {
         assert_eq!(
             describe_step(Some(&Item::Tool { key: "t5".into(), name: "winfer · bg".into(), title: "start web-os static server".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
             "Start web-os static server"
+        );
+        // Streaming tool with empty title yet, lowercase backend names, and visualize / todos.
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t6".into(), name: "Write".into(), title: "".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Writing file"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t7".into(), name: "write".into(), title: "src/app.rs".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Writing app.rs"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t8".into(), name: "winfer · visualize".into(), title: "Perf Report".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Visualizing Perf Report"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t9".into(), name: "Todos".into(), title: "update todos".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Updating plan"
         );
     }
 

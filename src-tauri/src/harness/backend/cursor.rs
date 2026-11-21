@@ -521,7 +521,11 @@ impl Bridge {
                     }
                     self.emit(Ev::ReasoningDelta { id, text });
                 }
-                Some("completed") => self.reasoning = None,
+                Some("completed") => {
+                    if let Some(id) = self.reasoning.take() {
+                        self.emit(Ev::ReasoningEnd { id });
+                    }
+                }
                 _ => {}
             },
             "assistant" => {
