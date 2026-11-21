@@ -62,7 +62,8 @@ Done:
 - [x] Settings → winfer code → Local models (host, key, thinking levels and budgets, Test) and the local subagent model
 - [x] winfer code chat pane (the default; Settings → winfer code → "Use TUI style" brings the terminal UI back): transcript with markdown, tool rows and diffs, approvals and questions, plan, slash commands, `@` files, attachments, model/effort/mode pickers, sessions, usage, tasks, context meter. chat panes animate in (rows fade up, spinners, a working indicator, sheets); images open full size, links open in the browser or viewer, and file names in a reply's inline code open in the file viewer; the transcript is virtualized, so long sessions need no paging
 - [x] Live voice with an OpenAI API key: Realtime API over WebSocket (cpal audio), winfer's tools (registry, agent, browser, bg), HUD, mute; ⌘⌥V. Untested against the live API
-- [x] Updates: channel, check, What's new (GitHub releases tagged `native-v<version>`; it links to the download, no in-place install yet)
+- [x] Updates: Stable/Nebula channel, check, What's new, and install in place ("Install and restart"): the signed bundle
+  from `latest-native.json` replaces the running app (see Packaging)
 - [x] Settings: General, Theme, Agents, Data, Diagnostics, pane cost; shortcut editor in the shortcut sheet
 
 Partial:
@@ -71,12 +72,30 @@ Partial:
 
 Not started, roughly in priority order:
 
-- [ ] Windows and Linux installers (CI tests them; only the macOS .dmg is bundled)
-- [ ] Signing and notarization (the bundle is ad-hoc signed)
+- [ ] Windows and Linux installers (they ship as a portable `.exe` and a `.tar.gz` of the binary); a Windows icon and
+  code signing
 
 ## Packaging
 
-`native/scripts/bundle-macos.sh [target]` builds `target/bundle/winfer.app` and a `.dmg`. `.github/workflows/native.yml` runs the tests on macOS, Linux and Windows, and on a `native-v<version>` tag bundles both macOS architectures into a GitHub release (what the in-app update check reads).
+`native/scripts/bundle-{macos,windows,linux}.sh [target]` build into `target/bundle`:
+
+| Platform | Download | Update bundle |
+| --- | --- | --- |
+| macOS | `winfer-native-macos-<arch>.dmg` | `winfer-native-macos-<arch>.app.tar.gz` (winfer.app) |
+| Windows | `winfer-native-windows-x86_64.exe` (portable) | the same `.exe` |
+| Linux | `winfer-native-linux-x86_64.tar.gz` (the binary; needs WebKitGTK 4.1, GTK 3, ALSA) | the same `.tar.gz` |
+
+On macOS, `WINFER_SIGN_IDENTITY` signs with a Developer ID and the hardened runtime and `WINFER_NOTARIZE=1` notarizes
+and staples (see the script); otherwise the app is ad-hoc signed.
+
+`.github/workflows/native.yml` runs the tests on macOS, Linux and Windows. Releases come from `release.yml`: every Nebula
+(`vX.Y.Z-N`) and stable (`vX.Y.Z`) build of the Tauri app also bundles the native app of the same version into the
+same release (`native-bundle`), with the version stamped into `Cargo.toml`. `native-updater-json` signs the update
+bundles with the Tauri app's updater key and writes `latest-native.json`, the native app's feed, next to the Tauri
+app's `latest.json`: on the release itself (stable apps read the latest release's) and on the `nebula-channel` release
+(Nebula apps). `src/updates.rs` checks the channel's feed, verifies the bundle against `plugins.updater.pubkey` in
+`src-tauri/tauri.conf.json`, moves it in place of the running app (the `.app` on macOS, the executable elsewhere; it
+needs write access to that folder) and relaunches; the new copy waits for the old one to quit.
 
 ## Development aids (debug builds)
 

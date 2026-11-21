@@ -1,5 +1,6 @@
-//! The native build has no signed update feed of its own yet: the Tauri app's releases can't
-//! replace it, so a check always answers "nothing newer".
+//! Stand-in for `app_updates.rs`, the Tauri app's update check: its feed carries the Tauri app,
+//! which can't replace the native build, so a check always answers "nothing newer". The native
+//! build checks and installs its own feed (winfer-app's `updates.rs`).
 use tauri::{Manager, Runtime, Url, Webview};
 
 pub trait UpdaterExt {

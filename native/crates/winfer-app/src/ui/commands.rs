@@ -68,6 +68,7 @@ pub enum Command {
     LiveVoice,
     CheckUpdates,
     DownloadUpdate,
+    InstallUpdate,
     ShowReleaseNotes(bool),
     BrowserUndock,
     ToggleSidebar,
@@ -800,6 +801,7 @@ impl Root {
             C::LiveVoice => self.toggle_voice(window, cx),
             C::CheckUpdates => self.check_updates(false, cx),
             C::DownloadUpdate => self.download_update(cx),
+            C::InstallUpdate => self.install_update(cx),
             C::ShowReleaseNotes(available) => self.show_release_notes(available, cx),
             C::BrowserUndock => self.toggle_browser_window(window, cx),
             C::BrowserFocusUrl => {

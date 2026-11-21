@@ -1649,6 +1649,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-codecs"
+version = "1.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fd9f3db6f2cfef61c10613071955154ffdc9e515daebff26de4b54e35038fdd"
+
+[[package]]
 name = "ctor"
 version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4955,6 +4961,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "minisign"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aefd422a7a8b5efced01cd7cdf3771e62ebecbc90e3d27695002d3af6af94586"
+dependencies = [
+ "ct-codecs",
+ "getrandom 0.4.3",
+ "rpassword",
+ "scrypt",
+]
+
+[[package]]
+name = "minisign-verify"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f9645cb765ea72b8111f36c522475d2daa0d22c957a9826437e97534bc4e9e"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7136,6 +7160,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpassword"
+version = "7.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa2c5d9304b618df61ff17f3d3485c6e1854a3d94902a49abbb8d43dfbe0464"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rsqlite-vfs"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7143,6 +7178,16 @@ checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7393,6 +7438,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "salsa20"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7469,6 +7523,17 @@ dependencies = [
  "objc-foundation",
  "objc_id",
  "once_cell",
+]
+
+[[package]]
+name = "scrypt"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0516a385866c09368f0b5bcd1caff3366aace790fcd46e2bb032697bb172fd1f"
+dependencies = [
+ "pbkdf2",
+ "salsa20",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -10703,6 +10768,8 @@ dependencies = [
  "hayro",
  "image",
  "libc",
+ "minisign",
+ "minisign-verify",
  "openh264",
  "parking_lot",
  "rand 0.10.3",
@@ -10747,6 +10814,7 @@ dependencies = [
  "similar 3.2.1",
  "syntect",
  "tauri",
+ "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tauri-winrt-notification",
