@@ -410,6 +410,50 @@ fn link_target(href: &str, doc: &str) -> Option<(String, Option<usize>)> {
     Some((full.to_string_lossy().into_owned(), line))
 }
 
+/// Wraps link destinations that hold spaces or parentheses (`[a](file:///Dir (X)/a.rs)`) in `<…>`
+/// so the markdown parser reads them as links; fenced code is left alone.
+fn fix_link_destinations(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut fenced = false;
+    for line in src.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+            fenced = !fenced;
+        }
+        if fenced || !line.contains("](") {
+            out.push_str(line);
+            continue;
+        }
+        let mut rest = line;
+        while let Some(i) = rest.find("](") {
+            let (head, tail) = rest.split_at(i + 2);
+            out.push_str(head);
+            let mut depth = 1usize;
+            let end = tail.char_indices().find_map(|(j, ch)| {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 { return Some(j); }
+                    }
+                    _ => {}
+                }
+                None
+            });
+            match end {
+                Some(j) if !tail.starts_with('<') && !tail[..j].contains(['<', '>', '"', '\n']) && tail[..j].contains([' ', '(']) => {
+                    out.push('<');
+                    out.push_str(&tail[..j]);
+                    out.push('>');
+                    rest = &tail[j..];
+                }
+                _ => rest = tail,
+            }
+        }
+        out.push_str(rest);
+    }
+    out
+}
+
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -941,7 +985,7 @@ impl ViewerPanel {
             );
         if !alert.body.trim().is_empty() {
             inner = inner.child(
-                TextView::markdown(id, SharedString::from(alert.body))
+                TextView::markdown(id, SharedString::from(fix_link_destinations(&alert.body)))
                     .selectable(true)
                     .on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
                         Some((target, line)) => {
@@ -1227,7 +1271,7 @@ impl ViewerPanel {
                     cx,
                 )
             } else {
-                TextView::markdown(id, SharedString::from(block.source))
+                TextView::markdown(id, SharedString::from(fix_link_destinations(&block.source)))
                     .selectable(true)
                     .on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
                         Some((target, line)) => {
@@ -1576,7 +1620,13 @@ mod tests {
 
 #[cfg(test)]
 mod link_tests {
-    use super::link_target;
+    use super::{fix_link_destinations, link_target};
+
+    #[test]
+    fn wraps_destinations_with_spaces_and_parens() {
+        assert_eq!(fix_link_destinations("[a](file:///V/(D) E/a.rs): x [b](http://x.y)"), "[a](<file:///V/(D) E/a.rs>): x [b](http://x.y)");
+        assert_eq!(fix_link_destinations("```\n[a](b c)\n```\n"), "```\n[a](b c)\n```\n");
+    }
 
     #[test]
     fn resolves_links() {

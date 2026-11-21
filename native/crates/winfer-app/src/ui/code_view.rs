@@ -82,6 +82,8 @@ pub struct CodeView {
     flipped: HashSet<String>,
     toggled: HashMap<String, (u64, bool)>,
     toggle_seq: u64,
+    /// A card was opened at the bottom: scroll to the end once it is laid out so the whole body shows.
+    scroll_end_pending: bool,
     pane_size: Size<Pixels>,
     /// Ctrl/⌘ + wheel distance not yet turned into a text size step.
     zoom_accum: Pixels,
@@ -580,7 +582,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None, composer_rows: 3 }
+        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None, composer_rows: 3 }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -827,6 +829,8 @@ impl CodeView {
             self.flipped.insert(key.to_string());
         }
         let opening = !was_open;
+        let at_end = self.list.is_following_tail() || self.list.is_scrolled_to_end() == Some(true) || self.list.logical_scroll_top().item_ix >= self.list.item_count();
+        self.scroll_end_pending = opening && at_end;
         if opening {
             if let Some(handle) = self.wg_scrolls.borrow().get(key) {
                 handle.set_offset(point(px(0.0), px(0.0)));
@@ -1273,7 +1277,7 @@ fn reasoning_row(env: &Env, key: &str, text: &str, streaming: bool, started: u64
     let (view, k) = (env.view.clone(), key.to_string());
     let icon = Icon::new(IconName::Brain).size(px(13.0)).text_color(if streaming { c.accent } else { c.subtle });
     let name = div().text_size(env.small()).text_color(if streaming { c.accent } else { c.muted }).child(label);
-    let head = div().id(SharedString::from(format!("r-{key}"))).flex().items_center().gap_1p5().h(px(26.0)).px_1p5().ml(px(-6.0)).rounded_lg().cursor_pointer().hover(move |d| d.bg(c.hover))
+    let head = div().id(SharedString::from(format!("r-{key}"))).flex().items_center().gap_1p5().h(px(26.0)).px_1p5().rounded_lg().cursor_pointer().hover(move |d| d.bg(c.hover))
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
         })
@@ -2812,6 +2816,9 @@ impl Render for CodeView {
                 self.list.scroll_to_end();
             }
             self.last_user = last_user;
+        }
+        if std::mem::take(&mut self.scroll_end_pending) {
+            self.list.scroll_to_end();
         }
         let away = !items.is_empty() && !self.list.is_following_tail() && self.list.is_scrolled_to_end() == Some(false);
         let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0), height: self.pane_size.height / px(1.0) };
