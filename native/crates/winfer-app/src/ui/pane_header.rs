@@ -10,13 +10,7 @@ use crate::model::Overlay;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::tooltip::Tooltip;
 use serde_json::Value;
-use winfer_backend::{context_breakdown, usage as usage_backend, usage_history};
-
-/// Colour per part of the context (`src/features/usage/contextParts.ts`).
-const PART_COLORS: [(&str, &str); 10] = [
-    ("setup", "#8a94a8"), ("system", "#8a94a8"), ("tools", "#5b8def"), ("mcp", "#9b7bea"), ("instructions", "#c79a3e"),
-    ("messages", "#e5735a"), ("replies", "#d867a8"), ("thinking", "#a3b85a"), ("toolCalls", "#6dbf67"), ("toolResults", "#3fb5a3"),
-];
+use winfer_backend::{usage as usage_backend, usage_history};
 
 #[derive(Clone, Debug)]
 pub(super) struct BgTask {
@@ -63,32 +57,7 @@ pub(super) struct PaneMeters {
     /// Logged spend by worktree folder and by agent session.
     pub by_dir: HashMap<String, Value>,
     pub by_session: HashMap<String, Value>,
-    /// The context card's breakdown and the reading it belongs to.
-    breakdown: HashMap<String, (f64, Option<Vec<Value>>)>,
-    hovered: Option<String>,
     seconds: u64,
-}
-
-/// "84k", "1.2M".
-pub fn short_tokens(n: f64) -> String {
-    if n >= 1_000_000.0 {
-        format!("{:.1}M", n / 1_000_000.0)
-    } else if n >= 1000.0 {
-        format!("{}k", (n / 1000.0).round())
-    } else {
-        format!("{n}")
-    }
-}
-
-/// Context colour: fine until it gets full enough for the agent to start compacting.
-fn context_color(used: f64, c: &Colors) -> Hsla {
-    if used >= 85.0 {
-        c.danger
-    } else if used >= 60.0 {
-        c.warning
-    } else {
-        c.accent
-    }
 }
 
 /// "Opus 5.5: $1.20 · 1.4M tokens" lines, for a tooltip.
@@ -100,6 +69,37 @@ pub fn cost_breakdown(usage: &Value, place: &str) -> String {
         lines.push(format!("{}: {cost} · {} tokens", m["model"].as_str().unwrap_or_default(), format_tokens(tokens)));
     }
     lines.join("\n")
+}
+
+/// A ring filling clockwise with the used share of the context window and its percent inside.
+pub(crate) fn context_ring(fraction: f64, color: Hsla, text: Hsla, size: f32, mono: SharedString, c: Colors) -> Div {
+    let fraction = fraction.clamp(0.0, 1.0) as f32;
+    let track = c.border_strong;
+    let stroke = (size / 10.0).max(2.0);
+    let arcs = canvas(|_, _, _| {}, move |bounds, _, window, _| {
+        let center = bounds.center();
+        let radius = (bounds.size.width.min(bounds.size.height) - px(stroke)) / 2.0;
+        // The track (a full circle), then the used arc from 12 o'clock, clockwise.
+        let mut arc = |to: f32, color: Hsla| {
+            let steps = ((to * 64.0).ceil() as usize).max(2);
+            let mut path = PathBuilder::stroke(px(stroke));
+            for i in 0..=steps {
+                let angle = to * i as f32 / steps as f32 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                let p = point(center.x + radius * angle.cos(), center.y + radius * angle.sin());
+                if i == 0 { path.move_to(p) } else { path.line_to(p) }
+            }
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        };
+        arc(1.0, track);
+        if fraction > 0.0 {
+            arc(fraction, color);
+        }
+    }).absolute().size_full();
+    div().relative().size(px(size)).flex_shrink_0().flex().items_center().justify_center()
+        .child(arcs)
+        .child(div().font_family(mono).text_size(px(size / 3.0)).font_weight(FontWeight::SEMIBOLD).text_color(text).child(format!("{}%", (fraction * 100.0).round())))
 }
 
 fn norm_dir(dir: &str) -> String {
@@ -199,108 +199,6 @@ impl Root {
         .detach();
     }
 
-    fn load_breakdown(&mut self, pane: &Pane, cx: &mut Context<Self>) {
-        let Some(context) = self.meters.context.get(&pane.id).cloned() else { return };
-        let at = context["at"].as_f64().unwrap_or(0.0);
-        if self.meters.breakdown.get(&pane.id).is_some_and(|(a, _)| *a == at) {
-            return;
-        }
-        let Some(source) = context["source"].as_str().map(str::to_string) else {
-            self.meters.breakdown.insert(pane.id.clone(), (at, None));
-            return;
-        };
-        let provider = context["provider"].as_str().unwrap_or(&pane.provider).to_string();
-        let tokens = context["tokens"].as_u64().unwrap_or(0);
-        let id = pane.id.clone();
-        cx.spawn(async move |this, cx| {
-            let parts = tauri::async_runtime::spawn(context_breakdown::usage_context_breakdown(provider, source, tokens)).await.ok().flatten();
-            let parts = parts.and_then(|p| serde_json::to_value(p).ok()).and_then(|v| v.as_array().cloned());
-            let _ = this.update(cx, |this, cx| {
-                this.meters.breakdown.insert(id, (at, parts));
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn context_meter(&self, pane: &Pane, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let context = self.meters.context.get(&pane.id)?;
-        let used = context["usedPercent"].as_f64().unwrap_or(0.0).clamp(0.0, 100.0);
-        let color = context_color(used, &c);
-        let p = pane.clone();
-        let id = pane.id.clone();
-        let mono = crate::fonts::mono(cx);
-        let ring_bg = Hsla { a: 0.18, ..color };
-        let bar = div().size(px(12.0)).flex_shrink_0().rounded_full().border_2().border_color(color).bg(ring_bg);
-        Some(
-            div().id(SharedString::from(format!("context-{}", pane.id))).relative().flex().flex_shrink_0().items_center().gap_1p5()
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    this.meters.hovered = hovered.then(|| id.clone());
-                    if *hovered {
-                        this.load_breakdown(&p, cx);
-                    }
-                    cx.notify();
-                }))
-                .child(bar)
-                .child(div().font_family(mono).text_size(px(10.5)).text_color(if used >= 60.0 { color } else { c.fg }).child(format!("{}%", used.round())))
-                .when(self.meters.hovered.as_deref() == Some(&pane.id), |d| d.child(deferred(self.context_card(pane, c)).with_priority(10)))
-                .into_any_element(),
-        )
-    }
-
-    /// The card under the context meter: what fills the window.
-    fn context_card(&self, pane: &Pane, c: Colors) -> Div {
-        let context = &self.meters.context[&pane.id];
-        let (tokens, window) = (context["tokens"].as_f64().unwrap_or(0.0), context["window"].as_f64().unwrap_or(0.0));
-        let used = context["usedPercent"].as_f64().unwrap_or(0.0).clamp(0.0, 100.0);
-        let free = (window - tokens).max(0.0);
-        let pct = |n: f64| if window > 0.0 { n * 100.0 / window } else { 0.0 };
-        let at = context["at"].as_f64().unwrap_or(0.0);
-        let parts = self.meters.breakdown.get(&pane.id).filter(|(a, _)| *a == at).map(|(_, p)| p.clone());
-        let color_of = |kind: &str| PART_COLORS.iter().find(|(k, _)| *k == kind).map_or(c.subtle, |(_, hex)| theme::hex(hex));
-        let row = |color: Option<Hsla>, label: String, n: f64, nested: bool, muted: bool| {
-            let p = pct(n);
-            div().flex().items_center().gap_2().text_size(px(if nested { 10.0 } else { 11.0 })).when(nested, |d| d.pl_4())
-                .child(match color {
-                    Some(col) if !nested => div().size_2().flex_shrink_0().rounded_sm().bg(col),
-                    _ => div().w_2().flex_shrink_0().text_center().text_color(c.subtle).child(if nested { "·" } else { "" }),
-                })
-                .child(div().flex_1().truncate().text_color(if muted { c.subtle } else { c.muted }).child(label))
-                .child(div().text_color(c.fg).child(short_tokens(n)))
-                .child(div().w(px(40.0)).text_right().text_color(c.subtle).child(if p < 1.0 && n > 0.0 { "<1%".to_string() } else { format!("{}%", p.round()) }))
-        };
-        let mut bar = div().flex().h(px(5.0)).overflow_hidden().rounded_full().bg(c.hover);
-        let mut body = div().flex().flex_col().gap_1();
-        match &parts {
-            Some(Some(list)) if !list.is_empty() => {
-                for part in list {
-                    let n = part["tokens"].as_f64().unwrap_or(0.0);
-                    let col = color_of(part["kind"].as_str().unwrap_or_default());
-                    bar = bar.child(div().h_full().bg(col).w(relative((pct(n) / 100.0) as f32)));
-                    body = body.child(row(Some(col), part["label"].as_str().unwrap_or_default().to_string(), n, false, false));
-                    for source in part["sources"].as_array().into_iter().flatten() {
-                        body = body.child(row(None, source["label"].as_str().unwrap_or_default().to_string(), source["tokens"].as_f64().unwrap_or(0.0), true, false));
-                    }
-                }
-                body = body.child(row(Some(c.hover), "Free space".into(), free, false, true)).child(div().pt_1().text_size(px(10.0)).text_color(c.subtle).child("Estimated from the session's conversation."));
-            }
-            Some(_) => {
-                bar = bar.child(div().h_full().bg(context_color(used, &c)).w(relative((used / 100.0) as f32)));
-                body = body.child(div().text_size(px(11.0)).text_color(c.subtle).child(format!("{} tokens free. No breakdown for this session.", short_tokens(free))));
-            }
-            None => {
-                bar = bar.child(div().h_full().bg(context_color(used, &c)).w(relative((used / 100.0) as f32)));
-                body = body.child(div().text_size(px(11.0)).text_color(c.subtle).child("Reading the session…"));
-            }
-        }
-        div().absolute().top(px(22.0)).right_0().w(px(300.0)).flex().flex_col().gap_2p5().rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_3()
-            .child(div().flex().items_baseline().gap_2().text_xs()
-                .child(div().flex_1().text_color(c.fg).child("Context"))
-                .child(div().text_size(px(11.0)).text_color(c.muted).child(format!("{} / {} · {}%", short_tokens(tokens), short_tokens(window), used.round()))))
-            .child(bar)
-            .child(body)
-    }
-
     /// A pane's cost in its header, when turned on in Settings → Usage.
     fn pane_cost(&self, pane: &Pane, c: Colors, cx: &App) -> Option<AnyElement> {
         if !self.state.read(cx).show_pane_cost {
@@ -351,7 +249,10 @@ impl Root {
     fn header_menu(&self, pane: &Pane) -> Vec<MenuItem> {
         let target = PaneRef::Id(pane.id.clone());
         let rename = pane.id.clone();
-        let mut items = vec![MenuItem::run("Rename…", move |this, window, cx| this.start_rename(&rename, window, cx))];
+        let mut items = vec![MenuItem::run("Rename…", move |this, window, cx| {
+            this.start_rename(&rename, window, cx);
+            this.sidebar.rename_in_header = true;
+        })];
         if let Some(wt) = &pane.worktree {
             let path = wt.path.clone();
             items.push(MenuItem::command("Show changes", Command::ShowChanges(target.clone())));
@@ -365,6 +266,12 @@ impl Root {
             items.push(MenuItem::command("Restore from archive", Command::Archive { target: target.clone(), restore: true }));
         } else {
             items.push(MenuItem::command("Zoom", Command::Zoom(target.clone())));
+            items.push(MenuItem::commands("Split right", vec![Command::Focus(target.clone()), Command::Split { dir: crate::model::layout::SplitDir::Row }]));
+            let note = pane.id.clone();
+            items.push(MenuItem::run("Pane note…", move |this, window, cx| {
+                let at = window.mouse_position();
+                this.toggle_pane_note(&note, at, window, cx)
+            }));
             items.push(MenuItem::command("Archive", Command::Archive { target: target.clone(), restore: false }));
         }
         items.push(MenuItem::command("Close", Command::Close(target)));
@@ -375,8 +282,11 @@ impl Root {
     /// left, and right edges of the pane. Left: provider badge + live status dot and a two-line
     /// identity/metadata stack. Right: live bg tasks, dev server launch, unified telemetry pill,
     /// divider, and action icons.
-    pub(super) fn render_header(&self, pane: &Pane, index: usize, zoomed: bool, c: &Colors, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_header(&self, pane: &Pane, width: f32, zoomed: bool, c: &Colors, cx: &mut Context<Self>) -> AnyElement {
         let c = *c;
+        // Collapse by pane width: <340 secondary actions go to the "…" menu, <230 the title and the
+        // rest of the actions too, <150 nothing more: avatar, "…" and close stay.
+        let (compact, narrow) = (width < 340.0, width < 230.0);
         let s = self.state.read(cx);
         let label = s.pane_label(pane);
         let name = s.provider_name(&pane.provider);
@@ -389,7 +299,7 @@ impl Root {
         let id = pane.id.clone();
         let target = PaneRef::Id(id.clone());
         let status = pane.status;
-        let renaming = self.sidebar.renaming.as_ref().filter(|(r, _)| *r == pane.id).map(|(_, i)| i.clone());
+        let renaming = self.sidebar.renaming.as_ref().filter(|(r, _)| *r == pane.id && self.sidebar.rename_in_header).map(|(_, i)| i.clone());
         let title_tip = format!("{}\nDouble-click to rename", if label == name { name.clone() } else { format!("{name}: {label}") });
         let rename_id = id.clone();
         let title = match renaming {
@@ -400,9 +310,10 @@ impl Root {
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     if e.click_count() == 2 {
                         this.start_rename(&rename_id, window, cx);
+                        this.sidebar.rename_in_header = true;
                     }
                 }))
-                .child(label.clone())
+                .child(super::title_swap::title("head", &id, &label))
                 .into_any_element(),
         };
         let button = move |key: String, icon: IconName, tip: String| {
@@ -413,8 +324,7 @@ impl Root {
                 .child(Icon::new(icon).size(px(13.0)))
         };
         let pill_bg = if c.light { Hsla { a: 0.055, ..c.fg } } else { Hsla { a: 0.07, ..c.fg } };
-        let context = self.context_meter(pane, c, cx);
-        let cost = self.pane_cost(pane, c, cx);
+        let cost = if compact { None } else { self.pane_cost(pane, c, cx) };
         let branch = pane.worktree.as_ref().map(|t| (t.branch.trim_start_matches("winfer/").to_string(), t.path.clone()));
         let (t1, t2, t3, t4, t5, t6, t7) = (target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone());
         let menu_pane = pane.clone();
@@ -480,7 +390,7 @@ impl Root {
         } else {
             let note_pane = id.clone();
             let has_note = self.state.read(cx).pane_notes.contains_key(&id);
-            vec![
+            let mut v = vec![
                 button(format!("note-{id}"), IconName::StickyNote, if has_note { "Edit pane note".into() } else { "Add pane note".into() })
                     .when(has_note, |d| d.text_color(c.accent))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| this.toggle_pane_note(&note_pane, e.position(), window, cx))).into_any_element(),
@@ -493,7 +403,11 @@ impl Root {
                         this.execute(Command::Focus(t6.clone()), window, cx);
                         this.execute(Command::Split { dir: crate::model::layout::SplitDir::Row }, window, cx);
                     })).into_any_element(),
-            ]
+            ];
+            // The last two go first, then archive and the note: the order the width asks for.
+            if narrow { v.drain(2..); }
+            if compact { v.drain(..v.len().min(2)); }
+            v
         };
         let close = div().id(SharedString::from(format!("close-{id}"))).size(px(24.0)).flex().items_center().justify_center().rounded_md().text_color(c.subtle).cursor_pointer()
             .hover(move |d| d.bg(Hsla { a: 0.14, ..c.danger }).text_color(c.danger))
@@ -538,13 +452,7 @@ impl Root {
                 .child(branch_el)
                 .children(model_el),
         };
-        let telemetry = (cost.is_some() || context.is_some()).then(|| {
-            let has_both = cost.is_some() && context.is_some();
-            div().flex().flex_shrink_0().items_center().gap_1p5().h(px(24.0)).px_2().rounded_full().bg(pill_bg)
-                .children(cost)
-                .when(has_both, |d| d.child(div().text_size(px(10.0)).text_color(Hsla { a: 0.45, ..c.subtle }).child("·")))
-                .children(context)
-        });
+        let telemetry = cost.map(|cost| div().flex().flex_shrink_0().items_center().h(px(24.0)).px_2().rounded_full().bg(pill_bg).child(cost));
         let island_shadow = if c.light {
             vec![
                 BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.10), offset: point(px(0.0), px(6.0)), blur_radius: px(16.0), spread_radius: px(-6.0), inset: false },
@@ -606,15 +514,9 @@ impl Root {
             // Center: Identity two-line stack (#index + title, then branch/model/alert)
             .child(
                 div().flex_1().min_w_0().flex().flex_col().gap(px(2.0))
+                    .when(narrow, |d| d.invisible().w(px(0.0)))
                     .child(
                         div().flex().min_w_0().items_center().gap_1p5()
-                            .child(
-                                div().flex_shrink_0().rounded(px(4.0)).px(px(4.5)).py(px(0.5))
-                                    .bg(if focused { Hsla { a: 0.15, ..c.accent } } else { pill_bg })
-                                    .font_family(mono.clone()).text_size(px(10.0)).font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(if focused { c.accent } else { c.subtle })
-                                    .child(index.to_string()),
-                            )
                             .child(title),
                     )
                     .child(meta_row),
@@ -625,7 +527,7 @@ impl Root {
                     .children(bg_chip)
                     .children(url_el)
                     .children(telemetry)
-                    .child(div().w(px(1.0)).h(px(16.0)).bg(c.border))
+                    .when(!narrow, |d| d.child(div().w(px(1.0)).h(px(16.0)).bg(c.border)))
                     .child(
                         div().flex().flex_shrink_0().items_center().gap(px(1.0))
                             .when(!focused, |d| d.opacity(0.48).group_hover(group_id, |d| d.opacity(1.0)))
@@ -929,16 +831,9 @@ impl Root {
 
 #[cfg(test)]
 mod tests {
-    use super::{cost_breakdown, pane_header_cursor, short_tokens};
+    use super::{cost_breakdown, pane_header_cursor};
     use gpui_kit::CursorStyle;
     use serde_json::json;
-
-    #[test]
-    fn short_token_counts() {
-        assert_eq!(short_tokens(950.0), "950");
-        assert_eq!(short_tokens(84_200.0), "84k");
-        assert_eq!(short_tokens(1_240_000.0), "1.2M");
-    }
 
     #[test]
     fn cost_tooltips_list_models() {

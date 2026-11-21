@@ -50,10 +50,12 @@ mod progress;
 mod plugins;
 #[path = "menu.rs"]
 mod menu;
+#[path = "title_swap.rs"]
+mod title_swap;
 #[path = "sidebar.rs"]
 mod sidebar;
 #[path = "pane_header.rs"]
-mod pane_header;
+pub(super) mod pane_header;
 #[path = "worktrees.rs"]
 mod worktrees;
 #[path = "accounts.rs"]
@@ -1246,7 +1248,7 @@ impl Root {
 
 
 
-    fn render_pane(&mut self, pane: &Pane, index: usize, zoomed: bool, bounds: Bounds<Pixels>, origin: Point<Pixels>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_pane(&mut self, pane: &Pane, _index: usize, zoomed: bool, bounds: Bounds<Pixels>, origin: Point<Pixels>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let code = if self.uses_code(&pane.provider, &pane.id, cx) { self.code_view(&pane.id, window, cx) } else { None };
         let is_code = code.is_some();
         let sky = code.as_ref().map(|view| {
@@ -1261,7 +1263,7 @@ impl Root {
             Some(view) => view.into_any_element(),
             None => self.terminal(&pane.id, cx).into_any_element(),
         };
-        let header = self.render_header(pane, index, zoomed, c, cx);
+        let header = self.render_header(pane, bounds.size.width / px(1.0), zoomed, c, cx);
         let search = if is_code { None } else { self.render_search(&pane.id, *c, cx) };
         let s = self.state.read(cx);
         let starting = s.starting.get(&pane.id).map(|p| if *p == "worktree" { "Creating worktree…".to_string() } else { format!("Starting {}…", s.provider_name(&pane.provider)) });

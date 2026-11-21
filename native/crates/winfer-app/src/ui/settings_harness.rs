@@ -611,7 +611,7 @@ impl Root {
 }
 
 fn cx_scale(scale: f64, by: f64) -> f64 {
-    (((scale + by).clamp(0.8, 1.5) / 0.05).round() * 0.05 * 100.0).round() / 100.0
+    crate::ui::code_view::text_scale_step(scale, by)
 }
 
 #[cfg(test)]

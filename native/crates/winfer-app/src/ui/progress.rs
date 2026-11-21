@@ -140,6 +140,7 @@ impl Root {
                 // A title restored from the resumed session meanwhile wins.
                 this.update_state(cx, |s| {
                     if s.progress.get(&id).is_some_and(|p| p.title.is_none()) {
+                        super::title_swap::arm(&id, &title);
                         s.patch_progress(&id, |p| p.title = Some(title.clone()));
                     }
                 });

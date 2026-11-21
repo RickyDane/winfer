@@ -78,6 +78,8 @@ pub struct CodeView {
     toggled: HashMap<String, (u64, bool)>,
     toggle_seq: u64,
     pane_size: Size<Pixels>,
+    /// Ctrl/⌘ + wheel distance not yet turned into a text size step.
+    zoom_accum: Pixels,
     images: Rc<RefCell<HashMap<String, Vec<Arc<Image>>>>>,
     popup: usize,
     popup_scroll: ScrollHandle,
@@ -94,6 +96,8 @@ pub struct CodeView {
     preview: Option<Arc<Image>>,
     /// Key of the newest user message; a new one snaps the transcript back to the bottom.
     last_user: Option<String>,
+    /// Row cap the composer currently grows to (follows the pane height).
+    composer_rows: usize,
 }
 
 /// A link clicked in the transcript: a web address or a file path (with `:line`).
@@ -105,6 +109,11 @@ impl Focusable for CodeView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.read(cx).focus_handle(cx)
     }
+}
+
+/// winfer code's text scale moved by `by`, clamped to 80–150% and rounded to 5% steps.
+pub(crate) fn text_scale_step(scale: f64, by: f64) -> f64 {
+    (((scale + by).clamp(0.8, 1.5) / 0.05).round() * 0.05 * 100.0).round() / 100.0
 }
 
 pub(super) fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
@@ -545,7 +554,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), images: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None }
+        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None, composer_rows: 3 }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -913,6 +922,30 @@ impl CodeView {
         let get = |k: &str, d: bool| s.rest.get("codeWeb").and_then(|v| v[k].as_bool()).unwrap_or(d);
         let scale = s.rest.get("codeWeb").and_then(|v| v["textScale"].as_f64()).unwrap_or(1.0) as f32;
         (scale, get("compact", false), get("expandThinking", false), get("expandShell", false), get("showCost", true), get("showContext", true), get("showRate", true), get("showPlan", true))
+    }
+
+    /// Steps `codeWeb.textScale` (Settings → winfer code → Text size) by 5% per wheel notch.
+    fn zoom_by_wheel(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+        const NOTCH: f32 = 20.0;
+        self.zoom_accum += delta;
+        let steps = (self.zoom_accum / px(NOTCH)).trunc();
+        if steps == 0.0 {
+            return;
+        }
+        self.zoom_accum -= px(steps * NOTCH);
+        let scale = self.prefs(cx).0 as f64;
+        let next = text_scale_step(scale, steps as f64 * 0.05);
+        if next == scale {
+            return;
+        }
+        self.app.update(cx, |s, cx| {
+            let entry = s.rest.entry("codeWeb".to_string()).or_insert_with(|| serde_json::json!({}));
+            if !entry.is_object() {
+                *entry = serde_json::json!({});
+            }
+            entry["textScale"] = serde_json::json!(next);
+            cx.notify();
+        });
     }
 
     fn compact_tools(&self, cx: &App) -> bool {
@@ -2452,6 +2485,13 @@ impl CodeView {
         // Composer text follows the web UI text scale (Settings → winfer code), like the transcript.
         let scale = self.prefs(cx).0;
         // Textarea sizes its own text from `Size` (Size::Size(s) renders at s * 0.875), so the parent's text size is ignored.
+        // Cap the rows to what the pane fits instead of clipping a taller textarea: a clipped third row
+        // can't be scrolled to (the textarea itself isn't overflowing).
+        let rows = if lay.ultra_v { 1 } else if lay.compact_v { 2 } else { 3 };
+        if rows != self.composer_rows {
+            self.composer_rows = rows;
+            self.input.update(cx, |s, cx| s.set_auto_grow(1, rows, cx));
+        }
         let composer_input = Textarea::new(&self.input).with_size(KitSize::Size(px(13.5 * scale / 0.875))).appearance(false).on_paste(move |item, _, cx| {
             view_for_paste.update(cx, |this, cx| this.paste_clipboard_item(item, cx))
         });
@@ -2474,12 +2514,12 @@ impl CodeView {
             let clip_sz = if lay.ultra_v { 13.0 } else { 15.0 };
             let input_pl = px((6.0 + (attach_sz - clip_sz) / 2.0 - 10.0f32).max(0.0) + EXTRA);
             // The textarea's own 8px plus the line's leading already roughly matches the left
-            // inset, so the top gets the same extra room plus 2px to look even.
-            let input_wrap = div().pl(input_pl).pt(px(EXTRA + 2.0));
+            // inset, so the top gets the same extra room plus 5px to look even.
+            let input_wrap = div().pl(input_pl).pt(px(EXTRA + 5.0));
             let input_wrap = if lay.ultra_v {
-                input_wrap.pr_2p5().pb_0p5().max_h(px(48.0)).overflow_hidden()
+                input_wrap.pr_2p5().pb_0p5()
             } else if lay.compact_v {
-                input_wrap.pr_2p5().pb_0p5().max_h(px(96.0)).overflow_hidden()
+                input_wrap.pr_2p5().pb_0p5()
             } else {
                 input_wrap.pr_3().pb_1()
             };
@@ -2521,9 +2561,12 @@ impl CodeView {
                                 d.when_some(done_rate, |d, r| d.child(div().font_family(mono.clone()).text_size(px(10.5)).child(format!("{r:.0} t/s"))))
                             })
                             .when(show_cost && lay.show_cost, |d| d.when_some(cost, |d, cost| d.child(format!("${cost:.2}"))))
-                            .when(show_context, |d| d
-                                .when(lay.show_meter, |d| d.child(div().w(px(40.0)).h(px(3.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))))
-                                .child(format!("{}%", (pct * 100.0).round()))),
+                            .when(show_context, |d| d.child(super::root::pane_header::context_ring(
+                                pct as f64,
+                                if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent },
+                                if pct > 0.65 { if pct > 0.85 { c.danger } else { c.warning } } else { c.fg },
+                                22.0, mono.clone(), c,
+                            ))),
                     )
                 });
             let toolbar = div().flex().items_end().gap_0p5().px_1p5().h(px(bar_h))
@@ -2655,6 +2698,7 @@ impl Render for CodeView {
         let sheet_el = sheet.filter(|s| !matches!(s, Sheet::Model | Sheet::Effort | Sheet::Mode)).map(|s| self.render_sheet(s, c, mono.clone(), window, cx));
         let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().border_1().border_color(alpha(c.danger, 0.5)).bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
         let view_for_size = cx.entity();
+        let view_for_zoom = cx.entity();
         let measure = canvas(
             move |bounds, _, cx| {
                 view_for_size.update(cx, |this, cx| {
@@ -2672,7 +2716,17 @@ impl Render for CodeView {
                     }
                 });
             },
-            |_, _, _, _| {},
+            move |bounds, _, window, _| {
+                // Ctrl/⌘ + wheel steps the text size; capture phase so the transcript doesn't scroll.
+                let view = view_for_zoom.clone();
+                window.on_mouse_event(move |e: &ScrollEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture || !(e.modifiers.control || e.modifiers.platform) || !bounds.contains(&e.position) {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    view.update(cx, |this, cx| this.zoom_by_wheel(e.delta.pixel_delta(px(20.0)).y, cx));
+                });
+            },
         )
         .absolute()
         .size_full();

@@ -36,6 +36,8 @@ impl Render for DraggedRow {
 #[derive(Default)]
 pub(super) struct SidebarUi {
     pub renaming: Option<(String, Entity<InputState>)>,
+    /// The rename field is drawn in the pane header, not the sidebar row (never both: one input can't be focused twice in a frame).
+    pub rename_in_header: bool,
     show_archived: HashSet<String>,
     feed_expanded: bool,
     listings: HashMap<String, Option<Vec<Value>>>,
@@ -175,6 +177,7 @@ impl Root {
             i.select_all(window, cx);
         });
         self.sidebar.renaming = Some((id.to_string(), input));
+        self.sidebar.rename_in_header = false;
         cx.notify();
     }
 
@@ -329,7 +332,7 @@ impl Root {
         let branch = pane.worktree.as_ref().map(|t| t.branch.trim_start_matches("winfer/").to_string());
         let doing = if pane.status == AgentStatus::NeedsInput { Some("Needs your input".to_string()) } else { s.progress.get(&pane.id).and_then(|e| e.step.clone()) };
         let tooltip = self.pane_tooltip(pane, cx);
-        let renaming = self.sidebar.renaming.as_ref().filter(|(id, _)| *id == pane.id).map(|(_, input)| input.clone());
+        let renaming = self.sidebar.renaming.as_ref().filter(|(id, _)| *id == pane.id && !self.sidebar.rename_in_header).map(|(_, input)| input.clone());
         let status = pane.status;
         let (focus, menu_pane, rename, hover_dir) = (pane.id.clone(), pane.clone(), pane.id.clone(), pane.cwd.clone());
         let mono = crate::fonts::mono(cx);
@@ -383,7 +386,7 @@ impl Root {
                     .child(div().flex().items_center().gap_1p5()
                         .child(match renaming {
                             Some(input) => div().flex_1().child(Input::new(&input)).into_any_element(),
-                            None => div().flex_1().min_w_0().truncate().when(emphasized, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM)).child(label).into_any_element(),
+                            None => div().flex_1().min_w_0().truncate().when(emphasized, |d| d.text_color(c.fg).font_weight(FontWeight::MEDIUM)).child(super::title_swap::title("side", &pane.id, &label)).into_any_element(),
                         })
                         .when_some(meta, |d, (text, color)| d.child(div().flex_shrink_0().text_size(px(10.5)).text_color(color).when(percent.is_some() && status == AgentStatus::Working, |d| d.font_family(mono.clone())).child(text))))
                     .when(branch.is_some() || doing.is_some(), |d| d.child(detail)),

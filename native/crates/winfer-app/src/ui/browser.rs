@@ -1122,7 +1122,7 @@ impl BrowserPanel {
 
     /// Browser-style tabs with darker tab surfaces and subtle elevation shadows; tabs an agent is
     /// using carry a small agent badge next to their page icon.
-    fn render_tabs(&mut self, c: Colors, dark: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_tabs(&mut self, c: Colors, dark: bool, theme_id: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Clipped at the strip's bottom edge so tab shadows never spill onto the toolbar below.
         let mut strip = div().flex().items_end().gap_1().px_2().pt_2().overflow_hidden();
         let workspace = self.workspace.clone().unwrap_or_default();
@@ -1145,7 +1145,9 @@ impl BrowserPanel {
         let active_shadow = if c.light {
             vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.14), offset: point(px(0.0), px(0.0)), blur_radius: px(3.0), spread_radius: px(0.0), inset: false }]
         } else {
-            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.8), offset: point(px(0.0), px(0.0)), blur_radius: px(5.0), spread_radius: px(0.0), inset: false }]
+            // Gruvbox Dark's warm panels make the full-strength shadow look heavy.
+            let alpha = if theme_id == "gruvbox-dark" { 0.4 } else { 0.8 };
+            vec![BoxShadow { color: hsla(0.0, 0.0, 0.0, alpha), offset: point(px(0.0), px(0.0)), blur_radius: px(5.0), spread_radius: px(0.0), inset: false }]
         };
         // Inactive tabs get a lighter shadow in light mode.
         let idle_shadow = if c.light {
@@ -1488,7 +1490,7 @@ impl Render for BrowserPanel {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_tabs(c, dark, cx))
+            .child(self.render_tabs(c, dark, &theme_id, cx))
             .child(self.render_toolbar(c, cx))
             .children(self.render_agent_bar(c))
             .when(certs_off || self.cert_prompt, |d| d.child(
