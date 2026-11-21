@@ -686,7 +686,8 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
         let request = json!({
             "paneId": pane.id, "providerId": pane.provider, "cwd": pane.cwd, "workspaceId": pane.workspace_id,
             "resume": pane.resume, "session": if pane.resume { pane.session_id.clone() } else { None },
-            "prompt": pane.prompt, "model": pane.model, "effort": pane.effort, "autoApprove": settings.auto_approve,
+            // Pasted images go through the session itself (see CodeModel::new), not the start prompt.
+            "prompt": if pane.attachments.is_empty() { pane.prompt.clone() } else { None }, "model": pane.model, "effort": pane.effort, "autoApprove": settings.auto_approve,
             "systemPrompt": settings.system_prompt, "plain": pane.plain, "lean": settings.lean,
             "hiddenTools": settings.hidden_tools, "account": pane.account_id, "cols": size.cols, "rows": size.rows,
             "serve": session.is_code(),
@@ -710,7 +711,7 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
             Ok(result) => {
                 let pid = serde_json::to_value(&result).ok().and_then(|v| v["pid"].as_u64()).map(|p| p as u32);
                 *session.pid.lock() = Some(pid);
-                let busy = pane.provider != "shell" && !pane.resume && pane.prompt.as_ref().is_some_and(|p| !p.trim().is_empty());
+                let busy = pane.provider != "shell" && !pane.resume && pane.attachments.is_empty() && pane.prompt.as_ref().is_some_and(|p| !p.trim().is_empty());
                 let task = if busy { pane.prompt.clone() } else { None };
                 let _ = events.try_send(Event::Spawned { pane_id: id, busy, task });
                 let early: Vec<_> = std::mem::take(&mut *session.early_exits.lock());

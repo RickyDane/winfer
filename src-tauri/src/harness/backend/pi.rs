@@ -591,6 +591,8 @@ fn risk(name: &str, input: &Value) -> Risk {
         "codemode" => Risk::Read,
         "edit" | "write" => Risk::Edit,
         n if is_bg(n) => tools::risk("bg", input),
+        // Only draws what it is given in the chat.
+        n if n.starts_with("mcp__winfer") && crate::viz::is_visualize(n) => Risk::Read,
         _ => Risk::Exec,
     }
 }

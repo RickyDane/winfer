@@ -8,7 +8,7 @@ use crate::terminal::SESSIONS;
 use crate::theme::{self, Colors};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::input::{Editor, EditorState, Position};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
@@ -17,17 +17,11 @@ use regex::Regex;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::SyntaxSet;
 use winfer_backend::files;
 
 const IMAGE: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
 const POLL: Duration = Duration::from_millis(1500);
-const MAX_HIGHLIGHT: usize = 600_000;
 
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
-static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--\s*@([\w.-]+):\s*(.*?)\s*-->").unwrap());
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,11 +208,24 @@ fn expand(path: &str) -> String {
 }
 
 fn extension(path: &str) -> String {
-    path.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_lowercase())
+    file_name(path).rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map_or(String::new(), |(_, e)| e.to_lowercase())
 }
 
 fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+fn language_for(path: &str) -> String {
+    let name = file_name(path);
+    match name {
+        "Makefile" | "makefile" | "GNUmakefile" => "make".to_string(),
+        "Dockerfile" | "Containerfile" => "dockerfile".to_string(),
+        ".bashrc" | ".bash_profile" | ".zshrc" | ".zprofile" | ".profile" => "bash".to_string(),
+        _ => {
+            let ext = extension(path);
+            if ext.is_empty() { name.to_string() } else { ext }
+        }
+    }
 }
 
 /// A tab's name: the file name, with its folder when another open file shares it.
@@ -229,34 +236,6 @@ fn tab_label(path: &str, docs: &[String]) -> String {
     }
     let parts: Vec<&str> = path.split(['/', '\\']).collect();
     parts.len().checked_sub(2).map_or(name.to_string(), |i| format!("{}/{name}", parts[i]))
-}
-
-type Spans = Vec<(std::ops::Range<usize>, Hsla, bool)>;
-
-fn highlight(text: &str, path: &str, dark: bool) -> Option<Vec<Spans>> {
-    if text.len() > MAX_HIGHLIGHT {
-        return None;
-    }
-    let ext = extension(path);
-    let syntax = SYNTAXES.find_syntax_by_extension(&ext).or_else(|| SYNTAXES.find_syntax_by_first_line(text.lines().next()?))?;
-    let theme = &THEMES.themes[if dark { "base16-ocean.dark" } else { "InspiredGitHub" }];
-    let mut lines = HighlightLines::new(syntax, theme);
-    let mut out = Vec::new();
-    for line in syntect::util::LinesWithEndings::from(text) {
-        let mut spans = Spans::new();
-        let mut offset = 0;
-        for (style, piece) in lines.highlight_line(line, &SYNTAXES).ok()? {
-            let visible = piece.trim_end_matches(['\n', '\r']).len();
-            let c = style.foreground;
-            let color: Hsla = rgb(((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32).into();
-            if visible > 0 {
-                spans.push((offset..offset + visible, color, style.font_style.contains(FontStyle::BOLD)));
-            }
-            offset += piece.len();
-        }
-        out.push(spans);
-    }
-    Some(out)
 }
 
 /// The file a markdown link points at, resolved from the document's folder: `None` for web links
@@ -293,7 +272,7 @@ fn percent_decode(s: &str) -> String {
 enum Content {
     Loading,
     Failed(String),
-    Text { text: SharedString, modified: u64, lines: Arc<Vec<SharedString>>, spans: Option<Arc<Vec<Spans>>>, comments: Vec<DocComment> },
+    Text { text: SharedString, modified: u64, line_count: usize, comments: Vec<DocComment> },
     Image(PathBuf),
     Pdf { bytes: Arc<Vec<u8>>, pages: usize },
 }
@@ -304,12 +283,13 @@ pub struct ViewerPanel {
     content: Content,
     source: bool,
     editor: Option<Entity<EditorState>>,
+    editor_synced: Option<(String, u64)>,
+    editing: bool,
     edit_base: u64,
     conflict: bool,
     composing: Option<Entity<EditorState>>,
     comment_line: usize,
     jump: Option<usize>,
-    list: UniformListScrollHandle,
     send_open: bool,
     poll: Option<Task<()>>,
     pdf: PdfView,
@@ -334,7 +314,7 @@ impl Default for PdfView {
 impl ViewerPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |this, _, cx| this.sync(cx)).detach();
-        Self { state, shown: None, content: Content::Loading, source: false, editor: None, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, list: UniformListScrollHandle::new(), send_open: false, poll: None, pdf: PdfView::default() }
+        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default() }
     }
 
     /// Shows `path` (absolute), opening its tab; `background` leaves the side panel as it is.
@@ -370,6 +350,8 @@ impl ViewerPanel {
         if active != self.shown {
             self.shown = active;
             self.editor = None;
+            self.editor_synced = None;
+            self.editing = false;
             self.composing = None;
             self.conflict = false;
             self.source = false;
@@ -394,7 +376,7 @@ impl ViewerPanel {
                 let p = path.clone();
                 let Ok(modified) = backend::background(move || files::files_modified(p)).await else { continue };
                 let stale = this.update(cx, |this, _| match &this.content {
-                    Content::Text { modified: known, .. } => this.editor.is_none() && modified.is_some_and(|m| m != *known),
+                    Content::Text { modified: known, .. } => !this.editing && modified.is_some_and(|m| m != *known),
                     Content::Pdf { .. } => modified.is_some_and(|m| m != this.pdf.modified),
                     _ => false,
                 });
@@ -424,15 +406,13 @@ impl ViewerPanel {
         if matches!(self.content, Content::Failed(_)) {
             self.content = Content::Loading;
         }
-        let dark = theme::theme_by_id(&self.state.read(cx).theme).mode != "light";
         cx.spawn(async move |this, cx| {
             let target = path.clone();
             let read = tauri::async_runtime::spawn(async move {
-                let file = files::files_read_text(target.clone()).await?;
+                let file = files::files_read_text(target).await?;
                 let v = serde_json::to_value(file).map_err(|e| e.to_string())?;
                 let text = v["text"].as_str().unwrap_or_default().to_string();
-                let spans = highlight(&text, &target, dark);
-                Ok::<_, String>((text, v["modified"].as_u64().unwrap_or(0), spans))
+                Ok::<_, String>((text, v["modified"].as_u64().unwrap_or(0)))
             })
             .await
             .map_err(|e| e.to_string())
@@ -442,10 +422,10 @@ impl ViewerPanel {
                     return;
                 }
                 this.content = match read {
-                    Ok((text, modified, spans)) => {
-                        let lines: Vec<SharedString> = text.split('\n').map(|l| SharedString::from(l.trim_end_matches('\r').to_string())).collect();
+                    Ok((text, modified)) => {
+                        let line_count = text.split('\n').count();
                         let comments = find_comments(&text);
-                        Content::Text { text: text.into(), modified, lines: Arc::new(lines), spans: spans.map(Arc::new), comments }
+                        Content::Text { text: text.into(), modified, line_count, comments }
                     }
                     Err(err) => Content::Failed(err),
                 };
@@ -554,9 +534,8 @@ impl ViewerPanel {
     }
 
     fn apply_jump(&mut self, cx: &mut Context<Self>) {
-        if let (Some(line), Content::Text { lines, .. }) = (self.jump.take(), &self.content) {
-            self.list.scroll_to_item(line.saturating_sub(1).min(lines.len().saturating_sub(1)), ScrollStrategy::Center);
-            if extension(self.shown.as_deref().unwrap_or_default()).starts_with("md") {
+        if self.jump.is_some() && matches!(self.content, Content::Text { .. }) {
+            if matches!(extension(self.shown.as_deref().unwrap_or_default()).as_str(), "md" | "markdown" | "mdx") {
                 self.source = true;
             }
             cx.notify();
@@ -607,18 +586,60 @@ impl ViewerPanel {
         .detach();
     }
 
-    fn begin_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Content::Text { text, modified, .. } = &self.content else { return };
-        let (text, modified) = (text.clone(), *modified);
+    fn sync_editor(&mut self, path: &str, text: &SharedString, modified: u64, window: &mut Window, cx: &mut Context<Self>) -> Entity<EditorState> {
+        if let Some(editor) = self.editor.clone() {
+            let synced = self.editor_synced.as_ref().is_some_and(|(p, m)| p == path && *m == modified);
+            if !self.editing && !synced {
+                let next = text.to_string();
+                editor.update(cx, |state, cx| {
+                    if state.value().as_ref() != next.as_str() {
+                        state.set_value(next, window, cx);
+                    }
+                });
+                self.editor_synced = Some((path.to_string(), modified));
+            }
+            return editor;
+        }
+        let lang = language_for(path);
+        let initial = text.to_string();
         let editor = cx.new(|cx| {
-            let mut state = EditorState::new(window, cx);
-            state.set_value(text.to_string(), window, cx);
+            let mut state = EditorState::new(window, cx).language(lang).soft_wrap(false);
+            state.set_value(initial, window, cx);
             state
         });
+        self.editor = Some(editor.clone());
+        self.editor_synced = Some((path.to_string(), modified));
+        editor
+    }
+
+    fn begin_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(path), Content::Text { text, modified, .. }) = (self.shown.clone(), &self.content) else { return };
+        let (text, modified) = (text.clone(), *modified);
+        let editor = self.sync_editor(&path, &text, modified, window, cx);
+        editor.update(cx, |state, cx| {
+            state.set_readonly(false, cx);
+            state.focus(window, cx);
+        });
         self.edit_base = modified;
+        self.editing = true;
         self.conflict = false;
         self.composing = None;
-        self.editor = Some(editor);
+        cx.notify();
+    }
+
+    fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing = false;
+        self.conflict = false;
+        if let (Some(editor), Some(path), Content::Text { text, modified, .. }) = (self.editor.clone(), self.shown.clone(), &self.content) {
+            let (text, modified) = (text.clone(), *modified);
+            editor.update(cx, |state, cx| {
+                state.set_readonly(true, cx);
+                if state.value().as_ref() != text.as_ref() {
+                    state.set_value(text.to_string(), window, cx);
+                }
+            });
+            self.editor_synced = Some((path, modified));
+        }
         cx.notify();
     }
 
@@ -637,7 +658,7 @@ impl ViewerPanel {
                 match saved {
                     Ok(_) => {
                         if from_editor {
-                            this.editor = None;
+                            this.editing = false;
                         }
                         this.conflict = false;
                         this.load(cx);
@@ -703,7 +724,7 @@ impl ViewerPanel {
             if let Some(note) = block.comment {
                 let start = note.start;
                 column = column.child(
-                    div().flex().items_start().gap_2().rounded_md().bg(c.raised).px_2().py_1().text_xs()
+                    div().flex().items_start().gap_2().rounded_md().bg(c.raised).border_1().border_color(c.edge).px_2().py_1().text_xs()
                         .child(div().text_color(c.accent).child(format!("@{}", note.author)))
                         .child(div().flex_1().min_w_0().text_color(c.fg).child(note.body.clone()))
                         .child(div().id(("block-note-remove", start)).cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.remove_comment_at(start, cx))).child(Icon::new(IconName::X).size(px(11.0)).text_color(c.subtle))),
@@ -715,7 +736,7 @@ impl ViewerPanel {
             let doc = path.to_string();
             let link_panel = panel.clone();
             column = column.child(
-                div().id(SharedString::from(format!("block-{path}-{}", block.start_line))).group("md-block").relative().rounded_md().px_2().py_0p5()
+                div().id(SharedString::from(format!("block-{path}-{}", block.start_line))).group("md-block").relative().rounded_md().px_2().py_0p5().border_1()
                     .when(active, |d| d.bg(Hsla { a: 0.06, ..c.accent }))
                     .child(TextView::markdown(id, SharedString::from(block.source)).selectable(true).on_link_click(move |href, _, _, cx| match link_target(href, &doc) {
                         Some((target, line)) => { link_panel.update(cx, |this, cx| this.open(target, line, false, cx)).ok(); }
@@ -723,7 +744,7 @@ impl ViewerPanel {
                         None => {}
                     }))
                     .child(
-                        div().id(SharedString::from(format!("block-comment-{path}-{end}"))).absolute().top(px(2.0)).right(px(2.0)).p_1().rounded_md().bg(c.raised).cursor_pointer()
+                        div().id(SharedString::from(format!("block-comment-{path}-{end}"))).absolute().top(px(2.0)).right(px(2.0)).p_1().rounded_md().bg(c.raised).border_1().border_color(c.edge).cursor_pointer()
                             .opacity(0.0).group_hover("md-block", |d| d.opacity(1.0)).tooltip({ let t = SharedString::from("Comment on this block"); move |window, cx| Tooltip::new(t.clone()).build(window, cx) })
                             .on_click(cx.listener(move |this, _, window, cx| this.begin_comment(end, window, cx)))
                             .child(Icon::new(IconName::MessageSquarePlus).size(px(12.0)).text_color(c.muted)),
@@ -733,44 +754,30 @@ impl ViewerPanel {
         div().id("viewer-markdown").size_full().overflow_y_scroll().p_4().child(column).into_any_element()
     }
 
-    fn render_code(&self, c: Colors, font: SharedString, is_markdown: bool, cx: &mut Context<Self>) -> AnyElement {
-        let Content::Text { lines, spans, .. } = &self.content else { return div().into_any_element() };
-        let (lines, spans) = (lines.clone(), spans.clone());
-        let this = cx.entity().downgrade();
-        let gutter = (lines.len().to_string().len() as f32 * 7.5 + 12.0).max(32.0);
-        uniform_list("viewer-lines", lines.len(), move |range, _, _| {
-            range
-                .map(|i| {
-                    let text = lines[i].clone();
-                    let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans.as_ref().and_then(|s| s.get(i)).map_or_else(Vec::new, |line| {
-                        line.iter().map(|(r, color, bold)| (r.clone(), HighlightStyle { color: Some(*color), font_weight: bold.then_some(FontWeight::BOLD), ..Default::default() })).collect()
-                    });
-                    let this = this.clone();
-                    div()
-                        .id(("viewer-line", i))
-                        .flex()
-                        .h(px(19.0))
-                        .w_full()
-                        .whitespace_nowrap()
-                        .font_family(font.clone())
-                        .hover(move |d| d.bg(c.hover))
-                        .child(
-                            div().id(("viewer-num", i)).w(px(gutter)).flex_shrink_0().pr_2().text_right().text_color(c.subtle).when(is_markdown, |d| d.cursor_pointer())
-                                .when(is_markdown, |d| {
-                                    d.on_click(move |_, window, cx| {
-                                        let _ = this.update(cx, |this, cx| this.begin_comment(i + 1, window, cx));
-                                    })
-                                })
-                                .child((i + 1).to_string()),
-                        )
-                        .child(div().text_color(c.fg).child(StyledText::new(if text.is_empty() { SharedString::from(" ") } else { text }).with_highlights(highlights)))
-                })
-                .collect()
-        })
-        .track_scroll(&self.list)
-        .size_full()
-        .text_size(px(12.0))
-        .into_any_element()
+    fn render_code(&mut self, path: &str, text: SharedString, modified: u64, line_count: usize, font: SharedString, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let editor = self.sync_editor(path, &text, modified, window, cx);
+        if let Some(line) = self.jump.take() {
+            let pos = Position::new(line.saturating_sub(1).min(line_count.saturating_sub(1)) as u32, 0);
+            editor.update(cx, |state, cx| {
+                state.unfold_at(pos, cx);
+                state.set_cursor_position(pos, window, cx);
+            });
+        }
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                Editor::new(&editor)
+                    .appearance(false)
+                    .bordered(false)
+                    .readonly(!self.editing)
+                    .h(relative(1.0))
+                    .size_full()
+                    .font_family(font)
+                    .text_size(px(12.0)),
+            )
+            .into_any_element()
     }
 
     fn render_header(&self, path: &str, is_markdown: bool, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -778,7 +785,7 @@ impl ViewerPanel {
         let button = move |id: &'static str, icon: IconName, active: bool| {
             div().id(id).rounded_sm().p_1().cursor_pointer().text_color(if active { c.accent } else { c.subtle }).when(active, |d| d.bg(Hsla { a: 0.15, ..c.accent })).hover(move |d| d.bg(c.hover).text_color(c.fg)).child(Icon::new(icon).size(px(13.0)))
         };
-        let editing = self.editor.is_some();
+        let editing = self.editing;
         let comments = if let Content::Text { comments, .. } = &self.content { comments.iter().filter(|c| c.author == "user").count() } else { 0 };
         let shown = path.to_string();
         let copy = path.to_string();
@@ -795,14 +802,14 @@ impl ViewerPanel {
                 )
                 .child(
                     div().id("viewer-cancel").rounded_md().px_2().py_1().text_xs().text_color(c.muted).cursor_pointer().hover(move |d| d.bg(c.hover))
-                        .on_click(cx.listener(|this, _, _, cx| { this.editor = None; this.conflict = false; cx.notify(); }))
+                        .on_click(cx.listener(|this, _, window, cx| this.cancel_edit(window, cx)))
                         .child("Cancel"),
                 )
         } else {
             row.when(is_markdown, |d| d.child(button("viewer-source", IconName::Code, self.source).on_click(cx.listener(|this, _, _, cx| { this.source = !this.source; cx.notify(); }))))
                 .when(matches!(self.content, Content::Text { .. }), |d| d.child(button("viewer-edit", IconName::Pencil, false).on_click(cx.listener(|this, _, window, cx| this.begin_edit(window, cx)))))
                 .when(is_markdown, |d| d.child(button("viewer-comment", IconName::MessageSquarePlus, false).on_click(cx.listener(|this, _, window, cx| {
-                    let last = if let Content::Text { lines, .. } = &this.content { lines.len() } else { 0 };
+                    let last = if let Content::Text { line_count, .. } = &this.content { *line_count } else { 0 };
                     this.begin_comment(last, window, cx);
                 }))))
                 .when(comments > 0, |d| d.child(button("viewer-send", IconName::Send, self.send_open).on_click(cx.listener(|this, _, _, cx| { this.send_open = !this.send_open; cx.notify(); }))))
@@ -883,27 +890,26 @@ impl Render for ViewerPanel {
         };
         let is_markdown = matches!(extension(&path).as_str(), "md" | "markdown" | "mdx");
         let header = self.render_header(&path, is_markdown, c, window, cx);
-        let body: AnyElement = if let Some(editor) = &self.editor {
-            div().size_full().p_2().font_family(font.clone()).text_size(px(12.0)).child(Editor::new(editor)).into_any_element()
-        } else {
-            match &self.content {
-                Content::Loading => div().p_4().text_xs().text_color(c.subtle).child("Loading…").into_any_element(),
-                Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
-                Content::Pdf { pages, .. } => self.render_pdf_view(*pages, c, cx),
-                Content::Image(p) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
-                Content::Text { text, .. } if is_markdown && !self.source => self.render_markdown(&path, text.clone(), c, cx),
-                Content::Text { .. } => self.render_code(c, font.clone(), is_markdown, cx),
+        let body: AnyElement = match &self.content {
+            Content::Loading => div().p_4().text_xs().text_color(c.subtle).child("Loading…").into_any_element(),
+            Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
+            Content::Pdf { pages, .. } => self.render_pdf_view(*pages, c, cx),
+            Content::Image(p) => div().size_full().p_2().child(img(p.clone()).size_full().object_fit(ObjectFit::Contain)).into_any_element(),
+            Content::Text { text, .. } if !self.editing && is_markdown && !self.source => self.render_markdown(&path, text.clone(), c, cx),
+            Content::Text { text, modified, line_count, .. } => {
+                let (text, modified, line_count) = (text.clone(), *modified, *line_count);
+                self.render_code(&path, text, modified, line_count, font.clone(), window, cx)
             }
         };
         let comments = match &self.content {
-            Content::Text { comments, .. } if self.editor.is_none() && is_markdown => comments.clone(),
+            Content::Text { comments, .. } if !self.editing && is_markdown => comments.clone(),
             _ => Vec::new(),
         };
         let mut notes = div().flex().flex_col().gap_1();
         for note in &comments {
             let start = note.start;
             notes = notes.child(
-                div().flex().items_start().gap_2().rounded_md().bg(c.raised).px_2().py_1().text_xs()
+                div().flex().items_start().gap_2().rounded_md().bg(c.raised).border_1().border_color(c.edge).px_2().py_1().text_xs()
                     .child(div().text_color(c.accent).child(format!("@{}", note.author)))
                     .child(div().flex_1().min_w_0().text_color(c.fg).child(note.body.clone()))
                     .child(
@@ -1000,6 +1006,15 @@ mod tests {
         let docs = vec!["/a/x/README.md".to_string(), "/a/y/README.md".to_string(), "/a/z.txt".to_string()];
         assert_eq!(tab_label(&docs[0], &docs), "x/README.md");
         assert_eq!(tab_label(&docs[2], &docs), "z.txt");
+    }
+
+    #[test]
+    fn language_for_resolves_extensions_and_filenames() {
+        assert_eq!(super::language_for("/a/settings.rs"), "rs");
+        assert_eq!(super::language_for("/a.b/Makefile"), "make");
+        assert_eq!(super::language_for("/a/Dockerfile"), "dockerfile");
+        assert_eq!(super::language_for("/a/.zshrc"), "bash");
+        assert_eq!(super::language_for("/a.b/README"), "README");
     }
 }
 

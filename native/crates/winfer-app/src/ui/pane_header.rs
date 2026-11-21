@@ -43,6 +43,10 @@ struct HeaderBgItem {
     from_code: bool,
 }
 
+fn pane_header_cursor(archived: bool, dragging: bool) -> Option<CursorStyle> {
+    (!archived).then_some(if dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
+}
+
 fn bg_clock(ms: u64) -> String {
     let s = ms / 1000;
     let h = s / 3600;
@@ -239,7 +243,7 @@ impl Root {
                 }))
                 .child(bar)
                 .child(div().font_family(mono).text_size(px(10.5)).text_color(if used >= 60.0 { color } else { c.fg }).child(format!("{}%", used.round())))
-                .when(self.meters.hovered.as_deref() == Some(&pane.id), |d| d.child(self.context_card(pane, c)))
+                .when(self.meters.hovered.as_deref() == Some(&pane.id), |d| d.child(deferred(self.context_card(pane, c)).with_priority(10)))
                 .into_any_element(),
         )
     }
@@ -265,7 +269,7 @@ impl Root {
                 .child(div().text_color(c.fg).child(short_tokens(n)))
                 .child(div().w(px(40.0)).text_right().text_color(c.subtle).child(if p < 1.0 && n > 0.0 { "<1%".to_string() } else { format!("{}%", p.round()) }))
         };
-        let mut bar = div().flex().h_2().overflow_hidden().rounded_full().bg(c.hover);
+        let mut bar = div().flex().h(px(5.0)).overflow_hidden().rounded_full().bg(c.hover);
         let mut body = div().flex().flex_col().gap_1();
         match &parts {
             Some(Some(list)) if !list.is_empty() => {
@@ -289,7 +293,7 @@ impl Root {
                 body = body.child(div().text_size(px(11.0)).text_color(c.subtle).child("Reading the session…"));
             }
         }
-        div().absolute().top(px(22.0)).right_0().w(px(300.0)).flex().flex_col().gap_2p5().rounded_lg().bg(c.raised).p_3()
+        div().absolute().top(px(22.0)).right_0().w(px(300.0)).flex().flex_col().gap_2p5().rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_3()
             .child(div().flex().items_baseline().gap_2().text_xs()
                 .child(div().flex_1().text_color(c.fg).child("Context"))
                 .child(div().text_size(px(11.0)).text_color(c.muted).child(format!("{} / {} · {}%", short_tokens(tokens), short_tokens(window), used.round()))))
@@ -389,7 +393,7 @@ impl Root {
         let title_tip = format!("{}\nDouble-click to rename", if label == name { name.clone() } else { format!("{name}: {label}") });
         let rename_id = id.clone();
         let title = match renaming {
-            Some(input) => div().flex_1().min_w_0().child(Input::new(&input)).into_any_element(),
+            Some(input) => div().flex_1().min_w_0().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(Input::new(&input)).into_any_element(),
             None => div().id(SharedString::from(format!("title-{id}"))).flex_1().min_w_0().truncate()
                 .text_size(px(13.0)).font_weight(if focused { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if focused { c.fg } else { c.muted })
                 .tooltip(move |window, cx| Tooltip::new(title_tip.clone()).build(window, cx))
@@ -503,8 +507,9 @@ impl Root {
             div().max_w(px(120.0)).flex_shrink_0().truncate().rounded_full().bg(pill_bg).px_1p5().py(px(0.5)).text_size(px(10.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(w)
         });
         let bar = progress.as_ref().map(|p| {
-            div().absolute().left_0().right_0().bottom_0().h(px(10.0)).rounded_b_xl().overflow_hidden()
-                .child(progress::progress_bar(Some(p), status, &c).absolute().bottom_0().left_0().right_0().h(px(2.0)))
+            // Inset past the rounded corners (radius 12) so the track sits inside the header instead of poking out of it.
+            div().absolute().left(px(14.0)).right(px(14.0)).bottom(px(3.0)).h(px(2.0))
+                .child(progress::progress_bar(Some(p), status, &c).h_full().bg(Hsla { a: if c.light { 0.08 } else { 0.10 }, ..c.fg }))
         });
         let fill = match status {
             AgentStatus::NeedsInput => crate::theme::blend(c.raised, c.warning, if c.light { 0.14 } else { 0.13 }),
@@ -556,6 +561,7 @@ impl Root {
         };
         let bg_chip = self.render_bg_chip(&id, c, cx);
         let group_id = SharedString::from(format!("hdr-grp-{id}"));
+        let dragging = matches!(&self.drag, Some(Drag::Pane { id: drag_id, .. }) if *drag_id == id);
         div()
             .id(SharedString::from(format!("header-{id}")))
             .group(group_id.clone())
@@ -572,10 +578,19 @@ impl Root {
             .rounded_xl()
             .bg(fill)
             .shadow(island_shadow)
-            .when(!archived, |d| d.on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                this.drag = Some(Drag::Pane { id: drag_id.clone(), at: e.position });
-                cx.notify();
-            })))
+            .when_some(pane_header_cursor(archived, dragging), |d, cursor| d.cursor(cursor))
+            .when(!archived, |d| {
+                d.on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                    this.drag = Some(Drag::Pane { id: drag_id.clone(), start: e.position, at: e.position, active: false });
+                    cx.notify();
+                }))
+            })
+            .when(archived, |d| {
+                d.on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                })
+            })
             .children(bar)
             // Left: Provider avatar + live status dot
             .child(
@@ -913,7 +928,8 @@ impl Root {
 
 #[cfg(test)]
 mod tests {
-    use super::{cost_breakdown, short_tokens};
+    use super::{cost_breakdown, pane_header_cursor, short_tokens};
+    use gpui_kit::CursorStyle;
     use serde_json::json;
 
     #[test]
@@ -927,6 +943,121 @@ mod tests {
     fn cost_tooltips_list_models() {
         let usage = json!({ "calls": 3, "models": [{ "model": "opus", "priced": true, "cost": 1.2, "input": 1000, "output": 400, "cacheRead": 0, "cacheWrite": 0 }, { "model": "x", "priced": false, "cost": 0, "input": 10, "output": 0, "cacheRead": 0, "cacheWrite": 0 }] });
         assert_eq!(cost_breakdown(&usage, "in this worktree"), "At API prices, 3 model calls in this worktree:\nopus: $1.20 · 1.4K tokens\nx: no known price · 10 tokens");
+    }
+
+    #[test]
+    fn header_cursor_shows_open_and_closed_hand() {
+        assert_eq!(pane_header_cursor(false, false), Some(CursorStyle::OpenHand));
+        assert_eq!(pane_header_cursor(false, true), Some(CursorStyle::ClosedHand));
+        assert_eq!(pane_header_cursor(true, false), None);
+        assert_eq!(pane_header_cursor(true, true), None);
+    }
+}
+
+#[cfg(test)]
+mod drag_selection_tests {
+    use gpui_kit::base::{GlobalState, TextSelection};
+    use gpui_kit::component::text::TextView;
+    use gpui_kit::prelude::FluentBuilder;
+    use gpui_kit::{
+        AppContext, Context, CursorStyle, InteractiveElement, IntoElement, Modifiers, MouseButton,
+        MouseDownEvent, MouseUpEvent, ParentElement, Render, SharedString, Styled, TestAppContext,
+        Window, div, point, px,
+    };
+
+    struct TwoPaneHarness {
+        dragging: bool,
+    }
+
+    impl Render for TwoPaneHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let dragging = self.dragging;
+            div()
+                .relative()
+                .size_full()
+                .flex()
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                        this.dragging = false;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div().w(px(300.0)).h_full().flex().flex_col().child(
+                        div()
+                            .id("header-p1")
+                            .h(px(40.0))
+                            .cursor(if dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                    GlobalState::suppress_text_selection(cx);
+                                    this.dragging = true;
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Pane 1"),
+                    ),
+                )
+                .child(
+                    div().w(px(300.0)).h_full().flex().flex_col().child(
+                        TextView::markdown(
+                            SharedString::from("pane-2-body"),
+                            SharedString::from("Selectable text in the second pane"),
+                        )
+                        .selectable(true),
+                    ),
+                )
+                .when(dragging, |d| {
+                    d.child(
+                        div()
+                            .id("drag-shield")
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .occlude()
+                            .cursor(CursorStyle::ClosedHand)
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                                    this.dragging = false;
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                })
+        }
+    }
+
+    #[gpui_kit::test]
+    fn dragging_pane_header_does_not_select_other_pane_text(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, vcx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| TwoPaneHarness { dragging: false });
+            gpui_kit::component::Root::new(view, window, cx)
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // Sanity check: dragging directly inside pane 2 selects text.
+        vcx.simulate_mouse_down(point(px(305.0), px(12.0)), MouseButton::Left, Modifiers::default());
+        vcx.simulate_mouse_move(point(px(480.0), px(12.0)), Some(MouseButton::Left), Modifiers::default());
+        vcx.simulate_mouse_up(point(px(480.0), px(12.0)), MouseButton::Left, Modifiers::default());
+        vcx.run_until_parked();
+        assert!(vcx.update(|window, cx| TextSelection::has_selection(window, cx)));
+
+        // Dragging from pane 1's header across pane 2 must NOT select text in pane 2.
+        vcx.simulate_mouse_down(point(px(100.0), px(20.0)), MouseButton::Left, Modifiers::default());
+        vcx.simulate_mouse_move(point(px(320.0), px(12.0)), Some(MouseButton::Left), Modifiers::default());
+        vcx.simulate_mouse_move(point(px(480.0), px(12.0)), Some(MouseButton::Left), Modifiers::default());
+        vcx.simulate_mouse_up(point(px(480.0), px(12.0)), MouseButton::Left, Modifiers::default());
+        vcx.run_until_parked();
+        assert!(!vcx.update(|window, cx| TextSelection::has_selection(window, cx)));
+        assert!(vcx.update(|window, cx| TextSelection::selected_text(window, cx)).is_empty());
     }
 }
 
@@ -1003,7 +1134,7 @@ impl Root {
                 .child(Icon::new(icon).size(px(13.0)))
         };
         Some(
-            div().absolute().top(px(36.0)).right(px(12.0)).flex().items_center().gap_1().rounded_md().bg(c.raised).px_2().py_1()
+            div().absolute().top(px(36.0)).right(px(12.0)).flex().items_center().gap_1().rounded_md().border_1().border_color(c.edge).bg(c.raised).px_2().py_1()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().w(px(176.0)).child(Input::new(&search.input).appearance(false)))
                 .child(div().min_w(px(40.0)).text_right().font_family(mono).text_size(px(11.0)).text_color(c.subtle).child(count))

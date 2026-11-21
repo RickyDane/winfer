@@ -2,7 +2,9 @@
 //! dark rim), used as the send button's face. GPUI can't blur, so the clouds are painted into a
 //! small image once and shown as that.
 
-use gpui_kit::{Image, ImageFormat};
+use gpui_kit::{Hsla, Image, ImageFormat, RenderImage, Rgba};
+use parking_lot::Mutex;
+use smallvec::smallvec;
 use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,7 +65,7 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 /// The RGBA pixels of a nebula, its clouds drifted to `phase` (radians); a full turn returns to the start.
 /// Dark themes paint additive dye clouds on deep space with a dark rim; light themes wash luminous
 /// pigments onto an airy base so the button doesn't sit like a black hole on a light composer.
-fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
+fn paint_rect(w: u32, h: u32, kind: Kind, light: bool, phase: f32) -> Vec<u8> {
     let (ox, oy) = (phase.cos() * 0.55, phase.sin() * 0.55);
     let (bg, dye1, dye2, dye3, strength) = match (kind, light) {
         (Kind::Ready, false) => (hexc("#07030f"), hexc("#5b21b6"), hexc("#d946ef"), hexc("#38bdf8"), 1.0),
@@ -73,10 +75,13 @@ fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
         (Kind::Stop, true) => (hexc("#e11d48"), hexc("#f97316"), hexc("#fb7185"), hexc("#fde047"), 1.0),
         (Kind::Idle, true) => (hexc("#eef0f8"), hexc("#b4c0f8"), hexc("#dfc4fb"), hexc("#bae6fd"), 0.65),
     };
-    let mut out = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for py in 0..SIZE {
-        for px in 0..SIZE {
-            let (u, v) = (px as f32 / SIZE as f32, py as f32 / SIZE as f32);
+    let ar = w as f32 / h as f32;
+    let half_spine = ((ar - 1.0) * 0.5).max(0.0);
+    let star_thresh = if ar > 1.5 { 0.9978 } else { 0.9965 };
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for py in 0..h {
+        for px in 0..w {
+            let (u, v) = (px as f32 / h as f32, py as f32 / h as f32);
             // Warp the lookup with another noise field: that's what makes the clouds swirl and melt together.
             let (wx, wy) = (fbm(u * 2.6 + 3.1 + ox, v * 2.6 + oy, 11), fbm(u * 2.6 - oy, v * 2.6 + 7.7 + ox, 12));
             let (x, y) = (u * 2.8 + wx * 1.7, v * 2.8 + wy * 1.7);
@@ -85,16 +90,16 @@ fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
             let d3 = fbm(x - 3.7, y + 8.1, 3);
             let (a1, a2, a3) = (smooth(0.28, 0.78, d1), smooth(0.4, 0.85, d2) * 0.9, smooth(0.5, 0.9, d3).powi(2) * 0.8);
             let core = smooth(0.55, 1.0, (d1 + d2) * 0.5);
-            let (dx, dy) = (u - 0.5, v - 0.5);
+            let (dx, dy) = (((u - ar * 0.5).abs() - half_spine).max(0.0), v - 0.5);
             let r = (dx * dx + dy * dy).sqrt() * 2.0;
             let star = hash(px as i32, py as i32, 99);
-            let twinkle = if star > 0.9965 { 0.6 + 0.4 * hash(px as i32, py as i32, 7) } else { 0.0 };
+            let twinkle = if star > star_thresh { 0.6 + 0.4 * hash(px as i32, py as i32, 7) } else { 0.0 };
 
             let mut rgb = if light {
                 let mut c = mix(bg, dye1, (a1 * 0.75 * strength).clamp(0.0, 1.0));
                 c = mix(c, dye2, (a2 * 0.70 * strength).clamp(0.0, 1.0));
                 c = mix(c, dye3, (a3 * 0.62 * strength).clamp(0.0, 1.0));
-                let lift = core * if kind == Kind::Idle { 0.08 } else { 0.22 };
+                let lift = core * if kind == Kind::Idle { 0.05 } else { 0.12 };
                 for ch in c.iter_mut() {
                     *ch += lift;
                 }
@@ -108,9 +113,9 @@ fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
             } else {
                 let mut c = bg;
                 for k in 0..3 {
-                    c[k] += (dye1[k] * a1 + dye2[k] * a2 + dye3[k] * a3) * strength;
+                    c[k] += (dye1[k] * a1 + dye2[k] * a2 + dye3[k] * a3) * strength * 0.75;
                 }
-                let lift = core * 0.35 * strength;
+                let lift = core * 0.12 * strength;
                 for ch in c.iter_mut() {
                     *ch += lift;
                 }
@@ -129,11 +134,20 @@ fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
     out
 }
 
-fn png(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
+#[cfg(test)]
+fn paint(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
+    paint_rect(SIZE, SIZE, kind, light, phase)
+}
+
+fn png_rect(w: u32, h: u32, kind: Kind, light: bool, phase: f32) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let buf = image::RgbaImage::from_raw(SIZE, SIZE, paint(kind, light, phase)).expect("buffer matches size");
+    let buf = image::RgbaImage::from_raw(w, h, paint_rect(w, h, kind, light, phase)).expect("buffer matches size");
     image::DynamicImage::ImageRgba8(buf).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).expect("png encodes");
     bytes
+}
+
+fn png(kind: Kind, light: bool, phase: f32) -> Vec<u8> {
+    png_rect(SIZE, SIZE, kind, light, phase)
 }
 
 /// The nebula for a button state, painted on first use.
@@ -160,52 +174,91 @@ pub fn working_frames(light: bool) -> &'static [Arc<Image>] {
     cache.get_or_init(|| (0..FRAMES).map(|i| Arc::new(Image::from_bytes(ImageFormat::Png, png(Kind::Stop, light, i as f32 / FRAMES as f32 * std::f32::consts::TAU)))).collect())
 }
 
-const SKY_W: u32 = 256;
-const SKY_H: u32 = 160;
+pub const SKY_INNER_W: u32 = 256;
+pub const SKY_INNER_H: u32 = 160;
+/// Extra texel border around the painted sky so `window.paint_image` can crop strictly inside the
+/// atlas tile on all four edges (preventing bilinear bleed from neighboring atlas tiles) while
+/// still clipping all four corners with GPU SDF `corner_radii`.
+pub const SKY_PAD: u32 = 2;
+const SKY_W: u32 = SKY_INNER_W + SKY_PAD * 2;
+const SKY_H: u32 = SKY_INNER_H + SKY_PAD * 2;
 
-/// Soft transparent nebula + Milky Way glow painted behind the winfer code welcome screen in dark mode
-/// (matches `.cw-nebula` and `.cw-milkyway` in `src/features/code/code.css`).
-pub fn sky_backdrop() -> Arc<Image> {
-    static SKY: OnceLock<Arc<Image>> = OnceLock::new();
-    SKY.get_or_init(|| {
-        let mut out = Vec::with_capacity((SKY_W * SKY_H * 4) as usize);
-        let radial = |u: f32, v: f32, cx: f32, cy: f32, rx: f32, ry: f32| -> f32 {
-            let dx = (u - cx) / rx;
-            let dy = (v - cy) / ry;
-            let d = (dx * dx + dy * dy).sqrt();
-            (1.0 - smooth(0.0, 0.72, d)).powf(1.35)
-        };
-        let (ca, sa) = (25_f32.to_radians().cos(), 25_f32.to_radians().sin());
-        for py in 0..SKY_H {
-            for px in 0..SKY_W {
-                let (u, v) = (px as f32 / SKY_W as f32, py as f32 / SKY_H as f32);
+fn paint_sky_bgra(light: bool, accent: Hsla) -> Vec<u8> {
+    let mut out = Vec::with_capacity((SKY_W * SKY_H * 4) as usize);
+    let radial = |u: f32, v: f32, cx: f32, cy: f32, rx: f32, ry: f32| -> f32 {
+        let dx = (u - cx) / rx;
+        let dy = (v - cy) / ry;
+        let d = (dx * dx + dy * dy).sqrt();
+        (1.0 - smooth(0.0, 0.72, d)).powf(1.35)
+    };
+    let (ca, sa) = (25_f32.to_radians().cos(), 25_f32.to_radians().sin());
+    let acc = Rgba::from(accent);
+    for py in 0..SKY_H {
+        for px in 0..SKY_W {
+            let (u, v) = (
+                (px as f32 - SKY_PAD as f32) / SKY_INNER_W as f32,
+                (py as f32 - SKY_PAD as f32) / SKY_INNER_H as f32,
+            );
+            let band = ((u - 0.5) * ca + (v - 0.5) * sa) / 0.17;
+            let (r, g, b, a) = if light {
+                let n1 = radial(u, v, 0.18, 0.12, 0.40, 0.30) * 0.07;
+                let n2 = radial(u, v, 0.85, 0.88, 0.35, 0.28) * 0.05;
+                let n3 = radial(u, v, 0.50, 1.15, 0.60, 0.35) * 0.05;
+                let mw = (-band * band * 2.4).exp() * 0.10;
+                let acc_w = n1 + n2 + mw;
+                let r = acc.r * acc_w + (70.0 / 255.0) * n3;
+                let g = acc.g * acc_w + (110.0 / 255.0) * n3;
+                let b = acc.b * acc_w + (220.0 / 255.0) * n3;
+                (r, g, b, (acc_w + n3).clamp(0.0, 0.42))
+            } else {
                 // Three radial nebula clouds matching `.cw-nebula`.
-                let n1 = radial(u, v, 0.18, 0.12, 0.60, 0.45) * 0.17;
-                let n2 = radial(u, v, 0.85, 0.88, 0.50, 0.40) * 0.15;
-                let n3 = radial(u, v, 0.50, 1.15, 0.80, 0.50) * 0.17;
+                let n1 = radial(u, v, 0.18, 0.12, 0.45, 0.32) * 0.09;
+                let n2 = radial(u, v, 0.85, 0.88, 0.40, 0.30) * 0.08;
+                let n3 = radial(u, v, 0.50, 1.15, 0.65, 0.38) * 0.09;
                 // Soft diagonal Milky Way band along 115deg.
-                let band = ((u - 0.5) * ca + (v - 0.5) * sa) / 0.17;
                 let mw = (-band * band * 2.4).exp() * 0.08;
-
-                // Additive premultiplied-style color layers converted to straight RGBA.
                 let r = (88.0 / 255.0) * n1 + (124.0 / 255.0) * n2 + (40.0 / 255.0) * n3 + (195.0 / 255.0) * mw;
                 let g = (80.0 / 255.0) * n1 + (140.0 / 255.0) * n2 + (70.0 / 255.0) * n3 + (202.0 / 255.0) * mw;
                 let b = (220.0 / 255.0) * n1 + (255.0 / 255.0) * n2 + (160.0 / 255.0) * n3 + (255.0 / 255.0) * mw;
-                let a = (n1 + n2 + n3 + mw).clamp(0.0, 0.42);
-                let (sr, sg, sb) = if a > 1e-4 {
-                    ((r / a).clamp(0.0, 1.0), (g / a).clamp(0.0, 1.0), (b / a).clamp(0.0, 1.0))
-                } else {
-                    (0.0, 0.0, 0.0)
-                };
-                out.extend_from_slice(&[(sr * 255.0) as u8, (sg * 255.0) as u8, (sb * 255.0) as u8, (a * 255.0) as u8]);
-            }
+                (r, g, b, (n1 + n2 + n3 + mw).clamp(0.0, 0.42))
+            };
+            let (sr, sg, sb) = if a > 1e-4 {
+                ((r / a).clamp(0.0, 1.0), (g / a).clamp(0.0, 1.0), (b / a).clamp(0.0, 1.0))
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            // RenderImage expects BGRA byte order.
+            out.extend_from_slice(&[(sb * 255.0) as u8, (sg * 255.0) as u8, (sr * 255.0) as u8, (a * 255.0) as u8]);
         }
-        let mut bytes = Vec::new();
-        let buf = image::RgbaImage::from_raw(SKY_W, SKY_H, out).expect("sky buffer matches size");
-        image::DynamicImage::ImageRgba8(buf).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).expect("sky png encodes");
-        Arc::new(Image::from_bytes(ImageFormat::Png, bytes))
-    })
-    .clone()
+    }
+    out
+}
+
+fn build_sky_render_image(light: bool, accent: Hsla) -> Arc<RenderImage> {
+    let buf = image::RgbaImage::from_raw(SKY_W, SKY_H, paint_sky_bgra(light, accent)).expect("sky buffer matches size");
+    Arc::new(RenderImage::new(smallvec![image::Frame::new(buf)]))
+}
+
+/// Soft transparent nebula + Milky Way glow painted behind the winfer code welcome screen
+/// (matches `.cw-nebula` and `.cw-milkyway` in `src/features/code/code.css`), ready for
+/// `window.paint_image` with rounded corners and 2-texel atlas bleed padding.
+pub fn sky_backdrop_render(light: bool, accent: Hsla) -> Arc<RenderImage> {
+    if !light {
+        static DARK_SKY: OnceLock<Arc<RenderImage>> = OnceLock::new();
+        return DARK_SKY.get_or_init(|| build_sky_render_image(false, accent)).clone();
+    }
+    static LIGHT_SKY: OnceLock<Mutex<Option<([u8; 3], Arc<RenderImage>)>>> = OnceLock::new();
+    let acc = Rgba::from(accent);
+    let key = [(acc.r * 255.0) as u8, (acc.g * 255.0) as u8, (acc.b * 255.0) as u8];
+    let mut guard = LIGHT_SKY.get_or_init(|| Mutex::new(None)).lock();
+    if let Some((k, img)) = guard.as_ref() {
+        if *k == key {
+            return img.clone();
+        }
+    }
+    let img = build_sky_render_image(true, accent);
+    *guard = Some((key, img.clone()));
+    img
 }
 
 #[cfg(test)]

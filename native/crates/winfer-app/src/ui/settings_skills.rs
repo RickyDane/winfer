@@ -244,7 +244,7 @@ impl Root {
         let discover = listing.as_ref().map_or("Discover".to_string(), |l| format!("Discover {}", l["skills"].as_array().map_or(0, Vec::len)));
         let have = installed.as_ref().map_or("Installed".to_string(), |l| format!("Installed {}", l.len()));
         let toolbar = div().flex().items_center().gap_3()
-            .child(div().flex().rounded_lg().bg(c.panel).p_0p5()
+            .child(div().flex().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_0p5()
                 .child(tab_button("skills-discover", "discover", discover, tab == "discover", false, cx))
                 .child(tab_button("skills-installed", "installed", have, tab == "installed", !outdated.is_empty(), cx)))
             .child(div().flex_1().child(Input::new(&search)));
@@ -254,7 +254,7 @@ impl Root {
             let id = s(&t["id"]).to_string();
             let on = selected.contains(&id);
             let current = selected.clone();
-            chips = chips.child(div().id(SharedString::from(format!("target-{id}"))).flex().h(px(24.0)).items_center().rounded_md().px_2().text_size(px(11.0)).cursor_pointer()
+            chips = chips.child(div().id(SharedString::from(format!("target-{id}"))).flex().h(px(24.0)).items_center().rounded_md().border_1().px_2().text_size(px(11.0)).cursor_pointer()
                 .when(on, |d| d.text_color(c.fg)).when(!on, |d| d.text_color(c.muted))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let mut next = current.clone();
@@ -263,7 +263,7 @@ impl Root {
                 }))
                 .child(format!("{}{}", s(&t["label"]), if t["detected"] == true { "" } else { " · not found" })));
         }
-        let install_for = div().flex().items_start().gap_3().rounded_lg().bg(c.panel).px_3p5().py_2p5()
+        let install_for = div().flex().items_start().gap_3().rounded_lg().border_1().border_color(c.edge).bg(c.panel).px_3p5().py_2p5()
             .child(div().mt_1().flex_shrink_0().text_xs().text_color(c.muted).child("Install for"))
             .child(div().min_w_0().flex_1().child(chips).child(div().mt_1p5().text_size(px(11.0)).text_color(if selected.is_empty() { c.danger } else { c.subtle }).child(if selected.is_empty() { "Pick at least one agent." } else { "Codex, OpenCode, Cursor and other agents also read the shared .agents folder." })));
         let page = div().flex().flex_col().gap_5().child(toolbar);
@@ -279,7 +279,7 @@ impl Root {
         let sources = self.skill_list("sources", cx).unwrap_or_default();
         let new_repo = self.skill_page.new_repo.clone().unwrap();
         let chip = |id: String, label: String, repo: String, on: bool, cx: &mut Context<Self>| {
-            div().id(SharedString::from(id)).flex().h(px(24.0)).items_center().rounded_md().px_2().text_size(px(11.0)).cursor_pointer()
+            div().id(SharedString::from(id)).flex().h(px(24.0)).items_center().rounded_md().border_1().px_2().text_size(px(11.0)).cursor_pointer()
                 .when(on, |d| d.text_color(c.fg)).when(!on, |d| d.text_color(c.muted))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.skill_page.source = Some(repo.clone());
@@ -343,7 +343,7 @@ impl Root {
                 }
                 let (repo, entry) = (s(&listing["repo"]).to_string(), skill.clone());
                 let for_text = format!("For {}", self.target_names(&copies));
-                grid = grid.child(div().w(relative(0.5)).p(px(6.0)).child(div().size_full().flex().flex_col().rounded_lg().bg(c.panel).p_3p5()
+                grid = grid.child(div().w(relative(0.5)).p(px(6.0)).child(div().size_full().flex().flex_col().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_3p5()
                     .child(div().truncate().text_size(px(12.0)).text_color(c.fg).child(name.clone()))
                     .child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(format!("{path} · {files} file{}", if files == 1 { "" } else { "s" })))
                     .child(div().id(SharedString::from(format!("skill-desc-{path}"))).mt_2p5().text_xs().text_color(c.muted).cursor_pointer().when(!open, |d| d.line_clamp(3))
@@ -376,7 +376,7 @@ impl Root {
         if !outdated.is_empty() && query.is_empty() {
             let text = if outdated.len() == 1 { format!("An update for {} is available.", s(&outdated[0]["name"])) } else { format!("{} skill updates are available.", outdated.len()) };
             let list = outdated.clone();
-            out = out.child(div().flex().items_center().gap_2().rounded_lg().px_3().py_2().text_xs().child(div().flex_1().text_color(c.fg).child(text))
+            out = out.child(div().flex().items_center().gap_2().rounded_lg().border_1().border_color(c.accent).px_3().py_2().text_xs().child(div().flex_1().text_color(c.fg).child(text))
                 .child(accent_button(c, "skills-update-all", if outdated.len() == 1 { "Update" } else { "Update all" }, free).on_click(cx.listener(move |this, _, _, cx| {
                     if free {
                         for skill in &list {
@@ -393,7 +393,7 @@ impl Root {
             out = out.child(div().py_8().text_center().text_xs().text_color(c.muted).child(if all.is_empty() { "No skills installed. Skills are folders with a SKILL.md that agents load from their skills folder.".to_string() } else { format!("No installed skill matches “{query}”") }));
         } else {
             let projects = self.skill_page.projects.clone();
-            let mut list = div().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel);
+            let mut list = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel);
             for (i, skill) in shown.into_iter().enumerate() {
                 let name = s(&skill["name"]).to_string();
                 let origin = origin_of(skill);

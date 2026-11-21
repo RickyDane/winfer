@@ -64,7 +64,7 @@
     {
       "id": "db-explorer",
       "name": "Databases",
-      "version": "1.2.5",
+      "version": "1.2.6",
       "description": "Your Postgres, MySQL, SQLite and SQL Server databases in one place, read-only: browse tables, run queries with a history, and see the schema as a class diagram with keys, relations and their cardinality (join tables and relations without a foreign key found for you, Mermaid, PlantUML and SVG export). Paste a URL or a SQL Server connection string. Agents query and describe them by name without ever seeing the credentials.",
       "author": "winfer",
       "tags": [
@@ -85,11 +85,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "0f7ea2732005fe538058f04452e90cb4e3869c97403e83b31f2d8f49331c7911"
+          "sha256": "c4a35e5dd3bac8a14e670a3169579bb7bc2c3508e630b0094adb6fb2a845c9c1"
         },
         {
           "path": "plugin.json",
-          "sha256": "192fc147ef8f897488d5ac9814e6fcd689ba78621f09a4b86dd56819072c6798"
+          "sha256": "205e6b1b472c3987294b212611c2df4a61eb07479b724d63ed7151fbaee0c69a"
         }
       ]
     },
@@ -165,7 +165,7 @@
     {
       "id": "knowledge-base",
       "name": "Knowledge Base",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "description": "Turns each project into a knowledge graph you explore as a live 3D galaxy, a flat glowing galaxy or a plain 2D map, and replay call flows step by step. Built by graphify (code, docs and concepts) or codegraph (code only, exact and fast to keep fresh), per project. Agents query it with tools and you watch what they look at.",
       "author": "winfer",
       "tags": [
@@ -180,11 +180,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "43d1ddd7dbf93096a38e1a2a9dd0aa1b715d817a2e5fccf52ac99495904fd716"
+          "sha256": "a18b776806883745478bea2f5ef7c52dc38fd119e6783508d532c98a9b2cd2cb"
         },
         {
           "path": "plugin.json",
-          "sha256": "5c0f97454722e00353b4ff55110db6a2570f60c030c564f3b63103044a2e8e08"
+          "sha256": "018cd121b5bb93cb6ab4f836fcce01e84f3166154c918eace2f46cd2971e07d4"
         }
       ]
     },
@@ -216,7 +216,7 @@
     {
       "id": "screen-recorder",
       "name": "Screen Recorder",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "description": "Record the browser panel or the Android mirror and save it as an MP4, with the record button on the panel, from the palette, by voice or by an agent showing off what it built.",
       "author": "winfer",
       "tags": [
@@ -231,11 +231,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "28c2ec04bd9d47caf71ef56ca1d2f8393cb1d5ada837deca2d7c4f89ce046eac"
+          "sha256": "4b80c79e94a9a8aeb41c22720bc43100a0d7c1e9eb0d220e620799a32e8c7dd1"
         },
         {
           "path": "plugin.json",
-          "sha256": "534a06c2f79988a7e6f8f3195d5df5d79f48c07dd01d8bf78a0cfa38a91c7eab"
+          "sha256": "6657c5be5a2d324f64cef5a646223c30569c7b5919b0fa9b772d1c5f490f8292"
         }
       ]
     },
@@ -288,7 +288,7 @@
     {
       "id": "telegram",
       "name": "Telegram",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "description": "Get a Telegram message when an agent needs you, and approve, decline or answer it from your phone while you're away.",
       "author": "winfer",
       "tags": [
@@ -301,11 +301,11 @@
       "files": [
         {
           "path": "index.js",
-          "sha256": "4f0177155db68de3c8fc59f5e7ab2cc223572eddf70df761364400182f88aa73"
+          "sha256": "13babff0b137541b058060996ed4e6f97423186d594970d0e01a13c17198749a"
         },
         {
           "path": "plugin.json",
-          "sha256": "23e8ca88d7f57b97d2cb33fca6cdb42144d019925fef39c95259070cc3b68cc3"
+          "sha256": "8f54d46a61ebc3394fe0b95252ae82ec78985e80e8a055ec39d087453cb0078b"
         }
       ]
     }

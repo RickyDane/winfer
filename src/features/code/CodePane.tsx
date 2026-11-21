@@ -408,6 +408,8 @@ export function storeFor(pane: Pane) {
       promptTimer = setTimeout(() => s!.getState().submit(prompt), 3500);
     } else {
       disconnect = s.getState().attach(new PtyTransport(pane));
+      // The transport queues this until the session is live.
+      if (pane.attachments?.length) s.getState().submit(pane.prompt ?? "", pane.attachments);
     }
     const untrack = trackTitle(pane.id, s);
     // Broadcasts, send_to_pane, the phone, Approve and Interrupt type into panes; here that's the composer.

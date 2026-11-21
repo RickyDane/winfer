@@ -8,14 +8,14 @@ import { pasteText, sendText } from "@/features/terminal/xtermRegistry";
 import { logActivity } from "@/stores/activity";
 import { providerName, useWorkspaces, type Pane } from "@/stores/workspaces";
 import { accountLabel, accountsOf, paneAccount, usageKey } from "@/features/accounts/accounts";
-import { activeKey, duration, leftNow, refreshClaude, refreshCodex, runsOutAt, tightest, useUsage, usedNow, type UsageWindow } from "./usage";
+import { activeKey, duration, leftNow, refreshAgy, refreshClaude, refreshCodex, runsOutAt, tightest, useUsage, usedNow, type UsageWindow } from "./usage";
 
 /** OpenCode's model providers whose account sign-in shares the limits of a plan winfer tracks. */
 const PLAN_OF: Record<string, string> = { openai: "codex", anthropic: "claude" };
 
 /** winfer code's backends and the plan whose limits each uses (ChatGPT's are Codex's). */
-const WINFER_BACKEND_PLAN: Record<string, string> = { claude: "claude", codex: "codex", chatgpt: "codex" };
-const WINFER_BACKEND_NAME: Record<string, string> = { claude: "Claude Code", codex: "Codex", chatgpt: "your ChatGPT account" };
+const WINFER_BACKEND_PLAN: Record<string, string> = { claude: "claude", codex: "codex", chatgpt: "codex", agy: "agy" };
+const WINFER_BACKEND_NAME: Record<string, string> = { claude: "Claude Code", codex: "Codex", chatgpt: "your ChatGPT account", agy: "Antigravity" };
 
 /**
  * Whose limits a pane's agent uses: its own; for winfer code those of its backend (as its usage
@@ -44,6 +44,7 @@ export async function limitsOf(pane: Pane): Promise<{ provider: string; note: st
 export async function refreshLimits(provider: string) {
   if (provider === "codex") await refreshCodex();
   if (provider === "claude") await refreshClaude();
+  if (provider === "agy") await refreshAgy();
 }
 
 const round = (n: number) => Math.round(n * 10) / 10;

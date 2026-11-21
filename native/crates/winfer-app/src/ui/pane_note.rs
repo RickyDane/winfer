@@ -54,7 +54,7 @@ impl Root {
                     this.close_pane_note(cx);
                 }))
                 .child(
-                    div().id("pane-note").absolute().left((note.at.x - px(320.0)).max(px(8.0))).top(note.at.y + px(10.0)).w(px(320.0)).flex().flex_col().gap_2().rounded_lg().bg(c.raised).p_3().shadow_lg()
+                    div().id("pane-note").absolute().left((note.at.x - px(320.0)).max(px(8.0))).top(note.at.y + px(10.0)).w(px(320.0)).flex().flex_col().gap_2().rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_3().shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div().flex().items_center().justify_between()
@@ -67,7 +67,7 @@ impl Root {
                                         .child(Icon::new(IconName::X).size(px(14.0))),
                                 ),
                         )
-                        .child(div().rounded_md().bg(c.panel).p_1p5().text_xs().child(Textarea::new(&note.input).appearance(false)))
+                        .child(div().rounded_md().border_1().border_color(c.edge).bg(c.panel).p_1p5().text_xs().child(Textarea::new(&note.input).appearance(false)))
                         .child(div().text_size(px(11.0)).text_color(c.subtle).child("Only for you. Not shared with the agent. Saves automatically.")),
                 )
                 .into_any_element(),

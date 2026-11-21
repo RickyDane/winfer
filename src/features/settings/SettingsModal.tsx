@@ -1,7 +1,7 @@
 import { EFFORT_LABELS } from "@/features/code/EffortIcon";
 import { invoke } from "@tauri-apps/api/core";
 import { usePlanSidebar } from "@/features/code/planSidebar";
-import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Users, ChartColumn, Check, ChevronDown, CloudOff, Copy, Download, FileArchive, FolderOpen, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, Settings2, SlidersHorizontal, Undo2, Smartphone, Sparkles, SquareTerminal, Store, Trash2, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { Activity, ArchiveRestore, ArrowUpCircle, Bot, Brain, Users, ChartColumn, Check, ChevronDown, ChevronUp, CloudOff, Copy, Download, FileArchive, FolderOpen, Globe, Keyboard, Mic, PackageCheck, Palette, Plus, Puzzle, RefreshCw, Search, Settings2, Shield, SlidersHorizontal, Undo2, Smartphone, Sparkles, SquareTerminal, Star, Store, Trash2, TriangleAlert, Wand2, X, Zap, type LucideIcon } from "lucide-react";
 import { Spinner } from "@/components/Spinner";
 import { useEffect, useMemo, useState } from "react";
 import { OPTIONAL_TOOLS, DEFAULT_SYSTEM_PROMPT, defaultProviderId, suspendSaving, MAX_TERMINAL_FONT_SIZE, MIN_TERMINAL_FONT_SIZE, useWorkspaces, useWorkspacesPick } from "@/stores/workspaces";
@@ -372,15 +372,226 @@ function ShortcutSettings() {
 
 /* Agents */
 
-/** Which agent ⌘T, splits and "open a new window" start, and the model each agent starts with. */
+const PROVIDER_TINT: Record<string, string> = {
+  claude: "var(--color-claude)",
+  agy: "#4f8cff",
+  opencode: "#f5b544",
+  cursor: "#a0a0ff",
+  pi: "#7ee787",
+  muse: "#fb7185",
+  winfer: "var(--color-accent)",
+};
+
+const providerBadgeStyle = (id: string): React.CSSProperties => {
+  const tint = PROVIDER_TINT[id];
+  return tint
+    ? { background: `color-mix(in oklab, ${tint} 14%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${tint} 26%, transparent)` }
+    : { background: "color-mix(in oklab, var(--color-fg) 8%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in oklab, var(--color-fg) 14%, transparent)" };
+};
+
+/** Installed agent cockpit cards, available installs, pane defaults, prompt and optional tools. */
 function AgentSettings() {
-  const { providers, defaultProvider, setDefaultProvider, models, agentModels, setAgentModel, loadModels, workspaces, activeWorkspaceId, updateActive } = useWorkspacesPick("providers", "defaultProvider", "setDefaultProvider", "models", "agentModels", "setAgentModel", "loadModels", "workspaces", "activeWorkspaceId", "updateActive");
+  const {
+    providers,
+    defaultProvider,
+    setDefaultProvider,
+    models,
+    agentModels,
+    setAgentModel,
+    loadModels,
+    autoApprove,
+    setAutoApprove,
+    workspaces,
+    activeWorkspaceId,
+    updateActive,
+  } = useWorkspacesPick(
+    "providers",
+    "defaultProvider",
+    "setDefaultProvider",
+    "models",
+    "agentModels",
+    "setAgentModel",
+    "loadModels",
+    "autoApprove",
+    "setAutoApprove",
+    "workspaces",
+    "activeWorkspaceId",
+    "updateActive",
+  );
+  const { versions, checking, updating, checkedAt } = useProviderUpdates();
   const active = workspaces.find((w) => w.id === activeWorkspaceId);
   const current = defaultProviderId({ providers, defaultProvider });
-  const agents = providers.filter((p) => p.installed && p.modelArg);
-  useEffect(() => agents.forEach((p) => void loadModels(p.id)), [agents.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const installed = providers.filter((p) => p.installed && p.id !== "shell" && (p.command || p.modelArg || p.autoApproveArgs?.length));
+  useEffect(() => {
+    installed.filter((p) => p.modelArg).forEach((p) => void loadModels(p.id));
+  }, [installed.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!checkedAt || Date.now() - checkedAt > 5 * 60_000) void checkProviderUpdates(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <>
+      <section className="space-y-2.5">
+        <div className="flex items-center justify-between gap-3 px-0.5">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-fg">Your agents</h3>
+              <span className="rounded-full border border-border/60 bg-panel px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">{installed.length} installed</span>
+            </div>
+            <p className="mt-0.5 text-[11.5px] text-fg-subtle">Pick each agent's starting model, default for new panes (★), or sandbox auto-approve.</p>
+          </div>
+          <button onClick={() => void checkProviderUpdates()} disabled={checking} className={cn(buttonClass, "border border-border/60 bg-panel")}>
+            {checking ? <Spinner size={12} /> : <RefreshCw size={12} className="text-fg-subtle" />}
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
+        </div>
+
+        {installed.length > 0 && (
+          <div className="grid grid-cols-2 gap-2.5">
+            {installed.map((p) => {
+              const v = versions[p.id];
+              const busy = updating.includes(p.id);
+              const isDefault = p.id === current;
+              const list = models[p.id] ?? [];
+              const modelValue = agentModels[p.id] ?? "";
+              const modelChanged = Boolean(modelValue);
+              const autoOn = autoApprove.includes(p.id);
+              const hasControls = Boolean(p.modelArg || p.autoApproveArgs?.length);
+              return (
+                <div
+                  key={p.id}
+                  className={cn(
+                    "flex flex-col gap-2.5 rounded-[10px] border bg-panel p-3 shadow-sm",
+                    isDefault ? "border-accent/45" : "border-border/60",
+                  )}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="grid size-[30px] shrink-0 place-items-center rounded-lg" style={providerBadgeStyle(p.id)}>
+                      <ProviderIcon provider={p.id} size={16} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] font-semibold text-fg">{p.name}</div>
+                      <div className="flex items-center gap-1.5 text-[11px] text-fg-subtle">
+                        {v?.current && <span className="font-mono">{v.current}</span>}
+                        {busy ? (
+                          <span className="text-accent">Updating…</span>
+                        ) : v?.outdated ? (
+                          <span className="text-accent">→ {v.latest}</span>
+                        ) : v?.latest ? (
+                          <span className="inline-flex items-center gap-0.5 text-fg-subtle">
+                            <Check size={10.5} className="text-success" />
+                            Up to date
+                          </span>
+                        ) : !v && checking ? (
+                          <span>Checking…</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {!busy && v?.updatable && (v.outdated || !v.latest) && (
+                        <button
+                          onClick={() => void updateProvider(p.id)}
+                          title={v.outdated ? `Update ${p.name} to ${v.latest} via ${installLabel(v)}` : `Check and update ${p.name} via ${installLabel(v)}`}
+                          className={cn(
+                            "flex h-[22px] items-center gap-1 rounded-md px-2 text-[11px] transition-colors",
+                            v.outdated ? "bg-accent font-medium text-on-accent hover:brightness-110" : "border border-border/60 bg-panel-raised text-fg-muted hover:bg-hover hover:text-fg",
+                          )}
+                        >
+                          <Download size={10.5} />
+                          Update
+                        </button>
+                      )}
+                      {isDefault ? (
+                        <span
+                          title="Default agent for new panes"
+                          className="inline-flex h-[22px] items-center gap-1 rounded-md bg-accent-soft px-1.5 text-[10.5px] font-medium text-accent"
+                        >
+                          <Star size={10.5} className="fill-current" />
+                          Default
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setDefaultProvider(p.id)}
+                          title={`Set ${p.name} as default agent`}
+                          className="grid size-[22px] place-items-center rounded-md text-fg-subtle hover:bg-hover hover:text-fg"
+                        >
+                          <Star size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {hasControls && (
+                    <>
+                      <div className="h-px w-full bg-border/45" />
+                      <div className="flex items-center gap-1.5">
+                        {p.modelArg && (
+                          <>
+                            <div className="min-w-0 flex-1">
+                              {list.length ? (
+                                <Select
+                                  value={modelValue}
+                                  onChange={(e) => setAgentModel(p.id, e.target.value || null)}
+                                  className={cn("w-full", modelChanged && "[&>select]:border [&>select]:border-accent/45 [&>select]:text-fg")}
+                                >
+                                  <option value="">CLI default</option>
+                                  {list.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                      {m.label}
+                                    </option>
+                                  ))}
+                                </Select>
+                              ) : (
+                                <input
+                                  defaultValue={modelValue}
+                                  onBlur={(e) => setAgentModel(p.id, e.target.value.trim() || null)}
+                                  placeholder="CLI default"
+                                  className={cn(inputClass, "w-full border border-border/60")}
+                                />
+                              )}
+                            </div>
+                            {modelChanged && (
+                              <button
+                                onClick={() => setAgentModel(p.id, null)}
+                                title={`Reset ${p.name} model to CLI default`}
+                                className="grid size-[26px] shrink-0 place-items-center rounded-md text-fg-subtle hover:bg-hover hover:text-fg"
+                              >
+                                <Undo2 size={11.5} />
+                              </button>
+                            )}
+                          </>
+                        )}
+                        {!!p.autoApproveArgs?.length && (
+                          <button
+                            type="button"
+                            aria-pressed={autoOn}
+                            onClick={() => setAutoApprove(p.id, !autoOn)}
+                            title={
+                              autoOn
+                                ? "Auto-approve is on — runs tools and edits without asking. Click to turn off."
+                                : "Auto-approve — skip permission prompts on start. Only for sandboxes or work you can undo."
+                            }
+                            className={cn(
+                              "flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11.5px] transition-colors",
+                              autoOn ? "border-warning/40 bg-warning/15 font-medium text-fg" : "border-border/60 bg-panel-raised text-fg-muted hover:bg-hover hover:text-fg",
+                            )}
+                          >
+                            {autoOn ? <Zap size={11.5} className="text-warning" /> : <Shield size={11.5} className="text-fg-subtle" />}
+                            Auto-approve
+                            {autoOn && <span className="size-[5px] rounded-full bg-warning" />}
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <InstallSettings />
+      </section>
+
       <Card title="New panes">
         <Row label="Default agent" reset="agents.default" hint={`${keysFor({ type: "ui.overlay", overlay: "newPane" })}, split and “open a new window” start this agent.`}>
           <Select value={current} onChange={(e) => setDefaultProvider(e.target.value)} className="w-44">
@@ -405,237 +616,180 @@ function AgentSettings() {
           </Row>
         )}
       </Card>
-      {agents.length > 0 && (
-        <Card title="Models" reset="agents.models" description="The model each agent starts with in new panes.">
-          {agents.map((p) => {
-            const list = models[p.id] ?? [];
-            return (
-              <Row key={p.id} label={p.name}>
-                {list.length ? (
-                  <Select value={agentModels[p.id] ?? ""} onChange={(e) => setAgentModel(p.id, e.target.value || null)} className="w-56">
-                    <option value="">CLI default</option>
-                    {list.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </Select>
-                ) : (
-                  <input
-                    defaultValue={agentModels[p.id] ?? ""}
-                    onBlur={(e) => setAgentModel(p.id, e.target.value.trim() || null)}
-                    placeholder="CLI default (type a model name)"
-                    className={cn(inputClass, "w-56")}
-                  />
-                )}
-              </Row>
-            );
-          })}
-        </Card>
-      )}
-      <VersionSettings />
-      <AutoApproveSettings />
       <SystemPromptSettings />
       <AgentToolSettings />
     </>
   );
 }
 
-/** Agents whose CLI isn't installed: what they are and how to get them. */
+/** Agents whose CLI isn't installed: compact 2-column grid with install commands. */
 function InstallSettings() {
   const { providers } = useWorkspacesPick("providers");
   const missing = providers.filter((p) => !p.installed && p.id !== "shell" && p.command);
   if (!missing.length) return null;
   return (
-    <div id="agents-to-install">
-      <Card title="Available to install" description="Install one, then Check for updates (or restart winfer) and it shows up above.">
+    <div id="agents-to-install" className="rounded-[10px] border border-border/60 bg-panel shadow-sm">
+      <div className="px-3.5 pt-3 pb-1.5">
+        <div className="flex items-center gap-2">
+          <h4 className="text-xs font-semibold text-fg">Available to install</h4>
+          <span className="rounded-full bg-panel-raised px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">{missing.length}</span>
+        </div>
+        <p className="mt-0.5 text-[11.5px] text-fg-subtle">Install one, then Check for updates (or restart winfer) and it shows up above.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 px-3 pb-3">
         {missing.map((p) => {
           const command = installCommand(p);
           return (
-            <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-hover">
-                <ProviderIcon provider={p.id} size={15} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-fg">{p.name}</div>
-                <div className="truncate font-mono text-[11px] text-fg-subtle">{command ?? `Needs the \`${p.command}\` command on your PATH`}</div>
+            <div key={p.id} className="flex flex-col gap-1.5 rounded-lg border border-border/55 bg-panel-raised px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                <span className="grid size-[22px] shrink-0 place-items-center rounded-md" style={providerBadgeStyle(p.id)}>
+                  <ProviderIcon provider={p.id} size={13} />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">{p.name}</span>
+                {command && (
+                  <button
+                    onClick={() => void navigator.clipboard.writeText(command).then(() => toast(`Copied install command for ${p.name}`))}
+                    className="flex h-[22px] shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-fg-muted hover:bg-hover hover:text-fg"
+                  >
+                    <Copy size={10.5} />
+                    Copy
+                  </button>
+                )}
               </div>
-              {command && (
-                <button onClick={() => void navigator.clipboard.writeText(command).then(() => toast("Copied the install command"))} className={buttonClass}>
-                  <Copy size={12} />
-                  Copy command
-                </button>
-              )}
+              <div className="truncate font-mono text-[10.5px] text-fg-subtle">{command ?? `Needs \`${p.command}\` on PATH`}</div>
             </div>
           );
         })}
-      </Card>
+      </div>
     </div>
   );
 }
 
-/** Each installed agent's version, and updating it to the newest one. */
-function VersionSettings() {
-  const { providers } = useWorkspacesPick("providers");
-  const { versions, checking, updating, checkedAt } = useProviderUpdates();
-  const agents = providers.filter((p) => p.installed && p.command);
-  // Opening the page checks unless a check ran in the last few minutes.
-  useEffect(() => {
-    if (!checkedAt || Date.now() - checkedAt > 5 * 60_000) void checkProviderUpdates(true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!agents.length) return null;
-  return (
-    <Card title="Versions" description="Updating changes the CLI on disk; running panes keep their version until restarted.">
-      {agents.map((p) => {
-        const v = versions[p.id];
-        const busy = updating.includes(p.id);
-        return (
-          <Row
-            key={p.id}
-            label={
-              <>
-                {p.name}
-                {v?.current && <span className="ml-1.5 font-mono text-[11px] text-fg-subtle">{v.current}</span>}
-              </>
-            }
-            hint={
-              !v
-                ? checking
-                  ? "Checking…"
-                  : undefined
-                : v.outdated
-                  ? `${v.latest} is available${v.updatable ? `, updates via ${installLabel(v)}` : ""}.`
-                  : v.latest
-                    ? "Up to date."
-                    : v.updatable
-                      ? `Can't tell the newest version; updating asks ${installLabel(v)}.`
-                      : undefined
-            }
-          >
-            {busy && <Spinner size={13} className="text-fg-subtle" />}
-            {v?.updatable && (v.outdated || !v.latest) && (
-              <button
-                disabled={busy}
-                onClick={() => void updateProvider(p.id)}
-                className={v.outdated ? "flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-on-accent hover:brightness-110 disabled:opacity-50" : buttonClass}
-              >
-                <Download size={12} />
-                {v.outdated ? `Update to ${v.latest}` : "Update"}
-              </button>
-            )}
-          </Row>
-        );
-      })}
-      <Row label="Check for agent updates" hint="winfer also checks every few hours and tells you when one is out.">
-        <button onClick={() => void checkProviderUpdates()} disabled={checking} className={buttonClass}>
-          {checking ? <Spinner size={12} /> : <RefreshCw size={12} />}
-          Check now
-        </button>
-      </Row>
-    </Card>
-  );
-}
-
-/** Agents that start with their permission prompts skipped (each provider's `autoApproveArgs`). */
-function AutoApproveSettings() {
-  const { providers, autoApprove, setAutoApprove } = useWorkspacesPick("providers", "autoApprove", "setAutoApprove");
-  const agents = providers.filter((p) => p.installed && p.autoApproveArgs?.length);
-  if (!agents.length) return null;
-  return (
-    <Card title="Permissions" reset="agents.autoApprove" description="Applies to agents started (or restarted) after the change.">
-      {agents.map((p) => (
-        <Row key={p.id} label={`Start ${p.name} in auto-approve mode`} hint="Runs tools and edits without asking, except what its config explicitly denies.">
-          <Toggle label={`Start ${p.name} in auto-approve mode`} checked={autoApprove.includes(p.id)} onChange={(on) => setAutoApprove(p.id, on)} />
-        </Row>
-      ))}
-    </Card>
-  );
-}
-
-/** Text added to every agent's system prompt when it starts (empty adds nothing). */
+/** Text added to every agent's system prompt when it starts (collapsible). */
 function SystemPromptSettings() {
   const { systemPrompt, setSystemPrompt } = useWorkspacesPick("systemPrompt", "setSystemPrompt");
   const saved = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+  const custom = systemPrompt !== null;
   const [draft, setDraft] = useState(saved);
+  const [open, setOpen] = useState(false);
   useEffect(() => setDraft(saved), [saved]);
   const save = () => setSystemPrompt(draft.trim() === DEFAULT_SYSTEM_PROMPT ? null : draft.trim());
+  const lines = draft.split("\n").length;
   return (
-    <Card
-      title="System prompt"
-      description="Given to every agent when it starts (or restarts). Claude Code and Codex get it as a system prompt; other agents get it in front of their first message. Leave it empty to add nothing."
-    >
-      <Row
-        stacked
-        label="Instructions for every agent"
-        reset="agents.prompt"
-      >
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={save}
-          rows={12}
-          aria-label="System prompt"
-          className="w-full resize-y rounded-md bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
-        />
-      </Row>
-    </Card>
+    <section className="overflow-hidden rounded-[10px] border border-border/60 bg-panel shadow-sm">
+      <div className="flex items-center gap-4 px-3.5 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-xs font-semibold text-fg">
+            System prompt
+            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-medium", custom ? "bg-accent-soft text-accent" : "bg-panel-raised text-fg-subtle")}>
+              {custom ? "Custom" : "Default"}
+            </span>
+            <ResetMark id="agents.prompt" />
+          </div>
+          <p className="mt-0.5 text-[11.5px] text-fg-subtle">Given to every agent when it starts (or restarts). Leave empty for none.</p>
+        </div>
+        <button onClick={() => setOpen((v) => !v)} className={cn(buttonClass, "border border-border/60")}>
+          {open ? "Hide" : "Edit"}
+          {open ? <ChevronUp size={12} className="text-fg-subtle" /> : <ChevronDown size={12} className="text-fg-subtle" />}
+        </button>
+      </div>
+      {open && (
+        <div className="space-y-2 border-t border-border/45 px-3.5 py-3">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={save}
+            rows={10}
+            aria-label="System prompt"
+            className="w-full resize-y rounded-md bg-panel-raised px-2.5 py-2 text-xs leading-relaxed text-fg outline-none focus:ring-2 focus:ring-accent/40 shadow-sm"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono text-[11px] text-fg-subtle">{lines} lines</span>
+            <div className="flex items-center gap-2">
+              {custom && (
+                <button onClick={() => setSystemPrompt(null)} className={buttonClass}>
+                  Reset to default
+                </button>
+              )}
+              <button onClick={() => { save(); toast("System prompt saved"); }} className={primaryButtonClass}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
-/** The rarely used MCP tools agents start without, to turn back on one by one. */
+/** The rarely used MCP tools agents start without, in a compact 2-column toggle grid. */
 function AgentToolSettings() {
   const { enabledTools, setToolEnabled } = useWorkspacesPick("enabledTools", "setToolEnabled");
   const plugins = usePlugins((s) => s.plugins);
   const tools = OPTIONAL_TOOLS.filter((t) => !t.plugin || plugins.some((p) => p.id === t.plugin && p.enabled && !p.error && p.manifest));
+  const enabledCount = tools.filter((t) => enabledTools.includes(t.name)).length;
   return (
-    <Card
-      title="Agent tools"
-      reset="agents.tools"
-      description="Tools agents rarely use are left out, since every tool an agent is offered takes up context in each request. Turn on the ones you want. Applies to agents started (or restarted) after the change."
-    >
-      {tools.map((t) => (
-        <Row key={t.name} label={`${t.server}: ${t.name}`} hint={t.hint}>
-          <Toggle label={t.name} checked={enabledTools.includes(t.name)} onChange={(on) => setToolEnabled(t.name, on)} />
-        </Row>
-      ))}
-    </Card>
+    <section className="overflow-hidden rounded-[10px] border border-border/60 bg-panel shadow-sm">
+      <div className="px-3.5 pt-3 pb-1.5">
+        <div className="flex items-center gap-2 text-xs font-semibold text-fg">
+          Agent tools
+          <span className={cn("rounded-full px-1.5 py-0.5 font-mono text-[10px]", enabledCount > 0 ? "bg-accent-soft text-accent" : "bg-panel-raised text-fg-subtle")}>
+            {enabledCount}/{tools.length} on
+          </span>
+          <ResetMark id="agents.tools" />
+        </div>
+        <p className="mt-0.5 text-[11.5px] text-fg-subtle">Rarely used tools stay off by default so they don't spend context on every request.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 px-3 pb-3">
+        {tools.map((t) => {
+          const on = enabledTools.includes(t.name);
+          const Icon = t.server === "Browser" ? Globe : Brain;
+          return (
+            <button
+              key={t.name}
+              type="button"
+              role="switch"
+              aria-checked={on}
+              onClick={() => setToolEnabled(t.name, !on)}
+              className={cn(
+                "flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors",
+                on ? "border-accent/40 bg-accent/10" : "border-border/55 bg-panel-raised hover:bg-hover",
+              )}
+            >
+              <span className={cn("grid size-6 shrink-0 place-items-center rounded-md", on ? "bg-accent/15 text-accent" : "bg-panel text-fg-subtle")}>
+                <Icon size={12.5} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-xs font-medium text-fg">{t.name}</span>
+                  <span className="shrink-0 text-[10px] text-fg-subtle">{t.server}</span>
+                </span>
+                <span className="block truncate text-[11px] text-fg-subtle">{t.hint}</span>
+              </span>
+              <span className={cn("relative h-[15px] w-[26px] shrink-0 rounded-full p-0.5 transition-colors", on ? "bg-accent" : "bg-active")}>
+                <span className={cn("block size-[11px] rounded-full bg-white transition-transform", on && "translate-x-[11px]")} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
-/** What the review inbox does on its own when an agent finishes. */
+/** What the review inbox does on its own when an agent finishes, and live progress estimation. */
 function ReviewSettings() {
-  const { reviewConfig, setReviewConfig } = useWorkspacesPick("reviewConfig", "setReviewConfig");
+  const { reviewConfig, setReviewConfig, progressConfig, setProgressConfig } = useWorkspacesPick("reviewConfig", "setReviewConfig", "progressConfig", "setProgressConfig");
+  const enabled = progressConfig.enabled ?? true;
   return (
-    <Card title="Review inbox" description="Summaries use the LLM under AI; with it off, cards show the agent's last output instead.">
+    <Card title="Review & progress" description="Automatic checks when agents finish, and progress estimates using the LLM under AI.">
       <Row label="Run tests when an agent finishes" reset="review.tests" hint="Runs the project's tests in the agent's worktree.">
         <Toggle label="Run tests when an agent finishes" checked={reviewConfig.autoTests ?? false} onChange={(autoTests) => setReviewConfig({ autoTests })} />
       </Row>
       <Row label="Screenshot the dev server" reset="review.screenshots" hint="Shows the agent's running app on its review card.">
         <Toggle label="Screenshot the dev server" checked={reviewConfig.screenshots ?? true} onChange={(screenshots) => setReviewConfig({ screenshots })} />
       </Row>
-    </Card>
-  );
-}
-
-/** Opt-in: each agent pane's task cost in its header. */
-function PaneCostSettings() {
-  const showPaneCost = useWorkspaces((s) => s.showPaneCost);
-  return (
-    <Card title="On panes">
-      <Row label="Show task cost on panes" reset="usage.cost" hint="Each agent shows what its task has cost so far, at API prices, next to its title: its worktree's spend, or its session's when it works in a shared folder.">
-        <Toggle label="Show task cost on panes" checked={showPaneCost} onChange={(on) => useWorkspaces.getState().setShowPaneCost(on)} />
-      </Row>
-    </Card>
-  );
-}
-
-/** How often the LLM re-estimates working agents' progress. */
-function ProgressSettings() {
-  const { progressConfig, setProgressConfig } = useWorkspacesPick("progressConfig", "setProgressConfig");
-  const enabled = progressConfig.enabled ?? true;
-  return (
-    <Card title="Session progress" description="Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked.">
-      <Row label="Estimate how far working agents are" reset="progress.enabled">
+      <Row label="Estimate how far working agents are" reset="progress.enabled" hint="Agents whose output hasn't changed aren't re-checked.">
         <Toggle label="Estimate progress" checked={enabled} onChange={(enabled) => setProgressConfig({ enabled })} />
       </Row>
       {enabled && (
@@ -648,6 +802,18 @@ function ProgressSettings() {
           </Select>
         </Row>
       )}
+    </Card>
+  );
+}
+
+/** Opt-in: each agent pane's task cost in its header. */
+function PaneCostSettings() {
+  const showPaneCost = useWorkspaces((s) => s.showPaneCost);
+  return (
+    <Card title="On panes">
+      <Row label="Show task cost on panes" reset="usage.cost" hint="Each agent shows what its task has cost so far, at API prices, next to its title: its worktree's spend, or its session's when it works in a shared folder.">
+        <Toggle label="Show task cost on panes" checked={showPaneCost} onChange={(on) => useWorkspaces.getState().setShowPaneCost(on)} />
+      </Row>
     </Card>
   );
 }
@@ -1411,6 +1577,9 @@ function HarnessSettings() {
             <Row label="Live shell output" hint="Open a command's output while it runs.">
               <Toggle label="Live shell output" checked={codeWeb.expandShell} onChange={(expandShell) => codeWeb.set({ expandShell })} />
             </Row>
+            <Row label="Compact tool calls" hint="Collapse tool calls and thinking into one live-updating row; click to expand.">
+              <Toggle label="Compact tool calls" checked={codeWeb.compactTools} onChange={(compactTools) => codeWeb.set({ compactTools })} />
+            </Row>
             <Row label="Compact layout" hint="Tighter spacing in the transcript.">
               <Toggle label="Compact layout" checked={codeWeb.compact} onChange={(compact) => codeWeb.set({ compact })} />
             </Row>
@@ -2099,9 +2268,7 @@ const GROUPS: { label: string; pages: Page[] }[] = [
         render: () => (
           <>
             <AgentSettings />
-            <InstallSettings />
             <ReviewSettings />
-            <ProgressSettings />
           </>
         ),
       },
@@ -3103,21 +3270,17 @@ export function SettingsModal() {
             <X size={15} />
             <kbd className="rounded px-1 font-mono text-[10px] shadow-sm">esc</kbd>
           </button>
-          <header className="flex shrink-0 items-start gap-3.5 pt-6 pr-24 pb-4 pl-8">
+          <header className="flex h-14 shrink-0 items-center gap-2.5 pr-24 pl-8">
             {searching ? (
-              <div>
-                <div className="text-[11px] tracking-wider text-fg-subtle uppercase">Search</div>
-                <h2 className="text-lg font-semibold text-fg">Results for “{query.trim()}”</h2>
-              </div>
+              <h2 className="truncate text-[15px] font-semibold text-fg">Results for “{query.trim()}”</h2>
             ) : (
               <>
-                <div className="grid size-[38px] shrink-0 place-items-center rounded-lg bg-accent-soft text-accent">
-                  <page.icon size={18} />
+                <div className="grid size-7 shrink-0 place-items-center rounded-md bg-accent-soft text-accent">
+                  <page.icon size={15} />
                 </div>
-                <div className="min-w-0">
-                  <div className="text-[11px] tracking-wider text-fg-subtle uppercase">{page.group}</div>
-                  <h2 className="text-lg font-semibold text-fg">{page.label}</h2>
-                  <p className="text-[12.5px] text-fg-muted">{page.description}</p>
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <h2 className="shrink-0 text-[15px] font-semibold text-fg">{page.label}</h2>
+                  <p className="truncate text-xs text-fg-muted" title={page.description}>{page.description}</p>
                 </div>
                 {changedHere > 0 && (
                   <button

@@ -29,6 +29,7 @@
 #[path = "../../../../src-tauri/src/usage.rs"] pub mod usage;
 #[path = "../../../../src-tauri/src/usage_history.rs"] pub mod usage_history;
 #[path = "../../../../src-tauri/src/vault.rs"] pub mod vault;
+#[path = "../../../../src-tauri/src/viz.rs"] pub mod viz;
 #[path = "../../../../src-tauri/src/realtime.rs"] pub mod realtime;
 #[path = "../../../../src-tauri/src/chatgpt_voice.rs"] pub mod chatgpt_voice;
 #[path = "../../../../src-tauri/src/diagnostics.rs"] pub mod diagnostics;

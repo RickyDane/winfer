@@ -78,6 +78,24 @@ pub fn left_now(w: &UsageWindow, now: f64) -> f64 {
     (100.0 - used_now(w, now)).clamp(0.0, 100.0)
 }
 
+/// Usage meter color that shifts smoothly from `success` → `warning` → `danger` as quota runs low:
+/// - `>= 60%`: `success` (green)
+/// - `30%..60%`: smooth blend from `warning` (amber) to `success` (green)
+/// - `10%..30%`: smooth blend from `danger` (red) to `warning` (amber)
+/// - `<= 10%`: `danger` (red)
+pub(super) fn level_color(left: f64, c: &Colors) -> Hsla {
+    let left = left.clamp(0.0, 100.0);
+    if left <= 10.0 {
+        c.danger
+    } else if left < 30.0 {
+        theme::blend(c.danger, c.warning, ((left - 10.0) / 20.0) as f32)
+    } else if left < 60.0 {
+        theme::blend(c.warning, c.success, ((left - 30.0) / 30.0) as f32)
+    } else {
+        c.success
+    }
+}
+
 /// The window that runs out first; credits count only once every plan limit is out.
 pub fn tightest(s: Option<&Snapshot>, now: f64) -> Option<&UsageWindow> {
     let s = s.filter(|s| !s.windows.is_empty())?;
@@ -96,6 +114,63 @@ pub fn tightest(s: Option<&Snapshot>, now: f64) -> Option<&UsageWindow> {
         Some(b) if left_now(w, now) <= left_now(b, now) => Some(b),
         _ => Some(w),
     }).or(Some(plan))
+}
+
+/// Splits `"5-hour (Gemini Models)"` into `("5-hour", Some("Gemini Models"))`,
+/// or `"5-hour"` into `("5-hour", None)`.
+fn split_group(label: &str) -> (&str, Option<&str>) {
+    if let Some(rest) = label.strip_suffix(')')
+        && let Some((base, group)) = rest.rsplit_once(" (")
+        && !base.is_empty()
+        && !group.is_empty()
+    {
+        return (base, Some(group));
+    }
+    (label, None)
+}
+
+fn is_primary_window(kind: &str) -> bool {
+    kind == "session" || kind == "week" || kind.starts_with("session-") || kind.starts_with("week-")
+}
+
+fn window_order(kind: &str) -> u8 {
+    if kind == "session" || kind.starts_with("session-") {
+        0
+    } else if kind == "week" || kind.starts_with("week-") {
+        1
+    } else {
+        2
+    }
+}
+
+/// Groups paired 5-hour and weekly limits (overall or per model group) so they render together
+/// inside one visual card. Standalone windows (e.g. `Weekly (Opus)` or credits) keep their own card.
+pub(super) fn group_windows<'a>(windows: &'a [UsageWindow]) -> Vec<(Option<&'a str>, Vec<(&'a str, &'a UsageWindow)>)> {
+    let mut groups: Vec<(Option<&'a str>, bool, Vec<(&'a str, &'a UsageWindow)>)> = Vec::new();
+    for w in windows {
+        if is_primary_window(&w.kind) {
+            let (short, group) = split_group(&w.label);
+            if let Some(existing) = groups.iter_mut().find(|(g, primary, _)| *primary && *g == group) {
+                existing.2.push((short, w));
+            } else {
+                groups.push((group, true, vec![(short, w)]));
+            }
+        } else {
+            groups.push((None, false, vec![(&w.label, w)]));
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(title, _, mut items)| {
+            if items.len() > 1 {
+                items.sort_by_key(|(_, w)| window_order(&w.kind));
+                (title, items)
+            } else {
+                let (_, w) = items[0];
+                (None, vec![(w.label.as_str(), w)])
+            }
+        })
+        .collect()
 }
 
 pub fn duration(ms: f64) -> String {
@@ -186,6 +261,74 @@ pub fn start_account(provider: &str, list: &[Account], now: f64) -> Option<Strin
     (!first.id.ends_with(":default")).then(|| first.id.clone())
 }
 
+/// Where the usage of each of an agent's accounts that count toward its pooled limits is kept
+/// (enabled and signed in, so failover can move work there); just the default sign-in when there
+/// are no other accounts.
+fn pool_keys(provider: &str, list: &[Account]) -> Vec<String> {
+    let accounts: Vec<&Account> = list.iter().filter(|a| a.provider == provider).collect();
+    if accounts.len() < 2 {
+        return vec![provider.to_string()];
+    }
+    accounts.into_iter().filter(|a| a.enabled && a.signed_in).map(|a| usage_key(&a.id)).collect()
+}
+
+/// An agent's limits over all its counted accounts (port of `pooled` in usage.ts): each account
+/// is 100%, so a window's "left" is the average of what each has left. It resets (partly) when
+/// the first account's does, and is as old as the oldest reading in it. The bool is whether more
+/// than one account is pooled.
+pub fn pooled(provider: &str, snapshots: &HashMap<String, Snapshot>, list: &[Account], now: f64) -> Option<(Snapshot, bool)> {
+    let members: Vec<&Snapshot> = pool_keys(provider, list).iter().filter_map(|k| snapshots.get(k)).filter(|s| !s.windows.is_empty()).collect();
+    match members.as_slice() {
+        [] => snapshots.get(provider).filter(|s| !s.windows.is_empty()).map(|s| (s.clone(), false)),
+        [one] => Some((Snapshot { provider: provider.to_string(), ..(*one).clone() }, false)),
+        _ => {
+            let mut kinds: Vec<&str> = Vec::new();
+            for w in members.iter().flat_map(|s| &s.windows) {
+                if !kinds.contains(&w.kind.as_str()) {
+                    kinds.push(&w.kind);
+                }
+            }
+            let windows = kinds.into_iter().map(|kind| {
+                let ws: Vec<&UsageWindow> = members.iter().flat_map(|s| s.windows.iter().filter(|w| w.kind == kind)).collect();
+                let left = ws.iter().map(|w| left_now(w, now)).sum::<f64>() / ws.len() as f64;
+                let resets_at = ws.iter().filter_map(|w| w.resets_at).filter(|r| *r > now).reduce(f64::min);
+                UsageWindow { kind: kind.to_string(), label: ws[0].label.clone(), used_percent: 100.0 - left, resets_at }
+            }).collect();
+            let at = members.iter().map(|s| s.at).reduce(f64::min).unwrap_or(now);
+            Some((Snapshot { provider: provider.to_string(), windows, at, reset_credits: None }, true))
+        }
+    }
+}
+
+/// When a pooled window runs out at the combined pace of its accounts, if before any of them resets.
+pub fn pooled_runs_out_at(provider: &str, kind: &str, snapshots: &HashMap<String, Snapshot>, list: &[Account], samples: &HashMap<String, Vec<(f64, f64)>>, now: f64) -> Option<f64> {
+    let members: Vec<(String, &UsageWindow)> = pool_keys(provider, list).into_iter()
+        .filter_map(|k| snapshots.get(&k).and_then(|s| s.windows.iter().find(|w| w.kind == kind)).map(|w| (k, w)))
+        .collect();
+    if members.len() < 2 {
+        let (key, w) = members.first()?;
+        return runs_out_at(key, w, samples, now);
+    }
+    let (mut left, mut per_ms, mut first_reset) = (0.0, 0.0, f64::INFINITY);
+    for (key, w) in &members {
+        left += left_now(w, now);
+        if let Some(r) = w.resets_at.filter(|r| *r > now) {
+            first_reset = first_reset.min(r);
+        }
+        let Some(points) = samples.get(&window_key(key, w)) else { continue };
+        if let (Some(&(t0, u0)), Some(&(t1, u1))) = (points.first(), points.last()) {
+            if points.len() >= 2 && t1 - t0 >= 15.0 * 60_000.0 && u1 > u0 {
+                per_ms += (u1 - u0) / (t1 - t0);
+            }
+        }
+    }
+    if per_ms <= 0.0 {
+        return None;
+    }
+    let at = now + left / per_ms;
+    (at < first_reset).then_some(at)
+}
+
 impl Root {
     pub(super) fn start_usage(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -231,7 +374,7 @@ impl Root {
         }
         self.refresh_accounts(cx);
         let accounts: Vec<Account> = self.usage.accounts.iter().filter(|a| a.enabled && a.signed_in).cloned().collect();
-        let mut targets: Vec<(String, Option<String>)> = vec![("claude".to_string(), None), ("codex".to_string(), None)];
+        let mut targets: Vec<(String, Option<String>)> = vec![("claude".to_string(), None), ("codex".to_string(), None), ("agy".to_string(), None)];
         targets.extend(accounts.iter().filter(|a| !a.id.ends_with(":default")).map(|a| (a.provider.clone(), Some(a.id.clone()))));
         for (provider, account) in targets {
             self.refresh_one(provider, account, cx);
@@ -245,6 +388,8 @@ impl Root {
             let value = tauri::async_runtime::spawn(async move {
                 if p == "claude" {
                     usage::usage_claude(a).await.ok().and_then(|s| serde_json::to_value(s).ok())
+                } else if p == "agy" {
+                    usage::usage_agy().await.ok().and_then(|s| serde_json::to_value(s).ok())
                 } else {
                     usage::usage_codex(a).await.and_then(|s| serde_json::to_value(s).ok())
                 }
@@ -401,6 +546,7 @@ impl Root {
         let name = self.name_of(provider, cx);
         let Some(snapshot) = self.usage.snapshots.get(key).filter(|s| !s.windows.is_empty()) else {
             return match provider {
+                "agy" => format!("winfer has no usage numbers for {name} yet. Sign in to Antigravity (run agy once), then ask again."),
                 "claude" | "codex" => format!("winfer has no usage numbers for {name} yet. They are reported after the agent's first answer in winfer; ask again after your next reply."),
                 _ => format!("winfer can't read usage limits for {name}."),
             };
@@ -493,11 +639,12 @@ impl Root {
     pub(super) fn render_usage_meter(&self, c: Colors, cx: &mut Context<Self>) -> Div {
         let now = now_ms();
         let mut row = div().flex().items_center().gap_1();
-        for provider in ["claude", "codex"] {
-            let snapshot = self.usage.snapshots.get(provider);
-            let Some(w) = tightest(snapshot, now) else { continue };
+        for provider in ["claude", "codex", "agy"] {
+            let pooled = pooled(provider, &self.usage.snapshots, &self.usage.accounts, now);
+            let Some(w) = tightest(pooled.as_ref().map(|p| &p.0), now) else { continue };
             let left = left_now(w, now);
-            let color = if left < 10.0 { c.danger } else if left < 30.0 { c.warning } else { c.success };
+            let color = level_color(left, &c);
+            let label_color = if left < 40.0 { color } else { c.muted };
             let toggle = provider.to_string();
             row = row.child(
                 div().id(SharedString::from(format!("usage-{provider}"))).flex().items_center().gap_1p5().rounded_md().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover))
@@ -506,7 +653,7 @@ impl Root {
                         cx.notify();
                     }))
                     .child(usage_ring(provider, left, color, 22.0, c))
-                    .child(div().text_size(px(11.0)).text_color(c.muted).child(format!("{left:.0}%"))),
+                    .child(div().text_size(px(11.0)).text_color(label_color).child(format!("{left:.0}%"))),
             );
         }
         row
@@ -517,25 +664,36 @@ impl Root {
         let c = *c;
         let now = now_ms();
         let name = self.name_of(&provider, cx);
-        let snapshot = self.usage.snapshots.get(&provider)?;
-        let mut list = div().flex().flex_col().gap_2();
-        for w in &snapshot.windows {
-            let left = left_now(w, now);
-            let color = if left < 10.0 { c.danger } else if left < 30.0 { c.warning } else { c.success };
-            let reset = w.resets_at.filter(|r| *r > now).map(|r| format!("resets {}", at_text(r, now)));
-            // Only warn when the pace runs it out before it resets.
-            let out = runs_out_at(&provider, w, &self.usage.samples, now).filter(|o| w.resets_at.is_none_or(|r| *o < r)).map(|o| format!("Runs out in {} at this pace", duration(o - now)));
-            list = list.child(
-                div().flex().flex_col().gap_1p5().rounded_lg().bg(c.panel).p_3()
-                    .child(div().flex().items_baseline().gap_2()
-                        .child(div().flex_1().text_size(px(12.0)).text_color(c.muted).child(w.label.clone()))
-                        .child(div().text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(format!("{left:.0}%")))
-                        .child(div().text_size(px(11.0)).text_color(c.subtle).child("left")))
-                    .child(div().h(px(6.0)).w_full().rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(color).w(relative((left / 100.0).clamp(0.0, 1.0) as f32))))
-                    .when_some(reset, |d, t| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(t)))
-                    .when_some(out, |d, t| d.child(div().flex().items_center().gap_1p5().mt_0p5().rounded_md().bg(Hsla { a: 0.1, ..c.warning }).px_2().py_1().text_size(px(11.0)).text_color(c.warning)
-                        .child(Icon::new(IconName::TriangleAlert).size(px(11.0))).child(t))),
-            );
+        // Several accounts count toward the agent's limits: the bars are their average.
+        let (snapshot, multi) = pooled(&provider, &self.usage.snapshots, &self.usage.accounts, now)?;
+        let mut list = div().flex().flex_col().gap_2p5();
+        for (group_title, items) in group_windows(&snapshot.windows) {
+            let mut card = div().flex().flex_col().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_3();
+            if let Some(title) = group_title {
+                card = card.child(div().pb_2().text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title.to_string()));
+            }
+            for (idx, (label, w)) in items.into_iter().enumerate() {
+                if idx > 0 {
+                    card = card.child(div().my_2p5().h(px(1.0)).w_full().bg(c.border));
+                }
+                let left = left_now(w, now);
+                let color = level_color(left, &c);
+                let reset = w.resets_at.filter(|r| *r > now).map(|r| format!("{} {}", if multi { "first resets" } else { "resets" }, at_text(r, now)));
+                // Only warn when the pace runs it out before it resets.
+                let out = pooled_runs_out_at(&provider, &w.kind, &self.usage.snapshots, &self.usage.accounts, &self.usage.samples, now).filter(|o| w.resets_at.is_none_or(|r| *o < r)).map(|o| format!("Runs out in {} at this pace", duration(o - now)));
+                card = card.child(
+                    div().flex().flex_col().gap_1p5()
+                        .child(div().flex().items_baseline().gap_2()
+                            .child(div().flex_1().min_w_0().truncate().text_size(px(12.0)).text_color(c.muted).child(label.to_string()))
+                            .child(div().text_size(px(17.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(format!("{left:.0}%")))
+                            .child(div().text_size(px(11.0)).text_color(c.subtle).child("left")))
+                        .child(div().h(px(4.0)).w_full().rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(color).w(relative((left / 100.0).clamp(0.0, 1.0) as f32))))
+                        .when_some(reset, |d, t| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(t)))
+                        .when_some(out, |d, t| d.child(div().flex().items_center().gap_1p5().mt_0p5().rounded_md().bg(Hsla { a: 0.1, ..c.warning }).px_2().py_1().text_size(px(11.0)).text_color(c.warning)
+                            .child(Icon::new(IconName::TriangleAlert).size(px(11.0))).child(t))),
+                );
+            }
+            list = list.child(card);
         }
         let accounts: Vec<&Account> = self.usage.accounts.iter().filter(|a| a.provider == provider).collect();
         if accounts.len() > 1 {
@@ -544,8 +702,8 @@ impl Root {
             for a in accounts {
                 let snapshot = self.usage.snapshots.get(&usage_key(&a.id));
                 let left = tightest(snapshot, now).map(|w| left_now(w, now));
-                let color = left.map_or(c.subtle, |l| if l < 10.0 { c.danger } else if l < 30.0 { c.warning } else { c.success });
-                let mut card = div().flex().flex_col().gap_1().rounded_lg().bg(c.panel).p_2p5()
+                let color = left.map_or(c.subtle, |l| level_color(l, &c));
+                let mut card = div().flex().flex_col().gap_1().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_2p5()
                     .child(div().flex().items_center().gap_2()
                         .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color))
                         .child(div().flex().flex_1().min_w_0().flex_col()
@@ -555,7 +713,7 @@ impl Root {
                 // Every window of the account (5-hour, weekly, …) with when it resets.
                 for w in snapshot.map_or(&[][..], |s| s.windows.as_slice()) {
                     let wl = left_now(w, now);
-                    let wc = if wl < 10.0 { c.danger } else if wl < 30.0 { c.warning } else { c.success };
+                    let wc = level_color(wl, &c);
                     let reset = match w.resets_at {
                         Some(r) if r > now => format!("resets {}", at_text(r, now)),
                         Some(_) => "reset — full again".to_string(),
@@ -564,7 +722,7 @@ impl Root {
                     card = card.child(div().flex().flex_col().pl(px(14.0)).text_size(px(11.0))
                         .child(div().flex().items_baseline().gap_2()
                             .child(div().w(px(46.0)).flex_shrink_0().truncate().text_color(c.muted).child(w.label.clone()))
-                            .child(div().flex_1().h(px(4.0)).rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(wc).w(relative((wl / 100.0).clamp(0.0, 1.0) as f32))))
+                            .child(div().flex_1().h(px(3.0)).rounded_full().bg(c.active).child(div().h_full().rounded_full().bg(wc).w(relative((wl / 100.0).clamp(0.0, 1.0) as f32))))
                             .child(div().w(px(62.0)).flex_shrink_0().text_right().font_family(crate::fonts::mono(cx)).text_color(wc).child(format!("{wl:.0}% left"))))
                         .when(!reset.is_empty(), |d| d.child(div().pl(px(54.0)).text_size(px(10.5)).text_color(c.subtle).child(reset))));
                 }
@@ -591,7 +749,7 @@ impl Root {
                     cx.notify();
                 }))
                 .child(
-                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).flex().flex_col().gap_3().rounded(px(12.0)).bg(c.raised).shadow_2xl().p_4()
+                    div().id("usage-popover").absolute().top(px(40.0)).right(px(120.0)).w(px(340.0)).flex().flex_col().gap_3().rounded(px(12.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl().p_4()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().flex().items_center().gap_2()
                             .child(div().size(px(26.0)).flex().items_center().justify_center().rounded_lg().bg(c.hover).child(crate::ui::code_pickers::mark(c, &provider, 14.0, 1.0)))
@@ -650,7 +808,7 @@ pub(super) fn usage_ring(provider: &str, left: f64, color: Hsla, size: f32, c: C
                 window.paint_path(path, color);
             }
         };
-        arc(0.0, 1.0, c.border_strong);
+        arc(0.0, 1.0, if fraction == 0.0 { Hsla { a: 0.45, ..color } } else { c.border_strong });
         if fraction > 0.0 {
             arc(0.0, fraction, color);
         }
@@ -662,11 +820,34 @@ pub(super) fn usage_ring(provider: &str, left: f64, color: Hsla, size: f32, c: C
 
 #[cfg(test)]
 mod tests {
-    use super::{Account, Snapshot, UsageWindow, duration, left_now, runs_out_at, start_account, tightest, usage_key};
+    use super::{Account, Snapshot, UsageWindow, duration, group_windows, left_now, level_color, pooled, runs_out_at, start_account, theme, tightest, usage_key};
     use std::collections::HashMap;
 
     fn window(kind: &str, used: f64, resets: Option<f64>) -> UsageWindow {
         UsageWindow { kind: kind.into(), label: kind.into(), used_percent: used, resets_at: resets }
+    }
+
+    #[test]
+    fn pooled_averages_counted_accounts_resetting_with_the_first() {
+        let acc = |id: &str, enabled: bool| Account { id: id.into(), provider: "claude".into(), label: id.into(), enabled, signed_in: true, email: None, exhausted_until: None, dir: String::new() };
+        let snap = |used: [f64; 2], resets: f64, at: f64| Snapshot { provider: "claude".into(), windows: vec![window("session", used[0], Some(resets)), window("week", used[1], None)], at, reset_credits: None };
+        let snapshots: HashMap<String, Snapshot> = [
+            ("claude".to_string(), snap([100.0, 0.0], 5000.0, 10.0)),
+            ("claude:a2".to_string(), snap([26.0, 26.0], 9000.0, 20.0)),
+            ("claude:a3".to_string(), snap([0.0, 23.0], 7000.0, 30.0)),
+            ("claude:off".to_string(), snap([100.0, 100.0], 3000.0, 1.0)),
+        ].into();
+        let list = vec![acc("claude:default", true), acc("claude:a2", true), acc("claude:a3", true), acc("claude:off", false)];
+        let (p, multi) = pooled("claude", &snapshots, &list, 100.0).unwrap();
+        assert!(multi);
+        assert_eq!(p.at, 10.0);
+        assert!((left_now(&p.windows[0], 100.0) - 58.0).abs() < 1e-9);
+        assert_eq!(p.windows[0].resets_at, Some(5000.0));
+        assert!((left_now(&p.windows[1], 100.0) - 251.0 / 3.0).abs() < 1e-9);
+        // One account: its own reading.
+        let (single, multi) = pooled("claude", &snapshots, &[], 100.0).unwrap();
+        assert!(!multi);
+        assert_eq!(single.windows, snapshots["claude"].windows);
     }
 
     #[test]
@@ -706,5 +887,53 @@ mod tests {
         ];
         assert_eq!(start_account("claude", &list, 5.0).as_deref(), Some("claude:a2"));
         assert_eq!(usage_key("claude:default"), "claude");
+    }
+
+    #[test]
+    fn groups_pair_five_hour_and_weekly() {
+        let mk = |kind: &str, label: &str| UsageWindow { kind: kind.into(), label: label.into(), used_percent: 10.0, resets_at: None };
+
+        // Antigravity: two model groups, each pairing 5-hour before Weekly.
+        let agy = vec![
+            mk("week-0", "Weekly (Gemini Models)"),
+            mk("session-0", "5-hour (Gemini Models)"),
+            mk("week-1", "Weekly (Claude and GPT models)"),
+            mk("session-1", "5-hour (Claude and GPT models)"),
+        ];
+        let grouped = group_windows(&agy);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].0, Some("Gemini Models"));
+        assert_eq!(grouped[0].1.iter().map(|(l, _)| *l).collect::<Vec<_>>(), vec!["5-hour", "Weekly"]);
+        assert_eq!(grouped[1].0, Some("Claude and GPT models"));
+        assert_eq!(grouped[1].1.iter().map(|(l, _)| *l).collect::<Vec<_>>(), vec!["5-hour", "Weekly"]);
+
+        // Claude: main 5-hour + Weekly grouped together, per-model weekly extras stay standalone.
+        let claude = vec![mk("session", "5-hour"), mk("week", "Weekly"), mk("week-opus", "Weekly (Opus)")];
+        let grouped = group_windows(&claude);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].0, None);
+        assert_eq!(grouped[0].1.iter().map(|(l, _)| *l).collect::<Vec<_>>(), vec!["5-hour", "Weekly"]);
+        assert_eq!(grouped[1].0, None);
+        assert_eq!(grouped[1].1.iter().map(|(l, _)| *l).collect::<Vec<_>>(), vec!["Weekly (Opus)"]);
+
+        // Codex: main 5-hour + Weekly grouped together, credits stay separate.
+        let codex = vec![mk("session", "5-hour"), mk("week", "Weekly"), mk("month-credit", "Monthly credits")];
+        let grouped = group_windows(&codex);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].1.len(), 2);
+        assert_eq!(grouped[1].1.iter().map(|(l, _)| *l).collect::<Vec<_>>(), vec!["Monthly credits"]);
+    }
+
+    #[test]
+    fn level_color_shifts_when_low() {
+        let c = theme::colors("dark");
+        assert_eq!(level_color(100.0, &c), c.success);
+        assert_eq!(level_color(60.0, &c), c.success);
+        assert_ne!(level_color(33.0, &c), c.success);
+        assert_eq!(level_color(30.0, &c), c.warning);
+        assert_ne!(level_color(20.0, &c), c.warning);
+        assert_ne!(level_color(20.0, &c), c.danger);
+        assert_eq!(level_color(10.0, &c), c.danger);
+        assert_eq!(level_color(0.0, &c), c.danger);
     }
 }

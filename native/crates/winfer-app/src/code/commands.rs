@@ -126,6 +126,25 @@ pub fn matching(prefix: &str) -> Vec<(&'static str, &'static str)> {
     COMMANDS.iter().filter(|(c, _)| c[1..].starts_with(&p)).copied().collect()
 }
 
+/// Built-in commands and session skills matching what's typed after the slash, for the composer's popup.
+pub fn matching_with_skills(prefix: &str, skills: &[String]) -> Vec<(String, String)> {
+    let p = prefix.trim_start_matches('/').to_lowercase();
+    let mut out: Vec<(String, String)> = COMMANDS
+        .iter()
+        .filter(|(c, _)| c[1..].starts_with(&p))
+        .map(|(c, d)| ((*c).to_string(), (*d).to_string()))
+        .collect();
+    for s in skills {
+        if COMMANDS.iter().any(|(c, _)| c[1..] == *s) {
+            continue;
+        }
+        if s.to_lowercase().starts_with(&p) {
+            out.push((format!("/{s}"), "skill".to_string()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +208,11 @@ mod tests {
         assert!(matching("/co").iter().any(|(c, _)| *c == "/compact"));
         assert!(matching("/co").iter().all(|(c, _)| c.starts_with("/co")));
         assert_eq!(matching("/").len(), COMMANDS.len());
+
+        let skills = vec!["deploy".to_string(), "model".to_string(), "debug-ui".to_string()];
+        let all = matching_with_skills("/", &skills);
+        assert_eq!(all.len(), COMMANDS.len() + 2);
+        assert!(all.iter().any(|(c, d)| c == "/deploy" && d == "skill"));
+        assert_eq!(matching_with_skills("/de", &skills), vec![("/deploy".into(), "skill".into()), ("/debug-ui".into(), "skill".into())]);
     }
 }

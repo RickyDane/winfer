@@ -54,7 +54,7 @@ fn title_of(sheet: Sheet) -> (&'static str, IconName) {
 }
 
 fn list_item(c: Colors, id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
-    div().id(id).w_full().flex().items_center().gap_2p5().px_3().py_2().rounded_xl().cursor_pointer().text_size(px(12.5)).text_color(c.fg)
+    div().id(id).w_full().flex().items_center().gap_2p5().px_3().py_2().rounded_xl().border_1().cursor_pointer().text_size(px(12.5)).text_color(c.fg)
         .when(selected, |d| d.bg(Hsla { a: 0.12, ..c.accent }))
         .when(!selected, |d| d.hover(move |d| d.bg(c.hover)))
 }
@@ -96,7 +96,7 @@ impl CodeView {
         let scrim = div().id("cw-sheet-scrim").absolute().top_0().left_0().size_full().flex().items_center().justify_center().bg(Hsla { a: 0.5, ..black() }).p_4()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.set_sheet(None, cx)))
             .child(
-                rise(div().id("cw-sheet").w(px(if wide { 560.0 } else { 440.0 })).max_w_full().max_h_full().flex().flex_col().rounded_xl().bg(c.raised).shadow_lg()
+                rise(div().id("cw-sheet").w(px(if wide { 560.0 } else { 440.0 })).max_w_full().max_h_full().flex().flex_col().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(div().flex().items_center().gap_2().px_4().py_3().child(Icon::new(icon).size(px(14.0)).text_color(c.accent)).child(div().flex_1().text_size(px(13.0)).text_color(c.fg).child(title))
                         .child(div().id("cw-sheet-x").p_0p5().rounded_md().cursor_pointer().text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.set_sheet(None, cx))).child(Icon::new(IconName::X).size(px(14.0)))))
@@ -107,7 +107,7 @@ impl CodeView {
 
     /// A picker that slides up from the bottom of the pane, over the composer.
     fn bottom_sheet(&mut self, title: &'static str, icon: IconName, subtitle: String, body: AnyElement, c: Colors, cx: &mut Context<Self>) -> AnyElement {
-        let panel = div().id("cw-sheet").w_full().max_w(px(super::code_view::COLUMN)).max_h(relative(0.78)).flex().flex_col().rounded_t_2xl().bg(c.raised).shadow_lg()
+        let panel = div().id("cw-sheet").w_full().max_w(px(super::code_view::COLUMN)).max_h(relative(0.78)).flex().flex_col().rounded_t_2xl().border_1().border_b_0().border_color(c.edge).bg(c.raised).shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().w_full().flex().justify_center().pt_2().child(div().w(px(36.0)).h(px(4.0)).rounded_full().bg(c.border_strong)))
             .child(div().flex().items_center().gap_2p5().px_5().pt_2().pb_3()
@@ -172,7 +172,7 @@ impl CodeView {
                 }
                 if let (Some(fast), false) = (twin, sub) {
                     let spec_fast = if on_fast { spec.clone() } else { fast.clone() };
-                    row = row.child(div().id(SharedString::from(format!("fast-{spec}"))).px_1p5().h(px(20.0)).flex().items_center().gap_0p5().rounded_md().text_size(px(10.5))
+                    row = row.child(div().id(SharedString::from(format!("fast-{spec}"))).px_1p5().h(px(20.0)).flex().items_center().gap_0p5().rounded_md().border_1().text_size(px(10.5))
                         .text_color(if on_fast { c.warning } else { c.subtle })
                         .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.send(Cmd::SetModel(spec_fast.clone()), cx); this.set_sheet(None, cx); }))
                         .child(Icon::new(IconName::Zap).size(px(10.0))).child("Fast"));
@@ -191,7 +191,7 @@ impl CodeView {
                 for level in std::iter::once("default").chain(EFFORTS) {
                     let on = (level == "default" && effort.is_empty()) || effort == level;
                     let (model, level_s) = (st.sub_model.clone(), level.to_string());
-                    row = row.child(div().id(SharedString::from(format!("se-{level}"))).px_2().h(px(22.0)).flex().items_center().rounded_md().text_size(px(11.0)).cursor_pointer()
+                    row = row.child(div().id(SharedString::from(format!("se-{level}"))).px_2().h(px(22.0)).flex().items_center().rounded_md().border_1().text_size(px(11.0)).cursor_pointer()
                         .text_color(if on { c.fg } else { c.muted })
                         .on_click(cx.listener(move |this, _, _, cx| this.send(Cmd::SetSubagent { model: model.clone(), effort: if level_s == "default" { None } else { Some(level_s.clone()) } }, cx)))
                         .child(effort_label(level)));
@@ -222,7 +222,7 @@ impl CodeView {
                 div().w(px(3.5)).h(px(5.0 + b as f32 * 2.2)).rounded_full().bg(if filled { if on { c.accent } else { c.muted } } else { c.border_strong })
             }));
             let glyph: AnyElement = if rank.is_some() { bars.into_any_element() } else { div().h(px(18.0)).flex().items_center().child(Icon::new(IconName::Sparkles).size(px(15.0)).text_color(if on { c.accent } else { c.muted })).into_any_element() };
-            strip = strip.child(div().id(SharedString::from(format!("e-{level}"))).flex_1().min_w(px(88.0)).flex().flex_col().items_center().gap_2().py_3().rounded_xl().cursor_pointer().text_size(px(12.0))
+            strip = strip.child(div().id(SharedString::from(format!("e-{level}"))).flex_1().min_w(px(88.0)).flex().flex_col().items_center().gap_2().py_3().rounded_xl().border_1().cursor_pointer().text_size(px(12.0))
                 .when(on, |d| d.bg(Hsla { a: 0.12, ..c.accent }).text_color(c.fg))
                 .when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -280,7 +280,7 @@ impl CodeView {
         let mut out = div().flex().flex_col().gap_3()
             .child(div().flex().flex_col().gap_1()
                 .child(div().flex().justify_between().text_size(px(12.5)).text_color(c.fg).child("Context").child(format!("{} / {} · {}%", tokens(u.context), tokens(u.window), (pct * 100.0).round())))
-                .child(div().h(px(6.0)).rounded_full().bg(c.border).child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else { c.accent }))));
+                .child(div().h(px(4.0)).rounded_full().bg(c.border).child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else { c.accent }))));
         let mut grid = div().flex().flex_wrap().gap_x_4().gap_y_1();
         for (label, value) in [("Input", tokens(u.input)), ("Cached", tokens(u.cached)), ("Output", tokens(u.output)), ("Cost", u.cost.map_or("—".to_string(), |c| format!("${c:.2}")))] {
             grid = grid.child(div().flex().flex_col().child(dim(c, label)).child(div().text_size(px(13.0)).text_color(c.fg).child(value)));
@@ -296,7 +296,7 @@ impl CodeView {
                     let share = p.tokens as f32 / total as f32;
                     list = list.child(div().flex().flex_col().gap_0p5()
                         .child(div().flex().justify_between().text_size(px(12.0)).text_color(c.fg).child(p.label.clone()).child(format!("{} · {}%", tokens(p.tokens), (share * 100.0).round())))
-                        .child(div().h(px(4.0)).rounded_full().bg(c.border).child(div().h_full().w(relative(share.clamp(0.0, 1.0))).rounded_full().bg(c.accent)))
+                        .child(div().h(px(3.0)).rounded_full().bg(c.border).child(div().h_full().w(relative(share.clamp(0.0, 1.0))).rounded_full().bg(c.accent)))
                         .children(p.sources.iter().take(4).map(|s| div().flex().justify_between().pl_2().text_size(px(11.0)).text_color(c.subtle).child(s.label.clone()).child(tokens(s.tokens)))));
                 }
                 out = out.child(list);
@@ -384,7 +384,7 @@ impl CodeView {
             if let Some(m) = &t.ev.model { meta.push(model_name(m, None)); }
             if let Some(n) = t.ev.tools { meta.push(format!("{n} tools")); }
             meta.push(elapsed(now.saturating_sub(t.started_at)));
-            out = out.child(div().flex().flex_col().gap_0p5().rounded_md().px_2().py_1p5()
+            out = out.child(div().flex().flex_col().gap_0p5().rounded_md().border_1().border_color(c.edge).px_2().py_1p5()
                 .child(div().flex().items_center().gap_1p5().child(Icon::new(icon).size(px(13.0)).text_color(color)).child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(c.fg).child(title))
                     .when(has_log, |d| d.child(div().id(SharedString::from(format!("log-{id_log}"))).px_1p5().rounded_md().cursor_pointer().text_size(px(11.0)).text_color(c.muted).hover(move |d| d.bg(c.hover)).on_click(cx.listener(move |this, _, _, cx| {
                         let id = id_log.clone();
@@ -404,7 +404,7 @@ impl CodeView {
             Some((_, None, _)) => dim(c, "No output yet.").into_any_element(),
             Some((_, Some(text), file)) => div().flex().flex_col().gap_1()
                 .when_some(file.clone(), |d, f| d.child(dim(c, f)))
-                .child(div().rounded_md().bg(c.app).p_2().font_family(mono).text_size(px(11.5)).text_color(c.muted).whitespace_normal().child(text.clone())).into_any_element(),
+                .child(div().rounded_md().border_1().border_color(c.edge).bg(c.app).p_2().font_family(mono).text_size(px(11.5)).text_color(c.muted).whitespace_normal().child(text.clone())).into_any_element(),
         }
     }
 
@@ -433,7 +433,7 @@ impl CodeView {
             let mut row = div().flex().flex_wrap().gap_1();
             for p in std::iter::once(0u64).chain((30..=95).step_by(5)) {
                 let on = current == p;
-                row = row.child(div().id(SharedString::from(format!("cmp-{is_trim}-{p}"))).px_1p5().h(px(22.0)).flex().items_center().rounded_md().text_size(px(11.0)).cursor_pointer()
+                row = row.child(div().id(SharedString::from(format!("cmp-{is_trim}-{p}"))).px_1p5().h(px(22.0)).flex().items_center().rounded_md().border_1().text_size(px(11.0)).cursor_pointer()
                     .text_color(if on { c.fg } else { c.muted })
                     .on_click(cx.listener(move |this, _, _, cx| this.send(if is_trim { Cmd::SetCompaction { trim: Some(p), compact: None } } else { Cmd::SetCompaction { trim: None, compact: Some(p) } }, cx)))
                     .child(if p == 0 { "Off".to_string() } else { format!("{p}%") }));

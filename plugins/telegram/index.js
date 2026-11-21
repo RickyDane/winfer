@@ -87,13 +87,20 @@ function loadSettings() {
   }
 }
 
+/**
+ * The Bot API's parameters as a form, with objects and arrays as JSON (which it takes). A JSON body
+ * would need a CORS preflight, and api.telegram.org answers those with 501: the webview's fetch fails.
+ */
+export function formBody(params) {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) body.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+  }
+  return body;
+}
+
 async function telegram(token, method, params = {}, signal) {
-  const res = await fetch(`${API}/bot${token}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(params),
-    signal,
-  });
+  const res = await fetch(`${API}/bot${token}/${method}`, { method: "POST", body: formBody(params), signal });
   const data = await res.json().catch(() => null);
   if (!data?.ok) {
     const err = new Error(data?.description ?? `Telegram answered ${res.status}`);

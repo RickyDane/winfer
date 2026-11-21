@@ -557,6 +557,15 @@ mockIPC(
             { kind: "week", label: "Weekly", usedPercent: 17, resetsAt: RESETS.claude.week },
           ],
         };
+      case "usage_agy":
+        return {
+          provider: "agy", at: Date.now(), windows: [
+            { kind: "week-0", label: "Weekly (Gemini Models)", usedPercent: 33, resetsAt: Date.now() + 6 * 86400_000 },
+            { kind: "session-0", label: "5-hour (Gemini Models)", usedPercent: 11, resetsAt: Date.now() + 4 * 3600_000 },
+            { kind: "week-1", label: "Weekly (Claude and GPT models)", usedPercent: 7, resetsAt: Date.now() + 6 * 86400_000 },
+            { kind: "session-1", label: "5-hour (Claude and GPT models)", usedPercent: 0, resetsAt: Date.now() + 5 * 3600_000 },
+          ],
+        };
       case "accounts_list":
         return [
           { id: "claude:default", provider: "claude", label: "Default", enabled: true, dir: "~/.claude", signedIn: true, email: "you@example.com", exhaustedUntil: RESETS.claude.session },

@@ -131,6 +131,11 @@ pub fn dir(id: &str) -> Option<PathBuf> {
     (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| base().join("accounts").join(provider).join(name))
 }
 
+/// The config dir the agent runs with on `account` (None: the default sign-in).
+pub fn config_dir(provider: &str, account: Option<&str>) -> Option<PathBuf> {
+    account.and_then(dir).or_else(|| default_dir(provider))
+}
+
 /// Whether the agent itself sees this dir as overridden (Claude Code's Keychain naming).
 pub fn overridden(id: &str) -> bool {
     !is_default(id) || std::env::var_os(if provider_of(id) == "claude" { "CLAUDE_CONFIG_DIR" } else { "CODEX_HOME" }).is_some()
@@ -161,6 +166,11 @@ fn link_shared(primary: &Path, dir: &Path, names: &[&str]) -> Result<(), String>
         let source = primary.join(name);
         let target = dir.join(name);
         if target.symlink_metadata().is_ok() {
+            // A shared folder deleted from the default dir leaves the link dangling, and the agent
+            // can't write through it (e.g. Claude Code's plan files): make the folder again.
+            if target.is_symlink() && !source.exists() && !name.contains('.') {
+                std::fs::create_dir_all(&source).map_err(|e| e.to_string())?;
+            }
             continue;
         }
         // Folders the agent would create later are made now, so they're shared from the start.
@@ -478,6 +488,10 @@ mod tests {
         assert!(dir.join("skills").exists(), "missing folders are created and shared");
         assert!(!dir.join("CLAUDE.md").exists(), "missing files aren't linked");
         assert!(!dir.join(".credentials.json").exists());
+        // A shared folder deleted later is made again, so its link isn't left dangling.
+        std::fs::remove_dir_all(primary.join("plans")).unwrap();
+        link_shared(&primary, &dir, shared("claude")).unwrap();
+        assert!(dir.join("plans").is_dir());
         remove_account_dir(&dir);
         assert!(!dir.exists());
         assert!(primary.join("projects").is_dir(), "removing an account leaves shared state");

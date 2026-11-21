@@ -342,7 +342,7 @@ impl Root {
         let mut defaults = card(c, "Defaults", Some("For winfer code, winfer's own coding agent (pick “winfer code” as an agent, or run winfer code in a terminal). New sessions start with these; /model, /effort, /mode and /compaction change them from inside a session too."))
             .child(row(c, "Use TUI style", hint("Use TUI style"), tui_toggle));
         if web {
-            for (label, key, default) in [("Context meter", "showContext", true), ("Cost", "showCost", true), ("Tokens per second", "showRate", true), ("Plan above the composer", "showPlan", true), ("Show thinking", "expandThinking", false), ("Live shell output", "expandShell", false), ("Animated send button", "sendAnimation", true), ("Compact layout", "compact", false)] {
+            for (label, key, default) in [("Context meter", "showContext", true), ("Cost", "showCost", true), ("Tokens per second", "showRate", true), ("Plan above the composer", "showPlan", true), ("Show thinking", "expandThinking", false), ("Live shell output", "expandShell", false), ("Compact tool calls", "compactTools", true), ("Animated send button", "sendAnimation", true), ("Compact layout", "compact", false)] {
                 let on = self.code_web(key, default, cx);
                 let t = self.web_toggle(key, on, c, cx);
                 defaults = defaults.child(row(c, label, hint(label), t));
@@ -447,7 +447,7 @@ impl Root {
                             let name = s["name"].as_str().unwrap_or_default();
                             let label = if source == "user" { name.to_string() } else { format!("{source}:{name}") };
                             let current = picked.clone();
-                            chips = chips.child(div().id(SharedString::from(format!("lean-{id}"))).flex().h(px(24.0)).items_center().rounded_md().px_2().text_size(px(11.0)).cursor_pointer()
+                            chips = chips.child(div().id(SharedString::from(format!("lean-{id}"))).flex().h(px(24.0)).items_center().rounded_md().border_1().px_2().text_size(px(11.0)).cursor_pointer()
                                 .when(on, |d| d.text_color(c.fg)).when(!on, |d| d.text_color(c.muted))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let mut next = current.clone();

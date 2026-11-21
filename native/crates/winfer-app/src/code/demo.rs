@@ -74,6 +74,26 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
             steps.truncate(2);
             steps.push((300, Ev(json!({ "type": "ready", "session": "demo", "model": "codex/gpt-6-luna", "mode": "ask", "cwd": "/tmp/web-os-demo", "branch": "main", "effort": "high" }))));
         }
+        "viz" => {
+            steps.truncate(2);
+            steps.push((300, Type("Show me how the build time splits up\r")));
+            steps.push((300, Ev(json!({ "type": "turn_start" }))));
+            steps.push((400, Ev(json!({ "type": "tool_start", "id": "v0", "name": "Bash", "title": "cargo build --timings", "input": { "command": "cargo build --timings" } }))));
+            steps.push((500, Ev(json!({ "type": "tool_end", "id": "v0", "ok": true, "output": "Finished" }))));
+            steps.push((300, Ev(json!({ "type": "tool_start", "id": "v1", "name": "winfer · visualize", "title": "Build time report", "input": { "title": "Build time report", "subtitle": "cargo build --timings, release", "blocks": [
+                { "type": "stats", "items": [{ "label": "Total", "value": "41.2 s", "delta": "-8% vs last week" }, { "label": "Crates", "value": "318" }, { "label": "Cache hits", "value": "92%", "note": "sccache" }] },
+                { "type": "pie", "ring": true, "title": "Where the time goes", "center": { "value": "41 s", "label": "total" }, "unit": "s", "slices": [{ "label": "gpui", "value": 14.2 }, { "label": "winfer-app", "value": 11.1 }, { "label": "winfer-backend", "value": 8.4 }, { "label": "tokio", "value": 3.2 }, { "label": "serde", "value": 2.1 }, { "label": "other", "value": 2.2 }] },
+                { "type": "bar", "title": "Seconds per crate", "unit": "s", "labels": ["gpui", "winfer-app", "winfer-backend", "tokio"], "series": [{ "name": "Debug", "values": [9.1, 7.4, 5.2, 2.0] }, { "name": "Release", "values": [14.2, 11.1, 8.4, 3.2] }] },
+                { "type": "line", "area": true, "title": "Build time, last 8 runs", "unit": "s", "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon"], "series": [{ "name": "Release", "values": [52, 49, 47, 51, 44, 43, 42, 41.2] }] },
+                { "type": "bar", "orientation": "vertical", "stacked": true, "title": "Stacked by phase", "labels": ["Mon", "Tue", "Wed", "Thu"], "series": [{ "name": "Compile", "values": [30, 28, 27, 25] }, { "name": "Link", "values": [12, 11, 12, 10] }, { "name": "Other", "values": [4, 3, 4, 3] }] },
+                { "type": "progress", "title": "Budget", "items": [{ "label": "CI minutes", "value": 72 }, { "label": "Disk", "value": 18, "max": 50 }] },
+                { "type": "table", "title": "Slowest crates", "columns": ["Crate", { "key": "t", "label": "Time" }, "Note"], "rows": [["gpui", 14.2, "proc macros"], ["winfer-app", 11.1, "large file"], { "Crate": "winfer-backend", "t": 8.4, "Note": "" }] },
+                { "type": "text", "markdown": "**gpui** dominates; a shared target dir would cut about 10 s." }
+            ] } }))));
+            steps.push((300, Ev(json!({ "type": "tool_end", "id": "v1", "ok": true, "output": "Shown to the user in the chat: 1 stat row." }))));
+            steps.push((300, Ev(json!({ "type": "text", "id": "va1", "text": "Two crates make up 60% of the build." }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
         "model" => steps.push((1200, Type("/model\r"))),
         "mode" => steps.push((1200, Type("/mode\r"))),
         "effort" => steps.push((1200, Type("/effort\r"))),

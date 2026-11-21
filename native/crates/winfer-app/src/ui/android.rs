@@ -126,6 +126,7 @@ fn decode_loop(rx: mpsc::Receiver<Vec<u8>>, latest: Arc<Mutex<Option<Arc<RenderI
                 let mut rgba = vec![0; w * h * 4];
                 yuv.write_rgba8(&mut rgba);
                 if let Some(image) = render_image(rgba, w as u32, h as u32) {
+                    super::capture::offer_image(super::capture::Source::Android, &image);
                     *latest.lock() = Some(image);
                     let _ = frames.try_send(Ok(()));
                 }
@@ -173,6 +174,7 @@ fn decode_loop(rx: mpsc::Receiver<Vec<u8>>, latest: Arc<Mutex<Option<Arc<RenderI
 fn decode_data_url(url: &str) -> Option<(Arc<RenderImage>, u32, u32)> {
     let encoded = url.split_once(',').map_or(url, |(_, b)| b);
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    super::capture::offer_encoded(super::capture::Source::Android, &bytes);
     let rgba = ::image::load_from_memory(&bytes).ok()?.into_rgba8();
     let (w, h) = rgba.dimensions();
     Some((render_image(rgba.into_raw(), w, h)?, w, h))
@@ -421,7 +423,7 @@ impl AndroidPanel {
             let name = avd.to_string();
             let booting = self.starting.as_deref() == Some(avd);
             let free = self.starting.is_none();
-            list = list.child(div().id(("avd", i)).flex().items_center().gap_2().rounded_md().px_2p5().py_1p5().text_color(c.fg).when(free, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover))).when(!free, |d| d.opacity(0.5))
+            list = list.child(div().id(("avd", i)).flex().items_center().gap_2().rounded_md().border_1().border_color(c.edge).px_2p5().py_1p5().text_color(c.fg).when(free, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover))).when(!free, |d| d.opacity(0.5))
                 .on_click(cx.listener(move |this, _, _, cx| if this.starting.is_none() { this.start_avd(name.clone(), cx) }))
                 .child(Icon::new(IconName::Smartphone).size(px(12.0)))
                 .child(div().flex_1().truncate().text_left().child(avd.replace('_', " ")))
@@ -466,7 +468,7 @@ impl AndroidPanel {
             stage = stage.child(img(ImageSource::Render(image)).size_full().object_fit(ObjectFit::Contain));
         } else {
             stage = stage.child(div().size_full().flex().flex_col().items_center().justify_center().gap_2().p_6().text_center().text_xs().text_color(c.subtle).child(match error {
-                Some(e) => div().flex().flex_col().items_center().gap_2().child(div().text_color(c.danger).child(e)).child(div().id("android-retry").rounded_md().px_2().py_1().text_color(c.muted).cursor_pointer().on_click(cx.listener(|this, _, _, cx| this.reconnect(cx))).child("Try again")),
+                Some(e) => div().flex().flex_col().items_center().gap_2().child(div().text_color(c.danger).child(e)).child(div().id("android-retry").rounded_md().border_1().border_color(c.edge).px_2().py_1().text_color(c.muted).cursor_pointer().on_click(cx.listener(|this, _, _, cx| this.reconnect(cx))).child("Try again")),
                 None => div().child(format!("Connecting to {model}… (the picture appears when the screen changes)")),
             }));
         }
@@ -505,7 +507,7 @@ impl Render for AndroidPanel {
                 let serial = d["serial"].as_str().unwrap_or_default().to_string();
                 let on = current.as_ref().is_some_and(|x| x["serial"] == d["serial"]);
                 let label = format!("{}{} · {serial}", d["model"].as_str().unwrap_or_default(), if d["emulator"] == true { " (emulator)" } else { "" });
-                row = row.child(div().id(("device", i)).truncate().rounded_md().px_1p5().py_0p5().cursor_pointer().when(on, |d| d.text_color(c.fg)).when(!on, |d| d.text_color(c.muted))
+                row = row.child(div().id(("device", i)).truncate().rounded_md().border_1().px_1p5().py_0p5().cursor_pointer().when(on, |d| d.border_color(c.accent).text_color(c.fg)).when(!on, |d| d.border_color(c.edge).text_color(c.muted))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let serial = serial.clone();
                         this.state.update(cx, |s, cx| {

@@ -176,7 +176,7 @@ impl Root {
         };
         let discover_label = catalog.as_ref().map_or("Discover".to_string(), |_| format!("Discover {}", not_installed.len()));
         let toolbar = div().flex().items_center().gap_3()
-            .child(div().flex().rounded_lg().bg(c.panel).p_0p5()
+            .child(div().flex().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_0p5()
                 .child(tab_button("plugins-discover", "discover", discover_label, tab == "discover", false, cx))
                 .child(tab_button("plugins-installed", "installed", format!("Installed {}", plugins.len()), tab == "installed", !updates.is_empty(), cx)))
             .child(div().flex_1().child(Input::new(&search)));
@@ -208,7 +208,7 @@ impl Root {
             fields.extend(tag_list.iter());
             tag.as_ref().is_none_or(|t| tag_list.contains(&t.as_str())) && matches_search(query, &fields)
         }).cloned().collect();
-        let chip = |id: SharedString, label: String, on: bool| div().id(id).flex().h(px(24.0)).items_center().rounded_md().px_2().text_size(px(11.0)).cursor_pointer()
+        let chip = |id: SharedString, label: String, on: bool| div().id(id).flex().h(px(24.0)).items_center().rounded_md().border_1().px_2().text_size(px(11.0)).cursor_pointer()
             .when(on, |d| d.text_color(c.fg)).when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg))).child(label);
         let mut out = div().flex().flex_col().gap_3();
         if !tags.is_empty() {
@@ -243,7 +243,7 @@ impl Root {
             let label = if busy.as_ref() == Some(&id) { "Installing…" } else { "Install" };
             let entry = e.clone();
             let enabled = busy.is_none();
-            grid = grid.child(div().w(relative(0.5)).p(px(6.0)).child(div().size_full().flex().flex_col().rounded_lg().bg(c.panel).p_3p5()
+            grid = grid.child(div().w(relative(0.5)).p(px(6.0)).child(div().size_full().flex().flex_col().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_3p5()
                 .child(div().truncate().text_size(px(13.0)).text_color(c.fg).child(str_of(&e["name"]).to_string()))
                 .child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(format!("{author}{version}")))
                 .child(div().id(SharedString::from(format!("desc-{id}"))).mt_2p5().text_xs().text_color(c.muted).cursor_pointer().when(!open, |d| d.line_clamp(3))
@@ -271,7 +271,7 @@ impl Root {
             let text = if updates.len() == 1 { format!("An update for {} is available.", str_of(&updates[0]["name"])) } else { format!("{} plugin updates are available.", updates.len()) };
             let list = updates.clone();
             let free = busy.is_none();
-            page = page.child(div().flex().items_center().gap_2().rounded_lg().px_3().py_2().text_xs()
+            page = page.child(div().flex().items_center().gap_2().rounded_lg().border_1().border_color(c.accent).px_3().py_2().text_xs()
                 .child(div().flex_1().text_color(c.fg).child(text))
                 .child(accent_button(c, "plugins-update-all", if updates.len() == 1 { "Update" } else { "Update all" }, free).on_click(cx.listener(move |this, _, window, cx| {
                     if !free {
@@ -295,7 +295,7 @@ impl Root {
         if shown.is_empty() {
             page = page.child(div().py_8().text_center().text_xs().text_color(c.muted).child(if plugins.is_empty() { "No plugins installed. Plugins add pages, agents, recipes, commands, voice actions and tools for your agents.".to_string() } else { format!("No installed plugin matches “{query}”") }));
         } else {
-            let mut list = div().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel);
+            let mut list = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel);
             for (i, p) in shown.into_iter().enumerate() {
                 let id = str_of(&p["id"]).to_string();
                 let name = p["manifest"]["name"].as_str().unwrap_or(&id).to_string();

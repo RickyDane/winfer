@@ -112,6 +112,7 @@ impl Root {
     /// The chat changed: tell the phones if what it waits on did, and stream the thread to the
     /// phones reading it.
     pub(super) fn on_code_changed(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.show_handed_plan(id, cx);
         let Some(pane) = self.state.read(cx).pane(id).cloned() else { return };
         let (asking, busy) = self.chat(id).map_or((false, false), |m| {
             let st = &m.read(cx).state;

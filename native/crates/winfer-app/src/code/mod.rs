@@ -6,6 +6,8 @@ pub mod commands;
 pub mod links;
 pub mod mobile;
 pub mod toolbody;
+pub mod viz;
+pub mod viz_svg;
 #[cfg(debug_assertions)]
 pub mod demo;
 pub mod names;

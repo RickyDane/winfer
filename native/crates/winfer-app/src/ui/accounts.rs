@@ -385,7 +385,7 @@ impl Root {
             let ids: Vec<String> = list.iter().map(|a| a.id.clone()).collect();
             let name = self.state.read(cx).provider_name(provider);
             let adding = self.failover.adding;
-            let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel);
+            let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel);
             for (i, account) in list.iter().enumerate() {
                 let label = self.label_input(account, window, cx);
                 let w = tightest(self.usage.snapshots.get(&usage_key(&account.id)), now).cloned();
@@ -497,7 +497,7 @@ impl Root {
     }
 
     pub(super) fn refresh_all_usage(&mut self, cx: &mut Context<Self>) {
-        let mut targets: Vec<(String, Option<String>)> = vec![("claude".into(), None), ("codex".into(), None)];
+        let mut targets: Vec<(String, Option<String>)> = vec![("claude".into(), None), ("codex".into(), None), ("agy".into(), None)];
         targets.extend(self.usage.accounts.iter().filter(|a| a.enabled && a.signed_in && !is_default(&a.id)).map(|a| (a.provider.clone(), Some(a.id.clone()))));
         for (provider, account) in targets {
             self.refresh_one(provider, account, cx);

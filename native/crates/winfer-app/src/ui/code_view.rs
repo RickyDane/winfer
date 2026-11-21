@@ -14,7 +14,7 @@ use crate::theme::{self, Colors};
 use base64::Engine;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::input::{Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, MoveDown, MoveUp, OutdentInline, Position, Textarea, TextareaState};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
@@ -44,6 +44,8 @@ pub(super) struct Env {
     pub cwd: Option<String>,
     /// When each row first appeared (ms), to play its entrance once.
     pub born: Rc<HashMap<String, u64>>,
+    /// Width of a transcript row's content, in px.
+    pub width: f32,
 }
 
 impl Env {
@@ -68,6 +70,7 @@ pub struct CodeView {
     pub(super) model: Entity<CodeModel>,
     pub(super) app: Entity<AppState>,
     list: ListState,
+    rows: Rc<Vec<DisplayRow>>,
     sigs: Vec<u64>,
     input: Entity<TextareaState>,
     seen_rev: u64,
@@ -77,16 +80,20 @@ pub struct CodeView {
     pane_size: Size<Pixels>,
     images: Rc<RefCell<HashMap<String, Vec<Arc<Image>>>>>,
     popup: usize,
+    popup_scroll: ScrollHandle,
+    popup_closed_at: Option<usize>,
     /// Per approval id and question: the picked option indexes.
     picks: HashMap<String, Vec<Vec<usize>>>,
     asked_files: bool,
     ticking: bool,
-    sky_ticking: bool,
+    sky: Entity<SpaceSkyView>,
     born: HashMap<String, u64>,
     seeded: bool,
     pub(super) picker: super::code_pickers::PickerState,
     /// An image open full size.
     preview: Option<Arc<Image>>,
+    /// Key of the newest user message; a new one snaps the transcript back to the bottom.
+    last_user: Option<String>,
 }
 
 /// A link clicked in the transcript: a web address or a file path (with `:line`).
@@ -133,6 +140,297 @@ fn tool_icon(name: &str) -> IconName {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DisplayRow {
+    Item(usize),
+    WorkGroup {
+        key: String,
+        start: usize,
+        end: usize,
+        active: bool,
+    },
+    /// `visualize` calls made in a row (only work between them), drawn as one report.
+    Report { key: String, items: Vec<usize> },
+    Working,
+}
+
+impl DisplayRow {
+    fn key<'a>(&'a self, items: &'a [Item]) -> &'a str {
+        match self {
+            DisplayRow::Item(ix) => items.get(*ix).map_or("", Item::key),
+            DisplayRow::WorkGroup { key, .. } | DisplayRow::Report { key, .. } => key.as_str(),
+            DisplayRow::Working => "cw-working",
+        }
+    }
+}
+
+fn is_work_item(item: &Item) -> bool {
+    matches!(item, Item::Tool { .. } | Item::Reasoning { .. }) && !is_chart(item)
+}
+
+/// A `visualize` call drawn as a chart: its own row, never folded into a work group.
+fn is_chart(item: &Item) -> bool {
+    matches!(item, Item::Tool { name, input, ok, .. } if crate::code::viz::report_of(name, input, *ok).is_some())
+}
+
+/// Adds item `k` as a row of its own. A chart joins the report still `open` (one with only work
+/// since it); anything else closes that report.
+fn push_row(rows: &mut Vec<DisplayRow>, items: &[Item], k: usize, open: &mut Option<usize>) {
+    if !is_chart(&items[k]) {
+        *open = None;
+        rows.push(DisplayRow::Item(k));
+        return;
+    }
+    if let Some(DisplayRow::Report { items: charts, .. }) = open.and_then(|r| rows.get_mut(r)) {
+        charts.push(k);
+        return;
+    }
+    *open = Some(rows.len());
+    rows.push(DisplayRow::Report { key: format!("rep-{}", items[k].key()), items: vec![k] });
+}
+
+fn build_display_rows(items: &[Item], busy: bool, compact_tools: bool) -> Vec<DisplayRow> {
+    if !compact_tools {
+        let (mut out, mut open) = (Vec::new(), None);
+        for k in 0..items.len() {
+            push_row(&mut out, items, k, &mut open);
+        }
+        if busy {
+            out.push(DisplayRow::Working);
+        }
+        return out;
+    }
+
+    let mut rows = Vec::new();
+    let mut open: Option<usize>;
+    let mut i = 0;
+    while i < items.len() {
+        if matches!(items[i], Item::User { .. }) {
+            rows.push(DisplayRow::Item(i));
+            i += 1;
+            if i == items.len() && busy {
+                rows.push(DisplayRow::Working);
+            }
+            continue;
+        }
+
+        let turn_start = i;
+        open = None;
+        while i < items.len() && !matches!(items[i], Item::User { .. }) {
+            i += 1;
+        }
+        let turn_end = i;
+        let is_last_turn = turn_end == items.len();
+
+        // Each run of work between text, notices and charts gets its own group; the turn's total
+        // "Worked for" row stays where it is. A finished run of one step shows that step directly.
+        let mut k = turn_start;
+        while k < turn_end {
+            if !is_work_item(&items[k]) {
+                push_row(&mut rows, items, k, &mut open);
+                k += 1;
+                continue;
+            }
+            let start = k;
+            while k < turn_end && is_work_item(&items[k]) {
+                k += 1;
+            }
+            let active = busy && is_last_turn && k == turn_end;
+            // Not `push_row`: work between charts keeps their report open.
+            rows.push(if k - start == 1 && !active {
+                DisplayRow::Item(start)
+            } else {
+                DisplayRow::WorkGroup { key: format!("wg-{}", items[start].key()), start, end: k - 1, active }
+            });
+        }
+        if is_last_turn && busy {
+            let live_group = matches!(rows.last(), Some(DisplayRow::WorkGroup { active: true, .. }));
+            let streaming_text = matches!(items.get(turn_end.wrapping_sub(1)), Some(Item::Text { streaming: true, .. }));
+            if !live_group && !streaming_text {
+                rows.push(DisplayRow::Working);
+            }
+        }
+    }
+
+    rows
+}
+
+fn group_duration_ms(items: &[Item], start: usize, end: usize) -> Option<u64> {
+    let mut min_start = u64::MAX;
+    let mut max_end = 0u64;
+    for it in items.get(start..=end).unwrap_or(&[]) {
+        match it {
+            Item::Tool { started, ended, .. } | Item::Reasoning { started, ended, .. } => {
+                if *started > 0 {
+                    min_start = min_start.min(*started);
+                }
+                if let Some(e) = ended {
+                    max_end = max_end.max(*e);
+                }
+            }
+            _ => {}
+        }
+    }
+    if min_start < u64::MAX && max_end >= min_start {
+        Some((max_end - min_start).max(1000))
+    } else {
+        None
+    }
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let clean: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.chars().count() <= max {
+        clean
+    } else {
+        let mut out: String = clean.chars().take(max.saturating_sub(1)).collect();
+        while out.ends_with(' ') {
+            out.pop();
+        }
+        out.push('…');
+        out
+    }
+}
+
+fn file_label(raw: &str) -> String {
+    let first = raw.split_whitespace().next().unwrap_or("");
+    let base = first.rsplit(['/', '\\']).next().unwrap_or(first);
+    truncate_chars(base, 36)
+}
+
+fn host_label(raw: &str) -> String {
+    let s = raw.trim();
+    let stripped = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(s);
+    let stripped = stripped.strip_prefix("www.").unwrap_or(stripped);
+    let host = stripped.split('/').next().unwrap_or(stripped);
+    truncate_chars(host, 36)
+}
+
+fn capitalize_first(s: String) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => format!("{}{}", c.to_uppercase(), chars.as_str()),
+        None => s,
+    }
+}
+
+/// Short, subtle status description for the active compact row (no raw tool chrome).
+fn describe_step(step: Option<&Item>) -> String {
+    capitalize_first(describe_step_raw(step))
+}
+
+fn describe_step_raw(step: Option<&Item>) -> String {
+    match step {
+        None => "Working…".into(),
+        Some(Item::Reasoning { streaming: true, .. }) => "Thinking…".into(),
+        Some(Item::Reasoning { streaming: false, .. }) => "Working…".into(),
+        Some(Item::Tool { name, title, input, .. }) => {
+            let desc = input.get("description").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+            let title = title.trim();
+            match name.as_str() {
+                "Read" => {
+                    let f = file_label(title);
+                    if f.is_empty() { "Reading file".into() } else { format!("Reading {f}") }
+                }
+                "Edit" => {
+                    let f = file_label(title);
+                    if f.is_empty() { "Editing file".into() } else { format!("Editing {f}") }
+                }
+                "Write" => {
+                    let f = file_label(title);
+                    if f.is_empty() { "Writing file".into() } else { format!("Writing {f}") }
+                }
+                "Grep" => if title.is_empty() { "Searching files".into() } else { format!("Searching {}", truncate_chars(title, 36)) },
+                "Glob" => if title.is_empty() { "Finding files".into() } else { format!("Finding {}", truncate_chars(title, 36)) },
+                "Bash" => {
+                    if !desc.is_empty() {
+                        truncate_chars(desc, 48)
+                    } else {
+                        let cmd = title.lines().next().map(str::trim).unwrap_or("");
+                        if cmd.is_empty() { "Running command".into() } else { format!("Running {}", truncate_chars(cmd, 40)) }
+                    }
+                }
+                "Agent" => {
+                    if !desc.is_empty() {
+                        truncate_chars(desc, 48)
+                    } else if !title.is_empty() {
+                        format!("Running agent · {}", truncate_chars(title, 34))
+                    } else {
+                        "Running subagent".into()
+                    }
+                }
+                "WebSearch" => if title.is_empty() { "Searching the web".into() } else { format!("Searching web · {}", truncate_chars(title, 34)) },
+                "WebFetch" => {
+                    let h = host_label(title);
+                    if h.is_empty() { "Fetching page".into() } else { format!("Fetching {h}") }
+                }
+                "TodoWrite" | "UpdatePlan" => "Updating plan".into(),
+                _ => {
+                    if !desc.is_empty() {
+                        truncate_chars(desc, 48)
+                    } else if !title.is_empty() {
+                        truncate_chars(title, 48)
+                    } else if !name.is_empty() {
+                        format!("Running {}", truncate_chars(name, 36))
+                    } else {
+                        "Working…".into()
+                    }
+                }
+            }
+        }
+        _ => "Working…".into(),
+    }
+}
+
+fn row_signature(row: &DisplayRow, items: &[Item], env_flipped: &HashSet<String>, env_toggled: &HashMap<String, (u64, bool)>, now: u64) -> u64 {
+    match row {
+        DisplayRow::Item(ix) => items.get(*ix).map_or(0, |i| signature(i, env_flipped, env_toggled, now)),
+        DisplayRow::Working => u64::MAX,
+        DisplayRow::Report { key, items: charts } => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut h);
+            for ix in charts {
+                items.get(*ix).map(|i| signature(i, env_flipped, env_toggled, now)).hash(&mut h);
+            }
+            h.finish()
+        }
+        DisplayRow::WorkGroup { key, start, end, active } => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut h);
+            (*start, *end, *active).hash(&mut h);
+            let open = env_flipped.contains(key);
+            open.hash(&mut h);
+            env_toggled.get(key).hash(&mut h);
+            if open || env_toggled.contains_key(key) {
+                for it in items.get(*start..=*end).unwrap_or(&[]) {
+                    signature(it, env_flipped, env_toggled, now).hash(&mut h);
+                }
+            } else {
+                let slice = items.get(*start..=*end).unwrap_or(&[]);
+                let mut tool_count = 0usize;
+                let mut last_work: Option<&Item> = None;
+                for it in slice {
+                    match it {
+                        Item::Tool { .. } => {
+                            tool_count += 1;
+                            last_work = Some(it);
+                        }
+                        Item::Reasoning { .. } => {
+                            last_work = Some(it);
+                        }
+                        _ => {}
+                    }
+                }
+                (tool_count, group_duration_ms(items, *start, *end)).hash(&mut h);
+                if *active {
+                    describe_step(last_work).hash(&mut h);
+                }
+            }
+            h.finish()
+        }
+    }
+}
+
 fn signature(item: &Item, env_flipped: &HashSet<String>, env_toggled: &HashMap<String, (u64, bool)>, now: u64) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     item.key().hash(&mut h);
@@ -159,7 +457,7 @@ fn signature(item: &Item, env_flipped: &HashSet<String>, env_toggled: &HashMap<S
     h.finish()
 }
 
-fn data_image(url: &str) -> Option<Arc<Image>> {
+pub(super) fn data_image(url: &str) -> Option<Arc<Image>> {
     let (head, body) = url.split_once(',')?;
     let format = match head.strip_prefix("data:")?.split(';').next()? {
         "image/png" => ImageFormat::Png,
@@ -179,7 +477,7 @@ fn encode_png(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn attachment_from_path(path: &std::path::Path) -> Option<Attachment> {
+pub(super) fn attachment_from_path(path: &std::path::Path) -> Option<Attachment> {
     if path.is_dir() {
         return None;
     }
@@ -206,7 +504,7 @@ fn attachment_from_path(path: &std::path::Path) -> Option<Attachment> {
     Some(Attachment { data: String::new(), mime: String::new(), name, path: Some(path.to_string_lossy().into_owned()) })
 }
 
-fn attachment_from_clipboard_image(img: &Image, existing: usize) -> Option<Attachment> {
+pub(super) fn attachment_from_clipboard_image(img: &Image, existing: usize) -> Option<Attachment> {
     let (mime, ext, bytes) = match img.format {
         ImageFormat::Png => ("image/png", "png", img.bytes.clone()),
         ImageFormat::Jpeg => ("image/jpeg", "jpg", img.bytes.clone()),
@@ -230,6 +528,8 @@ impl CodeView {
                 let text = input.read(cx).value().to_string();
                 this.model.update(cx, |m, _| m.set_draft(text.clone()));
                 this.popup = 0;
+                this.popup_closed_at = None;
+                this.popup_scroll.set_offset(point(px(0.0), px(0.0)));
                 if text.contains('@') && !this.asked_files {
                     this.asked_files = true;
                     this.model.update(cx, |m, cx| m.send(Cmd::Files, cx));
@@ -240,14 +540,26 @@ impl CodeView {
         })
         .detach();
         cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        cx.observe(&app, |_, _, cx| cx.notify()).detach();
         cx.subscribe(&model, |_, _, _: &CodeEvent, _| {}).detach();
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
-        Self { model, app, list, sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), images: Rc::new(RefCell::new(HashMap::new())), popup: 0, picks: HashMap::new(), asked_files: false, ticking: false, sky_ticking: false, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None }
+        let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
+        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), images: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None }
+    }
+
+    pub fn sky_view(&self) -> Entity<SpaceSkyView> {
+        self.sky.clone()
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut App) {
         self.input.read(cx).focus_handle(cx).focus(window, cx);
+    }
+
+    fn cycle_mode(&mut self, cx: &mut Context<Self>) {
+        let cur = self.model.read(cx).state.mode;
+        let next = Mode::ALL[(Mode::ALL.iter().position(|m| *m == cur).unwrap_or(0) + 1) % Mode::ALL.len()];
+        self.send(Cmd::SetMode(next), cx);
     }
 
     fn draft(&self, cx: &App) -> String {
@@ -256,7 +568,17 @@ impl CodeView {
 
     fn set_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let text = text.to_string();
-        self.input.update(cx, |s, cx| s.set_value(text, window, cx));
+        let line = text.matches('\n').count() as u32;
+        let col = text.rsplit('\n').next().map_or(0, |s| s.encode_utf16().count()) as u32;
+        self.popup = 0;
+        self.popup_closed_at = None;
+        self.popup_scroll.set_offset(point(px(0.0), px(0.0)));
+        self.input.update(cx, |s, cx| {
+            s.set_value(text.clone(), window, cx);
+            if !text.is_empty() {
+                s.set_cursor_position(Position::new(line, col), window, cx);
+            }
+        });
     }
 
     /// The composer's Enter: completes a half-typed command, answers a question, or sends.
@@ -264,15 +586,17 @@ impl CodeView {
         let text = self.draft(cx);
         let t = text.trim().to_string();
         if t.starts_with('/') && !t.contains(char::is_whitespace) {
-            let matches = commands::matching(&t);
-            if !matches.iter().any(|(c, _)| *c == t) {
-                if let Some((c, _)) = matches.get(self.popup.min(matches.len().saturating_sub(1))) {
+            let skills = self.model.read(cx).state.skills.clone();
+            let matches = commands::matching_with_skills(&t, &skills);
+            if let Some((c, _)) = matches.get(self.popup.min(matches.len().saturating_sub(1))) {
+                if *c != t {
                     self.set_input(&format!("{c} "), window, cx);
                     return;
                 }
             }
         }
-        if let Some((_, path)) = self.mention(&text, cx) {
+        let mentions = self.mention_matches(&text, cx);
+        if let Some(path) = mentions.get(self.popup.min(mentions.len().saturating_sub(1))) {
             let at = text.rfind('@').unwrap_or(0);
             self.set_input(&format!("{}@{path} ", &text[..at]), window, cx);
             return;
@@ -325,27 +649,125 @@ impl CodeView {
         }
     }
 
-    /// `@mention` being typed at the end of the text: (query, first match).
-    fn mention(&self, text: &str, cx: &App) -> Option<(String, String)> {
+    /// `@mention` being typed at the end of the text: `(at_offset, query)`.
+    fn mention_at(text: &str) -> Option<(usize, &str)> {
         let at = text.rfind('@')?;
         let query = &text[at + 1..];
         if query.contains(char::is_whitespace) || (at > 0 && !text[..at].ends_with(char::is_whitespace)) {
             return None;
         }
-        let files = self.model.read(cx).state.files.clone()?;
-        let q = query.to_lowercase();
-        let hit = files.iter().find(|f| f.to_lowercase().contains(&q))?;
-        Some((query.to_string(), hit.clone()))
+        Some((at, query))
     }
 
     fn mention_matches(&self, text: &str, cx: &App) -> Vec<String> {
-        let Some(at) = text.rfind('@') else { return Vec::new() };
-        let query = &text[at + 1..];
-        if query.contains(char::is_whitespace) || (at > 0 && !text[..at].ends_with(char::is_whitespace)) {
+        let Some((at, query)) = Self::mention_at(text) else { return Vec::new() };
+        if self.popup_closed_at == Some(at) {
             return Vec::new();
         }
         let q = query.to_lowercase();
-        self.model.read(cx).state.files.as_ref().map_or(Vec::new(), |f| f.iter().filter(|p| p.to_lowercase().contains(&q)).take(8).cloned().collect())
+        self.model
+            .read(cx)
+            .state
+            .files
+            .as_ref()
+            .map_or(Vec::new(), |f| f.iter().filter(|p| p.to_lowercase().contains(&q)).take(200).cloned().collect())
+    }
+
+    fn popup_rows(&self, text: &str, cx: &App) -> Vec<(String, String, String)> {
+        let t = text.trim_start();
+        if t.starts_with('/') && !t.contains(char::is_whitespace) {
+            let skills = &self.model.read(cx).state.skills;
+            return commands::matching_with_skills(t, skills)
+                .into_iter()
+                .map(|(cmd, d)| {
+                    let insert = format!("{cmd} ");
+                    (cmd, d, insert)
+                })
+                .collect();
+        }
+        if let Some((at, _)) = Self::mention_at(text) {
+            let prefix = &text[..at];
+            return self
+                .mention_matches(text, cx)
+                .into_iter()
+                .map(|f| {
+                    let insert = format!("{prefix}@{f} ");
+                    (f, String::new(), insert)
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
+    fn move_popup(&mut self, down: bool, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let len = self.popup_rows(&self.draft(cx), cx).len();
+        if len == 0 {
+            return false;
+        }
+        let cur = self.popup.min(len - 1);
+        self.popup = if down { (cur + 1) % len } else { (cur + len - 1) % len };
+        self.popup_scroll.scroll_to_item(self.popup);
+        cx.notify();
+        true
+    }
+
+    fn accept_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let rows = self.popup_rows(&self.draft(cx), cx);
+        if rows.is_empty() {
+            return false;
+        }
+        let selected = self.popup.min(rows.len() - 1);
+        let insert = rows[selected].2.clone();
+        self.set_input(&insert, window, cx);
+        self.focus_composer(window, cx);
+        true
+    }
+
+    fn accept_popup_on_enter(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let text = self.draft(cx);
+        let t = text.trim();
+        if t.starts_with('/') && !t.contains(char::is_whitespace) {
+            let skills = self.model.read(cx).state.skills.clone();
+            let matches = commands::matching_with_skills(t, &skills);
+            if let Some((c, _)) = matches.get(self.popup.min(matches.len().saturating_sub(1))) {
+                if c != t {
+                    self.set_input(&format!("{c} "), window, cx);
+                    return true;
+                }
+            }
+            return false;
+        }
+        let mentions = self.mention_matches(&text, cx);
+        if let Some(path) = mentions.get(self.popup.min(mentions.len().saturating_sub(1))) {
+            let at = text.rfind('@').unwrap_or(0);
+            self.set_input(&format!("{}@{path} ", &text[..at]), window, cx);
+            return true;
+        }
+        false
+    }
+
+    fn dismiss_mention_popup(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let text = self.draft(cx);
+        if let Some((at, _)) = Self::mention_at(&text) {
+            if !self.mention_matches(&text, cx).is_empty() {
+                self.popup_closed_at = Some(at);
+                cx.notify();
+                return true;
+            }
+        }
+        false
     }
 
     pub(super) fn set_sheet(&mut self, sheet: Option<Sheet>, cx: &mut Context<Self>) {
@@ -370,6 +792,15 @@ impl CodeView {
             self.flipped.insert(key.to_string());
         }
         let opening = !was_open;
+        // At the bottom the bottom-aligned list has no anchor and lays out from the end, so a growing
+        // card would push everything above it up. Pin the current top so it pushes content below it down.
+        if self.list.logical_scroll_top().item_ix >= self.list.item_count() {
+            let top = -self.list.scroll_px_offset_for_scrollbar().y;
+            self.list.scroll_to_end();
+            let end = -self.list.scroll_px_offset_for_scrollbar().y;
+            self.list.scroll_by(top - end);
+        }
+        self.list.pause_following_tail();
         self.toggle_seq = self.toggle_seq.wrapping_add(1);
         let seq = self.toggle_seq;
         let k = key.to_string();
@@ -477,32 +908,6 @@ impl CodeView {
         .detach();
     }
 
-    /// Gently repaints the space welcome sky (twinkling stars & shooting stars) while no turn has started.
-    fn sky_tick(&mut self, cx: &mut Context<Self>) {
-        if self.sky_ticking {
-            return;
-        }
-        self.sky_ticking = true;
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_millis(45)).await;
-                let keep = this.update(cx, |this, cx| {
-                    let empty = this.model.read(cx).state.items.is_empty();
-                    if empty {
-                        cx.notify();
-                    } else {
-                        this.sky_ticking = false;
-                    }
-                    empty
-                });
-                if !keep.unwrap_or(false) {
-                    break;
-                }
-            }
-        })
-        .detach();
-    }
-
     fn prefs(&self, cx: &App) -> (f32, bool, bool, bool, bool, bool, bool, bool) {
         let s = self.app.read(cx);
         let get = |k: &str, d: bool| s.rest.get("codeWeb").and_then(|v| v[k].as_bool()).unwrap_or(d);
@@ -510,25 +915,57 @@ impl CodeView {
         (scale, get("compact", false), get("expandThinking", false), get("expandShell", false), get("showCost", true), get("showContext", true), get("showRate", true), get("showPlan", true))
     }
 
+    fn compact_tools(&self, cx: &App) -> bool {
+        if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") {
+            return false;
+        }
+        self.app.read(cx).rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true)
+    }
+
     /// Splices what changed since the last frame into the list state.
-    fn sync_list(&mut self, items: &[Item], now: u64) {
-        let sigs: Vec<u64> = items.iter().map(|i| signature(i, &self.flipped, &self.toggled, now)).collect();
+    fn sync_list(&mut self, items: &[Item], busy: bool, compact_tools: bool, now: u64) {
+        let rows = build_display_rows(items, busy, compact_tools);
+        let sigs: Vec<u64> = rows.iter().map(|r| row_signature(r, items, &self.flipped, &self.toggled, now)).collect();
         let first = sigs.iter().zip(&self.sigs).position(|(a, b)| a != b).unwrap_or(sigs.len().min(self.sigs.len()));
         if first < self.sigs.len() || sigs.len() != self.sigs.len() {
-            self.list.splice(first..self.sigs.len(), sigs.len() - first);
+            // Only re-measure the rows that changed, so rows after a toggled card keep their heights.
+            let max_suffix = sigs.len().min(self.sigs.len()) - first;
+            let suffix = sigs.iter().rev().zip(self.sigs.iter().rev()).take(max_suffix).take_while(|(a, b)| a == b).count();
+            let old_range = first..self.sigs.len() - suffix;
+            let top = self.list.logical_scroll_top();
+            let count = sigs.len() - suffix - first;
+            self.list.splice(old_range.clone(), count);
+            // `splice` resets the anchor to the top of a replaced row; when rows were only re-rendered in place,
+            // keep the offset within it instead.
+            if old_range.contains(&top.item_ix) && old_range.len() == count {
+                self.list.scroll_to(top);
+            }
         }
         // Rows present on the first frame (a resumed session) don't animate in.
         let stamp = if self.seeded || items.is_empty() { now } else { 0 };
         for i in items {
             self.born.entry(i.key().to_string()).or_insert(stamp);
         }
+        for r in &rows {
+            let k = r.key(items);
+            if !k.is_empty() {
+                self.born.entry(k.to_string()).or_insert(stamp);
+            }
+        }
         self.seeded |= !items.is_empty();
+        self.rows = Rc::new(rows);
         self.sigs = sigs;
     }
 }
 
 /// The transcript and composer share one centered column.
 pub(super) const COLUMN: f32 = 780.0;
+
+fn mix_color(base: Hsla, over: Hsla, t: f32) -> Hsla {
+    let (a, b) = (Rgba::from(base), Rgba::from(over));
+    let inv = 1.0 - t;
+    Rgba { r: a.r * inv + b.r * t, g: a.g * inv + b.g * t, b: a.b * inv + b.b * t, a: a.a * inv + b.a * t }.into()
+}
 
 fn alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
@@ -558,13 +995,6 @@ fn spinner(color: Hsla, size: f32, id: impl Into<ElementId>) -> AnimationElement
         .with_animation(id, Animation::new(Duration::from_millis(900)).repeat().with_max_fps(30.0), |i, t| i.rotate(radians(t * std::f32::consts::TAU)))
 }
 
-/// Three dots pulsing in turn.
-fn dots(color: Hsla, id: &str) -> AnimationElement<Div> {
-    div().flex().items_center().gap(px(3.0)).with_animation(SharedString::from(id.to_string()), Animation::new(Duration::from_millis(1100)).repeat().with_max_fps(30.0), move |d, t| {
-        d.children((0..3).map(|i| div().size(px(4.0)).rounded_full().bg(color).opacity(0.25 + 0.75 * breathe((t + 1.0 - i as f32 * 0.16) % 1.0))))
-    })
-}
-
 /// A column-width wrapper: content centered, never wider than `COLUMN`.
 fn col(el: impl IntoElement) -> Div {
     col_inset(el, false)
@@ -573,7 +1003,7 @@ fn col(el: impl IntoElement) -> Div {
 fn col_inset(el: impl IntoElement, tight: bool) -> Div {
     let wrap = div().w_full().min_w_0().flex().justify_center();
     let wrap = if tight { wrap.px_2() } else { wrap.px_4() };
-    wrap.child(div().w_full().min_w_0().max_w(px(COLUMN)).child(el))
+    wrap.child(div().w_full().min_w_0().child(el))
 }
 
 /// Edge-aligned dock wrapper so the composer (and its attached strips) matches left/right/bottom pane margins.
@@ -675,7 +1105,6 @@ fn composer_layout(w: f32, h: f32) -> ComposerLayout {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct WelcomeLayout {
     compact: bool,
-    show_logo: bool,
     show_cwd: bool,
     short_cwd: bool,
     suggestions: usize,
@@ -703,7 +1132,6 @@ fn welcome_layout(w: f32, h: f32) -> WelcomeLayout {
     };
     WelcomeLayout {
         compact,
-        show_logo: h >= 330.0 && w >= 260.0,
         show_cwd: h >= 260.0,
         short_cwd: w < 460.0 || h < 440.0,
         suggestions,
@@ -726,8 +1154,9 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
     };
     let top = if first { 0.0 } else if env.compact { 10.0 } else { 22.0 };
     enter(env, key, div().w_full().flex().flex_col().items_end().pt(px(top)).pb(px(6.0)).child(
-        div().max_w(relative(0.82)).flex().flex_col().gap_2().rounded_2xl().bg(alpha(c.accent, 0.13)).px_3p5().py_2p5().text_size(env.text()).line_height(relative(1.5)).text_color(c.fg)
-            .children(decoded.into_iter().enumerate().map(|(i, image)| {
+        div().max_w(relative(0.82)).flex().flex_col().gap_2().rounded_2xl().bg(alpha(c.accent, 0.13)).border_1().border_color(alpha(c.accent, 0.28)).px_3p5().py_2p5().text_size(env.text()).line_height(relative(1.5)).text_color(c.fg)
+            // Only add the image row when there are images: an empty row still takes a flex gap and pushes the text down.
+            .when(!decoded.is_empty(), |d| d.child(div().flex().flex_row().flex_wrap().items_start().gap_1p5().children(decoded.into_iter().enumerate().map(|(i, image)| {
                 let (view, full) = (env.view.clone(), image.clone());
                 div().id(("user-img", i)).max_w(px(300.0)).max_h(px(220.0)).rounded_lg().overflow_hidden().cursor_pointer()
                     .on_click(move |_, _, cx| {
@@ -738,7 +1167,7 @@ fn user_row(env: &Env, text: &str, images: &[String], key: &str, first: bool) ->
                         });
                     })
                     .child(gpui_kit::img(image).max_h(px(220.0)))
-            }))
+            }))))
             .when(!text.is_empty(), |d| d.child(
                 // Selectable like assistant text (mark, then ⌘/Ctrl+C). Keep the user's line breaks.
                 TextView::markdown(SharedString::from(format!("cw-user-{key}")), SharedString::from(text.replace('\n', "  \n"))).selectable(true),
@@ -785,7 +1214,7 @@ fn reasoning_row(env: &Env, key: &str, text: &str, streaming: bool, started: u64
 
 fn diff_block(env: &Env, diff: &str, max: usize) -> Div {
     let c = env.c;
-    let mut block = div().flex().flex_col().rounded_lg().bg(c.app).overflow_hidden().py_1().font_family(env.mono.clone()).text_size(env.small());
+    let mut block = div().flex().flex_col().rounded_lg().border_1().border_color(c.edge).bg(c.app).overflow_hidden().py_1().font_family(env.mono.clone()).text_size(env.small());
     let (mut o, mut n) = (0usize, 0usize);
     let mut shown = 0;
     let lines: Vec<&str> = diff.split('\n').collect();
@@ -841,7 +1270,7 @@ fn terminal_block(env: &Env, command: Option<&str>, output: &str) -> Div {
     let shown: String = if out.len() > 6000 { format!("…{}", out[out.len() - 6000..].trim_start_matches(|ch: char| !ch.is_ascii())) } else { out.to_string() };
     let lines: Vec<String> = shown.lines().map(str::to_string).collect();
     let skip = lines.len().saturating_sub(200);
-    div().rounded_lg().bg(c.app).px_3().py_2().flex().flex_col().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5)).text_color(c.muted)
+    div().rounded_lg().border_1().border_color(c.edge).bg(c.app).px_3().py_2().flex().flex_col().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5)).text_color(c.muted)
         .when_some(command, |d, cmd| d.child(div().whitespace_normal().text_color(c.fg).child(format!("$ {cmd}"))))
         .when(skip > 0, |d| d.child(div().text_color(c.subtle).child(format!("… {skip} earlier lines"))))
         .children(lines.into_iter().skip(skip).map(|l| div().whitespace_normal().child(if l.is_empty() { " ".to_string() } else { l })))
@@ -852,7 +1281,7 @@ fn code_block(env: &Env, text: &str, max: usize) -> Div {
     let c = env.c;
     let lines: Vec<&str> = text.lines().collect();
     let width = lines.len().min(max).to_string().len().max(2);
-    div().rounded_lg().bg(c.app).py_1p5().flex().flex_col().overflow_hidden().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5))
+    div().rounded_lg().border_1().border_color(c.edge).bg(c.app).py_1p5().flex().flex_col().overflow_hidden().font_family(env.mono.clone()).text_size(env.small()).line_height(relative(1.5))
         .children(lines.iter().take(max).enumerate().map(|(i, l)| {
             div().flex().gap_3().px_3()
                 .child(div().w(px(8.0 * width as f32)).flex_shrink_0().text_color(c.subtle).child(format!("{:>width$}", i + 1)))
@@ -864,7 +1293,7 @@ fn code_block(env: &Env, text: &str, max: usize) -> Div {
 /// `name  value` rows: a tool's arguments.
 fn fields_block(env: &Env, rows: Vec<(String, String)>) -> Div {
     let c = env.c;
-    div().rounded_lg().bg(c.app).px_3().py_2().flex().flex_col().gap_1().text_size(env.small())
+    div().rounded_lg().border_1().border_color(c.edge).bg(c.app).px_3().py_2().flex().flex_col().gap_1().text_size(env.small())
         .children(rows.into_iter().map(|(k, v)| {
             div().flex().gap_3().items_start()
                 .child(div().w(px(84.0)).flex_shrink_0().text_color(c.subtle).child(k))
@@ -874,7 +1303,7 @@ fn fields_block(env: &Env, rows: Vec<(String, String)>) -> Div {
 
 /// The send button: a small painted nebula (`ui::nebula`) in a round, glowing frame; ember-red while
 /// it can interrupt, dim when there's nothing to send.
-fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName, sz: f32) -> Stateful<Div> {
+pub(crate) fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName, sz: f32) -> Stateful<Div> {
     use super::nebula::{self, Kind};
     let live = ready || stop;
     let light = c.light;
@@ -889,9 +1318,9 @@ fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName
     }];
     if live {
         shadows.push(BoxShadow {
-            color: alpha(glow, if light { 0.32 } else { 0.4 }),
+            color: alpha(glow, 0.18),
             offset: point(px(0.0), px(2.0)),
-            blur_radius: px(if light { 10.0 } else { 12.0 }),
+            blur_radius: px(8.0),
             spread_radius: px(0.0),
             inset: false,
         });
@@ -914,7 +1343,7 @@ fn nebula_send(c: Colors, stop: bool, ready: bool, animate: bool, icon: IconName
     let icon_sz = (sz * 0.44).clamp(11.0, 14.0);
     let icon_color = if live { gpui_kit::white() } else if light { c.muted } else { c.subtle };
     div().id("cw-send").relative().size(px(sz)).flex_shrink_0().flex().items_center().justify_center().rounded_full()
-        .when(light && !live, |d| d)
+        .when(light && !live, |d| d.border_1().border_color(alpha(c.border_strong, 0.7)))
         .shadow(shadows)
         .child(face)
         .child(Icon::new(icon).size(px(icon_sz)).text_color(icon_color))
@@ -932,13 +1361,14 @@ fn tool_tint(c: Colors, name: &str) -> Hsla {
     }
 }
 
-fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::Value, output: &str, ok: Option<bool>, diff: Option<&str>, started: u64, ended: Option<u64>) -> AnyElement {
+fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::Value, output: &str, ok: Option<bool>, diff: Option<&str>, started: u64, ended: Option<u64>, link_up: bool, link_down: bool) -> AnyElement {
     let c = env.c;
     let running = ended.is_none() && ok.is_none();
     let default_open = running && name == "Bash" && env.expand_shell;
     let open = env.open(key, default_open);
     let toggled = env.toggled.get(key).copied();
-    let show_body = open || matches!(toggled, Some((_, false)));
+    let show_body = tool_body_shown(env, key, name, ok, ended);
+    let link_down = link_down && !show_body;
     let tint = if ok == Some(false) { c.danger } else { tool_tint(c, name) };
     let status: AnyElement = match ok {
         Some(true) => Icon::new(IconName::Check).size(px(13.0)).text_color(c.success).into_any_element(),
@@ -952,7 +1382,7 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
     };
     let counts = diff.map(diff_counts).filter(|(a, d)| a + d > 0);
     let (view, k) = (env.view.clone(), key.to_string());
-    let head = div().id(SharedString::from(format!("t-{key}"))).w_full().flex().items_center().gap_2().h(px(34.0)).px_2p5().cursor_pointer().hover(move |d| d.bg(alpha(c.hover, 0.6)))
+    let head = div().id(SharedString::from(format!("t-{key}"))).w_full().flex().items_center().gap_2().h(px(34.0)).px_2p5().rounded_t_xl().when(!show_body, |d| d.rounded_b_xl()).cursor_pointer().hover(move |d| d.bg(alpha(c.hover, 0.6)))
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
         })
@@ -963,7 +1393,7 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
         .when_some(right, |d, r| d.child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(r)))
         .child(div().w(px(14.0)).flex_shrink_0().flex().items_center().justify_center().child(status))
         .child(toggle_chevron(key, open, toggled, c.subtle));
-    let mut card = div().w_full().rounded_xl().bg(c.raised).overflow_hidden().child(head);
+    let mut card = div().w_full().rounded_xl().overflow_hidden().child(head);
     if show_body {
         let secs = toolbody::sections(name, input, output, diff);
         let mut body = div().p_2().flex().flex_col().gap_2();
@@ -993,14 +1423,47 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
     } else {
         card.into_any_element()
     };
-    enter(env, key, div().w_full().py(px(if env.compact { 1.5 } else { 3.0 })).child(card))
+    // Connector segments from the row's edges to the icon badge (22px, centred in the 34px head, 10px in).
+    let pad = if env.compact { 1.5 } else { 3.0 };
+    let (x, gap) = (px(10.0 + 11.0 - 0.5), pad + 6.0);
+    let seg = || div().absolute().left(x).w(px(1.0)).h(px(gap)).bg(c.border);
+    enter(env, key, div().relative().w_full().py(px(pad)).child(card)
+        .when(link_up, |d| d.child(seg().top_0()))
+        .when(link_down, |d| d.child(seg().bottom_0())))
+}
+
+/// `visualize` calls as the one report they make up.
+fn report_row<'a>(env: &Env, key: &str, charts: impl Iterator<Item = &'a Item>) -> AnyElement {
+    let reports: Vec<_> = charts
+        .filter_map(|it| match it {
+            Item::Tool { name, input, ok, .. } => crate::code::viz::report_of(name, input, *ok),
+            _ => None,
+        })
+        .collect();
+    let view = env.view.clone();
+    let (theme, all) = (super::viz::file_theme(&env.c), reports.clone());
+    let on_export: Rc<dyn Fn(crate::code::viz_svg::Format, &mut App)> = Rc::new(move |format, cx| {
+        let view = view.clone();
+        super::viz::export(all.clone(), theme.clone(), format, cx, move |result, cx| {
+            let text = match result {
+                Ok(path) => format!("Saved the report to {}", path.display()),
+                Err(e) => format!("Couldn't export the report: {e}"),
+            };
+            let _ = view.update(cx, |v, cx| v.model.update(cx, |m, cx| {
+                m.state.notice(text);
+                cx.notify();
+            }));
+        });
+    });
+    let style = super::viz::Style { c: env.c, mono: env.mono.clone(), scale: env.scale, width: env.width, on_export: Some(on_export) };
+    enter(env, key, super::viz::report(&style, key, &reports))
 }
 
 fn notice_row(env: &Env, key: &str, text: &str, error: bool) -> AnyElement {
     let c = env.c;
     let (icon, color) = if error { (IconName::TriangleAlert, c.danger) } else { (IconName::Info, c.subtle) };
     enter(env, key, div().w_full().flex().justify_center().py_1p5().child(
-        div().max_w(relative(0.9)).flex().items_start().gap_1p5().rounded_xl().px_3().py_1p5().bg(if error { alpha(c.danger, 0.08) } else { c.raised }).text_size(env.small()).line_height(relative(1.5)).text_color(if error { c.danger } else { c.muted })
+        div().max_w(relative(0.9)).flex().items_start().gap_1p5().rounded_xl().px_3().py_1p5().border_1().border_color(if error { alpha(c.danger, 0.4) } else { c.border }).bg(if error { alpha(c.danger, 0.08) } else { c.raised }).text_size(env.small()).line_height(relative(1.5)).text_color(if error { c.danger } else { c.muted })
             .child(div().mt(px(2.0)).child(Icon::new(icon).size(px(12.0)).text_color(color)))
             .child(div().min_w_0().whitespace_normal().child(text.to_string())),
     ))
@@ -1010,16 +1473,164 @@ fn worked_row(env: &Env, key: &str, ms: u64) -> AnyElement {
     let c = env.c;
     enter(env, key, div().w_full().flex().items_center().gap_3().pt_3().pb_1().text_size(px(11.0)).text_color(c.subtle)
         .child(div().h(px(1.0)).flex_1().bg(c.border))
-        .child(div().flex().items_center().gap_1().child(Icon::new(IconName::Check).size(px(11.0)).text_color(c.success)).child(format!("Worked for {}", elapsed(ms))))
+        .child(div().flex().items_center().gap_1().child(Icon::new(IconName::Check).size(px(11.0)).text_color(c.success)).child(format!("Worked for {}", elapsed(ms.max(1000)))))
         .child(div().h(px(1.0)).flex_1().bg(c.border)))
 }
 
-pub(super) fn render_item(env: &Env, item: &Item, first: bool) -> AnyElement {
+fn working_row(env: &Env) -> AnyElement {
+    let pad = if env.compact { 1.5 } else { 3.0 };
+    div()
+        .w_full()
+        .py(px(pad))
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .h(px(28.0))
+        .child(div().flex_shrink_0().flex().items_center().justify_center().child(spinner(env.c.muted, 12.0, "cw-working-sp")))
+        .child(
+            div()
+                .text_size(px(12.5 * env.scale))
+                .text_color(env.c.muted)
+                .child("Working…")
+                .with_animation("cw-working-pulse", Animation::new(Duration::from_millis(1800)).repeat().with_max_fps(30.0), |d, t| {
+                    d.opacity(0.48 + 0.52 * breathe(t))
+                }),
+        )
+        .into_any_element()
+}
+
+fn work_group_row(env: &Env, items: &[Item], key: &str, start: usize, end: usize, active: bool) -> AnyElement {
+    let c = env.c;
+    let open = env.open(key, false);
+    let toggled = env.toggled.get(key).copied();
+    let show_body = open || matches!(toggled, Some((_, false)));
+    let slice = items.get(start..=end).unwrap_or(&[]);
+
+    let mut tool_count = 0usize;
+    let mut step_count = 0usize;
+    let mut last_step: Option<&Item> = None;
+    for it in slice {
+        match it {
+            Item::Tool { .. } => {
+                tool_count += 1;
+                step_count += 1;
+                last_step = Some(it);
+            }
+            Item::Reasoning { .. } => {
+                step_count += 1;
+                last_step = Some(it);
+            }
+            _ => {}
+        }
+    }
+
+    let (view, k) = (env.view.clone(), key.to_string());
+    let group = SharedString::from(format!("wg-grp-{key}"));
+    let chev = div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .opacity(0.55)
+        .group_hover(group.clone(), |d| d.opacity(1.0))
+        .child(toggle_chevron(key, open, toggled, c.fg));
+    let head: AnyElement = if active {
+        let label = div()
+            .min_w_0()
+            .truncate()
+            .child(describe_step(last_step))
+            .with_animation(SharedString::from(format!("wg-live-{key}")), Animation::new(Duration::from_millis(1800)).repeat().with_max_fps(30.0), |d, t| {
+                d.opacity(0.52 + 0.48 * breathe(t))
+            });
+        div()
+            .w_full()
+            .flex()
+            .child(
+                div()
+                    .id(SharedString::from(format!("wg-{key}")))
+                    .group(group.clone())
+                    .max_w_full()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .h(px(28.0))
+                    .cursor_pointer()
+                    .text_size(px(12.5 * env.scale))
+                    .text_color(c.muted)
+                    .hover(move |d| d.text_color(c.fg))
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
+                    })
+                    .child(div().flex_shrink_0().flex().items_center().justify_center().opacity(0.6).group_hover(group, |d| d.opacity(1.0)).child(spinner(c.fg, 12.0, SharedString::from(format!("wg-sp-{key}")))))
+                    .child(label)
+                    .child(chev),
+            )
+            .into_any_element()
+    } else {
+        let count = if tool_count > 0 { tool_count } else { step_count };
+        let unit = match (tool_count > 0, count == 1) {
+            (true, true) => "tool call",
+            (true, false) => "tool calls",
+            (false, true) => "step",
+            (false, false) => "steps",
+        };
+        let label = match group_duration_ms(items, start, end) {
+            Some(ms) => format!("Worked for {} · {count} {unit}", elapsed(ms.max(1000))),
+            None => format!("Worked · {count} {unit}"),
+        };
+        div()
+            .flex()
+            .child(
+                div()
+                    .id(SharedString::from(format!("wg-{key}")))
+                    .group(group)
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .h(px(28.0))
+                    .cursor_pointer()
+                    .text_size(px(12.5 * env.scale))
+                    .text_color(c.muted)
+                    .hover(move |d| d.text_color(c.fg))
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
+                    })
+                    .child(label)
+                    .child(chev),
+            )
+            .into_any_element()
+    };
+
+    let pad = if env.compact { 1.5 } else { 3.0 };
+    let mut wrap = div().w_full().flex().flex_col().py(px(pad)).child(head);
+    if show_body {
+        let body = div().w_full().flex().flex_col().pt_1().children((start..=end).filter_map(|ix| {
+            let item = items.get(ix)?;
+            let prev = if ix > start { items.get(ix - 1) } else { None };
+            let next = if ix < end { items.get(ix + 1) } else { None };
+            Some(render_item(env, item, false, prev, next))
+        }));
+        wrap = wrap.child(toggle_body(key, toggled, body));
+    }
+    enter(env, key, wrap)
+}
+
+/// Whether a tool row currently shows its body (open, or animating closed).
+fn tool_body_shown(env: &Env, key: &str, name: &str, ok: Option<bool>, ended: Option<u64>) -> bool {
+    let running = ended.is_none() && ok.is_none();
+    let open = env.open(key, running && name == "Bash" && env.expand_shell);
+    open || matches!(env.toggled.get(key), Some((_, false)))
+}
+
+pub(super) fn render_item(env: &Env, item: &Item, first: bool, prev: Option<&Item>, next: Option<&Item>) -> AnyElement {
+    // Consecutive tool calls get a line joining their icons; an expanded body breaks it.
+    let link_up = matches!(prev, Some(Item::Tool { key, name, ok, ended, .. }) if !tool_body_shown(env, key, name, *ok, *ended));
+    let link_down = matches!(next, Some(Item::Tool { .. }));
     match item {
         Item::User { key, text, images, .. } => user_row(env, text, images, key, first),
         Item::Text { key, text, streaming } => text_row(env, key, text, *streaming),
         Item::Reasoning { key, text, streaming, started, ended } => reasoning_row(env, key, text, *streaming, *started, *ended),
-        Item::Tool { key, name, title, input, output, ok, diff, started, ended } => tool_row(env, key, name, title, input, output, *ok, diff.as_deref(), *started, *ended),
+        Item::Tool { key, .. } if is_chart(item) => report_row(env, key, std::iter::once(item)),
+        Item::Tool { key, name, title, input, output, ok, diff, started, ended } => tool_row(env, key, name, title, input, output, *ok, diff.as_deref(), *started, *ended, link_up, link_down),
         Item::Notice { key, text, error, .. } => notice_row(env, key, text, *error),
         Item::Worked { key, ms, .. } => worked_row(env, key, *ms),
     }
@@ -1038,21 +1649,97 @@ fn sky_rand(i: u32, n: u32) -> f32 {
     ((v + 1.0).fract()) as f32
 }
 
-/// Keeps painted stars/streaks inside the pane's 15 px bottom-left and bottom-right corner radius.
-fn inside_bottom_corners(x: f32, y: f32, w: f32, h: f32, r: f32) -> bool {
-    if y <= h - r {
+/// Keeps painted stars/streaks (plus their `pad` half-extent) strictly inside the pane's rounded
+/// corners on all four corners.
+fn inside_rounded_corners(x: f32, y: f32, w: f32, h: f32, r: f32, pad: f32) -> bool {
+    if x < pad || x > w - pad || y < pad || y > h - pad {
+        return false;
+    }
+    let dy = if y < r {
+        r - y
+    } else if y > h - r {
+        y - (h - r)
+    } else {
         return true;
+    };
+    let dx = if x < r {
+        r - x
+    } else if x > w - r {
+        x - (w - r)
+    } else {
+        return true;
+    };
+    let max_d = (r - pad).max(0.0);
+    dx * dx + dy * dy <= max_d * max_d
+}
+
+/// Computes `image_bounds` for `window.paint_image` so the inner `SKY_INNER_W x SKY_INNER_H` sky
+/// covers `bounds` (`ObjectFit::Cover`) while the `SKY_PAD`-texel margin sits outside `bounds` on
+/// all four sides, keeping `sub_tile` strictly inside the atlas tile on every edge while letting
+/// GPUI's sprite SDF clip all four corners to `Corners::all(px(16.0))`.
+fn sky_image_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    let cover = ObjectFit::Cover.get_bounds(
+        bounds,
+        size(DevicePixels(super::nebula::SKY_INNER_W as i32), DevicePixels(super::nebula::SKY_INNER_H as i32)),
+    );
+    let pad_x = cover.size.width * (super::nebula::SKY_PAD as f32 / super::nebula::SKY_INNER_W as f32);
+    let pad_y = cover.size.height * (super::nebula::SKY_PAD as f32 / super::nebula::SKY_INNER_H as f32);
+    Bounds::new(
+        point(cover.origin.x - pad_x, cover.origin.y - pad_y),
+        size(cover.size.width + pad_x * 2.0, cover.size.height + pad_y * 2.0),
+    )
+}
+
+/// Full-pane animated space welcome sky rendered behind both the floating pane header and
+/// `CodeView` so the nebula and stars span the entire rounded pane without a top/bottom seam.
+pub struct SpaceSkyView {
+    model: Entity<CodeModel>,
+    app: Entity<AppState>,
+    ticking: bool,
+}
+
+impl SpaceSkyView {
+    pub fn new(model: Entity<CodeModel>, app: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        cx.observe(&app, |_, _, cx| cx.notify()).detach();
+        Self { model, app, ticking: false }
     }
-    let dy = y - (h - r);
-    if x < r {
-        let dx = r - x;
-        return dx * dx + dy * dy <= r * r;
+
+    fn tick(&mut self, cx: &mut Context<Self>) {
+        if self.ticking {
+            return;
+        }
+        self.ticking = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(45)).await;
+                let keep = this.update(cx, |this, cx| {
+                    let empty = this.model.read(cx).state.items.is_empty();
+                    if empty {
+                        cx.notify();
+                    } else {
+                        this.ticking = false;
+                    }
+                    empty
+                });
+                if !keep.unwrap_or(false) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
-    if x > w - r {
-        let dx = x - (w - r);
-        return dx * dx + dy * dy <= r * r;
+}
+
+impl Render for SpaceSkyView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.model.read(cx).state.items.is_empty() {
+            return div().into_any_element();
+        }
+        self.tick(cx);
+        let c = theme::colors(&self.app.read(cx).theme);
+        render_space_sky(c, now_ms())
     }
-    true
 }
 
 /// Space-themed welcome background matching the Tauri web UI: soft nebula + Milky Way glow (dark mode),
@@ -1070,15 +1757,17 @@ fn render_space_sky(c: Colors, now: u64) -> AnyElement {
             }
             let ox = bounds.origin.x / px(1.0);
             let oy = bounds.origin.y / px(1.0);
+            let sky = super::nebula::sky_backdrop_render(light, c.accent);
+            let _ = window.paint_image(bounds, sky_image_bounds(bounds), Corners::all(px(16.0)), sky, 0, false);
             let white_star = hsla(0.0, 0.0, 1.0, 1.0);
             let cool_star = crate::theme::hex("#b9c8ff");
             let warm_star = crate::theme::hex("#ffe2b8");
 
             // Three depths: far dust (110), mid stars (42), near bright stars with glint (7).
             let layers: [(u32, u32, f32, f32, f32, f32, bool); 3] = [
-                (110, 0, 0.7, 0.8, if light { 0.16 } else { 0.30 }, 1.0, false),
-                (42, 300, 1.1, 1.2, if light { 0.24 } else { 0.58 }, -1.5, false),
-                (7, 600, 2.0, 1.2, if light { 0.34 } else { 0.92 }, 0.0, true),
+                (110, 0, 0.7, 0.8, if light { 0.42 } else { 0.30 }, 1.0, false),
+                (42, 300, 1.1, 1.2, if light { 0.70 } else { 0.58 }, -1.5, false),
+                (7, 600, 2.0, 1.2, if light { 0.95 } else { 0.92 }, 0.0, true),
             ];
             for (count, seed, min_s, spread, peak, drift_dir, near) in layers {
                 let drift_x = if drift_dir != 0.0 { (t * 0.035 * drift_dir).sin() * 7.0 } else { 0.0 };
@@ -1087,10 +1776,11 @@ fn render_space_sky(c: Colors, now: u64) -> AnyElement {
                     let i = k + seed;
                     let sx = sky_rand(i, 1) * w + drift_x;
                     let sy = sky_rand(i, 2) * h + drift_y;
-                    if sx < 1.0 || sx > w - 1.0 || sy < 1.0 || sy > h - 1.0 || !inside_bottom_corners(sx, sy, w, h, 15.0) {
+                    let sz = min_s + sky_rand(i, 3) * spread;
+                    let pad = if near { 7.0 } else { sz * 0.5 + 1.0 };
+                    if !inside_rounded_corners(sx, sy, w, h, 16.0, pad) {
                         continue;
                     }
-                    let sz = min_s + sky_rand(i, 3) * spread;
                     let delay = sky_rand(i, 4) * 6.0;
                     let period = 2.5 + sky_rand(i, 5) * 4.0;
                     let wave = 0.5 - 0.5 * ((t + delay) * std::f32::consts::TAU / period).cos();
@@ -1099,7 +1789,7 @@ fn render_space_sky(c: Colors, now: u64) -> AnyElement {
                         continue;
                     }
                     let base = if light {
-                        c.fg
+                        mix_color(c.accent, c.fg, 0.45)
                     } else {
                         match (sky_rand(i, 6) * 6.0) as u32 {
                             3 | 4 => cool_star,
@@ -1112,7 +1802,7 @@ fn render_space_sky(c: Colors, now: u64) -> AnyElement {
                         fill(Bounds::new(point(px(ox + sx - half), px(oy + sy - half)), size(px(sz), px(sz))), alpha(base, a))
                             .corner_radii(Corners::all(px(half))),
                     );
-                    if near && !light {
+                    if near {
                         // Soft halo + 4-point cross glint on the brightest stars.
                         let halo = sz * 3.0;
                         window.paint_quad(
@@ -1165,10 +1855,10 @@ fn render_space_sky(c: Colors, now: u64) -> AnyElement {
                     }
                     let px_x = start_x + dx * d;
                     let px_y = start_y + dy * d;
-                    if px_x < 1.0 || px_x > w - 1.0 || px_y < 1.0 || px_y > h - 1.0 || !inside_bottom_corners(px_x, px_y, w, h, 15.0) {
+                    let dot = 1.2 + frac * 1.4;
+                    if !inside_rounded_corners(px_x, px_y, w, h, 16.0, dot * 0.5 + 1.0) {
                         continue;
                     }
-                    let dot = 1.2 + frac * 1.4;
                     let seg_a = fade * frac * frac * if light { 0.55 } else { 0.92 };
                     let col = if light { c.accent } else if frac > 0.78 { white_star } else { cool_star };
                     window.paint_quad(
@@ -1185,23 +1875,10 @@ fn render_space_sky(c: Colors, now: u64) -> AnyElement {
     .size_full();
 
     div()
-        .absolute()
-        .top_0()
-        .left_0()
+        .relative()
         .size_full()
-        .rounded_b(px(15.0))
+        .rounded_2xl()
         .overflow_hidden()
-        .when(!light, |d| {
-            d.child(
-                gpui_kit::img(super::nebula::sky_backdrop())
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .rounded_b(px(15.0))
-                    .object_fit(ObjectFit::Cover),
-            )
-        })
         .child(star_canvas)
         .into_any_element()
 }
@@ -1257,6 +1934,8 @@ impl CodeView {
                     .items_center()
                     .gap(px(if lay.compact_cards { 8.0 } else { 10.0 }))
                     .rounded(px(if lay.compact_cards { 9.0 } else { 12.0 }))
+                    .border_1()
+                    .border_color(c.edge)
                     .bg(c.raised)
                     .px(px(if lay.compact_cards { 10.0 } else { 12.0 }))
                     .py(px(if lay.compact_cards { 6.0 } else { 10.0 }))
@@ -1277,18 +1956,6 @@ impl CodeView {
                 grid = grid.child(rise(card, SharedString::from(format!("sg-{i}")), 220 + i as u64 * 70, 10.0));
             }
             grid
-        });
-
-        let logo = lay.show_logo.then(|| {
-            let box_sz = if lay.compact { 36.0 } else { 52.0 };
-            let icon_sz = if lay.compact { 17.0 } else { 24.0 };
-            let radius = if lay.compact { 11.0 } else { 16.0 };
-            rise(
-                div().size(px(box_sz)).flex_shrink_0().flex().items_center().justify_center().rounded(px(radius)).bg(alpha(c.accent, 0.14)).child(Icon::new(IconName::Sparkles).size(px(icon_sz)).text_color(c.accent)),
-                "wl-logo",
-                0,
-                8.0,
-            )
         });
 
         let cwd_pill = if lay.show_cwd {
@@ -1343,7 +2010,6 @@ impl CodeView {
             .px(px(if lay.compact { 12.0 } else { 16.0 }))
             .py(px(if lay.compact { 8.0 } else { 16.0 }))
             .text_color(c.subtle)
-            .children(logo)
             .child(header_block)
             .children(suggestions)
             .children(hint)
@@ -1375,7 +2041,7 @@ impl CodeView {
             .on_click(cx.listener(move |this, _, _, cx| this.toggle("plan", open, cx)))
             .child(Icon::new(IconName::ListTodo).size(px(13.0)).text_color(c.accent))
             .child(div().text_color(c.fg).child("Plan"))
-            .child(div().w(px(56.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(frac)).rounded_full().bg(c.success)))
+            .child(div().w(px(56.0)).h(px(3.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(frac)).rounded_full().bg(c.success)))
             .child(div().flex_1().text_color(c.subtle).child(format!("{done} of {total}")))
             .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronUp }).size(px(12.0)).text_color(c.subtle));
         Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head).when(open, |d| d.child(list)), false).into_any_element())
@@ -1386,7 +2052,7 @@ impl CodeView {
         let decide = |label: &'static str, key_hint: &'static str, decision: Decision, primary: bool, key: String, model: Entity<CodeModel>, id: String| {
             div().id(SharedString::from(key)).h(px(30.0)).flex().items_center().gap_1p5().px_3().rounded_lg().text_size(px(12.5)).cursor_pointer()
                 .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).hover(|d| d.opacity(0.88)))
-                .when(!primary, |d| d.text_color(c.fg).hover(move |d| d.bg(c.hover)))
+                .when(!primary, |d| d.border_1().border_color(c.edge).text_color(c.fg).hover(move |d| d.bg(c.hover)))
                 .on_click(move |_, _, cx| {
                     let (id, decision) = (id.clone(), decision.clone());
                     model.update(cx, |m, cx| m.send(Cmd::Approve { id, decision }, cx));
@@ -1394,18 +2060,19 @@ impl CodeView {
                 .child(label)
                 .child(div().text_size(px(10.0)).opacity(0.55).child(key_hint))
         };
-        let mut body = div().flex_1().min_w_0().p_3().flex().flex_col().gap_2()
-            .child(div().flex().items_center().gap_2().text_size(px(12.5)).text_color(c.warning).child(Icon::new(IconName::ShieldQuestionMark).size(px(15.0))).child(if a.questions.is_empty() { format!("{} wants to run", a.tool) } else { "winfer code is asking".to_string() }));
+        let head = div().flex().items_center().gap_2().text_size(px(12.5)).text_color(c.warning).child(Icon::new(IconName::ShieldQuestionMark).size(px(15.0))).child(if a.questions.is_empty() { format!("{} wants to run", a.tool) } else { "winfer code is asking".to_string() });
+        let mut body = div().flex().flex_col().gap_2();
+        let actions;
         if a.questions.is_empty() {
-            body = body.child(div().rounded_lg().bg(c.app).px_3().py_2().font_family(mono.clone()).text_size(px(12.0)).text_color(c.fg).whitespace_normal().child(a.title.clone()));
+            body = body.child(div().rounded_lg().bg(c.app).border_1().border_color(c.edge).px_3().py_2().font_family(mono.clone()).text_size(px(12.0)).text_color(c.fg).whitespace_normal().child(a.title.clone()));
             if !a.detail.trim().is_empty() && a.detail != a.title {
                 body = body.child(div().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).max_h(px(140.0)).overflow_hidden().whitespace_normal().child(a.detail.clone()));
             }
             if let Some(d) = a.diff.as_deref().filter(|d| !d.trim().is_empty()) {
-                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()) };
-                body = body.child(diff_block(&env, d, 40));
+                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()), width: 600.0 };
+                body = body.child(diff_block(&env, d, 400));
             }
-            body = body.child(div().flex().gap_2().pt_0p5().child(decide("Allow", "Y", Decision::Allow, true, format!("allow-{id}"), model.clone(), id.clone())).child(decide("Always allow", "A", Decision::Always, false, format!("always-{id}"), model.clone(), id.clone())).child(decide("Deny", "N", Decision::Deny, false, format!("deny-{id}"), model.clone(), id.clone())));
+            actions = div().flex().gap_2().child(decide("Allow", "Y", Decision::Allow, true, format!("allow-{id}"), model.clone(), id.clone())).child(decide("Always allow", "A", Decision::Always, false, format!("always-{id}"), model.clone(), id.clone())).child(decide("Deny", "N", Decision::Deny, false, format!("deny-{id}"), model.clone(), id.clone()));
         } else {
             let picks = self.picks.entry(a.id.clone()).or_insert_with(|| vec![Vec::new(); a.questions.len()]).clone();
             for (qi, q) in a.questions.iter().enumerate() {
@@ -1413,7 +2080,7 @@ impl CodeView {
                 for (oi, o) in q.options.iter().enumerate() {
                     let on = picks.get(qi).is_some_and(|p| p.contains(&oi));
                     let (aid, multi) = (a.id.clone(), q.multi);
-                    options = options.child(div().id(SharedString::from(format!("q-{}-{qi}-{oi}", a.id))).flex().flex_col().gap_0p5().rounded_lg().px_3().py_1p5().cursor_pointer().text_size(px(12.5))
+                    options = options.child(div().id(SharedString::from(format!("q-{}-{qi}-{oi}", a.id))).flex().flex_col().gap_0p5().rounded_lg().border_1().px_3().py_1p5().cursor_pointer().text_size(px(12.5))
                         .when(on, |d| d.bg(alpha(c.accent, 0.14)).text_color(c.fg))
                         .when(!on, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -1435,7 +2102,7 @@ impl CodeView {
             }
             let ready = a.questions.iter().enumerate().all(|(i, _)| picks.get(i).is_some_and(|p| !p.is_empty()));
             let (aid, qs) = (a.id.clone(), a.questions.clone());
-            body = body.child(div().flex().items_center().gap_3().pt_0p5()
+            actions = div().flex().items_center().gap_3()
                 .child(div().id(SharedString::from(format!("answer-{}", a.id))).h(px(30.0)).flex().items_center().px_3().rounded_lg().text_size(px(12.5)).bg(c.accent).text_color(c.on_accent)
                     .when(ready, |d| d.cursor_pointer().hover(|d| d.opacity(0.88))).when(!ready, |d| d.opacity(0.4))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1446,36 +2113,61 @@ impl CodeView {
                         this.send(Cmd::Answer { id, answers }, cx);
                     }))
                     .child("Answer"))
-                .child(div().text_size(px(11.0)).text_color(c.subtle).child("or type an answer below")));
+                .child(div().text_size(px(11.0)).text_color(c.subtle).child("or type an answer below"));
         }
-        let card = div().w_full().flex().mb_2().rounded_xl().bg(c.raised).shadow_md().child(body);
+        // Keep the card compact: content scrolls within a height cap tied to the pane, actions stay pinned.
+        let cap = (self.pane_size.height / px(1.0) * 0.4).clamp(120.0, 320.0);
+        let scroll = div().id(SharedString::from(format!("appr-scroll-{}", a.id))).min_h_0().max_h(px(cap)).overflow_y_scroll().child(body);
+        let card = div().w_full().flex().flex_col().gap_2().mb_2().p_3().min_w_0().rounded_xl().border_1().border_color(alpha(c.warning, 0.55)).bg(c.raised).shadow_md().child(head).child(scroll).child(actions);
         dock_inset(rise(card, SharedString::from(format!("appr-{}", a.id)), 0, 14.0), false).into_any_element()
     }
 
     fn render_popup(&mut self, text: &str, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let t = text.trim_start();
-        let mut rows: Vec<(String, String, String)> = Vec::new();
-        if t.starts_with('/') && !t.contains(char::is_whitespace) {
-            rows = commands::matching(t).into_iter().map(|(cmd, d)| (cmd.to_string(), d.to_string(), format!("{cmd} "))).collect();
-        } else if let Some(at) = text.rfind('@') {
-            let prefix = text[..at].to_string();
-            rows = self.mention_matches(text, cx).into_iter().map(|f| (f.clone(), String::new(), format!("{prefix}@{f} "))).collect();
-        }
+        let rows = self.popup_rows(text, cx);
         if rows.is_empty() {
             return None;
         }
         let selected = self.popup.min(rows.len() - 1);
-        let mut list = div().flex().flex_col().max_h(px(236.0)).overflow_hidden().p_1();
+        let mut list = div()
+            .id("cw-popup-list")
+            .flex()
+            .flex_col()
+            .max_h(px(236.0))
+            .overflow_y_scroll()
+            .track_scroll(&self.popup_scroll)
+            .p_1();
         for (i, (label, hint, insert)) in rows.into_iter().enumerate() {
-            list = list.child(div().id(("cw-pop", i)).flex().items_center().gap_3().px_2p5().h(px(28.0)).rounded_lg().cursor_pointer().text_size(px(12.5)).when(i == selected, |d| d.bg(alpha(c.accent, 0.14))).hover(move |d| d.bg(c.hover))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.set_input(&insert, window, cx);
-                    this.focus_composer(window, cx);
-                }))
-                .child(div().font_family(fonts::mono(cx)).text_color(if i == selected { c.accent } else { c.fg }).child(label))
-                .child(div().flex_1().min_w_0().truncate().text_size(px(11.5)).text_color(c.subtle).child(hint)));
+            list = list.child(
+                div()
+                    .id(("cw-pop", i))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_2p5()
+                    .h(px(28.0))
+                    .flex_shrink_0()
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .text_size(px(12.5))
+                    .when(i == selected, |d| d.bg(alpha(c.accent, 0.14)))
+                    .hover(move |d| d.bg(c.hover))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_input(&insert, window, cx);
+                        this.focus_composer(window, cx);
+                    }))
+                    .child(
+                        div()
+                            .font_family(fonts::mono(cx))
+                            .text_color(if i == selected { c.accent } else { c.fg })
+                            .when(hint.is_empty(), |d| d.flex_1().min_w_0().truncate())
+                            .child(label),
+                    )
+                    .when(!hint.is_empty(), |d| {
+                        d.child(div().flex_1().min_w_0().truncate().text_size(px(11.5)).text_color(c.subtle).child(hint))
+                    }),
+            );
         }
-        Some(dock_inset(rise(div().mb_2().rounded_xl().bg(c.raised).shadow_md().child(list), "cw-popup", 0, 6.0), false).into_any_element())
+        Some(dock_inset(rise(div().mb_2().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_md().overflow_hidden().child(list), "cw-popup", 0, 6.0), false).into_any_element())
     }
 
     /// Spinner row above the composer while a turn runs: elapsed time, token in/out, cached %, tok/s.
@@ -1493,19 +2185,19 @@ impl CodeView {
         let turn_out = st.turn_output();
         let rate = st.tokens_per_second();
         let cache_pct = if turn_in > 0 && turn_cached > 0 { Some((((turn_cached as f64 / turn_in as f64) * 100.0).round() as u64).min(100)) } else { None };
-        let row = div().h(px(26.0)).flex().items_center().gap_1p5().px_1().text_size(px(11.5)).text_color(c.subtle)
-            .child(dots(c.accent, "busy"))
-            .child(div().text_color(c.muted).child("Working"))
-            .when_some(secs, |d, s| d.child("·").child(div().font_family(mono.clone()).child(s)))
+        // "Working" itself trails the transcript; this row starts with the elapsed time.
+        let pad_x = if lay.tight_x { px(8.0) } else { px(12.0) };
+        let row = div().h(px(26.0)).flex().items_center().gap_1p5().px(pad_x).text_size(px(11.5)).text_color(c.subtle)
+            .when_some(secs.clone(), |d, s| d.child(div().font_family(mono.clone()).child(s)))
             .when(turn_in > 0, |d| {
                 let in_label = if let (Some(pct), false) = (cache_pct, lay.tight_x) {
                     format!("↑ {} in ({pct}% cached)", tokens(turn_in))
                 } else {
                     format!("↑ {} in", tokens(turn_in))
                 };
-                d.child("·").child(div().font_family(mono.clone()).child(in_label))
+                d.when(secs.is_some(), |d| d.child("·")).child(div().font_family(mono.clone()).child(in_label))
             })
-            .child("·")
+            .when(secs.is_some() || turn_in > 0, |d| d.child("·"))
             .child(div().font_family(mono.clone()).child(format!("↓ {} out", tokens(turn_out))))
             .when(show_rate, |d| d.when_some(rate, |d, r| d.child("·").child(div().font_family(mono.clone()).text_color(c.muted).child(format!("{r:.0} tok/s")))))
             .child(div().flex_1())
@@ -1600,9 +2292,8 @@ impl CodeView {
             .min_w_0()
             .flex()
             .flex_col()
-            .bg(c.raised)
-            .border_1()
-            .border_color(alpha(c.border, 0.0))
+            .bg(c.composer)
+            .border_color(c.border)
             .shadow_md()
             .drag_over::<ExternalPaths>(move |d, _, _, _| d.border_color(c.accent).bg(alpha(c.accent, 0.08)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
@@ -1611,15 +2302,33 @@ impl CodeView {
                 cx.stop_propagation();
             }));
         card = match (lay.compact_v, attachments.is_empty()) {
-            (true, true) => card.rounded_xl(),
-            (false, true) => card.rounded_2xl(),
-            (true, false) => card.rounded_b_xl(),
-            (false, false) => card.rounded_b_2xl(),
+            (true, true) => card.border_1().rounded_xl(),
+            (false, true) => card.border_1().rounded_2xl(),
+            (true, false) => card.border_b_1().border_l_1().border_r_1().rounded_b_xl(),
+            (false, false) => card.border_b_1().border_l_1().border_r_1().rounded_b_2xl(),
         };
         if !attachments.is_empty() {
             let thumb_sz = if lay.compact_v { 40.0 } else { 48.0 };
             let chip_max = if lay.tight_x { 150.0 } else { 220.0 };
-            let mut chips = div().absolute().bottom(relative(1.0)).left_0().right_0().min_w_0().flex().flex_wrap().items_center().gap_1p5().px_3().pt_2p5().pb_1().bg(c.raised).rounded_t_2xl();
+            let chips_base = div()
+                .absolute()
+                .bottom(relative(1.0))
+                .left(px(-1.0))
+                .right(px(-1.0))
+                .min_w_0()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1p5()
+                .px_3()
+                .pt_2p5()
+                .pb_1()
+                .bg(c.composer)
+                .border_t_1()
+                .border_l_1()
+                .border_r_1()
+                .border_color(c.border);
+            let mut chips = if lay.compact_v { chips_base.rounded_t_xl() } else { chips_base.rounded_t_2xl() };
             for (i, a) in attachments.iter().enumerate() {
                 let decoded = if a.mime.starts_with("image/") && !a.data.is_empty() {
                     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1761,7 +2470,9 @@ impl CodeView {
             };
             card = card.child(input_wrap.child(composer_input));
             let bar_h = if lay.ultra_v { 28.0 } else if lay.compact_v { 31.0 } else { 36.0 };
-            let toolbar = div().flex().items_center().gap_0p5().px_1p5().pb(px(if lay.compact_v { 3.0 } else { 6.0 })).h(px(bar_h))
+            let send_pb = if lay.ultra_v { 3.5 } else if lay.compact_v { 4.0 } else { 5.0 };
+            let controls_pb = if lay.compact_v { 3.0 } else { 4.0 };
+            let controls = div().flex_1().min_w_0().flex().items_center().gap_0p5().pb(px(controls_pb))
                 .child(attach_btn)
                 .when(lay.show_labels, |d| d.child(div().w(px(1.0)).h(px(14.0)).mx_1().bg(c.border)))
                 .child(mode_btn)
@@ -1796,11 +2507,13 @@ impl CodeView {
                             })
                             .when(show_cost && lay.show_cost, |d| d.when_some(cost, |d, cost| d.child(format!("${cost:.2}"))))
                             .when(show_context, |d| d
-                                .when(lay.show_meter, |d| d.child(div().w(px(40.0)).h(px(4.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))))
+                                .when(lay.show_meter, |d| d.child(div().w(px(40.0)).h(px(3.0)).rounded_full().bg(c.border).overflow_hidden().child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else if pct > 0.65 { c.warning } else { c.accent }))))
                                 .child(format!("{}%", (pct * 100.0).round()))),
                     )
-                })
-                .child(send_btn);
+                });
+            let toolbar = div().flex().items_end().gap_0p5().px_1p5().h(px(bar_h))
+                .child(controls)
+                .child(div().flex_shrink_0().pb(px(send_pb)).child(send_btn));
             card = card.child(toolbar);
         }
         let tight = lay.compact_v || lay.tight_x;
@@ -1829,26 +2542,73 @@ impl Render for CodeView {
         if busy {
             self.tick(cx);
         }
-        if items.is_empty() {
-            self.sky_tick(cx);
-        }
         self.ensure_picker(window, cx);
-        self.sync_list(&items, now);
-        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()) };
+        let compact_tools = self.compact_tools(cx);
+        self.sync_list(&items, busy, compact_tools, now);
+        // A newly sent message resumes following the bottom, even when scrolled up.
+        let last_user = items.iter().rev().find(|i| matches!(i, Item::User { .. })).map(|i| i.key().to_string());
+        if last_user != self.last_user {
+            if last_user.is_some() {
+                self.list.scroll_to_end();
+            }
+            self.last_user = last_user;
+        }
+        let away = !items.is_empty() && !self.list.is_following_tail() && self.list.is_scrolled_to_end() == Some(false);
+        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0) };
         let model = self.model.clone();
+        let rows = self.rows.clone();
         let transcript: AnyElement = if items.is_empty() {
             self.welcome(c, cx)
         } else {
             let list_env = env.clone();
-            let count = items.len();
+            let count = rows.len();
             list(self.list.clone(), move |ix, _, cx| {
-                let item = model.read(cx).state.items.get(ix).cloned();
-                match item {
-                    Some(item) => div().w_full().flex().justify_center().px_4().child(div().w_full().max_w(px(COLUMN)).pt(px(if ix == 0 { 16.0 } else { 0.0 })).pb(px(if ix + 1 == count { 12.0 } else { 0.0 })).child(render_item(&list_env, &item, ix == 0))).into_any_element(),
-                    None => div().into_any_element(),
-                }
+                let items = &model.read(cx).state.items;
+                let Some(row) = rows.get(ix) else {
+                    return div().into_any_element();
+                };
+                let inner: AnyElement = match row {
+                    DisplayRow::Working => working_row(&list_env),
+                    DisplayRow::Report { key, items: charts } => report_row(&list_env, key, charts.iter().filter_map(|ix| items.get(*ix))),
+                    DisplayRow::WorkGroup { key, start, end, active } => {
+                        work_group_row(&list_env, items, key, *start, *end, *active)
+                    }
+                    DisplayRow::Item(item_ix) => {
+                        let (prev, next) = (item_ix.checked_sub(1).and_then(|i| items.get(i)), items.get(item_ix + 1));
+                        match items.get(*item_ix) {
+                            Some(item) => render_item(&list_env, item, ix == 0, prev, next),
+                            None => div().into_any_element(),
+                        }
+                    }
+                };
+                div().w_full().flex().justify_center().px_4().child(div().w_full().pt(px(if ix == 0 { 16.0 } else { 0.0 })).pb(px(if ix + 1 == count { 12.0 } else { 0.0 })).child(inner)).into_any_element()
             }).size_full().into_any_element()
         };
+        let jump = away.then(|| {
+            div().absolute().bottom(px(12.0)).left_0().right_0().flex().justify_center().child(
+                div()
+                    .id("cw-jump")
+                    .size(px(32.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .bg(c.raised)
+                    .border_1()
+                    .border_color(c.border)
+                    .shadow(vec![BoxShadow { color: alpha(black(), if c.light { 0.12 } else { 0.4 }), offset: point(px(0.0), px(6.0)), blur_radius: px(18.0), spread_radius: px(0.0), inset: false }])
+                    .hover(move |d| d.bg(c.hover))
+                    .tooltip(tip("Jump to latest"))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.list.scroll_to_end();
+                        cx.notify();
+                    }))
+                    .child(Icon::new(IconName::ArrowDown).size(px(16.0)).text_color(c.fg))
+                    .with_animation("cw-jump-in", Animation::new(Duration::from_millis(180)), |d, t| d.opacity(ease_out(t)).mt(px(6.0 * (1.0 - ease_out(t))))),
+            )
+        });
         let text = self.draft(cx);
         let popup = self.render_popup(&text, c, cx);
         let plan = if show_plan { self.render_plan(c, cx) } else { None };
@@ -1878,7 +2638,7 @@ impl Render for CodeView {
                 .with_animation("cw-lightbox-in", Animation::new(Duration::from_millis(180)), |d, t| d.opacity(ease_out(t)))
         });
         let sheet_el = sheet.filter(|s| !matches!(s, Sheet::Model | Sheet::Effort | Sheet::Mode)).map(|s| self.render_sheet(s, c, mono.clone(), window, cx));
-        let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
+        let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().border_1().border_color(alpha(c.danger, 0.5)).bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
         let view_for_size = cx.entity();
         let measure = canvas(
             move |bounds, _, cx| {
@@ -1901,14 +2661,43 @@ impl Render for CodeView {
         )
         .absolute()
         .size_full();
-        let space_sky = items.is_empty().then(|| render_space_sky(c, now));
         div().id("code-pane").relative().size_full().rounded_b(px(15.0)).flex().flex_col().text_color(c.fg).font_family(fonts::sans(cx))
-            .children(space_sky)
             .child(measure)
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 let m = e.keystroke.modifiers;
                 let primary = if cfg!(target_os = "macos") { m.platform && !m.control } else { m.control && !m.platform };
                 if primary && !m.alt && !m.shift && e.keystroke.key.eq_ignore_ascii_case("v") && this.paste_attachments(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            // The composer Textarea binds shift-tab to OutdentInline and up/down/tab/escape to
+            // input actions, which run before on_key_down, so intercept them in the capture phase.
+            .capture_action(cx.listener(|this, _: &OutdentInline, _, cx| {
+                this.cycle_mode(cx);
+                cx.stop_propagation();
+            }))
+            .capture_action(cx.listener(|this, _: &MoveDown, window, cx| {
+                if this.move_popup(true, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MoveUp, window, cx| {
+                if this.move_popup(false, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                if this.accept_popup(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, e: &InputEnter, window, cx| {
+                if !e.shift && !e.secondary && this.accept_popup_on_enter(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &InputEscape, window, cx| {
+                if this.dismiss_mention_popup(window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -1924,15 +2713,15 @@ impl Render for CodeView {
                 } else if k == "escape" {
                     if this.model.read(cx).state.sheet.is_some() {
                         this.set_sheet(None, cx);
+                    } else if this.dismiss_mention_popup(window, cx) {
+                        cx.stop_propagation();
                     } else if !this.draft(cx).is_empty() && this.draft(cx).trim_start().starts_with('/') {
                         this.set_input("", window, cx);
                     } else if this.model.read(cx).state.busy {
                         this.send(Cmd::Interrupt, cx);
                     }
                 } else if k == "tab" && e.keystroke.modifiers.shift {
-                    let cur = this.model.read(cx).state.mode;
-                    let next = Mode::ALL[(Mode::ALL.iter().position(|m| *m == cur).unwrap_or(0) + 1) % Mode::ALL.len()];
-                    this.send(Cmd::SetMode(next), cx);
+                    this.cycle_mode(cx);
                 } else if this.draft(cx).is_empty() {
                     let first = this.model.read(cx).state.approvals.first().filter(|a| a.questions.is_empty()).map(|a| a.id.clone());
                     if let Some(id) = first {
@@ -1949,7 +2738,7 @@ impl Render for CodeView {
                 this.attach_paths(paths.paths().to_vec(), cx);
                 this.focus_composer(window, cx);
             }))
-            .child(div().flex_1().min_h_0().relative().overflow_hidden().child(transcript))
+            .child(div().flex_1().min_h_0().relative().overflow_hidden().child(transcript).children(jump))
             .children(status)
             .children(plan)
             .children(approval_cards)
@@ -2028,18 +2817,366 @@ mod tests {
     #[::core::prelude::v1::test]
     fn welcome_compacts_when_narrow_or_short() {
         let wide = welcome_layout(720.0, 640.0);
-        assert!(!wide.compact && wide.show_logo && wide.show_cwd && !wide.short_cwd && wide.two_col && wide.suggestions == 4 && !wide.compact_cards && wide.show_hint);
+        assert!(!wide.compact && wide.show_cwd && !wide.short_cwd && wide.two_col && wide.suggestions == 4 && !wide.compact_cards && wide.show_hint);
 
         let narrow_tall = welcome_layout(250.0, 640.0);
-        assert!(narrow_tall.compact && !narrow_tall.show_logo && narrow_tall.short_cwd && !narrow_tall.two_col && narrow_tall.compact_cards && narrow_tall.suggestions == 4 && !narrow_tall.show_hint);
+        assert!(narrow_tall.compact && narrow_tall.short_cwd && !narrow_tall.two_col && narrow_tall.compact_cards && narrow_tall.suggestions == 4 && !narrow_tall.show_hint);
 
         let narrow_mid = welcome_layout(250.0, 440.0);
         assert!(narrow_mid.compact && narrow_mid.suggestions == 2 && narrow_mid.compact_cards);
 
         let short = welcome_layout(500.0, 320.0);
-        assert!(short.compact && !short.show_logo && short.show_cwd && short.suggestions == 0 && !short.show_hint);
+        assert!(short.compact && short.show_cwd && short.suggestions == 0 && !short.show_hint);
 
         let tiny = welcome_layout(240.0, 220.0);
-        assert!(tiny.compact && !tiny.show_logo && !tiny.show_cwd && tiny.suggestions == 0 && !tiny.show_hint);
+        assert!(tiny.compact && !tiny.show_cwd && tiny.suggestions == 0 && !tiny.show_hint);
+    }
+
+    #[test]
+    fn a_chart_stands_apart_from_the_work_groups_around_it() {
+        use super::{DisplayRow, build_display_rows};
+        use crate::code::state::Item;
+        use serde_json::{Value, json};
+
+        let tool = |k: &str, name: &str, input: Value, ok: Option<bool>| Item::Tool { key: k.into(), name: name.into(), title: String::new(), input, output: String::new(), ok, diff: None, started: 1, ended: Some(2) };
+        let chart = json!({ "blocks": [{ "type": "text", "markdown": "hi" }] });
+        let items = vec![
+            Item::User { key: "u".into(), text: "hi".into(), at: 1, images: vec![] },
+            tool("t1", "Bash", Value::Null, Some(true)),
+            tool("v", "winfer · visualize", chart.clone(), Some(true)),
+            tool("t2", "Bash", Value::Null, Some(true)),
+        ];
+        let rows = build_display_rows(&items, false, true);
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert_eq!(rows[1], DisplayRow::Item(1));
+        assert_eq!(rows[2], DisplayRow::Report { key: "rep-v".into(), items: vec![2] });
+        assert_eq!(rows[3], DisplayRow::Item(3));
+        // Charts with only work between them become one report; text between them splits it.
+        let text = |k: &str| Item::Text { key: k.into(), text: "x".into(), streaming: false };
+        let merged = vec![items[0].clone(), tool("v1", "winfer · visualize", chart.clone(), Some(true)), tool("t1", "Bash", Value::Null, Some(true)), tool("v2", "winfer · visualize", chart.clone(), Some(true)), text("a"), tool("v3", "winfer · visualize", chart.clone(), Some(true))];
+        let rows = build_display_rows(&merged, false, true);
+        assert_eq!(rows[1], DisplayRow::Report { key: "rep-v1".into(), items: vec![1, 3] });
+        assert_eq!(rows[2], DisplayRow::Item(2));
+        assert_eq!(rows[3], DisplayRow::Item(4));
+        assert_eq!(rows[4], DisplayRow::Report { key: "rep-v3".into(), items: vec![5] });
+        // Without compact tools only charts right next to each other merge.
+        let adjacent = vec![items[0].clone(), tool("v1", "winfer · visualize", chart.clone(), Some(true)), tool("v2", "winfer · visualize", chart.clone(), Some(true))];
+        assert_eq!(build_display_rows(&adjacent, false, false)[1], DisplayRow::Report { key: "rep-v1".into(), items: vec![1, 2] });
+        // A call that failed is an ordinary tool row again, so the error shows in its group.
+        let failed = vec![items[0].clone(), items[1].clone(), tool("v", "winfer · visualize", chart, Some(false))];
+        assert_eq!(build_display_rows(&failed, false, true).len(), 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn display_rows_compact_tools_into_updating_work_group() {
+        use super::{DisplayRow, build_display_rows, group_duration_ms};
+        use crate::code::state::Item;
+        use serde_json::Value;
+
+        let user = |k: &str| Item::User { key: k.into(), text: "hi".into(), at: 1, images: vec![] };
+        let text = |k: &str, streaming: bool| Item::Text { key: k.into(), text: "ok".into(), streaming };
+        let reason = |k: &str, started: u64, ended: Option<u64>| Item::Reasoning { key: k.into(), text: "hmm".into(), streaming: ended.is_none(), started, ended };
+        let tool = |k: &str, ok: Option<bool>, started: u64, ended: Option<u64>| Item::Tool { key: k.into(), name: "Bash".into(), title: "ls".into(), input: Value::Null, output: String::new(), ok, diff: None, started, ended };
+        let notice = |k: &str| Item::Notice { key: k.into(), text: "note".into(), error: false };
+        let worked = |k: &str, ms: u64| Item::Worked { key: k.into(), ms };
+
+        // Right after sending a message while busy: "Working…"
+        assert_eq!(build_display_rows(&[user("u1")], true, true), vec![DisplayRow::Item(0), DisplayRow::Working]);
+
+        // Text splits a turn's work: each run gets its own group, the trailing one live.
+        let live = vec![user("u1"), reason("r1", 1000, Some(2000)), tool("t1", Some(true), 2000, Some(3000)), text("a1", false), tool("t2", None, 3000, None)];
+        assert_eq!(
+            build_display_rows(&live, true, true),
+            vec![
+                DisplayRow::Item(0),
+                DisplayRow::WorkGroup { key: "wg-r1".into(), start: 1, end: 2, active: false },
+                DisplayRow::Item(3),
+                DisplayRow::WorkGroup { key: "wg-t2".into(), start: 4, end: 4, active: true },
+            ]
+        );
+
+        // Between finished text and the next step, "Working…" keeps the turn visibly alive.
+        assert_eq!(build_display_rows(&live[..4], true, true).last(), Some(&DisplayRow::Working));
+
+        // Finished turn: a one-step run shows directly, and the total "Worked" row stays.
+        let done = vec![user("u1"), reason("r1", 1000, Some(2000)), tool("t1", Some(true), 2000, Some(4000)), text("a1", false), tool("t2", Some(true), 4000, Some(8000)), text("a2", false), worked("w1", 92_000)];
+        assert_eq!(
+            build_display_rows(&done, false, true),
+            vec![
+                DisplayRow::Item(0),
+                DisplayRow::WorkGroup { key: "wg-r1".into(), start: 1, end: 2, active: false },
+                DisplayRow::Item(3),
+                DisplayRow::Item(4),
+                DisplayRow::Item(5),
+                DisplayRow::Item(6),
+            ]
+        );
+        assert_eq!(group_duration_ms(&done, 1, 2), Some(3000));
+
+        // Notice stays outside work groups
+        let with_notice = vec![user("u1"), tool("t1", Some(true), 1000, Some(2000)), tool("t2", Some(true), 2000, Some(3000)), notice("n1"), text("a2", false), worked("w1", 5000)];
+        assert_eq!(
+            build_display_rows(&with_notice, false, true),
+            vec![
+                DisplayRow::Item(0),
+                DisplayRow::WorkGroup { key: "wg-t1".into(), start: 1, end: 2, active: false },
+                DisplayRow::Item(3),
+                DisplayRow::Item(4),
+                DisplayRow::Item(5),
+            ]
+        );
+
+        // Restored session without timestamps yields None duration
+        let restored = vec![tool("t1", Some(true), 0, Some(0))];
+        assert_eq!(group_duration_ms(&restored, 0, 0), None);
+
+        // Compact disabled preserves flat rows
+        assert_eq!(build_display_rows(&with_notice, false, false).len(), 6);
+
+        // Active compact row uses short subtle descriptions rather than full tool cards
+        use super::describe_step;
+        assert_eq!(describe_step(None), "Working…");
+        assert_eq!(describe_step(Some(&reason("r1", 1000, None))), "Thinking…");
+        assert_eq!(describe_step(Some(&reason("r1", 1000, Some(2000)))), "Working…");
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t1".into(), name: "Read".into(), title: "src/ui/code_view.rs".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Reading code_view.rs"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t2".into(), name: "Bash".into(), title: "cargo test".into(), input: serde_json::json!({ "description": "Run unit tests" }), output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Run unit tests"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t3".into(), name: "WebFetch".into(), title: "https://docs.rs/gpui".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Fetching docs.rs"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t4".into(), name: "Bash".into(), title: "ls".into(), input: serde_json::json!({ "description": "list project files" }), output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "List project files"
+        );
+        assert_eq!(
+            describe_step(Some(&Item::Tool { key: "t5".into(), name: "winfer · bg".into(), title: "start web-os static server".into(), input: Value::Null, output: String::new(), ok: None, diff: None, started: 1, ended: None })),
+            "Start web-os static server"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn inside_rounded_corners_clips_all_four_corners() {
+        use super::inside_rounded_corners;
+        let (w, h, r) = (400.0, 300.0, 16.0);
+        // Center and straight edges are inside
+        assert!(inside_rounded_corners(200.0, 150.0, w, h, r, 1.0));
+        assert!(inside_rounded_corners(200.0, 1.0, w, h, r, 1.0));
+        assert!(inside_rounded_corners(200.0, h - 1.0, w, h, r, 1.0));
+        assert!(inside_rounded_corners(1.0, 150.0, w, h, r, 1.0));
+        assert!(inside_rounded_corners(w - 1.0, 150.0, w, h, r, 1.0));
+        // Points right inside each corner arc are inside
+        assert!(inside_rounded_corners(r, r, w, h, r, 1.0));
+        assert!(inside_rounded_corners(w - r, r, w, h, r, 1.0));
+        assert!(inside_rounded_corners(r, h - r, w, h, r, 1.0));
+        assert!(inside_rounded_corners(w - r, h - r, w, h, r, 1.0));
+        // Extreme corner pixels outside the 16px arc on all four corners are excluded
+        assert!(!inside_rounded_corners(1.0, 1.0, w, h, r, 1.0));
+        assert!(!inside_rounded_corners(w - 1.0, 1.0, w, h, r, 1.0));
+        assert!(!inside_rounded_corners(1.0, h - 1.0, w, h, r, 1.0));
+        assert!(!inside_rounded_corners(w - 1.0, h - 1.0, w, h, r, 1.0));
+        // Bright star with 7px glint near a corner arc is also excluded
+        assert!(!inside_rounded_corners(6.0, 6.0, w, h, r, 7.0));
+        assert!(!inside_rounded_corners(w - 6.0, 6.0, w, h, r, 7.0));
+        assert!(!inside_rounded_corners(6.0, h - 6.0, w, h, r, 7.0));
+        assert!(!inside_rounded_corners(w - 6.0, h - 6.0, w, h, r, 7.0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn sky_image_bounds_insets_atlas_sub_tile_on_all_four_edges() {
+        use super::sky_image_bounds;
+        use crate::ui::nebula::{SKY_INNER_H, SKY_INNER_W, SKY_PAD};
+        use gpui_kit::{Bounds, point, px, size};
+
+        let tile_w = (SKY_INNER_W + SKY_PAD * 2) as f32;
+        let tile_h = (SKY_INNER_H + SKY_PAD * 2) as f32;
+
+        // Test tall/narrow, exact 16:10, and ultra-wide pane shapes
+        for (bw, bh) in [(858.0, 700.0), (800.0, 500.0), (1400.0, 380.0), (260.0, 420.0)] {
+            let bounds = Bounds::new(point(px(12.0), px(20.0)), size(px(bw), px(bh)));
+            let image_bounds = sky_image_bounds(bounds);
+            // visible_bounds must stay equal to the exact pane bounds so corner_radii clip the pane
+            assert_eq!(bounds.intersect(&image_bounds), bounds);
+
+            // Mirror GPUI's paint_image sub_tile math and confirm >= SKY_PAD texels margin on all 4 sides
+            let x_off = ((bounds.origin.x - image_bounds.origin.x) / image_bounds.size.width * tile_w).round() as i32;
+            let y_off = ((bounds.origin.y - image_bounds.origin.y) / image_bounds.size.height * tile_h).round() as i32;
+            let sub_w = ((bounds.size.width / image_bounds.size.width) * tile_w).round() as i32;
+            let sub_h = ((bounds.size.height / image_bounds.size.height) * tile_h).round() as i32;
+
+            assert!(x_off >= SKY_PAD as i32, "left margin {x_off} for {bw}x{bh}");
+            assert!(y_off >= SKY_PAD as i32, "top margin {y_off} for {bw}x{bh}");
+            assert!(x_off + sub_w <= tile_w as i32 - SKY_PAD as i32, "right margin for {bw}x{bh}");
+            assert!(y_off + sub_h <= tile_h as i32 - SKY_PAD as i32, "bottom margin for {bw}x{bh}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn space_sky_spans_full_pane_behind_header(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Pixels, Render, Styled, Window, canvas, div, px};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        cx.update(gpui_kit::init);
+        let sky_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+
+        struct ChildSkyView {
+            sky_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+        }
+
+        impl Render for ChildSkyView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let sb = self.sky_bounds.clone();
+                div()
+                    .relative()
+                    .size_full()
+                    .rounded_2xl()
+                    .overflow_hidden()
+                    .child(canvas(move |b, _, _| { *sb.borrow_mut() = Some(b); }, |_, _, _, _| {}).absolute().size_full())
+            }
+        }
+
+        struct PaneSkyHarness {
+            sky: Entity<ChildSkyView>,
+        }
+
+        impl Render for PaneSkyHarness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .w(px(600.0))
+                    .h(px(400.0))
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .rounded_2xl()
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded_2xl()
+                            .overflow_hidden()
+                            .child(self.sky.clone()),
+                    )
+                    .child(div().flex_shrink_0().mx_2().mt_2().h(px(48.0)))
+                    .child(div().flex_1().min_h_0())
+            }
+        }
+
+        let sb = sky_bounds.clone();
+        let (_, vcx) = cx.add_window_view(move |_, cx| {
+            let sky = cx.new(|_| ChildSkyView { sky_bounds: sb });
+            PaneSkyHarness { sky }
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let sky = sky_bounds.borrow().expect("sky bounds measured");
+        assert_eq!(sky.origin.x, px(0.0));
+        assert_eq!(sky.origin.y, px(0.0));
+        assert_eq!(sky.size.width, px(600.0));
+        assert_eq!(sky.size.height, px(400.0));
+    }
+
+    #[gpui_kit::test]
+    fn popup_arrow_keys_and_scroll_work_for_slash_skills_and_mentions(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::protocol::COMMANDS;
+        use crate::code::session::CodeModel;
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, px};
+
+        cx.update(gpui_kit::init);
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                m.state.skills = vec!["deploy".into(), "zebra-skill".into()];
+                m.state.files = Some((0..20).map(|i| format!("src/file_{i:02}.rs")).collect());
+                m
+            });
+            CodeView::new(model, app, window, cx)
+        });
+        vcx.run_until_parked();
+
+        // 1. `/` popup: arrow keys navigate commands + skills, scroll the popup, and Tab inserts the selection.
+        vcx.update(|window, cx| {
+            view.update(cx, |v, cx| {
+                v.focus_composer(window, cx);
+                v.set_input("/", window, cx);
+            });
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        // Total rows = COMMANDS.len() + 2 skills; pressing Up wraps to the last item ("/zebra-skill") and scrolls down.
+        vcx.simulate_keystrokes("up");
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        let (popup_ix, scroll_y) = vcx.read(|cx| {
+            let v = view.read(cx);
+            (v.popup, v.popup_scroll.offset().y)
+        });
+        assert_eq!(popup_ix, COMMANDS.len() + 1, "Up from 0 wraps to the last skill");
+        assert!(scroll_y < px(0.0), "popup scroll should move to reveal the bottom skill, got {scroll_y:?}");
+
+        vcx.simulate_keystrokes("tab");
+        vcx.run_until_parked();
+        assert_eq!(vcx.read(|cx| view.read(cx).draft(cx)), "/zebra-skill ");
+
+        // 2. `@` popup: shows >8 files, arrow keys move past 8 and scroll, Enter picks the selected file.
+        vcx.update(|window, cx| {
+            view.update(cx, |v, cx| {
+                v.focus_composer(window, cx);
+                v.set_input("look at @", window, cx);
+            });
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        for _ in 0..12 {
+            vcx.simulate_keystrokes("down");
+        }
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        let (mention_ix, mention_scroll_y) = vcx.read(|cx| {
+            let v = view.read(cx);
+            (v.popup, v.popup_scroll.offset().y)
+        });
+        assert_eq!(mention_ix, 12, "Down 12 times selects the 13th file");
+        assert!(mention_scroll_y < px(0.0), "mention popup should scroll past the first 8 items, got {mention_scroll_y:?}");
+
+        vcx.simulate_keystrokes("enter");
+        vcx.run_until_parked();
+        assert_eq!(vcx.read(|cx| view.read(cx).draft(cx)), "look at @src/file_12.rs ");
+
+        // 3. Escape dismisses an open `@` popup without clearing the draft.
+        vcx.update(|window, cx| {
+            view.update(cx, |v, cx| {
+                v.focus_composer(window, cx);
+                v.set_input("check @src", window, cx);
+            });
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        assert!(!vcx.read(|cx| view.read(cx).popup_rows("check @src", cx).is_empty()));
+
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert_eq!(vcx.read(|cx| view.read(cx).draft(cx)), "check @src");
+        assert!(vcx.read(|cx| view.read(cx).popup_rows("check @src", cx).is_empty()));
     }
 }

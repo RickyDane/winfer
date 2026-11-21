@@ -259,7 +259,7 @@ impl Root {
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| this.run_palette(i, window, cx)))
                     .child(div().flex_1().truncate().child(e.title.clone()))
-                    .when_some(e.keys.clone(), |d, k| d.child(div().rounded_sm().bg(c.panel).px_1p5().py(px(1.0)).text_size(px(10.5)).text_color(c.subtle).child(k))),
+                    .when_some(e.keys.clone(), |d, k| d.child(div().rounded_sm().border_1().border_color(c.edge).bg(c.panel).px_1p5().py(px(1.0)).text_size(px(10.5)).text_color(c.subtle).child(k))),
             );
         }
         let total = results.len();
@@ -271,7 +271,7 @@ impl Root {
                 .child(
                     div()
                         .id("palette")
-                        .w(px(620.0)).max_h(px(540.0)).flex().flex_col().overflow_hidden().rounded(px(14.0)).bg(c.raised).shadow_2xl()
+                        .w(px(620.0)).max_h(px(540.0)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .capture_action(cx.listener(move |this, _: &MoveDown, _, cx| {
                             this.palette_selected = (this.palette_selected + 1).min(total.saturating_sub(1));
@@ -350,7 +350,7 @@ impl Root {
             div().id("cheat-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.cheat_sheet_open = false)))
                 .child(
-                    div().id("cheat").w(px(1040.0)).max_h(px(640.0)).overflow_y_scroll().rounded_xl().bg(c.raised).p_5()
+                    div().id("cheat").w(px(1040.0)).max_h(px(640.0)).overflow_y_scroll().rounded_xl().border_1().border_color(c.edge).bg(c.raised).p_5()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().text_sm().mb_3().child(if recording_hint { "Press the new shortcut (esc cancels)" } else { "Keyboard shortcuts · click one to change it" }))
                         .child(columns),
@@ -416,7 +416,7 @@ impl Root {
             let picked = self.question_picked.contains(&i);
             let label = option.label.clone();
             body = body.child(
-                div().id(("question-option", i)).flex().items_start().gap_2().rounded_md().px_3().py_2().text_size(px(13.0)).cursor_pointer()
+                div().id(("question-option", i)).flex().items_start().gap_2().rounded_md().border_1().px_3().py_2().text_size(px(13.0)).cursor_pointer()
                     .hover(move |d| d.bg(c.hover))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if multi {
@@ -444,7 +444,7 @@ impl Root {
         Some(
             div().id("question-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .child(
-                    div().w(px(500.0)).max_h(px(620.0)).flex().flex_col().rounded_xl().bg(c.raised)
+                    div().w(px(500.0)).max_h(px(620.0)).flex().flex_col().rounded_xl().border_1().border_color(c.edge).bg(c.raised)
                         .child(
                             div().flex().items_start().gap_3().px_5().py_3()
                                 .child(Icon::new(IconName::CircleQuestionMark).size(px(16.0)).text_color(c.accent))
@@ -492,7 +492,14 @@ impl Root {
                     this.execute(action.clone(), window, cx);
                 }))
             });
-            stack = stack.child(div().flex().items_center().gap_2().max_w(px(420.0)).rounded_md().bg(c.raised).px_3().py_1p5().text_xs().text_color(c.fg).child(toast.text.clone()).children(button));
+            let shadow = BoxShadow {
+                color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.25 }),
+                offset: point(px(0.0), px(2.0)),
+                blur_radius: px(8.0),
+                spread_radius: px(0.0),
+                inset: false,
+            };
+            stack = stack.child(div().flex().items_center().gap_2().max_w(px(420.0)).rounded_md().bg(c.raised).border_1().border_color(c.border).shadow(vec![shadow]).px_3().py_1p5().text_xs().text_color(c.fg).child(toast.text.clone()).children(button));
         }
         Some(stack.into_any_element())
     }

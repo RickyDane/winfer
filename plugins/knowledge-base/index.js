@@ -936,8 +936,12 @@ const CG_SQL = [
   "'links', (SELECT json_group_array(json_object('source', e.source, 'target', e.target, 'relation', e.kind, 'c', CASE WHEN json_valid(e.metadata) THEN json_extract(e.metadata, '$.confidence') END, 'line', e.line))",
   `FROM edges e JOIN nodes s ON s.id = e.source JOIN nodes t ON t.id = e.target WHERE s.kind NOT IN ${CG_SKIP} AND t.kind NOT IN ${CG_SKIP}))`,
 ].join(" ");
-/** The same query with Node's built-in SQLite, where there's no sqlite3 (Windows): `node -e` it with the db and output paths. */
-const CG_DUMP_JS = `const{DatabaseSync}=require('node:sqlite');const[d,o]=process.argv.slice(1);const r=new DatabaseSync(d,{readOnly:true}).prepare(${JSON.stringify(CG_SQL)}).get();require('fs').writeFileSync(o,String(Object.values(r)[0]));`;
+/**
+ * The same query with Node's built-in SQLite, where there's no sqlite3 (Windows): `node -e` it with the db and output paths.
+ * Read-only first; codegraph's database is in WAL mode, which a read-only connection can't open once codegraph's daemon
+ * has quit and taken its -shm file along, so then a normal connection (it only reads).
+ */
+const CG_DUMP_JS = `const{DatabaseSync}=require('node:sqlite');const[d,o]=process.argv.slice(1);const q=(readOnly)=>new DatabaseSync(d,{readOnly}).prepare(${JSON.stringify(CG_SQL)}).get();let r;try{r=q(true)}catch{r=q(false)}require('fs').writeFileSync(o,String(Object.values(r)[0]));`;
 const CG_DETECT_UNIX = [
   "b=$(command -v codegraph 2>/dev/null); onpath=1",
   'if [ -z "$b" ]; then onpath=0; for p in "$HOME/.local/bin/codegraph" "$HOME/.codegraph/current/bin/codegraph" /opt/homebrew/bin/codegraph /usr/local/bin/codegraph; do if [ -x "$p" ]; then b="$p"; break; fi; done; fi',
@@ -1262,7 +1266,8 @@ function createCodegraphBackend({ api, exec, readText, changed, graphOf, absolut
       ].join("\n");
     }
     return [
-      `if command -v sqlite3 >/dev/null 2>&1; then sqlite3 -readonly ${CG_DB} ${q(CG_SQL)} > ${CG_DUMP}; exit $?; fi`,
+      // As in CG_DUMP_JS: read-only, else a normal connection. Errors go to the output (vault.exec's 2>&1 only covers the last command).
+      `if command -v sqlite3 >/dev/null 2>&1; then sqlite3 -readonly ${CG_DB} ${q(CG_SQL)} > ${CG_DUMP} 2>/dev/null || sqlite3 ${CG_DB} ${q(CG_SQL)} 2>&1 > ${CG_DUMP}; exit $?; fi`,
       'n=""',
       `for p in ${q(bundledNode())} "$(command -v node 2>/dev/null)"; do if [ -n "$p" ] && [ -x "$p" ]; then n="$p"; break; fi; done`,
       'if [ -z "$n" ]; then echo "Reading the codegraph index needs sqlite3 or Node.js 22.5 or later"; exit 1; fi',

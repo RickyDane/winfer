@@ -45,7 +45,8 @@ Done:
 - [x] Orchestration: race, A/B test, results with winner verdict, broadcast, recipes, agent bar
 - [x] Progress estimates, session titles, Sessions overlay, pane header progress bar
 - [x] Plugin host in a wry webview: plugins' code, pages (title bar tabs, Apps menu, pins), palette tools, recipes,
-  agent tools over MCP, panel buttons, `api.confirm` dialog, vault, file access, pane events
+  agent tools over MCP, panel buttons, `api.confirm` dialog, vault, file access, pane events, the app's page styles
+  (`wf-*`, Tailwind's preflight), and browser/Android frames for plugins that record a panel
 - [x] Sidebar (Sessions/Review/History, workspaces and sessions with drag reorder, context menus, rename, tooltips,
   Latest feed, footer); pane header (menu, rename, context meter and card, cost, glass design); scrollback search;
   notifications with the agent's question and Approve/Decline/Reply

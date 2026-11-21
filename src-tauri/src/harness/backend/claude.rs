@@ -3,6 +3,7 @@
 //! are answered by the TUI.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
 use serde_json::{Value, json};
@@ -266,6 +267,10 @@ struct Bridge {
     limit: Option<(String, Option<i64>)>,
     /// The account's usage is nearly gone: the next turn starts on another account.
     low: bool,
+    /// Where Claude Code keeps plan files (`<config dir>/plans`), which plan mode may write.
+    plans: Option<PathBuf>,
+    /// The plan file the agent last wrote, handed over with ExitPlanMode.
+    plan_file: Option<String>,
 }
 
 struct Checkpoint {
@@ -349,6 +354,21 @@ fn env(opts: &Opts) -> Vec<(String, String)> {
     env
 }
 
+/// Claude Code's plan files on `account`: `<config dir>/plans`.
+fn plans_dir(account: Option<&str>) -> Option<PathBuf> {
+    crate::accounts::config_dir("claude", account).map(|d| d.join("plans"))
+}
+
+/// Whether `path` is a file in `plans` (also through the account's symlinked `plans`).
+fn in_plans(plans: &Path, path: &str) -> bool {
+    let path = Path::new(path);
+    if path.starts_with(plans) {
+        return true;
+    }
+    let parent = path.parent().and_then(|p| p.canonicalize().ok());
+    parent.is_some() && parent == plans.canonicalize().ok()
+}
+
 /// Tools whose changes Claude Code's file checkpoints cover.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 
@@ -387,6 +407,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         settled: false,
         limit: None,
         low: false,
+        plans: plans_dir(opts.account.as_deref()),
+        plan_file: None,
     };
     b.set_model(&opts.model);
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
@@ -483,6 +505,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
 #[allow(clippy::too_many_arguments)]
 fn switch_account(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, account: String, rx: &Receiver<In>, me: &Sender<In>, stale_exits: &mut usize) -> Result<(), String> {
     opts.account = Some(account.clone());
+    b.plans = plans_dir(opts.account.as_deref());
     let (held, ended) = micro_compact(b, proc, opts, None, rx, me)?;
     *stale_exits += usize::from(!ended);
     b.emit(Ev::Account(account));
@@ -759,6 +782,9 @@ impl Bridge {
                             if name == "TaskUpdate" && self.plan.update(&input) {
                                 self.emit(Ev::Todos(self.plan.todos()));
                             }
+                            if let Some(path) = self.plan_file_of(&name, &input) {
+                                self.plan_file = Some(path);
+                            }
                             if EDIT_TOOLS.contains(&name.as_str()) {
                                 if let Some(cp) = self.checkpoints.last_mut() {
                                     cp.edited = true;
@@ -901,7 +927,15 @@ impl Bridge {
                     let input = req["input"].clone();
                     // winfer's `bg` only runs something new on start; reading, listing and
                     // stopping its tasks don't ask (like winfer code's own tools).
-                    if name.starts_with("mcp__winfer") && name.ends_with("__bg") && crate::harness::tools::risk("bg", &input) == crate::harness::tools::Risk::Read {
+                    // `visualize` only draws what it is given in the chat.
+                    let shows = name.starts_with("mcp__winfer") && crate::viz::is_visualize(name);
+                    if shows || name.starts_with("mcp__winfer") && name.ends_with("__bg") && crate::harness::tools::risk("bg", &input) == crate::harness::tools::Risk::Read {
+                        self.outbox.push(json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": { "behavior": "allow", "updatedInput": input } } }));
+                        return;
+                    }
+                    // Plan mode writes its plan file: never refused or asked about (Claude Code may
+                    // ask when the plans folder is a symlink to the shared one).
+                    if self.mode.plans() && self.plan_file_of(name, &input).is_some() {
                         self.outbox.push(json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": { "behavior": "allow", "updatedInput": input } } }));
                         return;
                     }
@@ -922,6 +956,7 @@ impl Bridge {
                         .unwrap_or("")
                         .to_string();
                     self.pending.insert(id.clone(), (input.clone(), req["permission_suggestions"].clone()));
+                    let plan_file = if name == "ExitPlanMode" { self.handed_plan(&input) } else { None };
                     self.emit(Ev::Approval(Approval {
                         id,
                         tool: display_name(name),
@@ -929,11 +964,36 @@ impl Bridge {
                         detail,
                         diff: edit_diff(name, &input),
                         questions: if name == "AskUserQuestion" { Question::parse_all(&input) } else { Vec::new() },
+                        plan_file,
                     }));
                 }
             }
             _ => {}
         }
+    }
+
+    /// The plan file an edit tool call writes, if it writes one in the plans folder.
+    fn plan_file_of(&self, name: &str, input: &Value) -> Option<String> {
+        let plans = self.plans.as_ref()?;
+        let path = input["file_path"].as_str().filter(|_| EDIT_TOOLS.contains(&name))?;
+        in_plans(plans, path).then(|| path.to_string())
+    }
+
+    /// The plan ExitPlanMode hands over, as a file to show: the one Claude Code names, else the
+    /// one the agent wrote, else its inline plan saved to a file of its own.
+    fn handed_plan(&mut self, input: &Value) -> Option<String> {
+        let named = input["planFilePath"].as_str().map(str::to_string).filter(|p| Path::new(p).is_file());
+        if let Some(p) = named.or_else(|| self.plan_file.clone().filter(|p| Path::new(p).is_file())) {
+            return Some(p);
+        }
+        let plan = input["plan"].as_str().map(str::trim).filter(|p| !p.is_empty())?;
+        let dir = self.plans.clone()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(format!("{}.md", self.session.as_deref().unwrap_or("plan")));
+        std::fs::write(&path, format!("{plan}\n")).ok()?;
+        let path = path.to_string_lossy().into_owned();
+        self.plan_file = Some(path.clone());
+        Some(path)
     }
 
     /// Claude Code put back the turn's files; now drop the turn from the conversation.
@@ -1249,6 +1309,7 @@ mod tests {
             compact_at: 0,
             running: Default::default(),
             settled: false, limit: None, low: false,
+            plans: None, plan_file: None,
         };
         (b, rx)
     }
@@ -1363,6 +1424,49 @@ mod tests {
         // Claude Code reports yolo-plan as plain "plan": not a mode change.
         b.on_line(&json!({ "type": "system", "subtype": "status", "permissionMode": "plan" }));
         assert_eq!(b.mode, Mode::YoloPlan);
+    }
+
+    #[test]
+    fn plan_mode_writes_its_plan_file_and_hands_it_over() {
+        let root = std::env::temp_dir().join(format!("winfer-claude-plans-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (shared, account) = (root.join("shared"), root.join("account"));
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(&account).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&shared, account.join("plans")).unwrap();
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(account.join("plans")).unwrap();
+        let (mut b, rx) = bridge();
+        b.plans = Some(account.join("plans"));
+        b.session = Some("s1".into());
+        let ask = |b: &mut Bridge, id: &str, tool: &str, input: Value| {
+            b.on_line(&json!({ "type": "control_request", "request_id": id, "request": { "subtype": "can_use_tool", "tool_name": tool, "input": input } }));
+            b.outbox.pop().map(|o| o["response"]["response"]["behavior"].as_str().unwrap().to_string())
+        };
+        // Through the account's link or the shared folder itself: allowed, in both plan modes.
+        let plan = account.join("plans/p.md").to_string_lossy().into_owned();
+        let real = shared.join("p.md").to_string_lossy().into_owned();
+        for mode in [Mode::Plan, Mode::YoloPlan] {
+            b.mode = mode;
+            assert_eq!(ask(&mut b, "w1", "Write", json!({ "file_path": plan })).as_deref(), Some("allow"));
+            assert_eq!(ask(&mut b, "w2", "Edit", json!({ "file_path": real })).as_deref(), Some("allow"));
+        }
+        // Other files are still refused.
+        assert_eq!(ask(&mut b, "w3", "Write", json!({ "file_path": root.join("x.md").to_string_lossy() })).as_deref(), Some("deny"));
+        // Only an inline plan: saved to a file of its own and handed over with the approval.
+        let _ = rx.try_iter().count();
+        assert_eq!(ask(&mut b, "x1", "ExitPlanMode", json!({ "plan": "# Plan\n- do it" })), None);
+        let file = rx.try_iter().find_map(|e| if let Ev::Approval(a) = e { a.plan_file } else { None }).unwrap();
+        assert!(std::fs::read_to_string(&file).unwrap().contains("- do it"));
+        // A plan file the agent wrote wins over the inline plan.
+        std::fs::write(&real, "# Written").unwrap();
+        b.on_line(&json!({ "type": "assistant", "message": { "id": "m", "content": [{ "type": "tool_use", "id": "t", "name": "Write", "input": { "file_path": plan } }] } }));
+        let _ = rx.try_iter().count();
+        ask(&mut b, "x2", "ExitPlanMode", json!({ "plan": "inline" }));
+        let file = rx.try_iter().find_map(|e| if let Ev::Approval(a) = e { a.plan_file } else { None }).unwrap();
+        assert_eq!(file, plan);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

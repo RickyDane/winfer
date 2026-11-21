@@ -17,6 +17,8 @@ export interface CodeWebPrefs {
   expandThinking: boolean;
   /** Shell output is open while the command runs. */
   expandShell: boolean;
+  /** Compact consecutive tool calls and thinking into one live-updating row. */
+  compactTools: boolean;
   /** Tighter spacing in the transcript. */
   compact: boolean;
   /** Text size multiplier (1 = default); only text scales, not spacing. */
@@ -41,6 +43,7 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   showPlan: true,
   expandThinking: false,
   expandShell: false,
+  compactTools: true,
   compact: false,
   textScale: 1,
   favoriteModels: [],

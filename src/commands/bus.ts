@@ -3,6 +3,7 @@
  * becomes one of these typed commands and runs through `execute`.
  */
 import type { ProviderId } from "@/features/providers/providers";
+import type { Attachment } from "@/features/code/store";
 import {
   buildPreset,
   equalize,
@@ -37,7 +38,7 @@ export type Direction = "left" | "right" | "up" | "down";
 export type PaneRef = "focused" | { id: string } | { index: number };
 
 export type Command =
-  | { type: "pane.spawn"; provider: ProviderId | "default"; count?: number; prompt?: string; worktree?: boolean; model?: string; effort?: string }
+  | { type: "pane.spawn"; provider: ProviderId | "default"; count?: number; prompt?: string; attachments?: Attachment[]; worktree?: boolean; model?: string; effort?: string }
   /** Switches a running agent's model: in place where the CLI supports it, else by restarting it. */
   | { type: "pane.setModel"; target: PaneRef; model: string | null }
   | { type: "pane.split"; dir: SplitDir; provider?: ProviderId | "default" }
@@ -197,7 +198,7 @@ export function execute(cmd: Command): void {
     case "pane.spawn": {
       const provider = resolveProvider(cmd.provider);
       const count = Math.max(1, cmd.count ?? 1);
-      for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, worktree: cmd.worktree, model: cmd.model, effort: cmd.effort });
+      for (let i = 0; i < count; i++) s.addPane(provider, { prompt: cmd.prompt, attachments: cmd.attachments, worktree: cmd.worktree, model: cmd.model, effort: cmd.effort });
       logActivity(s.activeWorkspaceId, `Opened ${count > 1 ? `${count}× ` : ""}${providerName(s.providers, provider)}`, provider);
       return;
     }

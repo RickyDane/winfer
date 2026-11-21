@@ -129,6 +129,8 @@ pub struct CodeState {
     pub exited: Option<String>,
     /// Commands queued for the transport (drained by the view).
     pub outbox: Vec<Cmd>,
+    /// A plan handed over for approval, to open in the file viewer (taken by the app).
+    pub show_plan: Option<String>,
 }
 
 impl Default for CodeState {
@@ -139,6 +141,7 @@ impl Default for CodeState {
             sheet: None, rate: None, last_rate: None, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), sub_model: None, sub_effort: None,
             items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
             usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, outbox: Vec::new(),
+            show_plan: None,
         }
     }
 }
@@ -300,7 +303,12 @@ impl CodeState {
                     }
                 }
             }
-            Ev::Approval(a) => self.approvals.push(a),
+            Ev::Approval(a) => {
+                if let Some(file) = &a.plan_file {
+                    self.show_plan = Some(file.clone());
+                }
+                self.approvals.push(a);
+            }
             Ev::Task(t) => {
                 let now = now_ms();
                 let i = match self.tasks.iter().position(|x| x.ev.id == t.id) {

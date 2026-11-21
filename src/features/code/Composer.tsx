@@ -186,6 +186,7 @@ export function Composer({ focused }: { focused: boolean }) {
   const [sel, setSel] = useState(0);
   const ta = useRef<HTMLTextAreaElement>(null);
   const dropTarget = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -232,9 +233,12 @@ export function Composer({ focused }: { focused: boolean }) {
   const files = useCode((s) => s.files);
   const mention = useMemo(() => (cmds.length ? null : mentionAt(text, caret)), [cmds.length, text, caret]);
   const picks = useMemo(
-    () => (mention && mention.start !== closedAt && files ? rankFiles(files, mention.query) : []),
+    () => (mention && mention.start !== closedAt && files ? rankFiles(files, mention.query, 50) : []),
     [mention, closedAt, files],
   );
+  useEffect(() => {
+    popupRef.current?.querySelector(".cw-slash-item.sel")?.scrollIntoView({ block: "nearest" });
+  }, [sel, cmds.length, picks.length]);
   // Refresh the list each time a mention starts (the stale one shows meanwhile).
   const mentioning = mention != null;
   useEffect(() => {
@@ -390,7 +394,7 @@ export function Composer({ focused }: { focused: boolean }) {
         }}
       >
         {cmds.length > 0 && (
-          <div className="cw-slash">
+          <div className="cw-slash" ref={popupRef}>
             {cmds.map(([c, d], i) => (
               <button
                 key={c}
@@ -408,7 +412,7 @@ export function Composer({ focused }: { focused: boolean }) {
           </div>
         )}
         {picks.length > 0 && (
-          <div className="cw-slash cw-mentions">
+          <div className="cw-slash cw-mentions" ref={popupRef}>
             {picks.map((f, i) => {
               const slash = f.lastIndexOf("/");
               return (

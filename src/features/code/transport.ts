@@ -69,7 +69,8 @@ export class PtyTransport implements Transport {
             workspaceId: pane.workspaceId,
             resume: pane.resume,
             session: pane.resume ? pane.sessionId : null,
-            prompt: pane.prompt,
+            // Pasted images go through the session itself (see storeFor), not the start prompt.
+            prompt: pane.attachments?.length ? null : pane.prompt,
             model: pane.model,
             effort: pane.effort ?? null,
             autoApprove: s.autoApprove.includes(pane.provider),

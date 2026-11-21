@@ -9,15 +9,17 @@
 //! mode runs every tool without asking, whatever the mode.
 
 use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use super::{In, LineProcess, Opts};
 use crate::harness::diff;
-use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, TurnTokens, Usage, UserMsg};
+use crate::harness::event::{Cmd, Ev, Events, Mode, ModelInfo, TaskEv, TurnTokens, Usage, UserMsg};
 
 /// Effort suffixes `agy models` attaches to per-level model variants, lowest first.
 const EFFORT_SUFFIXES: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
@@ -211,31 +213,125 @@ impl Drop for McpDir {
     }
 }
 
-/// Session-only `--settings` JSON allowing MCP tool calls for the servers winfer attaches (print
-/// mode has no approval protocol and denies unallowed MCP calls). Existing `permissions.allow`
-/// entries from `~/.gemini/antigravity-cli/settings.json` are preserved so `--settings` doesn't
-/// drop the user's own allow rules.
-fn mcp_settings_arg(servers: &serde_json::Map<String, Value>, existing: Option<&Value>) -> Option<String> {
-    if servers.is_empty() {
+/// Read-only commands allowed without prompting in `Mode::Plan`.
+///
+/// `agy --print=` has no interactive approval protocol: any command that evaluates to Ask is
+/// immediately denied and aborts the turn (and permanently halts any subagent that hits it).
+/// Because Antigravity evaluates every segment of `&&`, `||`, and `|` pipelines against allow
+/// rules, common composition helpers (`true`, `sort`, `head`, etc.) are included alongside
+/// filesystem/search/git inspection tools.
+const PLAN_READONLY_COMMANDS: &[&str] = &[
+    "ls", "ll", "find", "fd", "tree", "stat", "file", "wc", "du", "df", "pwd", "realpath", "readlink",
+    "dirname", "basename", "which", "type", "cat", "head", "tail", "nl", "rg", "grep", "egrep",
+    "fgrep", "ag", "ack", "sort", "uniq", "cut", "tr", "diff", "comm", "cmp", "jq", "yq", "strings",
+    "od", "hexdump", "xxd", "shasum", "sha256sum", "md5", "md5sum", "echo", "printf", "true",
+    "false", "test", "[", "cd", "uname", "date", "env", "printenv", "id", "whoami", "hostname",
+    "ps", "lsof", "sw_vers", "sysctl", "git status", "git log", "git diff", "git show", "git branch",
+    "git rev-parse", "git ls-files", "git ls-tree", "git blame", "git grep", "git tag",
+    "git describe", "git remote", "git shortlog", "git config --get", "git config --list",
+    "gh pr view", "gh pr list", "gh pr diff", "gh issue view", "gh issue list", "gh repo view",
+    "cargo metadata", "rustc --version", "node --version", "pnpm --version", "npm --version",
+    "python3 --version",
+];
+
+fn push_unique(list: &mut Vec<String>, rule: String) {
+    if !list.iter().any(|r| r == &rule) {
+        list.push(rule);
+    }
+}
+
+fn normalized_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Workspace `write_file(...)` deny rules for plan modes (includes the canonical path when `cwd`
+/// crosses a symlink like `/tmp` → `/private/tmp`), keeping Antigravity's own artifact dir outside
+/// the workspace writable.
+fn workspace_write_denies(cwd: &Path) -> Vec<String> {
+    let mut rules = Vec::new();
+    let raw = normalized_path(cwd);
+    if !raw.is_empty() {
+        push_unique(&mut rules, format!("write_file({raw})"));
+    }
+    if let Ok(canon) = std::fs::canonicalize(cwd) {
+        let canon = normalized_path(&canon);
+        if !canon.is_empty() {
+            push_unique(&mut rules, format!("write_file({canon})"));
+        }
+    }
+    rules
+}
+
+/// Session-only `--settings` JSON for Antigravity:
+/// - allows MCP tool calls for the servers winfer attaches (`mcp(<name>/*)`),
+/// - in `Mode::Plan`, allows read-only exploration commands + `read_file(*)` + user-configured
+///   `allowed_commands`, and denies workspace `write_file(...)` so planning stays read-only
+///   without print mode aborting on every shell inspection command,
+/// - in `Mode::YoloPlan`, allows `command(*)`, `read_file(*)`, `read_url(*)`, and denies
+///   workspace `write_file(...)`.
+///
+/// Existing `permissions` entries from `~/.gemini/antigravity-cli/settings.json` are preserved so
+/// `--settings` doesn't drop the user's own rules.
+fn settings_arg(
+    mode: Mode,
+    cwd: &Path,
+    servers: &serde_json::Map<String, Value>,
+    allowed_commands: &[String],
+    existing: Option<&Value>,
+) -> Option<String> {
+    if mode == Mode::Yolo {
         return None;
     }
-    let mut allow: Vec<String> = existing
-        .and_then(|v| v["permissions"]["allow"].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str().map(String::from))
-        .collect();
+    if !mode.plans() && servers.is_empty() {
+        return None;
+    }
+    let read_list = |key: &str| -> Vec<String> {
+        existing
+            .and_then(|v| v["permissions"][key].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    };
+    let mut allow = read_list("allow");
+    let mut deny = read_list("deny");
     for name in servers.keys() {
-        let rule = format!("mcp({name}/*)");
-        if !allow.iter().any(|r| r == &rule) {
-            allow.push(rule);
+        push_unique(&mut allow, format!("mcp({name}/*)"));
+    }
+    match mode {
+        Mode::Plan => {
+            push_unique(&mut allow, "read_file(*)".into());
+            for cmd in PLAN_READONLY_COMMANDS {
+                push_unique(&mut allow, format!("command({cmd})"));
+            }
+            for cmd in allowed_commands {
+                let cmd = cmd.trim();
+                if !cmd.is_empty() {
+                    push_unique(&mut allow, format!("command({cmd})"));
+                }
+            }
+            for rule in workspace_write_denies(cwd) {
+                push_unique(&mut deny, rule);
+            }
         }
+        Mode::YoloPlan => {
+            push_unique(&mut allow, "command(*)".into());
+            push_unique(&mut allow, "read_file(*)".into());
+            push_unique(&mut allow, "read_url(*)".into());
+            for rule in workspace_write_denies(cwd) {
+                push_unique(&mut deny, rule);
+            }
+        }
+        Mode::Ask | Mode::AutoEdit | Mode::Yolo => {}
     }
     let mut perms = existing
         .and_then(|v| v["permissions"].as_object())
         .cloned()
         .unwrap_or_default();
     perms.insert("allow".into(), json!(allow));
+    if !deny.is_empty() {
+        perms.insert("deny".into(), json!(deny));
+    }
     Some(json!({ "permissions": perms }).to_string())
 }
 
@@ -358,6 +454,98 @@ struct Call {
     before: Option<(String, String)>,
 }
 
+/// A spawned Antigravity subagent tracked via its `transcript.jsonl` on disk.
+struct Subagent {
+    agent: String,
+    log_path: Option<PathBuf>,
+    /// Byte offset already parsed in `log_path`.
+    offset: u64,
+    tools: u64,
+    model: Option<String>,
+    last: Option<String>,
+    /// True once the subagent sent a message back to the parent via `send_message`.
+    sent_reply: bool,
+    /// True when the latest observed step was an error.
+    saw_error: bool,
+    /// True once a terminal `Ev::Task` status has been emitted.
+    done: bool,
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = ((bytes[i + 1] as char).to_digit(16), (bytes[i + 2] as char).to_digit(16)) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    let decoded = percent_decode(rest);
+    if decoded.is_empty() {
+        return None;
+    }
+    #[cfg(windows)]
+    let decoded = {
+        let b = decoded.as_bytes();
+        if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+            decoded[1..].to_string()
+        } else {
+            decoded
+        }
+    };
+    Some(PathBuf::from(decoded))
+}
+
+fn default_subagent_log(conv_id: &str) -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".gemini/antigravity-cli/brain").join(conv_id).join(".system_generated/logs/transcript.jsonl"))
+}
+
+/// Decodes `args` from an Antigravity `transcript.jsonl` tool call, where values are often
+/// JSON-encoded strings (e.g. `"CommandLine": "\"ls -la\""`).
+fn decode_transcript_args(raw: &Value) -> Value {
+    let Some(map) = raw.as_object() else {
+        return raw.clone();
+    };
+    let mut out = serde_json::Map::with_capacity(map.len());
+    for (k, v) in map {
+        let decoded = match v.as_str() {
+            Some(s) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| Value::String(s.to_string())),
+            None => v.clone(),
+        };
+        out.insert(k.clone(), decoded);
+    }
+    Value::Object(out)
+}
+
+fn truncate_line(s: &str, max: usize) -> String {
+    let first = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    if first.chars().count() <= max {
+        first.to_string()
+    } else {
+        let mut out: String = first.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn format_subagent_tool(name: &str, args: &Value) -> String {
+    let shown = display_name(name, args);
+    let t = title(name, args);
+    let line = if t.is_empty() || t == shown { shown } else { format!("{shown} {t}") };
+    truncate_line(&line, 72)
+}
+
 /// What a command asks of the process loop.
 enum Next {
     Go,
@@ -375,6 +563,8 @@ struct Bridge {
     /// Messages written while a turn ran: agy runs each as a turn of its own.
     queued: usize,
     calls: HashMap<String, Call>,
+    /// Spawned subagents keyed by their Antigravity `conversation_id`.
+    subagents: HashMap<String, Subagent>,
     /// A settings change waiting for the turn to end, to restart with it.
     restart: bool,
     usage: Usage,
@@ -464,6 +654,257 @@ impl Bridge {
         self.emit(Ev::TurnDone);
     }
 
+    fn has_running_subagents(&self) -> bool {
+        self.subagents.values().any(|s| !s.done)
+    }
+
+    /// Reads newly appended lines from each running subagent's `transcript.jsonl` and emits
+    /// `Ev::Task` progress or completion updates.
+    fn poll_subagents(&mut self) {
+        let mut updates: Vec<TaskEv> = Vec::new();
+        for (id, sub) in &mut self.subagents {
+            if sub.done {
+                continue;
+            }
+            let Some(path) = sub.log_path.as_deref() else { continue };
+            let Ok(mut file) = std::fs::File::open(path) else { continue };
+            let Ok(len) = file.metadata().map(|m| m.len()) else { continue };
+            if len <= sub.offset {
+                continue;
+            }
+            if file.seek(SeekFrom::Start(sub.offset)).is_err() {
+                continue;
+            }
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            let mut changed = false;
+            let mut model_changed = false;
+            let mut terminal: Option<&'static str> = None;
+            loop {
+                line.clear();
+                let Ok(n) = reader.read_line(&mut line) else { break };
+                if n == 0 || !line.ends_with('\n') {
+                    // Wait for the writer to finish the line before advancing `offset`.
+                    break;
+                }
+                sub.offset += n as u64;
+                let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+                if let Some(m) = v["model"].as_str().filter(|m| !m.is_empty()) {
+                    let base = split_effort(m).0.to_string();
+                    if sub.model.as_deref() != Some(base.as_str()) {
+                        sub.model = Some(base);
+                        model_changed = true;
+                        changed = true;
+                    }
+                }
+                let step_type = v["type"].as_str().unwrap_or("");
+                let status = v["status"].as_str().unwrap_or("");
+                match step_type {
+                    "PLANNER_RESPONSE" => {
+                        let calls = v["tool_calls"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+                        if !calls.is_empty() {
+                            sub.saw_error = false;
+                            for tc in calls {
+                                let name = tc["name"].as_str().unwrap_or("");
+                                if name == "send_message" {
+                                    sub.sent_reply = true;
+                                    sub.last = Some("Reporting results".into());
+                                    changed = true;
+                                    continue;
+                                }
+                                if !name.is_empty() {
+                                    let args = decode_transcript_args(&tc["args"]);
+                                    sub.tools += 1;
+                                    sub.last = Some(format_subagent_tool(name, &args));
+                                    changed = true;
+                                }
+                            }
+                        } else if status == "DONE" {
+                            terminal = Some("completed");
+                            changed = true;
+                        }
+                    }
+                    "GENERIC" => {
+                        if status == "ERROR" {
+                            sub.saw_error = true;
+                            let err = v["error"].as_str().unwrap_or("");
+                            if err.contains("permission check failed") || err.contains("user denied permission") {
+                                sub.last = Some("Permission denied".into());
+                                terminal = Some("failed");
+                                changed = true;
+                            }
+                        } else if status == "DONE" {
+                            sub.saw_error = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if changed {
+                if terminal.is_some() {
+                    sub.done = true;
+                }
+                updates.push(TaskEv {
+                    id: id.clone(),
+                    agent: Some(sub.agent.clone()),
+                    tools: Some(sub.tools),
+                    last: sub.last.clone(),
+                    status: terminal.map(str::to_string),
+                    model: model_changed.then(|| sub.model.clone()).flatten(),
+                    ..Default::default()
+                });
+            }
+        }
+        for t in updates {
+            self.emit(Ev::Task(t));
+        }
+    }
+
+    /// Reconciles running subagents once a parent turn finishes with a `result` event.
+    fn settle_subagents_on_result(&mut self, ok: bool) {
+        self.poll_subagents();
+        let mut updates = Vec::new();
+        for (id, sub) in &mut self.subagents {
+            if sub.done {
+                continue;
+            }
+            let status = if sub.saw_error || !ok {
+                Some("failed")
+            } else if sub.sent_reply {
+                Some("completed")
+            } else {
+                None
+            };
+            if let Some(status) = status {
+                sub.done = true;
+                updates.push(TaskEv {
+                    id: id.clone(),
+                    agent: Some(sub.agent.clone()),
+                    tools: Some(sub.tools),
+                    last: sub.last.clone(),
+                    status: Some(status.into()),
+                    ..Default::default()
+                });
+            }
+        }
+        for t in updates {
+            self.emit(Ev::Task(t));
+        }
+    }
+
+    /// Marks every still-running subagent with `status` (e.g. `"stopped"` on interrupt or exit).
+    fn finish_subagents(&mut self, status: &str) {
+        let mut updates = Vec::new();
+        for (id, sub) in &mut self.subagents {
+            if sub.done {
+                continue;
+            }
+            sub.done = true;
+            updates.push(TaskEv {
+                id: id.clone(),
+                agent: Some(sub.agent.clone()),
+                tools: Some(sub.tools),
+                last: sub.last.clone(),
+                status: Some(status.into()),
+                ..Default::default()
+            });
+        }
+        for t in updates {
+            self.emit(Ev::Task(t));
+        }
+    }
+
+    fn on_subagent_step(&mut self, s: &Value, index: u64, state: &str, running: bool) {
+        let empty = Vec::new();
+        let list = s["subagent_info"]["subagents"].as_array().unwrap_or(&empty);
+        if list.is_empty() {
+            let id = format!("s{index}");
+            if !self.calls.contains_key(&id) {
+                self.emit(Ev::ToolStart { id: id.clone(), name: "Agent".into(), title: "subagent".into(), input: s["subagent_info"].clone() });
+                self.calls.insert(id.clone(), Call { before: None });
+            }
+            if !running {
+                self.calls.remove(&id);
+                let ok = state == "DONE" && s["error"].is_null();
+                let output = s["error"].as_str().unwrap_or("").to_string();
+                self.emit(Ev::ToolEnd { id, ok, output, diff: None });
+            }
+            return;
+        }
+        let multi = list.len() > 1;
+        let mut spawned = false;
+        for (i, sub) in list.iter().enumerate() {
+            let card_id = if multi { format!("s{index}-{i}") } else { format!("s{index}") };
+            let agent = sub["type_name"].as_str().filter(|v| !v.is_empty()).unwrap_or("subagent").to_string();
+            let role = sub["role"].as_str().filter(|v| !v.is_empty());
+            let prompt = sub["initial_prompt"].as_str().filter(|v| !v.is_empty());
+            let card_title = role
+                .map(str::to_string)
+                .or_else(|| prompt.map(|p| truncate_line(p, 80)).filter(|t| !t.is_empty()))
+                .unwrap_or_else(|| agent.clone());
+            let description = prompt.map(|p| truncate_line(p, 160)).filter(|d| !d.is_empty() && d != &card_title);
+            if !self.calls.contains_key(&card_id) {
+                let input = json!({
+                    "subagent_type": agent,
+                    "role": role,
+                    "prompt": prompt,
+                });
+                self.emit(Ev::ToolStart { id: card_id.clone(), name: "Agent".into(), title: card_title.clone(), input });
+                self.calls.insert(card_id.clone(), Call { before: None });
+            }
+            if !running {
+                let existed = self.calls.remove(&card_id).is_some();
+                let ok = state == "DONE" && s["error"].is_null();
+                let conv_id = sub["conversation_id"].as_str().filter(|v| !v.is_empty()).map(String::from);
+                if ok {
+                    if let Some(conv_id) = conv_id {
+                        if !self.subagents.contains_key(&conv_id) {
+                            let log_path = sub["log_uri"].as_str().and_then(file_uri_to_path).or_else(|| default_subagent_log(&conv_id));
+                            let model = (!self.model.is_empty()).then(|| self.model.clone());
+                            self.subagents.insert(
+                                conv_id.clone(),
+                                Subagent {
+                                    agent: agent.clone(),
+                                    log_path,
+                                    offset: 0,
+                                    tools: 0,
+                                    model: model.clone(),
+                                    last: None,
+                                    sent_reply: false,
+                                    saw_error: false,
+                                    done: false,
+                                },
+                            );
+                            self.emit(Ev::Task(TaskEv {
+                                id: conv_id,
+                                tool_id: Some(card_id.clone()),
+                                title: Some(card_title.clone()),
+                                description,
+                                agent: Some(agent.clone()),
+                                tools: Some(0),
+                                last: None,
+                                status: Some("running".into()),
+                                output_file: None,
+                                exit_code: None,
+                                model,
+                            }));
+                            spawned = true;
+                        }
+                    }
+                    if existed {
+                        self.emit(Ev::ToolEnd { id: card_id, ok: true, output: format!("Started {agent} subagent ({card_title})."), diff: None });
+                    }
+                } else if existed {
+                    let output = s["error"].as_str().unwrap_or("Subagent failed to start.").to_string();
+                    self.emit(Ev::ToolEnd { id: card_id, ok: false, output, diff: None });
+                }
+            }
+        }
+        if spawned {
+            self.poll_subagents();
+        }
+    }
+
     fn on_line(&mut self, v: &Value) {
         match v["event"].as_str().unwrap_or("") {
             "init" => {
@@ -481,10 +922,12 @@ impl Bridge {
             "step_update" => self.on_step(&v["step_update"]),
             "result" => {
                 let r = &v["result"];
+                let ok = r["status"] == "SUCCESS";
+                self.settle_subagents_on_result(ok);
                 if !r["usage"].is_null() {
                     self.on_usage(&r["usage"]);
                 }
-                if r["status"] != "SUCCESS" {
+                if !ok {
                     let error = r["error"].as_str().filter(|e| !e.is_empty()).unwrap_or("Antigravity reported an error.");
                     self.emit(Ev::Error(error.to_string()));
                 }
@@ -520,6 +963,8 @@ impl Bridge {
                     self.emit(Ev::TextDelta { id: format!("t{index}"), text: text.to_string() });
                 }
             }
+            "subagent" => self.on_subagent_step(s, index, state, running),
+            "system_message" => self.poll_subagents(),
             "tool" => {
                 let id = format!("s{index}");
                 let info = &s["tool_info"];
@@ -653,7 +1098,12 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
             }
         }
     };
-    let settings = mcp_dir.as_ref().and_then(|_| mcp_settings_arg(&opts.mcp, user_settings().as_ref()));
+    let settings_for = |o: &Opts, has_mcp: bool| {
+        let empty = serde_json::Map::new();
+        let servers = if has_mcp { &o.mcp } else { &empty };
+        settings_arg(o.mode, &o.cwd, servers, &o.allowed_commands, user_settings().as_ref())
+    };
+    let settings = settings_for(&opts, mcp_dir.is_some());
     let mut proc = match spawn(&opts, mcp_dir.as_ref().map(|d| d.0.as_path()), settings.as_deref(), &catalog, &me) {
         Ok(p) => p,
         Err(e) => {
@@ -669,6 +1119,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         busy: false,
         queued: 0,
         calls: HashMap::new(),
+        subagents: HashMap::new(),
         restart: false,
         usage: Usage { window: window(&opts.model), ..Default::default() },
         turn: TurnTokens::default(),
@@ -688,9 +1139,22 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     loop {
         let msg = match held.pop_front() {
             Some(cmd) => In::Cmd(cmd),
+            None if b.has_running_subagents() => match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(m) => m,
+                Err(RecvTimeoutError::Timeout) => {
+                    b.poll_subagents();
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    b.finish_subagents("stopped");
+                    kill_tree(&mut proc);
+                    return;
+                }
+            },
             None => match super::recv(&rx) {
                 Some(m) => m,
                 None => {
+                    b.finish_subagents("stopped");
                     kill_tree(&mut proc);
                     return;
                 }
@@ -708,6 +1172,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 Next::Go
             }
             In::Closed => {
+                b.finish_subagents("stopped");
                 let reason = proc.exit_reason();
                 let _ = b.events.send(Ev::Exited(format!("Antigravity stopped: {reason}")));
                 return;
@@ -717,6 +1182,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         match next {
             Next::Go => {}
             Next::Stop => {
+                b.finish_subagents("stopped");
                 kill_tree(&mut proc);
                 return;
             }
@@ -727,12 +1193,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 let mut cmds = Vec::new();
                 stale_exits += usize::from(!super::drain_closed(&rx, &mut cmds));
                 held.extend(cmds);
+                b.finish_subagents("stopped");
                 if b.busy {
                     b.end_turn("Interrupted.");
                     b.emit(Ev::Notice("Interrupted.".into()));
                 }
                 b.restart = false;
                 opts.resume = b.session.clone();
+                let settings = settings_for(&opts, mcp_dir.is_some());
                 proc = match spawn(&opts, mcp_dir.as_ref().map(|d| d.0.as_path()), settings.as_deref(), &catalog, &me) {
                     Ok(p) => p,
                     Err(e) => {
@@ -783,13 +1251,18 @@ mod tests {
         assert_eq!(resolve_model_and_effort("gpt-oss-120b", Some("high"), &out), ("gpt-oss-120b".into(), None));
     }
 
+    fn test_bridge(tx: Sender<Ev>, model: &str) -> Bridge {
+        Bridge {
+            events: tx, session: None, model: model.into(), system: None, busy: true, queued: 0,
+            calls: HashMap::new(), subagents: HashMap::new(), restart: false, usage: Usage::default(),
+            turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(),
+        }
+    }
+
     #[test]
     fn tool_steps_become_cards() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut b = Bridge {
-            events: tx, session: None, model: String::new(), system: None, busy: true, queued: 0, calls: HashMap::new(),
-            restart: false, usage: Usage::default(), turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(),
-        };
+        let mut b = test_bridge(tx, "");
         let step = |state: &str, output: Option<&str>| json!({ "event": "step_update", "step_update": {
             "step_index": 2, "state": state, "step_type": "tool", "tool_name": "run_command",
             "tool_info": { "name": "run_command", "parameters": { "CommandLine": "ls" }, "output": output } } });
@@ -813,7 +1286,7 @@ mod tests {
         assert_eq!(cfg["mcpServers"]["winfer"]["timeoutSeconds"], 3660);
 
         let existing = json!({ "permissions": { "allow": ["command(git)"], "deny": ["command(rm)"] } });
-        let settings = mcp_settings_arg(&servers, Some(&existing)).unwrap();
+        let settings = settings_arg(Mode::Ask, Path::new("/repo"), &servers, &[], Some(&existing)).unwrap();
         let parsed: Value = serde_json::from_str(&settings).unwrap();
         assert_eq!(parsed["permissions"]["allow"], json!(["command(git)", "mcp(winfer/*)"]));
         assert_eq!(parsed["permissions"]["deny"], json!(["command(rm)"]));
@@ -821,6 +1294,169 @@ mod tests {
         let path = dir.0.clone();
         drop(dir);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn plan_and_yolo_plan_settings_allow_exploration_and_deny_workspace_writes() {
+        let empty = serde_json::Map::new();
+        let existing = json!({ "permissions": { "allow": ["command(custom)"], "deny": ["command(rm -rf)"] } });
+        let cwd = Path::new("/tmp/winfer-plan-unit-nonexistent");
+
+        let plan: Value = serde_json::from_str(
+            &settings_arg(Mode::Plan, cwd, &empty, &["cargo test".into()], Some(&existing)).unwrap(),
+        ).unwrap();
+        let allow: Vec<&str> = plan["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let deny: Vec<&str> = plan["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(allow.contains(&"command(custom)"));
+        assert!(allow.contains(&"read_file(*)"));
+        assert!(allow.contains(&"command(ls)"));
+        assert!(allow.contains(&"command(find)"));
+        assert!(allow.contains(&"command(rg)"));
+        assert!(allow.contains(&"command(git status)"));
+        assert!(allow.contains(&"command(cargo test)"));
+        assert!(!allow.contains(&"command(*)"));
+        assert!(deny.contains(&"command(rm -rf)"));
+        assert!(deny.contains(&"write_file(/tmp/winfer-plan-unit-nonexistent)"));
+
+        let yolo_plan: Value = serde_json::from_str(
+            &settings_arg(Mode::YoloPlan, cwd, &empty, &[], None).unwrap(),
+        ).unwrap();
+        let yp_allow: Vec<&str> = yolo_plan["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let yp_deny: Vec<&str> = yolo_plan["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(yp_allow.contains(&"command(*)"));
+        assert!(yp_allow.contains(&"read_file(*)"));
+        assert!(yp_allow.contains(&"read_url(*)"));
+        assert!(yp_deny.contains(&"write_file(/tmp/winfer-plan-unit-nonexistent)"));
+
+        assert!(settings_arg(Mode::Yolo, cwd, &empty, &[], None).is_none());
+        assert!(settings_arg(Mode::Ask, cwd, &empty, &[], None).is_none());
+    }
+
+    #[test]
+    fn subagent_steps_emit_agent_cards_and_track_transcript_progress() {
+        let dir = std::env::temp_dir().join(format!("winfer-agy-sub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("transcript.jsonl");
+        let log_uri = format!("file://{}", log.to_string_lossy().replace(' ', "%20"));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        let active = json!({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 12,
+                "state": "ACTIVE",
+                "step_type": "subagent",
+                "tool_name": "invoke_subagent",
+                "subagent_info": {
+                    "subagents": [{
+                        "type_name": "research",
+                        "role": "Frontend Explorer",
+                        "initial_prompt": "Explore src/ for markdown rendering."
+                    }]
+                }
+            }
+        });
+        let done = json!({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 12,
+                "state": "DONE",
+                "step_type": "subagent",
+                "tool_name": "invoke_subagent",
+                "subagent_info": {
+                    "subagents": [{
+                        "type_name": "research",
+                        "role": "Frontend Explorer",
+                        "initial_prompt": "Explore src/ for markdown rendering.",
+                        "conversation_id": "sub-123",
+                        "log_uri": log_uri
+                    }]
+                }
+            }
+        });
+        b.on_line(&active);
+        b.on_line(&done);
+        assert!(b.has_running_subagents());
+
+        let initial: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&initial[0], Ev::ToolStart { id, name, title, .. } if id == "s12" && name == "Agent" && title == "Frontend Explorer"));
+        assert!(matches!(&initial[1], Ev::Task(t) if t.id == "sub-123" && t.tool_id.as_deref() == Some("s12") && t.agent.as_deref() == Some("research") && t.status.as_deref() == Some("running")));
+        assert!(matches!(&initial[2], Ev::ToolEnd { id, ok: true, .. } if id == "s12"));
+
+        // Subagent runs a tool call and writes to its transcript.
+        std::fs::write(
+            &log,
+            concat!(
+                r#"{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","model":"gemini-4-argon-low","tool_calls":[{"name":"read_file","args":{"Path":"\"/repo/package.json\""}}]}"#,
+                "\n",
+            ),
+        ).unwrap();
+        b.poll_subagents();
+        let prog: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&prog[0], Ev::Task(t) if t.id == "sub-123" && t.tools == Some(1) && t.last.as_deref() == Some("Read /repo/package.json") && t.model.as_deref() == Some("gemini-4-argon") && t.status.is_none()), "{prog:?}");
+
+        // Subagent reports back and finishes its turn.
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        writeln!(f, r#"{{"step_index":2,"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{{"name":"send_message","args":{{"Message":"\"done\""}}}}]}}"#).unwrap();
+        writeln!(f, r#"{{"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","content":"Reported back."}}"#).unwrap();
+        drop(f);
+        b.poll_subagents();
+        assert!(!b.has_running_subagents());
+        let done_evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&done_evs[0], Ev::Task(t) if t.id == "sub-123" && t.status.as_deref() == Some("completed")), "{done_evs:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subagent_permission_denial_marks_task_failed() {
+        let dir = std::env::temp_dir().join(format!("winfer-agy-sub-err-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("transcript.jsonl");
+        let log_uri = format!("file://{}", log.to_string_lossy());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        b.on_line(&json!({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 5,
+                "state": "DONE",
+                "step_type": "subagent",
+                "subagent_info": {
+                    "subagents": [{
+                        "type_name": "research",
+                        "role": "Backend Explorer",
+                        "conversation_id": "sub-err",
+                        "log_uri": log_uri
+                    }]
+                }
+            }
+        }));
+        let _ = rx.try_iter().count();
+
+        std::fs::write(
+            &log,
+            r#"{"step_index":2,"type":"GENERIC","status":"ERROR","error":"permission check failed for unsandboxed \"ls\": user denied permission to run command"}"#.to_string() + "\n",
+        ).unwrap();
+        b.poll_subagents();
+        assert!(!b.has_running_subagents());
+        let evs: Vec<Ev> = rx.try_iter().collect();
+        assert!(matches!(&evs[0], Ev::Task(t) if t.id == "sub-err" && t.status.as_deref() == Some("failed") && t.last.as_deref() == Some("Permission denied")), "{evs:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_uri_decodes_spaces() {
+        assert_eq!(
+            file_uri_to_path("file:///Volumes/(DGD)%20Dane%20Game%20Drive/transcript.jsonl"),
+            Some(PathBuf::from("/Volumes/(DGD) Dane Game Drive/transcript.jsonl")),
+        );
     }
 
     #[test]
@@ -834,10 +1470,7 @@ mod tests {
     #[test]
     fn usage_counts_cached_tokens_in_input() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut b = Bridge {
-            events: tx, session: None, model: "gemini-4-neon".into(), system: None, busy: true, queued: 0, calls: HashMap::new(),
-            restart: false, usage: Usage::default(), turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(),
-        };
+        let mut b = test_bridge(tx, "gemini-4-neon");
         b.on_usage(&json!({ "input_tokens": 22_100, "cache_read_tokens": 38_900, "output_tokens": 972 }));
         let Some(Ev::Usage(u)) = rx.try_iter().last() else { panic!("expected Usage event") };
         assert_eq!(u.input, 61_000);

@@ -70,6 +70,26 @@ pub fn type_into(state: &mut CodeState, draft: &mut String, data: &str) {
 }
 
 impl CodeModel {
+    #[cfg(test)]
+    pub fn for_test(app: Entity<AppState>) -> Self {
+        let (tx, _rx) = async_channel::unbounded();
+        let session = Session::new("test-pane", tx);
+        Self {
+            pane_id: "test-pane".to_string(),
+            state: CodeState::default(),
+            session,
+            app,
+            lines: LineBuffer::default(),
+            pending: Vec::new(),
+            flushing: false,
+            draft: String::new(),
+            draft_rev: 0,
+            attachments: Vec::new(),
+            plan_sidebar: false,
+            screen_at: 0,
+        }
+    }
+
     pub fn new(pane: Pane, settings: SpawnSettings, session: Arc<Session>, events: Events, app: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = async_channel::unbounded::<Msg>();
         let (tap, input) = (tx.clone(), tx.clone());
@@ -118,7 +138,14 @@ impl CodeModel {
             .detach();
             return model;
         }
+        let first = (!pane.attachments.is_empty()).then(|| (pane.prompt.clone().unwrap_or_default(), pane.attachments.clone()));
         terminal::spawn(session, pane, settings, events);
+        let mut model = model;
+        if let Some((text, attachments)) = first {
+            // `flush` holds this until the process is up.
+            model.attachments = attachments;
+            model.submit(&text, None, cx);
+        }
         model
     }
 

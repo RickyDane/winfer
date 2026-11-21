@@ -802,6 +802,8 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
   let program;
   let args;
   let env = [];
+  // A second try, when the first run's output says `when`: other args, and the SQL behind `prefix`.
+  let retry = null;
   if (meta.kind === "postgres") {
     program = "psql";
     args = [{ secret: key }, "-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1", ...(query ? ["-P", "null=NULL"] : [])];
@@ -844,6 +846,10 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
   } else if (meta.kind === "sqlite") {
     program = "sqlite3";
     args = ["-readonly", "-safe", "-bail", "-csv", "-header", ...(query ? ["-nullvalue", "NULL"] : []), "-cmd", ".timeout 5000", meta.path];
+    // A WAL database whose -shm file went away with its last writer can't be opened read-only. Then
+    // once more as a normal connection that refuses writes, if the file exists (else sqlite3 would
+    // create it).
+    retry = { args: args.filter((a) => a !== "-readonly"), prefix: "PRAGMA query_only=1;\n", when: "unable to open database file", path: meta.path };
   } else {
     throw new Error(`Unknown database kind “${meta.kind}”.`);
   }
@@ -858,6 +864,16 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
       sql,
       d,
       "c=$?",
+      ...(retry
+        ? [
+            `if [ $c -ne 0 ] && [ -f ${shq(retry.path)} ] && grep -q ${shq(retry.when)} "$t"; then`,
+            `${envs ? `${envs} ` : ""}${program} ${retry.args.map(arg).join(" ")} >"$t" 2>&1 <<'${d}'`,
+            retry.prefix + sql,
+            d,
+            "c=$?",
+            "fi",
+          ]
+        : []),
       toFile ? `if [ $c -eq 0 ]; then printf '${FILE_MARK} %s\\n' "$t"; else cat "$t"; fi` : query ? `head -n ${maxRows + headLines} "$t"` : 'cat "$t"',
       `printf '\\n${ROWS_MARK} %s\\n' "$(wc -l < "$t" | tr -d ' ')"`,
       toFile ? '[ $c -eq 0 ] || rm -f "$t"' : 'rm -f "$t"',
@@ -867,6 +883,7 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
 
   if (/^'@/m.test(sql)) throw new Error("A line of the query starts with '@, which can't be passed on Windows.");
   const psArg = (a) => (typeof a === "object" ? `(${psq('"')} + $env:${a.secret} + ${psq('"')})` : psq(winArg(a)));
+  const start = `$p = Start-Process -FilePath ${psq(program)} -ArgumentList $a${meta.kind === "mssql" ? "" : " -RedirectStandardInput $f.FullName"} -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName -NoNewWindow -Wait -PassThru`;
   return [
     "$q = @'",
     sql,
@@ -877,7 +894,16 @@ export function buildCommand(conn, sql, { maxRows = null, timeoutSec = 60, win =
     `$a = ${args.map(psArg).join(" + ' ' + ")}`,
     // sqlcmd 15 on Windows reads nothing from a redirected stdin (exit 0, no output): it gets -i.
     ...(meta.kind === "mssql" ? [`$a += ' -i "' + $f.FullName + '"'`] : []),
-    `$p = Start-Process -FilePath ${psq(program)} -ArgumentList $a${meta.kind === "mssql" ? "" : " -RedirectStandardInput $f.FullName"} -RedirectStandardOutput $o.FullName -RedirectStandardError $e.FullName -NoNewWindow -Wait -PassThru`,
+    start,
+    ...(retry
+      ? [
+          `if ($p.ExitCode -ne 0 -and (Test-Path -LiteralPath ${psq(retry.path)} -PathType Leaf) -and (Select-String -LiteralPath $o.FullName, $e.FullName -SimpleMatch ${psq(retry.when)} -Quiet)) {`,
+          `[IO.File]::WriteAllText($f.FullName, ${psq(retry.prefix.trim())} + [Environment]::NewLine + $q)`,
+          `$a = ${retry.args.map(psArg).join(" + ' ' + ")}`,
+          start,
+          "}",
+        ]
+      : []),
     toFile
       ? `if ($p.ExitCode -eq 0) { "${FILE_MARK} " + $o.FullName } else { Get-Content $o.FullName -Encoding UTF8 }`
       : `Get-Content $o.FullName${query ? ` -TotalCount ${maxRows + headLines}` : ""} -Encoding UTF8`,
@@ -1706,8 +1732,9 @@ function createStore(api) {
       void api.vault.exec({ command: IS_WIN ? `del /f /q "${file}"` : `rm -f ${shq(file)}`, cwd: "", keys: [], timeoutSec: 15 }).catch(() => {});
     }
     const { columns, rows } = parseResult(text.replace(/^\uFEFF/, ""), conn.meta.kind);
-    // Every catalog query prints its header, so no output at all means the CLI didn't run it.
-    if (columns.length === 0) throw new Error(`${KINDS[conn.meta.kind].cli} exited without an error but printed nothing.`);
+    // Every catalog query prints its header, so no output at all means the CLI didn't run it. Except
+    // sqlite3, which prints no header when there are no rows (a database without indexes).
+    if (columns.length === 0 && conn.meta.kind !== "sqlite") throw new Error(`${KINDS[conn.meta.kind].cli} exited without an error but printed nothing.`);
     return { columns: columns.map((c) => c.trim().toLowerCase()), rows };
   }
 

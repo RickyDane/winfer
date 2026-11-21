@@ -499,13 +499,13 @@ export function activate(api) {
       }
       page.append(controls);
 
-      const folder = h("input", "wf-input wf-grow");
+      const folder = h("input", "wf-input");
       folder.value = settings.folder;
       folder.onchange = () => {
         settings.folder = folder.value.trim() || defaultFolder();
         save(settings);
       };
-      page.append(h("label", "wf-field", [h("span", "wf-subtle", "Save to"), h("div", "wf-row", [folder])]));
+      page.append(h("label", "wf-field", [h("span", "wf-subtle", "Save to"), folder]));
 
       page.append(h("h2", "wf-h2", "Recent"));
       if (settings.recent.length === 0) page.append(h("p", "wf-empty", "No recordings yet. Start one above, with the record button on the browser or Android panel, from " + (isMac() ? "⌘K" : "Ctrl+Shift+K") + " or ask an agent to record a demo."));

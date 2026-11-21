@@ -18,6 +18,7 @@ use wry::{Rect, WebView, WebViewBuilder, dpi};
 
 const HOST_HTML: &str = include_str!("../../assets/plugin-host/index.html");
 const HOST_JS: &str = include_str!("../../assets/plugin-host/host.js");
+const HOST_CSS: &str = include_str!("../../assets/plugin-host/host.css");
 /// Pages pinned before the user has chosen any.
 const DEFAULT_PINNED: usize = 3;
 
@@ -110,6 +111,8 @@ pub(super) struct PluginHost {
     page_bounds: Bounds<Pixels>,
     shown: Option<bool>,
     apps_open: bool,
+    /// Whether frames are being forwarded to the host for a plugin reading a panel (see `capture`).
+    capturing: bool,
 }
 
 /// The URL the host's custom protocol serves `path` at (wry maps it per platform).
@@ -125,6 +128,7 @@ fn serve(path: &str) -> wry::http::Response<Cow<'static, [u8]>> {
     match path.trim_start_matches('/') {
         "" | "index.html" => respond("text/html", 200, HOST_HTML.as_bytes().to_vec()),
         "host.js" => respond("text/javascript", 200, HOST_JS.as_bytes().to_vec()),
+        "host.css" => respond("text/css", 200, HOST_CSS.as_bytes().to_vec()),
         other => match other.strip_prefix("plugin/").and_then(|p| p.strip_suffix(".js")) {
             Some(id) => match backend_plugins::plugins_source(id.to_string()) {
                 Ok(source) => respond("text/javascript", 200, format!("{source}\n//# sourceURL=winfer-plugin://{id}").into_bytes()),
@@ -378,7 +382,7 @@ impl Root {
         .detach();
     }
 
-    fn enabled_plugins(&self) -> Vec<Value> {
+    pub(super) fn enabled_plugins(&self) -> Vec<Value> {
         self.plugins.infos.iter().filter(|p| p["enabled"] == true && p["error"].is_null() && p["manifest"].is_object()).cloned().collect()
     }
 
@@ -477,11 +481,37 @@ impl Root {
     fn on_host_message(&mut self, msg: Value, window: &mut Window, cx: &mut Context<Self>) {
         match msg["kind"].as_str().unwrap_or_default() {
             "ready" => {
+                crate::ui::capture::clear();
                 self.plugins.ready = true;
                 self.plugins.sent_state.clear();
                 self.plugins.sent_theme.clear();
                 self.plugins.mounted = None;
                 self.load_into_host();
+            }
+            "capture" => {
+                let Some(source) = crate::ui::capture::Source::parse(msg["source"].as_str().unwrap_or_default()) else { return };
+                crate::ui::capture::set_wanted(source, msg["on"] == true);
+                if crate::ui::capture::any_wanted() && !self.plugins.capturing {
+                    self.plugins.capturing = true;
+                    cx.spawn(async move |this, cx| {
+                        loop {
+                            cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+                            let frames = cx.background_executor().spawn(async { crate::ui::capture::take() }).await;
+                            let more = this.update(cx, |this, _| {
+                                for (source, frame) in frames {
+                                    let data = base64::engine::general_purpose::STANDARD.encode(frame.bytes.as_slice());
+                                    this.send_to_host(json!({ "type": "frame", "source": source.name(), "mime": frame.mime, "data": data }));
+                                }
+                                this.plugins.capturing = crate::ui::capture::any_wanted();
+                                this.plugins.capturing
+                            });
+                            if !matches!(more, Ok(true)) {
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                }
             }
             "registry" => {
                 let take = |key: &str| msg[key].as_array().cloned().unwrap_or_default();
@@ -596,7 +626,7 @@ impl Root {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
                 let plans: Vec<String> = match a["provider"].as_str() {
                     Some(p) => vec![p.to_string()],
-                    None => vec!["claude".into(), "codex".into()],
+                    None => vec!["claude".into(), "codex".into(), "agy".into()],
                 };
                 let found: Vec<Value> = plans.iter().filter_map(|p| self.usage.snapshots.get(p)).filter(|s| !s.windows.is_empty()).map(|s| json!({
                     "provider": s.provider, "at": s.at,
@@ -857,23 +887,35 @@ impl Root {
         let c = *c;
         let known = self.plugins.pages.iter().any(|p| p.key == key);
         let measure = cx.entity();
-        div().relative().size_full().rounded_lg().bg(c.panel)
+        div().relative().size_full().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
             .child(canvas(move |bounds, _, cx| measure.update(cx, |this, _| this.plugins.page_bounds = bounds), |_, _, _, _| {}).absolute().size_full())
             .when(!known, |d| d.flex().items_center().justify_center().text_xs().text_color(c.subtle).child(if self.plugins.ready { "This page's plugin is off or gone." } else { "Loading plugins…" }))
     }
 
+    /// The Lucide icon a plugin names, as the Tauri app's `PAGE_ICONS` (src/features/plugins/PluginPage.tsx).
     fn page_icon(icon: Option<&str>) -> IconName {
         match icon.unwrap_or_default() {
+            "atom" => IconName::Atom,
             "bot" => IconName::Bot,
-            "globe" => IconName::Globe,
-            "terminal" => IconName::SquareTerminal,
+            "camera" => IconName::Camera,
+            "record" => IconName::CircleDot,
+            "database" => IconName::Database,
+            "database-search" => IconName::DatabaseSearch,
             "file" => IconName::FileText,
-            "star" => IconName::Star,
-            "database" | "database-search" => IconName::Database,
-            "key" | "key-round" | "lock" | "shield" => IconName::Lock,
+            "gauge" => IconName::Gauge,
+            "globe" => IconName::Globe,
+            "key" | "key-round" => IconName::KeyRound,
+            "lock" => IconName::Lock,
+            "message-square-quote" => IconName::MessageSquareQuote,
+            "network" => IconName::Network,
             "send" => IconName::Send,
-            "camera" | "video" | "record" => IconName::Camera,
+            "shield" => IconName::Shield,
+            "square-kanban" => IconName::SquareKanban,
             "stop" => IconName::Square,
+            "star" => IconName::Star,
+            "terminal" => IconName::Terminal,
+            "video" => IconName::Video,
+            "waypoints" => IconName::Waypoints,
             _ => IconName::Puzzle,
         }
     }
@@ -949,7 +991,7 @@ impl Root {
             View::Page(k) => Some(k),
             _ => None,
         };
-        let mut menu = div().id("apps-menu").absolute().top(px(40.0)).left(relative(0.5)).w(px(256.0)).ml(px(-128.0)).rounded_lg().bg(c.raised).p_1().flex().flex_col()
+        let mut menu = div().id("apps-menu").absolute().top(px(40.0)).left(relative(0.5)).w(px(256.0)).ml(px(-128.0)).rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_1().flex().flex_col()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         let mut ordered: Vec<&PageInfo> = pinned.iter().filter_map(|k| self.plugins.pages.iter().find(|p| p.key == *k)).collect();
         ordered.extend(self.plugins.pages.iter().filter(|p| !pinned.contains(&p.key)));
@@ -1014,7 +1056,7 @@ impl Root {
         let subtitle = format!("{name}{}", if approval.pane_id.is_some() { " · you can also answer from your phone" } else { "" });
         Some(
             div().id("approval-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude().child(
-                div().w(px(460.0)).max_h(relative(0.7)).flex().flex_col().rounded_xl().bg(c.raised)
+                div().w(px(460.0)).max_h(relative(0.7)).flex().flex_col().rounded_xl().border_1().border_color(c.edge).bg(c.raised)
                     .child(div().flex().items_start().gap_3().px_5().py_3()
                         .child(Icon::new(if approval.warning { IconName::TriangleAlert } else { IconName::Info }).size(px(16.0)).text_color(if approval.warning { c.warning } else { c.accent }))
                         .child(div().min_w_0().flex_1().child(div().text_sm().text_color(c.fg).child(approval.title.clone())).child(div().text_xs().text_color(c.subtle).child(subtitle))))

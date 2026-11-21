@@ -79,6 +79,9 @@ pub struct Approval {
     /// Questions the agent asks the user (Claude Code's AskUserQuestion); answered with
     /// [`Cmd::Answer`] instead of a [`Decision`] (declining still goes through `Approve`).
     pub questions: Vec<Question>,
+    /// The plan file a plan-mode hand-over (Claude Code's ExitPlanMode) asks to approve, for the
+    /// app to show in its file viewer.
+    pub plan_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

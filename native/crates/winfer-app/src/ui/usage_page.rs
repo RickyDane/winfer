@@ -354,7 +354,7 @@ impl Root {
     }
 
     fn segmented<T: Copy + PartialEq + 'static>(&self, id: &'static str, value: T, options: Vec<(T, String)>, c: Colors, cx: &mut Context<Self>, pick: fn(&mut Self, T, &mut Context<Self>)) -> Div {
-        let mut row = div().flex().rounded_md().bg(c.app).p_0p5();
+        let mut row = div().flex().rounded_md().border_1().border_color(c.edge).bg(c.app).p_0p5();
         for (i, (v, label)) in options.into_iter().enumerate() {
             let on = v == value;
             row = row.child(div().id((id, i)).rounded_sm().px_2().py_0p5().text_size(px(11.0)).cursor_pointer()
@@ -377,7 +377,7 @@ impl Root {
                 BoxShadow { color: hsla(0.0, 0.0, 0.0, 0.32), offset: point(px(0.0), px(3.0)), blur_radius: px(10.0), spread_radius: px(-2.0), inset: false },
             ]
         };
-        div().min_w_0().flex_1().rounded_lg().bg(c.raised).shadow(shadow).px_3().py_2p5()
+        div().min_w_0().flex_1().rounded_lg().border_1().border_color(c.edge).bg(c.raised).shadow(shadow).px_3().py_2p5()
             .child(div().text_size(px(11.0)).text_color(c.subtle).child(label.to_string()))
             .child(div().mt_0p5().font_family(mono).text_lg().text_color(c.fg).child(value))
             .when_some(detail, |d, t| d.child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(t)))
@@ -387,7 +387,7 @@ impl Root {
     pub(super) fn page_usage(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
         let tab = self.saved("tab", cx).unwrap_or_else(|| "usage".into());
         let tabs = [("usage", "Usage", IconName::ChartColumn), ("limits", "Limits", IconName::Gauge), ("tools", "Tools", IconName::Wrench)];
-        let mut bar = div().flex().w_auto().items_center().gap_0p5().rounded_lg().bg(c.app).p_0p5();
+        let mut bar = div().flex().w_auto().items_center().gap_0p5().rounded_lg().border_1().border_color(c.edge).bg(c.app).p_0p5();
         for (id, label, icon) in tabs {
             let on = tab == id;
             bar = bar.child(div().id(id).flex().items_center().gap_1p5().rounded_md().px_2p5().py_1().text_xs().cursor_pointer()
@@ -534,7 +534,7 @@ impl Root {
             axis = axis.child(fmt(t));
         }
         let card = hover.and_then(|h| bars.get(h).map(|b| (h, b.clone()))).map(|(h, bar)| {
-            let mut card = div().absolute().top_1().w(px(200.0)).rounded_md().bg(c.panel).px_2p5().py_2().text_xs()
+            let mut card = div().absolute().top_1().w(px(200.0)).rounded_md().border_1().border_color(c.edge).bg(c.panel).px_2p5().py_2().text_xs()
                 .child(div().mb_1().text_color(c.muted).child(bar_label(&bar, range)));
             let left = (h as f32 + 1.0) / bars.len() as f32;
             card = if h < bars.len() / 2 { card.left(relative(left)).ml(px(6.0)) } else { card.right(relative(1.0 - h as f32 / bars.len() as f32)).mr(px(6.0)) };
@@ -567,7 +567,7 @@ impl Root {
             labels = labels.child(if i == 0 { div().absolute().left_0().child(text) } else if i == bars.len() - 1 { div().absolute().right_0().child(text) } else { div().absolute().left(relative((i as f32 + 0.5) / bars.len() as f32)).child(text) });
         }
         div().flex().gap_2().child(axis).child(div().relative().min_w_0().flex_1()
-            .child(div().relative().h(px(160.0)).rounded_md().bg(c.app).child(grid).when(!stacked, |d| d.child(line_canvas)).child(columns).children(card))
+            .child(div().relative().h(px(160.0)).rounded_md().bg(c.app).border_1().border_color(c.edge).child(grid).when(!stacked, |d| d.child(line_canvas)).child(columns).children(card))
             .child(labels))
     }
 
@@ -655,25 +655,40 @@ impl Root {
             let mut section = div().flex().flex_col().gap_2().child(div().flex().items_center().gap_2().text_size(px(13.0))
                 .child(div().flex_1().text_color(c.fg).child(match &account { Some(a) => format!("{name} · {a}"), None => name.clone() }))
                 .child(div().text_size(px(10.0)).text_color(if age > 600_000.0 { c.warning } else { c.subtle }).child(format!("{}{}", if age > 600_000.0 { "Stale · " } else { "" }, if age < 120_000.0 { "just now".to_string() } else { format!("{} ago", duration(age)) }))));
-            for w in &snap.windows {
-                let out = runs_out_at(&key, w, &self.usage.samples, now);
-                section = section.child(if line { self.window_line(&key, w, out, now, c, mono.clone()) } else { window_bar(w, out, now, c, mono.clone()) });
+            for (group_title, items) in super::usage::group_windows(&snap.windows) {
+                let mut card = div().flex().flex_col().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_3();
+                if let Some(title) = group_title {
+                    card = card.child(div().pb_2().text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title.to_string()));
+                }
+                for (idx, (label, w)) in items.into_iter().enumerate() {
+                    if idx > 0 {
+                        card = card.child(div().my_2p5().h(px(1.0)).w_full().bg(c.border));
+                    }
+                    let out = runs_out_at(&key, w, &self.usage.samples, now);
+                    card = card.child(if line {
+                        self.window_line(&key, w, label, out, now, c, mono.clone())
+                    } else {
+                        window_bar(w, label, out, now, c, mono.clone())
+                    });
+                }
+                section = section.child(card);
             }
             page = page.child(section);
         }
         page
     }
 
-    fn window_line(&self, key: &str, w: &UsageWindow, out: Option<f64>, now: f64, c: Colors, mono: SharedString) -> Div {
+    fn window_line(&self, key: &str, w: &UsageWindow, label: &str, out: Option<f64>, now: f64, c: Colors, mono: SharedString) -> Div {
         let left = left_now(w, now);
         let live = w.resets_at.is_some_and(|r| r > now);
         let span = match w.kind.as_str() {
-            "session" => Some(5.0 * 3_600_000.0),
-            "week" => Some(7.0 * 86_400_000.0),
             "month-credit" => Some(30.0 * 86_400_000.0),
+            k if k == "session" || k.starts_with("session-") => Some(5.0 * 3_600_000.0),
+            k if k == "week" || k.starts_with("week-") => Some(7.0 * 86_400_000.0),
             _ => None,
         };
-        let samples = self.usage.samples.iter().find(|(k, _)| k.starts_with(&format!("{key}:{}", w.kind))).map(|(_, v)| v.clone()).unwrap_or_default();
+        let prefix = format!("{key}:{}:", w.kind);
+        let samples = self.usage.samples.iter().find(|(k, _)| k.starts_with(&prefix)).map(|(_, v)| v.clone()).unwrap_or_default();
         let mut points: Vec<(f64, f64)> = if live { samples.iter().filter(|(t, _)| *t <= now).map(|(t, used)| (*t, 100.0 - used)).collect() } else { Vec::new() };
         let window_start = if live { span.map(|s| w.resets_at.unwrap() - s) } else { None };
         let start = window_start.unwrap_or(f64::INFINITY).min(points.first().map_or(f64::INFINITY, |p| p.0)).min(now - 3_600_000.0);
@@ -688,7 +703,8 @@ impl Root {
         }
         points.push((now, left));
         let end = if live { w.resets_at.unwrap() } else { now };
-        let color = level_color(left, &c);
+        let color = super::usage::level_color(left, &c);
+        let pct_color = if left < 40.0 { color } else { c.fg };
         let path_points = points.clone();
         let chart = canvas(|_, _, _| {}, move |bounds, _, window, _| {
             let x = |t: f64| bounds.origin.x + bounds.size.width * (((t - start) / (end - start)) as f32);
@@ -706,19 +722,9 @@ impl Root {
             grid = grid.child(div().absolute().left_0().right_0().top(relative(i as f32 / 2.0)));
         }
         div().flex().flex_col().gap_1()
-            .child(div().flex().items_baseline().gap_2().text_xs().child(div().flex_1().text_color(c.muted).child(w.label.clone())).child(div().font_family(mono).text_size(px(11.0)).text_color(c.fg).child(format!("{}% left", left.round()))))
-            .child(div().relative().h(px(64.0)).rounded_md().bg(c.app).child(grid).child(chart))
+            .child(div().flex().items_baseline().gap_2().text_xs().child(div().flex_1().text_color(c.muted).child(label.to_string())).child(div().font_family(mono).text_size(px(11.0)).text_color(pct_color).child(format!("{}% left", left.round()))))
+            .child(div().relative().h(px(64.0)).rounded_md().bg(c.app).border_1().border_color(c.edge).child(grid).child(chart))
             .child(reset_line(w, out, now, c))
-    }
-}
-
-fn level_color(left: f64, c: &Colors) -> Hsla {
-    if left <= 10.0 {
-        c.danger
-    } else if left <= 30.0 {
-        c.warning
-    } else {
-        c.success
     }
 }
 
@@ -727,14 +733,16 @@ fn reset_line(w: &UsageWindow, out: Option<f64>, now: f64, c: Colors) -> Div {
     div().text_size(px(11.0)).text_color(c.subtle).child(reset).when_some(out, |d, o| d.child(div().text_color(c.warning).child(format!(" · at this pace runs out in {}", duration(o - now)))))
 }
 
-fn window_bar(w: &UsageWindow, out: Option<f64>, now: f64, c: Colors, mono: SharedString) -> Div {
+fn window_bar(w: &UsageWindow, label: &str, out: Option<f64>, now: f64, c: Colors, mono: SharedString) -> Div {
     let left = left_now(w, now);
+    let color = super::usage::level_color(left, &c);
+    let pct_color = if left < 40.0 { color } else { c.fg };
     div().flex().flex_col().gap_1()
-        .child(div().flex().items_center().gap_2().text_xs()
-            .child(div().w(px(96.0)).flex_shrink_0().text_color(c.muted).child(w.label.clone()))
-            .child(div().h(px(6.0)).flex_1().overflow_hidden().rounded_full().bg(c.hover).child(div().h_full().rounded_full().bg(level_color(left, &c)).w(relative((left / 100.0) as f32))))
-            .child(div().w(px(64.0)).flex_shrink_0().text_right().font_family(mono).text_size(px(11.0)).text_color(c.fg).child(format!("{}% left", left.round()))))
-        .child(div().pl(px(104.0)).child(reset_line(w, out, now, c)))
+        .child(div().flex().items_baseline().gap_2().text_xs()
+            .child(div().flex_1().min_w_0().truncate().text_color(c.muted).child(label.to_string()))
+            .child(div().flex_shrink_0().font_family(mono).text_size(px(11.0)).text_color(pct_color).child(format!("{}% left", left.round()))))
+        .child(div().h(px(4.0)).w_full().overflow_hidden().rounded_full().bg(c.hover).child(div().h_full().rounded_full().bg(color).w(relative((left / 100.0) as f32))))
+        .child(reset_line(w, out, now, c))
 }
 
 fn bar_label(bar: &Bar, range: Range) -> String {
@@ -809,7 +817,7 @@ impl Root {
         let all = self.usage_page.all_tools.get(key).copied().unwrap_or(false);
         let max = rows.iter().map(|s| sort.key(s)).fold(1.0, f64::max);
         let head = |t: &'static str, w: f32| div().w(px(w)).text_right().child(t);
-        let mut table = div().flex().flex_col().overflow_hidden().rounded_lg().text_size(px(11.0))
+        let mut table = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).text_size(px(11.0))
             .child(div().flex().bg(c.panel).px_2p5().py_1p5().text_color(c.subtle).child(div().flex_1().child("Name")).child(head("Calls", 56.0)).child(head("Failed", 72.0)).child(head("Time · avg", 96.0)).child(head("Max", 56.0)).child(head("Tokens", 64.0)));
         for s in rows.iter().take(if all { rows.len() } else { 12 }) {
             let value = sort.key(s);
@@ -845,7 +853,7 @@ impl Root {
         let list = rep["failures"].as_array().filter(|l| !l.is_empty())?;
         let failed = rep["failed"].as_u64().unwrap_or(0);
         let title = format!("Failed calls{}", if failed as usize > list.len() { format!(" (latest {} of {failed})", list.len()) } else { String::new() });
-        let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg();
+        let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge);
         for (i, f) in list.iter().enumerate() {
             let open = self.usage_page.open_failure == Some(i);
             let error = f["error"].as_str().unwrap_or_default().to_string();

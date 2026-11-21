@@ -28,7 +28,7 @@ impl Render for DraggedRow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = self.c;
         let _ = cx;
-        div().rounded_md().bg(c.raised).px_2().py_1().text_xs().text_color(c.fg).child(self.label.clone())
+        div().rounded_md().border_1().border_color(c.accent).bg(c.raised).px_2().py_1().text_xs().text_color(c.fg).child(self.label.clone())
     }
 }
 
@@ -314,14 +314,14 @@ impl Root {
     }
 
     /// The agent's brand mark on a rounded tile, with its status as a dot in the corner.
-    pub(super) fn agent_tile(provider: &str, status: AgentStatus, ring: Hsla, c: Colors) -> Div {
+    pub(super) fn agent_tile(provider: &str, status: AgentStatus, c: Colors) -> Div {
         let shell = provider == "shell";
         div().relative().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(c.hover)
             .child(crate::ui::code_pickers::mark(c, provider, 14.0, 1.0))
             .when(!shell, |d| d.child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(8.0)).rounded_full().bg(status_color(status, &c))))
     }
 
-    fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, surface: Hsla, c: Colors, cx: &mut Context<Self>) -> AnyElement {
+    fn render_pane_row(&self, pane: &Pane, index: usize, sortable: bool, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let s = self.state.read(cx);
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id) && s.active_workspace_id == pane.workspace_id;
         let label = s.pane_label(pane);
@@ -354,7 +354,6 @@ impl Root {
         if let Some(d) = &doing {
             detail = detail.child(div().flex_1().min_w_0().truncate().when(status == AgentStatus::NeedsInput, |x| x.text_color(c.warning)).child(d.clone()));
         }
-        let ring = if focused { c.active } else { surface };
         let row = div().id(SharedString::from(format!("row-{}", pane.id))).flex().items_center().gap(px(9.0)).rounded(px(7.0)).px_1p5().py(px(5.5)).cursor_pointer()
             .text_size(px(12.5))
             .when(focused, |d| d.bg(c.active).text_color(c.fg))
@@ -378,7 +377,7 @@ impl Root {
                 let title = menu_pane.worktree.as_ref().map_or(menu_pane.cwd.clone(), |t| t.branch.clone());
                 this.open_menu(e.position, Some(title), items, cx);
             }))
-            .child(Self::agent_tile(&pane.provider, status, ring, c))
+            .child(Self::agent_tile(&pane.provider, status, c))
             .child(
                 div().flex_1().min_w_0().flex().flex_col()
                     .child(div().flex().items_center().gap_1p5()
@@ -460,12 +459,12 @@ impl Root {
         // Narrow sidebar: the tabs show icons only, and the search drops its shortcut hint.
         let sidebar_width = self.state.read(cx).sidebar_width as f32;
         let labels = sidebar_width >= SIDEBAR_LABELS_MIN;
-        let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app)
+        let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app).border_1().border_color(c.edge)
             .text_size(px(12.5)).text_color(c.subtle).cursor_pointer().hover(move |d| d.text_color(c.muted))
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx)))
             .child(Icon::new(IconName::Search).size(px(14.0)))
             .child(div().flex_1().child("Search or jump to…"))
-            .when(!palette_keys.is_empty() && sidebar_width >= SIDEBAR_HINT_MIN, |d| d.child(div().px_1().rounded_sm().font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
+            .when(!palette_keys.is_empty() && sidebar_width >= SIDEBAR_HINT_MIN, |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.edge).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
         let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
         let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, review_count,labels, c)
@@ -474,13 +473,13 @@ impl Root {
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
         let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2()
             .child(search)
-            .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).child(sessions).child(review).child(history));
+            .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).border_1().border_color(c.edge).child(sessions).child(review).child(history));
 
         // Needs you: approve or open waiting agents without finding their pane.
         let waiting = self.waiting_panes(cx);
         let needs = (!waiting.is_empty()).then(|| {
             let tint = Hsla { a: 0.06, ..c.warning };
-            let mut sec = div().mt_2p5().p_1().rounded_lg().bg(tint)
+            let mut sec = div().mt_2p5().p_1().rounded_lg().bg(tint).border_1().border_color(Hsla { a: 0.16, ..c.warning })
                 .child(div().flex().items_center().gap(px(7.0)).h(px(26.0)).px_1p5().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.warning)
                     .child(div().size(px(7.0)).rounded_full().bg(c.warning))
                     .child("Needs you")
@@ -493,7 +492,7 @@ impl Root {
                     div().id(SharedString::from(format!("need-{}", p.id))).flex().items_center().gap(px(9.0)).rounded_md().px_1p5().py(px(7.0)).cursor_pointer()
                         .hover(move |d| d.bg(Hsla { a: 0.08, ..c.warning }))
                         .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
-                        .child(Self::agent_tile(&p.provider, p.status, c.panel, c))
+                        .child(Self::agent_tile(&p.provider, p.status, c))
                         .child(div().flex_1().min_w_0().flex().flex_col()
                             .child(div().truncate().text_size(px(12.5)).text_color(c.fg).child(s.pane_label(p)))
                             .child(div().truncate().text_size(px(11.5)).text_color(c.muted).child(ask)))
@@ -595,7 +594,8 @@ impl Root {
                 }))
                 .child(top_row)
                 .children(summary);
-            let mut group = div().relative().rounded(px(10.0))
+            let mut group = div().relative().rounded(px(10.0)).border_1()
+                .border_color(if expanded || active { c.edge } else { gpui_kit::transparent_black() })
                 .when(expanded, |d| d.bg(card_bg))
                 .child(header);
             if expanded {
@@ -603,7 +603,7 @@ impl Root {
                 let live: Vec<Pane> = ws.panes.iter().filter(|p| !p.archived).cloned().collect();
                 let archived: Vec<Pane> = ws.panes.iter().filter(|p| p.archived).cloned().collect();
                 for (j, p) in live.iter().enumerate() {
-                    panes = panes.child(self.render_pane_row(p, j, true, card_bg, c, cx));
+                    panes = panes.child(self.render_pane_row(p, j, true, c, cx));
                 }
                 if !archived.is_empty() {
                     let showing = self.sidebar.show_archived.contains(&ws.id);
@@ -624,7 +624,7 @@ impl Root {
                     );
                     if showing {
                         for (j, p) in archived.iter().enumerate() {
-                            panes = panes.child(self.render_pane_row(p, j, false, card_bg, c, cx));
+                            panes = panes.child(self.render_pane_row(p, j, false, c, cx));
                         }
                     }
                 }
@@ -667,7 +667,7 @@ impl Root {
         let feed = self.render_activity_feed(&active_ws, c, cx);
         let footer = self.render_sidebar_footer(false, &settings_tip, c, cx);
         let width = px(self.state.read(cx).sidebar_width as f32);
-        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel)
+        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
             .child(top)
             .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_3().children(needs).child(label).child(list))
             .children(feed)
@@ -690,7 +690,7 @@ impl Root {
                 .tooltip(move |window, cx| Tooltip::new(format!("Update to winfer {version}")).build(window, cx))
                 .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ShowReleaseNotes(true), window, cx)))
                 .child(Icon::new(IconName::Download).size(px(12.0)))
-                .child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent))
+                .child(div().absolute().top(px(-2.0)).right(px(-2.0)).size(px(7.0)).rounded_full().bg(c.accent).border_2().border_color(c.panel))
         });
         let theme_button = icon_button("theme-toggle")
             .tooltip(move |window, cx| Tooltip::new(format!("Switch to {pair} (more themes in Settings)")).build(window, cx))
@@ -737,19 +737,19 @@ impl Root {
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Review, provider: None }, window, cx))));
         top = top.child(rail_button("rail-history".into(), IconName::Clock, "History".into()).on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx))));
 
-        let tile_button = |this: &Self, p: &Pane, ring: Hsla, cx: &mut Context<Self>| {
+        let tile_button = |this: &Self, p: &Pane, cx: &mut Context<Self>| {
             let (focus, tip) = (p.id.clone(), this.state.read(cx).pane_label(p));
             div().id(SharedString::from(format!("rail-{}", p.id))).p(px(5.0)).rounded_md().cursor_pointer().hover(move |d| d.bg(c.hover))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::Focus(PaneRef::Id(focus.clone())), window, cx)))
-                .child(Self::agent_tile(&p.provider, p.status, ring, c))
+                .child(Self::agent_tile(&p.provider, p.status, c))
         };
         let mut body = div().flex().flex_col().items_center().gap_1p5().py_2();
         let waiting = self.waiting_panes(cx);
         if !waiting.is_empty() {
-            let mut sec = div().flex().flex_col().items_center().w(px(44.0)).py_1().rounded_lg().bg(Hsla { a: 0.06, ..c.warning });
+            let mut sec = div().flex().flex_col().items_center().w(px(44.0)).py_1().rounded_lg().bg(Hsla { a: 0.06, ..c.warning }).border_1().border_color(Hsla { a: 0.16, ..c.warning });
             for p in &waiting {
-                sec = sec.child(tile_button(self, p, c.panel, cx));
+                sec = sec.child(tile_button(self, p, cx));
             }
             body = body.child(sec);
         }
@@ -764,7 +764,7 @@ impl Root {
             let (switch, name) = (ws.id.clone(), ws.name.clone());
             let ws_agents: Vec<&Pane> = ws.panes.iter().filter(|p| !p.archived && p.provider != "shell").collect();
             let mut pill = div().w(px(44.0)).flex().flex_col().items_center().gap_0p5().py_1().rounded(px(10.0))
-                .bg(card_bg)
+                .bg(card_bg).border_1().border_color(c.edge)
                 .child(div().id(SharedString::from(format!("rail-ws-{}", ws.id))).relative().size(px(34.0)).flex().items_center().justify_center().rounded(px(7.0)).cursor_pointer().hover(move |d| d.bg(c.hover))
                     .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
                     .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::WorkspaceSwitch(switch.clone()), window, cx)))
@@ -774,13 +774,13 @@ impl Root {
                 pill = pill.child(div().w(px(24.0)));
                 for p in ws_agents {
                     let on = focused.as_deref() == Some(&p.id);
-                    pill = pill.child(tile_button(self, p, if on { c.active } else { card_bg }, cx).when(on, |d| d.bg(c.active)));
+                    pill = pill.child(tile_button(self, p, cx).when(on, |d| d.bg(c.active)));
                 }
             }
             body = body.child(pill);
         }
         let footer = self.render_sidebar_footer(true, &settings_tip, c, cx);
-        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().bg(c.panel)
+        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
             .child(top)
             .child(div().id("sidebar-rail-list").flex_1().min_h_0().overflow_y_scroll().child(body))
             .child(footer)

@@ -89,6 +89,9 @@ pub struct Approval {
     pub diff: Option<String>,
     #[serde(default)]
     pub questions: Vec<Question>,
+    /// The plan file a plan-mode hand-over asks to approve: shown in the file viewer.
+    #[serde(default)]
+    pub plan_file: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

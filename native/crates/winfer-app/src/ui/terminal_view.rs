@@ -12,7 +12,9 @@ use gpui_kit::*;
 use std::ops::Range;
 use std::sync::Arc;
 
-actions!(terminal, [Copy, Paste]);
+// Tab/Shift-Tab are bound to focus cycling in gpui's "Root" context, which beats key-down listeners,
+// so the terminal claims them with its own bindings.
+actions!(terminal, [Copy, Paste, SendTab, SendBackTab]);
 
 pub struct TerminalView {
     pub session: Arc<Session>,
@@ -531,6 +533,16 @@ impl TerminalView {
         cx.notify();
     }
 
+    fn send_tab(&mut self, _: &SendTab, _: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_to_bottom();
+        self.input("\t", cx);
+    }
+
+    fn send_back_tab(&mut self, _: &SendBackTab, _: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_to_bottom();
+        self.input("\x1b[Z", cx);
+    }
+
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.session.term.lock().selection_to_string() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -643,6 +655,8 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .key_context("Terminal")
             .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(Self::send_tab))
+            .on_action(cx.listener(Self::send_back_tab))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste_action))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
@@ -658,8 +672,8 @@ impl Render for TerminalView {
                         let view = view.clone();
                         move |bounds, window, cx| {
                             let font_id = window.text_system().resolve_font(&font(family.clone()));
-                            let width = window.text_system().advance(font_id, font_size, 'm').map_or(px(8.0), |a| a.width);
-                            let cell = size(width, (font_size * 1.2).round());
+                            let width = window.text_system().advance(font_id, font_size, 'm').map_or(px(8.0), |a| a.width).max(px(1.0));
+                            let cell = size(width, (font_size * 1.2).round().max(px(1.0)));
                             let cols = (bounds.size.width / cell.width) as usize;
                             let rows = (bounds.size.height / cell.height) as usize;
                             if cols >= 2 && rows >= 2 {
@@ -737,5 +751,32 @@ mod tests {
     fn contrast_is_enforced() {
         let c = ensure_contrast([200, 200, 200], [255, 255, 255], 4.5);
         assert!(contrast(c, [255, 255, 255]) >= 4.5);
+    }
+}
+
+#[cfg(test)]
+mod typing_tests {
+    use super::TerminalView;
+    use crate::terminal::{CodeHooks, Session};
+    use gpui_kit::{AppContext, TestAppContext};
+    use std::sync::{Arc, Mutex};
+
+    #[gpui_kit::test]
+    fn typing_reaches_the_shell(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::ui::root::bind_keys(cx);
+        });
+        let sent = Arc::new(Mutex::new(String::new()));
+        let session = Session::new("p1", async_channel::unbounded().0);
+        let log = sent.clone();
+        session.attach_code(CodeHooks { tap: Box::new(|_| {}), input: Box::new(move |s| log.lock().unwrap().push_str(s)) });
+        let state = cx.new(|_| crate::model::AppState::default());
+        let (view, vcx) = cx.add_window_view(|_, cx| TerminalView::new(session, state, async_channel::unbounded().0, cx));
+        vcx.update(|window, cx| { let f = view.read(cx).focus.clone(); window.focus(&f, cx) });
+        vcx.run_until_parked();
+        vcx.simulate_input("ls");
+        vcx.simulate_keystrokes("tab shift-tab enter");
+        assert_eq!(*sent.lock().unwrap(), "ls\t\x1b[Z\r");
     }
 }

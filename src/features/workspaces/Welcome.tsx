@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronDown, CornerDownLeft, GitBranch, Search, Sparkles, Zap } from "lucide-react";
+import { Check, ChevronDown, CornerDownLeft, Search, Sparkles, X } from "lucide-react";
+import type { Attachment } from "@/features/code/store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { execute } from "@/commands/bus";
-import { keysFor } from "@/commands/keymap";
 import { EffortIcon, EFFORT_HINTS, EFFORT_LABELS } from "@/features/code/EffortIcon";
 import { backendOf, modelName } from "@/features/code/names";
 import { ProviderIcon } from "@/features/providers/ProviderIcon";
@@ -51,6 +51,7 @@ export function Welcome() {
   const [openPicker, setOpenPicker] = useState<"model" | "effort" | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const [task, setTask] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [harnessModels, setHarnessModels] = useState<HarnessModel[] | null>(cachedHarnessModels);
   const [providerModels, setProviderModels] = useState<Record<string, WelcomeModel[]>>({});
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
@@ -59,7 +60,11 @@ export function Welcome() {
   const agents = providers.filter((p) => p.id !== "shell" && p.installed);
   const missing = providers.filter((p) => p.id !== "shell" && !p.installed).length;
   const activeProvider: ProviderId =
-    selectedProvider && providers.some((p) => p.id === selectedProvider && p.installed) ? selectedProvider : defaultId;
+    selectedProvider && providers.some((p) => p.id === selectedProvider && p.installed)
+      ? selectedProvider
+      : providers.some((p) => p.id === "winfer" && p.installed)
+        ? "winfer"
+        : defaultId;
   const activeProviderInfo = providers.find((p) => p.id === activeProvider);
 
   useEffect(() => {
@@ -169,24 +174,79 @@ export function Welcome() {
     }
   };
 
+  // Only winfer code sessions can take images with their first message.
+  const canAttach = activeProvider === "winfer";
+  const addImages = (files: File[]) => {
+    for (const f of files) {
+      const reader = new FileReader();
+      reader.onload = () =>
+        setAttachments((a) => [...a, { id: `${Date.now()}-${Math.random()}`, url: String(reader.result), mime: f.type, name: f.name || "pasted image" }]);
+      reader.readAsDataURL(f);
+    }
+  };
+
+  // Paste anywhere on the welcome screen (the task box isn't focused by default, so an input-level handler never fires).
+  const addImagesRef = useRef(addImages);
+  addImagesRef.current = addImages;
+  useEffect(() => {
+    if (!canAttach) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // Leave other text fields (model search, etc.) alone; the task box is fine.
+      if (t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && t.getAttribute("aria-label") !== "Task for a new agent"))) return;
+      const data = e.clipboardData;
+      if (!data) return;
+      const files = data.files.length ? [...data.files] : [...data.items].map((i) => (i.kind === "file" ? i.getAsFile() : null)).filter((f): f is File => !!f);
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      if (images.length) {
+        e.preventDefault();
+        addImagesRef.current(images);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [canAttach]);
+
   const start = () => {
     const text = task.trim();
+    const images = canAttach ? attachments : [];
     setOpenPicker(null);
     setTask("");
+    setAttachments([]);
     execute({
       type: "pane.spawn",
       provider: activeProvider,
       prompt: text || undefined,
+      attachments: images.length ? images : undefined,
       model: selectedModel ?? undefined,
       effort: activeEffort !== "default" ? activeEffort : undefined,
     });
   };
 
-  const steps = [
-    { icon: GitBranch, title: "Open a branch", text: "Start an agent on an existing branch or worktree.", keys: keysFor({ type: "ui.overlay", overlay: "branch" }), run: () => execute({ type: "ui.overlay", overlay: "branch" }) },
-    { icon: Search, title: "Commands", text: "Everything winfer can do, by name.", keys: keysFor({ type: "ui.palette" }), run: () => execute({ type: "ui.palette" }) },
-    { icon: Zap, title: "Shortcuts", text: "See and change every shortcut.", keys: keysFor({ type: "ui.cheatSheet" }), run: () => execute({ type: "ui.cheatSheet" }) },
-  ];
+  const primary = agents.find((p) => p.id === "winfer");
+  const others = agents.filter((p) => p.id !== "winfer");
+
+  const agentButton = (p: (typeof agents)[number], big: boolean) => {
+    const on = p.id === activeProvider;
+    return (
+      <button
+        key={p.id}
+        onClick={() => selectBackend(p.id)}
+        onDoubleClick={() => {
+          selectBackend(p.id);
+          execute({ type: "pane.spawn", provider: p.id });
+        }}
+        className={cn(
+          "flex items-center justify-center gap-2 rounded-2xl font-medium shadow-sm transition-all",
+          big ? "h-9 min-w-[120px] px-4 text-[13.5px]" : "h-9 min-w-[80px] px-3 text-[13px]",
+          on ? "bg-accent-soft text-fg" : "bg-panel-raised text-fg-muted hover:bg-hover hover:text-fg",
+        )}
+      >
+        <ProviderIcon provider={p.id} size={big ? 18 : 15} />
+        {big ? "Winfer code" : p.name}
+      </button>
+    );
+  };
 
   return (
     <div className="flex h-full w-full items-center justify-center rounded-[var(--radius-pane)] bg-panel shadow-sm">
@@ -199,6 +259,23 @@ export function Welcome() {
           <p className="mt-1 text-[13px] text-fg-muted">One line starts an agent in its own worktree. Or pick an agent below.</p>
         </div>
         <div className="flex w-full flex-col rounded-xl bg-panel-raised focus-within:ring-2 focus-within:ring-accent/40 focus-within:ring-3 focus-within:ring-accent-soft shadow-sm">
+          {canAttach && attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-3.5 pt-2.5">
+              {attachments.map((a) => (
+                <div key={a.id} className="relative" title={a.name}>
+                  <img src={a.url} alt={a.name} className="size-12 rounded-md object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setAttachments((all) => all.filter((x) => x.id !== a.id))}
+                    title="Remove"
+                    className="absolute -top-1 -right-1 grid size-4 place-items-center rounded-full bg-fg text-bg"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <label className="flex h-[46px] w-full items-center gap-2 pr-1.5 pl-3.5">
             <ProviderIcon provider={activeProvider} size={16} />
             <input
@@ -351,54 +428,27 @@ export function Welcome() {
             </div>
           )}
         </div>
-        <div className="flex flex-wrap justify-center gap-2">
-          {agents.map((p) => {
-            const on = p.id === activeProvider;
-            return (
-              <button
-                key={p.id}
-                onClick={() => selectBackend(p.id)}
-                onDoubleClick={() => {
-                  selectBackend(p.id);
-                  execute({ type: "pane.spawn", provider: p.id });
-                }}
-                className={cn(
-                  "flex h-8 items-center gap-2 rounded-lg px-3 text-[12.5px] transition-colors shadow-sm",
-                  on
-                    ? "bg-accent/10 font-medium text-fg"
-                    : "bg-panel text-fg-muted hover:bg-hover hover:text-fg",
-                )}
-              >
-                <ProviderIcon provider={p.id} size={14} />
-                {p.name}
-              </button>
-            );
-          })}
-          {missing > 0 && (
-            <button
-              onClick={() => {
-                execute({ type: "ui.settings", page: "agents" });
-                // Once the page has rendered, scroll to the agents that can be installed.
-                window.setTimeout(() => document.getElementById("agents-to-install")?.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
-              }}
-              className="h-8 px-2 text-xs text-fg-subtle hover:text-fg"
-            >
-              + {missing} more agents you can install
-            </button>
+        <div className="flex w-full items-stretch justify-center gap-2.5">
+          {primary && (
+            <>
+              {agentButton(primary, true)}
+              {others.length > 0 && <span className="flex shrink-0 items-center px-1 text-[12px] text-fg-subtle">or</span>}
+            </>
           )}
+          <div className="flex flex-wrap items-stretch justify-center gap-2">{others.map((p) => agentButton(p, false))}</div>
         </div>
-        <div className="flex w-full gap-2.5">
-          {steps.map((s) => (
-            <button key={s.title} onClick={s.run} className="flex min-w-0 flex-1 flex-col gap-1 rounded-lg bg-panel p-3 text-left hover:bg-hover shadow-sm">
-              <span className="flex items-center gap-2 text-[12.5px] text-fg">
-                <s.icon size={14} className="text-accent" />
-                <span className="flex-1">{s.title}</span>
-                {s.keys && <kbd className="rounded px-1 font-mono text-[10px] text-fg-subtle shadow-sm">{s.keys}</kbd>}
-              </span>
-              <span className="text-[11.5px] text-fg-subtle">{s.text}</span>
-            </button>
-          ))}
-        </div>
+        {missing > 0 && (
+          <button
+            onClick={() => {
+              execute({ type: "ui.settings", page: "agents" });
+              // Once the page has rendered, scroll to the agents that can be installed.
+              window.setTimeout(() => document.getElementById("agents-to-install")?.scrollIntoView({ block: "start", behavior: "smooth" }), 150);
+            }}
+            className="-mt-2 text-xs text-fg-subtle hover:text-fg"
+          >
+            + {missing} more agents you can install
+          </button>
+        )}
       </div>
     </div>
   );

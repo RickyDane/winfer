@@ -6,6 +6,7 @@
 "Plan above the composer": "The agent's todo list and running subagents.",
 "Show thinking": "Open the model's reasoning instead of collapsing it.",
 "Live shell output": "Open a command's output while it runs.",
+"Compact tool calls": "Collapse tool calls and thinking into one live-updating row; click to expand.",
 "Animated send button": "The send button's nebula drifts while a session is working.",
 "Compact layout": "Tighter spacing in the transcript.",
 "Model": "Automatic uses your ChatGPT account when signed in (Settings → AI), else Claude Code or Codex.",

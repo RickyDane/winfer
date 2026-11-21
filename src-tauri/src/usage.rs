@@ -9,6 +9,8 @@
 //!   (`~/.codex/auth.json`), the numbers `/status` shows. Falls back to the rate limits Codex
 //!   records after every turn in its session logs (`~/.codex/sessions`), which go stale when
 //!   Codex is used elsewhere (another machine, the IDE extension, the cloud).
+//! - Antigravity: asked live from Google's Code Assist quota endpoints with Antigravity's own
+//!   sign-in (the system keyring), the 5-hour and weekly limits its `/usage` shows.
 //! - OpenCode has no plan limits of its own (it uses whatever model providers are set up), so
 //!   it reports today's tokens and cost.
 
@@ -585,6 +587,185 @@ pub async fn usage_codex_redeem_reset(credit_id: Option<String>, account: Option
     .map_err(|e| e.to_string())?
 }
 
+// Antigravity -----------------------------------------------------------------------------------
+
+const AGY_QUOTA_URL: &str = "https://aicode.googleapis.com/v1alpha:fetchQuotaStatus";
+const AGY_LEGACY_QUOTA_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal";
+
+/// Antigravity's stored sign-in (go-keyring: service "gemini", user "antigravity"), as
+/// `{ token: { access_token, expiry, … }, … }`. Antigravity renews it itself while it runs.
+fn agy_credentials() -> Option<Value> {
+    #[cfg(target_os = "macos")]
+    let out = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"])
+        .stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    #[cfg(target_os = "linux")]
+    let out = Command::new("secret-tool")
+        .args(["lookup", "service", "gemini", "username", "antigravity"])
+        .stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return None;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if !out.status.success() {
+            return None;
+        }
+        agy_decode_secret(String::from_utf8_lossy(&out.stdout).trim())
+    }
+}
+
+/// go-keyring stores the secret as "go-keyring-base64:<base64 JSON>" (or plain JSON).
+fn agy_decode_secret(secret: &str) -> Option<Value> {
+    use base64::Engine;
+    match secret.strip_prefix("go-keyring-base64:") {
+        Some(encoded) => serde_json::from_slice(&base64::engine::general_purpose::STANDARD.decode(encoded).ok()?).ok(),
+        None => serde_json::from_str(secret).ok(),
+    }
+}
+
+/// The access token, unless it has expired.
+fn agy_token(auth: &Value, now: i64) -> Option<String> {
+    let token = &auth["token"];
+    if token["expiry"].as_str().and_then(parse_rfc3339).is_some_and(|at| at <= now) {
+        return None;
+    }
+    token["access_token"].as_str().filter(|s| !s.is_empty()).map(String::from)
+}
+
+fn agy_summary_root(body: &Value) -> &Value {
+    if body["quotaSummary"].is_object() { &body["quotaSummary"] } else { body }
+}
+
+fn agy_has_gemini_summary(body: &Value) -> bool {
+    agy_summary_root(body)["groups"].as_array().is_some_and(|groups| {
+        groups.iter().any(|g| {
+            g["displayName"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains("gemini"))
+                || g["buckets"].as_array().is_some_and(|bs| {
+                    bs.iter().any(|b| b["bucketId"].as_str().is_some_and(|id| id.to_ascii_lowercase().starts_with("gemini")))
+                })
+        })
+    })
+}
+
+/// Groups of models sharing a 5-hour and a weekly limit, from `fetchQuotaStatus`'s `quotaSummary`
+/// (with `refreshWindowLabel`) or legacy `retrieveUserQuotaSummary` (with `window`). With more
+/// than one group, each group's windows are named after it.
+pub fn agy_summary_windows(body: &Value) -> Vec<Window> {
+    let groups = agy_summary_root(body)["groups"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let many = groups.len() > 1;
+    groups
+        .iter()
+        .enumerate()
+        .flat_map(|(i, group)| {
+            let name = group["displayName"].as_str().unwrap_or("Models").to_string();
+            group["buckets"].as_array().into_iter().flatten().filter_map(move |b| {
+                if b["disabled"].as_bool() == Some(true) {
+                    return None;
+                }
+                let win = b["refreshWindowLabel"].as_str().or_else(|| b["window"].as_str()).unwrap_or_default();
+                let left = match b["remainingFraction"].as_f64() {
+                    Some(f) => f,
+                    // proto3 JSON omits 0.0: a bucket with a reset time or window label and no remainingFraction is exhausted.
+                    None if !b["resetTime"].is_null() || !win.is_empty() => 0.0,
+                    None => return None,
+                };
+                let (kind, label) = match win {
+                    "5h" => ("session".to_string(), "5-hour".to_string()),
+                    "weekly" => ("week".to_string(), "Weekly".to_string()),
+                    other => (other.to_string(), b["displayName"].as_str().unwrap_or(other).to_string()),
+                };
+                let (kind, label) = if many { (format!("{kind}-{i}"), format!("{label} ({name})")) } else { (kind, label) };
+                Some(Window { kind, label, used_percent: ((1.0 - left) * 100.0).clamp(0.0, 100.0), resets_at: seconds_or_date(&b["resetTime"]) })
+            })
+        })
+        .collect()
+}
+
+/// Per-model buckets (`fetchQuotaStatus` or `retrieveUserQuota`). Used when Gemini models aren't
+/// in the summary's groups: picks the Gemini model with the least left.
+pub fn agy_gemini_window(body: &Value) -> Option<Window> {
+    let (bucket, left) = body["buckets"]
+        .as_array()?
+        .iter()
+        .filter(|b| {
+            b["modelId"]
+                .as_str()
+                .or_else(|| b["model"]["modelId"].as_str())
+                .is_some_and(|m| m.starts_with("gemini"))
+        })
+        .filter_map(|b| {
+            let left = match b["remainingFraction"].as_f64() {
+                Some(f) => f,
+                None if !b["resetTime"].is_null() => 0.0,
+                None => return None,
+            };
+            Some((b, left))
+        })
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))?;
+    Some(Window { kind: "gemini".into(), label: "Gemini models".into(), used_percent: ((1.0 - left) * 100.0).clamp(0.0, 100.0), resets_at: seconds_or_date(&bucket["resetTime"]) })
+}
+
+fn agy_fetch_quota_status(agent: &ureq::Agent, token: &str) -> Result<Value, ureq::Error> {
+    agent.get(AGY_QUOTA_URL)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("User-Agent", "antigravity")
+        .call()?
+        .body_mut()
+        .read_json()
+}
+
+fn agy_legacy_call(agent: &ureq::Agent, token: &str, method: &str) -> Result<Value, ureq::Error> {
+    agent.post(&format!("{AGY_LEGACY_QUOTA_URL}:{method}"))
+        .header("Authorization", &format!("Bearer {token}"))
+        // The quota endpoints only answer Antigravity's own clients.
+        .header("User-Agent", "antigravity")
+        .send_json(json!({}))?
+        .body_mut()
+        .read_json()
+}
+
+fn agy_error_message(e: ureq::Error) -> String {
+    match e {
+        ureq::Error::StatusCode(429) => "Antigravity is limiting how often usage can be read; trying again later.",
+        ureq::Error::StatusCode(401 | 403) => "Antigravity sign-in expired. Run agy once to renew it, then refresh.",
+        _ => "Couldn't refresh Antigravity limits. Check your connection and Antigravity sign-in.",
+    }
+    .to_string()
+}
+
+/// Antigravity's plan limits, as its `/usage` shows them, with its own sign-in.
+#[tauri::command]
+pub async fn usage_agy() -> Result<Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = agy_credentials().and_then(|a| agy_token(&a, now_ms()))
+            .ok_or("Antigravity sign-in unavailable or expired. Run agy once to renew it, then refresh.")?;
+        let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
+        let windows = match agy_fetch_quota_status(&agent, &token) {
+            Ok(status) => {
+                let mut ws = agy_summary_windows(&status);
+                if !agy_has_gemini_summary(&status) {
+                    ws.extend(agy_gemini_window(&status));
+                }
+                ws
+            }
+            Err(ureq::Error::StatusCode(429)) => return Err(agy_error_message(ureq::Error::StatusCode(429))),
+            Err(_) => {
+                // Fall back to daily Cloud Code Assist if AI Code's quota endpoint isn't available for this sign-in.
+                let summary = agy_legacy_call(&agent, &token, "retrieveUserQuotaSummary").map_err(agy_error_message)?;
+                let mut ws = agy_summary_windows(&summary);
+                if !agy_has_gemini_summary(&summary) {
+                    ws.extend(agy_legacy_call(&agent, &token, "retrieveUserQuota").ok().as_ref().and_then(agy_gemini_window));
+                }
+                ws
+            }
+        };
+        if windows.is_empty() {
+            return Err("Antigravity returned no plan limits.".to_string());
+        }
+        Ok(Snapshot { provider: "agy".into(), windows, at: now_ms(), reset_credits: None })
+    }).await.map_err(|_| "Antigravity usage refresh failed.".to_string())?
+}
+
 // OpenCode --------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
@@ -966,6 +1147,86 @@ mod tests {
     #[ignore]
     fn codex_live_on_this_machine() {
         println!("{:#?}", codex_live(None));
+    }
+
+    #[test]
+    fn reads_antigravity_limits() {
+        // Modern `aicode.googleapis.com/v1alpha:fetchQuotaStatus` payload with both groups,
+        // `refreshWindowLabel`, an exhausted bucket (omitted `remainingFraction`), and a disabled bucket.
+        let status = json!({
+            "quotaSummary": {
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            { "bucketId": "gemini-weekly", "refreshWindowLabel": "weekly", "resetTime": "2026-11-27T12:07:50Z", "remainingFraction": 0.67 },
+                            { "bucketId": "gemini-5h", "refreshWindowLabel": "5h", "resetTime": "2026-11-20T22:07:50Z", "remainingFraction": 0.89 },
+                            { "bucketId": "gemini-disabled", "refreshWindowLabel": "5h", "disabled": true, "remainingFraction": 0.5 },
+                        ]
+                    },
+                    {
+                        "displayName": "Claude and GPT models",
+                        "buckets": [
+                            { "bucketId": "3p-weekly", "refreshWindowLabel": "weekly", "resetTime": "2026-11-27T13:06:39Z", "remainingFraction": 0.93 },
+                            { "bucketId": "3p-5h", "refreshWindowLabel": "5h", "resetTime": "2026-11-20T23:06:39Z" },
+                        ]
+                    }
+                ]
+            }
+        });
+        assert!(agy_has_gemini_summary(&status));
+        let ws = agy_summary_windows(&status);
+        assert_eq!(ws.len(), 4);
+        assert_eq!((ws[0].kind.as_str(), ws[0].label.as_str()), ("week-0", "Weekly (Gemini Models)"));
+        assert!((ws[0].used_percent - 33.0).abs() < 1e-9);
+        assert_eq!((ws[1].kind.as_str(), ws[1].label.as_str()), ("session-0", "5-hour (Gemini Models)"));
+        assert!((ws[1].used_percent - 11.0).abs() < 1e-9);
+        assert_eq!((ws[2].kind.as_str(), ws[2].label.as_str()), ("week-1", "Weekly (Claude and GPT models)"));
+        assert!((ws[2].used_percent - 7.0).abs() < 1e-9);
+        assert_eq!((ws[3].kind.as_str(), ws[3].used_percent), ("session-1", 100.0));
+        assert_eq!(ws[0].resets_at, parse_rfc3339("2026-11-27T12:07:50Z"));
+
+        // Legacy `retrieveUserQuotaSummary` + `retrieveUserQuota` format.
+        let summary = json!({ "groups": [{ "displayName": "Claude and GPT models", "buckets": [
+            { "window": "weekly", "resetTime": "2026-11-27T13:06:39Z", "remainingFraction": 0.75 },
+            { "window": "5h", "resetTime": "2026-11-20T18:06:39Z", "remainingFraction": 0.5 },
+        ]}]});
+        assert!(!agy_has_gemini_summary(&summary));
+        let ws = agy_summary_windows(&summary);
+        assert_eq!(ws.iter().map(|w| (w.kind.as_str(), w.used_percent)).collect::<Vec<_>>(), [("week", 25.0), ("session", 50.0)]);
+        assert_eq!(ws[1].resets_at, parse_rfc3339("2026-11-20T18:06:39Z"));
+        let two = json!({ "groups": [summary["groups"][0].clone(), { "displayName": "Gemini", "buckets": [{ "window": "5h", "remainingFraction": 1 }] }] });
+        assert_eq!(agy_summary_windows(&two)[2].kind, "session-1");
+        let quota = json!({ "buckets": [
+            { "modelId": "claude-opus-5-5-high", "remainingFraction": 0.1 },
+            { "modelId": "gemini-3-flash", "remainingFraction": 0.9, "resetTime": "2026-11-20T22:07:50Z" },
+            { "modelId": "gemini-2.5-pro", "remainingFraction": 0.6, "resetTime": "2026-11-20T22:07:50Z" },
+            { "modelId": "tab_flash_lite_preview" },
+        ]});
+        assert!((agy_gemini_window(&quota).unwrap().used_percent - 40.0).abs() < 1e-9);
+        let nested_quota = json!({ "buckets": [
+            { "model": { "modelId": "gemini-3.8-flash" }, "remainingFraction": 0.8, "resetTime": "2026-11-20T22:07:50Z" },
+        ]});
+        assert!((agy_gemini_window(&nested_quota).unwrap().used_percent - 20.0).abs() < 1e-9);
+        assert!(agy_gemini_window(&json!({ "buckets": [] })).is_none());
+    }
+
+    #[test]
+    fn reads_antigravity_keyring_secret() {
+        use base64::Engine;
+        let auth = json!({ "token": { "access_token": "tok", "expiry": "2026-11-20T19:25:40.818364+01:00" } });
+        let secret = format!("go-keyring-base64:{}", base64::engine::general_purpose::STANDARD.encode(auth.to_string()));
+        let decoded = agy_decode_secret(&secret).unwrap();
+        let expiry = parse_rfc3339("2026-11-20T18:25:40.818Z").unwrap();
+        assert_eq!(agy_token(&decoded, expiry - 1).as_deref(), Some("tok"));
+        assert_eq!(agy_token(&decoded, expiry + 1), None);
+    }
+
+    /// Asks the real endpoint with this machine's Antigravity sign-in: `cargo test agy_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn agy_live_on_this_machine() {
+        println!("{:#?}", tauri::async_runtime::block_on(usage_agy()));
     }
 
     #[test]

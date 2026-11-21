@@ -222,6 +222,7 @@ fn run_decoder(decoder: Arc<Mutex<Decoder>>, latest: Arc<Mutex<Option<Arc<Render
     backend::background(move || {
         let mut bytes = first;
         loop {
+            super::capture::offer_encoded(super::capture::Source::Browser, &bytes);
             if let Some(image) = decode(&bytes) {
                 *latest.lock() = Some(image);
                 let _ = notify.try_send(());
@@ -1315,7 +1316,7 @@ impl BrowserPanel {
         let at = |x: f32, y: f32| (rect.origin.x - origin.x + rect.size.width * (x / a.width.max(1) as f32), rect.origin.y - origin.y + rect.size.height * (y / a.height.max(1) as f32));
         let (x, y) = at(cursor.x, cursor.y);
         let ripple = cursor.pressed.filter(|p| p.elapsed() < Duration::from_millis(900)).map(|p| {
-            div().absolute().left(x - px(14.0)).top(y - px(14.0)).size(px(28.0)).rounded_full()
+            div().absolute().left(x - px(14.0)).top(y - px(14.0)).size(px(28.0)).rounded_full().border_2().border_color(c.accent)
                 .with_animation(SharedString::from(format!("ripple-{}", p.elapsed().as_nanos() / 1_000_000_000u128)), Animation::new(Duration::from_millis(700)), |d, t| d.opacity(1.0 - t))
         });
         Some(div().absolute().size_full().children(ripple).child(div().absolute().left(x).top(y).child(Icon::new(IconName::MousePointer2).size(px(20.0)).text_color(c.accent))).into_any_element())

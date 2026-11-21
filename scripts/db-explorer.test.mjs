@@ -577,6 +577,29 @@ describe("query mode", () => {
   });
 });
 
+describe("a SQLite file read-only can't open", () => {
+  const lite = { key: "DB_LITE", meta: { kind: "sqlite", path: "a b.db" } };
+
+  it("tries again without -readonly but refusing writes, only for an existing file", () => {
+    const cmd = buildCommand(lite, "SELECT 1", { win: false });
+    expect(cmd).toContain(`if [ $c -ne 0 ] && [ -f 'a b.db' ] && grep -q 'unable to open database file' "$t"; then`);
+    const retry = cmd.slice(cmd.indexOf("; then"));
+    expect(retry).not.toContain("-readonly");
+    expect(retry).toContain("PRAGMA query_only=1;\nSELECT 1\n");
+  });
+
+  it("does the same on Windows", () => {
+    const cmd = buildCommand(lite, "SELECT 1", { win: true });
+    expect(cmd).toContain("Test-Path -LiteralPath 'a b.db' -PathType Leaf");
+    expect(cmd).toContain("'PRAGMA query_only=1;' + [Environment]::NewLine + $q");
+    expect(cmd.match(/Start-Process/g)).toHaveLength(2);
+  });
+
+  it("leaves other databases alone", () => {
+    expect(buildCommand({ key: "DB_X", meta: { kind: "postgres" } }, "SELECT 1", { win: false })).not.toContain("query_only");
+  });
+});
+
 describe("choosing a database on the server", () => {
   const pg = { key: "DB_PG", meta: { kind: "postgres", database: "shop" } };
   const my = { key: "DB_MY", meta: { kind: "mysql", host: "db", user: "me", database: "shop" } };

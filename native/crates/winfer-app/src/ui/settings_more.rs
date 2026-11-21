@@ -226,7 +226,7 @@ impl Root {
         let hint = self.more.mic_result.as_ref().map(|r| r.as_ref().map_or_else(|e| e.clone(), |o| o.clone()));
         let mic = card(c, "Input", None).child(row(c, "Microphone", hint, div().flex().flex_col().items_end().gap_1()
             .child(div().flex().items_center().gap_2().child(mic_select).child(small_button(c, "mic-test", if testing { "Listening…" } else { "Test" }).on_click(cx.listener(move |this, _, _, cx| if !testing { this.test_mic(cx) }))))
-            .when(testing, |d| d.child(div().h(px(6.0)).w(px(160.0)).overflow_hidden().rounded_full().bg(c.hover).child(div().h_full().bg(c.success).w(relative((level * 12.0).min(1.0))))))));
+            .when(testing, |d| d.child(div().h(px(4.0)).w(px(160.0)).overflow_hidden().rounded_full().bg(c.hover).child(div().h_full().bg(c.success).w(relative((level * 12.0).min(1.0))))))));
         let readback = self.rest_bool("voice", "readback", false, cx);
         let read_toggle = self.toggle("readback", readback, c, cx, move |this, cx| this.set_rest("voice", "readback", json!(!readback), cx));
         let read = card(c, "Read aloud", None).child(row_marked(c, "Speak agent updates aloud", self.reset_mark("voice.readback", c, cx), Some("“Codex needs your input”, “Claude Code finished”.".to_string()), read_toggle));

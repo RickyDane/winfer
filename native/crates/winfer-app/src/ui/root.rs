@@ -98,6 +98,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("cmd-c", terminal_view::Copy, Some("Terminal")),
         KeyBinding::new("cmd-v", terminal_view::Paste, Some("Terminal")),
+        KeyBinding::new("tab", terminal_view::SendTab, Some("Terminal")),
+        KeyBinding::new("shift-tab", terminal_view::SendBackTab, Some("Terminal")),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &Hide, cx| cx.hide());
@@ -181,11 +183,13 @@ struct GutterDrag {
     sizes: Vec<f64>,
 }
 
+const PANE_DRAG_THRESHOLD: f32 = 6.0;
+
 enum Drag {
     Sidebar,
     SidePanel,
     Gutter(GutterDrag),
-    Pane { id: String, at: Point<Pixels> },
+    Pane { id: String, start: Point<Pixels>, at: Point<Pixels>, active: bool },
 }
 
 fn place(node: &LayoutNode, bounds: Bounds<Pixels>, path: &mut Vec<usize>, rects: &mut Vec<Rect>, gutters: &mut Vec<Gutter>) {
@@ -919,7 +923,7 @@ impl Root {
                 .child(Icon::new(icon).size(px(13.0)))
                 .child(label)
         };
-        let header = div().flex().items_center().gap_1().px_2().py_1()
+        let header = div().flex().items_center().gap_1().pl_1().pr_2().py_1()
             .child(tab(self, cx, "side-browser", IconName::Globe, "Browser", SidePanel::Browser))
             .child(tab(self, cx, "side-device", IconName::Smartphone, "Android", SidePanel::Device))
             .child(tab(self, cx, "side-terminal", IconName::SquareTerminal, "Terminal", SidePanel::Terminal))
@@ -933,7 +937,7 @@ impl Root {
         let body: AnyElement = match panel {
             SidePanel::Browser if self.browser_window.is_some() => div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
                 .child("The browser is in its own window.")
-                .child(div().id("dock-browser").rounded_md().px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
+                .child(div().id("dock-browser").rounded_md().border_1().border_color(c.edge).px_3().py_1().cursor_pointer().text_color(c.fg).hover(move |d| d.bg(c.hover))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_browser_window(window, cx))).child("Dock it back"))
                 .into_any_element(),
             SidePanel::Browser => self.browser.clone().into_any_element(),
@@ -977,6 +981,11 @@ impl Root {
     }
 
     fn mouse_moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag.is_some() && event.pressed_button != Some(MouseButton::Left) {
+            self.drag = None;
+            cx.notify();
+            return;
+        }
         match self.drag.as_mut() {
             Some(Drag::Sidebar) => {
                 let width = (event.position.x / px(1.0)).clamp(MIN_SIDEBAR, MAX_SIDEBAR) as f64;
@@ -1012,8 +1021,16 @@ impl Root {
                     cx.notify();
                 });
             }
-            Some(Drag::Pane { at, .. }) => {
+            Some(Drag::Pane { start, at, active, .. }) => {
                 *at = event.position;
+                if !*active {
+                    let dx = (event.position.x - start.x) / px(1.0);
+                    let dy = (event.position.y - start.y) / px(1.0);
+                    if dx.hypot(dy) >= PANE_DRAG_THRESHOLD {
+                        *active = true;
+                        gpui_kit::base::TextSelection::clear(window, cx);
+                    }
+                }
                 cx.notify();
             }
             None => {}
@@ -1022,7 +1039,7 @@ impl Root {
 
     fn mouse_released(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         let drag = self.drag.take();
-        if let Some(Drag::Pane { id, .. }) = drag {
+        if let Some(Drag::Pane { id, active: true, .. }) = drag {
             let overview = self.state.read(cx).view() == View::Overview;
             let tree = {
                 let s = self.state.read(cx);
@@ -1093,7 +1110,7 @@ impl Root {
                 ),
             )
             .child(
-                div().flex().items_center().gap_0p5().rounded_lg().bg(c.panel).p_0p5()
+                div().flex().items_center().gap_0p5().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_0p5()
                     .child(tab("tab-workspace", IconName::LayoutGrid, name, view == View::Workspace).on_click(set(View::Workspace)))
                     .child(
                         tab("tab-overview", IconName::Layers, "Overview".into(), view == View::Overview)
@@ -1114,14 +1131,14 @@ impl Root {
                 div().flex_1().flex().items_center().justify_end().gap_2()
                     .child(self.render_usage_meter(c, cx))
                     .child(
-                        div().id("live-voice").rounded_md().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        div().id("live-voice").rounded_md().border_1().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
                             .text_color(if live_on { c.accent } else { c.subtle })
                             .tooltip(crate::ui::code_view::tip(if live_on { "End live voice conversation" } else { "Start live voice conversation" }))
                             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::LiveVoice, window, cx)))
                             .child(Icon::new(IconName::AudioLines).size(px(13.0))),
                     )
                     .child(
-                        div().id("new-pane").flex().items_center().gap_1().rounded_md().px_2().py_1().text_xs().cursor_pointer()
+                        div().id("new-pane").flex().items_center().gap_1().rounded_md().border_1().border_color(c.edge).px_2().py_1().text_xs().cursor_pointer()
                             .hover(move |d| d.bg(c.hover).text_color(c.fg))
                             .tooltip(crate::ui::code_view::tip("New pane"))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_new_menu(cx)))
@@ -1141,6 +1158,14 @@ impl Root {
     fn render_pane(&mut self, pane: &Pane, index: usize, zoomed: bool, bounds: Bounds<Pixels>, origin: Point<Pixels>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let code = if self.uses_code(&pane.provider, &pane.id, cx) { self.code_view(&pane.id, window, cx) } else { None };
         let is_code = code.is_some();
+        let sky = code.as_ref().map(|view| {
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_2xl()
+                .overflow_hidden()
+                .child(view.read(cx).sky_view())
+        });
         let body: AnyElement = match code {
             Some(view) => view.into_any_element(),
             None => self.terminal(&pane.id, cx).into_any_element(),
@@ -1148,9 +1173,9 @@ impl Root {
         let header = self.render_header(pane, index, zoomed, c, cx);
         let search = if is_code { None } else { self.render_search(&pane.id, *c, cx) };
         let s = self.state.read(cx);
-        let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
         let starting = s.starting.get(&pane.id).map(|p| if *p == "worktree" { "Creating worktree…".to_string() } else { format!("Starting {}…", s.provider_name(&pane.provider)) });
-        let dragged = matches!(&self.drag, Some(Drag::Pane { id, .. }) if *id == pane.id);
+        let dragged = matches!(&self.drag, Some(Drag::Pane { id, active: true, .. }) if *id == pane.id);
+        let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
         let c = *c;
         div()
             .absolute()
@@ -1164,6 +1189,7 @@ impl Root {
             .rounded_2xl()
             .bg(c.panel)
             .when(dragged, |d| d.opacity(0.4))
+            .children(sky)
             .child(header)
             .child(if is_code {
                 div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().child(body)
@@ -1174,12 +1200,12 @@ impl Root {
             .when_some(starting, |d, text| {
                 d.child(
                     div().absolute().top(px(32.0)).left_0().right_0().bottom_0().flex().items_center().justify_center().child(
-                        div().rounded_md().bg(c.raised).px_3().py_1p5().text_xs().text_color(c.muted).child(text),
+                        div().rounded_md().border_1().border_color(c.edge).bg(c.raised).px_3().py_1p5().text_xs().text_color(c.muted).child(text),
                     ),
                 )
             })
             // Paint the rounded border on top so inner views (chat/terminal/sky) can never square off the bottom corners.
-            .child(div().absolute().top_0().left_0().size_full().rounded_2xl())
+            .child(div().absolute().top_0().left_0().size_full().rounded_2xl().border_1().border_color(if focused { Hsla { a: 0.4, ..c.accent } } else { c.edge }))
     }
 
     fn render_tiles(&mut self, tree: Option<LayoutNode>, zoomed: Option<String>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -1221,7 +1247,9 @@ impl Root {
                             leaf => leaf,
                         });
                         if let LayoutNode::Split { sizes, .. } = node {
+                            gpui_kit::base::GlobalState::suppress_text_selection(cx);
                             this.drag = Some(Drag::Gutter(GutterDrag { path: path.clone(), index, dir, span, start: e.position, sizes: sizes.clone() }));
+                            cx.notify();
                         }
                     })),
             );
@@ -1247,7 +1275,7 @@ impl Root {
     }
 
     fn drop_indicator(&self, c: &Colors, cx: &App) -> Option<impl IntoElement + use<>> {
-        let Some(Drag::Pane { id, at }) = &self.drag else { return None };
+        let Some(Drag::Pane { id, at, active: true, .. }) = &self.drag else { return None };
         let s = self.state.read(cx);
         let tree = if s.view() == View::Overview { s.overview.layout.clone() } else { s.active().and_then(|w| w.layout.clone()) }?;
         let mut rects = Vec::new();
@@ -1270,13 +1298,17 @@ impl Root {
             DropSide::Center => {}
         }
         let tile = self.tile_bounds.origin;
-        Some(div().absolute().left(origin.x - tile.x).top(origin.y - tile.y).w(extent.width).h(extent.height).rounded_md().bg(Hsla { a: 0.2, ..c.accent }))
+        Some(div().absolute().left(origin.x - tile.x).top(origin.y - tile.y).w(extent.width).h(extent.height).rounded_md().bg(Hsla { a: 0.2, ..c.accent }).border_1().border_color(c.accent))
     }
 }
 
 impl Root {
     /// Closes the topmost modal layer; true if there was one.
     fn close_top_layer(&mut self, _: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.drag.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.close_release_notes(cx) || self.close_bg_popover(cx) || self.close_welcome_picker(cx) || self.close_pane_note(cx) || self.close_menu(cx) || self.cancel_rename(cx) || self.close_search(cx) || self.close_plugin_layer(cx) || self.close_orchestration_layer(cx) {
             return true;
         }
@@ -1340,6 +1372,13 @@ impl Root {
         t.accent_foreground = c.fg;
         t.selection = Hsla { a: 0.35, ..c.accent };
         t.caret = c.fg;
+        let hl = std::sync::Arc::make_mut(&mut t.highlight_theme);
+        hl.style.editor_background = Some(c.panel);
+        hl.style.editor_gutter_background = Some(c.panel);
+        hl.style.editor_foreground = Some(c.fg);
+        hl.style.editor_active_line = Some(c.hover);
+        hl.style.editor_line_number = Some(c.subtle);
+        hl.style.editor_active_line_number = Some(c.fg);
         window.refresh();
     }
 }
@@ -1396,7 +1435,7 @@ impl Render for Root {
                 }
                 Ok("install") => {
                     self.execute(Command::Settings(Some("agents".into())), window, cx);
-                    self.scroll_settings_to_end(cx);
+                    self.scroll_settings_to_install(cx);
                 }
                 Ok("review") => self.demo_reviews(cx),
                 Ok("usage") => self.demo_usage(cx),
@@ -1477,17 +1516,41 @@ impl Render for Root {
         let whats_new = self.render_whats_new(&c, cx);
         let voice_hud = self.render_voice_hud(&c, cx);
         let toasts = self.render_toasts(&c, cx);
+        let drag_shield = match &self.drag {
+            Some(Drag::Pane { active: true, .. }) => Some(CursorStyle::ClosedHand),
+            Some(Drag::Sidebar | Drag::SidePanel) => Some(CursorStyle::ResizeLeftRight),
+            Some(Drag::Gutter(g)) => Some(if g.dir == SplitDir::Row { CursorStyle::ResizeLeftRight } else { CursorStyle::ResizeUpDown }),
+            _ => None,
+        }
+        .map(|cursor| {
+            div()
+                .id("drag-shield")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .cursor(cursor)
+                .on_mouse_move(cx.listener(Self::mouse_moved))
+                .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_released))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_released))
+        });
         let measure = cx.entity();
         // Full sidebar with its resize handle, or the collapsed icon rail.
         let sidebar = if sidebar_open {
             div().flex().h_full().child(self.render_sidebar(&c, cx)).child(
                 div().id("sidebar-resize").w(px(8.0)).flex_shrink_0().cursor(CursorStyle::ResizeLeftRight)
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::Sidebar))),
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                        this.drag = Some(Drag::Sidebar);
+                        cx.notify();
+                    })),
             ).into_any_element()
         } else {
             div().flex().h_full().child(self.render_sidebar_rail(&c, cx)).child(div().w(px(8.0)).flex_shrink_0()).into_any_element()
         };
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -1498,14 +1561,22 @@ impl Render for Root {
             .key_context("Root")
             .on_mouse_move(cx.listener(Self::mouse_moved))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_released))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_released))
             .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, _| this.note_user_activity()))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.note_user_activity();
-                if this.record_shortcut(event, cx) {
+                if this.record_shortcut(event, cx) || this.paste_welcome_images_from_key(event, cx) {
                     cx.stop_propagation();
                 } else if this.handle_shortcut(event, window, cx) {
                     cx.stop_propagation();
                 } else if event.keystroke.key == "escape" && this.close_top_layer(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            // Cmd/Ctrl+V in a focused text box is matched as the Input's `Paste` binding before any key-down
+            // listener runs, so images for the welcome task box are taken here, ahead of the Input's text paste.
+            .capture_action(cx.listener(|this, _: &gpui_kit::component::input::Paste, _, cx| {
+                if this.welcome_showing(cx) && this.paste_welcome_images(cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -1546,10 +1617,14 @@ impl Render for Root {
                     .when(side_open, |d| {
                         d.child(
                             div().id("side-resize").w(px(8.0)).flex_shrink_0().cursor(CursorStyle::ResizeLeftRight)
-                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = Some(Drag::SidePanel))),
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                    gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                                    this.drag = Some(Drag::SidePanel);
+                                    cx.notify();
+                                })),
                         )
                         .child(
-                            div().w(px(side_width.max(MIN_SIDE_PANEL))).flex_shrink_0().overflow_hidden().rounded_lg().bg(c.panel).child(side_panel.take().unwrap()),
+                            div().w(px(side_width.max(MIN_SIDE_PANEL))).flex_shrink_0().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel).child(side_panel.take().unwrap()),
                         )
                     }),
             )
@@ -1578,5 +1653,6 @@ impl Render for Root {
             .children(whats_new)
             .children(voice_hud)
             .children(toasts)
+            .children(drag_shield)
     }
 }

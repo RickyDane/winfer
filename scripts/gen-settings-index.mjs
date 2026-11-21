@@ -20,7 +20,7 @@ const FILES = [SETTINGS, "src/features/accounts/AccountsSettings.tsx", "src/feat
 const PAGES = {
   general: ["TerminalSettings", "EditorSettings", "ShortcutSettings"],
   theme: ["AppearanceSettings"],
-  agents: ["AgentSettings", "ReviewSettings", "ProgressSettings"],
+  agents: ["AgentSettings", "ReviewSettings"],
   "winfer-code": ["HarnessSettings"],
   accounts: ["AccountsSettings"],
   ai: ["AiSettings"],

@@ -5,7 +5,7 @@ use super::commands::Command;
 use super::dialogs::ModelInfo as ProviderModelInfo;
 use super::*;
 use crate::code::names::{backend_of, model_name};
-use crate::model::{AddPane, Overlay};
+use crate::model::AddPane;
 use crate::ui::code_pickers::{effort_glyph, effort_hint, effort_label, effort_levels, mark};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -47,6 +47,8 @@ pub(super) struct WelcomeUi {
     loading_providers: std::collections::HashSet<String>,
     /// Saved harness default model & effort, read once.
     harness_defaults: Option<(Option<String>, Option<String>)>,
+    /// Images pasted into the task box (with their decoded thumbnails); winfer code sends them with the first message.
+    attachments: Vec<(crate::code::state::Attachment, std::sync::Arc<Image>)>,
 }
 
 const HARNESS_BACKENDS: [&str; 7] = ["claude", "codex", "agy", "cursor", "opencode", "pi", "muse"];
@@ -77,10 +79,10 @@ impl Root {
             return input.clone();
         }
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Describe a task — Enter starts an agent on it"));
-        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                this.start_welcome_task(window, cx);
-            }
+        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
+            InputEvent::PressEnter { .. } => this.start_welcome_task(window, cx),
+            InputEvent::Change => cx.notify(),
+            _ => {}
         })
         .detach();
         self.welcome.input = Some(input.clone());
@@ -147,6 +149,9 @@ impl Root {
             if s.providers.iter().any(|x| x.id == *p && x.installed) {
                 return p.clone();
             }
+        }
+        if s.providers.iter().any(|x| x.id == "winfer" && x.installed) {
+            return "winfer".to_string();
         }
         s.default_provider_id()
     }
@@ -220,6 +225,64 @@ impl Root {
         }
     }
 
+    /// True while the empty-workspace welcome screen is what's showing (no dialog or panel on top).
+    pub(super) fn welcome_showing(&self, cx: &App) -> bool {
+        let s = self.state.read(cx);
+        matches!(s.view(), crate::model::View::Workspace)
+            && s.active().is_some_and(|w| w.layout.is_none())
+            && !s.settings_open
+            && s.overlay == crate::model::Overlay::None
+            && self.palette_input.is_none()
+            && self.questions.is_empty()
+            && self.new_pane.is_none()
+            && self.model_dialog.is_none()
+            && self.diff_dialog.is_none()
+            && self.search.is_none()
+            && self.history.is_none()
+    }
+
+    /// Cmd/Ctrl+V anywhere on the welcome screen: attaches clipboard images even when the task box isn't focused.
+    /// Returns `true` if the keystroke was consumed.
+    pub(super) fn paste_welcome_images_from_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let m = event.keystroke.modifiers;
+        let primary = if cfg!(target_os = "macos") { m.platform && !m.control } else { m.control && !m.platform };
+        primary && !m.alt && !m.shift && event.keystroke.key.eq_ignore_ascii_case("v") && self.welcome_showing(cx) && self.paste_welcome_images(cx)
+    }
+
+    /// Attaches clipboard images to the task box. Returns `true` if any were attached (so the text isn't pasted too).
+    pub(super) fn paste_welcome_images(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.welcome_provider(cx) != "winfer" {
+            return false;
+        }
+        let Some(item) = cx.read_from_clipboard() else { return false };
+        let mut added = false;
+        for entry in &item.entries {
+            let ClipboardEntry::Image(img) = entry else { continue };
+            let count = self.welcome.attachments.len();
+            let Some(att) = crate::ui::code_view::attachment_from_clipboard_image(img, count) else { continue };
+            let Some(thumb) = crate::ui::code_view::data_image(&format!("data:{};base64,{}", att.mime, att.data)) else { continue };
+            self.welcome.attachments.push((att, thumb));
+            added = true;
+        }
+        if added {
+            cx.notify();
+        }
+        added
+    }
+
+    /// Attaches image files dropped onto the task box (non-images are ignored).
+    fn drop_welcome_images(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            let Some(att) = crate::ui::code_view::attachment_from_path(path) else { continue };
+            if !att.mime.starts_with("image/") {
+                continue;
+            }
+            let Some(thumb) = crate::ui::code_view::data_image(&format!("data:{};base64,{}", att.mime, att.data)) else { continue };
+            self.welcome.attachments.push((att, thumb));
+        }
+        cx.notify();
+    }
+
     /// Starts the selected backend on what's typed in the task box with the chosen model and effort.
     fn start_welcome_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let provider = self.welcome_provider(cx);
@@ -231,9 +294,11 @@ impl Root {
             input.update(cx, |i, cx| i.set_value("", window, cx));
         }
         let prompt = (!task.is_empty()).then_some(task);
+        // Only winfer code sessions can take images with their first message.
+        let attachments: Vec<_> = std::mem::take(&mut self.welcome.attachments).into_iter().map(|(a, _)| a).filter(|_| provider == "winfer").collect();
         let name = self.state.read(cx).provider_name(&provider);
         self.update_state(cx, |s| {
-            s.add_pane(&provider, AddPane { prompt, model, effort, ..Default::default() });
+            s.add_pane(&provider, AddPane { prompt, attachments, model, effort, ..Default::default() });
             let ws = s.active_workspace_id.clone();
             s.log_activity(&ws, format!("Opened {name}"), Some(provider.clone()));
         });
@@ -260,9 +325,6 @@ impl Root {
         };
         let agents: Vec<(String, String)> = s.providers.iter().filter(|p| p.id != "shell" && p.installed).map(|p| (p.id.clone(), p.name.clone())).collect();
         let missing = s.providers.iter().filter(|p| p.id != "shell" && !p.installed).count();
-        let keys = |cmd: Command| commands::keys_for(&cmd, s).unwrap_or_default();
-        let (palette_keys, sheet_keys, branch_keys) = (keys(Command::Palette(None)), keys(Command::CheatSheet), keys(Command::Overlay { overlay: Overlay::Branch, provider: None }));
-        let mono = crate::fonts::mono(cx);
 
         let effective_model = self.welcome.model.as_deref().or(saved_agent_model.as_deref());
         let model_label = match effective_model {
@@ -456,67 +518,111 @@ impl Root {
             ]
         };
 
-        let task = div().w_full().flex().flex_col().rounded_xl().bg(c.raised).shadow(card_shadow.clone())
-            .child(
-                div().w_full().flex().items_center().gap_2().h(px(46.0)).pl_3p5().pr_1p5()
-                    .child(mark(c, &selected_provider, 16.0, 1.0))
-                    .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false)))
-                    .child(div().id("welcome-start").h(px(32.0)).px_3().flex().items_center().gap_1p5().rounded_lg().bg(c.accent).cursor_pointer().hover(|d| d.opacity(0.9))
-                        .on_click(cx.listener(|this, _, window, cx| this.start_welcome_task(window, cx))).text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.on_accent)
-                        .child(format!("Start {selected_name}")).child(Icon::new(IconName::CornerDownLeft).size(px(13.0)))),
-            )
-            .children(picker_row);
+        let thumbs = (selected_provider == "winfer" && !self.welcome.attachments.is_empty()).then(|| {
+            let mut row = div().flex().flex_wrap().gap_2().px_3p5().pt_2p5();
+            for (i, (a, image)) in self.welcome.attachments.iter().enumerate() {
+                row = row.child(
+                    div().id(("welcome-att", i)).relative().size(px(48.0)).flex_shrink_0().rounded_md().overflow_hidden().bg(c.hover).border_1().border_color(c.border)
+                        .tooltip({
+                            let name = a.name.clone();
+                            move |window, cx| Tooltip::new(name.clone()).build(window, cx)
+                        })
+                        .child(gpui_kit::img(image.clone()).size(px(48.0)).object_fit(ObjectFit::Cover))
+                        .child(
+                            div().id(("welcome-att-x", i)).absolute().top(px(2.0)).right(px(2.0)).size(px(16.0)).flex().items_center().justify_center().rounded_full()
+                                .bg(Hsla { a: 0.85, ..c.panel }).text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.panel))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if i < this.welcome.attachments.len() {
+                                        this.welcome.attachments.remove(i);
+                                    }
+                                    cx.notify();
+                                }))
+                                .child(Icon::new(IconName::X).size(px(10.0))),
+                        ),
+                );
+            }
+            row
+        });
 
-        let mut picks = div().flex().flex_wrap().justify_center().gap_2();
+        let animate_send = self.state.read(cx).rest.get("codeWeb").and_then(|v| v["sendAnimation"].as_bool()).unwrap_or(true);
+        let has_task = !input.read(cx).value().trim().is_empty() || (selected_provider == "winfer" && !self.welcome.attachments.is_empty());
+        let start_btn = crate::ui::code_view::nebula_send(c, false, has_task, animate_send, IconName::ArrowUp, 32.0)
+            .tooltip(move |window, cx| Tooltip::new("Start (Enter)").build(window, cx))
+            .on_click(cx.listener(|this, _, window, cx| this.start_welcome_task(window, cx)));
+
+        let task = div().id("welcome-task").w_full().flex().flex_col().rounded_xl().bg(c.raised).shadow(card_shadow.clone()).border_1().border_color(c.edge)
+            .when(selected_provider == "winfer", |d| {
+                d.drag_over::<ExternalPaths>(move |d, _, _, _| d.border_color(c.accent))
+                    .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                        this.drop_welcome_images(paths.paths(), cx);
+                        cx.stop_propagation();
+                    }))
+            })
+            .children(thumbs)
+            .child(
+                div().w_full().flex().items_center().gap_2().h(px(46.0)).px_3p5()
+                    .child(mark(c, &selected_provider, 16.0, 1.0))
+                    .child(div().flex_1().min_w_0().child(Input::new(&input).appearance(false))),
+            )
+            .child(
+                // Bottom bar: pickers on the left, send button in the bottom-right corner.
+                div().w_full().flex().items_end().pb_1p5().pr_1p5()
+                    .child(div().flex_1().min_w_0().children(picker_row))
+                    .child(start_btn),
+            );
+
+        let mut picks = div().flex().items_stretch().justify_center().gap_2p5().w_full();
+        let mut others = div().flex().flex_wrap().items_stretch().justify_center().gap_2();
+        let has_others = agents.iter().any(|(id, _)| id != "winfer");
         for (id, name) in agents {
             let on = id == selected_provider;
+            let big = id == "winfer";
             let pick = id.clone();
-            picks = picks.child(
-                div().id(SharedString::from(format!("welcome-{id}"))).flex().items_center().gap_2().h(px(32.0)).px_3().rounded_lg().text_size(px(12.5))
-                    .when(on, |d| d.bg(Hsla { a: 0.14, ..c.accent }).text_color(c.fg).font_weight(FontWeight::MEDIUM))
-                    .when(!on, |d| d.bg(c.app).text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if this.welcome.provider.as_deref() != Some(pick.as_str()) {
-                            this.welcome.provider = Some(pick.clone());
-                            this.welcome.model = None;
-                            this.welcome.effort = None;
-                            this.welcome.open = None;
-                            this.ensure_welcome_models(&pick, cx);
-                            cx.notify();
-                        }
-                        if e.click_count() == 2 {
-                            this.start_welcome_task(window, cx);
-                        }
-                    }))
-                    .child(mark(c, &id, 14.0, 1.0))
-                    .child(name),
-            );
-        }
-        if missing > 0 {
-            picks = picks.child(div().id("welcome-more-agents").flex().items_center().h(px(32.0)).px_2().text_size(px(12.0)).text_color(c.subtle).cursor_pointer().hover(move |d| d.text_color(c.fg))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.execute(Command::Settings(Some("agents".into())), window, cx);
-                    this.scroll_settings_to_end(cx);
+            let btn = div().id(SharedString::from(format!("welcome-{id}"))).flex().items_center().justify_center().gap_2().h(px(36.0)).rounded_lg().font_weight(FontWeight::MEDIUM)
+                .when(big, |d| d.min_w(px(120.0)).px_4().text_size(px(13.5)))
+                .when(!big, |d| d.min_w(px(80.0)).px_3().text_size(px(13.0)))
+                .border_1()
+                .when(on, |d| d.bg(Hsla { a: 0.14, ..c.accent }).border_color(Hsla { a: 0.4, ..c.accent }).text_color(c.fg))
+                .when(!on, |d| d.bg(c.raised).border_color(c.edge).text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    if this.welcome.provider.as_deref() != Some(pick.as_str()) {
+                        this.welcome.provider = Some(pick.clone());
+                        this.welcome.model = None;
+                        this.welcome.effort = None;
+                        this.welcome.open = None;
+                        this.ensure_welcome_models(&pick, cx);
+                        cx.notify();
+                    }
+                    if e.click_count() == 2 {
+                        this.start_welcome_task(window, cx);
+                    }
                 }))
-                .child(format!("+ {missing} more agents you can install")));
+                .child(mark(c, &id, if big { 18.0 } else { 15.0 }, 1.0))
+                .child(if big { "Winfer code".to_string() } else { name });
+            if big {
+                picks = picks.child(btn);
+                if has_others {
+                    picks = picks.child(
+                        // A full-height line with "or" sitting on top of it (panel-coloured
+                        // backing), so the line shows above and below the text.
+                        div().relative().h(px(36.0)).w(px(24.0)).flex().items_center().justify_center().text_size(px(12.0)).text_color(c.subtle)
+                            .child(div().absolute().top_0().bottom_0().left(px(11.5)).w(px(1.0)).bg(c.edge))
+                            .child(div().relative().bg(c.panel).py(px(1.0)).child("or")),
+                    );
+                }
+            } else {
+                others = others.child(btn);
+            }
         }
-
-        let step = |id: &'static str, icon: IconName, title: &'static str, text: &'static str, keys: String| {
-            div().id(id).flex_1().min_w_0().flex().flex_col().gap_1().p_3().rounded_lg().bg(c.raised).shadow(card_shadow.clone()).cursor_pointer()
-                .hover(move |d| d.bg(c.hover))
-                .child(div().flex().items_center().gap_2().text_size(px(12.5)).text_color(c.fg)
-                    .child(Icon::new(icon).size(px(14.0)).text_color(c.accent)).child(div().flex_1().child(title))
-                    .when(!keys.is_empty(), |d| d.child(div().rounded_sm().bg(c.app).px_1().font_family(mono.clone()).text_size(px(10.0)).text_color(c.subtle).child(keys))))
-                .child(div().text_size(px(11.5)).text_color(c.subtle).child(text))
-        };
-        let steps = div().w_full().flex().gap_2p5()
-            .child(step("welcome-branch", IconName::GitBranch, "Open a branch", "Start an agent on an existing branch or worktree.", branch_keys)
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Branch, provider: None }, window, cx))))
-            .child(step("welcome-palette", IconName::Search, "Commands", "Everything winfer can do, by name.", palette_keys)
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx))))
-            .child(step("welcome-keys", IconName::Zap, "Shortcuts", "See and change every shortcut.", sheet_keys)
-                .on_click(cx.listener(|this, _, window, cx| this.execute(Command::CheatSheet, window, cx))));
+        picks = picks.child(others);
+        let more = (missing > 0).then(|| div().id("welcome-more-agents").flex().items_center().text_size(px(12.0)).text_color(c.subtle).cursor_pointer().hover(move |d| d.text_color(c.fg))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.execute(Command::Settings(Some("agents".into())), window, cx);
+                this.scroll_settings_to_install(cx);
+            }))
+            .child(format!("+ {missing} more agents you can install")));
 
         div().size_full().flex().items_center().justify_center().rounded_lg().bg(c.panel)
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -526,13 +632,12 @@ impl Root {
             }))
             .child(
                 div().w(px(620.0)).max_w(relative(0.92)).flex().flex_col().items_center().gap_5()
-                    .child(div().size(px(44.0)).flex().items_center().justify_center().rounded_xl().bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent).child(Icon::new(IconName::Sparkles).size(px(20.0))))
                     .child(div().flex().flex_col().items_center().gap_1()
                         .child(div().text_size(px(20.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("What should agents do in {workspace}?")))
                         .child(div().text_size(px(13.0)).text_color(c.muted).child("One line starts an agent in its own worktree. Or pick an agent below.")))
                     .child(task)
                     .child(picks)
-                    .child(steps),
+                    .children(more),
             )
     }
 }

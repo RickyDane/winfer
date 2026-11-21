@@ -26,6 +26,7 @@ import { followAfterScroll, isAwayFromBottom } from "./scrollFollow";
 import { useCodeWeb } from "./styles";
 import { modelName } from "./names";
 import { elapsed } from "../usage/toolStats";
+import { buildDisplayRows, describeStep, fmtWorkedFor, groupDurationMs, summarizeGroup } from "./workGroup";
 
 const TOOL_ICONS: Record<string, typeof Bot> = {
   Read: FileText,
@@ -294,15 +295,97 @@ const Reasoning = memo(function Reasoning({ item }: { item: Extract<Item, { kind
   );
 });
 
-/** "Worked 12s" / "Worked 3m 05s" / "Worked 1h 02m". */
-function fmtWorked(ms: number) {
-  const t = Math.max(1, Math.round(ms / 1000));
-  const h = Math.floor(t / 3600),
-    m = Math.floor((t % 3600) / 60),
-    sec = t % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `Worked ${h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(sec)}s` : `${sec}s`}`;
+const fmtWorked = fmtWorkedFor;
+
+function renderItem(it: Item, dark: boolean) {
+  switch (it.kind) {
+    case "user":
+      return <UserRow key={it.key} item={it} />;
+    case "text":
+      return <TextRow key={it.key} item={it} dark={dark} />;
+    case "reasoning":
+      return <Reasoning key={it.key} item={it} />;
+    case "tool":
+      return <ToolCard key={it.key} item={it} />;
+    case "worked":
+      return (
+        <div key={it.key} className="cw-worked cw-enter">
+          <span>{fmtWorked(it.ms)}</span>
+        </div>
+      );
+    case "notice":
+      return <NoticeRow key={it.key} item={it} />;
+  }
 }
+
+const WorkGroupRow = memo(function WorkGroupRow({
+  items,
+  start,
+  end,
+  workedMs,
+  active,
+  dark,
+}: {
+  items: Item[];
+  start: number;
+  end: number;
+  workedMs: number | null;
+  active: boolean;
+  dark: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const summary = useMemo(() => summarizeGroup(items, start, end), [items, start, end]);
+  const durationMs = useMemo(
+    () => groupDurationMs(items, start, end, workedMs),
+    [items, start, end, workedMs],
+  );
+
+  let headContent: ReactNode;
+  if (active) {
+    headContent = (
+      <>
+        <span className="cw-spinner cw-work-spinner" aria-hidden="true" />
+        <span className="cw-work-label cw-shimmer">{describeStep(summary.lastStep)}</span>
+        <ChevronRight size={14} className={clsx("cw-chev", open && "open")} />
+      </>
+    );
+  } else {
+    const count = summary.toolCount || summary.stepCount;
+    const unit = summary.toolCount ? (count === 1 ? "tool call" : "tool calls") : count === 1 ? "step" : "steps";
+    const label = durationMs != null ? fmtWorkedFor(durationMs) : `Worked · ${count} ${unit}`;
+    headContent = (
+      <>
+        <span className="cw-work-label">{label}</span>
+        <ChevronRight size={14} className={clsx("cw-chev", open && "open")} />
+      </>
+    );
+  }
+
+  return (
+    <div
+      className={clsx(
+        "cw-work cw-enter",
+        active && "active",
+        !active && "done",
+        open && "open",
+      )}
+    >
+      <button
+        type="button"
+        className={clsx("cw-work-head", active ? "live" : "done")}
+        onClick={() => !selecting() && setOpen((v) => !v)}
+      >
+        {headContent}
+      </button>
+      <Collapse open={open}>
+        <div className="cw-work-body">
+          {items.slice(start, end + 1).map((it) => renderItem(it, dark))}
+        </div>
+      </Collapse>
+    </div>
+  );
+});
 
 const UserRow = memo(function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   const setPreview = useCode((s) => s.setPreview);
@@ -359,7 +442,12 @@ export function useFresh() {
 export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) {
   const items = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
+  const compactTools = useCodeWeb((s) => s.compactTools);
   const fresh = useFresh();
+  const rows = useMemo(
+    () => buildDisplayRows(items, busy, compactTools),
+    [items, busy, compactTools],
+  );
   const scroller = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -368,9 +456,9 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
   const touchY = useRef<number | undefined>(undefined);
   const lastUser = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
-  const head = items[0]?.key;
-  const [history, setHistory] = useState(() => ({ head, start: historyStart(items.length) }));
-  const start = historyStart(items.length, history.head === head ? history.start : undefined);
+  const head = rows[0]?.key;
+  const [history, setHistory] = useState(() => ({ head, start: historyStart(rows.length) }));
+  const start = historyStart(rows.length, history.head === head ? history.start : undefined);
   if (history.head !== head || history.start !== start) setHistory({ head, start });
   const prepend = useRef<{ row: Element; top: number } | null>(null);
   useLayoutEffect(() => {
@@ -437,11 +525,11 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
     if (stick.current) {
       // Long-running panes need the same bound as restored ones. Only retire old
       // rows while following, never while the user is reading earlier history.
-      const latest = historyStart(items.length, start, true);
+      const latest = historyStart(rows.length, start, true);
       if (latest !== start) setHistory({ head, start: latest });
       follow();
     }
-  }, [items]);
+  }, [items, rows.length]);
 
   // Follow growing content, and refresh the jump button on content/pane resizing
   // even while paused (collapsing output can make the transcript fit again).
@@ -464,6 +552,11 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
       className="cw-scroll"
       ref={scroller}
       tabIndex={0}
+      onClickCapture={(e) => {
+        // Opening or closing a tool call or compacted work group stops following the bottom,
+        // so the header stays put and the content below is pushed down instead of up.
+        if ((e.target as Element).closest?.(".cw-tool-head, .cw-work-head")) scrolling(0);
+      }}
       onWheel={(e) => {
         if (!e.ctrlKey && !e.metaKey && e.deltaY) scrolling(e.deltaY);
       }}
@@ -514,37 +607,31 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
             Show earlier messages ({start})
           </button>
         )}
-        {items.slice(start).map((it) => {
-          switch (it.kind) {
-            case "user":
-              return <UserRow key={it.key} item={it} />;
-            case "text":
-              return <TextRow key={it.key} item={it} dark={dark} />;
-            case "reasoning":
-              return <Reasoning key={it.key} item={it} />;
-            case "tool":
-              return <ToolCard key={it.key} item={it} />;
-            case "worked":
+        {rows.slice(start).map((row) => {
+          switch (row.kind) {
+            case "item":
+              return renderItem(items[row.index], dark);
+            case "work":
               return (
-                <div key={it.key} className="cw-worked cw-enter">
-                  <span>{fmtWorked(it.ms)}</span>
+                <WorkGroupRow
+                  key={row.key}
+                  items={items}
+                  start={row.start}
+                  end={row.end}
+                  workedMs={row.workedMs}
+                  active={row.active}
+                  dark={dark}
+                />
+              );
+            case "working":
+              return (
+                <div key={row.key} className="cw-working cw-enter">
+                  <span className="cw-spinner cw-work-spinner" aria-hidden="true" />
+                  <span className="cw-shimmer">Working…</span>
                 </div>
               );
-            case "notice":
-              return <NoticeRow key={it.key} item={it} />;
           }
         })}
-        {busy && items.at(-1)?.kind === "user" && (
-          <div className="cw-reason cw-enter">
-            <div className="cw-reason-head">
-              <span className="cw-dots">
-                <i />
-                <i />
-                <i />
-              </span>
-            </div>
-          </div>
-        )}
         <div style={{ height: 1 }} />
       </div>
       {away && (
@@ -557,7 +644,7 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
               stick.current = true;
               scrollIntent.current = 0;
               setAway(false);
-              setHistory({ head, start: historyStart(items.length) });
+              setHistory({ head, start: historyStart(rows.length) });
               toBottom("smooth");
             }}
           >

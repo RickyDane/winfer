@@ -1,7 +1,7 @@
 /**
  * How much of their plan's usage limits the agents have left (see src-tauri/src/usage.rs):
  * Claude Code is asked live (status line as fallback), Codex is asked live from ChatGPT (session logs
- * as fallback), OpenCode reports today's tokens and cost. Kept across restarts, with samples for a run-out projection.
+ * as fallback), Antigravity is asked live from Google's quota endpoint, OpenCode reports today's tokens and cost. Kept across restarts, with samples for a run-out projection.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -415,6 +415,14 @@ export function toastResetOutcome({ code }: { code: ResetCode }) {
   toast(resetOutcomeText(code), code === "reset" ? "success" : "info");
 }
 
+export function refreshAgy() {
+  return refresh("agy", async () => {
+    const snapshot = await invoke<Snapshot>("usage_agy");
+    if (!snapshot?.windows.length) throw new Error("Antigravity returned no plan limits.");
+    record(snapshot);
+  });
+}
+
 export function refreshClaude() {
   return refresh("claude", async () => {
     const snapshot = await invoke<Snapshot>("usage_claude");
@@ -458,6 +466,7 @@ export async function refreshUsage() {
   await Promise.all([
     installed("codex") ? refreshCodex() : undefined,
     installed("claude") ? refreshClaude() : undefined,
+    installed("agy") ? refreshAgy() : undefined,
     installed("opencode") ? refreshOpencode() : undefined,
     refreshOtherAccounts(true),
   ]);
@@ -546,12 +555,17 @@ export function startUsageTracking() {
   // Just a look at a few log files (nothing if Codex was never used), so no need to wait for
   // the provider list.
   let claudePolledAt = 0;
+  let agyPolledAt = 0;
   const poll = () => {
     void loadAccounts().then(() => refreshOtherAccounts());
     void refreshCodex();
     if (installed("claude") && Date.now() - Math.max(claudePolledAt, claudeLiveAt) >= 5 * 60_000) {
       claudePolledAt = Date.now();
       void refreshClaude();
+    }
+    if (installed("agy") && Date.now() - agyPolledAt >= 5 * 60_000) {
+      agyPolledAt = Date.now();
+      void refreshAgy();
     }
   };
   poll();

@@ -1,4 +1,5 @@
 pub mod android;
+pub mod capture;
 pub mod viewer;
 pub mod browser;
 pub mod root;
@@ -7,3 +8,4 @@ pub mod code_pickers;
 pub mod nebula;
 pub mod code_sheets;
 pub mod code_view;
+pub mod viz;

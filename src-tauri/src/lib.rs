@@ -28,6 +28,7 @@ mod undock;
 mod usage;
 mod usage_history;
 mod vault;
+mod viz;
 mod realtime;
 mod chatgpt_voice;
 mod diagnostics;
@@ -256,6 +257,7 @@ pub fn run() {
             usage::usage_codex_resets,
             usage::usage_codex_redeem_reset,
             usage::usage_claude,
+            usage::usage_agy,
             usage::usage_codex_context,
             context_breakdown::usage_context_breakdown,
             usage::usage_opencode,

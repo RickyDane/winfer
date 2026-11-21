@@ -1,0 +1,322 @@
+/* What plugin pages get from the Tauri app's stylesheet (src/styles/globals.css): Tailwind's preflight, the
+   app's base rules and the wf-* building blocks (docs/plugins/README.md). Keep in sync with it. Same layers as
+   there, so a page's own (unlayered) styles win over these whatever their specificity. */
+@layer theme, base, components, utilities;
+
+@layer theme {
+  :root {
+    --color-app: #09090b;
+    --color-panel: #111113;
+    --color-panel-raised: #161619;
+    --color-hover: #1c1c20;
+    --color-active: #232328;
+    --color-border: #1f1f23;
+    --color-border-strong: #2c2c31;
+    --color-fg: #ececf0;
+    --color-fg-muted: #a1a1aa;
+    --color-fg-subtle: #71717a;
+    --color-accent: #7c8cff;
+    --color-accent-soft: #7c8cff1f;
+    --color-on-accent: #ffffff;
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-claude: #e08b6a;
+    --color-series-claude: #cf6e4e;
+    --color-series-codex: #6d7cff;
+    --color-series-opencode: #25a28f;
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --default-font-family: var(--font-sans);
+    --default-mono-font-family: var(--font-mono);
+    --radius-pane: 10px;
+    color-scheme: dark;
+  }
+  :root[data-mode="light"] {
+    --color-series-claude: #c2603f;
+    --color-series-codex: #4f5ff0;
+    --color-series-opencode: #138a78;
+  }
+}
+
+/* Tailwind v4 preflight. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid;
+  }
+  html,
+  :host {
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    tab-size: 4;
+    font-family: var(--default-font-family, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji");
+    font-feature-settings: normal;
+    font-variation-settings: normal;
+    -webkit-tap-highlight-color: transparent;
+  }
+  hr {
+    height: 0;
+    color: inherit;
+    border-top-width: 1px;
+  }
+  abbr:where([title]) {
+    -webkit-text-decoration: underline dotted;
+    text-decoration: underline dotted;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  a {
+    color: inherit;
+    -webkit-text-decoration: inherit;
+    text-decoration: inherit;
+  }
+  b,
+  strong {
+    font-weight: bolder;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--default-mono-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+    font-feature-settings: normal;
+    font-variation-settings: normal;
+    font-size: 1em;
+  }
+  small {
+    font-size: 80%;
+  }
+  sub,
+  sup {
+    font-size: 75%;
+    line-height: 0;
+    position: relative;
+    vertical-align: baseline;
+  }
+  sub {
+    bottom: -0.25em;
+  }
+  sup {
+    top: -0.5em;
+  }
+  table {
+    text-indent: 0;
+    border-color: inherit;
+    border-collapse: collapse;
+  }
+  progress {
+    vertical-align: baseline;
+  }
+  summary {
+    display: list-item;
+  }
+  ol,
+  ul,
+  menu {
+    list-style: none;
+  }
+  img,
+  svg,
+  video,
+  canvas,
+  audio,
+  iframe,
+  embed,
+  object {
+    display: block;
+    vertical-align: middle;
+  }
+  img,
+  video {
+    max-width: 100%;
+    height: auto;
+  }
+  button,
+  input,
+  select,
+  optgroup,
+  textarea,
+  ::file-selector-button {
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    border-radius: 0;
+    background-color: transparent;
+    opacity: 1;
+  }
+  :where(select:is([multiple], [size])) optgroup {
+    font-weight: bolder;
+  }
+  :where(select:is([multiple], [size])) optgroup option {
+    padding-inline-start: 20px;
+  }
+  ::file-selector-button {
+    margin-inline-end: 4px;
+  }
+  ::placeholder {
+    opacity: 1;
+  }
+  @supports (not (-webkit-appearance: -apple-pay-button)) or (contain-intrinsic-size: 1px) {
+    ::placeholder {
+      color: color-mix(in oklab, currentcolor 50%, transparent);
+    }
+  }
+  textarea {
+    resize: vertical;
+  }
+  ::-webkit-search-decoration {
+    -webkit-appearance: none;
+  }
+  ::-webkit-date-and-time-value {
+    min-height: 1lh;
+    text-align: inherit;
+  }
+  ::-webkit-datetime-edit {
+    display: inline-flex;
+  }
+  ::-webkit-datetime-edit-fields-wrapper {
+    padding: 0;
+  }
+  ::-webkit-datetime-edit,
+  ::-webkit-datetime-edit-year-field,
+  ::-webkit-datetime-edit-month-field,
+  ::-webkit-datetime-edit-day-field,
+  ::-webkit-datetime-edit-hour-field,
+  ::-webkit-datetime-edit-minute-field,
+  ::-webkit-datetime-edit-second-field,
+  ::-webkit-datetime-edit-millisecond-field,
+  ::-webkit-datetime-edit-meridiem-field {
+    padding-block: 0;
+  }
+  ::-webkit-calendar-picker-indicator {
+    line-height: 1;
+  }
+  :-moz-ui-invalid {
+    box-shadow: none;
+  }
+  button,
+  input:where([type="button"], [type="reset"], [type="submit"]),
+  ::file-selector-button {
+    appearance: button;
+  }
+  ::-webkit-inner-spin-button,
+  ::-webkit-outer-spin-button {
+    height: auto;
+  }
+  [hidden]:where(:not([hidden="until-found"])) {
+    display: none !important;
+  }
+}
+
+/* The app's base rules. */
+@layer base {
+  body {
+    background: var(--color-panel);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+  button:not(:disabled),
+  [role="button"],
+  [role="tab"],
+  a[href],
+  select:not(:disabled),
+  summary,
+  label:has(> input[type="checkbox"], > input[type="radio"]),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled {
+    cursor: not-allowed;
+  }
+  ::selection {
+    background: var(--color-accent-soft);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *:not(.animate-spin),
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* Building blocks for plugin pages. */
+@layer components {
+  .wf-page { max-width: 880px; margin: 0 auto; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px; }
+  .wf-header { display: flex; align-items: flex-start; gap: 16px; }
+  .wf-header > :first-child { flex: 1; min-width: 0; }
+  .wf-h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--color-fg); }
+  .wf-h2 { margin: 0; font-size: 13px; font-weight: 500; color: var(--color-fg); }
+  .wf-muted { color: var(--color-fg-muted); font-size: 12px; line-height: 1.55; }
+  .wf-subtle { color: var(--color-fg-subtle); font-size: 12px; }
+  .wf-mono { font-family: var(--font-mono); }
+  .wf-card { border-radius: 8px; background: var(--color-panel-raised); box-shadow: 0 2px 10px -2px rgb(0 0 0 / 0.22); overflow: hidden; }
+  .wf-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+  .wf-row + .wf-row { margin-top: 1px; background: color-mix(in srgb, var(--color-fg) 2%, transparent); }
+  .wf-row > .wf-grow { flex: 1; min-width: 0; }
+  .wf-stack { display: flex; flex-direction: column; gap: 10px; }
+  .wf-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .wf-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--color-fg-muted); }
+  .wf-input,
+  .wf-select {
+    height: 30px; padding: 0 10px; border-radius: 6px; border: none;
+    background: var(--color-app); color: var(--color-fg); font: inherit; font-size: 12px; outline: none; user-select: text;
+    box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.18);
+  }
+  .wf-input:focus,
+  .wf-select:focus { box-shadow: 0 0 0 2px var(--color-accent-soft), 0 2px 8px -2px color-mix(in srgb, var(--color-accent) 30%, transparent); }
+  .wf-input.wf-mono { font-family: var(--font-mono); }
+  .wf-button {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 6px;
+    border: none; background: var(--color-active); color: var(--color-fg); font: inherit; font-size: 12px; white-space: nowrap;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
+  }
+  .wf-button:hover:not(:disabled) { background: var(--color-hover); }
+  .wf-button:disabled { opacity: 0.5; }
+  .wf-button.wf-primary { background: var(--color-accent); color: white; }
+  .wf-button.wf-primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--color-accent); }
+  .wf-button.wf-danger { color: var(--color-danger); }
+  .wf-button.wf-ghost { background: transparent; box-shadow: none; color: var(--color-fg-muted); }
+  .wf-button.wf-ghost:hover:not(:disabled) { background: var(--color-hover); color: var(--color-fg); }
+  .wf-badge {
+    display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 500;
+    background: var(--color-active); color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .wf-badge.wf-accent { background: var(--color-accent-soft); color: var(--color-accent); }
+  .wf-empty { padding: 36px 16px; text-align: center; color: var(--color-fg-subtle); font-size: 12px; }
+  .wf-error { color: var(--color-danger); font-size: 12px; }
+  .wf-switch { appearance: none; position: relative; width: 32px; height: 18px; border-radius: 9px; background: var(--color-active); box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.25); transition: background 0.15s; flex-shrink: 0; margin: 0; }
+  .wf-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: white; box-shadow: 0 1px 2px rgb(0 0 0 / 0.25); transition: transform 0.15s; }
+  .wf-switch:checked { background: var(--color-accent); box-shadow: none; }
+  .wf-switch:checked::after { transform: translateX(14px); }
+  .wf-dialog-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 0.4); }
+  .wf-dialog { width: min(480px, 92vw); border-radius: 12px; background: var(--color-panel-raised); padding: 20px; box-shadow: 0 20px 50px rgb(0 0 0 / 0.45); display: flex; flex-direction: column; gap: 14px; }
+}

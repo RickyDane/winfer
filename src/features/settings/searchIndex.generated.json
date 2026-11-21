@@ -71,48 +71,8 @@
  },
  {
   "page": "agents",
-  "label": "Models",
-  "words": "The model each agent starts with in new panes."
- },
- {
-  "page": "agents",
-  "label": "Versions",
-  "words": "Updating changes the CLI on disk; running panes keep their version until restarted."
- },
- {
-  "page": "agents",
-  "label": "ml-1.5 font-mono text-[11px] text-fg-subtle",
-  "words": "Checking… Up to date."
- },
- {
-  "page": "agents",
-  "label": "Check for agent updates",
-  "words": "winfer also checks every few hours and tells you when one is out."
- },
- {
-  "page": "agents",
-  "label": "Permissions",
-  "words": "Applies to agents started (or restarted) after the change."
- },
- {
-  "page": "agents",
-  "label": "System prompt",
-  "words": "Given to every agent when it starts (or restarts). Claude Code and Codex get it as a system prompt; other agents get it in front of their first message. Leave it empty to add nothing."
- },
- {
-  "page": "agents",
-  "label": "Instructions for every agent",
-  "words": ""
- },
- {
-  "page": "agents",
-  "label": "Agent tools",
-  "words": "Tools agents rarely use are left out, since every tool an agent is offered takes up context in each request. Turn on the ones you want. Applies to agents started (or restarted) after the change."
- },
- {
-  "page": "agents",
-  "label": "Review inbox",
-  "words": "Summaries use the LLM under AI; with it off, cards show the agent's last output instead."
+  "label": "Review & progress",
+  "words": "Automatic checks when agents finish, and progress estimates using the LLM under AI."
  },
  {
   "page": "agents",
@@ -126,13 +86,8 @@
  },
  {
   "page": "agents",
-  "label": "Session progress",
-  "words": "Uses the LLM under AI. Agents whose output hasn't changed aren't re-checked."
- },
- {
-  "page": "agents",
   "label": "Estimate how far working agents are",
-  "words": ""
+  "words": "Agents whose output hasn't changed aren't re-checked."
  },
  {
   "page": "agents",
@@ -188,6 +143,11 @@
   "page": "winfer-code",
   "label": "Live shell output",
   "words": "Open a command's output while it runs."
+ },
+ {
+  "page": "winfer-code",
+  "label": "Compact tool calls",
+  "words": "Collapse tool calls and thinking into one live-updating row; click to expand."
  },
  {
   "page": "winfer-code",
@@ -578,10 +538,5 @@
   "page": "diagnostics",
   "label": "Latest crash",
   "words": "The end of crash.log. Full backtraces are in the file and in the export."
- },
- {
-  "page": "diagnostics",
-  "label": "Available to install",
-  "words": "Install one, then Check for updates (or restart winfer) and it shows up above."
  }
 ]

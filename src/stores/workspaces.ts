@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
+import type { Attachment } from "@/features/code/store";
 import { fetchModels, fetchProviders, type ModelInfo, type Provider, type ProviderId } from "@/features/providers/providers";
 import { buildPreset, insertDwindle, leaves, PRESETS, removeLeaf, type LayoutNode } from "@/features/layout/tree";
 import type { Recipe } from "@/features/recipes/recipes";
@@ -46,6 +47,8 @@ export interface Pane {
   plain: boolean;
   /** Initial prompt given when the agent was started (not persisted). */
   prompt: string | null;
+  /** Images pasted on the welcome screen, sent with the prompt by a winfer code pane (not persisted). */
+  attachments?: Attachment[];
   /** Model the agent runs with; null means the CLI's default. */
   model: string | null;
   /** Reasoning effort level the agent launched with; null means model default. */
@@ -172,7 +175,7 @@ interface WorkspaceState {
   focusPane: (id: string) => void;
   addPane: (
     provider: ProviderId,
-    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; effort?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
+    opts?: { splitFrom?: string; worktree?: boolean; prompt?: string; attachments?: Attachment[]; raceId?: string; plain?: boolean; customTitle?: string; workspaceId?: string; model?: string; effort?: string; existingWorktree?: WorktreeInfo; cwd?: string; resumeSession?: string },
   ) => string;
   removePane: (id: string) => void;
   /** Moves a pane out of its workspace's tiles into the archive; its process keeps running. */
@@ -516,6 +519,7 @@ export const useWorkspaces = create<WorkspaceState>((set, get) => ({
             raceId: opts?.raceId ?? null,
             plain: opts?.plain ?? false,
             prompt: opts?.prompt ?? null,
+            attachments: opts?.attachments,
             model: opts?.model ?? get().agentModels[provider] ?? null,
             effort: opts?.effort ?? null,
             archived: false,

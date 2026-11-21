@@ -310,6 +310,21 @@ impl Root {
         .detach();
     }
 
+    /// A chat handed over its plan for approval: show the plan file in the file viewer (in the
+    /// background when the user is elsewhere), like an agent's `open_file`.
+    pub(super) fn show_handed_plan(&mut self, pane_id: &str, cx: &mut Context<Self>) {
+        let Some(model) = self.code_models.get(pane_id).cloned() else { return };
+        let Some(file) = model.update(cx, |m, _| m.state.show_plan.take()) else { return };
+        let s = self.state.read(cx);
+        let Some(ws) = s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane_id)) else { return };
+        let ws_id = ws.id.clone();
+        let provider = ws.panes.iter().find(|p| p.id == pane_id).map(|p| p.provider.clone());
+        let on_screen = s.view() == View::Workspace && ws_id == s.active_workspace_id;
+        let name = std::path::Path::new(&file).file_name().map_or_else(|| file.clone(), |n| n.to_string_lossy().into_owned());
+        self.viewer.update(cx, |v, cx| v.open(file, None, !on_screen, cx));
+        self.update_state(cx, |s| s.log_activity(&ws_id, format!("Plan ready for approval: {name}"), provider));
+    }
+
     /// Starts a pane's process without showing it (an agent started in a background workspace).
     pub(super) fn start_detached(&mut self, id: &str, cx: &mut Context<Self>) {
         let s = self.state.read(cx);

@@ -75,10 +75,14 @@ pub struct Colors {
     pub app: Hsla,
     pub panel: Hsla,
     pub raised: Hsla,
+    /// The chat composer card: `raised`, except darker in Winfer Dark.
+    pub composer: Hsla,
     pub hover: Hsla,
     pub active: Hsla,
     pub border: Hsla,
     pub border_strong: Hsla,
+    /// Subtle outer edge for cards, groups, inputs, buttons and floating surfaces.
+    pub edge: Hsla,
     pub fg: Hsla,
     pub muted: Hsla,
     pub subtle: Hsla,
@@ -93,15 +97,18 @@ pub struct Colors {
 pub fn colors(id: &str) -> Colors {
     let def = theme_by_id(id);
     let u = &def.ui;
+    let (border, border_strong) = (hex(&u.border), hex(&u.border_strong));
     Colors {
         light: def.mode == "light",
         app: hex(&u.app),
         panel: hex(&u.panel),
         raised: hex(&u.panel_raised),
+        composer: if def.id == "dark" { hex("#0c0c0e") } else { hex(&u.panel_raised) },
         hover: hex(&u.hover),
         active: hex(&u.active),
-        border: hex(&u.border),
-        border_strong: hex(&u.border_strong),
+        border,
+        border_strong,
+        edge: blend(border, border_strong, 0.4),
         fg: hex(&u.fg),
         muted: hex(&u.fg_muted),
         subtle: hex(&u.fg_subtle),

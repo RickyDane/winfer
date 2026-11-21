@@ -599,7 +599,7 @@ impl Bridge {
             "" => input["path"].as_str().or(input["url"].as_str()).unwrap_or("").to_string(),
             c => c.to_string(),
         };
-        self.emit(Ev::Approval(Approval { id: key, tool: name, title, detail, diff, questions: Vec::new() }));
+        self.emit(Ev::Approval(Approval { id: key, tool: name, title, detail, diff, ..Default::default() }));
     }
 
     /// Records what a `tool_call` / `tool_call_update` tells about a call, and shows its card once

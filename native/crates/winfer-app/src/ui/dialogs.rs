@@ -354,7 +354,7 @@ impl Root {
             let on = id == provider;
             let pick = id.clone();
             picker = picker.child(
-                div().id(SharedString::from(format!("new-pane-agent-{id}"))).flex().items_center().gap_1p5().h(px(30.0)).px_2p5().rounded_lg().text_size(px(12.5)).cursor_pointer()
+                div().id(SharedString::from(format!("new-pane-agent-{id}"))).flex().items_center().gap_1p5().h(px(30.0)).px_2p5().rounded_lg().border_1().text_size(px(12.5)).cursor_pointer()
                     .bg(if on { Hsla { a: 0.12, ..c.accent } } else { c.panel })
                     .text_color(if on { c.fg } else { c.muted })
                     .hover(move |d| d.text_color(c.fg))
@@ -364,13 +364,13 @@ impl Root {
                     .when(on, |d| d.child(Icon::new(IconName::Check).size(px(12.0)).text_color(c.accent))),
             );
         }
-        let key = |k: &'static str| div().rounded_sm().bg(c.panel).px_1().text_size(px(10.5)).text_color(c.muted).child(k);
+        let key = |k: &'static str| div().rounded_sm().border_1().border_color(c.edge).bg(c.panel).px_1().text_size(px(10.5)).text_color(c.muted).child(k);
         let hint = |k: &'static str, label: &'static str| div().flex().items_center().gap_1().child(key(k)).child(label);
         Some(
             div().id("new-pane-backdrop").absolute().size_full().flex().items_start().justify_center().pt(px(90.0)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close_overlay(cx)))
                 .child(
-                    div().id("new-pane").w(px(600.0)).max_h(px(660.0)).flex().flex_col().overflow_hidden().rounded(px(14.0)).bg(c.raised).shadow_2xl()
+                    div().id("new-pane").w(px(600.0)).max_h(px(660.0)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .capture_action(cx.listener(move |this, _: &MoveDown, _, cx| {
                             if let Some(d) = this.new_pane.as_mut() {
@@ -502,7 +502,7 @@ impl Root {
         Some(
             div().id("model-backdrop").absolute().size_full().flex().justify_center().pt(px(120.0)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close_overlay(cx)))
-                .child(div().id("model").w(px(480.0)).h_auto().overflow_hidden().rounded_xl().bg(c.raised).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(content))
+                .child(div().id("model").w(px(480.0)).h_auto().overflow_hidden().rounded_xl().border_1().border_color(c.edge).bg(c.raised).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(content))
                 .into_any_element(),
         )
     }
@@ -593,7 +593,7 @@ impl Root {
             div().id("diff-backdrop").absolute().size_full().flex().items_center().justify_center().p_10().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.diff_pane_id = None)))
                 .child(
-                    div().id("diff").w_full().max_w(px(1024.0)).h_full().flex().flex_col().overflow_hidden().rounded_xl().bg(c.panel)
+                    div().id("diff").w_full().max_w(px(1024.0)).h_full().flex().flex_col().overflow_hidden().rounded_xl().border_1().border_color(c.edge).bg(c.panel)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div().flex().items_center().gap_3().px_4().py_3()

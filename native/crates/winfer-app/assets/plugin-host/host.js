@@ -308,11 +308,81 @@
     unmount();
     if (!page) return;
     const root = document.getElementById("page");
+    document.getElementById("scroller").scrollTop = 0;
     mounted = { page, cleanup: null };
     try {
       mounted.cleanup = page.mount(root);
     } catch (err) {
       document.getElementById("error").textContent = `This page failed to load: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // The browser and Android panels draw outside this webview. A plugin that records one (the screen
+  // recorder) reads it from a canvas[data-winfer-capture], as in the Tauri app: these stand in for them.
+  // Reading a canvas's size asks Rust for that panel's frames for a while (a lease each read renews);
+  // without readers its frames stop and the canvas goes back to blank (300×150, "no picture yet").
+  const CAPTURE_LEASE_MS = 2000;
+  const canvasWidth = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "width");
+  const canvasHeight = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "height");
+  const captures = new Map();
+  for (const source of ["browser", "android"]) {
+    const canvas = document.createElement("canvas");
+    canvas.dataset.winferCapture = source;
+    canvas.hidden = true;
+    const capture = { canvas, until: 0, on: false, drawing: false };
+    const read = (desc) => ({
+      get() {
+        lease(source);
+        return desc.get.call(this);
+      },
+      set(v) {
+        desc.set.call(this, v);
+      },
+    });
+    Object.defineProperty(canvas, "width", read(canvasWidth));
+    Object.defineProperty(canvas, "height", read(canvasHeight));
+    captures.set(source, capture);
+    document.body.append(canvas);
+  }
+
+  function lease(source) {
+    const capture = captures.get(source);
+    capture.until = Date.now() + CAPTURE_LEASE_MS;
+    if (!capture.on) {
+      capture.on = true;
+      post({ kind: "capture", source, on: true });
+    }
+  }
+
+  setInterval(() => {
+    for (const [source, capture] of captures) {
+      if (!capture.on || Date.now() < capture.until) continue;
+      capture.on = false;
+      post({ kind: "capture", source, on: false });
+      canvasWidth.set.call(capture.canvas, 300);
+      canvasHeight.set.call(capture.canvas, 150);
+    }
+  }, 500);
+
+  async function showFrame(msg) {
+    const capture = captures.get(msg.source);
+    // A frame still decoding: this one is dropped, the next is newer anyway.
+    if (!capture?.on || capture.drawing) return;
+    capture.drawing = true;
+    try {
+      const bytes = Uint8Array.from(atob(msg.data), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: msg.mime }));
+      const { canvas } = capture;
+      if (capture.on) {
+        if (canvasWidth.get.call(canvas) !== bitmap.width) canvasWidth.set.call(canvas, bitmap.width);
+        if (canvasHeight.get.call(canvas) !== bitmap.height) canvasHeight.set.call(canvas, bitmap.height);
+        canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      }
+      bitmap.close();
+    } catch (err) {
+      console.error("panel frame failed", err);
+    } finally {
+      capture.drawing = false;
     }
   }
 
@@ -364,6 +434,8 @@
           document.documentElement.dataset.theme = msg.id;
           document.documentElement.dataset.mode = msg.mode;
           return;
+        case "frame":
+          return showFrame(msg);
         case "mount":
           return msg.key ? mount(msg.key) : unmount();
         case "command":

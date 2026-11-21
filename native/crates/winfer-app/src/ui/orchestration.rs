@@ -691,7 +691,7 @@ impl Root {
     fn dialog(&self, id: &'static str, width: f32, c: Colors, on_close: fn(&mut Self, &mut Context<Self>), cx: &mut Context<Self>) -> (Stateful<Div>, Stateful<Div>) {
         let backdrop = div().id(SharedString::from(format!("{id}-backdrop"))).absolute().size_full().flex().items_start().justify_center().pt(relative(0.1)).bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| on_close(this, cx)));
-        let panel = div().id(id).w(px(width)).max_h(relative(0.8)).flex().flex_col().gap_4().overflow_y_scroll().rounded_xl().bg(c.raised).p_5()
+        let panel = div().id(id).w(px(width)).max_h(relative(0.8)).flex().flex_col().gap_4().overflow_y_scroll().rounded_xl().border_1().border_color(c.edge).bg(c.raised).p_5()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         (backdrop, panel)
     }
@@ -713,7 +713,7 @@ impl Root {
             let on = !excluded.contains(&pane.id);
             let toggle = pane.id.clone();
             chips = chips.child(
-                div().id(SharedString::from(format!("broadcast-{}", pane.id))).rounded_md().px_2().py_1().text_xs().cursor_pointer()
+                div().id(SharedString::from(format!("broadcast-{}", pane.id))).rounded_md().border_1().px_2().py_1().text_xs().cursor_pointer()
                     .when(on, |d| d.text_color(c.fg))
                     .when(!on, |d| d.text_color(c.subtle).line_through())
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -744,7 +744,7 @@ impl Root {
         let recipes = self.recipes(cx);
         let (backdrop, panel) = self.dialog("recipes", 560.0, c, Self::dismiss_overlay, cx);
         let s = self.state.read(cx);
-        let mut list = div().flex().flex_col().rounded_lg();
+        let mut list = div().flex().flex_col().rounded_lg().border_1().border_color(c.edge);
         for (i, r) in recipes.iter().enumerate() {
             let description = r.panes.iter().map(|p| s.provider_name(&p.provider)).collect::<Vec<_>>().join(" + ") + &r.url.as_ref().map_or(String::new(), |u| format!(" · {u}")) + &format!(" · {}", r.preset);
             let (load, delete) = (r.id.clone(), r.id.clone());
@@ -795,7 +795,7 @@ impl Root {
             if ab {
                 let id = p.id.clone();
                 let on = form.ab_provider == p.id;
-                row = row.child(div().id(SharedString::from(format!("ab-{}", p.id))).rounded_md().px_2().py_1().text_xs().cursor_pointer()
+                row = row.child(div().id(SharedString::from(format!("ab-{}", p.id))).rounded_md().border_1().px_2().py_1().text_xs().cursor_pointer()
                     .when(on, |d| d.text_color(c.accent))
                     .when(!on, |d| d.text_color(c.fg).hover(move |d| d.bg(c.hover)))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -816,7 +816,7 @@ impl Root {
                         cx.notify();
                     })
                 };
-                row = row.child(div().flex().items_center().gap_1p5().rounded_md().px_2().py_1().text_xs().text_color(c.fg)
+                row = row.child(div().flex().items_center().gap_1p5().rounded_md().border_1().border_color(c.edge).px_2().py_1().text_xs().text_color(c.fg)
                     .child(p.name.clone())
                     .child(small_button(c, SharedString::from(format!("minus-{}", p.id)), "−").on_click(bump(-1)))
                     .child(div().w_3().text_center().child(form.counts.get(&p.id).copied().unwrap_or(0).to_string()))
@@ -864,7 +864,7 @@ impl Root {
             .child(div().flex_1().truncate().child(title))
             .child(results.on_click(cx.listener(move |this, _, _, cx| this.open_race_results(open.clone(), cx))))
             .child(small_button(c, SharedString::from(format!("refresh-{race}")), "Refresh").on_click(cx.listener(move |this, _, _, cx| this.load_race_numbers(reload.clone(), false, cx))));
-        let mut table = div().flex().flex_col().rounded_lg();
+        let mut table = div().flex().flex_col().rounded_lg().border_1().border_color(c.edge);
         for (i, pane) in panes.iter().enumerate() {
             let stats = match self.orchestration.changes.get(&pane.id) {
                 Some(Err(e)) => div().text_color(c.danger).child(e.clone()),
@@ -1062,7 +1062,7 @@ impl Root {
                     .when(ab, |d| d.child(div().flex_shrink_0().rounded_sm().px_1().when(p.plain, |d| d.bg(c.hover).text_color(c.muted)).when(!p.plain, |d| d.text_color(c.accent)).child(if p.plain { "plain" } else { "with tools" })))
                     .child(div().truncate().font_family(mono.clone()).text_color(c.subtle).child(models(p)))));
         }
-        let mut table = div().flex().flex_col().rounded_lg().overflow_hidden().child(head);
+        let mut table = div().flex().flex_col().rounded_lg().border_1().border_color(c.edge).overflow_hidden().child(head);
         for (name, lower_better, values, format) in &metrics {
             let known: Vec<f64> = values.iter().flatten().copied().collect();
             let best = (*lower_better && known.len() >= 2 && known.iter().any(|v| *v != known[0])).then(|| known.iter().copied().fold(f64::INFINITY, f64::min));
@@ -1100,7 +1100,7 @@ impl Root {
         let can_merge = verdict.finished && winner.as_ref().is_some_and(|p| p.worktree.is_some());
         let field_all = panes.clone();
         let merge_winner = winner.clone();
-        let banner = div().flex().items_center().gap_2().rounded_lg().bg(c.panel).px_3().py_2().text_xs()
+        let banner = div().flex().items_center().gap_2().rounded_lg().border_1().border_color(if winner.is_some() { Hsla { a: 0.4, ..c.success } } else { c.border }).bg(c.panel).px_3().py_2().text_xs()
             .child(div().flex_1().text_color(c.muted)
                 .when_some(who, |d, who| d.child(div().text_color(c.fg).child(format!("{}: {who}", if verdict.finished { "Winner" } else { "Leading" }))))
                 .child(format!("{}{}", verdict.reason, if winner.is_some() && !verdict.finished { " Not every agent has finished yet." } else { "" })))
@@ -1128,7 +1128,7 @@ impl Root {
             .child(div().truncate().text_xs().text_color(c.muted).child(panes[0].prompt.clone().unwrap_or_else(|| if ab { "A/B test".into() } else { "Race".into() })))
             .child(table)
             .child(banner)
-            .when(!summary.is_empty(), |d| d.child(div().flex().flex_col().gap_0p5().rounded_lg().bg(c.panel).px_3().py_2().text_xs().text_color(c.muted).children(summary.into_iter().map(|l| format!("• {l}")))))
+            .when(!summary.is_empty(), |d| d.child(div().flex().flex_col().gap_0p5().rounded_lg().border_1().border_color(c.edge).bg(c.panel).px_3().py_2().text_xs().text_color(c.muted).children(summary.into_iter().map(|l| format!("• {l}")))))
             .when(!errors.is_empty(), |d| d.child(div().text_size(px(11.0)).text_color(c.danger).child(errors.join(" · "))))
             .child(div().text_size(px(11.0)).text_color(c.subtle).child(note))
     }

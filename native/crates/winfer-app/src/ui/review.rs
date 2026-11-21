@@ -641,7 +641,7 @@ impl Root {
                         this.review.selected = Some(pick.clone());
                         cx.notify();
                     }))
-                    .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, if on { c.active } else { c.panel }, c))
+                    .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, c))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
                         .child(div().flex().items_center().gap_1p5()
                             .child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title))
@@ -705,7 +705,7 @@ impl Root {
             div().id("review-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.overlay = Overlay::None)))
                 .child(
-                    div().id("review").w(px(1040.0)).max_w(relative(0.94)).h(px(700.0)).max_h(relative(0.9)).flex().flex_col().overflow_hidden().rounded(px(14.0)).bg(c.raised).shadow_2xl()
+                    div().id("review").w(px(1040.0)).max_w(relative(0.94)).h(px(700.0)).max_h(relative(0.9)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div().flex().items_center().gap_3().px_5().py_3()
@@ -715,7 +715,7 @@ impl Root {
                                 .child(
                                     div().id("queue-tests").flex().items_center().gap_1p5().text_xs().text_color(c.muted).cursor_pointer()
                                         .on_click(cx.listener(|this, _, _, cx| { this.review.queue_tests = !this.review.queue_tests; cx.notify(); }))
-                                        .child(div().size(px(14.0)).flex().items_center().justify_center().rounded_sm()
+                                        .child(div().size(px(14.0)).flex().items_center().justify_center().rounded_sm().border_1()
                                             .when(tests_first, |d| d.bg(c.accent))
                                             .when(tests_first, |d| d.child(Icon::new(IconName::Check).size(px(10.0)).text_color(c.on_accent))))
                                         .child("Run tests first"),
@@ -768,7 +768,7 @@ impl Root {
         let pane = s.pane(&r.pane_id).cloned();
         let elapsed = r.finished_at.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
         let mut header = div().flex().items_center().gap_2().text_xs().pb_3()
-            .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, c.raised, c))
+            .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, c))
             .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(agent))
             .when_some(r.branch.clone(), |d, b| d.child(div().font_family(mono.clone()).text_color(c.subtle).truncate().child(b)))
             .child(div().flex_1())
@@ -813,9 +813,9 @@ impl Root {
                 .when_some(info, |d, t| d.child(div().flex().items_center().gap_1p5().rounded_md().bg(Hsla { a: 0.08, ..c.warning }).px_2p5().py_1p5().text_xs().text_color(c.warning)
                     .child(Icon::new(IconName::TriangleAlert).size(px(12.0))).child(t))))
             .when_some(screenshot, |d, image| d.child(div().flex().flex_col().gap_1p5().child(section("Running app"))
-                .child(img(ImageSource::Render(image)).w_full().max_w(px(520.0)).h(px(240.0)).object_fit(ObjectFit::Cover).rounded_lg())))
+                .child(img(ImageSource::Render(image)).w_full().max_w(px(520.0)).h(px(240.0)).object_fit(ObjectFit::Cover).rounded_lg().border_1().border_color(c.edge))))
             .when_some(reply, |d, input| d.child(
-                div().flex().items_center().gap_1().rounded_md().bg(c.panel).px_2()
+                div().flex().items_center().gap_1().rounded_md().border_1().border_color(c.edge).bg(c.panel).px_2()
                     .child(div().flex_1().when(!can_reply, |d| d.opacity(0.5)).child(Input::new(&input).appearance(false)))
                     .child(
                         div().id(SharedString::from(format!("send-back-{}", r.id))).rounded_sm().p_1().cursor_pointer().text_color(c.subtle).hover(move |d| d.text_color(c.fg))
@@ -937,7 +937,7 @@ impl Root {
                     });
                     list = list.child(
                         div().id(SharedString::from(format!("history-{id}"))).flex().flex_col().rounded_lg().px_3().py_2p5().cursor_pointer()
-                            .when(open, |d| d.bg(c.panel)).when(!open, |d| d.hover(move |d| d.bg(c.hover)))
+                            .when(open, |d| d.bg(c.panel).border_1().border_color(c.edge)).when(!open, |d| d.hover(move |d| d.bg(c.hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(ui) = this.history.as_mut() {
                                     ui.expanded = if ui.expanded.as_ref() == Some(&toggle) { None } else { Some(toggle.clone()) };
@@ -960,7 +960,7 @@ impl Root {
             }
         }
         let stat = |label: &'static str, value: String, color: Hsla| {
-            div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().bg(c.panel)
+            div().flex_1().flex().flex_col().gap_0p5().p_2p5().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
                 .child(div().text_size(px(17.0)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(value))
                 .child(div().text_size(px(11.0)).text_color(c.subtle).child(label))
         };
@@ -979,13 +979,13 @@ impl Root {
             div().id("history-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.update_state(cx, |s| s.overlay = Overlay::None)))
                 .child(
-                    div().id("history").w(px(820.0)).max_w(relative(0.94)).h(px(640.0)).max_h(relative(0.9)).flex().flex_col().overflow_hidden().rounded(px(14.0)).bg(c.raised).shadow_2xl()
+                    div().id("history").w(px(820.0)).max_w(relative(0.94)).h(px(640.0)).max_h(relative(0.9)).flex().flex_col().overflow_hidden().rounded(px(14.0)).border_1().border_color(c.edge).bg(c.raised).shadow_2xl()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(div().flex().flex_col().gap_3().px_5().pt_4().pb_3()
                             .child(div().flex().items_center().gap_2()
                                 .child(Icon::new(IconName::Clock).size(px(15.0)).text_color(c.accent))
                                 .child(div().flex_1().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("History"))
-                                .child(div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).bg(c.app)
+                                .child(div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.edge).bg(c.app)
                                     .child(scope("history-this", "This workspace", this_workspace, true, cx))
                                     .child(scope("history-all", "All workspaces", !this_workspace, false, cx))))
                             .child(div().flex().gap_2()
@@ -993,7 +993,7 @@ impl Root {
                                 .child(stat("files changed", totals.1.to_string(), c.fg))
                                 .child(stat("lines added", format!("+{}", totals.2), c.success))
                                 .child(stat("lines removed", format!("−{}", totals.3), c.danger)))
-                            .child(div().flex().items_center().gap_2().h(px(34.0)).px_2p5().rounded_md().bg(c.app)
+                            .child(div().flex().items_center().gap_2().h(px(34.0)).px_2p5().rounded_md().border_1().border_color(c.edge).bg(c.app)
                                 .child(Icon::new(IconName::Search).size(px(13.0)).text_color(c.subtle))
                                 .child(div().flex_1().child(Input::new(&input).appearance(false)))))
                         .child(div().id("history-list").flex_1().min_h_0().overflow_y_scroll().p_2().child(list)),
@@ -1027,7 +1027,7 @@ fn conflict_note(report: Option<&Value>, dir: &str) -> Option<(bool, String)> {
 }
 
 pub(super) fn small_button(c: Colors, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    div().id(id).rounded_md().px_2().py_0p5().text_xs().text_color(c.muted).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).child(label.into())
+    div().id(id).rounded_md().border_1().border_color(c.edge).px_2().py_0p5().text_xs().text_color(c.muted).cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).child(label.into())
 }
 
 async fn run_tests_for(dir: String) -> Result<Option<TestRun>, String> {

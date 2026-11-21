@@ -22,6 +22,14 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "Use your tools (MCP, browser, skills, s
 /// MCP tools agents rarely use, off by default (each one costs context in every request).
 pub const OPTIONAL_TOOLS: [&str; 6] = ["browser_drag", "browser_drop", "browser_emulate_media", "browser_navigate_back", "kb_explain", "kb_save"];
 
+/// The plugin that provides an optional tool; such tools are shown only while it's installed and enabled.
+pub fn optional_tool_plugin(name: &str) -> Option<&'static str> {
+    match name {
+        "kb_explain" | "kb_save" => Some("knowledge-base"),
+        _ => None,
+    }
+}
+
 /// An agent and whether its CLI is installed.
 #[derive(Clone, Debug)]
 pub struct AgentProvider {
@@ -108,6 +116,9 @@ pub struct Pane {
     pub dev_url: Option<String>,
     #[serde(skip)]
     pub prompt: Option<String>,
+    /// Images pasted on the welcome screen; a winfer code pane sends them with `prompt` as its first message.
+    #[serde(skip)]
+    pub attachments: Vec<crate::code::state::Attachment>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -352,6 +363,7 @@ pub struct AddPane {
     pub split_from: Option<String>,
     pub worktree: Option<bool>,
     pub prompt: Option<String>,
+    pub attachments: Vec<crate::code::state::Attachment>,
     pub race_id: Option<String>,
     pub plain: bool,
     pub custom_title: Option<String>,
@@ -652,6 +664,7 @@ impl AppState {
                 race_id: opts.race_id,
                 plain: opts.plain,
                 prompt: opts.prompt,
+                attachments: opts.attachments,
                 model,
                 effort: opts.effort,
                 ..Default::default()

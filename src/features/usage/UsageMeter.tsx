@@ -162,7 +162,7 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
   const now = Date.now();
   const left = leftNow(w, now);
   const live = w.resetsAt !== null && w.resetsAt > now;
-  const span = SPAN[w.kind];
+  const span = SPAN[w.kind] ?? SPAN[w.kind.split("-")[0]];
   // Readings as [at, % left], ending at the current value now.
   const points: [number, number][] = live ? (samples ?? []).filter(([t]) => t <= now).map(([t, used]) => [t, 100 - used]) : [];
   const windowStart = live && span ? w.resetsAt! - span : null;

@@ -128,8 +128,16 @@ impl RenderOnce for EffortPicker {
     }
 }
 
+/// Antigravity's multicolour arch, drawn as an image since `svg()` only tints in one colour.
+static AGY_MARK: std::sync::LazyLock<std::sync::Arc<Image>> = std::sync::LazyLock::new(|| {
+    std::sync::Arc::new(Image::from_bytes(ImageFormat::Svg, include_bytes!("../../assets/providers/agy-color.svg").to_vec()))
+});
+
 /// A provider's brand mark in its colour.
 pub(super) fn mark(c: Colors, backend: &str, size: f32, opacity: f32) -> AnyElement {
+    if backend == "agy" {
+        return img(AGY_MARK.clone()).size(px(size)).flex_shrink_0().opacity(opacity).into_any_element();
+    }
     let (file, color) = match backend {
         "claude" => ("claude", c.claude),
         "chatgpt" => ("openai", c.fg),
@@ -278,7 +286,7 @@ impl CodeView {
 
     /// Wraps a popover so it opens upward from the button it is a child of.
     fn popover(&mut self, sheet: Sheet, c: Colors, panel: Div, cx: &mut Context<Self>) -> AnyElement {
-        let panel = panel.id("cw-popover").occlude().rounded_xl().bg(c.raised).shadow_lg().overflow_hidden()
+        let panel = panel.id("cw-popover").occlude().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_lg().overflow_hidden()
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
                 this.picker.out_close = Some((sheet, Instant::now()));
                 this.set_sheet(None, cx);

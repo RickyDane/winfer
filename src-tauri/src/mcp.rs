@@ -120,6 +120,7 @@ fn tools() -> Value {
                 "tools": { "type": "boolean", "description": "Include tool calls (default true)" }
             }, "required": ["id"] }
         },
+        crate::viz::tool(),
         crate::harness::bg::mcp_tool(code_bg().is_some())
     ])
 }
@@ -240,6 +241,13 @@ pub fn dispatch(app: &AppHandle, mut call: Call) -> Reply {
     }
     if let Some(reply) = chat_call(&call) {
         return reply;
+    }
+    if call.tool == "visualize" {
+        // Drawn by the chat from this very call's input; all that's left here is checking it.
+        return match crate::viz::Report::parse(&call.args) {
+            Ok(report) => Reply { ok: true, text: report.summary() },
+            Err(text) => Reply { ok: false, text: format!("Not shown: {text}") },
+        };
     }
     call.id = format!("{:016x}", rand::random::<u64>());
     let (tx, rx) = mpsc::channel();
@@ -848,6 +856,7 @@ mod tests {
                 "wait_for_usage_reset",
                 "list_chats",
                 "read_chat",
+                "visualize",
                 "bg"
             ]
         );

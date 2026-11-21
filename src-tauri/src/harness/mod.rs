@@ -409,7 +409,7 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::ToolOutput { id, chunk } => json!({ "type": "tool_output", "id": id, "chunk": chunk }),
         Ev::ToolEnd { id, ok, output, diff } => json!({ "type": "tool_end", "id": id, "ok": ok, "output": output, "diff": diff }),
         Ev::Approval(a) => json!({
-            "type": "approval", "id": a.id, "tool": a.tool, "title": a.title, "detail": a.detail, "diff": a.diff,
+            "type": "approval", "id": a.id, "tool": a.tool, "title": a.title, "detail": a.detail, "diff": a.diff, "plan_file": a.plan_file,
             "questions": a.questions.iter().map(|q| json!({
                 "header": q.header, "question": q.question, "multi": q.multi,
                 "options": q.options.iter().map(|(label, description)| json!({ "label": label, "description": description })).collect::<Vec<_>>(),
