@@ -244,11 +244,13 @@ impl Target {
         }
     }
 
-    fn next(self) -> Self {
+    const ALL: [Self; 3] = [Self::All, Self::Working, Self::Waiting];
+
+    fn color(self, c: &Colors) -> Hsla {
         match self {
-            Self::All => Self::Working,
-            Self::Working => Self::Waiting,
-            Self::Waiting => Self::All,
+            Self::All => c.accent,
+            Self::Working => c.success,
+            Self::Waiting => c.warning,
         }
     }
 
@@ -280,6 +282,8 @@ pub(super) struct Orchestration {
     recipe_name: Option<Entity<InputState>>,
     bar_input: Option<Entity<InputState>>,
     bar_target: Target,
+    /// Enter types the message into the agents without submitting it.
+    bar_type_only: bool,
     /// The race shown in the results dialog.
     results: Option<String>,
     changes: HashMap<String, Result<Changes, String>>,
@@ -502,7 +506,7 @@ impl Root {
         if self.orchestration.bar_input.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx));
             cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { .. } => this.bar_send(true, window, cx),
+                InputEvent::PressEnter { .. } => this.bar_send(!this.orchestration.bar_type_only, window, cx),
                 _ => cx.notify(),
             })
             .detach();
@@ -637,7 +641,8 @@ impl Root {
         input.update(cx, |i, cx| i.set_value("", window, cx));
     }
 
-    /// Messages, approves or interrupts a group of agents at once.
+    /// Messages, approves or interrupts a group of agents at once: one command field with the
+    /// target picker leading it and send inside, then Approve and Interrupt as icon buttons.
     pub(super) fn render_agent_bar(&mut self, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let view = self.state.read(cx).view();
         let overview = view == View::Overview;
@@ -647,45 +652,99 @@ impl Root {
         }
         let c = *c;
         let input = self.orchestration.bar_input.clone()?;
-        let target = self.orchestration.bar_target;
+        let (target, type_only) = (self.orchestration.bar_target, self.orchestration.bar_type_only);
         let agents = self.bar_agents(cx);
-        let waiting = panes.iter().filter(|p| p.status == AgentStatus::NeedsInput).count();
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
         let s = self.state.read(cx);
         let workspaces: HashSet<&String> = panes.iter().map(|p| &p.workspace_id).collect();
-        let scope = if overview { format!(" in {} workspace{}", workspaces.len(), if workspaces.len() == 1 { "" } else { "s" }) } else { String::new() };
-        let count = panes.iter().filter(|p| p.provider != "shell" && target.includes(p.status)).count();
-        let summary = format!("{} session{}{scope}", panes.len(), if panes.len() == 1 { "" } else { "s" });
-        let placeholder: SharedString = format!("Message {} agent{} {} (Enter sends)", agents.len(), if agents.len() == 1 { "" } else { "s" }, if overview { "across workspaces".to_string() } else { format!("in {}", s.active().map_or("", |w| w.name.as_str())) }).into();
+        let scope = if overview { format!(" in {} workspace{}", workspaces.len(), plural(workspaces.len())) } else { String::new() };
+        let summary = format!("{} session{}{scope}", panes.len(), plural(panes.len()));
+        let place = if overview { "across workspaces".to_string() } else { format!("in {}", s.active().map_or("", |w| w.name.as_str())) };
+        let placeholder: SharedString = match agents.len() {
+            0 => format!("No {} agents {place}", target.label().to_lowercase()),
+            n => format!("Message {n} agent{} {place}", plural(n)),
+        }
+        .into();
         input.update(cx, |i, cx| i.set_placeholder(placeholder.clone(), window, cx));
         let has_text = !input.read(cx).value().trim().is_empty();
-        let enabled = !agents.is_empty();
-        let targets: Vec<String> = agents.iter().map(|p| p.id.clone()).collect();
-        let approve = targets.clone();
-        Some(
-            div().flex().flex_shrink_0().flex_wrap().items_center().gap_2().pb_2().text_xs()
-                .child(div().flex().flex_shrink_0().items_center().gap_1p5().text_color(c.muted)
-                    .child(Icon::new(IconName::LayoutDashboard).size(px(13.0)).text_color(c.accent))
-                    .child(summary)
-                    .when(waiting > 0, |d| d.child(div().text_color(c.warning).child(format!("· {waiting} waiting")))))
-                .child(small_button(c, "bar-target", format!("{} ({count})", target.label())).on_click(cx.listener(|this, _, _, cx| {
-                    this.orchestration.bar_target = this.orchestration.bar_target.next();
-                    cx.notify();
-                })))
-                .child(div().flex_1().min_w(px(224.0)).flex().items_center().gap_1()
-                    .child(div().flex_1().child(Input::new(&input).small()))
-                    .child(small_button(c, "bar-type", "Type only").when(!has_text, |d| d.opacity(0.4)).on_click(cx.listener(|this, _, window, cx| this.bar_send(false, window, cx)))))
-                .child(small_button(c, "bar-approve", "Approve").when(!enabled, |d| d.opacity(0.4)).on_click(cx.listener(move |this, _, window, cx| {
-                    for id in &approve {
-                        this.execute(Command::Approve(PaneRef::Id(id.clone())), window, cx);
-                    }
-                })))
-                .child(small_button(c, "bar-interrupt", "Interrupt").when(!enabled, |d| d.opacity(0.4)).on_click(cx.listener(move |this, _, window, cx| {
-                    for id in &targets {
-                        this.execute(Command::Interrupt(PaneRef::Id(id.clone())), window, cx);
-                    }
-                })))
-                .into_any_element(),
-        )
+        let focused = input.read(cx).focus_handle(cx).is_focused(window);
+        let counts: Vec<(Target, usize)> = Target::ALL.iter().map(|t| (*t, panes.iter().filter(|p| p.provider != "shell" && t.includes(p.status)).count())).collect();
+        let count = agents.len();
+        let can_send = has_text && count > 0;
+        let interrupt: Vec<String> = agents.iter().map(|p| p.id.clone()).collect();
+        // Approve only presses the approve key in agents that are asking: elsewhere it would type into a prompt.
+        let approve: Vec<String> = agents.iter().filter(|p| p.status == AgentStatus::NeedsInput).map(|p| p.id.clone()).collect();
+        let (n_approve, n_interrupt) = (approve.len(), interrupt.len());
+
+        let picker = div().id("bar-target").flex_shrink_0().h_full().flex().items_center().gap_1p5().pl_2p5().pr_2().rounded_l_lg().cursor_pointer()
+            .text_color(c.fg).hover(move |d| d.bg(c.hover))
+            .tooltip(crate::ui::code_view::tip(format!("{summary} · choose who gets the message")))
+            .child(div().size(px(7.0)).rounded_full().bg(target.color(&c)))
+            .child(target.label())
+            .child(div().min_w(px(18.0)).h(px(16.0)).px_1().flex().items_center().justify_center().rounded_md().bg(c.hover).text_size(px(10.5)).text_color(c.muted).child(count.to_string()))
+            .child(Icon::new(IconName::ChevronDown).size(px(12.0)).text_color(c.subtle))
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                let items = counts.iter().map(|&(t, n)| {
+                    let hint = if t == target { format!("✓  {n}") } else { n.to_string() };
+                    super::menu::MenuItem::run(t.label(), move |this, _, cx| {
+                        this.orchestration.bar_target = t;
+                        cx.notify();
+                    })
+                    .hint(Some(hint))
+                }).collect();
+                this.open_menu(e.position(), Some(format!("Send to · {summary}")), items, cx);
+            }));
+
+        let mode = div().id("bar-mode").flex_shrink_0().h(px(24.0)).px_1p5().flex().items_center().gap_1().rounded_md().cursor_pointer().text_size(px(11.0))
+            .when(type_only, |d| d.bg(Hsla { a: 0.14, ..c.accent }).text_color(c.accent))
+            .when(!type_only, move |d| d.text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+            .tooltip(crate::ui::code_view::tip(if type_only { "Enter types without submitting · click to submit too" } else { "Enter sends and submits · click to only type it in" }))
+            .child(Icon::new(if type_only { IconName::TextCursorInput } else { IconName::CornerDownLeft }).size(px(13.0)))
+            .when(type_only, |d| d.child("Type only"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.orchestration.bar_type_only = !this.orchestration.bar_type_only;
+                cx.notify();
+            }));
+
+        let send = div().id("bar-send").flex_shrink_0().size(px(24.0)).flex().items_center().justify_center().rounded_md()
+            .when(can_send, |d| d.bg(c.accent).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9)))
+            .when(!can_send, |d| d.bg(c.hover).text_color(c.subtle))
+            .tooltip(crate::ui::code_view::tip(if type_only { format!("Type into {count} agent{}", plural(count)) } else { format!("Send to {count} agent{}", plural(count)) }))
+            .child(Icon::new(if type_only { IconName::TextCursorInput } else { IconName::ArrowUp }).size(px(14.0)))
+            .on_click(cx.listener(|this, _, window, cx| this.bar_send(!this.orchestration.bar_type_only, window, cx)));
+
+        let field = div().id("agent-bar").flex_1().min_w(px(280.0)).h(px(32.0)).flex().items_center().gap_1().pr_1().rounded_lg().border_1().bg(c.panel)
+            .border_color(if focused { c.accent } else { c.edge })
+            .child(picker)
+            .child(div().flex_shrink_0().w(px(1.0)).h(px(16.0)).bg(c.border))
+            .child(div().flex_1().min_w_0().pl_1().child(Input::new(&input).appearance(false).small()))
+            .child(mode)
+            .child(send);
+
+        let action = |id: &'static str, icon: IconName, tip: String, enabled: bool, tint: Hsla| {
+            div().id(id).flex_shrink_0().size(px(32.0)).flex().items_center().justify_center().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
+                .tooltip(crate::ui::code_view::tip(tip))
+                .when(enabled, move |d| d.cursor_pointer().text_color(c.muted).hover(move |d| d.bg(Hsla { a: 0.1, ..tint }).border_color(tint).text_color(tint)))
+                .when(!enabled, |d| d.opacity(0.4).text_color(c.subtle))
+                .child(Icon::new(icon).size(px(15.0)))
+        };
+        let approve_btn = action("bar-approve", IconName::Check, match n_approve { 0 => "Nothing to approve: no agent is waiting".into(), n => format!("Approve {n} waiting agent{}", plural(n)) }, n_approve > 0, c.success)
+            .relative()
+            .when(n_approve > 0, |d| d.border_color(c.warning).text_color(c.warning)
+                .child(div().absolute().top(px(-5.0)).right(px(-5.0)).min_w(px(15.0)).h(px(15.0)).px_1().flex().items_center().justify_center().rounded_full().bg(c.warning).text_size(px(9.5)).font_weight(FontWeight::BOLD).text_color(c.app).child(n_approve.to_string())))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                for id in &approve {
+                    this.execute(Command::Approve(PaneRef::Id(id.clone())), window, cx);
+                }
+            }));
+        let interrupt_btn = action("bar-interrupt", IconName::Square, match n_interrupt { 0 => "No agents to interrupt".into(), n => format!("Interrupt {n} agent{}", plural(n)) }, n_interrupt > 0, c.danger)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                for id in &interrupt {
+                    this.execute(Command::Interrupt(PaneRef::Id(id.clone())), window, cx);
+                }
+            }));
+
+        Some(div().flex().flex_shrink_0().items_center().gap_1p5().pb_2().text_xs().child(field).child(approve_btn).child(interrupt_btn).into_any_element())
     }
 
     fn dialog(&self, id: &'static str, width: f32, c: Colors, on_close: fn(&mut Self, &mut Context<Self>), cx: &mut Context<Self>) -> (Stateful<Div>, Stateful<Div>) {

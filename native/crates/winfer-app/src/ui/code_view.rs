@@ -13,8 +13,10 @@ use crate::model::AppState;
 use crate::theme::{self, Colors};
 use base64::Engine;
 use gpui_kit::assets::IconName;
+use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::{Icon, Sizable, Size as KitSize};
 use gpui_kit::component::input::{Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, MoveDown, MoveUp, OutdentInline, Position, Textarea, TextareaState};
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
@@ -40,12 +42,15 @@ pub(super) struct Env {
     pub expand_thinking: bool,
     pub expand_shell: bool,
     pub images: Rc<RefCell<HashMap<String, Vec<Arc<Image>>>>>,
+    pub wg_scrolls: Rc<RefCell<HashMap<String, ScrollHandle>>>,
     pub now: u64,
     pub cwd: Option<String>,
     /// When each row first appeared (ms), to play its entrance once.
     pub born: Rc<HashMap<String, u64>>,
     /// Width of a transcript row's content, in px.
     pub width: f32,
+    /// Height of the code pane, in px.
+    pub height: f32,
 }
 
 impl Env {
@@ -81,6 +86,7 @@ pub struct CodeView {
     /// Ctrl/⌘ + wheel distance not yet turned into a text size step.
     zoom_accum: Pixels,
     images: Rc<RefCell<HashMap<String, Vec<Arc<Image>>>>>,
+    wg_scrolls: Rc<RefCell<HashMap<String, ScrollHandle>>>,
     popup: usize,
     popup_scroll: ScrollHandle,
     popup_closed_at: Option<usize>,
@@ -391,7 +397,13 @@ fn describe_step_raw(step: Option<&Item>) -> String {
     }
 }
 
-fn row_signature(row: &DisplayRow, items: &[Item], env_flipped: &HashSet<String>, env_toggled: &HashMap<String, (u64, bool)>, now: u64) -> u64 {
+/// Maximum height of an expanded compacted work group: 40% of the pane height.
+fn work_group_max_h(pane_h: f32) -> f32 {
+    let h = if pane_h <= 1.0 { 600.0 } else { pane_h };
+    (h * 0.4).max(80.0).round()
+}
+
+fn row_signature(row: &DisplayRow, items: &[Item], env_flipped: &HashSet<String>, env_toggled: &HashMap<String, (u64, bool)>, now: u64, wg_max_h: u32) -> u64 {
     match row {
         DisplayRow::Item(ix) => items.get(*ix).map_or(0, |i| signature(i, env_flipped, env_toggled, now)),
         DisplayRow::Working => u64::MAX,
@@ -411,6 +423,7 @@ fn row_signature(row: &DisplayRow, items: &[Item], env_flipped: &HashSet<String>
             open.hash(&mut h);
             env_toggled.get(key).hash(&mut h);
             if open || env_toggled.contains_key(key) {
+                wg_max_h.hash(&mut h);
                 for it in items.get(*start..=*end).unwrap_or(&[]) {
                     signature(it, env_flipped, env_toggled, now).hash(&mut h);
                 }
@@ -554,7 +567,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None, composer_rows: 3 }
+        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None, composer_rows: 3 }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -801,6 +814,11 @@ impl CodeView {
             self.flipped.insert(key.to_string());
         }
         let opening = !was_open;
+        if opening {
+            if let Some(handle) = self.wg_scrolls.borrow().get(key) {
+                handle.set_offset(point(px(0.0), px(0.0)));
+            }
+        }
         // At the bottom the bottom-aligned list has no anchor and lays out from the end, so a growing
         // card would push everything above it up. Pin the current top so it pushes content below it down.
         if self.list.logical_scroll_top().item_ix >= self.list.item_count() {
@@ -958,7 +976,8 @@ impl CodeView {
     /// Splices what changed since the last frame into the list state.
     fn sync_list(&mut self, items: &[Item], busy: bool, compact_tools: bool, now: u64) {
         let rows = build_display_rows(items, busy, compact_tools);
-        let sigs: Vec<u64> = rows.iter().map(|r| row_signature(r, items, &self.flipped, &self.toggled, now)).collect();
+        let wg_max_h = work_group_max_h(self.pane_size.height / px(1.0)) as u32;
+        let sigs: Vec<u64> = rows.iter().map(|r| row_signature(r, items, &self.flipped, &self.toggled, now, wg_max_h)).collect();
         let first = sigs.iter().zip(&self.sigs).position(|(a, b)| a != b).unwrap_or(sigs.len().min(self.sigs.len()));
         if first < self.sigs.len() || sigs.len() != self.sigs.len() {
             // Only re-measure the rows that changed, so rows after a toggled card keep their heights.
@@ -1416,7 +1435,8 @@ fn tool_row(env: &Env, key: &str, name: &str, title: &str, input: &serde_json::V
     };
     let counts = diff.map(diff_counts).filter(|(a, d)| a + d > 0);
     let (view, k) = (env.view.clone(), key.to_string());
-    let head = div().id(SharedString::from(format!("t-{key}"))).w_full().flex().items_center().gap_2().h(px(34.0)).px_2p5().rounded_t_xl().when(!show_body, |d| d.rounded_b_xl()).cursor_pointer().hover(move |d| d.bg(alpha(c.hover, 0.6)))
+    let dbg_k = key.to_string();
+    let head = div().id(SharedString::from(format!("t-{key}"))).debug_selector(move || format!("t-{dbg_k}")).w_full().flex().items_center().gap_2().h(px(34.0)).px_2p5().rounded_t_xl().when(!show_body, |d| d.rounded_b_xl()).cursor_pointer().hover(move |d| d.bg(alpha(c.hover, 0.6)))
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
         })
@@ -1533,6 +1553,149 @@ fn working_row(env: &Env) -> AnyElement {
         .into_any_element()
 }
 
+/// Height of the soft edge fade on an expanded compacted work group, in px.
+const WORK_GROUP_FADE_H: f32 = 64.0;
+/// Scroll distance (px) over which an edge fade ramps from invisible to full strength.
+const WORK_GROUP_FADE_RAMP: f32 = 32.0;
+
+/// Returns `(top_strength, bottom_strength)` in `0.0..=1.0` for a vertical scroll container.
+/// `offset_y` is `<= 0.0` (`0` at the top, `-max_offset_y` at the bottom) and `max_offset_y >= 0.0`.
+fn scroll_edge_fade_strengths(offset_y: f32, max_offset_y: f32) -> (f32, f32) {
+    if max_offset_y <= 0.5 {
+        return (0.0, 0.0);
+    }
+    let scrolled_top = (-offset_y).clamp(0.0, max_offset_y);
+    let remaining_bottom = (max_offset_y - scrolled_top).max(0.0);
+    (
+        (scrolled_top / WORK_GROUP_FADE_RAMP).clamp(0.0, 1.0),
+        (remaining_bottom / WORK_GROUP_FADE_RAMP).clamp(0.0, 1.0),
+    )
+}
+
+fn paint_scroll_edge_fades(bounds: Bounds<Pixels>, handle: &ScrollHandle, color: Hsla, window: &mut Window) {
+    let h = bounds.size.height / px(1.0);
+    if h <= 4.0 {
+        return;
+    }
+    let (top_s, bot_s) = scroll_edge_fade_strengths(handle.offset().y / px(1.0), handle.max_offset().y / px(1.0));
+    let fade_h = WORK_GROUP_FADE_H.min(h * 0.42).round();
+    if fade_h <= 1.0 {
+        return;
+    }
+    // 4-band eased falloff (outer clipped edge -> inner clear edge) for a tall, soft feathered dissolve.
+    let ys = [0.0, (fade_h * 0.22).round(), (fade_h * 0.48).round(), (fade_h * 0.76).round(), fade_h];
+    const ALPHAS: [f32; 5] = [1.0, 0.80, 0.48, 0.16, 0.0];
+
+    if top_s > 0.001 {
+        let top_y = bounds.origin.y / px(1.0);
+        for i in 0..4 {
+            let (y0, y1) = (top_y + ys[i], top_y + ys[i + 1]);
+            if y1 <= y0 {
+                continue;
+            }
+            let band = Bounds::new(point(bounds.origin.x, px(y0)), size(bounds.size.width, px(y1 - y0)));
+            window.paint_quad(fill(
+                band,
+                linear_gradient(
+                    180.0,
+                    linear_color_stop(alpha(color, ALPHAS[i] * top_s), 0.0),
+                    linear_color_stop(alpha(color, ALPHAS[i + 1] * top_s), 1.0),
+                ),
+            ));
+        }
+    }
+
+    if bot_s > 0.001 {
+        let bot_y = (bounds.origin.y + bounds.size.height) / px(1.0);
+        for i in 0..4 {
+            let (y0, y1) = (bot_y - ys[i + 1], bot_y - ys[i]);
+            if y1 <= y0 {
+                continue;
+            }
+            let band = Bounds::new(point(bounds.origin.x, px(y0)), size(bounds.size.width, px(y1 - y0)));
+            window.paint_quad(fill(
+                band,
+                linear_gradient(
+                    180.0,
+                    linear_color_stop(alpha(color, ALPHAS[i + 1] * bot_s), 0.0),
+                    linear_color_stop(alpha(color, ALPHAS[i] * bot_s), 1.0),
+                ),
+            ));
+        }
+    }
+}
+
+/// Vertically scrollable body for an expanded compacted work group: caps at `max_h`,
+/// shows a vertical scrollbar, and paints soft scroll-reactive top/bottom edge fades.
+#[derive(IntoElement)]
+struct WorkGroupScroll {
+    id: ElementId,
+    max_h: Pixels,
+    fade_color: Hsla,
+    handle: ScrollHandle,
+    children: Vec<AnyElement>,
+}
+
+impl RenderOnce for WorkGroupScroll {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let root_id = self.id;
+        let handle = self.handle;
+        let fade_handle = handle.clone();
+        let fade_color = self.fade_color;
+
+        let content = div()
+            .id((root_id.clone(), "content"))
+            .flex_none()
+            .w_full()
+            .h_auto()
+            .min_h_full()
+            .flex()
+            .flex_col()
+            .pr_2()
+            .children(self.children);
+
+        let scroll_area = div()
+            .id((root_id.clone(), "area"))
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .lock_scroll_axis()
+            .track_scroll(&handle)
+            .child(content);
+
+        let fade_overlay = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                paint_scroll_edge_fades(bounds, &fade_handle, fade_color, window);
+            },
+        )
+        .absolute()
+        .inset_0();
+
+        div()
+            .id(root_id.clone())
+            .size_full()
+            .max_h(self.max_h)
+            .overflow_hidden()
+            .relative()
+            .flex()
+            .flex_col()
+            .child(gpui_kit::base::ScrollBounce::new((root_id.clone(), "bounce"), &handle, scroll_area))
+            .child(fade_overlay)
+            .when(!window.is_inspector_picking(cx), |d| {
+                d.child(
+                    div().absolute().inset_0().child(
+                        Scrollbar::new(&handle)
+                            .id((root_id, "scrollbar"))
+                            .axis(ScrollbarAxis::Vertical)
+                            .viewport_from_layout(),
+                    ),
+                )
+            })
+    }
+}
+
 fn work_group_row(env: &Env, items: &[Item], key: &str, start: usize, end: usize, active: bool) -> AnyElement {
     let c = env.c;
     let open = env.open(key, false);
@@ -1594,7 +1757,9 @@ fn work_group_row(env: &Env, items: &[Item], key: &str, start: usize, end: usize
                     .on_click(move |_, _, cx| {
                         let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
                     })
-                    .child(div().flex_shrink_0().flex().items_center().justify_center().opacity(0.6).group_hover(group, |d| d.opacity(1.0)).child(spinner(c.fg, 12.0, SharedString::from(format!("wg-sp-{key}")))))
+                    // Nudged up 1px: the label's glyphs sit above its line box's centre, so a
+                    // box-centred spinner reads low next to them.
+                    .child(div().flex_shrink_0().flex().items_center().justify_center().relative().top(px(-1.0)).opacity(0.6).group_hover(group, |d| d.opacity(1.0)).child(spinner(c.fg, 12.0, SharedString::from(format!("wg-sp-{key}")))))
                     .child(label)
                     .child(chev),
             )
@@ -1637,12 +1802,25 @@ fn work_group_row(env: &Env, items: &[Item], key: &str, start: usize, end: usize
     let pad = if env.compact { 1.5 } else { 3.0 };
     let mut wrap = div().w_full().flex().flex_col().py(px(pad)).child(head);
     if show_body {
-        let body = div().w_full().flex().flex_col().pt_1().children((start..=end).filter_map(|ix| {
-            let item = items.get(ix)?;
-            let prev = if ix > start { items.get(ix - 1) } else { None };
-            let next = if ix < end { items.get(ix + 1) } else { None };
-            Some(render_item(env, item, false, prev, next))
-        }));
+        let cap = work_group_max_h(env.height);
+        let handle = env.wg_scrolls.borrow_mut().entry(key.to_string()).or_default().clone();
+        let children: Vec<AnyElement> = (start..=end)
+            .filter_map(|ix| {
+                let item = items.get(ix)?;
+                let prev = if ix > start { items.get(ix - 1) } else { None };
+                let next = if ix < end { items.get(ix + 1) } else { None };
+                Some(render_item(env, item, false, prev, next))
+            })
+            .collect();
+        let list = WorkGroupScroll {
+            id: ElementId::Name(SharedString::from(format!("wg-scroll-{key}"))),
+            max_h: px(cap),
+            fade_color: c.panel,
+            handle,
+            children,
+        };
+        let dbg_wg = key.to_string();
+        let body = div().w_full().flex().flex_col().pt_1().debug_selector(move || format!("wg-body-{dbg_wg}")).child(list);
         wrap = wrap.child(toggle_body(key, toggled, body));
     }
     enter(env, key, wrap)
@@ -2103,7 +2281,7 @@ impl CodeView {
                 body = body.child(div().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).max_h(px(140.0)).overflow_hidden().whitespace_normal().child(a.detail.clone()));
             }
             if let Some(d) = a.diff.as_deref().filter(|d| !d.trim().is_empty()) {
-                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()), width: 600.0 };
+                let env = Env { c, mono: mono.clone(), scale: 1.0, compact: true, view: cx.entity().downgrade(), flipped: Rc::new(HashSet::new()), toggled: Rc::new(HashMap::new()), expand_thinking: false, expand_shell: false, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now: 0, cwd: None, born: Rc::new(HashMap::new()), width: 600.0, height: self.pane_size.height / px(1.0) };
                 body = body.child(diff_block(&env, d, 400));
             }
             actions = div().flex().gap_2().child(decide("Allow", "Y", Decision::Allow, true, format!("allow-{id}"), model.clone(), id.clone())).child(decide("Always allow", "A", Decision::Always, false, format!("always-{id}"), model.clone(), id.clone())).child(decide("Deny", "N", Decision::Deny, false, format!("deny-{id}"), model.clone(), id.clone()));
@@ -2266,6 +2444,8 @@ impl CodeView {
             st.usage.cached,
             st.usage.output,
         );
+        // The context meter only means something once the session has started (the agent reported usage).
+        let show_context = show_context && context > 0;
         let done_rate = (!busy).then_some(st.last_rate).flatten();
         let has_done_metrics = !busy && (total_in > 0 || total_out > 0);
         let draft_empty = self.draft(cx).trim().is_empty();
@@ -2612,7 +2792,7 @@ impl Render for CodeView {
             self.last_user = last_user;
         }
         let away = !items.is_empty() && !self.list.is_following_tail() && self.list.is_scrolled_to_end() == Some(false);
-        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0) };
+        let env = Env { c, mono: mono.clone(), scale, compact, view: cx.entity().downgrade(), flipped: Rc::new(self.flipped.clone()), toggled: Rc::new(self.toggled.clone()), expand_thinking, expand_shell, images: self.images.clone(), wg_scrolls: self.wg_scrolls.clone(), now, cwd: self.model.read(cx).state.cwd.clone(), born: Rc::new(self.born.clone()), width: (self.pane_size.width / px(1.0) - 32.0).max(240.0), height: self.pane_size.height / px(1.0) };
         let model = self.model.clone();
         let rows = self.rows.clone();
         let transcript: AnyElement = if items.is_empty() {
@@ -2710,8 +2890,13 @@ impl Render for CodeView {
                         composer_layout(bounds.size.width / px(1.0), bounds.size.height / px(1.0)),
                         welcome_layout(bounds.size.width / px(1.0), bounds.size.height / px(1.0)),
                     );
+                    let prev_wg_h = work_group_max_h(this.pane_size.height / px(1.0));
+                    let next_wg_h = work_group_max_h(bounds.size.height / px(1.0));
+                    let has_open_wg = this.rows.iter().any(|r| {
+                        matches!(r, DisplayRow::WorkGroup { key, .. } if this.flipped.contains(key) || this.toggled.contains_key(key))
+                    });
                     this.pane_size = bounds.size;
-                    if prev != next {
+                    if prev != next || (prev_wg_h != next_wg_h && has_open_wg) {
                         cx.notify();
                     }
                 });
@@ -3247,5 +3432,161 @@ mod tests {
         vcx.run_until_parked();
         assert_eq!(vcx.read(|cx| view.read(cx).draft(cx)), "check @src");
         assert!(vcx.read(|cx| view.read(cx).popup_rows("check @src", cx).is_empty()));
+    }
+
+    #[gpui_kit::test]
+    fn expanded_work_group_caps_at_40_percent_height_and_scrolls_inside(cx: &mut gpui_kit::TestAppContext) {
+        use super::{CodeView, scroll_edge_fade_strengths, work_group_max_h};
+        use crate::code::session::CodeModel;
+        use crate::code::state::Item;
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, ScrollDelta, ScrollEvent, point, px};
+        use serde_json::Value;
+
+        assert_eq!(work_group_max_h(0.0), 240.0);
+        assert_eq!(work_group_max_h(1000.0), 400.0);
+        assert_eq!(work_group_max_h(750.0), 300.0);
+        assert_eq!(work_group_max_h(100.0), 80.0);
+
+        // Edge fade strength math: no overflow -> (0, 0), top -> (0, 1), mid -> (1, 1), bottom -> (1, 0), partial ramp.
+        assert_eq!(scroll_edge_fade_strengths(0.0, 0.0), (0.0, 0.0));
+        assert_eq!(scroll_edge_fade_strengths(0.0, 300.0), (0.0, 1.0));
+        assert_eq!(scroll_edge_fade_strengths(-16.0, 300.0), (0.5, 1.0));
+        assert_eq!(scroll_edge_fade_strengths(-100.0, 300.0), (1.0, 1.0));
+        assert_eq!(scroll_edge_fade_strengths(-284.0, 300.0), (1.0, 0.5));
+        assert_eq!(scroll_edge_fade_strengths(-300.0, 300.0), (1.0, 0.0));
+
+        cx.update(gpui_kit::init);
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                let mut items = vec![Item::User { key: "u0".into(), text: "earlier turn".into(), at: 1, images: vec![] }];
+                // Filler turns so the outer transcript list itself is scrollable.
+                for i in 0..10 {
+                    items.push(Item::Text {
+                        key: format!("fill-{i}"),
+                        text: format!("Filler paragraph {i}\n\nLine two of filler paragraph {i}."),
+                        streaming: false,
+                    });
+                }
+                items.push(Item::User { key: "u1".into(), text: "do 22 tools".into(), at: 2, images: vec![] });
+                for i in 0..22 {
+                    items.push(Item::Tool {
+                        key: format!("t{i}"),
+                        name: "Read".into(),
+                        title: format!("src/file_{i}.rs"),
+                        input: Value::Null,
+                        output: String::new(),
+                        ok: Some(true),
+                        diff: None,
+                        started: 1000 + i as u64 * 1000,
+                        ended: Some(2000 + i as u64 * 1000),
+                    });
+                }
+                items.push(Item::Text { key: "a1".into(), text: "Done with 22 tools.".into(), streaming: false });
+                // Short 2-tool group to verify it doesn't pad out to 40%.
+                items.push(Item::User { key: "u2".into(), text: "do 2 tools".into(), at: 3, images: vec![] });
+                for i in 0..2 {
+                    items.push(Item::Tool {
+                        key: format!("s{i}"),
+                        name: "Read".into(),
+                        title: format!("src/short_{i}.rs"),
+                        input: Value::Null,
+                        output: String::new(),
+                        ok: Some(true),
+                        diff: None,
+                        started: 30_000 + i as u64 * 1000,
+                        ended: Some(31_000 + i as u64 * 1000),
+                    });
+                }
+                m.state.items = items;
+                m
+            });
+            CodeView::new(model, app, window, cx)
+        });
+
+        let draw = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        };
+
+        draw(vcx);
+        draw(vcx);
+
+        let pane_h = vcx.read(|cx| view.read(cx).pane_size.height / px(1.0));
+        let expected_cap = work_group_max_h(pane_h);
+        assert!(pane_h > 100.0, "pane should be measured, got {pane_h}");
+
+        // Open both the 22-tool group ("wg-t0") and the 2-tool group ("wg-s0").
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.flipped.insert("wg-t0".into());
+                v.flipped.insert("wg-s0".into());
+                cx.notify();
+            });
+        });
+        draw(vcx);
+        draw(vcx);
+
+        // 1. The 2-tool group stays at its natural content height (< 40% cap) and shows neither edge fade.
+        let short_bounds = vcx.debug_bounds("wg-body-wg-s0").expect("short work group body rendered");
+        assert!(
+            short_bounds.size.height < px(expected_cap),
+            "short 2-tool group should stay shorter than 40% cap ({expected_cap}), got {:?}",
+            short_bounds.size.height
+        );
+        let fade_for = |vcx: &mut gpui_kit::VisualTestContext, key: &str| {
+            vcx.read(|cx| {
+                let h = view.read(cx).wg_scrolls.borrow().get(key).expect("scroll handle").clone();
+                scroll_edge_fade_strengths(h.offset().y / px(1.0), h.max_offset().y / px(1.0))
+            })
+        };
+        assert_eq!(fade_for(vcx, "wg-s0"), (0.0, 0.0), "non-overflowing group must show no fades");
+
+        // 2. The 22-tool group is capped at ~40% of the pane height (+4px pt_1), NOT ~880px.
+        // Initially at the top, only the bottom edge fades.
+        let long_bounds = vcx.debug_bounds("wg-body-wg-t0").expect("22-tool work group body rendered");
+        assert!(
+            (long_bounds.size.height - px(expected_cap + 4.0)).abs() <= px(2.0),
+            "22-tool group body should cap at 40% pane height ({expected_cap} + 4px pt_1), got {:?}",
+            long_bounds.size.height
+        );
+        assert_eq!(fade_for(vcx, "wg-t0"), (0.0, 1.0), "initially at top: only bottom edge should fade");
+
+        // 3. Scrolling inside the 22-tool group moves its tool rows without scrolling the outer transcript list,
+        // and brings in the top edge fade while keeping the bottom fade.
+        let list_offset_before = vcx.read(|cx| view.read(cx).list.scroll_px_offset_for_scrollbar());
+        let first_top_before = vcx.debug_bounds("t-t0").expect("first tool rendered").top();
+
+        vcx.simulate_event(ScrollEvent {
+            position: long_bounds.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+            ..Default::default()
+        });
+        draw(vcx);
+
+        let first_top_after = vcx.debug_bounds("t-t0").expect("first tool still laid out").top();
+        let list_offset_after = vcx.read(|cx| view.read(cx).list.scroll_px_offset_for_scrollbar());
+        assert!(
+            first_top_after < first_top_before - px(50.0),
+            "inner tool rows should scroll up inside the work group: before={first_top_before:?}, after={first_top_after:?}"
+        );
+        assert_eq!(
+            list_offset_after, list_offset_before,
+            "outer transcript list must not scroll while scrolling inside the work group"
+        );
+        assert_eq!(fade_for(vcx, "wg-t0"), (1.0, 1.0), "mid-scroll: both top and bottom edges should fade");
+
+        // 4. Scrolling all the way to the bottom clears the bottom edge fade while keeping the top fade.
+        vcx.simulate_event(ScrollEvent {
+            position: long_bounds.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-2000.0))),
+            ..Default::default()
+        });
+        draw(vcx);
+        assert_eq!(fade_for(vcx, "wg-t0"), (1.0, 0.0), "at bottom: only top edge should fade");
     }
 }

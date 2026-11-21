@@ -37,7 +37,7 @@ export function DiffView() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-10" onMouseDown={() => setDiffPane(null)}>
       <div
-        className="anim-dialog flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-panel-raised shadow-2xl"
+        className="anim-dialog flex h-full max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-center gap-3 px-4 py-3">

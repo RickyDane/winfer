@@ -400,6 +400,7 @@ pub fn start(kind: Kind, mut opts: Opts, events: Events) -> Handle {
                 _ => codex::run(opts, rx, me, events),
             }
             crate::harness::bg::stop_owner(&owner);
+            crate::harness::bg::remove_asker(&owner);
         }
         }
     });

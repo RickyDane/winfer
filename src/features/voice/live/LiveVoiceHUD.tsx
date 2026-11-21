@@ -32,7 +32,7 @@ export function LiveVoiceHUD() {
 
   return (
     <div className="pointer-events-none fixed right-4 bottom-6 z-50 flex justify-end">
-      <div className="anim-rise pointer-events-auto flex w-[360px] flex-col gap-2 rounded-2xl bg-panel-raised/95 px-4 py-3 shadow-2xl backdrop-blur">
+      <div className="anim-rise pointer-events-auto flex w-[360px] flex-col gap-2 rounded-2xl border border-border-strong bg-panel-raised/95 px-4 py-3 shadow-2xl backdrop-blur">
         <div className="flex items-center gap-2 text-[13px]">
           {state === "connecting" || state === "thinking" ? (
             <Spinner size={15} className="text-accent" />

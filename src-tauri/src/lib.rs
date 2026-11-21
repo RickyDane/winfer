@@ -222,6 +222,7 @@ pub fn run() {
             browser::inspect::browser_console_clear,
             browser::inspect::browser_pick_start,
             browser::inspect::browser_pick_cancel,
+            browser::inspect::browser_pick_hover,
             realtime::realtime_client_secret,
             realtime::realtime_set_api_key,
             realtime::realtime_has_api_key,

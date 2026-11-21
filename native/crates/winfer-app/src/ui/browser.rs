@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use winfer_backend::browser::{self, BrowserManager};
+use winfer_backend::browser::inspect::PickHover;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Tab {
@@ -336,6 +337,11 @@ pub struct BrowserPanel {
     console: HashMap<String, Vec<ConsoleEntry>>,
     console_open: bool,
     picking: bool,
+    /// The element under the pointer while picking, with its tab id.
+    pick_box: Option<(String, PickHover)>,
+    /// The page point to hit-test next, and whether a hit-test is running.
+    pick_next: Option<(f32, f32)>,
+    pick_busy: bool,
     /// Workspaces whose browser skips HTTPS certificate checks (for this browser session).
     invalid_certs: std::collections::HashSet<String>,
     cert_prompt: bool,
@@ -404,6 +410,9 @@ impl BrowserPanel {
             console: HashMap::new(),
             console_open: false,
             picking: false,
+            pick_box: None,
+            pick_next: None,
+            pick_busy: false,
             invalid_certs: Default::default(),
             cert_prompt: false,
             cert_busy: false,
@@ -445,7 +454,7 @@ impl BrowserPanel {
                 cx.notify();
             }
             "browser://picked" => {
-                self.picking = false;
+                self.stop_picking();
                 let line = |k: &str| payload[k].as_str().unwrap_or_default().to_string();
                 let mut lines = vec![format!("Element on {}", line("url")), format!("selector: {}", line("selector"))];
                 let text = line("text");
@@ -461,7 +470,7 @@ impl BrowserPanel {
                 self.send_to_agent(format!("{}\n", lines.join("\n")), &what, cx);
             }
             "browser://pick-error" => {
-                self.picking = false;
+                self.stop_picking();
                 self.flash(format!("Couldn't read that element: {}", payload.as_str().unwrap_or_default()), cx);
             }
             "browser://agent" => {
@@ -575,13 +584,17 @@ impl BrowserPanel {
             s.focus_pane(&id);
             cx.notify();
         });
-        self.flash(format!("Sent {what} to {name}"), cx);
+        self.flash(format!("Added {what} to {name}'s message"), cx);
     }
 
     pub fn toggle_pick(&mut self, cx: &mut Context<Self>) {
         let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
         let start = !self.picking;
-        self.picking = start;
+        if start {
+            self.picking = true;
+        } else {
+            self.stop_picking();
+        }
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = tauri::async_runtime::spawn(async move {
@@ -595,10 +608,49 @@ impl BrowserPanel {
             .await;
             if let Ok(Err(err)) = result {
                 let _ = this.update(cx, |this, cx| {
-                    this.picking = false;
+                    this.stop_picking();
                     this.flash(err, cx);
                 });
             }
+        })
+        .detach();
+    }
+
+    fn stop_picking(&mut self) {
+        self.picking = false;
+        self.pick_box = None;
+        self.pick_next = None;
+    }
+
+    /// Outlines the element under a page point while picking. Headless Chrome doesn't paint its
+    /// inspect highlight into the screencast, so the panel draws it. One hit-test runs at a time;
+    /// points that come in meanwhile collapse into the latest.
+    fn pick_hover(&mut self, point: (f32, f32), cx: &mut Context<Self>) {
+        self.pick_next = Some(point);
+        if !self.pick_busy {
+            self.next_pick_hover(cx);
+        }
+    }
+
+    fn next_pick_hover(&mut self, cx: &mut Context<Self>) {
+        let Some((x, y)) = self.pick_next.take().filter(|_| self.picking) else { return };
+        let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
+        self.pick_busy = true;
+        cx.spawn(async move |this, cx| {
+            let target = tab.clone();
+            let result = tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                browser::inspect::browser_pick_hover(app.clone(), app.state::<BrowserManager>(), workspace, target, x as f64, y as f64).await
+            })
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                this.pick_busy = false;
+                if this.picking {
+                    this.pick_box = result.ok().and_then(Result::ok).flatten().map(|b| (tab, b));
+                    cx.notify();
+                }
+                this.next_pick_hover(cx);
+            });
         })
         .detach();
     }
@@ -1230,7 +1282,9 @@ impl BrowserPanel {
         } else {
             (IconName::Search, c.subtle, "Search or enter an address")
         };
-        let omni = div().flex_1().min_w_0().h(px(30.0)).flex().items_center().gap_1p5().pl_2().pr_1().rounded_full().bg(c.hover)
+        // Lifted well above the toolbar so the field reads as the bright spot of the chrome.
+        let omni_bg = if c.light { theme::blend(c.hover, hsla(0.0, 0.0, 1.0, 1.0), 0.45) } else { theme::blend(c.hover, c.fg, 0.09) };
+        let omni = div().flex_1().min_w_0().h(px(30.0)).flex().items_center().gap_1p5().pl_2().pr_1().rounded_full().bg(omni_bg)
             .hover(move |d| d)
             .child(div().id("connection").size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().text_color(sec_color)
                 .tooltip(tip(sec_tip)).child(Icon::new(sec_icon).size(px(12.0))))
@@ -1354,6 +1408,50 @@ impl BrowserPanel {
         });
         Some(div().absolute().size_full().children(ripple).child(div().absolute().left(x).top(y).child(Icon::new(IconName::MousePointer2).size(px(20.0)).text_color(c.accent))).into_any_element())
     }
+
+    /// The element under the pointer while picking: a label with its tag and size, and its outline
+    /// as fractions of the page. The outline is painted right after the page image, in the same
+    /// paint: elements over the page don't show above the image. The label is deferred for that.
+    fn render_pick_box(&self, rect: Bounds<Pixels>, c: Colors) -> Option<(AnyElement, [f32; 4])> {
+        let (_, tab) = self.active()?;
+        let (_, b) = self.pick_box.as_ref().filter(|(t, _)| *t == tab.id && self.picking)?;
+        let a = self.attachment.as_ref()?;
+        let (sx, sy) = (rect.size.width / px(1.0) / a.width.max(1) as f32, rect.size.height / px(1.0) / a.height.max(1) as f32);
+        // In panel coordinates, cut to the visible page.
+        let (page_w, page_h) = (rect.size.width / px(1.0), rect.size.height / px(1.0));
+        let left = (b.x as f32 * sx).clamp(0.0, page_w);
+        let top = (b.y as f32 * sy).clamp(0.0, page_h);
+        let right = ((b.x + b.width) as f32 * sx).clamp(0.0, page_w);
+        let bottom = ((b.y + b.height) as f32 * sy).clamp(0.0, page_h);
+        if right - left < 1.0 || bottom - top < 1.0 {
+            return None;
+        }
+        let origin = rect.origin - self.panel_bounds.origin;
+        let (x, y) = (origin.x + px(left), origin.y + px(top));
+        let label = format!("{}  {} × {}", b.label, b.width.round(), b.height.round());
+        // The label sits above the element, or inside its top when there's no room above.
+        const LABEL_H: f32 = 20.0;
+        let label_top = if top >= LABEL_H + 2.0 { y - px(LABEL_H + 2.0) } else { y + px(2.0) };
+        let chip = div()
+            .absolute()
+            .left(x)
+            .top(label_top)
+            .h(px(LABEL_H))
+            .max_w(px((page_w - left).max(80.0)))
+            .px_1p5()
+            .flex()
+            .items_center()
+            .rounded_sm()
+            .bg(c.accent)
+            .text_color(c.on_accent)
+            .text_size(px(11.0))
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(label);
+        let frac = [left / page_w, top / page_h, right / page_w, bottom / page_h];
+        Some((deferred(div().absolute().size_full().child(chip)).with_priority(1).into_any_element(), frac))
+    }
 }
 
 impl Focusable for BrowserPanel {
@@ -1389,10 +1487,13 @@ impl Render for BrowserPanel {
         let rect = page_rect(self.panel_bounds, own);
         let handles = self.render_handles(rect, c, cx);
         let cursor = self.render_cursor(rect, c);
+        let (pick_box, pick_frac) = self.render_pick_box(rect, c).unzip();
+        let accent = c.accent;
         let dark = theme::theme_by_id(&theme_id).mode != "light";
         let console = if self.console_open { self.render_console(c, cx) } else { None };
         let notice = self.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(4)).map(|(t, _)| t.clone());
         let picking = self.picking;
+        let undocked = self.undocked;
         let certs_off = self.workspace.as_ref().is_some_and(|w| self.invalid_certs.contains(w));
         let body = if self.needs_install {
             div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
@@ -1456,10 +1557,26 @@ impl Render for BrowserPanel {
                     }
                     let button = if this.buttons & 1 != 0 { "left" } else { "none" };
                     this.mouse("mouseMoved", e.position, button, 0, &e.modifiers);
+                    if this.picking {
+                        if this.bounds.contains(&e.position) {
+                            this.pick_hover(this.page_point(e.position), cx);
+                        } else if this.pick_box.take().is_some() {
+                            this.pick_next = None;
+                            cx.notify();
+                        }
+                    }
                 }))
-                .on_scroll(cx.listener(|this, e: &ScrollEvent, _, _| {
+                .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
                     let delta = e.delta.pixel_delta(px(16.0));
                     let (x, y) = this.page_point(e.position);
+                    // The element under the pointer changes as the page scrolls: look again once it has.
+                    if this.picking {
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_millis(120)).await;
+                            let _ = this.update(cx, |this, cx| this.pick_hover((x, y), cx));
+                        })
+                        .detach();
+                    }
                     // Natural-scroll sign: the page moves with the fingers.
                     this.send("Input.dispatchMouseEvent", json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": -(delta.x / px(1.0)), "deltaY": -(delta.y / px(1.0)), "modifiers": cdp_modifiers(&e.modifiers) }));
                 }))
@@ -1473,13 +1590,26 @@ impl Render for BrowserPanel {
                         move |bounds, _, window, _| {
                             if let Some(image) = image {
                                 let rect = page_rect(bounds, own);
-                                let _ = window.paint_image(rect, rect, Corners::default(), image, 0, false);
+                                let corners = if !undocked && own.is_none() {
+                                    Corners { top_left: px(0.0), top_right: px(0.0), bottom_right: px(15.0), bottom_left: px(15.0) }
+                                } else {
+                                    Corners::default()
+                                };
+                                let _ = window.paint_image(rect, rect, corners, image, 0, false);
+                                // The picked element's outline, over the page in the same paint.
+                                if let Some([l, t, r, b]) = pick_frac {
+                                    let (w, h) = (rect.size.width, rect.size.height);
+                                    let outline = Bounds::from_corners(point(rect.origin.x + w * l, rect.origin.y + h * t), point(rect.origin.x + w * r, rect.origin.y + h * b));
+                                    window.paint_quad(fill(outline, Hsla { a: 0.18, ..accent }));
+                                    window.paint_quad(gpui_kit::outline(outline, accent, BorderStyle::Solid));
+                                }
                             }
                         },
                     )
                     .size_full(),
                 )
                 .children(handles)
+                .children(pick_box)
                 .children(cursor)
                 .when_some(self.message.clone().filter(|_| !has_tab), |d, text| {
                     d.child(div().absolute().size_full().flex().items_center().justify_center().text_xs().text_color(c.muted).child(text))
@@ -1510,7 +1640,7 @@ impl Render for BrowserPanel {
             .when(picking, |d| d.child(div().flex_shrink_0().px_3().py_1().text_size(px(11.0)).text_color(c.accent).bg(Hsla { a: 0.12, ..c.accent }).child("Click an element to send it to the agent · Esc to cancel")))
             .when_some(notice, |d, t| d.child(div().flex_shrink_0().px_3().py_1().text_size(px(11.0)).text_color(c.fg).bg(c.raised).child(t)))
             .children(console)
-            .child(div().flex_1().min_h_0().relative().bg(if own.is_some() { c.app } else { hsla(0.0, 0.0, 1.0, 1.0) }).child(body))
+            .child(div().flex_1().min_h_0().relative().when(!undocked, |d| d.rounded_b(px(15.0)).overflow_hidden()).bg(if own.is_some() { c.app } else { hsla(0.0, 0.0, 1.0, 1.0) }).child(body))
     }
 }
 

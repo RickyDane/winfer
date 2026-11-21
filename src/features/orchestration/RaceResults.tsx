@@ -325,7 +325,7 @@ export function RaceResults() {
   const ab = raceId.startsWith("ab-");
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex justify-center bg-black/40 pt-[8vh]" onMouseDown={closeRaceResults}>
-      <div className="anim-dialog h-fit max-h-[84vh] w-[min(860px,calc(100vw-32px))] space-y-4 overflow-y-auto rounded-xl bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog h-fit max-h-[84vh] w-[min(860px,calc(100vw-32px))] space-y-4 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
           <BarChart3 size={14} className="text-accent" />
           <h1 className="flex-1 text-sm font-semibold text-fg">{ab ? "A/B test results" : "Race results"}</h1>

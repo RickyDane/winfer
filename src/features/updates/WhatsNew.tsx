@@ -24,7 +24,7 @@ export function WhatsNew() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/40" onMouseDown={closeReleaseNotes}>
       <div
-        className="anim-dialog flex max-h-[70vh] w-[460px] flex-col rounded-xl bg-panel-raised shadow-2xl"
+        className="anim-dialog flex max-h-[70vh] w-[460px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-start gap-3 px-5 py-3">

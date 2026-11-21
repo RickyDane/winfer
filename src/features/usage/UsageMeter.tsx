@@ -212,7 +212,7 @@ function WindowLine({ window: w, outAt, samples, firstReset }: WindowProps) {
           <>
             <div className="absolute inset-y-0" style={{ left: `${hover! * 100}%` }} />
             <div
-              className="pointer-events-none absolute -top-1 z-10 w-max -translate-y-full rounded-md bg-panel px-2 py-1 text-[11px] shadow-lg"
+              className="pointer-events-none absolute -top-1 z-10 w-max -translate-y-full rounded-md border border-border-strong bg-panel px-2 py-1 text-[11px] shadow-lg"
               style={hover! < 0.5 ? { left: `${hover! * 100}%` } : { right: `${(1 - hover!) * 100}%` }}
             >
               <span className="text-fg-muted">{clock(hoverAt, long)}</span> <span className="font-mono text-fg">{Math.round(at(hoverAt))}% left</span>
@@ -312,7 +312,7 @@ function CodexResets({ count }: { count: number }) {
   );
 }
 
-const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg bg-panel-raised p-3 shadow-xl";
+const CARD = "w-[360px] max-h-[min(82vh,760px)] overflow-y-auto space-y-3 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl";
 
 /** Every agent's limits (its accounts pooled) as bars or lines.
  *  `accounts` adds what each account has left under its agent (collapsed behind a toggle
@@ -684,7 +684,7 @@ export function ContextMeter({ paneId, provider, ring }: { paneId: string; provi
       {hover &&
         createPortal(
           <div
-            className="anim-menu pointer-events-none fixed z-[1000] space-y-2.5 rounded-lg bg-panel-raised p-3 shadow-xl"
+            className="anim-menu pointer-events-none fixed z-[1000] space-y-2.5 rounded-lg border border-border-strong bg-panel-raised p-3 shadow-xl"
             style={{ left: hover.left, top: hover.top, width: CONTEXT_CARD_WIDTH }}
           >
             <div className="flex items-baseline gap-2 text-xs">

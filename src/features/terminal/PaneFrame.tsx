@@ -53,7 +53,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
       data-browser-highlighted={browserVisible && browserLinked || undefined}
       onMouseDown={onFocus}
       className={cn(
-        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden transition-[opacity,box-shadow,background-color] duration-150",
+        "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden transition-[border-color,opacity,box-shadow,background-color] duration-150",
         "pane-glass",
         isNew && "anim-grow",
         focused && "pane-glass-focused",
@@ -75,7 +75,7 @@ export const PaneFrame = memo(function PaneFrame({ pane, index, focused, zoomed,
       )}
       {starting && (
         <div className={cn("anim-fade pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center", "top-20")}>
-          <span className="flex items-center gap-2 rounded-md bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
+          <span className="flex items-center gap-2 rounded-md border border-border bg-panel-raised px-3 py-1.5 text-xs text-fg-muted shadow-lg">
             <Spinner size={13} className="text-accent" />
             {starting === "worktree" ? "Creating worktree…" : `Starting ${name}…`}
           </span>

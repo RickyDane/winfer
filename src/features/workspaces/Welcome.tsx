@@ -249,7 +249,7 @@ export function Welcome() {
   };
 
   return (
-    <div className="flex h-full w-full items-center justify-center rounded-[var(--radius-pane)] bg-panel shadow-sm">
+    <div className="flex h-full w-full items-center justify-center rounded-[var(--radius-pane)] border border-border bg-panel shadow-sm">
       <div className="flex w-[620px] max-w-[92%] flex-col items-center gap-5">
         <span className="grid size-11 place-items-center rounded-xl bg-accent-soft text-accent">
           <Sparkles size={20} />
@@ -312,7 +312,7 @@ export function Welcome() {
                     <ChevronDown size={11} className="text-fg-subtle" />
                   </button>
                   {openPicker === "model" && (
-                    <div className="anim-menu absolute top-[32px] left-0 z-30 w-[290px] overflow-hidden rounded-xl bg-panel-raised shadow-lg">
+                    <div className="anim-menu absolute top-[32px] left-0 z-30 w-[290px] overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-lg">
                       {models.length > 8 && (
                         <div className="flex items-center gap-2 px-2.5 py-1.5">
                           <Search size={12} className="text-fg-subtle" />
@@ -391,7 +391,7 @@ export function Welcome() {
                     <ChevronDown size={11} className="text-fg-subtle" />
                   </button>
                   {openPicker === "effort" && (
-                    <div className="anim-menu absolute top-[32px] left-0 z-30 w-[260px] overflow-hidden rounded-xl bg-panel-raised p-1.5 shadow-lg">
+                    <div className="anim-menu absolute top-[32px] left-0 z-30 w-[260px] overflow-hidden rounded-xl border border-border-strong bg-panel-raised p-1.5 shadow-lg">
                       <div className="flex flex-col gap-px">
                         {efforts.map((lvl) => {
                           const on = activeEffort === lvl;

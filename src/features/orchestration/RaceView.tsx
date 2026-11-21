@@ -258,7 +258,7 @@ export function RaceView() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-center bg-black/40 pt-[10vh]" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-dialog h-fit max-h-[80vh] w-[760px] space-y-5 overflow-y-auto rounded-xl bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-dialog h-fit max-h-[80vh] w-[760px] space-y-5 overflow-y-auto rounded-xl border border-border-strong bg-panel-raised p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-2">
           {ab ? <FlaskConical size={14} className="text-accent" /> : <Flag size={14} className="text-accent" />}
           <h1 className="text-sm font-semibold text-fg">{ab ? "A/B test" : "Race mode"}</h1>

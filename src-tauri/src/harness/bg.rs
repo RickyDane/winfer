@@ -180,7 +180,8 @@ pub fn serve(owner: &str) -> Option<String> {
             std::thread::spawn(move || {
                 for mut req in http.incoming_requests() {
                     let ok = req.headers().iter().any(|h| h.field.equiv("X-Winfer-Token") && h.value.as_str() == secret);
-                    if !ok || req.url() != "/bg" {
+                    let asking = req.url() == "/ask";
+                    if !ok || (req.url() != "/bg" && !asking) {
                         let _ = req.respond(tiny_http::Response::empty(401));
                         continue;
                     }
@@ -188,6 +189,18 @@ pub fn serve(owner: &str) -> Option<String> {
                         let mut body = String::new();
                         let _ = req.as_reader().take(1024 * 1024).read_to_string(&mut body);
                         let v: Value = serde_json::from_str(&body).unwrap_or_default();
+                        if asking {
+                            let asker = askers().lock().unwrap().get(v["owner"].as_str().unwrap_or("")).cloned();
+                            let reply = match asker {
+                                Some(ask) => {
+                                    let (ok, text) = ask(&v["args"]);
+                                    serde_json::json!({ "ok": ok, "text": text })
+                                }
+                                None => serde_json::json!({ "none": true }),
+                            };
+                            let _ = req.respond(tiny_http::Response::from_string(reply.to_string()));
+                            return;
+                        }
                         let cwd = v["cwd"].as_str().map(PathBuf::from).filter(|p| p.is_dir()).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
                         let out = run(&v["args"], &cwd, &AtomicBool::new(false), "", v["owner"].as_str().unwrap_or(""));
                         let reply = serde_json::json!({ "ok": out.ok, "text": out.output }).to_string();
@@ -216,6 +229,43 @@ pub fn call_server(env: &str, args: &Value, cwd: &Path) -> (bool, String) {
         },
         Err(e) => (false, format!("couldn't reach winfer code: {e}")),
     }
+}
+
+/// Answers `ask_user` calls that reach this process's server: `(ok, text)` for the call's `args`.
+pub type Asker = Arc<dyn Fn(&Value) -> (bool, String) + Send + Sync>;
+
+fn askers() -> &'static Mutex<HashMap<String, Asker>> {
+    static A: OnceLock<Mutex<HashMap<String, Asker>>> = OnceLock::new();
+    A.get_or_init(Mutex::default)
+}
+
+/// Lets the backend of `owner` answer its agent's `ask_user` calls (in winfer code's own picker).
+pub fn set_asker(owner: &str, f: Asker) {
+    askers().lock().unwrap().insert(owner.to_string(), f);
+}
+
+pub fn remove_asker(owner: &str) {
+    askers().lock().unwrap().remove(owner);
+}
+
+/// Env var on winfer's MCP server telling it to offer `ask_user` and send it to winfer code.
+pub const CODE_ASK_ENV: &str = "WINFER_CODE_ASK";
+
+/// Sends an `ask_user` call to the server `env` (`CODE_BG_ENV`'s value) names, waiting up to
+/// `wait` for the answers. None when winfer code has no one to ask the user.
+pub fn call_ask(env: &str, args: &Value, wait: Duration) -> Option<(bool, String)> {
+    let mut parts = env.splitn(3, ' ');
+    let (Some(addr), Some(token), owner) = (parts.next(), parts.next(), parts.next().unwrap_or("")) else {
+        return None;
+    };
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(wait)).http_status_as_error(false).build().into();
+    let body = serde_json::json!({ "args": args, "owner": owner });
+    let mut r = agent.post(&format!("http://{addr}/ask")).header("X-Winfer-Token", token).send_json(&body).ok()?;
+    let v = r.body_mut().read_json::<Value>().ok()?;
+    if v["none"].as_bool() == Some(true) {
+        return None;
+    }
+    Some((v["ok"].as_bool().unwrap_or(false), v["text"].as_str().unwrap_or("").to_string()))
 }
 
 /// Points winfer's MCP server among `servers` at this process's `bg` server for `owner` (adding

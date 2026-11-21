@@ -407,7 +407,7 @@ export function Sidebar() {
   const { drag, begin, dropLine } = useSortable(moveWorkspace);
 
   return (
-    <aside style={{ width }} className="anim-slide flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
+    <aside style={{ width }} className="anim-slide flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel shadow-sm">
       <SidebarTop />
 
       <nav className="flex-1 overflow-y-auto px-2 pb-3 select-none">
@@ -522,7 +522,7 @@ export function SidebarRail() {
     </button>
   );
   return (
-    <aside className="anim-slide flex h-full w-[60px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
+    <aside className="anim-slide flex h-full w-[60px] shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel shadow-sm">
       <div className="flex flex-col items-center gap-1 pt-2.5 pb-2">
         <button onClick={() => execute({ type: "ui.palette" })} title="Search or jump to…" className={railButton}>
           <Search size={15} />

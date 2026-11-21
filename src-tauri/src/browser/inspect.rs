@@ -1,5 +1,6 @@
 //! Page context for agents: console/exception/network errors per tab, and an element picker
-//! (Chrome's own inspect mode, so the highlight shows in the screencast).
+//! (Chrome's own inspect mode for the click; headless Chrome doesn't paint its highlight into
+//! the screencast, so the panel draws the hovered element from `browser_pick_hover` itself).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -251,14 +252,26 @@ impl Instance {
                 .as_f64()
                 .unwrap_or(0.0),
         );
+        let viewport = &metrics["cssVisualViewport"];
+        let (vw, vh) = (
+            viewport["clientWidth"].as_f64().unwrap_or(f64::MAX),
+            viewport["clientHeight"].as_f64().unwrap_or(f64::MAX),
+        );
+        // Only what's on screen: capturing beyond the viewport makes Chrome resize the page for
+        // the shot, which shows in the panel and can capture at the wrong scroll position.
         let pad = 8.0;
+        let (left, top) = ((x0 - pad).max(0.0), (y0 - pad).max(0.0));
+        let (right, bottom) = ((x1 + pad).min(vw), (y1 + pad).min(vh));
+        if right - left < 1.0 || bottom - top < 1.0 {
+            return Err("element is off screen".into());
+        }
         let shot = cdp
             .call(
                 "Page.captureScreenshot",
                 json!({
                     "format": "png",
-                    "clip": { "x": (x0 + sx - pad).max(0.0), "y": (y0 + sy - pad).max(0.0), "width": (x1 - x0 + 2.0 * pad).max(1.0), "height": (y1 - y0 + 2.0 * pad).max(1.0), "scale": 1 },
-                    "captureBeyondViewport": true
+                    "clip": { "x": left + sx, "y": top + sy, "width": right - left, "height": bottom - top, "scale": 1 },
+                    "captureBeyondViewport": false
                 }),
                 Some(session),
             )
@@ -369,6 +382,92 @@ pub async fn browser_pick_start(
     Ok(())
 }
 
+/// The element under a point while picking, for the panel to outline.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickHover {
+    /// Border box in the page's CSS pixels, relative to the viewport.
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// `tag#id.class` of the element.
+    pub label: String,
+}
+
+/// `tag#id.class.class` from a `DOM.describeNode` node.
+fn node_label(node: &Value) -> String {
+    let attrs: Vec<&str> = node["attributes"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let attr = |name: &str| attrs.chunks(2).find(|p| p[0] == name && p.len() == 2).map(|p| p[1].trim());
+    let mut label = node["localName"].as_str().unwrap_or_default().to_string();
+    if let Some(id) = attr("id").filter(|id| !id.is_empty()) {
+        label = format!("{label}#{id}");
+    }
+    for class in attr("class").into_iter().flat_map(str::split_whitespace).take(2) {
+        label = format!("{label}.{class}");
+    }
+    label
+}
+
+/// The element at a viewport point (the page's CSS pixels) and its border box, or `None` when
+/// there's none.
+#[tauri::command]
+pub async fn browser_pick_hover(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    target_id: String,
+    x: f64,
+    y: f64,
+) -> Res<Option<PickHover>> {
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let session = instance.session(&target_id).await?;
+    let cdp = instance.cdp().await?;
+    // The hit-test takes document coordinates (the box model comes back in viewport ones), so
+    // add how far the page is scrolled.
+    let metrics = cdp.call("Page.getLayoutMetrics", json!({}), Some(&session)).await?;
+    let (sx, sy) = (
+        metrics["cssLayoutViewport"]["pageX"].as_f64().unwrap_or(0.0),
+        metrics["cssLayoutViewport"]["pageY"].as_f64().unwrap_or(0.0),
+    );
+    let Ok(hit) = cdp
+        .call(
+            "DOM.getNodeForLocation",
+            json!({ "x": (x + sx).round() as i64, "y": (y + sy).round() as i64, "ignorePointerEventsNone": true }),
+            Some(&session),
+        )
+        .await
+    else {
+        return Ok(None);
+    };
+    let Some(node_id) = hit["backendNodeId"].as_i64() else { return Ok(None) };
+    let model = cdp
+        .call("DOM.getBoxModel", json!({ "backendNodeId": node_id }), Some(&session))
+        .await?;
+    let quad: Vec<f64> = model["model"]["border"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_f64)
+        .collect();
+    if quad.len() < 8 {
+        return Ok(None);
+    }
+    let (xs, ys): (Vec<f64>, Vec<f64>) = quad.chunks(2).map(|p| (p[0], p[1])).unzip();
+    let (left, top) = (xs.iter().cloned().fold(f64::MAX, f64::min), ys.iter().cloned().fold(f64::MAX, f64::min));
+    let (right, bottom) = (xs.iter().cloned().fold(f64::MIN, f64::max), ys.iter().cloned().fold(f64::MIN, f64::max));
+    let node = cdp
+        .call("DOM.describeNode", json!({ "backendNodeId": node_id }), Some(&session))
+        .await?;
+    Ok(Some(PickHover {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+        label: node_label(&node["node"]),
+    }))
+}
+
 #[tauri::command]
 pub async fn browser_pick_cancel(
     app: AppHandle,
@@ -400,6 +499,13 @@ mod tests {
             params,
             session_id: None,
         }
+    }
+
+    #[test]
+    fn labels_a_node_by_tag_id_and_classes() {
+        let node = json!({ "localName": "button", "attributes": ["type", "submit", "class", " btn  primary big ", "id", "go"] });
+        assert_eq!(node_label(&node), "button#go.btn.primary");
+        assert_eq!(node_label(&json!({ "localName": "div" })), "div");
     }
 
     #[test]

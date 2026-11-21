@@ -84,11 +84,7 @@ fn tools() -> Value {
             "description": "Get the user's attention with a short message (desktop notification and pane highlight), e.g. when you need a decision.",
             "inputSchema": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"] }
         },
-        {
-            "name": crate::harness::tools::ASK_USER,
-            "description": format!("{} The question shows in winfer and on the user's phone; the call waits until they answer.", crate::harness::tools::ASK_USER_DESCRIPTION),
-            "inputSchema": crate::harness::tools::ask_user_schema()
-        },
+        ask_user_tool(),
         {
             "name": "usage_status",
             "description": "How much of your plan's usage limits is left right now: each window (5-hour session, weekly, …) with percent used and left, when it resets, and when it runs out at the current pace. Check it before and during long tasks, e.g. when told to pause if usage runs low.",
@@ -123,6 +119,14 @@ fn tools() -> Value {
         crate::viz::tool(),
         crate::harness::bg::mcp_tool(code_bg().is_some())
     ])
+}
+
+fn ask_user_tool() -> Value {
+    json!({
+        "name": crate::harness::tools::ASK_USER,
+        "description": format!("{} The question shows in winfer and on the user's phone; the call waits until they answer.", crate::harness::tools::ASK_USER_DESCRIPTION),
+        "inputSchema": crate::harness::tools::ask_user_schema()
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -322,6 +326,11 @@ const LIST_PLUGIN_TOOLS: &str = "__plugin_tools";
 fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
     let id = message.get("id").cloned()?; // notifications get no response
     let method = message["method"].as_str().unwrap_or_default();
+    let asked = if method == "tools/call" && message["params"]["name"] == crate::harness::tools::ASK_USER && code_ask() {
+        code_bg().and_then(|addr| crate::harness::bg::call_ask(&addr, &message["params"]["arguments"], ASK_WAIT + Duration::from_secs(30)))
+    } else {
+        None
+    };
     let result = match method {
         "initialize" => json!({
             "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
@@ -331,8 +340,19 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
         }),
         "ping" => json!({}),
         // Outside the app (winfer code on its own) only winfer code's `bg` works.
-        "tools/list" if env.0.is_empty() => json!({ "tools": if code_bg().is_some() { vec![crate::harness::bg::mcp_tool(true)] } else { Vec::new() } }),
+        "tools/list" if env.0.is_empty() => {
+            let mut tools = if code_bg().is_some() { vec![crate::harness::bg::mcp_tool(true)] } else { Vec::new() };
+            if code_ask() {
+                tools.push(ask_user_tool());
+            }
+            json!({ "tools": tools })
+        }
         "tools/list" => json!({ "tools": all_tools(env) }),
+        // winfer code asks in its own picker (Antigravity); without one the app's dialog does.
+        "tools/call" if asked.is_some() => {
+            let (ok, text) = asked.unwrap_or_default();
+            json!({ "content": [{ "type": "text", "text": text }], "isError": !ok })
+        }
         "tools/call" if message["params"]["name"] == "bg" && code_bg().is_some() => {
             let cwd = std::env::current_dir().unwrap_or_default();
             let (ok, text) = crate::harness::bg::call_server(&code_bg().unwrap(), &message["params"]["arguments"], &cwd);
@@ -366,6 +386,11 @@ fn handle(message: &Value, env: &(String, String, String)) -> Option<Value> {
 /// Codex (see `bg::route_mcp`).
 fn code_bg() -> Option<String> {
     std::env::var(crate::harness::bg::CODE_BG_ENV).ok().filter(|v| !v.is_empty())
+}
+
+/// Whether winfer code asked this MCP server to send `ask_user` to its own picker (Antigravity).
+fn code_ask() -> bool {
+    std::env::var(crate::harness::bg::CODE_ASK_ENV).is_ok_and(|v| !v.is_empty())
 }
 
 /// Entry point for `winfer mcp-stdio`: newline-delimited JSON-RPC on stdin/stdout.

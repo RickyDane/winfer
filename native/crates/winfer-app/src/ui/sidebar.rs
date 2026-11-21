@@ -133,10 +133,6 @@ fn reveal_label() -> &'static str {
     if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Show in Explorer" }
 }
 
-/// The sidebar width from which the Sessions · Review · History tabs show their labels, and the
-/// search its shortcut. Below, icons only (each tab still has its tooltip).
-const SIDEBAR_LABELS_MIN: f32 = 236.0;
-const SIDEBAR_HINT_MIN: f32 = 224.0;
 
 impl Root {
     fn refresh_listing(&mut self, dir: String, cx: &mut Context<Self>) {
@@ -452,22 +448,13 @@ impl Root {
             with_keys("Merged features", keys(overlay(Overlay::History))),
         );
         let settings_tip = with_keys("Settings", keys(Command::Settings(None)));
-        let palette_keys = keys(Command::Palette(None)).unwrap_or_default();
         let new_keys = keys(overlay(Overlay::NewPane)).unwrap_or_default();
         let active_ws = s.active_workspace_id.clone();
         let review_count = self.open_reviews(cx);
         let mono = crate::fonts::mono(cx);
 
-        // Search and the three views.
-        // Narrow sidebar: the tabs show icons only, and the search drops its shortcut hint.
-        let sidebar_width = self.state.read(cx).sidebar_width as f32;
-        let labels = sidebar_width >= SIDEBAR_LABELS_MIN;
-        let search = div().id("sidebar-search").flex().items_center().gap_2().h(px(32.0)).pl_2p5().pr_2().rounded_md().bg(c.app).border_1().border_color(c.edge)
-            .text_size(px(12.5)).text_color(c.subtle).cursor_pointer().hover(move |d| d.text_color(c.muted))
-            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Palette(None), window, cx)))
-            .child(Icon::new(IconName::Search).size(px(14.0)))
-            .child(div().flex_1().child("Search or jump to…"))
-            .when(!palette_keys.is_empty() && sidebar_width >= SIDEBAR_HINT_MIN, |d| d.child(div().px_1().rounded_sm().border_1().border_color(c.edge).font_family(mono.clone()).text_size(px(10.0)).child(palette_keys.clone())));
+        // The three views: icon-only tabs (labels live in the tooltips).
+        let labels = false;
         let sessions = self.nav_tab("nav-sessions", IconName::Activity, "Sessions", progress_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::Progress, provider: None }, window, cx)));
         let review = self.nav_tab("nav-review", IconName::Inbox, "Review", review_tip, review_count,labels, c)
@@ -475,7 +462,6 @@ impl Root {
         let history = self.nav_tab("nav-history", IconName::Clock, "History", history_tip, 0,labels, c)
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Overlay { overlay: Overlay::History, provider: None }, window, cx)));
         let top = div().flex().flex_col().gap_2().px_2p5().pt_2p5().pb_2()
-            .child(search)
             .child(div().flex().gap_px().p(px(2.0)).rounded(px(8.0)).bg(c.app).border_1().border_color(c.edge).child(sessions).child(review).child(history));
 
         // Needs you: approve or open waiting agents without finding their pane.
@@ -654,7 +640,7 @@ impl Root {
             list = list.child(group);
         }
         let any_expanded = !expanded_ids.is_empty();
-        let label = div().flex().h(px(26.0)).mt_2p5().items_center().justify_between().pl_1p5()
+        let label = div().flex().h(px(26.0)).mt_1().items_center().justify_between().pl_1p5()
             .child(div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("Workspaces"))
             .child(div().flex().items_center()
                 .child(div().id("collapse-all").rounded_sm().p_1().text_color(c.subtle).when(!any_expanded, |d| d.opacity(0.4))
@@ -670,7 +656,7 @@ impl Root {
         let feed = self.render_activity_feed(&active_ws, c, cx);
         let footer = self.render_sidebar_footer(false, &settings_tip, c, cx);
         let width = px(self.state.read(cx).sidebar_width as f32);
-        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
+        div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_2xl().border_1().border_color(c.edge).bg(c.panel)
             .child(top)
             .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_3().children(needs).child(label).child(list))
             .children(feed)
@@ -783,7 +769,7 @@ impl Root {
             body = body.child(pill);
         }
         let footer = self.render_sidebar_footer(true, &settings_tip, c, cx);
-        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel)
+        div().w(px(60.0)).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_2xl().border_1().border_color(c.edge).bg(c.panel)
             .child(top)
             .child(div().id("sidebar-rail-list").flex_1().min_h_0().overflow_y_scroll().child(body))
             .child(footer)

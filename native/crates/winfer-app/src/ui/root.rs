@@ -996,7 +996,7 @@ impl Root {
                             .child(Icon::new(IconName::RotateCw).size(px(12.0))),
                     ),
             )
-            .child(div().flex_1().min_h_0().py_1p5().pr_1().pl_2p5().child(view))
+            .child(div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().py_1p5().pr_1().pl_2p5().child(view))
             .into_any_element()
     }
 
@@ -1013,7 +1013,7 @@ impl Root {
                 .child(label)
         };
         let header = div().flex().items_center().gap_1().pl_1().pr_2().py_1()
-            .child(tab(self, cx, "side-browser", IconName::Globe, "Browser", SidePanel::Browser))
+            .child(tab(self, cx, "side-browser", IconName::Globe, "Browser", SidePanel::Browser).rounded_tl_xl())
             .child(tab(self, cx, "side-device", IconName::Smartphone, "Android", SidePanel::Device))
             .child(tab(self, cx, "side-terminal", IconName::SquareTerminal, "Terminal", SidePanel::Terminal))
             .child(tab(self, cx, "side-viewer", IconName::FileText, "Files", SidePanel::Viewer))
@@ -1038,7 +1038,7 @@ impl Root {
             SidePanel::Terminal => self.render_side_terminal(&c, cx),
             SidePanel::Device => self.android.clone().into_any_element(),
         };
-        div().size_full().flex().flex_col().child(header).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        div().size_full().flex().flex_col().child(header).child(div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().child(body)).into_any_element()
     }
 
     /// Restarts a pane's process in place (a different model), resuming its session.
@@ -1304,7 +1304,7 @@ impl Root {
                 )
             })
             // Paint the rounded border on top so inner views (chat/terminal/sky) can never square off the bottom corners.
-            .child(div().absolute().top_0().left_0().size_full().rounded_2xl().border_1().border_color(if focused { Hsla { a: 0.4, ..c.accent } } else { c.edge }))
+            .child(div().absolute().top_0().left_0().size_full().rounded_2xl().when(focused, |d| d.border_2().border_color(Hsla { a: 0.75, ..c.accent })).when(!focused, |d| d.border_1().border_color(c.edge)))
     }
 
     fn render_tiles(&mut self, tree: Option<LayoutNode>, zoomed: Option<String>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -1723,7 +1723,16 @@ impl Render for Root {
                                 })),
                         )
                         .child(
-                            div().w(px(side_width.max(MIN_SIDE_PANEL))).flex_shrink_0().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel).child(side_panel.take().unwrap()),
+                            div()
+                                .relative()
+                                .w(px(side_width.max(MIN_SIDE_PANEL)))
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .rounded_2xl()
+                                .bg(c.panel)
+                                .child(side_panel.take().unwrap())
+                                // Paint the rounded border on top so inner views (browser/terminal/files) can never square off the bottom corners.
+                                .child(div().absolute().top_0().left_0().size_full().rounded_2xl().border_1().border_color(c.edge)),
                         )
                     }),
             )

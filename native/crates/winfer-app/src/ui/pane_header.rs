@@ -71,7 +71,7 @@ pub fn cost_breakdown(usage: &Value, place: &str) -> String {
     lines.join("\n")
 }
 
-/// A ring filling clockwise with the used share of the context window and its percent inside.
+/// A ring filling clockwise with the used share of the context window and its percent (no sign) inside.
 pub(crate) fn context_ring(fraction: f64, color: Hsla, text: Hsla, size: f32, mono: SharedString, c: Colors) -> Div {
     let fraction = fraction.clamp(0.0, 1.0) as f32;
     let track = c.border_strong;
@@ -97,9 +97,12 @@ pub(crate) fn context_ring(fraction: f64, color: Hsla, text: Hsla, size: f32, mo
             arc(fraction, color);
         }
     }).absolute().size_full();
-    div().relative().size(px(size)).flex_shrink_0().flex().items_center().justify_center()
+    // The number spans the ring's full width and is centered by text alignment (on its exact shaped
+    // width) rather than as a flex item, whose box width gets rounded to whole pixels and shifts the
+    // glyph off the ring's center.
+    div().relative().size(px(size)).flex_shrink_0()
         .child(arcs)
-        .child(div().font_family(mono).text_size(px(size / 3.0)).font_weight(FontWeight::SEMIBOLD).text_color(text).child(format!("{}%", (fraction * 100.0).round())))
+        .child(div().absolute().inset_0().flex().flex_col().justify_center().text_center().font_family(mono).text_size(px(size / 3.0)).font_weight(FontWeight::SEMIBOLD).text_color(text).child(format!("{}", (fraction * 100.0).round())))
 }
 
 fn norm_dir(dir: &str) -> String {
@@ -513,13 +516,13 @@ impl Root {
             )
             // Center: Identity two-line stack (#index + title, then branch/model/alert)
             .child(
-                div().flex_1().min_w_0().flex().flex_col().gap(px(2.0))
+                div().flex_1().min_w_0().flex().flex_col()
                     .when(narrow, |d| d.invisible().w(px(0.0)))
                     .child(
-                        div().flex().min_w_0().items_center().gap_1p5()
+                        div().flex().min_w_0().items_center().gap_1p5().line_height(px(16.0))
                             .child(title),
                     )
-                    .child(meta_row),
+                    .child(meta_row.line_height(px(14.0))),
             )
             // Right: Live bg tasks, dev launch, telemetry pill, divider, actions
             .child(

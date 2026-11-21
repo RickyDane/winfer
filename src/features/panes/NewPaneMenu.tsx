@@ -34,7 +34,7 @@ export function NewPaneMenu() {
         <span>New</span>
       </button>
       {open && (
-        <div className="anim-menu absolute right-0 z-50 mt-1 w-64 rounded-lg bg-panel-raised p-1 shadow-xl">
+        <div className="anim-menu absolute right-0 z-50 mt-1 w-64 rounded-lg border border-border-strong bg-panel-raised p-1 shadow-xl">
           {providers.map((p) => (
             <div key={p.id}>
               <div className="flex items-center">

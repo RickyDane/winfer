@@ -22,7 +22,7 @@ export function ApprovalDialog() {
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="wf-approval-title"
-        className="anim-dialog flex max-h-[70vh] w-[460px] flex-col rounded-xl bg-panel-raised shadow-2xl"
+        className="anim-dialog flex max-h-[70vh] w-[460px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
       >
         <header className="flex items-start gap-3 px-5 py-3">
           <Icon size={16} className={approval.kind === "warning" ? "mt-0.5 shrink-0 text-warning" : "mt-0.5 shrink-0 text-accent"} />

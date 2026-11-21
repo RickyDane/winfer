@@ -453,7 +453,7 @@ function SendComments({ path, count }: { path: string; count: number }) {
         </span>
       </IconButton>
       {open && (
-        <div className="absolute top-full right-0 z-20 mt-1 w-56 rounded-md bg-panel-raised p-1 shadow-lg" onMouseLeave={() => setOpen(false)}>
+        <div className="absolute top-full right-0 z-20 mt-1 w-56 rounded-md border border-border bg-panel-raised p-1 shadow-lg" onMouseLeave={() => setOpen(false)}>
           <div className="px-2 py-1 text-[10px] text-fg-subtle">Ask an agent to address your comments</div>
           {panes.length === 0 && <div className="px-2 py-1 text-xs text-fg-muted">No panes in this workspace</div>}
           {panes.map((p, i) => (

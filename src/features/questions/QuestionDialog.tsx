@@ -37,7 +37,7 @@ export function QuestionDialog() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="wf-question-title"
-        className="anim-dialog flex max-h-[80vh] w-[500px] flex-col rounded-xl bg-panel-raised shadow-2xl"
+        className="anim-dialog flex max-h-[80vh] w-[500px] flex-col rounded-xl border border-border-strong bg-panel-raised shadow-2xl"
       >
         <header className="flex items-start gap-3 px-5 py-3">
           <MessageCircleQuestion size={16} className="mt-0.5 shrink-0 text-accent" />

@@ -118,7 +118,7 @@ function Chart({ bars, metric, range, kind }: { bars: Bar[]; metric: Metric; ran
           </div>
         {hovered && hover !== null && (
             <div
-              className="pointer-events-none absolute top-1 z-10 w-max min-w-40 rounded-md bg-panel px-2.5 py-2 text-xs shadow-lg"
+              className="pointer-events-none absolute top-1 z-10 w-max min-w-40 rounded-md border border-border-strong bg-panel px-2.5 py-2 text-xs shadow-lg"
               style={hover < bars.length / 2 ? { left: `calc(${((hover + 1) / bars.length) * 100}% + 6px)` } : { right: `calc(${((bars.length - hover) / bars.length) * 100}% + 6px)` }}
             >
               <div className="mb-1 text-fg-muted">{barLabel(hovered, range)}</div>

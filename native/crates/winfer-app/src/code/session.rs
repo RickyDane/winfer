@@ -50,6 +50,12 @@ pub fn type_into(state: &mut CodeState, draft: &mut String, data: &str) {
             return;
         }
     }
+    // A bracketed paste is text, not keys: its line breaks stay in the composer instead of sending.
+    if let Some(pasted) = data.strip_prefix("\x1b[200~") {
+        let pasted = pasted.strip_suffix("\x1b[201~").unwrap_or(pasted);
+        draft.push_str(&pasted.replace("\r\n", "\n").replace('\r', "\n"));
+        return;
+    }
     let clean = data.replace("\x1b[200~", "").replace("\x1b[201~", "");
     let parts: Vec<&str> = clean.split('\r').collect();
     for (i, part) in parts.iter().enumerate() {
@@ -367,12 +373,15 @@ mod tests {
     }
 
     #[test]
-    fn a_pasted_block_is_sent_whole_with_its_line_ends() {
+    fn a_pasted_block_goes_into_the_composer_whole() {
         let mut s = CodeState::default();
         let mut draft = String::new();
-        type_into(&mut s, &mut draft, "\x1b[200~one\rtwo\x1b[201~");
+        type_into(&mut s, &mut draft, "\x1b[200~one\rtwo\r\x1b[201~");
+        assert!(s.outbox.is_empty());
+        assert_eq!(draft, "one\ntwo\n");
+        type_into(&mut s, &mut draft, "\r");
         assert_eq!(s.outbox.len(), 1);
-        assert_eq!(draft, "two");
+        assert_eq!(s.outbox[0].json()["text"], "one\ntwo");
     }
 
     #[test]

@@ -3194,7 +3194,7 @@ export function SettingsModal() {
   return (
     <div className="anim-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-[3px]" onMouseDown={() => setSettings(false)}>
       <div
-        className="anim-dialog isolate flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] bg-panel-raised shadow-2xl"
+        className="anim-dialog isolate flex h-[min(700px,90vh)] w-[min(1000px,94vw)] overflow-hidden rounded-[14px] border border-border-strong bg-panel-raised shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Its own rounded left corners: WebKit doesn't clip scrolling children to the dialog's radius. */}

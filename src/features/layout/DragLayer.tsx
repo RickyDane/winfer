@@ -37,7 +37,7 @@ export function DragLayer() {
       )}
       {pane && (
         <div
-          className="absolute flex items-center gap-1.5 rounded-md bg-panel-raised px-2 py-1 text-xs text-fg shadow-xl"
+          className="absolute flex items-center gap-1.5 rounded-md border border-border-strong bg-panel-raised px-2 py-1 text-xs text-fg shadow-xl"
           style={{ left: x + 12, top: y + 12 }}
         >
           <ProviderIcon provider={pane.provider} size={12} />

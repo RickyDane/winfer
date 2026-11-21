@@ -403,7 +403,7 @@ export function SidePanel() {
   const tab = (active: boolean) =>
     cn("flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs transition-colors duration-150", active ? "bg-active font-medium text-fg" : "text-fg-muted hover:bg-hover hover:text-fg");
   return (
-    <aside style={{ width }} className="anim-fade flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] bg-panel shadow-sm">
+    <aside style={{ width }} className="anim-fade flex h-full shrink-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-border bg-panel shadow-sm">
       <div role="tablist" className="flex shrink-0 items-center gap-0.5 px-1.5 py-1">
         <button role="tab" aria-selected={panel === "browser"} onClick={() => setPanel("browser")} className={tab(panel === "browser")}>
           <Globe size={12} /> Browser

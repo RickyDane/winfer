@@ -76,7 +76,7 @@ export function PaneNote({ paneId }: { paneId: string }) {
             e.stopPropagation();
             if (e.key === "Escape") { e.preventDefault(); close(); }
           }}
-          className="anim-menu fixed z-[70] flex max-h-[calc(100vh-16px)] w-80 max-w-[calc(100vw-16px)] flex-col gap-2 overflow-auto rounded-lg bg-panel-raised p-3 text-fg shadow-xl"
+          className="anim-menu fixed z-[70] flex max-h-[calc(100vh-16px)] w-80 max-w-[calc(100vw-16px)] flex-col gap-2 overflow-auto rounded-lg border border-border-strong bg-panel-raised p-3 text-fg shadow-xl"
         >
           <div className="flex items-center justify-between">
             <span id={`${id}-title`} className="text-xs font-medium">Pane note</span>

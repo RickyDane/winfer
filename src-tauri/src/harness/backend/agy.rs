@@ -8,11 +8,12 @@
 //! changes, so those restart the process on the same conversation (`--conversation`). Print
 //! mode runs every tool without asking, whatever the mode.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -568,9 +569,12 @@ struct Bridge {
     /// A settings change waiting for the turn to end, to restart with it.
     restart: bool,
     usage: Usage,
+    /// The running turn's steps reported their usage, so its `result` usage (their sum) is already counted.
+    step_usage: bool,
     turn: TurnTokens,
     mode: Mode,
     bg_owner: String,
+    asks: Arc<Asks>,
 }
 
 impl Bridge {
@@ -601,9 +605,19 @@ impl Bridge {
             }
             // agy doesn't take a message into the running turn: it runs it as the next turn.
             Cmd::Steer(msg) => return self.on_cmd(Cmd::Send(msg), proc, opts),
-            Cmd::Interrupt if self.busy => return Next::Restart,
-            Cmd::Interrupt => {}
-            Cmd::Approve(..) | Cmd::Answer(..) => {}
+            Cmd::Interrupt => {
+                self.asks.decline_all();
+                if self.busy {
+                    return Next::Restart;
+                }
+            }
+            // Declining a question goes through `Approve`.
+            Cmd::Approve(id, _) => {
+                self.asks.declined.lock().unwrap().insert(id);
+            }
+            Cmd::Answer(id, answers) => {
+                self.asks.answers.lock().unwrap().insert(id, answers);
+            }
             Cmd::SetModel(m) => {
                 opts.model = split_effort(&m).0.to_string();
                 return self.settings_changed();
@@ -629,7 +643,10 @@ impl Bridge {
                     self.emit(Ev::Notice("Antigravity can't stop that task from here.".into()));
                 }
             }
-            Cmd::Shutdown => return Next::Stop,
+            Cmd::Shutdown => {
+                self.asks.decline_all();
+                return Next::Stop;
+            }
         }
         Next::Go
     }
@@ -924,7 +941,9 @@ impl Bridge {
                 let r = &v["result"];
                 let ok = r["status"] == "SUCCESS";
                 self.settle_subagents_on_result(ok);
-                if !r["usage"].is_null() {
+                // The result's usage is the whole turn's: the sum of its model requests. Counting it
+                // again would double the totals and make the context the sum of every request's prompt.
+                if !r["usage"].is_null() && !std::mem::take(&mut self.step_usage) {
                     self.on_usage(&r["usage"]);
                 }
                 if !ok {
@@ -999,6 +1018,7 @@ impl Bridge {
             }
         }
         if !s["usage"].is_null() {
+            self.step_usage = true;
             self.on_usage(&s["usage"]);
         }
     }
@@ -1082,9 +1102,106 @@ fn spawn(opts: &Opts, mcp_dir: Option<&Path>, settings: Option<&str>, catalog: &
     LineProcess::spawn("agy", &args(opts, mcp_dir, settings, catalog), &[], &opts.cwd, me.clone())
 }
 
+/// What the model is told when winfer's `ask_user` is attached.
+const ASK_USER_NOTE: &str = "To ask the user a question (a choice, a decision, a missing detail), call the `ask_user` tool of the winfer MCP server. Never use the built-in `ask_question` tool: print mode skips it and returns an empty answer.";
+
+/// Antigravity's own `ask_question` has no way to reach the user in print mode (it comes back
+/// skipped), so winfer's `ask_user` MCP tool stands in: it's attached even though winfer code
+/// otherwise hides it (its other backends show their own picker). False if there's no winfer server.
+fn expose_ask_user(servers: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(env) = servers.get_mut("winfer").and_then(|s| s["env"].as_object_mut()) else {
+        return false;
+    };
+    if let Some(hidden) = env.get(crate::mcp::HIDE_ENV).and_then(Value::as_str).map(String::from) {
+        let kept: Vec<&str> = hidden.split(',').map(str::trim).filter(|t| !t.is_empty() && *t != crate::harness::tools::ASK_USER).collect();
+        if kept.is_empty() {
+            env.remove(crate::mcp::HIDE_ENV);
+        } else {
+            env.insert(crate::mcp::HIDE_ENV.into(), json!(kept.join(",")));
+        }
+    }
+    true
+}
+
+/// Sends winfer's `ask_user` to winfer code's own picker: the MCP server asks winfer code's server
+/// (`bg::serve`) rather than the app. False when winfer code runs no such server.
+fn route_ask_user(servers: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(env) = servers.get_mut("winfer").and_then(|s| s["env"].as_object_mut()) else {
+        return false;
+    };
+    if !env.contains_key(crate::harness::bg::CODE_BG_ENV) {
+        return false;
+    }
+    env.insert(crate::harness::bg::CODE_ASK_ENV.into(), json!("1"));
+    true
+}
+
+/// Questions from Antigravity's `ask_user` calls (answered through the TUI's picker), by id.
+#[derive(Default)]
+struct Asks {
+    answers: Mutex<HashMap<String, Vec<String>>>,
+    /// Questions the user dismissed.
+    declined: Mutex<HashSet<String>>,
+    /// Questions waiting for an answer.
+    open: Mutex<HashSet<String>>,
+}
+
+impl Asks {
+    fn decline_all(&self) {
+        let open = self.open.lock().unwrap().clone();
+        self.declined.lock().unwrap().extend(open);
+    }
+}
+
+static ASK_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+/// An `ask_user` call: shows the questions as the TUI's picker and waits for the answers.
+fn ask_user(events: &Events, asks: &Asks, args: &Value) -> (bool, String) {
+    use crate::harness::event::{Approval, Question};
+    use crate::harness::tools;
+    let questions = Question::parse_all(args);
+    if questions.is_empty() {
+        return (false, "ask_user needs at least one question with its options.".into());
+    }
+    let id = format!("q-agy-{}", ASK_SERIAL.fetch_add(1, Ordering::Relaxed));
+    asks.open.lock().unwrap().insert(id.clone());
+    let approval = Approval { id: id.clone(), tool: "Question".into(), title: tools::title(tools::ASK_USER, args), questions: questions.clone(), ..Default::default() };
+    let started = std::time::Instant::now();
+    let answers = if events.send(Ev::Approval(approval)).is_err() {
+        None
+    } else {
+        loop {
+            if let Some(a) = asks.answers.lock().unwrap().remove(&id) {
+                break Some(a);
+            }
+            if asks.declined.lock().unwrap().remove(&id) || started.elapsed() > Duration::from_secs(3600) {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    asks.open.lock().unwrap().remove(&id);
+    match answers {
+        Some(a) => (true, tools::ask_user_result(&questions, &a)),
+        None => (true, tools::ASK_USER_DECLINED.to_string()),
+    }
+}
+
 pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut opts = opts;
     opts.model = split_effort(&opts.model).0.to_string();
+    let asks = Arc::new(Asks::default());
+    if expose_ask_user(&mut opts.mcp) {
+        if !opts.bg_owner.is_empty() && route_ask_user(&mut opts.mcp) {
+            let (sink, asks) = (events.clone(), asks.clone());
+            crate::harness::bg::set_asker(&opts.bg_owner, Arc::new(move |args| ask_user(&sink, &asks, args)));
+        }
+        let system = opts.system.take().filter(|s| !s.trim().is_empty());
+        opts.system = Some(match system {
+            Some(s) => format!("{s}\n\n{ASK_USER_NOTE}"),
+            None => ASK_USER_NOTE.to_string(),
+        });
+    }
     let catalog = models();
     let mut mcp_err = None;
     let mcp_dir = if opts.mcp.is_empty() {
@@ -1122,9 +1239,11 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         subagents: HashMap::new(),
         restart: false,
         usage: Usage { window: window(&opts.model), ..Default::default() },
+        step_usage: false,
         turn: TurnTokens::default(),
         mode: opts.mode,
         bg_owner: opts.bg_owner.clone(),
+        asks,
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     if let Some(err) = mcp_err {
@@ -1254,8 +1373,8 @@ mod tests {
     fn test_bridge(tx: Sender<Ev>, model: &str) -> Bridge {
         Bridge {
             events: tx, session: None, model: model.into(), system: None, busy: true, queued: 0,
-            calls: HashMap::new(), subagents: HashMap::new(), restart: false, usage: Usage::default(),
-            turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(),
+            calls: HashMap::new(), subagents: HashMap::new(), restart: false, usage: Usage::default(), step_usage: false,
+            turn: TurnTokens::default(), mode: Mode::Ask, bg_owner: String::new(), asks: Arc::default(),
         }
     }
 
@@ -1273,6 +1392,44 @@ mod tests {
         assert!(matches!(&evs[0], Ev::ToolStart { name, title, .. } if name == "Bash" && title == "ls"));
         assert!(matches!(&evs[1], Ev::ToolEnd { ok: true, output, .. } if output == "a.txt"));
         assert!(matches!(&evs[2], Ev::TurnDone));
+    }
+
+    #[test]
+    fn ask_user_is_unhidden_for_antigravity() {
+        let mut servers = serde_json::Map::new();
+        servers.insert("winfer".into(), json!({ "env": { "WINFER_MCP_HIDE": "ask_user,kb_save" } }));
+        assert!(expose_ask_user(&mut servers));
+        assert_eq!(servers["winfer"]["env"]["WINFER_MCP_HIDE"], "kb_save");
+        servers.insert("winfer".into(), json!({ "env": { "WINFER_MCP_HIDE": "ask_user" } }));
+        assert!(expose_ask_user(&mut servers));
+        assert!(servers["winfer"]["env"].get("WINFER_MCP_HIDE").is_none());
+        assert!(!expose_ask_user(&mut serde_json::Map::new()));
+    }
+
+    #[test]
+    fn ask_user_goes_to_the_picker() {
+        let mut servers = serde_json::Map::new();
+        servers.insert("winfer".into(), json!({ "env": {} }));
+        assert!(!route_ask_user(&mut servers));
+        servers.insert("winfer".into(), json!({ "env": { "WINFER_CODE_BG": "127.0.0.1:1 t o" } }));
+        assert!(route_ask_user(&mut servers));
+        assert_eq!(servers["winfer"]["env"]["WINFER_CODE_ASK"], "1");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let asks = Arc::new(Asks::default());
+        let answerer = {
+            let asks = asks.clone();
+            std::thread::spawn(move || {
+                let Ev::Approval(a) = rx.recv().unwrap() else { panic!("expected an approval") };
+                assert_eq!(a.tool, "Question");
+                asks.answers.lock().unwrap().insert(a.id, vec!["Blue".into()]);
+            })
+        };
+        let args = json!({ "questions": [{ "question": "Color?", "header": "Color", "options": [{ "label": "Red", "description": "" }, { "label": "Blue", "description": "" }], "multiSelect": false }] });
+        let (ok, text) = ask_user(&tx, &asks, &args);
+        answerer.join().unwrap();
+        assert!(ok && text.contains("Blue"), "{text}");
+        assert!(asks.open.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1480,5 +1637,28 @@ mod tests {
         assert_eq!(u.output, 972);
         assert_eq!(u.context, 61_972);
         assert!(u.cached <= u.input);
+    }
+
+    /// agy's `result` usage is the sum of the turn's steps (seen from agy 2026-11): not counted twice.
+    #[test]
+    fn result_usage_does_not_recount_steps() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = test_bridge(tx, "gemini-4-neon");
+        let step = |i: u64, input: u64, cached: u64, output: u64| json!({ "event": "step_update", "step_update": {
+            "step_index": i, "step_type": "agent_response", "state": "DONE",
+            "usage": { "input_tokens": input, "cache_read_tokens": cached, "output_tokens": output } } });
+        b.on_line(&step(1, 10_248, 0, 284));
+        b.on_line(&step(4, 2_672, 8_191, 67));
+        b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS",
+            "usage": { "input_tokens": 12_920, "cache_read_tokens": 8_191, "output_tokens": 351 } } }));
+        let Some(Ev::Usage(u)) = rx.try_iter().filter(|e| matches!(e, Ev::Usage(_))).last() else { panic!("expected Usage event") };
+        assert_eq!(u.context, 2_672 + 8_191 + 67);
+        assert_eq!(u.input, 10_248 + 2_672 + 8_191);
+        assert_eq!(u.cached, 8_191);
+        assert_eq!(u.output, 351);
+        // A turn whose steps reported nothing still counts its result.
+        b.on_line(&json!({ "event": "result", "result": { "status": "SUCCESS", "usage": { "input_tokens": 100, "output_tokens": 5 } } }));
+        let Some(Ev::Usage(u)) = rx.try_iter().filter(|e| matches!(e, Ev::Usage(_))).last() else { panic!("expected Usage event") };
+        assert_eq!(u.context, 105);
     }
 }

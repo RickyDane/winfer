@@ -88,7 +88,7 @@ export function PluginPageView({ page }: { page: PluginPage }) {
   }, [page]);
 
   return (
-    <div className="wf-plugin-page relative min-h-0 min-w-0 flex-1 overflow-y-auto rounded-[var(--radius-pane)] bg-panel shadow-sm">
+    <div className="wf-plugin-page relative min-h-0 min-w-0 flex-1 overflow-y-auto rounded-[var(--radius-pane)] border border-border bg-panel shadow-sm">
       {error && <p className="m-6 text-xs text-danger">This page failed to load: {error}</p>}
       <div ref={ref} className="h-full select-text" />
     </div>

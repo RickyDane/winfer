@@ -81,10 +81,9 @@ impl Root {
         let sessions = s.all_panes().map(|p| format!("{}={}", p.id, p.session_id.as_deref().unwrap_or_default())).collect::<Vec<_>>().join(",");
         let open: Vec<String> = s.all_panes().map(|p| p.id.clone()).collect();
         let gone: Vec<String> = s.progress.keys().chain(s.run_times.keys()).filter(|id| !open.contains(id)).cloned().collect();
-        let unnamed: Vec<(String, String)> = s.all_panes().filter_map(|p| {
+        let unnamed: Vec<(String, String, Option<String>)> = s.all_panes().filter_map(|p| {
             let progress = s.progress.get(&p.id)?;
-            let task = progress.task.clone().filter(|_| progress.title.is_none())?;
-            Some((p.id.clone(), task))
+            Some((p.id.clone(), progress.task.clone()?, progress.title.clone()))
         }).collect();
         if sessions != self.progress_ui.sessions_key || !gone.is_empty() {
             self.progress_ui.sessions_key = sessions;
@@ -93,11 +92,17 @@ impl Root {
                 s.sync_session_titles();
             });
         }
-        for (id, task) in unnamed {
-            if !self.progress_ui.naming.contains_key(&id) && self.progress_ui.named_from.get(&id) != Some(&task) {
-                self.progress_ui.named_from.insert(id.clone(), task.clone());
-                self.name_session(id, task, cx);
+        for (id, task, title) in unnamed {
+            if self.progress_ui.naming.contains_key(&id) || self.progress_ui.named_from.get(&id) == Some(&task) {
+                continue;
             }
+            // A title restored from the last run stays until the agent gets a new request.
+            let first_seen = !self.progress_ui.named_from.contains_key(&id);
+            self.progress_ui.named_from.insert(id.clone(), task.clone());
+            if first_seen && title.is_some() {
+                continue;
+            }
+            self.name_session(id, task, title, cx);
         }
         self.progress_ui.seconds += 1;
         if self.progress_ui.seconds % 5 != 0 || !self.progress_on(cx) {
@@ -121,25 +126,37 @@ impl Root {
         }
     }
 
-    /// Asks the LLM's quickest model for a short title, from the session's first message.
-    fn name_session(&mut self, id: String, message: String, cx: &mut Context<Self>) {
+    /// Names a session from its message. With a `current` title, the LLM first checks whether
+    /// that title still fits the new request and keeps it if so.
+    fn name_session(&mut self, id: String, message: String, current: Option<String>, cx: &mut Context<Self>) {
         let Some((provider, model)) = self.llm_provider(cx) else { return };
         self.progress_ui.seq += 1;
         let seq = self.progress_ui.seq;
         self.progress_ui.naming.insert(id.clone(), seq);
-        let system = format!("{NAMING} Write it in {}.", reply_language(&message));
+        let language = reply_language(&message);
+        let system = match &current {
+            Some(title) => format!(
+                "{NAMING} The user just sent a new request in a session already titled \"{title}\". If that title still describes the work (a follow-up, fix or refinement of the same thing), reply with exactly KEEP. Only if the request moves to clearly different work, reply with a new title. Write it in {language}."
+            ),
+            None => format!("{NAMING} Write it in {language}."),
+        };
+        let label = if current.is_some() { "New request" } else { "First message" };
         let first: String = message.chars().take(2000).collect();
         cx.spawn(async move |this, cx| {
-            let answer = compose(provider, model, system, format!("First message:\n{first}"), true).await;
+            let answer = compose(provider, model, system, format!("{label}:\n{first}"), true).await;
             let _ = this.update(cx, |this, cx| {
                 if this.progress_ui.naming.get(&id) != Some(&seq) {
                     return;
                 }
                 this.progress_ui.naming.remove(&id);
-                let Some(title) = answer.ok().and_then(|a| clean_title(&a)).filter(|t| !wrong_script(t, &message)) else { return };
-                // A title restored from the resumed session meanwhile wins.
+                let Ok(answer) = answer else { return };
+                if answer.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '*' || c == '.').eq_ignore_ascii_case("keep") {
+                    return;
+                }
+                let Some(title) = clean_title(&answer).filter(|t| !wrong_script(t, &message)) else { return };
+                // A title changed meanwhile (restored from the resumed session) wins.
                 this.update_state(cx, |s| {
-                    if s.progress.get(&id).is_some_and(|p| p.title.is_none()) {
+                    if s.progress.get(&id).is_some_and(|p| p.title == current) {
                         super::title_swap::arm(&id, &title);
                         s.patch_progress(&id, |p| p.title = Some(title.clone()));
                     }

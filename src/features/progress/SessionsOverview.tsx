@@ -79,7 +79,7 @@ export function SessionsOverview() {
 
   return (
     <div className="anim-backdrop fixed inset-0 z-40 flex justify-end bg-black/25 p-2" onMouseDown={() => setOverlay(null)}>
-      <div className="anim-slide flex h-full w-[440px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="anim-slide flex h-full w-[440px] max-w-[90vw] flex-col overflow-hidden rounded-xl border border-border-strong bg-panel-raised shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="space-y-3 px-4 pt-4 pb-3">
           <div className="flex items-center gap-2">
             <Activity size={15} className="text-accent" />
