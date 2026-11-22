@@ -88,9 +88,31 @@ enum Waiting {
     Toast(String),
 }
 
+/// Where creating the host webview stands (see `start_host`).
+#[derive(Default, PartialEq)]
+enum HostStart {
+    #[default]
+    Idle,
+    Starting,
+    /// Not retried until the plugins are reloaded, so a broken WebView doesn't toast every frame.
+    Failed,
+}
+
+/// The main window's raw handle, so the webview can be built while nothing borrows the window.
+struct ParentWindow(wry::raw_window_handle::RawWindowHandle);
+
+impl wry::raw_window_handle::HasWindowHandle for ParentWindow {
+    fn window_handle(&self) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        // SAFETY: taken from the live window right before the synchronous build; if the window is
+        // closed during WebView2's message pump, its stale HWND only makes the build fail.
+        Ok(unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(self.0) })
+    }
+}
+
 #[derive(Default)]
 pub(super) struct PluginHost {
     webview: Option<WebView>,
+    start: HostStart,
     ready: bool,
     /// `plugins_list` as JSON, for Settings.
     pub infos: Vec<Value>,
@@ -371,6 +393,9 @@ impl Root {
             let _ = this.update(cx, |this, cx| {
                 this.plugins.infos = infos;
                 this.plugins.runtime_errors.clear();
+                if this.plugins.start == HostStart::Failed {
+                    this.plugins.start = HostStart::Idle;
+                }
                 if let Ok(found) = found {
                     let providers = found.into_iter().map(|p| crate::model::AgentProvider { info: p.provider, installed: p.installed }).collect();
                     this.update_state(cx, |s| s.set_providers(providers));
@@ -403,7 +428,7 @@ impl Root {
 
     /// Starts the webview once there's a plugin to run, and keeps its state, theme and page in sync.
     pub(super) fn sync_plugins(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.plugins.webview.is_none() && !self.enabled_plugins().is_empty() {
+        if self.plugins.webview.is_none() && self.plugins.start == HostStart::Idle && !self.enabled_plugins().is_empty() {
             self.start_host(window, cx);
         }
         if !self.plugins.ready {
@@ -461,27 +486,46 @@ impl Root {
             || !self.questions.is_empty() || !self.plugins.approvals.is_empty() || self.orchestration.has_layer() || self.plugins.apps_open
     }
 
+    /// Builds the webview from a task instead of right here (called from `render`): on Windows,
+    /// WebView2's setup runs a nested message loop (`webview2_com::wait_with_pump`) that runs other
+    /// GPUI tasks and frames, which panic on the App borrow if a `render` or `update` still holds it.
     fn start_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (tx, rx) = async_channel::unbounded::<String>();
-        let built = WebViewBuilder::new()
-            .with_custom_protocol("winfer".into(), |_, request| serve(request.uri().path()))
-            .with_ipc_handler(move |request| {
-                let _ = tx.try_send(request.into_body());
-            })
-            .with_url(host_url("index.html"))
-            .with_visible(false)
-            .with_devtools(cfg!(debug_assertions))
-            .with_bounds(Rect { position: dpi::LogicalPosition::new(0.0, 0.0).into(), size: dpi::LogicalSize::new(1.0, 1.0).into() })
-            .build_as_child(window);
-        match built {
-            Ok(webview) => self.plugins.webview = Some(webview),
-            Err(err) => {
-                self.toast(format!("Plugins can't run: {err}"), cx);
+        self.plugins.start = HostStart::Starting;
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(parent) = cx.update(|window, _| wry::raw_window_handle::HasWindowHandle::window_handle(window).map(|h| ParentWindow(h.as_raw()))) else {
+                return;
+            };
+            let (tx, rx) = async_channel::unbounded::<String>();
+            let built = parent.map_err(|err| err.to_string()).and_then(|parent| {
+                WebViewBuilder::new()
+                    .with_custom_protocol("winfer".into(), |_, request| serve(request.uri().path()))
+                    .with_ipc_handler(move |request| {
+                        let _ = tx.try_send(request.into_body());
+                    })
+                    .with_url(host_url("index.html"))
+                    .with_visible(false)
+                    .with_devtools(cfg!(debug_assertions))
+                    .with_bounds(Rect { position: dpi::LogicalPosition::new(0.0, 0.0).into(), size: dpi::LogicalSize::new(1.0, 1.0).into() })
+                    .build_as_child(&parent)
+                    .map_err(|err| err.to_string())
+            });
+            let started = this.update(cx, |this, cx| match built {
+                Ok(webview) => {
+                    this.plugins.webview = Some(webview);
+                    this.plugins.start = HostStart::Idle;
+                    this.plugins.shown = Some(false);
+                    cx.notify();
+                    true
+                }
+                Err(err) => {
+                    this.plugins.start = HostStart::Failed;
+                    this.toast(format!("Plugins can't run: {err}"), cx);
+                    false
+                }
+            });
+            if !matches!(started, Ok(true)) {
                 return;
             }
-        }
-        self.plugins.shown = Some(false);
-        cx.spawn_in(window, async move |this, cx| {
             while let Ok(text) = rx.recv().await {
                 let Ok(msg) = serde_json::from_str::<Value>(&text) else { continue };
                 if this.update_in(cx, |this, window, cx| this.on_host_message(msg, window, cx)).is_err() {
