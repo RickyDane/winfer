@@ -107,7 +107,18 @@ pub struct CodeView {
     last_user: Option<String>,
     /// Row cap the composer currently grows to (follows the pane height).
     composer_rows: usize,
+    /// How many of the newest rows are shown; older ones hide behind a "Load more" row.
+    visible: usize,
+    /// Rows currently hidden above the "Load more" row (0 = no such row).
+    hidden: usize,
+    /// Item count last frame: any change is new activity and re-caps the transcript.
+    seen_items: usize,
+    /// "Load more" was clicked: keep the reader's place when the rows are prepended.
+    load_pending: bool,
 }
+
+/// Rows shown initially and added per "Load more".
+const PAGE_ROWS: usize = 30;
 
 /// A link clicked in the transcript: a web address or a file path (with `:line`).
 pub struct OpenLink(pub String);
@@ -586,7 +597,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3 }
+        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -1024,11 +1035,31 @@ impl CodeView {
         self.app.read(cx).rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true)
     }
 
+    fn load_more(&mut self, cx: &mut Context<Self>) {
+        self.visible += PAGE_ROWS;
+        self.load_pending = true;
+        cx.notify();
+    }
+
     /// Splices what changed since the last frame into the list state.
     fn sync_list(&mut self, items: &[Item], busy: bool, compact_tools: bool, now: u64) {
-        let rows = build_display_rows(items, busy, compact_tools);
+        let mut rows = build_display_rows(items, busy, compact_tools);
+        if items.len() != self.seen_items {
+            self.seen_items = items.len();
+            self.visible = PAGE_ROWS;
+            self.load_pending = false;
+        }
+        let (old_hidden, old_lm) = (self.hidden, (self.hidden > 0) as usize);
+        let hidden = rows.len().saturating_sub(self.visible);
+        rows.drain(..hidden);
+        self.hidden = hidden;
+        let lm = (hidden > 0) as usize;
         let wg_max_h = work_group_max_h(self.pane_size.height / px(1.0)) as u32;
-        let sigs: Vec<u64> = rows.iter().map(|r| row_signature(r, items, &self.flipped, &self.toggled, now, wg_max_h)).collect();
+        let mut sigs: Vec<u64> = Vec::with_capacity(rows.len() + lm);
+        if hidden > 0 {
+            sigs.push(0x10AD_0000_0000_0000 ^ hidden as u64);
+        }
+        sigs.extend(rows.iter().map(|r| row_signature(r, items, &self.flipped, &self.toggled, now, wg_max_h)));
         let first = sigs.iter().zip(&self.sigs).position(|(a, b)| a != b).unwrap_or(sigs.len().min(self.sigs.len()));
         if first < self.sigs.len() || sigs.len() != self.sigs.len() {
             // Only re-measure the rows that changed, so rows after a toggled card keep their heights.
@@ -1042,6 +1073,12 @@ impl CodeView {
             // keep the offset within it instead.
             if old_range.contains(&top.item_ix) && old_range.len() == count {
                 self.list.scroll_to(top);
+            }
+            if std::mem::take(&mut self.load_pending) && old_hidden > hidden {
+                // Older rows were prepended: stay on the row that was at the top.
+                let shift = old_hidden - hidden;
+                let at_lm = top.item_ix < old_lm;
+                self.list.scroll_to(ListOffset { item_ix: top.item_ix.saturating_sub(old_lm) + shift + lm, offset_in_item: if at_lm { px(0.0) } else { top.offset_in_item } });
             }
         }
         // Rows present on the first frame (a resumed session) don't animate in.
@@ -2975,8 +3012,21 @@ impl Render for CodeView {
             self.welcome(c, cx)
         } else {
             let list_env = env.clone();
-            let count = rows.len();
+            let hidden = self.hidden;
+            let lm = (hidden > 0) as usize;
+            let count = rows.len() + lm;
             list(self.list.clone(), move |ix, _, cx| {
+                if lm == 1 && ix == 0 {
+                    let (view, c) = (list_env.view.clone(), list_env.c);
+                    let label = format!("Load more… ({hidden} older hidden)");
+                    return div().w_full().flex().justify_center().pt_4().pb_2().child(
+                        div().id("cw-load-more").h(px(28.0)).px_3().flex().items_center().rounded_full().cursor_pointer().border_1().border_color(c.border).bg(c.raised).text_size(px(12.0)).text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(move |_, _, cx| { let _ = view.update(cx, |v, cx| v.load_more(cx)); })
+                            .child(label),
+                    ).into_any_element();
+                }
+                let ix = ix - lm;
                 let items = &model.read(cx).state.items;
                 let Some(row) = rows.get(ix) else {
                     return div().into_any_element();
@@ -2990,12 +3040,12 @@ impl Render for CodeView {
                     DisplayRow::Item(item_ix) => {
                         let (prev, next) = (item_ix.checked_sub(1).and_then(|i| items.get(i)), items.get(item_ix + 1));
                         match items.get(*item_ix) {
-                            Some(item) => render_item(&list_env, item, ix == 0, prev, next),
+                            Some(item) => render_item(&list_env, item, ix == 0 && lm == 0, prev, next),
                             None => div().into_any_element(),
                         }
                     }
                 };
-                div().w_full().flex().justify_center().px_4().debug_selector(move || format!("cw-row-{ix}")).child(div().w_full().pt(px(if ix == 0 { 16.0 } else { 0.0 })).pb(px(if ix + 1 == count { 12.0 } else { 0.0 })).child(inner)).into_any_element()
+                div().w_full().flex().justify_center().px_4().debug_selector(move || format!("cw-row-{ix}")).child(div().w_full().pt(px(if ix == 0 && lm == 0 { 16.0 } else { 0.0 })).pb(px(if ix + lm + 1 == count { 12.0 } else { 0.0 })).child(inner)).into_any_element()
             }).size_full().into_any_element()
         };
         let jump = away.then(|| {
