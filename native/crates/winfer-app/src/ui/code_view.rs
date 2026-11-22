@@ -575,6 +575,17 @@ impl CodeView {
     pub fn new(model: Entity<CodeModel>, app: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3).soft_wrap(true).submit_on_enter(true).placeholder("Message WinferCode…  (/ for commands, @ for files)"));
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| match event {
+            InputEvent::Focus => {
+                let pane_id = this.model.read(cx).pane_id.clone();
+                this.app.update(cx, |s, cx| {
+                    if s.focused_pane_id.as_deref() != Some(pane_id.as_str())
+                        || s.pane(&pane_id).is_some_and(|p| p.workspace_id != s.active_workspace_id)
+                    {
+                        s.focus_pane(&pane_id);
+                        cx.notify();
+                    }
+                });
+            }
             InputEvent::PressEnter { shift: false, secondary: false } => this.enter(window, cx),
             InputEvent::Change => {
                 let text = input.read(cx).value().to_string();

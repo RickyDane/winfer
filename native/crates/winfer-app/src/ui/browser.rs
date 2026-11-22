@@ -2,7 +2,7 @@
 //! screencast (port of `src/features/browser/BrowserPanel.tsx` and `BrowserView.tsx`).
 
 use crate::backend;
-use crate::model::AppState;
+use crate::model::{AppState, View};
 use crate::terminal::SESSIONS;
 use crate::theme::{self, Colors};
 use gpui_kit::assets::IconName;
@@ -304,6 +304,63 @@ fn cdp_key(key: &str, typed: Option<&str>) -> (String, String, u32) {
     }
 }
 
+/// Resolves which workspace's browser tab the panel displays:
+/// - In `View::Workspace` (`!show_all`), always limited to the active workspace.
+/// - In Overview and other views (`show_all`), keeps `current` while that workspace still exists
+///   and has tabs, else prefers `active_workspace` if it has tabs, else the first workspace with
+///   tabs, else keeps `current` (if it exists) or falls back to `active_workspace`.
+fn resolve_shown_workspace(
+    show_all: bool,
+    current: Option<&str>,
+    active_workspace: Option<&str>,
+    workspace_ids: &[String],
+    tabs: &HashMap<String, Vec<Tab>>,
+) -> Option<String> {
+    if !show_all {
+        return active_workspace.map(str::to_string);
+    }
+    let exists = |id: &str| workspace_ids.iter().any(|w| w == id);
+    let has_tabs = |id: &str| tabs.get(id).is_some_and(|t| !t.is_empty());
+    if let Some(cur) = current.filter(|id| exists(id) && has_tabs(id)) {
+        return Some(cur.to_string());
+    }
+    if let Some(act) = active_workspace.filter(|id| exists(id) && has_tabs(id)) {
+        return Some(act.to_string());
+    }
+    if let Some(first) = workspace_ids.iter().find(|id| has_tabs(id)) {
+        return Some(first.clone());
+    }
+    current.filter(|id| exists(id)).or(active_workspace).map(str::to_string)
+}
+
+/// Which `(workspace_id, workspace_name, tabs)` groups appear in the browser tab strip.
+/// - When `show_all` is true (Overview, etc.): every workspace with open tabs, in workspace order.
+/// - When `show_all` is false (Workspace view): only the active workspace's tabs.
+fn visible_tab_groups(
+    show_all: bool,
+    shown_workspace: Option<&str>,
+    workspaces: &[(String, String)],
+    tabs: &HashMap<String, Vec<Tab>>,
+) -> Vec<(String, String, Vec<Tab>)> {
+    if show_all {
+        workspaces
+            .iter()
+            .filter_map(|(id, name)| {
+                let list = tabs.get(id).cloned().unwrap_or_default();
+                (!list.is_empty()).then(|| (id.clone(), name.clone(), list))
+            })
+            .collect()
+    } else {
+        let Some(ws) = shown_workspace else { return Vec::new() };
+        let list = tabs.get(ws).cloned().unwrap_or_default();
+        if list.is_empty() {
+            return Vec::new();
+        }
+        let name = workspaces.iter().find(|(id, _)| id == ws).map(|(_, n)| n.clone()).unwrap_or_default();
+        vec![(ws.to_string(), name, list)]
+    }
+}
+
 /// Asks the app to move the browser into its own window, or back into the side panel.
 pub struct ToggleWindow;
 
@@ -316,7 +373,7 @@ pub struct BrowserPanel {
     tabs: HashMap<String, Vec<Tab>>,
     active_tab: HashMap<String, String>,
     workspace: Option<String>,
-    opening: Option<String>,
+    opening: HashSet<String>,
     /// Workspaces whose browser failed to start: not retried by every repaint (that relaunched
     /// the browser in a loop and hid the error), only by the Retry button.
     failed: HashSet<String>,
@@ -324,7 +381,7 @@ pub struct BrowserPanel {
     needs_install: bool,
     installing: bool,
     address: Entity<InputState>,
-    address_for: Option<(String, String)>,
+    address_for: Option<(String, String, String)>,
     focus: FocusHandle,
     latest: Arc<Mutex<Option<Arc<RenderImage>>>>,
     shown: Option<Arc<RenderImage>>,
@@ -363,12 +420,13 @@ pub struct BrowserPanel {
     panel_bounds: Bounds<Pixels>,
     #[cfg(debug_assertions)]
     dev_url_opened: bool,
-    /// A blank replacement tab was requested after the last tab closed; cleared once any tab exists.
-    blank_pending: bool,
+    /// Workspaces where a blank replacement tab was requested after the last tab closed.
+    blank_pending: HashSet<String>,
 }
 
 impl BrowserPanel {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe(&state, |_, _, cx| cx.notify()).detach();
         let (input, input_rx) = async_channel::unbounded();
         input_loop(input_rx);
         let (frames, frames_rx) = async_channel::bounded(1);
@@ -393,7 +451,7 @@ impl BrowserPanel {
             tabs: HashMap::new(),
             active_tab: HashMap::new(),
             workspace: None,
-            opening: None,
+            opening: HashSet::new(),
             failed: HashSet::new(),
             message: None,
             needs_install: false,
@@ -430,7 +488,7 @@ impl BrowserPanel {
             panel_bounds: Bounds::default(),
             #[cfg(debug_assertions)]
             dev_url_opened: false,
-            blank_pending: false,
+            blank_pending: HashSet::new(),
         }
     }
 
@@ -482,10 +540,24 @@ impl BrowserPanel {
                     self.agent_tabs.insert(tab.to_string(), Instant::now());
                     self.later(AGENT_LINGER, cx);
                 }
+                if let Some(ws) = payload["workspaceId"].as_str()
+                    && !self.tabs.contains_key(ws)
+                    && !self.needs_install
+                    && !self.installing
+                {
+                    self.open_workspace(ws.to_string(), cx);
+                }
             }
             "browser://agent-navigate" => {
                 let (Some(ws), Some(tab)) = (payload["workspaceId"].as_str(), payload["targetId"].as_str()) else { return };
                 self.active_tab.insert(ws.to_string(), tab.to_string());
+                let show_all = self.state.read(cx).view() != View::Workspace;
+                if show_all {
+                    self.workspace = Some(ws.to_string());
+                }
+                if !self.tabs.contains_key(ws) && !self.needs_install && !self.installing {
+                    self.open_workspace(ws.to_string(), cx);
+                }
                 self.state.update(cx, |s, cx| {
                     if !s.browser_open || s.side_panel != Some(crate::model::SidePanel::Browser) {
                         s.side_panel = Some(crate::model::SidePanel::Browser);
@@ -522,6 +594,15 @@ impl BrowserPanel {
         }
     }
 
+    fn ensure_blank_tab(&mut self, workspace: String) {
+        if self.blank_pending.insert(workspace.clone()) {
+            tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                let _ = browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), workspace, "about:blank".to_string()).await;
+            });
+        }
+    }
+
     fn set_tabs(&mut self, workspace: String, tabs: Vec<Tab>, cx: &mut Context<Self>) {
         let active = self.active_tab.get(&workspace).filter(|id| tabs.iter().any(|t| t.id == **id)).cloned();
         match active.or_else(|| tabs.last().map(|t| t.id.clone())) {
@@ -532,15 +613,25 @@ impl BrowserPanel {
                 self.active_tab.remove(&workspace);
             }
         }
+        let had_tabs = self.tabs.get(&workspace).is_some_and(|t| !t.is_empty());
         self.tabs.insert(workspace.clone(), tabs);
-        // Never leave the browser without a tab: once the last one overall closes, open a blank one.
-        if self.tabs.values().any(|t| !t.is_empty()) {
-            self.blank_pending = false;
-        } else if !std::mem::replace(&mut self.blank_pending, true) {
-            tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                let _ = browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), workspace, "about:blank".to_string()).await;
-            });
+        if self.tabs.get(&workspace).is_some_and(|t| !t.is_empty()) {
+            self.blank_pending.remove(&workspace);
+        }
+        let (show_all, active_ws) = {
+            let s = self.state.read(cx);
+            (s.view() != View::Workspace, s.active_workspace_id.clone())
+        };
+        // Never leave the visible browser without a tab: in Workspace view, keep the active
+        // workspace's tab strip populated; in Overview (all tabs), only replace once every
+        // workspace's last tab closes.
+        let need_blank = if show_all {
+            had_tabs && !self.tabs.values().any(|t| !t.is_empty())
+        } else {
+            had_tabs && workspace == active_ws && self.tabs.get(&workspace).is_none_or(|t| t.is_empty())
+        };
+        if need_blank {
+            self.ensure_blank_tab(workspace);
         }
         // Development aid: load this page once the browser is up.
         #[cfg(debug_assertions)]
@@ -760,10 +851,10 @@ impl BrowserPanel {
     }
 
     fn open_workspace(&mut self, workspace: String, cx: &mut Context<Self>) {
-        if self.opening.as_ref() == Some(&workspace) || self.tabs.contains_key(&workspace) || self.failed.contains(&workspace) {
+        if self.opening.contains(&workspace) || self.tabs.contains_key(&workspace) || self.failed.contains(&workspace) {
             return;
         }
-        self.opening = Some(workspace.clone());
+        self.opening.insert(workspace.clone());
         cx.spawn(async move |this, cx| {
             let target = workspace.clone();
             let opened = tauri::async_runtime::spawn(async move {
@@ -778,7 +869,7 @@ impl BrowserPanel {
             })
             .await;
             let _ = this.update(cx, |this, cx| {
-                this.opening = None;
+                this.opening.remove(&workspace);
                 match opened {
                     Ok(Ok(Some(tabs))) => {
                         this.message = None;
@@ -1045,7 +1136,9 @@ impl BrowserPanel {
     /// Opens `url` the way `openUrl` does: the tab already on that site, the blank current tab,
     /// or a new one. Resolves to the (label, url) of a tab it took over, if any.
     pub fn open_url(&mut self, input: String, new_tab: bool, workspace: Option<String>, cx: &mut Context<Self>) -> Task<Result<Option<(String, String)>, String>> {
-        let Some(workspace) = workspace.or_else(|| self.workspace.clone()) else { return Task::ready(Err("No workspace is open.".to_string())) };
+        let Some(workspace) = workspace.or_else(|| self.workspace.clone()).or_else(|| self.state.read(cx).active().map(|w| w.id.clone())) else {
+            return Task::ready(Err("No workspace is open.".to_string()));
+        };
         let url = normalize_url(&input);
         cx.spawn(async move |this, cx| {
             let needs_open = this.update(cx, |this, _| !this.tabs.contains_key(&workspace)).map_err(|e| e.to_string())?;
@@ -1104,7 +1197,10 @@ impl BrowserPanel {
             .map_err(|e| e.to_string())??;
             let w = workspace.clone();
             this.update(cx, |this, cx| {
-                this.active_tab.insert(w, id);
+                this.active_tab.insert(w.clone(), id);
+                if this.state.read(cx).view() != View::Workspace {
+                    this.workspace = Some(w);
+                }
                 cx.notify();
             })
             .map_err(|e| e.to_string())?;
@@ -1129,8 +1225,8 @@ impl BrowserPanel {
     }
 
     pub fn close_current(&self) {
-        if let Some(id) = self.active().map(|(_, t)| t.id.clone()) {
-            self.close_tab(id);
+        if let Some((workspace, id)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) {
+            self.close_tab(workspace, id);
         }
     }
 
@@ -1157,16 +1253,29 @@ impl BrowserPanel {
         });
     }
 
-    pub fn new_tab(&self) {
-        let Some(workspace) = self.workspace.clone() else { return };
-        tauri::async_runtime::spawn(async move {
-            let app = backend::app();
-            let _ = browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), workspace, "about:blank".to_string()).await;
-        });
+    pub fn new_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.clone().or_else(|| self.state.read(cx).active().map(|w| w.id.clone())) else { return };
+        cx.spawn(async move |this, cx| {
+            let target = workspace.clone();
+            let id = tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), target, "about:blank".to_string()).await
+            })
+            .await
+            .ok()
+            .and_then(Result::ok);
+            if let Some(id) = id {
+                let _ = this.update(cx, |this, cx| {
+                    this.workspace = Some(workspace.clone());
+                    this.active_tab.insert(workspace, id);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
-    fn close_tab(&self, tab: String) {
-        let Some(workspace) = self.workspace.clone() else { return };
+    fn close_tab(&self, workspace: String, tab: String) {
         tauri::async_runtime::spawn(async move {
             let app = backend::app();
             let _ = browser::browser_close_tab(app.clone(), app.state::<BrowserManager>(), workspace, tab).await;
@@ -1174,9 +1283,9 @@ impl BrowserPanel {
     }
 
     fn update_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.active().map(|(w, t)| (t.id.clone(), t.url.clone(), w.clone()));
-        let Some((id, url, _)) = current else { return };
-        let key = (id, url.clone());
+        let current = self.active().map(|(w, t)| (w.clone(), t.id.clone(), t.url.clone()));
+        let Some((ws, id, url)) = current else { return };
+        let key = (ws, id, url.clone());
         if self.address_for.as_ref() != Some(&key) && !self.address.read(cx).focus_handle(cx).is_focused(window) {
             self.address_for = Some(key);
             self.address.update(cx, |input, cx| input.set_value(if url == "about:blank" { String::new() } else { url }, window, cx));
@@ -1185,11 +1294,12 @@ impl BrowserPanel {
 
     /// Browser-style tabs with darker tab surfaces and subtle elevation shadows; tabs an agent is
     /// using carry a small agent badge next to their page icon.
-    fn render_tabs(&mut self, c: Colors, dark: bool, theme_id: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_tabs(&mut self, show_all: bool, workspaces: &[(String, String)], c: Colors, dark: bool, theme_id: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Clipped at the strip's bottom edge so tab shadows never spill onto the toolbar below.
         let mut strip = div().flex().items_end().gap_1().px_2().pt_2().overflow_hidden();
-        let workspace = self.workspace.clone().unwrap_or_default();
-        let active = self.active_tab.get(&workspace).cloned();
+        let groups = visible_tab_groups(show_all, self.workspace.as_deref(), workspaces, &self.tabs);
+        let multi = groups.len() > 1;
+        let shown_workspace = self.workspace.clone();
         let now = Instant::now();
         let active_bg = c.raised; // same surface as the toolbar below, so the tab joins it
         let idle_bg = if c.light { theme::blend(c.panel, c.fg, 0.04) } else {
@@ -1218,53 +1328,75 @@ impl BrowserPanel {
         } else {
             active_shadow.clone()
         };
-        for tab in self.tabs.get(&workspace).cloned().unwrap_or_default() {
-            let is_active = active.as_ref() == Some(&tab.id);
-            let agent = self.agent_tabs.get(&tab.id).is_some_and(|at| now.duration_since(*at) < AGENT_LINGER);
-            let icon: AnyElement = if let Some(image) = self.favicon(&tab, dark) {
-                img(image).size(px(14.0)).flex_shrink_0().rounded(px(3.0)).into_any_element()
-            } else {
-                Icon::new(IconName::Globe).size(px(13.0)).text_color(c.subtle).into_any_element()
-            };
-            let (select, close, ws, middle) = (tab.id.clone(), tab.id.clone(), workspace.clone(), tab.id.clone());
-            let group = SharedString::from(format!("tab-group-{}", tab.id));
-            strip = strip.child(
-                div().id(SharedString::from(format!("tab-{}", tab.id))).group(group.clone()).flex().items_center().gap(px(7.0)).min_w_0().flex_basis(px(160.0)).flex_shrink(1.0)
-                    .h(px(30.0)).pl_2p5().pr_1p5().rounded_tl_lg().rounded_tr_lg().rounded_bl(px(0.0)).rounded_br(px(0.0)).text_size(px(12.0)).cursor_pointer()
-                    .shadow(if is_active { active_shadow.clone() } else { idle_shadow.clone() })
-                    .border_1().border_b_0().border_color(if is_active { edge } else { idle_edge })
-                    .when(is_active, |d| d.bg(active_bg).font_weight(FontWeight::MEDIUM).text_color(c.fg))
-                    .when(!is_active, |d| d.bg(idle_bg).text_color(c.muted).hover(move |d| d.bg(idle_hover_bg).text_color(c.fg)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.active_tab.insert(ws.clone(), select.clone());
-                        cx.notify();
-                    }))
-                    // Middle click closes, like any browser.
-                    .on_mouse_up(MouseButton::Middle, cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.close_tab(middle.clone());
-                    }))
-                    .child(icon)
-                    .child(div().flex_1().min_w_0().truncate().child(tab_label(&tab)))
-                    .when(agent, |d| d.child(div().size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().bg(Hsla { a: 0.16, ..c.accent })
-                        .child(Icon::new(IconName::Bot).size(px(10.0)).text_color(c.accent))))
-                    .child(
-                        div().id(SharedString::from(format!("tab-close-{}", tab.id))).size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_sm().cursor_pointer()
-                            .when(!is_active, |d| d.invisible().group_hover(group.clone(), |d| d.visible()))
-                            .hover(move |d| d.bg(c.active))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.close_tab(close.clone());
-                            }))
-                            .child(Icon::new(IconName::X).size(px(11.0)).text_color(c.subtle)),
-                    ),
-            );
+        for (group_index, (workspace, workspace_name, tabs)) in groups.into_iter().enumerate() {
+            if multi && group_index > 0 {
+                strip = strip.child(div().mx_0p5().mb(px(7.0)).h(px(14.0)).w(px(1.0)).flex_shrink_0().bg(c.border));
+            }
+            if multi && !workspace_name.is_empty() {
+                strip = strip.child(
+                    div()
+                        .max_w(px(96.0))
+                        .flex_shrink_0()
+                        .truncate()
+                        .px_0p5()
+                        .mb(px(7.0))
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c.subtle)
+                        .child(workspace_name),
+                );
+            }
+            let active = self.active_tab.get(&workspace).cloned();
+            for tab in tabs {
+                let is_active = shown_workspace.as_deref() == Some(workspace.as_str()) && active.as_ref() == Some(&tab.id);
+                let agent = self.agent_tabs.get(&tab.id).is_some_and(|at| now.duration_since(*at) < AGENT_LINGER);
+                let icon: AnyElement = if let Some(image) = self.favicon(&tab, dark) {
+                    img(image).size(px(14.0)).flex_shrink_0().rounded(px(3.0)).into_any_element()
+                } else {
+                    Icon::new(IconName::Globe).size(px(13.0)).text_color(c.subtle).into_any_element()
+                };
+                let (select, close, middle) = (tab.id.clone(), tab.id.clone(), tab.id.clone());
+                let (select_ws, close_ws, middle_ws) = (workspace.clone(), workspace.clone(), workspace.clone());
+                let group = SharedString::from(format!("tab-group-{}-{}", workspace, tab.id));
+                strip = strip.child(
+                    div().id(SharedString::from(format!("tab-{}-{}", workspace, tab.id))).group(group.clone()).flex().items_center().gap(px(7.0)).min_w_0().flex_basis(px(160.0)).flex_shrink(1.0)
+                        .h(px(30.0)).pl_2p5().pr_1p5().rounded_tl_lg().rounded_tr_lg().rounded_bl(px(0.0)).rounded_br(px(0.0)).text_size(px(12.0)).cursor_pointer()
+                        .shadow(if is_active { active_shadow.clone() } else { idle_shadow.clone() })
+                        .border_1().border_b_0().border_color(if is_active { edge } else { idle_edge })
+                        .when(is_active, |d| d.bg(active_bg).font_weight(FontWeight::MEDIUM).text_color(c.fg))
+                        .when(!is_active, |d| d.bg(idle_bg).text_color(c.muted).hover(move |d| d.bg(idle_hover_bg).text_color(c.fg)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.workspace = Some(select_ws.clone());
+                            this.active_tab.insert(select_ws.clone(), select.clone());
+                            cx.notify();
+                        }))
+                        // Middle click closes, like any browser.
+                        .on_mouse_up(MouseButton::Middle, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.close_tab(middle_ws.clone(), middle.clone());
+                        }))
+                        .child(icon)
+                        .child(div().flex_1().min_w_0().truncate().child(tab_label(&tab)))
+                        .when(agent, |d| d.child(div().size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().bg(Hsla { a: 0.16, ..c.accent })
+                            .child(Icon::new(IconName::Bot).size(px(10.0)).text_color(c.accent))))
+                        .child(
+                            div().id(SharedString::from(format!("tab-close-{}-{}", workspace, tab.id))).size(px(16.0)).flex_shrink_0().flex().items_center().justify_center().rounded_sm().cursor_pointer()
+                                .when(!is_active, |d| d.invisible().group_hover(group.clone(), |d| d.visible()))
+                                .hover(move |d| d.bg(c.active))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.close_tab(close_ws.clone(), close.clone());
+                                }))
+                                .child(Icon::new(IconName::X).size(px(11.0)).text_color(c.subtle)),
+                        ),
+                );
+            }
         }
         strip.child(
             div().id("new-tab").size(px(28.0)).ml_0p5().mb_0p5().flex_shrink_0().flex().items_center().justify_center().rounded_md().cursor_pointer().text_color(c.subtle)
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
                 .tooltip(|window, cx| Tooltip::new("New tab").build(window, cx))
-                .on_click(cx.listener(|this, _, _, _| this.new_tab()))
+                .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
                 .child(Icon::new(IconName::Plus).size(px(14.0))),
         )
     }
@@ -1473,16 +1605,24 @@ impl Focusable for BrowserPanel {
 
 impl Render for BrowserPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (theme_id, workspace) = {
+        let (theme_id, view, active_workspace, workspaces) = {
             let s = self.state.read(cx);
-            (s.theme.clone(), s.active().map(|w| w.id.clone()))
+            let ws_list: Vec<(String, String)> = s.workspaces.iter().map(|w| (w.id.clone(), w.name.clone())).collect();
+            (s.theme.clone(), s.view(), s.active().map(|w| w.id.clone()), ws_list)
         };
+        let show_all = view != View::Workspace;
+        let workspace_ids: Vec<String> = workspaces.iter().map(|(id, _)| id.clone()).collect();
+        let workspace = resolve_shown_workspace(show_all, self.workspace.as_deref(), active_workspace.as_deref(), &workspace_ids, &self.tabs);
         let c = theme::colors(&theme_id);
         if self.workspace != workspace {
             self.workspace = workspace.clone();
         }
         if let Some(id) = workspace.filter(|_| !self.needs_install && !self.installing) {
-            self.open_workspace(id, cx);
+            if !self.tabs.contains_key(&id) {
+                self.open_workspace(id, cx);
+            } else if self.tabs.get(&id).is_some_and(|t| t.is_empty()) && !self.failed.contains(&id) {
+                self.ensure_blank_tab(id);
+            }
         }
         self.update_address(window, cx);
         if let Some(next) = self.latest.lock().take() {
@@ -1648,7 +1788,7 @@ impl Render for BrowserPanel {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_tabs(c, dark, &theme_id, cx))
+            .child(self.render_tabs(show_all, &workspaces, c, dark, &theme_id, cx))
             .child(self.render_toolbar(c, cx))
             .children(self.render_agent_bar(c))
             .when(certs_off || self.cert_prompt, |d| d.child(
@@ -1674,8 +1814,9 @@ impl Render for BrowserPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tab, cdp_key, favicon_image, normalize_url, page_rect, related_tab};
+    use super::{Tab, cdp_key, favicon_image, normalize_url, page_rect, related_tab, resolve_shown_workspace, visible_tab_groups};
     use gpui_kit::{Bounds, point, px, size};
+    use std::collections::HashMap;
 
     #[test]
     fn related_tabs_match_by_site() {
@@ -1725,5 +1866,37 @@ mod tests {
         assert!(favicon_image(&url, true).is_some());
         assert!(favicon_image("data:image/png;base64,AAAA", false).is_none());
         assert!(favicon_image("nope", false).is_none());
+    }
+
+    #[test]
+    fn overview_shows_all_tabs_and_workspace_view_limits_to_active() {
+        let tab = |id: &str| Tab { id: id.into(), url: "https://example.com".into(), title: id.into(), favicon: String::new() };
+        let workspaces: Vec<(String, String)> = vec![("ws-a".into(), "Alpha".into()), ("ws-b".into(), "Beta".into()), ("ws-c".into(), "Gamma".into())];
+        let ids: Vec<String> = workspaces.iter().map(|(id, _)| id.clone()).collect();
+        let mut tabs = HashMap::new();
+        tabs.insert("ws-a".into(), vec![tab("a1")]);
+        tabs.insert("ws-b".into(), vec![tab("b1"), tab("b2")]);
+        tabs.insert("ws-c".into(), vec![]);
+
+        // Overview shows every workspace with open tabs, regardless of active workspace.
+        let all = visible_tab_groups(true, Some("ws-a"), &workspaces, &tabs);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].0, "ws-a");
+        assert_eq!(all[1].0, "ws-b");
+        assert_eq!(all[1].2.len(), 2);
+
+        // Workspace view limits visible tabs to the active workspace only.
+        let only_a = visible_tab_groups(false, Some("ws-a"), &workspaces, &tabs);
+        assert_eq!(only_a.len(), 1);
+        assert_eq!(only_a[0].0, "ws-a");
+
+        // Workspace view always follows the active workspace.
+        assert_eq!(resolve_shown_workspace(false, Some("ws-b"), Some("ws-a"), &ids, &tabs).as_deref(), Some("ws-a"));
+
+        // Overview keeps the user's selected tab workspace even when active workspace changes,
+        // and falls back to a workspace with tabs if the current workspace runs out of tabs.
+        assert_eq!(resolve_shown_workspace(true, Some("ws-b"), Some("ws-a"), &ids, &tabs).as_deref(), Some("ws-b"));
+        assert_eq!(resolve_shown_workspace(true, Some("ws-c"), Some("ws-a"), &ids, &tabs).as_deref(), Some("ws-a"));
+        assert_eq!(resolve_shown_workspace(true, Some("ws-c"), Some("ws-c"), &ids, &tabs).as_deref(), Some("ws-a"));
     }
 }

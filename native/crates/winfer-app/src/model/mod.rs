@@ -643,6 +643,14 @@ impl AppState {
                 w.zoomed_pane_id = Some(id.to_string());
             }
         }
+        if let Some(ws_id) = self.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == id)).map(|w| w.id.clone())
+            && self.active_workspace_id != ws_id
+        {
+            self.active_workspace_id = ws_id.clone();
+            if !self.expanded_workspaces.iter().any(|w| w == &ws_id) {
+                self.expanded_workspaces.push(ws_id);
+            }
+        }
         self.focused_pane_id = Some(id.to_string());
         if let Some(p) = self.pane_mut(id) {
             p.unseen = false;
@@ -908,5 +916,29 @@ mod tests {
     fn session_keys_expand_home() {
         let home = home();
         assert_eq!(session_key("claude", "~/x/"), format!("claude:{home}/x"));
+    }
+
+    #[test]
+    fn focus_pane_switches_to_panes_workspace() {
+        let mut s = AppState::new();
+        s.hydrate(serde_json::json!({ "workspaces": [], "ui": null }));
+        let ws_a = s.active_workspace_id.clone();
+        let pane_a = s.add_pane("claude", AddPane::default());
+        let ws_b = s.create_workspace("other", "/tmp/other");
+        let pane_b = s.add_pane("claude", AddPane::default());
+        s.expanded_workspaces.retain(|w| w != &ws_a);
+        s.set_view(View::Overview);
+        assert_eq!(s.active_workspace_id, ws_b);
+        assert_eq!(s.focused_pane_id.as_deref(), Some(pane_b.as_str()));
+
+        s.focus_pane(&pane_a);
+        assert_eq!(s.active_workspace_id, ws_a);
+        assert_eq!(s.focused_pane_id.as_deref(), Some(pane_a.as_str()));
+        assert_eq!(s.view(), View::Overview);
+        assert!(s.expanded_workspaces.contains(&ws_a));
+
+        s.focus_pane(&pane_b);
+        assert_eq!(s.active_workspace_id, ws_b);
+        assert_eq!(s.focused_pane_id.as_deref(), Some(pane_b.as_str()));
     }
 }

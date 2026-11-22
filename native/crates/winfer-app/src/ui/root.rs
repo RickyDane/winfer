@@ -1353,10 +1353,27 @@ impl Root {
         let focused = s.focused_pane_id.as_deref() == Some(&pane.id);
         let c = *c;
         let pane_id = pane.id.clone();
+        let pane_ws_id = pane.workspace_id.clone();
+        let body_pane_id = pane.id.clone();
+        let body_ws_id = pane.workspace_id.clone();
+        let body_wrap = if is_code {
+            div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().child(body)
+        } else {
+            div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body)
+        }
+        .capture_any_mouse_down(cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+            if e.button == MouseButton::Left {
+                let s = this.state.read(cx);
+                if s.focused_pane_id.as_deref() != Some(body_pane_id.as_str()) || s.active_workspace_id != body_ws_id {
+                    this.update_state(cx, |s| s.focus_pane(&body_pane_id));
+                }
+            }
+        }));
         div()
             .absolute()
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                if this.state.read(cx).focused_pane_id.as_deref() != Some(pane_id.as_str()) {
+                let s = this.state.read(cx);
+                if s.focused_pane_id.as_deref() != Some(pane_id.as_str()) || s.active_workspace_id != pane_ws_id {
                     this.update_state(cx, |s| s.focus_pane(&pane_id));
                 }
             }))
@@ -1372,11 +1389,7 @@ impl Root {
             .when(dragged, |d| d.opacity(0.4))
             .children(sky)
             .child(header)
-            .child(if is_code {
-                div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().child(body)
-            } else {
-                div().flex_1().min_h_0().rounded_b(px(15.0)).overflow_hidden().pt_1p5().pb_1p5().pl_2p5().pr_1().child(body)
-            })
+            .child(body_wrap)
             .children(search)
             .when_some(starting, |d, text| {
                 d.child(

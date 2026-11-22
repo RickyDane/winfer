@@ -788,7 +788,7 @@ impl Root {
                 });
                 self.browser.update(cx, |b, cx| b.open_url(url, new_tab, None, cx)).detach();
             }
-            C::BrowserNewTab => self.browser.update(cx, |b, _| b.new_tab()),
+            C::BrowserNewTab => self.browser.update(cx, |b, cx| b.new_tab(cx)),
             C::BrowserCloseTab => self.browser.update(cx, |b, _| b.close_current()),
             C::BrowserHistory(delta) => self.browser.update(cx, |b, cx| b.go(delta, cx)),
             C::BrowserPick => {
