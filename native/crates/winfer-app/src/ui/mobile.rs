@@ -418,7 +418,7 @@ impl Root {
             }
             "pane.set" => {
                 let Some(model) = self.chat(&pane.id) else {
-                    return reply(json!({ "t": "ack", "ok": false, "error": "Only winfer code agents have a model to change." }));
+                    return reply(json!({ "t": "ack", "ok": false, "error": "Only WinferCode agents have a model to change." }));
                 };
                 let (wanted_model, wanted_effort) = (req["model"].as_str().filter(|m| !m.is_empty()), req["effort"].as_str().filter(|e| !e.is_empty()));
                 let st = { let s = &model.read(cx).state; (s.model.clone(), s.models.clone()) };

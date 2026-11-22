@@ -347,7 +347,7 @@ impl CodeView {
     fn sheet_mcp(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let mcp = self.model.read(cx).state.mcp.clone();
         if mcp.is_empty() {
-            return dim(c, "No MCP servers. Add them under \"mcpServers\" in winfer code's config.json (inside winfer, its own server is added automatically).").into_any_element();
+            return dim(c, "No MCP servers. Add them under \"mcpServers\" in WinferCode's config.json (inside winfer, its own server is added automatically).").into_any_element();
         }
         div().flex().flex_col().gap_1().children(mcp.into_iter().map(|m| div().flex().items_center().gap_1p5().px_2().py_1().text_size(px(12.5)).text_color(c.fg).child(Icon::new(IconName::Activity).size(px(12.0)).text_color(c.success)).child(m))).into_any_element()
     }
@@ -428,7 +428,7 @@ impl CodeView {
     fn sheet_compaction(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
         let st = &self.model.read(cx).state;
         let (trim, compact) = (st.trim_at, st.compact_at);
-        let mut out = div().flex().flex_col().gap_3().child(dim(c, "When the context fills up, winfer code first trims old tool output (micro-compact), then summarizes the conversation (full compact)."));
+        let mut out = div().flex().flex_col().gap_3().child(dim(c, "When the context fills up, WinferCode first trims old tool output (micro-compact), then summarizes the conversation (full compact)."));
         for (label, current, is_trim) in [("Micro-compact at", trim, true), ("Full compact at", compact, false)] {
             let mut row = div().flex().flex_wrap().gap_1();
             for p in std::iter::once(0u64).chain((30..=95).step_by(5)) {

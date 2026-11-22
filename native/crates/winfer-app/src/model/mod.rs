@@ -260,7 +260,6 @@ pub struct AppState {
     /// A private note per pane, kept for the pane's life.
     pub pane_notes: HashMap<String, String>,
     pub auto_approve: Vec<String>,
-    pub lean_codex: bool,
     pub system_prompt: Option<String>,
     pub enabled_tools: Vec<String>,
     pub default_provider: Option<String>,
@@ -299,9 +298,9 @@ pub struct AppState {
 }
 
 /// `ui` fields the typed state above owns; everything else round-trips through `rest`.
-const OWNED_UI: [&str; 26] = [
+const OWNED_UI: [&str; 25] = [
     "viewer",
-    "activeWorkspaceId", "sidebarOpen", "expandedWorkspaces", "browserOpen", "agentModels", "autoApprove", "leanCodex",
+    "activeWorkspaceId", "sidebarOpen", "expandedWorkspaces", "browserOpen", "agentModels", "autoApprove",
     "systemPrompt", "enabledTools", "defaultProvider", "editor", "shortcuts", "browserWidth", "sidebarWidth", "sidePanel",
     "theme", "view", "terminalFontSize", "overviewLayout", "showPaneCost", "pageTabIconsOnly",
     "recentSessions", "paneTasks", "sessionTitles", "activeView",
@@ -448,7 +447,6 @@ impl AppState {
         self.agent_models = map_of("agentModels");
         self.pane_notes = map_of("paneNotes");
         self.auto_approve = list_of("autoApprove");
-        self.lean_codex = bool_of("leanCodex", false);
         self.system_prompt = str_of("systemPrompt");
         self.enabled_tools = list_of("enabledTools");
         self.default_provider = str_of("defaultProvider");
@@ -489,7 +487,7 @@ impl AppState {
         let owned = serde_json::json!({
             "activeWorkspaceId": self.active_workspace_id, "sidebarOpen": self.sidebar_open,
             "expandedWorkspaces": self.expanded_workspaces, "browserOpen": self.browser_open,
-            "agentModels": self.agent_models, "paneNotes": self.pane_notes.iter().filter(|(id, _)| open.contains(&id.as_str())).collect::<HashMap<_, _>>(), "autoApprove": self.auto_approve, "leanCodex": self.lean_codex,
+            "agentModels": self.agent_models, "paneNotes": self.pane_notes.iter().filter(|(id, _)| open.contains(&id.as_str())).collect::<HashMap<_, _>>(), "autoApprove": self.auto_approve,
             "systemPrompt": self.system_prompt, "enabledTools": self.enabled_tools,
             "defaultProvider": self.default_provider, "editor": self.editor, "shortcuts": self.shortcuts,
             "browserWidth": self.browser_width, "sidebarWidth": self.sidebar_width,
@@ -525,7 +523,22 @@ impl AppState {
     }
 
     pub fn provider_name(&self, id: &str) -> String {
-        self.providers.iter().find(|p| p.id == id).map_or_else(|| id.to_string(), |p| p.name.clone())
+        self.providers.iter().find(|p| p.id == id).map_or_else(
+            || if id == "winfer" { "WinferCode".to_string() } else { id.to_string() },
+            |p| p.name.clone(),
+        )
+    }
+
+    /// Stores the discovered providers with `winfer` (WinferCode) always first and branded as `WinferCode`.
+    pub fn set_providers(&mut self, mut providers: Vec<AgentProvider>) {
+        if let Some(pos) = providers.iter().position(|p| p.id == "winfer") {
+            providers[pos].info.name = "WinferCode".to_string();
+            if pos > 0 {
+                let winfer = providers.remove(pos);
+                providers.insert(0, winfer);
+            }
+        }
+        self.providers = providers;
     }
 
     pub fn has_hooks(&self, pane: &Pane) -> bool {
@@ -540,7 +553,7 @@ impl AppState {
         OPTIONAL_TOOLS.iter().filter(|t| !self.enabled_tools.iter().any(|e| e == *t)).map(|t| t.to_string()).collect()
     }
 
-    /// The agent new panes open with: the chosen default if installed, else Claude Code, else the shell.
+    /// The agent new panes open with: the chosen default if installed, else WinferCode, else Claude Code, else the shell.
     pub fn set_pane_note(&mut self, pane: &str, note: &str) {
         if note.is_empty() {
             self.pane_notes.remove(pane);
@@ -553,6 +566,7 @@ impl AppState {
         let installed = |id: &str| self.providers.iter().any(|p| p.id == id && p.installed);
         match &self.default_provider {
             Some(p) if installed(p) => p.clone(),
+            _ if installed("winfer") => "winfer".into(),
             _ if installed("claude") => "claude".into(),
             _ => "shell".into(),
         }

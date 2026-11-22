@@ -19,8 +19,7 @@ const GROUPS: [(&str, &[Page]); 5] = [
     ]),
     ("Agents", &[
         ("agents", "Agents", IconName::Bot, "New panes, models, versions, permissions, review and progress."),
-        ("winfer-code", "winfer code", IconName::SquareTerminal, "winfer's own agent: interface, model and context."),
-        ("local-models", "Local models", IconName::Cpu, "Run winfer code on a model served from your machine or network."),
+        ("winfer-code", "WinferCode", IconName::SquareTerminal, "winfer's own agent: interface, model and context."),
     ]),
     ("AI & voice", &[
         ("accounts", "Accounts", IconName::Users, "Sign-ins and the accounts winfer switches between."),
@@ -53,9 +52,6 @@ struct IndexEntry {
     words: String,
 }
 
-/// Labels of the local model settings (their page in the native build is "local-models").
-const LOCAL_LABELS: [&str; 5] = ["Use local models", "Host / Port", "API key", "Send level to chat template", "Web search"];
-
 /// The index: searchIndex.generated.json (every label and hint on the pages, made by
 /// `scripts/gen-settings-index.mjs`) plus searchIndex.json (words people use for a setting that
 /// its page doesn't). Entries with the same page and label are merged. Shared with the Tauri app.
@@ -64,8 +60,7 @@ static SEARCH_INDEX: std::sync::LazyLock<Vec<(&'static str, &'static str, &'stat
     for json in [include_str!("../../../../../src/features/settings/searchIndex.json"), include_str!("../../../../../src/features/settings/searchIndex.generated.json")] {
         let entries: Vec<IndexEntry> = serde_json::from_str(json).expect("settings search index");
         for e in entries {
-            // The native build keeps the local model settings on their own page.
-            let page = if e.page == "winfer-code" && LOCAL_LABELS.contains(&e.label.as_str()) { "local-models".to_string() } else { e.page };
+            let page = e.page;
             match merged.iter_mut().find(|m| m.0 == page && m.1 == e.label) {
                 Some(m) => {
                     m.2.push(' ');
@@ -363,11 +358,11 @@ impl Root {
     }
 
     pub(super) fn select_button(&self, key: &str, current: String, options: Vec<(String, String)>, c: Colors, cx: &mut Context<Self>, on_pick: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static) -> AnyElement {
-        self.select_button_inner(key, current, options, Some(200.0), 200.0, false, c, cx, on_pick)
+        self.select_button_inner(key, current, options, Some(200.0), 200.0, false, None, c, cx, on_pick)
     }
 
-    fn select_button_flex(&self, key: &str, current: String, options: Vec<(String, String)>, menu_w: f32, changed: bool, c: Colors, cx: &mut Context<Self>, on_pick: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static) -> AnyElement {
-        self.select_button_inner(key, current, options, None, menu_w, changed, c, cx, on_pick)
+    pub(super) fn select_button_flex(&self, key: &str, current: String, options: Vec<(String, String)>, menu_w: f32, changed: bool, c: Colors, cx: &mut Context<Self>, on_pick: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static) -> AnyElement {
+        self.select_button_inner(key, current, options, None, menu_w, changed, None, c, cx, on_pick)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -379,6 +374,7 @@ impl Root {
         trigger_w: Option<f32>,
         menu_w: f32,
         changed: bool,
+        recommended: Option<&str>,
         c: Colors,
         cx: &mut Context<Self>,
         on_pick: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static,
@@ -431,6 +427,7 @@ impl Root {
             for (i, (value, label)) in options.into_iter().enumerate() {
                 let (on_pick, picked) = (on_pick.clone(), value.clone());
                 let selected = label == current;
+                let is_rec = recommended.is_some_and(|r| r == value);
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("select-option-{key}-{i}")))
@@ -443,7 +440,7 @@ impl Root {
                         .text_xs()
                         .cursor_pointer()
                         .when(selected, |d| d.bg(Hsla { a: 0.14, ..c.accent }).text_color(c.fg).font_weight(FontWeight::MEDIUM))
-                        .when(!selected, |d| d.text_color(c.muted).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                        .when(!selected, |d| d.text_color(if is_rec { c.fg } else { c.muted }).hover(move |d| d.bg(c.hover).text_color(c.fg)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(s) = this.settings.as_mut() {
                                 s.open_select = None;
@@ -452,6 +449,7 @@ impl Root {
                             cx.notify();
                         }))
                         .child(div().flex_1().min_w_0().truncate().child(label))
+                        .when(is_rec, |d| d.child(crate::ui::code_pickers::recommended_badge(c, true)))
                         .when(selected, |d| d.child(Icon::new(IconName::Check).size(px(11.0)).flex_shrink_0().text_color(c.accent))),
                 );
             }
@@ -588,20 +586,10 @@ impl Root {
                         .child(div().h(px(4.0)).w(px(30.0)).rounded_full().bg(crate::theme::hex(&t.ui.fg_muted)))
                         .child(div().flex_1())
                         .child(div().flex().items_center().justify_between().child(dots).child(div().h(px(6.0)).w(px(16.0)).rounded_full().bg(crate::theme::hex(&t.ui.accent)))));
-                let tile_shadow = if selected {
-                    vec![
-                        BoxShadow { color: Hsla { a: if c.light { 0.22 } else { 0.35 }, ..c.accent }, offset: point(px(0.0), px(4.0)), blur_radius: px(14.0), spread_radius: px(-2.0), inset: false },
-                        BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.3 }), offset: point(px(0.0), px(2.0)), blur_radius: px(6.0), spread_radius: px(-1.0), inset: false },
-                    ]
-                } else {
-                    vec![
-                        BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.06 } else { 0.22 }), offset: point(px(0.0), px(1.0)), blur_radius: px(4.0), spread_radius: px(-1.0), inset: false },
-                    ]
-                };
                 grid = grid.child(
                     div().id(SharedString::from(format!("theme-{id}"))).w(px(160.0)).overflow_hidden().rounded_lg().border_1().cursor_pointer()
-                        .shadow(tile_shadow)
-                        .hover(move |d| d)
+                        .border_color(if selected { c.accent } else { c.edge })
+                        .when(!selected, |d| d.hover(move |d| d.border_color(Hsla { a: 0.5, ..c.accent })))
                         .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.pick_theme(&id, system_dark))))
                         .child(preview)
                         .child(div().rounded_b_lg().flex().items_center().gap_1().bg(if selected { Hsla { a: 0.15, ..c.accent } } else { c.raised }).px_2().py(px(6.0)).text_size(px(11.5))
@@ -651,12 +639,21 @@ impl Root {
                 .child(div().flex().items_center().gap_2().flex_shrink_0().child(control))
         };
 
-        // 1. Installed agents — compact 2-column grid of agent cockpit cards.
+        // 1. Installed agents — featured winfer code spotlight card on top, then a 2-column grid of other agents.
         let ui = self.settings.as_ref().unwrap();
         let (versions, checking, updating, prompt_open) = (ui.versions.clone(), ui.checking, ui.updating.clone(), ui.prompt_open);
-        let installed: Vec<_> = s.providers.iter().filter(|p| p.installed && p.id != "shell" && (p.command.is_some() || p.model_arg.is_some() || !p.auto_approve_args.is_empty())).collect();
+        let mut installed: Vec<_> = s.providers.iter().filter(|p| p.installed && p.id != "shell" && (p.command.is_some() || p.model_arg.is_some() || !p.auto_approve_args.is_empty())).collect();
+        if let Some(pos) = installed.iter().position(|p| p.id == "winfer")
+            && pos > 0
+        {
+            let winfer = installed.remove(pos);
+            installed.insert(0, winfer);
+        }
+        let mut featured_card: Option<Div> = None;
         let mut agent_grid = div().flex().flex_wrap().mx(px(-5.0));
+        let mut other_count = 0usize;
         for p in &installed {
+            let is_winfer = p.id == "winfer";
             let v = versions.get(&p.id);
             let current_ver = v.and_then(|v| v["current"].as_str()).unwrap_or_default().to_string();
             let (outdated, latest, updatable) = v.map_or((false, None, false), |v| (v["outdated"] == true, v["latest"].as_str().map(str::to_string), v["updatable"] == true));
@@ -675,7 +672,7 @@ impl Root {
             let update_btn = (!busy && updatable && (outdated || latest.is_none())).then(|| {
                 div()
                     .id(SharedString::from(format!("update-{update_id}")))
-                    .h(px(22.0))
+                    .h(px(24.0))
                     .px_2()
                     .flex()
                     .items_center()
@@ -697,13 +694,14 @@ impl Root {
             let default_badge = if is_default {
                 div()
                     .id(SharedString::from(format!("default-star-{star_id}")))
-                    .h(px(22.0))
-                    .px_1p5()
+                    .h(px(24.0))
+                    .px_2()
                     .flex()
                     .items_center()
                     .gap_1()
                     .rounded_md()
-                    .bg(Hsla { a: 0.14, ..c.accent })
+                    .bg(Hsla { a: if is_winfer { 0.18 } else { 0.14 }, ..c.accent })
+                    .when(is_winfer, |d| d.border_1().border_color(Hsla { a: 0.34, ..c.accent }))
                     .text_size(px(10.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(c.accent)
@@ -711,10 +709,35 @@ impl Root {
                     .child(crate::ui::code_pickers::star_icon(c.accent, 10.5))
                     .child("Default")
                     .into_any_element()
+            } else if is_winfer {
+                div()
+                    .id(SharedString::from(format!("default-star-{star_id}")))
+                    .h(px(24.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded_md()
+                    .bg(c.raised)
+                    .border_1()
+                    .border_color(card_border)
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(c.muted)
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .tooltip(move |window, cx| Tooltip::new(format!("Set {star_name} as default agent")).build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let id = star_id.clone();
+                        this.update_state(cx, |s| s.default_provider = if id == "winfer" { None } else { Some(id) });
+                    }))
+                    .child(Icon::new(IconName::Star).size(px(11.0)).text_color(c.subtle))
+                    .child("Set default")
+                    .into_any_element()
             } else {
                 div()
                     .id(SharedString::from(format!("default-star-{star_id}")))
-                    .size(px(22.0))
+                    .size(px(24.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -725,7 +748,7 @@ impl Root {
                     .tooltip(move |window, cx| Tooltip::new(format!("Set {star_name} as default agent")).build(window, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let id = star_id.clone();
-                        this.update_state(cx, |s| s.default_provider = Some(id));
+                        this.update_state(cx, |s| s.default_provider = if id == "winfer" { None } else { Some(id) });
                     }))
                     .child(Icon::new(IconName::Star).size(px(12.0)))
                     .into_any_element()
@@ -745,44 +768,6 @@ impl Root {
                 None
             };
 
-            let head = div()
-                .flex()
-                .items_center()
-                .gap_2p5()
-                .child(
-                    div()
-                        .size(px(30.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_lg()
-                        .bg(Hsla { a: if neutral { 0.08 } else { 0.14 }, ..tint })
-                        .border_1()
-                        .border_color(Hsla { a: if neutral { 0.14 } else { 0.25 }, ..tint })
-                        .child(crate::ui::code_pickers::mark(c, &p.id, 16.0, 1.0)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(1.0))
-                        .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(p.name.clone()))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1p5()
-                                .text_size(px(11.0))
-                                .text_color(c.subtle)
-                                .when(!current_ver.is_empty(), |d| d.child(div().font_family(mono.clone()).child(current_ver.clone())))
-                                .children(status_el),
-                        ),
-                )
-                .child(div().flex().items_center().gap_1().flex_shrink_0().children(update_btn).child(default_badge));
-
             let has_controls = p.model_arg.is_some() || !p.auto_approve_args.is_empty();
             let mut controls = div().flex().items_center().gap_1p5();
             if p.model_arg.is_some() {
@@ -793,7 +778,7 @@ impl Root {
                 let label = options.iter().find(|(id, _)| *id == chosen).map_or_else(|| if chosen.is_empty() { "CLI default".to_string() } else { chosen.clone() }, |(_, l)| l.clone());
                 let model_changed = s.agent_models.contains_key(&p.id);
                 let id = p.id.clone();
-                let select = self.select_button_flex(&format!("model-{}", p.id), label, options, 232.0, model_changed, c, cx, move |this, value, cx| {
+                let select = self.select_button_flex(&format!("model-{}", p.id), label, options, 240.0, model_changed, c, cx, move |this, value, cx| {
                     let id = id.clone();
                     this.update_state(cx, |s| {
                         if value.is_empty() {
@@ -803,7 +788,12 @@ impl Root {
                         }
                     });
                 });
-                controls = controls.child(div().flex_1().min_w_0().child(select));
+                controls = controls.child(
+                    div()
+                        .when(is_winfer, |d| d.w(px(250.0)).max_w_full())
+                        .when(!is_winfer, |d| d.flex_1().min_w_0())
+                        .child(select),
+                );
                 if model_changed {
                     let reset_id = p.id.clone();
                     let reset_name = p.name.clone();
@@ -878,20 +868,143 @@ impl Root {
                 controls = controls.child(pill);
             }
 
-            let card_box = div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .gap_2p5()
-                .rounded(px(10.0))
-                .bg(c.panel)
-                .border_1()
-                .border_color(if is_default { Hsla { a: 0.42, ..c.accent } } else { card_border })
-                .p_3()
-                .child(head)
-                .when(has_controls, |d| d.child(div().h(px(1.0)).w_full().bg(divider_color)).child(controls));
+            if is_winfer {
+                let configure_btn = div()
+                    .id("winfer-code-open-settings")
+                    .ml_auto()
+                    .h(px(28.0))
+                    .px_2p5()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .rounded_md()
+                    .bg(c.raised)
+                    .border_1()
+                    .border_color(card_border)
+                    .text_size(px(11.5))
+                    .text_color(c.muted)
+                    .cursor_pointer()
+                    .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                    .tooltip(|window, cx| Tooltip::new("Open WinferCode interface, model & context settings").build(window, cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings_page("winfer-code", window, cx)))
+                    .child(Icon::new(IconName::SlidersHorizontal).size(px(11.5)).text_color(c.subtle))
+                    .child("Configure")
+                    .child(Icon::new(IconName::ChevronRight).size(px(11.5)).text_color(c.subtle));
 
-            agent_grid = agent_grid.child(div().w(relative(0.5)).p(px(5.0)).child(card_box));
+                let hero_head = div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size(px(36.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_lg()
+                            .bg(Hsla { a: 0.12, ..tint })
+                            .border_1()
+                            .border_color(Hsla { a: 0.24, ..tint })
+                            .child(crate::ui::code_pickers::mark(c, &p.id, 19.0, 1.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(p.name.clone()))
+                                    .child(crate::ui::code_pickers::recommended_badge(c, false))
+                                    .when(!current_ver.is_empty(), |d| {
+                                        d.child(div().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(current_ver.clone()))
+                                    })
+                                    .when_some(status_el, |d, el| d.child(div().text_size(px(11.0)).child(el))),
+                            )
+                            .child(div().text_size(px(11.5)).text_color(c.muted).child("Built into winfer — multi-model chat, native UI, browser & MCP tools.")),
+                    )
+                    .child(div().flex().items_center().gap_1p5().flex_shrink_0().children(update_btn).child(default_badge));
+
+                let hero_controls = controls.child(configure_btn);
+
+                featured_card = Some(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap_2p5()
+                        .rounded(px(10.0))
+                        .bg(c.panel)
+                        .border_1()
+                        .border_color(if is_default { Hsla { a: 0.42, ..c.accent } } else { card_border })
+                        .p_3()
+                        .child(hero_head)
+                        .child(div().h(px(1.0)).w_full().bg(divider_color))
+                        .child(hero_controls),
+                );
+            } else {
+                other_count += 1;
+                let head = div()
+                    .flex()
+                    .items_center()
+                    .gap_2p5()
+                    .child(
+                        div()
+                            .size(px(30.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_lg()
+                            .bg(Hsla { a: if neutral { 0.08 } else { 0.14 }, ..tint })
+                            .border_1()
+                            .border_color(Hsla { a: if neutral { 0.14 } else { 0.25 }, ..tint })
+                            .child(crate::ui::code_pickers::mark(c, &p.id, 16.0, 1.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(p.name.clone()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .text_size(px(11.0))
+                                    .text_color(c.subtle)
+                                    .when(!current_ver.is_empty(), |d| d.child(div().font_family(mono.clone()).child(current_ver.clone())))
+                                    .children(status_el),
+                            ),
+                    )
+                    .child(div().flex().items_center().gap_1().flex_shrink_0().children(update_btn).child(default_badge));
+
+                let card_box = div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .gap_2p5()
+                    .rounded(px(10.0))
+                    .bg(c.panel)
+                    .border_1()
+                    .border_color(if is_default { Hsla { a: 0.42, ..c.accent } } else { card_border })
+                    .p_3()
+                    .child(head)
+                    .when(has_controls, |d| d.child(div().h(px(1.0)).w_full().bg(divider_color)).child(controls));
+
+                agent_grid = agent_grid.child(div().w(relative(0.5)).p(px(5.0)).child(card_box));
+            }
         }
 
         let agents_head = div()
@@ -935,6 +1048,63 @@ impl Root {
         let install_bounds = self.settings.as_ref().unwrap().install_bounds.clone();
         let missing_list: Vec<_> = s.providers.iter().filter(|p| !p.installed && p.id != "shell" && p.command.is_some()).collect();
         let any_missing = !missing_list.is_empty();
+
+        // Keep the 2-column agent grid balanced with a dashed placeholder slot when the count is odd.
+        if other_count % 2 == 1 {
+            let missing_count = missing_list.len();
+            let placeholder_border = Hsla { a: 0.85, ..c.border };
+            let placeholder_bg = Hsla { a: if c.light { 0.35 } else { 0.25 }, ..c.panel };
+            let placeholder = div()
+                .id("agent-grid-placeholder")
+                .size_full()
+                .min_h(px(108.0))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_1p5()
+                .rounded(px(10.0))
+                .bg(placeholder_bg)
+                .border_1()
+                .border_dashed()
+                .border_color(placeholder_border)
+                .p_3()
+                .cursor_pointer()
+                .hover(move |d| d.bg(Hsla { a: 0.5, ..c.hover }).border_color(c.edge))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if any_missing {
+                        this.scroll_settings_to_install(cx);
+                    } else {
+                        this.open_settings_page("plugins", window, cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .size(px(28.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_lg()
+                        .border_1()
+                        .border_dashed()
+                        .border_color(placeholder_border)
+                        .child(Icon::new(if any_missing { IconName::Plus } else { IconName::Puzzle }).size(px(13.0)).text_color(c.subtle)),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(c.muted)
+                        .child(if any_missing { "Install another agent" } else { "Add more via plugins" }),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(c.subtle)
+                        .child(if any_missing { format!("{missing_count} available below") } else { "Extend winfer with custom agents".to_string() }),
+                );
+            agent_grid = agent_grid.child(div().w(relative(0.5)).p(px(5.0)).child(placeholder));
+        }
         let mut missing_grid = div().flex().flex_wrap().px_2p5().pb_2p5();
         for p in &missing_list {
             let command = p.command.clone().unwrap_or_default();
@@ -1013,15 +1183,19 @@ impl Root {
         let agents_section = div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_2p5()
             .child(agents_head)
-            .when(!installed.is_empty(), |d| d.child(agent_grid))
+            .children(featured_card)
+            .when(other_count > 0, |d| d.child(agent_grid))
             .when(any_missing, |d| d.child(missing_card));
 
         // 3. New panes — compact workspace & default-pane card.
         let provider_options: Vec<(String, String)> = s.providers.iter().map(|p| (p.id.clone(), if p.installed { p.name.clone() } else { format!("{} (not installed)", p.name) })).collect();
         let current_default = s.provider_name(&default_id);
-        let default_select = self.select_button_inner("default-agent", current_default, provider_options, Some(184.0), 200.0, s.default_provider.is_some(), c, cx, |this, id, cx| this.update_state(cx, |s| s.default_provider = Some(id)));
+        let default_changed = s.default_provider.as_deref().is_some_and(|p| p != "winfer");
+        let default_select = self.select_button_inner("default-agent", current_default, provider_options, Some(184.0), 252.0, default_changed, Some("winfer"), c, cx, |this, id, cx| {
+            this.update_state(cx, |s| s.default_provider = if id == "winfer" { None } else { Some(id) })
+        });
         let mut panes = surface_card()
             .child(div().px_3p5().pt_3().pb_1p5().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("New panes"))
             .child(compact_row(
@@ -1239,13 +1413,13 @@ impl Root {
         let tests_toggle = self.toggle("review-tests", auto_tests, c, cx, move |this, cx| this.set_rest("review", "autoTests", Value::Bool(!auto_tests), cx));
         let shots_toggle = self.toggle("review-shots", shots, c, cx, move |this, cx| this.set_rest("review", "screenshots", Value::Bool(!shots), cx));
 
-        let progress_on = self.rest_bool("progress", "enabled", true, cx);
+        let progress_on = self.rest_bool("progress", "enabled", false, cx);
         let mark_interval = self.reset_mark("progress.interval", c, cx);
         let interval = s.rest.get("progress").and_then(|p| p["intervalSec"].as_u64()).unwrap_or(60);
         let options: Vec<(String, String)> = [(30, "30 seconds"), (60, "minute"), (120, "2 minutes"), (300, "5 minutes")].iter().map(|(v, l)| (v.to_string(), l.to_string())).collect();
         let label = options.iter().find(|(v, _)| *v == interval.to_string()).map_or_else(String::new, |(_, l)| l.clone());
         let on_toggle = self.toggle("progress-on", progress_on, c, cx, move |this, cx| this.set_rest("progress", "enabled", Value::Bool(!progress_on), cx));
-        let interval_select = self.select_button_inner("progress-interval", label, options, Some(140.0), 152.0, interval != 60, c, cx, |this, v, cx| this.set_rest("progress", "intervalSec", json!(v.parse::<u64>().unwrap_or(60)), cx));
+        let interval_select = self.select_button_inner("progress-interval", label, options, Some(140.0), 152.0, interval != 60, None, c, cx, |this, v, cx| this.set_rest("progress", "intervalSec", json!(v.parse::<u64>().unwrap_or(60)), cx));
 
         let automation = surface_card()
             .child(
@@ -1487,7 +1661,13 @@ impl Root {
         }
         self.settings_ui(window, cx);
         let c = *c;
-        let page = self.state.read(cx).settings_page.clone();
+        let mut page = self.state.read(cx).settings_page.clone();
+        // Local models used to be a page of their own; they are a tab of WinferCode now.
+        if page == "local-models" {
+            page = "winfer-code".into();
+            self.harness_page.ui.tab = super::settings_code::CodeTab::Local;
+            self.state.update(cx, |s, _| s.settings_page = page.clone());
+        }
         let (_, (id, label, icon, description)) = page_info(&page);
         let search = self.settings.as_ref().map(|s| s.search.clone()).expect("settings ui");
         let scroll = self.settings.as_ref().map(|s| s.page_scroll.clone()).expect("settings ui");
@@ -1548,6 +1728,7 @@ impl Root {
             .child(list)
             .child(foot);
 
+        let tabs = (id == "winfer-code" && !searching).then(|| self.code_tabs(c, cx));
         let (head, content): (Div, AnyElement) = if searching {
             let head = div().flex().items_center().min_w_0()
                 .child(div().truncate().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(format!("Results for “{query}”")));
@@ -1564,7 +1745,12 @@ impl Root {
                     rows = rows.child(
                         div().id(SharedString::from(format!("hit-{n}"))).flex().items_center().gap_3().rounded_lg().px_3().py_2p5().cursor_pointer()
                             .hover(move |d| d.bg(c.panel))
-                            .on_click(cx.listener(move |this, _, window, cx| this.open_settings_page(pid, window, cx)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_settings_page(pid, window, cx);
+                                if pid == "winfer-code" {
+                                    this.harness_page.ui.tab = super::settings_code::tab_for_label(plabel);
+                                }
+                            }))
                             .child(div().size(px(28.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().bg(c.hover).text_color(c.muted).child(Icon::new(page_icon).size(px(14.0))))
                             .child(div().flex_1().min_w_0().flex().flex_col()
                                 .child(div().text_size(px(13.0)).text_color(c.fg).child(plabel))
@@ -1608,7 +1794,6 @@ impl Root {
                 "plugins" => self.page_plugins(c, window, cx).into_any_element(),
                 "skills" => self.page_skills(c, window, cx).into_any_element(),
                 "winfer-code" => self.page_harness(c, window, cx).into_any_element(),
-                "local-models" => self.page_local_models(c, window, cx).into_any_element(),
                 "mobile" => self.page_mobile(c, window, cx).into_any_element(),
                 "usage" => self.page_usage(c, cx).into_any_element(),
                 "updates" => self.page_updates(c, cx).into_any_element(),
@@ -1633,6 +1818,7 @@ impl Root {
                                         .child(Icon::new(IconName::X).size(px(15.0)))
                                         .child(div().rounded_sm().border_1().border_color(c.edge).px_1().font_family(mono.clone()).text_size(px(10.0)).child("esc")),
                                 )
+                                .children(tabs)
                                 .child(div().id(SharedString::from(format!("settings-page-{id}-{searching}"))).flex_1().min_h_0().overflow_y_scroll().track_scroll(&scroll).px_8().pt_1().pb_10().child(content)),
                         ),
                 )
@@ -1673,6 +1859,22 @@ impl Root {
         })
     }
 
+    /// Development aid: scrolls the settings page down by `y` once it has laid out.
+    #[cfg(debug_assertions)]
+    pub(super) fn scroll_settings_for_dev(&mut self, y: f32, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(s) = this.settings.as_ref() {
+                    let max = s.page_scroll.max_offset();
+                    s.page_scroll.set_offset(point(px(0.0), (-px(y)).max(-max.y)));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Scrolls the Agents settings page, once it has laid out, so "Available to install" is at the top.
     pub(super) fn scroll_settings_to_install(&mut self, cx: &mut Context<Self>) {
         if let Some(s) = self.settings.as_ref() {
@@ -1693,8 +1895,20 @@ impl Root {
         .detach();
     }
 
+    /// Scrolls the settings page back to its top (e.g. on another tab).
+    pub(super) fn scroll_settings_top(&mut self) {
+        if let Some(s) = self.settings.as_mut() {
+            s.page_scroll.set_offset(point(px(0.0), px(0.0)));
+            s.open_select = None;
+        }
+    }
+
     /// Opens a settings page (from the navigation or a search result) and clears the search.
     fn open_settings_page(&mut self, page: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if page == "local-models" {
+            self.harness_page.ui.tab = super::settings_code::CodeTab::Local;
+            return self.open_settings_page("winfer-code", window, cx);
+        }
         if let Some(s) = self.settings.as_ref() {
             s.page_scroll.set_offset(point(px(0.0), px(0.0)));
         }
@@ -1774,11 +1988,46 @@ mod settings_search_tests {
         assert!(search_settings("nebula").iter().any(|h| h.0 == "updates"));
         assert_eq!(search_settings("text size")[0].1, "Text size");
         assert!(search_settings("   ").is_empty());
-        assert!(search_settings("local").iter().any(|h| h.0 == "local-models" && h.1 == "Use local models"));
-        assert!(search_settings("host").iter().any(|h| h.0 == "local-models" && h.1 == "Host / Port"));
+        assert!(search_settings("local").iter().any(|h| h.0 == "winfer-code" && h.1 == "Use local models"));
+        assert!(search_settings("host").iter().any(|h| h.0 == "winfer-code" && h.1 == "Host / Port"));
         assert!(matches_words("Host / Port", &["port".to_string()]));
         assert!(!matches_words("Export", &["port".to_string()]));
         assert_eq!(search_settings("auto-approve").iter().filter(|h| h.0 == "agents").count(), 1);
         assert!(search_settings("zzz-nothing").is_empty());
+    }
+
+    #[test]
+    fn winfer_provider_is_always_ordered_first() {
+        use crate::model::{AgentProvider, AppState};
+        use winfer_backend::providers::Provider;
+        let make = |id: &str| AgentProvider {
+            info: Provider {
+                id: id.into(),
+                name: id.into(),
+                command: Some(id.into()),
+                args: vec![],
+                resume_args: vec![],
+                resume_session_args: vec![],
+                aliases: vec![],
+                status_hooks: false,
+                prompt_arg: false,
+                prompt_flag: None,
+                approve_input: None,
+                model_arg: None,
+                models: vec![],
+                models_command: vec![],
+                model_command: None,
+                auto_approve_args: vec![],
+                system_prompt_args: vec![],
+                update: None,
+            },
+            installed: true,
+        };
+        let mut state = AppState::default();
+        state.set_providers(vec![make("claude"), make("codex"), make("agy"), make("winfer"), make("shell")]);
+        let ids: Vec<&str> = state.providers.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["winfer", "claude", "codex", "agy", "shell"]);
+        assert_eq!(state.providers[0].name, "WinferCode");
+        assert_eq!(state.default_provider_id(), "winfer");
     }
 }

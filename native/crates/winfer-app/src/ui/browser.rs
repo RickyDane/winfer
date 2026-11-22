@@ -317,6 +317,9 @@ pub struct BrowserPanel {
     active_tab: HashMap<String, String>,
     workspace: Option<String>,
     opening: Option<String>,
+    /// Workspaces whose browser failed to start: not retried by every repaint (that relaunched
+    /// the browser in a loop and hid the error), only by the Retry button.
+    failed: HashSet<String>,
     message: Option<SharedString>,
     needs_install: bool,
     installing: bool,
@@ -391,6 +394,7 @@ impl BrowserPanel {
             active_tab: HashMap::new(),
             workspace: None,
             opening: None,
+            failed: HashSet::new(),
             message: None,
             needs_install: false,
             installing: false,
@@ -756,7 +760,7 @@ impl BrowserPanel {
     }
 
     fn open_workspace(&mut self, workspace: String, cx: &mut Context<Self>) {
-        if self.opening.as_ref() == Some(&workspace) || self.tabs.contains_key(&workspace) {
+        if self.opening.as_ref() == Some(&workspace) || self.tabs.contains_key(&workspace) || self.failed.contains(&workspace) {
             return;
         }
         self.opening = Some(workspace.clone());
@@ -779,6 +783,7 @@ impl BrowserPanel {
                     Ok(Ok(Some(tabs))) => {
                         this.message = None;
                         this.needs_install = false;
+                        this.failed.remove(&workspace);
                         this.set_tabs(workspace, serde_json::from_value(tabs).unwrap_or_default(), cx);
                     }
                     Ok(Ok(None)) => {
@@ -788,8 +793,14 @@ impl BrowserPanel {
                             this.install(cx);
                         }
                     }
-                    Ok(Err(err)) => this.message = Some(err.into()),
-                    Err(err) => this.message = Some(err.to_string().into()),
+                    Ok(Err(err)) => {
+                        this.failed.insert(workspace);
+                        this.message = Some(err.into());
+                    }
+                    Err(err) => {
+                        this.failed.insert(workspace);
+                        this.message = Some(err.to_string().into());
+                    }
                 }
                 cx.notify();
             });
@@ -1612,7 +1623,24 @@ impl Render for BrowserPanel {
                 .children(pick_box)
                 .children(cursor)
                 .when_some(self.message.clone().filter(|_| !has_tab), |d, text| {
-                    d.child(div().absolute().size_full().flex().items_center().justify_center().text_xs().text_color(c.muted).child(text))
+                    let failed = self.workspace.as_ref().is_some_and(|w| self.failed.contains(w));
+                    d.child(
+                        div().absolute().size_full().flex().flex_col().items_center().justify_center().gap_2().px_4().text_xs().text_color(c.muted)
+                            .child(div().max_w(px(520.0)).text_center().child(text))
+                            .when(failed, |d| {
+                                d.child(
+                                    div().id("retry-browser").rounded_md().bg(c.accent).text_color(c.on_accent).px_3().py_1().cursor_pointer()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(w) = this.workspace.clone() {
+                                                this.failed.remove(&w);
+                                            }
+                                            this.message = None;
+                                            cx.notify();
+                                        }))
+                                        .child("Retry"),
+                                )
+                            }),
+                    )
                 })
                 .into_any_element()
         };

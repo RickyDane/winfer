@@ -1,0 +1,784 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>winfer code settings · D · Visual + tabs</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  /* Tabs */
+  .tabs { display: flex; gap: 2px; padding: 0 26px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .tabs button { position: relative; display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 9px; font-size: 12.5px; color: var(--fg-muted); white-space: nowrap; }
+  .tabs button:hover { color: var(--fg); }
+  .tabs button svg { width: 14px; height: 14px; }
+  .tabs button[aria-checked="true"] { color: var(--fg); }
+  .tabs button[aria-checked="true"] svg { color: var(--accent); }
+  .tabs button[aria-checked="true"]::after { content: ""; position: absolute; left: 7px; right: 7px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+  .tabs .tdot { width: 6px; height: 6px; border-radius: 50%; }
+  .tabs .tcount { font: 10px var(--mono); padding: 0 5px; border-radius: 99px; background: var(--hover); color: var(--fg-subtle); }
+  .body { padding-top: 20px; }
+  .pane { display: flex; flex-direction: column; gap: 16px; }
+  .intro { display: flex; align-items: center; gap: 10px; margin: 0 2px; font-size: 12px; color: var(--fg-subtle); }
+  .intro .k { margin-left: auto; display: flex; gap: 4px; }
+  h5 { display: flex; align-items: center; gap: 8px; margin: 0 2px -6px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+  h5 .r { margin-left: auto; font-weight: 400; color: var(--fg-subtle); }
+
+  /* Interface */
+  .styles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .style { text-align: left; border-radius: 10px; padding: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .style[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+  .style .pv { height: 74px; border-radius: 7px; background: var(--app); padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
+  .style .cap { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .style .cap b { font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .style .cap .subtle { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .style .cap .r { flex-shrink: 0; width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-strong); margin-left: auto; }
+  .style[aria-checked="true"] .cap .r { box-shadow: inset 0 0 0 4.5px var(--accent); }
+  .mini .bub { height: 7px; border-radius: 4px; background: var(--active); }
+  .mini .tool { height: 14px; border-radius: 4px; background: var(--panel-raised); box-shadow: var(--shadow); display: flex; align-items: center; gap: 4px; padding: 0 5px; }
+  .mini .tool i { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
+  .mini .tool span { height: 3px; flex: 1; border-radius: 2px; background: var(--active); }
+  .mini .diff { display: grid; gap: 3px; }
+  .mini .diff span { height: 4px; border-radius: 2px; }
+  .tline { font: 8.5px/1.25 var(--mono); color: var(--fg-subtle); white-space: nowrap; }
+  .tline b { color: var(--success); font-weight: 500; }
+  .tline i { color: var(--accent); font-style: normal; }
+  .webopts { display: grid; grid-template-columns: 1fr 336px; gap: 14px; align-items: stretch; }
+  .optlist { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .optlist .gh { padding: 8px 14px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); }
+  .opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 14px; text-align: left; font-size: 12.5px; }
+  .opt:hover { background: var(--hover); }
+  .opt > svg { width: 14px; height: 14px; color: var(--fg-subtle); }
+  .opt.on > svg { color: var(--accent); }
+  .opt > span:not(.toggle) { flex: 1; min-width: 0; }
+  .opt small { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .opt .toggle { pointer-events: none; }
+  /* Live preview */
+  .live { display: flex; flex-direction: column; min-height: 0; contain: size; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 8px; }
+  .live .lh { display: flex; align-items: center; gap: 6px; padding: 0 2px 7px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); }
+  .live .lh .r { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .scr { flex: 1; min-height: 0; border-radius: 7px; background: var(--app); overflow: hidden; display: flex; flex-direction: column; }
+  .scr .tx { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: .9em .9em .4em; gap: var(--g); font-size: var(--fs); line-height: 1.4; }
+  .p-user { align-self: flex-end; max-width: 80%; padding: .4em .7em; border-radius: .8em; background: var(--accent-soft); color: var(--fg); }
+  .p-think { color: var(--fg-subtle); font-style: italic; }
+  .p-think.open { padding: .3em 0 .3em .7em; border-left: 2px solid var(--border-strong); }
+  .p-tool { display: flex; align-items: center; gap: .5em; padding: .35em .6em; border-radius: .5em; background: var(--panel-raised); box-shadow: var(--shadow); font-family: var(--mono); font-size: .9em; color: var(--fg-muted); white-space: nowrap; overflow: hidden; }
+  .p-tool i { width: .5em; height: .5em; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+  .p-tool i.run { background: var(--warning); }
+  .p-tool em { font-style: normal; color: var(--success); }
+  .p-tool em + em { color: var(--danger); }
+  .p-tool .x { margin-left: auto; color: var(--fg-subtle); }
+  .p-shell { border-radius: .5em; background: #0006; padding: .45em .7em; font: .88em/1.5 var(--mono); color: var(--fg-muted); }
+  :root.light .p-shell { background: #0000000a; }
+  .p-shell .o { color: var(--success); }
+  .p-text { color: var(--fg-muted); }
+  .p-plan { border-radius: .5em; background: var(--panel-raised); box-shadow: var(--shadow); padding: .4em .7em; font-size: .92em; color: var(--fg-muted); display: grid; gap: .15em; }
+  .p-plan .d { color: var(--fg-subtle); text-decoration: line-through; }
+  .p-plan .c { color: var(--fg); }
+  .p-work { font-size: .9em; color: var(--accent); }
+  .p-work span { color: var(--fg-subtle); }
+  .scr .comp { margin: 0 .9em .5em; padding: .55em .7em; border-radius: .6em; background: var(--panel-raised); box-shadow: var(--shadow); color: var(--fg-subtle); font-size: var(--fs); }
+  .scr .status { display: flex; align-items: center; gap: 1em; padding: .4em .9em .55em; font: calc(var(--fs) * .85) var(--mono); color: var(--fg-subtle); }
+  .scr .status .r { margin-left: auto; display: flex; gap: 1em; align-items: center; }
+  .meter { display: inline-flex; align-items: center; gap: .4em; }
+  .meter b { display: inline-block; width: 3.5em; height: .45em; border-radius: 1em; background: var(--active); overflow: hidden; }
+  .meter b::after { content: ""; display: block; width: 42%; height: 100%; background: var(--accent); }
+  .sizer { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); font-size: 12.5px; }
+
+  /* Models */
+  .flow { display: grid; grid-template-columns: 284px 1fr; align-items: center; }
+  .maincard { border-radius: 12px; background: var(--panel); box-shadow: 0 0 0 1.5px var(--accent), var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .maincard .t { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+  .maincard .t .ic { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); }
+  .maincard .t .ic svg { width: 14px; height: 14px; }
+  .maincard select { width: 100%; height: 32px; font-size: 13px; }
+  .maincard .k { font-size: 11px; color: var(--fg-subtle); margin-bottom: -4px; }
+  .pills { display: grid; grid-template-columns: repeat(7, auto); gap: 2px; padding: 2px; border-radius: 8px; background: var(--app); box-shadow: var(--shadow); }
+  .pills button { height: 24px; padding: 0 4px; border-radius: 6px; font-size: 11px; color: var(--fg-muted); }
+  .pills button[aria-checked="true"] { background: var(--accent); color: var(--on-accent); }
+  .resolved { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-radius: 7px; background: var(--app); font-size: 11.5px; color: var(--fg-muted); }
+  .resolved svg { width: 12px; height: 12px; color: var(--success); }
+  .subs { position: relative; display: grid; gap: 8px; padding-left: 40px; }
+  .subs::before { content: ""; position: absolute; left: 20px; top: 25px; bottom: 25px; border-left: 1.5px solid var(--border-strong); }
+  .subs::after { content: ""; position: absolute; left: 0; top: 50%; width: 20px; border-top: 1.5px solid var(--border-strong); }
+  .subrow { position: relative; display: flex; align-items: center; gap: 8px; height: 50px; padding: 0 10px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .subrow::before { content: ""; position: absolute; left: -20px; top: 50%; width: 20px; border-top: 1.5px solid var(--border-strong); }
+  .subrow.cur { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow); }
+  .subrow.cur::before { border-color: var(--accent); }
+  .subrow .bi { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .subrow .nm { width: 84px; flex-shrink: 0; font-size: 12px; font-weight: 500; line-height: 1.25; }
+  .subrow .nm small { display: block; font-weight: 400; font-size: 10.5px; color: var(--fg-subtle); }
+  .subrow .nm small.cur { color: var(--accent); }
+  .subrow select { height: 28px; font-size: 12px; }
+  .explain { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .explain div { display: flex; gap: 10px; padding: 10px 12px; border-radius: 9px; background: var(--panel); box-shadow: var(--shadow); font-size: 12px; color: var(--fg-muted); line-height: 1.45; }
+  .explain svg { width: 15px; height: 15px; color: var(--accent); margin-top: 1px; }
+  .explain b { color: var(--fg); font-weight: 500; }
+
+  /* Permissions */
+  .scale { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); padding: 18px 16px 16px; }
+  .track { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); }
+  .track::before { content: ""; position: absolute; left: 10%; right: 10%; top: 10px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--success), var(--warning) 70%, var(--danger)); opacity: .5; }
+  .stop { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-muted); }
+  .stop .knob { width: 24px; height: 24px; border-radius: 50%; background: var(--panel-raised); box-shadow: var(--shadow), 0 0 0 3px var(--panel); }
+  .stop:hover .knob { background: var(--hover); }
+  .stop[aria-checked="true"] { color: var(--fg); font-weight: 500; }
+  .stop[aria-checked="true"] .knob { background: var(--accent); box-shadow: 0 0 0 3px var(--panel), 0 0 0 6px var(--accent-soft); }
+  .stop small { font-size: 10.5px; color: var(--fg-subtle); font-weight: 400; margin-top: -6px; }
+  .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+  .cap3 { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; background: var(--app); }
+  .cap3 .ci { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--hover); color: var(--fg-muted); }
+  .cap3 .ci svg { width: 14px; height: 14px; }
+  .cap3 b { display: block; font-size: 12.5px; font-weight: 500; }
+  .cap3 .st { display: flex; align-items: center; gap: 5px; font-size: 11.5px; }
+  .cap3 .st svg { width: 12px; height: 12px; }
+  .st.allow { color: var(--success); } .st.asks { color: var(--warning); } .st.block { color: var(--fg-subtle); }
+  .modeline { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--fg-muted); }
+  .modeline svg { width: 13px; height: 13px; color: var(--accent); }
+  .banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning); }
+  .banner svg { width: 15px; height: 15px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px; min-height: 32px; border-radius: 6px; background: var(--panel-raised); box-shadow: var(--shadow); width: 300px; }
+  .tag { display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 3px 0 8px; border-radius: 5px; background: var(--hover); font: 11.5px var(--mono); }
+  .tag button { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; color: var(--fg-subtle); }
+  .tag button:hover { background: var(--active); color: var(--fg); }
+  .tag svg { width: 11px; height: 11px; }
+  .tags input { border: 0; background: none; outline: none; flex: 1; min-width: 70px; font: 11.5px var(--mono); padding: 0 4px; }
+
+  /* Efficiency */
+  .leans { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .lean { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .lean .top { display: flex; align-items: center; gap: 10px; }
+  .lean .top b { font-size: 13px; font-weight: 500; flex: 1; }
+  .lean .big { font-size: 28px; font-weight: 600; letter-spacing: -.02em; color: var(--success); line-height: 1; }
+  .lean .big small { font-size: 11.5px; font-weight: 400; color: var(--fg-subtle); letter-spacing: 0; margin-left: 4px; }
+  .bars { display: grid; gap: 4px; }
+  .bars div { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--fg-subtle); }
+  .bars span { height: 6px; border-radius: 3px; transition: width .25s; }
+  .lean.off .big, .lean.off .bars { opacity: .3; }
+  .lean .sub { display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .lean .sub .lbl b { font-size: 12px; }
+  .lean .sub .hint { font-size: 11px; }
+  /* Skill picker: picked skills as chips in one field; the full list opens below it */
+  .sp { margin-top: 10px; }
+  .sp-field { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 34px; padding: 4px 4px 4px 5px; border-radius: 8px; background: var(--panel-raised); box-shadow: var(--shadow); cursor: text; }
+  .sp.open .sp-field { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .sp-chips { display: contents; }
+  .sk { display: inline-flex; align-items: center; gap: 1px; height: 24px; padding: 0 2px 0 8px; border-radius: 6px; background: var(--accent-soft); font-size: 11.5px; white-space: nowrap; }
+  .sk .src { color: var(--fg-subtle); }
+  .sk button { display: grid; place-items: center; width: 18px; height: 18px; margin-left: 2px; border-radius: 4px; color: var(--fg-subtle); }
+  .sk button:hover { background: var(--active); color: var(--fg); }
+  .sk button svg { width: 11px; height: 11px; }
+  .sk.more { padding: 0 8px; background: var(--hover); color: var(--fg-muted); cursor: pointer; }
+  .sk.more:hover { color: var(--fg); }
+  .sp-field input { flex: 1; min-width: 120px; height: 24px; padding: 0 6px; border: 0; background: none; outline: none; font-size: 12px; }
+  .sp-caret { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: var(--fg-subtle); margin-left: auto; }
+  .sp-caret:hover { background: var(--hover); color: var(--fg); }
+  .sp-caret svg { width: 14px; height: 14px; transition: transform .15s; }
+  .sp.open .sp-caret svg { transform: rotate(180deg); }
+  .sp-panel { margin-top: 6px; border-radius: 8px; background: var(--app); box-shadow: var(--shadow); overflow: hidden; }
+  .sp-groups { display: flex; gap: 3px; padding: 6px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .sp-groups button { flex-shrink: 0; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+  .sp-groups button:hover { color: var(--fg); background: var(--hover); }
+  .sp-groups button[aria-pressed="true"] { background: var(--active); color: var(--fg); box-shadow: var(--shadow); }
+  .sp-groups small { margin-left: 4px; font: 10px var(--mono); color: var(--fg-subtle); }
+  .sp-list { max-height: 224px; overflow-y: auto; padding-bottom: 4px; }
+  .sp-gh { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 7px 10px 3px; background: var(--app); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--fg-subtle); }
+  .sp-gh .path { font: 400 10px var(--mono); text-transform: none; letter-spacing: 0; }
+  .sp-gh button { margin-left: auto; font-size: 11px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--accent); }
+  .sp-row { display: grid; grid-template-columns: 14px 136px 1fr 44px; align-items: center; gap: 10px; width: 100%; height: 28px; padding: 0 10px; text-align: left; font-size: 12px; }
+  .sp-row:hover, .sp-row.hl { background: var(--hover); }
+  .sp-row .cb { width: 14px; height: 14px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px var(--border-strong); display: grid; place-items: center; }
+  .sp-row[aria-checked="true"] .cb { background: var(--accent); box-shadow: none; }
+  .sp-row[aria-checked="true"] .cb::after { content: "✓"; color: #fff; font-size: 9px; font-weight: 700; }
+  .sp-row .nm, .sp-row .ds { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sp-row .ds { font-size: 11.5px; color: var(--fg-subtle); }
+  .sp-row .tk { font: 10.5px var(--mono); color: var(--fg-subtle); text-align: right; }
+  .sp-row mark { background: none; color: var(--accent); font-weight: 600; }
+  .sp-empty { padding: 18px; text-align: center; font-size: 12px; color: var(--fg-subtle); }
+  .sp-keys { display: flex; gap: 14px; padding: 6px 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-subtle); }
+  .sp-keys kbd { margin-right: 3px; }
+  .sp-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 11.5px; color: var(--fg-subtle); }
+  .sp-cost { flex: 1; max-width: 160px; height: 5px; border-radius: 3px; background: var(--active); overflow: hidden; }
+  .sp-cost b { display: block; height: 100%; border-radius: 3px; background: var(--success); transition: width .2s; }
+  .sp-foot button { margin-left: auto; padding: 2px 6px; border-radius: 5px; color: var(--fg-muted); }
+  .sp-foot button:hover { background: var(--hover); color: var(--fg); }
+  .ctxwrap { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); padding: 34px 16px 14px; }
+  .ctxbar { position: relative; height: 38px; border-radius: 8px; background: var(--app); box-shadow: var(--shadow); touch-action: none; }
+  .ctxbar .seg2 { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; white-space: nowrap; overflow: hidden; }
+  .ctxbar .seg2:first-child { border-radius: 8px 0 0 8px; }
+  .ctxbar .seg2:last-child { border-radius: 0 8px 8px 0; }
+  .handle { position: absolute; top: -26px; bottom: -4px; width: 0; cursor: ew-resize; }
+  .handle::before { content: ""; position: absolute; left: -1.5px; top: 20px; bottom: 0; width: 3px; border-radius: 2px; background: currentColor; }
+  .handle span { position: absolute; top: 0; left: 50%; transform: translateX(-50%); padding: 1px 7px; border-radius: 99px; font: 500 10.5px var(--mono); white-space: nowrap; background: currentColor; }
+  .handle span em { font-style: normal; color: var(--app); }
+  .handle.trim { color: var(--warning); } .handle.full { color: var(--accent); }
+  .handle:hover span, .handle.drag span { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 30%, transparent); }
+  .ticks { position: relative; height: 18px; font: 10px var(--mono); color: var(--fg-subtle); }
+  .ticks span { position: absolute; top: 5px; transform: translateX(-50%); }
+  .ticks span:first-child { transform: none; } .ticks span:last-child { transform: translateX(-100%); }
+  .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .legend > div { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px; background: var(--app); }
+  .legend .sw { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .legend .lbl b { font-size: 12.5px; }
+  .legend .hint { font-size: 11.5px; }
+
+  /* Local */
+  .lhero { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, var(--panel)), var(--panel) 65%); box-shadow: var(--shadow); }
+  .lhero .ic { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+  .lhero .ic svg { width: 19px; height: 19px; }
+  .conn { display: flex; align-items: center; height: 34px; border-radius: 8px; background: var(--panel-raised); box-shadow: var(--shadow); font: 12.5px var(--mono); overflow: hidden; flex: 1; }
+  .conn span { padding: 0 2px 0 10px; color: var(--fg-subtle); }
+  .conn input { border: 0; background: none; outline: none; height: 100%; padding: 0 4px; font: inherit; }
+  .conn input:focus { background: var(--hover); }
+  .mrow { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-top: 1px solid var(--border); font-size: 12.5px; }
+  .levels { display: grid; grid-template-columns: repeat(4, 1fr) 70px; gap: 8px; padding: 0 16px 14px; }
+  .lvl { border-radius: 9px; background: var(--app); padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; }
+  .lvl .n { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 500; }
+  .lvl .n button { color: var(--fg-subtle); display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; }
+  .lvl .n button:hover { background: var(--hover); color: var(--fg); }
+  .lvl .n svg { width: 11px; height: 11px; }
+  .lvl input { width: 100%; height: 26px; font-size: 11.5px; }
+  .lvl .gauge { height: 4px; border-radius: 2px; background: var(--active); overflow: hidden; }
+  .lvl .gauge i { display: block; height: 100%; background: var(--accent); }
+  .lvl .cap { font-size: 10.5px; color: var(--fg-subtle); }
+  .addlvl { border-radius: 9px; border: 1.5px dashed var(--border-strong); color: var(--fg-subtle); display: grid; place-items: center; font-size: 11.5px; }
+  .addlvl:hover { color: var(--fg); background: var(--hover); }
+
+  /* MCP */
+  .srv { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .srv .ic { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--hover); color: var(--fg-muted); }
+  .srv.builtin .ic { background: var(--accent-soft); color: var(--accent); }
+  .srvs { display: grid; gap: 8px; }
+  .add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 42px; border-radius: 10px; border: 1.5px dashed var(--border-strong); color: var(--fg-muted); font-size: 12.5px; }
+  .add:hover { color: var(--fg); background: var(--hover); }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="square-terminal"></i></div>
+      <h2>winfer code</h2>
+      <p>winfer's own agent: interface, model and context.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="interface"><i data-lucide="layout-panel-left"></i>Interface</button>
+      <button data-v="models"><i data-lucide="cpu"></i>Models</button>
+      <button data-v="permissions"><i data-lucide="shield-check"></i>Permissions<span class="tdot" id="permDot"></span></button>
+      <button data-v="efficiency"><i data-lucide="feather"></i>Efficiency</button>
+      <button data-v="local"><i data-lucide="server"></i>Local models<span class="tdot" id="localDot"></span></button>
+      <button data-v="mcp"><i data-lucide="plug"></i>MCP servers<span class="tcount">2</span></button>
+    </div>
+    <div class="body" id="scroller">
+
+      <!-- ───────── Interface ───────── -->
+      <div class="pane" data-if="tab=interface">
+        <div class="intro">How new winfer code panes look. Open panes keep the style they started with.</div>
+        <div class="styles" data-radio="ui">
+          <button class="style" data-v="web">
+            <div class="pv mini">
+              <div class="bub" style="width: 50%; margin-left: auto; background: var(--accent-soft)"></div>
+              <div class="tool"><i></i><span></span></div>
+              <div class="diff"><span style="background: color-mix(in srgb, var(--danger) 35%, transparent); width: 70%"></span><span style="background: color-mix(in srgb, var(--success) 35%, transparent); width: 85%"></span></div>
+              <div class="bub" style="width: 75%"></div>
+            </div>
+            <div class="cap"><b>Web</b><span class="subtle">Timeline, inline diffs, approvals</span><span class="r"></span></div>
+          </button>
+          <button class="style" data-v="tui">
+            <div class="pv">
+              <div class="tline"><i>❯</i> fix the flaky upload test</div>
+              <div class="tline"><b>●</b> Edit src/upload.ts  <span style="color: var(--success)">+4</span> <span style="color: var(--danger)">−2</span></div>
+              <div class="tline"><b>●</b> Bash pnpm test upload</div>
+              <div class="tline">  ⎿ 12 passed</div>
+            </div>
+            <div class="cap"><b>Terminal (TUI)</b><span class="subtle">The classic terminal UI</span><span class="r"></span></div>
+          </button>
+        </div>
+
+        <h5>Web interface<span class="r" data-if="ui=tui">Only for panes that use the web interface</span><span class="r" data-if="ui=web">Preview updates as you change things</span></h5>
+        <div class="webopts" data-off-if="ui=tui">
+          <div class="optlist">
+            <div class="gh">Status line</div>
+            <button class="opt" data-k="showContext"><i data-lucide="gauge"></i><span>Context meter<small>Click it for the breakdown</small></span><span class="toggle sm"></span></button>
+            <button class="opt" data-k="showCost"><i data-lucide="coins"></i><span>Session cost<small>When the backend reports one</small></span><span class="toggle sm"></span></button>
+            <button class="opt" data-k="showRate"><i data-lucide="zap"></i><span>Tokens per second<small>Next to the working indicator</small></span><span class="toggle sm"></span></button>
+            <div class="gh">Transcript</div>
+            <button class="opt" data-k="showPlan"><i data-lucide="list-checks"></i><span>Plan above the composer<small>Todos and running subagents</small></span><span class="toggle sm"></span></button>
+            <button class="opt" data-k="expandThinking"><i data-lucide="brain"></i><span>Show thinking<small>Expanded, not collapsed</small></span><span class="toggle sm"></span></button>
+            <button class="opt" data-k="expandShell"><i data-lucide="square-terminal"></i><span>Live shell output<small>Open while a command runs</small></span><span class="toggle sm"></span></button>
+            <button class="opt" data-k="compactTools"><i data-lucide="rows-3"></i><span>Compact tool calls<small>One live row, click to expand</small></span><span class="toggle sm"></span></button>
+            <button class="opt" data-k="compact"><i data-lucide="fold-vertical"></i><span>Compact layout<small>Tighter spacing</small></span><span class="toggle sm"></span></button>
+          </div>
+          <div class="live">
+            <div class="lh">Preview<span class="r mono" id="pvScale"></span></div>
+            <div class="scr" id="scr"></div>
+          </div>
+        </div>
+        <div class="sizer" data-off-if="ui=tui">
+          <b style="font-weight: 500; white-space: nowrap">Text size</b>
+          <span class="subtle" style="font-size: 10px">A</span>
+          <input type="range" min="70" max="160" step="5" data-bind="textScale" style="flex: 1; accent-color: var(--accent)" />
+          <span class="subtle" style="font-size: 15px">A</span>
+          <span class="mono muted" style="width: 40px; text-align: right; font-size: 12px"><span data-text="textScale"></span>%</span>
+          <span class="subtle" style="font-size: 11.5px; white-space: nowrap"><kbd>⌘ +</kbd> <kbd>⌘ −</kbd> <kbd>⌘ 0</kbd></span>
+        </div>
+        <div class="card">
+          <div class="row"><div class="lbl"><b>Plan sidebar</b><div class="hint">Both styles: the plan sits on the right when the pane is wide enough. <kbd>/sidebar</kbd></div></div><button class="toggle" data-bind="planSidebar"></button></div>
+        </div>
+      </div>
+
+      <!-- ───────── Models ───────── -->
+      <div class="pane" data-if="tab=models">
+        <div class="intro">New sessions start with these.<span class="k"><kbd>/model</kbd><kbd>/effort</kbd><kbd>/subagent-model</kbd></span></div>
+        <div class="flow">
+          <div class="maincard">
+            <div class="t"><span class="ic"><i data-lucide="sparkles"></i></span>Main model</div>
+            <select data-bind="model" id="modelSel"></select>
+            <div class="k">Reasoning effort</div>
+            <div class="pills" data-radio="effort">
+              <button data-v="">Default</button><button data-v="minimal">Min</button><button data-v="low">Low</button><button data-v="medium">Med</button><button data-v="high">High</button><button data-v="xhigh">XHigh</button><button data-v="max">Max</button>
+            </div>
+            <div class="resolved"><i data-lucide="circle-check"></i><span id="resolved"></span></div>
+          </div>
+          <div class="subs" id="subs">
+            <div class="subrow" data-b="chatgpt">
+              <span class="bi" style="background: #10a37f22; color: #10a37f">GP</span>
+              <span class="nm">ChatGPT<small>subagents</small></span>
+              <select data-bind="subChatgpt" style="flex: 1; min-width: 0"><option value="">Same as main</option><option>gpt-6-luna</option><option>gpt-6-luna-mini</option></select>
+              <select data-bind="subChatgptEffort" data-if="subChatgpt" style="width: 86px"><option value="">Effort</option><option>minimal</option><option>low</option><option>medium</option><option>high</option></select>
+            </div>
+            <div class="subrow" data-b="claude">
+              <span class="bi" style="background: #e08b6a22; color: #e08b6a">C</span>
+              <span class="nm">Claude Code<small>subagents</small></span>
+              <select data-bind="subClaude" style="flex: 1; min-width: 0"><option value="">Same as main</option><option>claude-sonnet-5</option><option>claude-haiku-5</option></select>
+            </div>
+            <div class="subrow" data-b="codex">
+              <span class="bi" style="background: var(--hover); color: var(--fg-muted)">CX</span>
+              <span class="nm">Codex<small>subagents</small></span>
+              <select data-bind="subCodex" style="flex: 1; min-width: 0"><option value="">Same as main</option><option>gpt-6-luna-codex</option></select>
+              <select data-if="subCodex" style="width: 86px"><option>Effort</option><option>low</option></select>
+            </div>
+            <div class="subrow" data-b="local">
+              <span class="bi" style="background: var(--accent-soft); color: var(--accent)"><i data-lucide="server" style="width: 13px; height: 13px"></i></span>
+              <span class="nm">Local model<small>subagents</small></span>
+              <select data-bind="subLocal" style="flex: 1; min-width: 0"><option value="">Same as main</option><option>devstral-3</option></select>
+              <select data-if="subLocal" style="width: 86px"><option>Effort</option><option>low</option></select>
+            </div>
+          </div>
+        </div>
+        <div class="explain">
+          <div><i data-lucide="sparkles"></i><span><b>The main model</b> plans the work, writes the important changes and checks what subagents bring back.</span></div>
+          <div><i data-lucide="git-fork"></i><span><b>Subagents</b> explore the code, look things up and make small fixes, so a cheaper model can do them. Set one per backend.</span></div>
+        </div>
+      </div>
+
+      <!-- ───────── Permissions ───────── -->
+      <div class="pane" data-if="tab=permissions">
+        <div class="intro">What new sessions may do without asking.<span class="k"><kbd>⇧ Tab</kbd> cycles it in a session</span></div>
+        <div class="banner" data-if="autoApprove"><i data-lucide="triangle-alert"></i>Auto-approve is on: panes start with <code>--yolo</code> and ignore the mode below.</div>
+        <div class="scale" data-off-if="autoApprove">
+          <div class="track" data-radio="mode">
+            <button class="stop" data-v="plan"><span class="knob"></span>Plan<small>read-only</small></button>
+            <button class="stop" data-v="yolo-plan"><span class="knob"></span>Yolo plan<small>read-only, no asking</small></button>
+            <button class="stop" data-v="ask"><span class="knob"></span>Ask<small>asks first</small></button>
+            <button class="stop" data-v="auto-edit"><span class="knob"></span>Auto-edit<small>commands ask</small></button>
+            <button class="stop" data-v="yolo"><span class="knob"></span>Yolo<small>nothing asks</small></button>
+          </div>
+          <div class="caps" id="caps"></div>
+          <div class="modeline"><i data-lucide="info"></i><span data-text="modeText"></span></div>
+        </div>
+        <div class="card">
+          <div class="row"><div class="lbl"><b>Auto-approve in panes</b><div class="hint">Start winfer code panes with <code>--yolo</code>, whatever the mode above. Applies to panes started after the change.</div></div><button class="toggle" data-bind="autoApprove"></button></div>
+          <div class="row"><div class="lbl"><b>Always-allowed commands</b><div class="hint">Commands starting with these never ask. ChatGPT account only; Claude Code and Codex use their own rules.</div></div><div class="tags" id="tags"></div></div>
+        </div>
+      </div>
+
+      <!-- ───────── Efficiency ───────── -->
+      <div class="pane" data-if="tab=efficiency">
+        <h5>Lean setup<span class="r">Fewer tools and skills per request · sessions started after the change</span></h5>
+        <div class="leans">
+          <div class="lean" id="leanClaude">
+            <div class="top"><b>Claude Code</b><span class="info"><i data-lucide="info"></i><span class="tip">A short system prompt and only the tools coding needs: Bash, Read, Edit, Write, Grep, Glob, the plan tools, Agent, plus Skill when it has skills. No user MCP servers. Project CLAUDE.md and project skills still load. Bench: 71% fewer input tokens, 79% fewer at full price, same pass rate.</span></span><button class="toggle" data-bind="leanClaude"></button></div>
+            <div class="big">−71%<small>input tokens · same pass rate</small></div>
+            <div class="bars"><div><span style="width: 100%; background: var(--active)"></span></div><div><span style="width: 29%; background: var(--success)"></span>lean</div></div>
+            <div class="hint" style="margin: 0">Short prompt, coding tools only. Project CLAUDE.md and skills still load.</div>
+          </div>
+          <div class="lean" id="leanCodex">
+            <div class="top"><b>Codex</b><span class="info"><i data-lucide="info"></i><span class="tip">No ChatGPT apps, plugins and their skills, bundled skills, image generation, computer use, Codex's own browser or goals. Only the skills picked below; each tool result capped at 4k tokens. winfer's tools stay.</span></span><button class="toggle" data-bind="leanCodex"></button></div>
+            <div class="big"><span data-text="codexPct"></span><small>input tokens · same pass rate</small></div>
+            <div class="bars"><div><span style="width: 100%; background: var(--active)"></span></div><div><span id="codexBar" style="background: var(--success)"></span>lean</div></div>
+            <div class="sub" data-if="leanCodex"><div class="lbl"><b>Short system prompt</b><div class="hint">Replaces Codex's ~5k-token prompt; it loses its own tool guidance.</div></div><button class="toggle sm" data-bind="shortCodex"></button></div>
+            <div class="sub"><div class="lbl"><b>Codex CLI panes too</b><div class="hint">Plain Codex panes get it too. Can miss Codex's prompt cache.</div></div><button class="toggle sm" data-bind="leanCodexCli"></button></div>
+          </div>
+        </div>
+        <div class="card" id="skillsCard">
+          <div class="row stacked">
+            <div style="display: flex; align-items: center; gap: 24px">
+              <div class="lbl"><b>Skills in lean sessions</b><div class="hint" data-if="skillsMode=selected">Only the ones you pick load. Built-in and project skills always come along.</div><div class="hint" data-if="skillsMode=all">All <span data-text="skillTotal"></span> load; their descriptions add <b class="warn-t" style="font-weight: 500">~<span data-text="allTokens"></span> tokens</b> to every request.</div></div>
+              <div class="seg" data-bind="skillsMode"><button data-v="selected">Selected</button><button data-v="all">All</button></div>
+            </div>
+            <div class="sp" id="sp" data-if="skillsMode=selected">
+              <div class="sp-field" id="spField">
+                <span id="spChips" class="sp-chips"></span>
+                <input id="spInput" placeholder="Add a skill…" spellcheck="false" autocomplete="off" />
+                <button class="sp-caret" id="spCaret" aria-label="Show all skills"><i data-lucide="chevron-down"></i></button>
+              </div>
+              <div class="sp-panel" id="spPanel" hidden>
+                <div class="sp-groups" id="spGroups"></div>
+                <div class="sp-list" id="spList"></div>
+                <div class="sp-keys"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> pick</span><span><kbd>⌫</kbd> remove last</span><span><kbd>esc</kbd> close</span></div>
+              </div>
+              <div class="sp-foot">
+                <span id="spSummary"></span>
+                <span class="sp-cost" title="Skill descriptions go into every request"><b id="spBar"></b></span>
+                <span id="spTokens" class="mono"></span>
+                <button id="spClear">Clear</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h5 style="margin-top: 8px">Context compaction<span class="r">Drag the markers · <kbd>/compaction</kbd></span></h5>
+        <div class="ctxwrap">
+          <div class="ctxbar" id="ctxbar"></div>
+          <div class="ticks"><span style="left:0">0%</span><span style="left:25%">25%</span><span style="left:50%">50%</span><span style="left:75%">75%</span><span style="left:100%">100%</span></div><div class="subtle" style="font-size: 11px; text-align: center; margin-top: 2px">How full the context window is</div>
+          <div class="legend">
+            <div><span class="sw" style="background: var(--warning)"></span><div class="lbl"><b>Micro-compact</b><div class="hint">Trims old tool output and file contents</div></div><button class="toggle sm" id="trimOn"></button></div>
+            <div><span class="sw" style="background: var(--accent)"></span><div class="lbl"><b>Full compact</b><div class="hint">Summarizes the conversation</div></div><button class="toggle sm" id="compactOn"></button></div>
+          </div>
+          <div class="hint warn-t" id="overlap" style="margin-top: 8px">Full compact is at or below micro-compact, so micro-compact never runs.</div>
+        </div>
+      </div>
+
+      <!-- ───────── Local models ───────── -->
+      <div class="pane" data-if="tab=local">
+        <div class="lhero">
+          <span class="ic"><i data-lucide="server"></i></span>
+          <div class="lbl"><b style="font-size: 13.5px">Local models</b><div class="hint">Run winfer code on vLLM, LM Studio, Ollama, llama.cpp or oMLX with winfer's own tools. Needs the Responses API (<code>/v1/responses</code>).</div></div>
+          <span class="badge good" data-if="local"><span class="dot" style="width: 6px; height: 6px; box-shadow: none"></span>2 models</span>
+          <button class="toggle" data-bind="local"></button>
+        </div>
+        <div data-if="local" class="pane">
+          <div class="card">
+            <div class="row" style="gap: 8px">
+              <div class="conn"><span>http://</span><input data-bind="host" style="width: 120px" /><span style="padding: 0">:</span><input data-bind="port" style="width: 52px" /><input data-bind="path" style="width: 70px" /></div>
+              <input class="input" type="password" placeholder="API key (optional)" style="width: 150px; height: 34px" />
+              <button class="btn" style="height: 34px"><i data-lucide="refresh-cw"></i>Test</button>
+            </div>
+            <div class="mrow"><span class="dot"></span><span class="mono" style="flex: 1">local/qwen3.8-coder-32b</span><span class="badge">128k context</span><button class="btn ghost" data-use="local/qwen3.8-coder-32b">Use as main</button></div>
+            <div class="mrow"><span class="dot"></span><span class="mono" style="flex: 1">local/devstral-3</span><span class="badge">64k context</span><button class="btn ghost" data-use="local/devstral-3">Use as main</button></div>
+          </div>
+          <h5>Thinking levels<span class="r">As the chat template names them · llama.cpp templates override these</span></h5>
+          <div class="card" style="padding-top: 14px">
+            <div class="levels" id="levels"></div>
+            <div class="row"><div class="lbl"><b>Send level to chat template</b><div class="hint">As <code>chat_template_kwargs.reasoning_effort</code> (llama.cpp, oMLX, MLX). Off if the server rejects it.</div></div><button class="toggle" data-bind="templateEffort"></button></div>
+          </div>
+          <div class="card">
+            <div class="row"><div class="lbl"><b>Context window</b><div class="hint">For the context meter and compaction. Automatic uses what the server reports (else 32k).</div></div><input class="input" placeholder="Automatic" style="width: 110px" /></div>
+            <div class="row"><div class="lbl"><b>Web search</b><div class="hint">A web_search tool when the server searches the web (oMLX).</div></div><button class="toggle" data-bind="webSearch"></button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ───────── MCP ───────── -->
+      <div class="pane" data-if="tab=mcp">
+        <div class="intro">Extra MCP servers for every backend.<span class="k"><span class="seg" data-bind="mcpView"><button data-v="list"><i data-lucide="list"></i>List</button><button data-v="json"><i data-lucide="braces"></i>JSON</button></span></span></div>
+        <div class="srvs" data-if="mcpView=list">
+          <div class="srv builtin"><span class="ic"><i data-lucide="square-terminal"></i></span><div class="lbl"><b>winfer <span class="badge">built in</span></b><div class="hint">Panes, browser, secrets and notifications. Added automatically in panes.</div></div><i data-lucide="lock" class="subtle"></i></div>
+          <div class="srv"><span class="ic"><i data-lucide="github"></i></span><div class="lbl"><b>github <span class="badge">1 env var</span></b><div class="hint mono">npx -y @modelcontextprotocol/server-github</div></div><button class="toggle sm" aria-checked="true" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked') !== 'true')"></button><button class="btn ghost"><i data-lucide="pencil"></i></button><button class="btn ghost"><i data-lucide="trash-2"></i></button></div>
+          <div class="srv"><span class="ic"><i data-lucide="database"></i></span><div class="lbl"><b>postgres</b><div class="hint mono">uvx mcp-server-postgres postgres://localhost/dev</div></div><button class="toggle sm" aria-checked="true" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked') !== 'true')"></button><button class="btn ghost"><i data-lucide="pencil"></i></button><button class="btn ghost"><i data-lucide="trash-2"></i></button></div>
+          <button class="add"><i data-lucide="plus"></i>Add server<span class="subtle" style="margin-left: 6px">command, args and env</span></button>
+        </div>
+        <div class="card" data-if="mcpView=json" style="padding: 12px">
+          <textarea class="input" rows="11" spellcheck="false">{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_TOKEN": "…" }
+  },
+  "postgres": {
+    "command": "uvx",
+    "args": ["mcp-server-postgres", "postgres://localhost/dev"]
+  }
+}</textarea>
+          <div class="hint" style="margin-top: 6px; color: var(--success)">✓ Valid · 2 servers</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  $("modelSel").innerHTML = MODEL_OPTIONS;
+
+  // 30 skills from five places, as the lean setup finds them.
+  const SKILL_GROUPS = [
+    ["user", "Your skills", "~/.claude/skills", [
+      ["frontend-design", "Distinctive, production-grade web UI", 140], ["dataviz", "Charts, dashboards and palettes that read as one system", 160],
+      ["commit-messages", "Conventional commit messages from the staged diff", 70], ["release-notes", "Release notes from merged PRs since the last tag", 80],
+      ["sql-review", "Reviews SQL for injection, N+1s and missing indexes", 90], ["api-design", "REST and RPC conventions, versioning, errors", 110],
+      ["rust-perf", "Profiling and fixing hot paths in Rust", 95], ["tauri-ipc", "Typed commands and events between Tauri and the webview", 85],
+      ["gpui-components", "Building views and elements with GPUI", 120], ["changelog", "Keeps CHANGELOG.md in Keep a Changelog format", 60],
+      ["migration-guide", "Upgrade guides for breaking changes", 75], ["security-audit", "Secrets, unsafe input and auth checks before a release", 130]]],
+    ["document-skills", "document-skills", "plugin", [
+      ["pdf", "Read, fill, merge and create PDFs", 150], ["docx", "Word documents with tracked changes", 140], ["xlsx", "Spreadsheets with formulas and charts", 145], ["pptx", "Slide decks and templates", 135]]],
+    ["anthropic-skills", "anthropic-skills", "plugin", [
+      ["skill-creator", "Create, test and tune skills", 120], ["webapp-testing", "Drive a local web app with Playwright", 100], ["mcp-builder", "Build MCP servers in Python or TypeScript", 110],
+      ["canvas-design", "Posters and visual art as PNG or PDF", 90], ["algorithmic-art", "Generative art with p5.js", 85], ["brand-guidelines", "Apply brand colors and type", 70]]],
+    ["superpowers", "superpowers", "plugin", [
+      ["brainstorm", "Turns rough ideas into a design before coding", 95], ["tdd", "Red, green, refactor for every change", 80], ["debug", "Systematic root-cause debugging", 90],
+      ["plan", "Writes a step-by-step implementation plan", 85], ["review", "Requests and handles code review", 75], ["refactor", "Safe refactors in small verified steps", 70]]],
+    ["codex", "Codex", "~/.codex/skills", [["code-review", "Codex's review checklist for diffs", 90], ["k8s-deploy", "Deploys and rolls back Kubernetes services", 115]]],
+  ];
+  const ALL_SKILLS = SKILL_GROUPS.flatMap(([src, , , list]) => list.map(([name, desc, tok]) => ({ id: src === "user" ? name : `${src}:${name}`, src, name, desc, tok })));
+  const byId = new Map(ALL_SKILLS.map((s) => [s.id, s]));
+  const ALL_TOK = ALL_SKILLS.reduce((n, s) => n + s.tok, 0);
+  const sp = { open: false, q: "", grp: "all", hl: 0 };
+  const esc = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  const mark = (t) => {
+    const i = sp.q ? t.toLowerCase().indexOf(sp.q.toLowerCase()) : -1;
+    return i < 0 ? esc(t) : esc(t.slice(0, i)) + `<mark>${esc(t.slice(i, i + sp.q.length))}</mark>` + esc(t.slice(i + sp.q.length));
+  };
+  const visible = () => {
+    const q = sp.q.toLowerCase();
+    return ALL_SKILLS.filter((s) =>
+      (sp.grp === "all" || (sp.grp === "picked" ? state.skills.includes(s.id) : s.src === sp.grp)) &&
+      (!q || s.name.toLowerCase().includes(q) || s.desc.toLowerCase().includes(q) || s.src.includes(q)));
+  };
+  const toggleSkill = (id) => set({ skills: state.skills.includes(id) ? state.skills.filter((x) => x !== id) : [...state.skills, id] });
+  const openPanel = (open) => {
+    sp.open = open;
+    if (!open) (sp.q = ""), ($("spInput").value = ""), (sp.grp = "all");
+    renderSkillPicker();
+  };
+  const MAX_CHIPS = 6;
+  function renderSkillPicker() {
+    const picked = state.skills.map((id) => byId.get(id)).filter(Boolean);
+    const shown = sp.open ? picked : picked.slice(0, MAX_CHIPS);
+    $("spChips").innerHTML =
+      shown.map((s) => `<span class="sk">${s.src === "user" ? "" : `<span class="src">${s.src}:</span>`}${s.name}<button data-rm="${s.id}" aria-label="Remove ${s.name}"><i data-lucide="x"></i></button></span>`).join("") +
+      (picked.length > shown.length ? `<span class="sk more" id="spMore">+${picked.length - shown.length} more</span>` : "");
+    $("spChips").querySelectorAll("[data-rm]").forEach((b) => (b.onclick = (e) => (e.stopPropagation(), toggleSkill(b.dataset.rm))));
+    if ($("spMore")) $("spMore").onclick = (e) => (e.stopPropagation(), (sp.grp = "picked"), openPanel(true));
+    $("spInput").placeholder = picked.length ? "Add a skill…" : "No skills picked. Search or browse…";
+    $("sp").classList.toggle("open", sp.open);
+    $("spPanel").hidden = !sp.open;
+    const tok = picked.reduce((n, s) => n + s.tok, 0);
+    $("spSummary").textContent = `${picked.length} of ${ALL_SKILLS.length} picked`;
+    $("spBar").style.width = (tok / ALL_TOK) * 100 + "%";
+    $("spTokens").textContent = `~${tok.toLocaleString()} of ~${ALL_TOK.toLocaleString()} tokens per request`;
+    $("spClear").hidden = !picked.length;
+    if (sp.open) {
+      const count = (src) => ALL_SKILLS.filter((s) => s.src === src).length;
+      $("spGroups").innerHTML =
+        [["all", "All", ALL_SKILLS.length], ["picked", "Picked", picked.length], ...SKILL_GROUPS.map(([src, label]) => [src, label, count(src)])]
+          .map(([g, l, n]) => `<button data-g="${g}" aria-pressed="${sp.grp === g}">${l}<small>${n}</small></button>`).join("");
+      $("spGroups").querySelectorAll("[data-g]").forEach((b) => (b.onclick = () => ((sp.grp = b.dataset.g), (sp.hl = 0), renderSkillPicker(), $("spInput").focus())));
+      const vis = visible();
+      sp.hl = Math.min(sp.hl, Math.max(0, vis.length - 1));
+      const top = $("spList").scrollTop;
+      $("spList").innerHTML = vis.length
+        ? SKILL_GROUPS.map(([src, label, path]) => {
+            const rows = vis.filter((s) => s.src === src);
+            if (!rows.length) return "";
+            const all = rows.every((s) => state.skills.includes(s.id));
+            return `<div class="sp-gh">${label}<span class="path">${path}</span><button data-all="${src}" data-on="${!all}">${all ? "Unpick all" : "Pick all"}</button></div>` +
+              rows.map((s) => `<button class="sp-row${vis.indexOf(s) === sp.hl ? " hl" : ""}" data-id="${s.id}" aria-checked="${state.skills.includes(s.id)}" title="${esc(s.desc)}"><span class="cb"></span><span class="nm">${mark(s.name)}</span><span class="ds">${mark(s.desc)}</span><span class="tk">${s.tok}</span></button>`).join("");
+          }).join("")
+        : `<div class="sp-empty">No skill matches “${esc(sp.q)}”.</div>`;
+      $("spList").scrollTop = top;
+      $("spList").querySelectorAll("[data-id]").forEach((r) => (r.onclick = () => (toggleSkill(r.dataset.id), $("spInput").focus())));
+      $("spList").querySelectorAll("[data-all]").forEach((b) => (b.onclick = () => {
+        const ids = vis.filter((s) => s.src === b.dataset.all).map((s) => s.id);
+        set({ skills: b.dataset.on === "true" ? [...new Set([...state.skills, ...ids])] : state.skills.filter((x) => !ids.includes(x)) });
+      }));
+    }
+    lucide.createIcons();
+  }
+  $("spField").onclick = (e) => {
+    if (e.target.closest("#spCaret")) return openPanel(!sp.open);
+    $("spInput").focus();
+    if (!sp.open) openPanel(true);
+  };
+  $("spInput").oninput = () => ((sp.q = $("spInput").value.trim()), (sp.hl = 0), sp.open ? renderSkillPicker() : openPanel(true));
+  $("spInput").onkeydown = (e) => {
+    const vis = visible();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!sp.open) return openPanel(true);
+      sp.hl = (sp.hl + (e.key === "ArrowDown" ? 1 : -1) + vis.length) % Math.max(1, vis.length);
+      renderSkillPicker();
+      $("spList").querySelector(".hl")?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && sp.open && vis[sp.hl]) {
+      e.preventDefault();
+      toggleSkill(vis[sp.hl].id);
+    } else if (e.key === "Backspace" && !$("spInput").value && state.skills.length) {
+      toggleSkill(state.skills[state.skills.length - 1]);
+    } else if (e.key === "Escape" && sp.open) {
+      e.stopPropagation();
+      openPanel(false);
+    }
+  };
+  $("spClear").onclick = () => set({ skills: [] });
+  addEventListener("pointerdown", (e) => sp.open && !$("sp").contains(e.target) && openPanel(false));
+  document.querySelectorAll(".opt").forEach((o) => (o.onclick = () => set({ [o.dataset.k]: !state[o.dataset.k] })));
+  document.querySelectorAll("[data-use]").forEach((b) => (b.onclick = () => set({ model: b.dataset.use, tab: "models" })));
+
+  const MODES = {
+    plan: ["Plans without changing anything.", "allow", "block", "asks"],
+    "yolo-plan": ["Plans without changing anything; its tools run without approval.", "allow", "block", "allow"],
+    ask: ["Asks before edits, commands and network access.", "allow", "asks", "asks"],
+    "auto-edit": ["File edits go through; commands still ask.", "allow", "allow", "asks"],
+    yolo: ["Nothing asks. Use it where mistakes are cheap.", "allow", "allow", "allow"],
+  };
+  const RISK = { plan: "var(--success)", "yolo-plan": "var(--success)", ask: "var(--success)", "auto-edit": "var(--warning)", yolo: "var(--danger)" };
+  const ST = { allow: ["check", "Allowed"], asks: ["hand", "Asks first"], block: ["lock", "Blocked"] };
+  const CAPS = [["file-search", "Read files"], ["file-pen-line", "Edit files"], ["terminal", "Run commands"]];
+
+  const backendOf = (m) => (!m ? "chatgpt" : m.startsWith("local/") ? "local" : m.startsWith("claude") ? "claude" : m.endsWith("-codex") ? "codex" : "chatgpt");
+  const BNAME = { chatgpt: "ChatGPT account", claude: "Claude Code", codex: "Codex", local: "Local model" };
+
+  // Tags input
+  const renderTags = () => {
+    const list = state.allowed.split(/[,\s]+/).filter(Boolean);
+    $("tags").innerHTML = list.map((t, i) => `<span class="tag">${t}<button data-i="${i}" aria-label="Remove ${t}"><i data-lucide="x"></i></button></span>`).join("") + `<input placeholder="Add…" />`;
+    $("tags").querySelectorAll("button").forEach((b) => (b.onclick = () => set({ allowed: list.filter((_, i) => i !== +b.dataset.i).join(", ") })));
+    const inp = $("tags").querySelector("input");
+    inp.onkeydown = (e) => {
+      if ((e.key === "Enter" || e.key === ",") && inp.value.trim()) {
+        e.preventDefault();
+        set({ allowed: [...list, inp.value.trim()].join(", ") });
+        $("tags").querySelector("input").focus();
+      } else if (e.key === "Backspace" && !inp.value && list.length) set({ allowed: list.slice(0, -1).join(", ") });
+    };
+    lucide.createIcons({ nameAttr: "data-lucide", root: $("tags") });
+  };
+
+  // Thinking levels
+  const levels = () => state.levels.split(/[,\s]+/).filter(Boolean);
+  const renderLevels = () => {
+    const max = Math.max(1, ...levels().map((l) => +state["budget_" + l] || 0));
+    $("levels").innerHTML =
+      levels().map((l) => {
+        const v = state["budget_" + l] || "";
+        return l === "none"
+          ? `<div class="lvl"><div class="n">none<button data-rm="${l}"><i data-lucide="x"></i></button></div><div class="cap" style="flex:1">Thinking off</div><div class="gauge"></div></div>`
+          : `<div class="lvl"><div class="n">${l}<button data-rm="${l}"><i data-lucide="x"></i></button></div><input class="input mono" data-lvl="${l}" value="${v}" placeholder="No cap" /><div class="gauge"><i style="width:${v ? (v / max) * 100 : 100}%;${v ? "" : "opacity:.25"}"></i></div><div class="cap">${v ? (+v).toLocaleString() + " tokens" : "no cap"}</div></div>`;
+      }).join("") + `<button class="addlvl" id="addLvl"><i data-lucide="plus" style="width:14px;height:14px"></i></button>`;
+    $("levels").querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => set({ levels: levels().filter((x) => x !== b.dataset.rm).join(", ") })));
+    $("levels").querySelectorAll("[data-lvl]").forEach((inp) => (inp.onchange = () => set({ ["budget_" + inp.dataset.lvl]: inp.value.replace(/\D/g, "") })));
+    $("addLvl").onclick = () => {
+      const name = prompt("Level name, as the chat template names it (e.g. high):");
+      if (name) set({ levels: [...levels(), name.trim().toLowerCase()].join(", ") });
+    };
+    lucide.createIcons({ root: $("levels") });
+  };
+
+  // Compaction bar with draggable markers
+  const lastOn = { trimAt: 60, compactAt: 85 };
+  const renderCtx = (s) => {
+    const overlap = s.trimAt > 0 && s.compactAt > 0 && s.trimAt >= s.compactAt;
+    const t = s.trimAt, c = s.compactAt;
+    const z = [];
+    const first = Math.min(t || 100, c || 100);
+    z.push(`<div class="seg2" style="left:0;width:${first}%;color:var(--fg-subtle)">conversation</div>`);
+    if (t && (!c || t < c)) z.push(`<div class="seg2" style="left:${t}%;width:${(c || 100) - t}%;background:color-mix(in srgb,var(--warning) 20%,transparent);color:var(--warning)">trims</div>`);
+    if (c) z.push(`<div class="seg2" style="left:${c}%;right:0;background:color-mix(in srgb,var(--accent) 26%,transparent);color:var(--accent)">summarizes</div>`);
+    if (t) z.push(`<div class="handle trim" data-h="trimAt" style="left:${t}%"><span><em>${t}%</em></span></div>`);
+    if (c) z.push(`<div class="handle full" data-h="compactAt" style="left:${c}%"><span><em>${c}%</em></span></div>`);
+    $("ctxbar").innerHTML = z.join("");
+    $("overlap").hidden = !overlap;
+    $("trimOn").setAttribute("aria-checked", !!t);
+    $("compactOn").setAttribute("aria-checked", !!c);
+    $("ctxbar").querySelectorAll(".handle").forEach((h) => {
+      h.onpointerdown = (e) => {
+        e.preventDefault();
+        const key = h.dataset.h, rect = $("ctxbar").getBoundingClientRect();
+        const move = (ev) => {
+          const pct = Math.max(5, Math.min(95, Math.round((((ev.clientX - rect.left) / rect.width) * 100) / 5) * 5));
+          if (pct !== state[key]) set({ [key]: pct });
+          $("ctxbar").querySelector(`[data-h=${key}]`)?.classList.add("drag");
+        };
+        const up = () => (removeEventListener("pointermove", move), removeEventListener("pointerup", up), renderCtx(state));
+        addEventListener("pointermove", move);
+        addEventListener("pointerup", up);
+      };
+    });
+  };
+  for (const [btn, key] of [["trimOn", "trimAt"], ["compactOn", "compactAt"]])
+    $(btn).onclick = () => (state[key] ? ((lastOn[key] = state[key]), set({ [key]: 0 })) : set({ [key]: lastOn[key] }));
+
+  // Live web-interface preview
+  const renderPreview = (s) => {
+    const parts = [`<div class="p-user">fix the flaky upload test</div>`];
+    parts.push(s.expandThinking
+      ? `<div class="p-think open">The retry resolves before the mock server answers, so the second attempt races the first…</div>`
+      : `<div class="p-think">Thought for 4s ›</div>`);
+    if (s.compactTools) parts.push(`<div class="p-tool"><i></i>3 tool calls · Edit src/upload.ts <em>+4</em><em>−2</em><span class="x">›</span></div>`);
+    else parts.push(`<div class="p-tool"><i></i>Read src/upload.ts</div>`, `<div class="p-tool"><i></i>Grep "retry" src/</div>`, `<div class="p-tool"><i></i>Edit src/upload.ts <em>+4</em><em>−2</em></div>`);
+    parts.push(s.expandShell
+      ? `<div class="p-shell">$ pnpm test upload<div class="o">✓ retries after timeout (212 ms)</div><div class="o">✓ 12 passed</div></div>`
+      : `<div class="p-tool"><i class="run"></i>$ pnpm test upload<span class="x">›</span></div>`);
+    if (s.showPlan) parts.push(`<div class="p-plan"><span class="d">☑ Find the race</span><span class="d">☑ Await the mock server</span><span class="c">◐ Run the upload tests</span></div>`);
+    parts.push(`<div class="p-work">✻ Working… <span>14s${s.showRate ? " · 86 tok/s" : ""}</span></div>`);
+    const right = [s.showContext && `<span class="meter"><b></b>42%</span>`, s.showCost && `<span>$0.18</span>`].filter(Boolean).join("");
+    $("scr").style.setProperty("--fs", (11 * s.textScale) / 100 + "px");
+    $("scr").style.setProperty("--g", s.compact ? ".35em" : ".7em");
+    $("scr").innerHTML = `<div class="tx">${parts.join("")}</div><div class="comp">Ask winfer code…</div><div class="status"><span>${s.model || "gpt-6-luna"} · ${s.mode}</span><span class="r">${right}</span></div>`;
+    $("pvScale").textContent = s.textScale + "%";
+  };
+
+  let lastTags = null, lastLevels = null;
+  onChange((s) => {
+    document.querySelectorAll(".opt").forEach((o) => {
+      o.classList.toggle("on", !!s[o.dataset.k]);
+      o.querySelector(".toggle").setAttribute("aria-checked", !!s[o.dataset.k]);
+    });
+    s.modeText = MODES[s.mode][0];
+    s.codexPct = s.shortCodex ? "−52%" : "−37%";
+    s.skillTotal = ALL_SKILLS.length;
+    s.allTokens = ALL_TOK.toLocaleString();
+    document.querySelectorAll("[data-text]").forEach((el) => (el.textContent = s[el.dataset.text]));
+    $("caps").innerHTML = CAPS.map(([ic, l], i) => {
+      const st = MODES[s.mode][i + 1];
+      return `<div class="cap3"><span class="ci"><i data-lucide="${ic}"></i></span><span><b>${l}</b><span class="st ${st}"><i data-lucide="${ST[st][0]}"></i>${ST[st][1]}</span></span></div>`;
+    }).join("");
+    lucide.createIcons({ root: $("caps") });
+    $("permDot").style.background = s.autoApprove ? "var(--danger)" : RISK[s.mode];
+    $("localDot").style.background = s.local ? "var(--success)" : "transparent";
+    $("codexBar").style.width = s.shortCodex ? "48%" : "63%";
+    $("leanClaude").classList.toggle("off", !s.leanClaude);
+    $("leanCodex").classList.toggle("off", !s.leanCodex);
+    $("skillsCard").hidden = !(s.leanClaude || s.leanCodex || s.leanCodexCli);
+    renderSkillPicker();
+    const b = backendOf(s.model);
+    document.querySelectorAll(".subrow").forEach((r) => {
+      r.classList.toggle("cur", r.dataset.b === b);
+      r.querySelector("small").className = r.dataset.b === b ? "cur" : "";
+      r.querySelector("small").textContent = r.dataset.b === b ? "active backend" : "subagents";
+    });
+    $("resolved").textContent = s.model ? `Runs on ${BNAME[b]}` : "Automatic → ChatGPT · gpt-6-luna";
+    if (!document.querySelector(".ctxbar .drag")) renderCtx(s);
+    if (s.allowed !== lastTags) (lastTags = s.allowed), renderTags();
+    const lv = s.levels + JSON.stringify(Object.entries(s).filter(([k]) => k.startsWith("budget_")));
+    if (lv !== lastLevels) (lastLevels = lv), renderLevels();
+    renderPreview(s);
+    if (location.hash.slice(1) !== s.tab) history.replaceState(null, "", "#" + s.tab);
+  });
+  mockup({
+    id: "d-",
+    pitch: "<b>D · Visual + tabs.</b> C's visual controls, one topic per tab. The web-interface options get a live preview; models show which backend is in use; permissions spell out what each mode allows; compaction markers drag on the context bar.",
+    initial: {
+      ...DEFAULTS,
+      tab: ["interface", "models", "permissions", "efficiency", "local", "mcp"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "interface",
+      mcpView: "list",
+      skills: ["frontend-design", "dataviz", "document-skills:pdf", "superpowers:tdd"],
+      budget_low: "1024", budget_medium: "4096", budget_xhigh: "",
+    },
+  });
+</script>
+</body>
+</html>

@@ -846,24 +846,33 @@ impl Root {
     fn render_start_form(&self, ab: bool, c: Colors, cx: &mut Context<Self>) -> Option<Div> {
         let form = self.orchestration.race.as_ref()?;
         let s = self.state.read(cx);
-        let providers: Vec<AgentProvider> = s.providers.iter().filter(|p| p.installed && p.id != "shell").cloned().collect();
+        let mut providers: Vec<AgentProvider> = s.providers.iter().filter(|p| p.installed && p.id != "shell").cloned().collect();
+        if let Some(pos) = providers.iter().position(|p| p.id == "winfer")
+            && pos > 0
+        {
+            let winfer = providers.remove(pos);
+            providers.insert(0, winfer);
+        }
         let prompt = form.input.read(cx).value().trim().to_string();
         let total: usize = form.counts.values().sum();
         let mut row = div().flex().flex_wrap().items_center().gap_2();
         for p in &providers {
+            let is_winfer = p.id == "winfer";
             if ab {
                 let id = p.id.clone();
                 let on = form.ab_provider == p.id;
-                row = row.child(div().id(SharedString::from(format!("ab-{}", p.id))).rounded_md().border_1().px_2().py_1().text_xs().cursor_pointer()
-                    .when(on, |d| d.text_color(c.accent))
-                    .when(!on, |d| d.text_color(c.fg).hover(move |d| d.bg(c.hover)))
+                row = row.child(div().id(SharedString::from(format!("ab-{}", p.id))).flex().items_center().gap_1p5().rounded_md().border_1().px_2().py_1().text_xs().cursor_pointer()
+                    .when(on, |d| d.bg(Hsla { a: 0.14, ..c.accent }).border_color(Hsla { a: 0.42, ..c.accent }).text_color(c.accent).font_weight(FontWeight::MEDIUM))
+                    .when(!on, |d| d.border_color(c.edge).text_color(c.fg).hover(move |d| d.bg(c.hover)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(f) = this.orchestration.race.as_mut() {
                             f.ab_provider = id.clone();
                         }
                         cx.notify();
                     }))
-                    .child(p.name.clone()));
+                    .child(crate::ui::code_pickers::mark(c, &p.id, 13.0, 1.0))
+                    .child(p.name.clone())
+                    .when(is_winfer, |d| d.child(crate::ui::code_pickers::recommended_badge(c, true))));
             } else {
                 let bump = |d: isize| {
                     let id = p.id.clone();
@@ -876,7 +885,9 @@ impl Root {
                     })
                 };
                 row = row.child(div().flex().items_center().gap_1p5().rounded_md().border_1().border_color(c.edge).px_2().py_1().text_xs().text_color(c.fg)
+                    .child(crate::ui::code_pickers::mark(c, &p.id, 13.0, 1.0))
                     .child(p.name.clone())
+                    .when(is_winfer, |d| d.child(crate::ui::code_pickers::recommended_badge(c, true)))
                     .child(small_button(c, SharedString::from(format!("minus-{}", p.id)), "−").on_click(bump(-1)))
                     .child(div().w_3().text_center().child(form.counts.get(&p.id).copied().unwrap_or(0).to_string()))
                     .child(small_button(c, SharedString::from(format!("plus-{}", p.id)), "+").on_click(bump(1))));

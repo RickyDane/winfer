@@ -142,6 +142,8 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.
 - [ ] Shortcuts use Ctrl+Shift (Ctrl+Shift+T new pane, Ctrl+Shift+K palette, Ctrl+Shift+/ shortcuts); tooltips and the empty screen show the same keys.
 - [ ] Hold Alt+Space to talk; if another app owns it, Settings says so and the mic button still works.
+- [ ] Native: the title bar shows minimize, maximize/restore and close at the right edge (close turns red on hover); dragging an empty part of the title bar moves the window, double-clicking it maximizes, and dragging to a screen edge snaps.
+- [ ] Native: with no Chrome/Edge installed or one that fails to start, the browser panel shows the error and a Retry button (it doesn't flicker tabs open and closed).
 
 ## Known gaps
 - Unsigned build; no auto-update yet.

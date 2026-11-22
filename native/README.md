@@ -73,8 +73,7 @@ Partial:
 
 Not started, roughly in priority order:
 
-- [ ] Windows and Linux installers (they ship as a portable `.exe` and a `.tar.gz` of the binary); a Windows icon and
-  code signing
+- [ ] A Linux installer (it ships as a `.tar.gz` of the binary); Windows code signing
 
 ## Packaging
 
@@ -83,7 +82,7 @@ Not started, roughly in priority order:
 | Platform | Download | Update bundle |
 | --- | --- | --- |
 | macOS | `winfer-native-macos-<arch>.dmg` | `winfer-native-macos-<arch>.app.tar.gz` (winfer.app) |
-| Windows | `winfer-native-windows-x86_64.exe` (portable) | the same `.exe` |
+| Windows | `winfer-native-setup-windows-x86_64.exe` (Inno Setup, per user) or `winfer-native-windows-x86_64.exe` (portable) | the portable `.exe` |
 | Linux | `winfer-native-linux-x86_64.tar.gz` (the binary; needs WebKitGTK 4.1, GTK 3, ALSA) | the same `.tar.gz` |
 
 On macOS, `WINFER_SIGN_IDENTITY` signs with a Developer ID and the hardened runtime and `WINFER_NOTARIZE=1` notarizes

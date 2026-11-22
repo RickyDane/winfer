@@ -39,6 +39,13 @@ fn main() {
     if run_subcommand() {
         return;
     }
+    // Lean Codex always comes with the short system prompt in this build (Settings has no switch
+    // for it): keep the shared harness setting in step.
+    let mut harness = winfer_backend::harness::config::Config::load();
+    if harness.lean_codex_prompt != harness.lean_codex {
+        harness.lean_codex_prompt = harness.lean_codex;
+        harness.save();
+    }
     // Started by an update (updates::relaunch): the old copy is still quitting, so wait for it to let
     // go of the instance lock. Not passed on to the agents' processes.
     let relaunched = std::env::var_os(updates::RELAUNCH_ENV).is_some();

@@ -568,7 +568,7 @@ impl CodeState {
     }
 
     pub fn export_markdown(&self) -> String {
-        let mut md = format!("# {}\n\n", self.title.as_deref().filter(|t| !t.is_empty()).unwrap_or("winfer code session"));
+        let mut md = format!("# {}\n\n", self.title.as_deref().filter(|t| !t.is_empty()).unwrap_or("WinferCode session"));
         for it in &self.items {
             match it {
                 Item::User { text, .. } => md.push_str(&format!("## You\n\n{text}\n\n")),

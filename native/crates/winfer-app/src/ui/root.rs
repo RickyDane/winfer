@@ -72,6 +72,10 @@ mod settings_plugins;
 mod settings_skills;
 #[path = "settings_harness.rs"]
 mod settings_harness;
+#[path = "settings_code.rs"]
+mod settings_code;
+#[path = "model_logos.rs"]
+mod model_logos;
 #[path = "mobile.rs"]
 mod mobile;
 #[path = "updates_ui.rs"]
@@ -478,7 +482,7 @@ impl Root {
             if let Ok(found) = found {
                 let found = found.into_iter().map(|p| crate::model::AgentProvider { info: p.provider, installed: p.installed }).collect();
                 let _ = loading.update(cx, |s, cx| {
-                    s.providers = found;
+                    s.set_providers(found);
                     cx.notify();
                 });
             }
@@ -1157,7 +1161,73 @@ impl Root {
         cx.notify();
     }
 
-    fn render_title_bar(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Minimize, maximize/restore and close, drawn where the OS doesn't (the title bar is ours):
+    /// Windows, and Linux windows with client-side decorations. macOS keeps its traffic lights.
+    /// On Windows the buttons are only hit-test areas (the OS handles the clicks); on Linux they act.
+    fn render_window_controls(&self, c: &Colors, window: &Window) -> Option<AnyElement> {
+        let windows = cfg!(target_os = "windows");
+        let linux = cfg!(target_os = "linux");
+        if !windows && !(linux && matches!(window.window_decorations(), Decorations::Client { .. })) {
+            return None;
+        }
+        let c = *c;
+        let supported = window.window_controls();
+        let button = move |id: &'static str, icon: IconName, area: WindowControlArea| {
+            let close = area == WindowControlArea::Close;
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(46.0))
+                .h_full()
+                .flex_shrink_0()
+                .text_color(c.muted)
+                .hover(move |d| if close { d.bg(c.danger).text_color(white()) } else { d.bg(c.hover).text_color(c.fg) })
+                .when(windows, |d| d.window_control_area(area))
+                .when(!windows, |d| {
+                    d.on_mouse_down(MouseButton::Left, |_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        match area {
+                            WindowControlArea::Min => window.minimize_window(),
+                            WindowControlArea::Max => window.zoom_window(),
+                            _ => window.remove_window(),
+                        }
+                    })
+                })
+                .child(Icon::new(icon).size(px(12.0)))
+        };
+        Some(
+            div()
+                .id("window-controls")
+                .flex()
+                .items_center()
+                .h_full()
+                .flex_shrink_0()
+                .when(supported.minimize, |d| d.child(button("window-minimize", IconName::WindowMinimize, WindowControlArea::Min)))
+                .when(supported.maximize, |d| {
+                    d.child(if window.is_maximized() {
+                        button("window-restore", IconName::WindowRestore, WindowControlArea::Max)
+                    } else {
+                        button("window-maximize", IconName::WindowMaximize, WindowControlArea::Max)
+                    })
+                })
+                .child(button("window-close", IconName::WindowClose, WindowControlArea::Close))
+                .into_any_element(),
+        )
+    }
+
+    fn render_title_bar(&self, c: &Colors, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Room for macOS's traffic lights; elsewhere the window controls sit at the right edge.
+        let mac = cfg!(target_os = "macos");
+        let controls = self.render_window_controls(c, window);
+        // Moves the window on Windows (the OS drags and snaps it, and a double click maximizes it).
+        // Only on gaps between controls: over a button it would take the click for a title bar drag.
+        let drag = || div().flex_1().h_full().when(cfg!(target_os = "windows"), |d| d.window_control_area(WindowControlArea::Drag));
         let s = self.state.read(cx);
         let name: SharedString = s.active().map_or(String::new(), |w| w.name.clone()).into();
         let view = s.view();
@@ -1191,16 +1261,19 @@ impl Root {
             .flex_shrink_0()
             .flex()
             .items_center()
-            .px_3()
+            .pl_3()
+            .when(controls.is_none(), |d| d.pr_3())
             .gap_2()
             .text_color(c.subtle)
             .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
             .child(
-                div().flex_1().flex().items_center().pl(px(68.0)).child(
-                    div().id("toggle-sidebar").rounded_sm().p_1().hover(move |d| d.bg(c.hover).text_color(c.fg)).cursor_pointer()
-                        .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ToggleSidebar, window, cx)))
-                        .child(Icon::new(IconName::PanelLeft).size(px(15.0))),
-                ),
+                div().flex_1().h_full().flex().items_center().pl(px(if mac { 68.0 } else { 0.0 }))
+                    .child(
+                        div().id("toggle-sidebar").rounded_sm().p_1().hover(move |d| d.bg(c.hover).text_color(c.fg)).cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| this.execute(Command::ToggleSidebar, window, cx)))
+                            .child(Icon::new(IconName::PanelLeft).size(px(15.0))),
+                    )
+                    .child(drag()),
             )
             .child(
                 div().flex().items_center().gap_0p5().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_0p5()
@@ -1221,7 +1294,8 @@ impl Root {
                     .children(self.render_page_tabs(c, cx)),
             )
             .child(
-                div().flex_1().flex().items_center().justify_end().gap_2()
+                div().flex_1().h_full().flex().items_center().justify_end().gap_2()
+                    .child(drag())
                     .child(self.render_usage_meter(c, cx))
                     .child(
                         div().id("live-voice").rounded_md().border_1().px_1p5().py_1().cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg))
@@ -1244,6 +1318,8 @@ impl Root {
                             .child(Icon::new(IconName::PanelRight).size(px(15.0))),
                     ),
             )
+            // `.children` of an Option: nothing on macOS.
+            .children(controls.map(|controls| div().ml_2().h_full().child(controls)))
     }
 
 
@@ -1304,7 +1380,7 @@ impl Root {
                 )
             })
             // Paint the rounded border on top so inner views (chat/terminal/sky) can never square off the bottom corners.
-            .child(div().absolute().top_0().left_0().size_full().rounded_2xl().when(focused, |d| d.border_2().border_color(Hsla { a: 0.75, ..c.accent })).when(!focused, |d| d.border_1().border_color(c.edge)))
+            .child(div().absolute().top_0().left_0().size_full().rounded_2xl().when(focused, |d| d.border_1().border_color(Hsla { a: 0.75, ..c.accent })).when(!focused, |d| d.border_1().border_color(c.edge)))
     }
 
     fn render_tiles(&mut self, tree: Option<LayoutNode>, zoomed: Option<String>, c: &Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -1403,9 +1479,13 @@ impl Root {
 
 impl Root {
     /// Closes the topmost modal layer; true if there was one.
-    fn close_top_layer(&mut self, _: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn close_top_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.drag.take().is_some() {
             cx.notify();
+            return true;
+        }
+        // The skill list in Settings → WinferCode closes before Settings does.
+        if self.state.read(cx).settings_open && self.close_skill_list(window, cx) {
             return true;
         }
         if self.close_release_notes(cx) || self.close_bg_popover(cx) || self.close_welcome_picker(cx) || self.close_pane_note(cx) || self.close_menu(cx) || self.cancel_rename(cx) || self.close_search(cx) || self.close_plugin_layer(cx) || self.close_orchestration_layer(cx) {
@@ -1557,6 +1637,14 @@ impl Render for Root {
                     self.execute(Command::Settings(Some("general".into())), window, cx);
                     self.settings_ui_for_dev(other["settings-search:".len()..].to_string(), window, cx);
                 }
+                // Development aid: Settings → WinferCode on one of its tabs (interface, models, …, mcp),
+                // optionally scrolled down (`code-tab:efficiency@500`).
+                Ok(other) if other.starts_with("code-tab:") => {
+                    let (tab, scroll) = other["code-tab:".len()..].split_once('@').unwrap_or((&other["code-tab:".len()..], "0"));
+                    self.harness_page.ui.tab = settings_code::tab_named(tab);
+                    self.execute(Command::Settings(Some("winfer-code".into())), window, cx);
+                    self.scroll_settings_for_dev(scroll.parse().unwrap_or(0.0), cx);
+                }
                 Ok(other) if other.starts_with("settings:") => self.execute(Command::Settings(Some(other["settings:".len()..].to_string())), window, cx),
                 Ok(other) if other.starts_with("page:") => self.update_state(cx, |s| s.set_view(View::Page(other["page:".len()..].to_string()))),
                 Ok(other) if other.starts_with("file:") => {
@@ -1666,7 +1754,11 @@ impl Render for Root {
             .on_mouse_move(cx.listener(Self::mouse_moved))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_released))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_released))
-            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, _| this.note_user_activity()))
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, _| {
+                this.note_user_activity();
+                // A click that reaches GPUI is outside the plugin webview: keys belong to GPUI again.
+                this.reclaim_keyboard();
+            }))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.note_user_activity();
                 if this.record_shortcut(event, cx) || this.paste_welcome_images_from_key(event, cx) {
@@ -1685,7 +1777,7 @@ impl Render for Root {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSidePanel, window, cx| this.execute(Command::ToggleBrowser, window, cx)))
-            .child(self.render_title_bar(&c, cx))
+            .child(self.render_title_bar(&c, window, cx))
             .child(
                 div()
                     .flex_1()

@@ -1,0 +1,298 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>winfer code settings · A · Tabs</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .tabs { display: flex; gap: 2px; padding: 0 28px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .tabs button { position: relative; display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px; font-size: 12.5px; white-space: nowrap; color: var(--fg-muted); }
+  .tabs button:hover { color: var(--fg); }
+  .tabs button svg { width: 14px; height: 14px; }
+  .tabs button[aria-checked="true"] { color: var(--fg); }
+  .tabs button[aria-checked="true"] svg { color: var(--accent); }
+  .tabs button[aria-checked="true"]::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+  .body { padding-top: 20px; }
+  .group-h { padding: 8px 16px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); background: color-mix(in srgb, var(--panel) 60%, var(--app)); }
+  .row + .group-h, .group-h + .row { border-top: 1px solid var(--border); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; }
+  .grid2 .row { border-top: 1px solid var(--border); }
+  .grid2 .row:nth-child(odd) { border-right: 1px solid var(--border); }
+  .grid2 .row:nth-child(-n+2) { border-top: 0; }
+  table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.t th { text-align: left; font-weight: 500; font-size: 11px; color: var(--fg-subtle); padding: 8px 16px; background: color-mix(in srgb, var(--panel) 60%, var(--app)); }
+  table.t td { padding: 8px 16px; border-top: 1px solid var(--border); }
+  table.t td:first-child { width: 34%; }
+  .cardhead { display: flex; align-items: flex-end; gap: 12px; padding: 0 4px 8px; }
+  .cardhead .card-h { padding: 0; flex: 1; }
+  .modes { display: grid; gap: 0; }
+  .mode { display: flex; gap: 12px; align-items: flex-start; padding: 10px 16px; text-align: left; border-top: 1px solid var(--border); }
+  .mode:first-child { border-top: 0; }
+  .mode:hover { background: var(--hover); }
+  .mode .radio { width: 16px; height: 16px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-strong); margin-top: 1px; flex-shrink: 0; }
+  .mode[aria-checked="true"] .radio { box-shadow: inset 0 0 0 5px var(--accent); }
+  .mode b { font-size: 13px; font-weight: 500; }
+  .mode .hint { margin: 0; }
+  .mode .k { margin-left: auto; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px; min-height: 34px; border-radius: 6px; background: var(--panel-raised); box-shadow: var(--shadow); width: 320px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 4px 0 8px; border-radius: 5px; background: var(--hover); font: 11.5px var(--mono); }
+  .tag svg { width: 11px; height: 11px; color: var(--fg-subtle); }
+  .tags input { border: 0; background: none; outline: none; flex: 1; min-width: 60px; font: 11.5px var(--mono); }
+  .server { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  .server:first-child { border-top: 0; }
+  .server .ic { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--hover); color: var(--fg-muted); }
+  .empty { padding: 18px; text-align: center; color: var(--fg-subtle); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="square-terminal"></i></div>
+      <h2>winfer code</h2>
+      <p>winfer's own agent: interface, model and context.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="interface"><i data-lucide="layout-panel-left"></i>Interface</button>
+      <button data-v="models"><i data-lucide="cpu"></i>Models</button>
+      <button data-v="permissions"><i data-lucide="shield-check"></i>Permissions</button>
+      <button data-v="tokens"><i data-lucide="gauge"></i>Efficiency</button>
+      <button data-v="local"><i data-lucide="server"></i>Local models</button>
+      <button data-v="mcp"><i data-lucide="plug"></i>MCP servers</button>
+    </div>
+    <div class="body">
+
+      <!-- Interface -->
+      <section data-if="tab=interface">
+        <div class="card-h"><h3>Style</h3><p>For new winfer code panes. Open panes keep the style they started with.</p></div>
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Interface</b><div class="hint" data-if="ui=web">Timeline of tool calls, inline diffs and approvals.</div><div class="hint" data-if="ui=tui">The classic terminal UI.</div></div>
+            <div class="ctl"><div class="seg" data-bind="ui"><button data-v="web"><i data-lucide="app-window"></i>Web</button><button data-v="tui"><i data-lucide="terminal"></i>Terminal (TUI)</button></div></div>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Plan sidebar</b><div class="hint">The plan sits on the right when the pane is wide enough. <kbd>/sidebar</kbd></div></div>
+            <div class="ctl"><button class="toggle" data-bind="planSidebar"></button></div>
+          </div>
+        </div>
+      </section>
+      <section data-if="tab=interface" data-off-if="ui=tui">
+        <div class="cardhead"><div class="card-h"><h3>Web interface</h3><p data-if="ui=tui" class="warn-t">Only used by the web interface.</p></div></div>
+        <div class="card">
+          <div class="group-h">Status line</div>
+          <div class="grid2">
+            <div class="row"><div class="lbl"><b>Context meter</b><div class="hint">Click it for the breakdown.</div></div><button class="toggle" data-bind="showContext"></button></div>
+            <div class="row"><div class="lbl"><b>Session cost</b><div class="hint">When the backend reports one.</div></div><button class="toggle" data-bind="showCost"></button></div>
+            <div class="row"><div class="lbl"><b>Tokens per second</b><div class="hint">Next to the working indicator.</div></div><button class="toggle" data-bind="showRate"></button></div>
+            <div class="row"><div class="lbl"><b>Plan above the composer</b><div class="hint">Todos and running subagents.</div></div><button class="toggle" data-bind="showPlan"></button></div>
+          </div>
+          <div class="group-h">Transcript</div>
+          <div class="grid2">
+            <div class="row"><div class="lbl"><b>Show thinking</b><div class="hint">Expanded instead of collapsed.</div></div><button class="toggle" data-bind="expandThinking"></button></div>
+            <div class="row"><div class="lbl"><b>Live shell output</b><div class="hint">Open while a command runs.</div></div><button class="toggle" data-bind="expandShell"></button></div>
+            <div class="row"><div class="lbl"><b>Compact tool calls</b><div class="hint">One live row; click to expand.</div></div><button class="toggle" data-bind="compactTools"></button></div>
+            <div class="row"><div class="lbl"><b>Compact layout</b><div class="hint">Tighter spacing.</div></div><button class="toggle" data-bind="compact"></button></div>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Text size</b><div class="hint"><kbd>⌘ +</kbd> <kbd>⌘ −</kbd> <kbd>⌘ 0</kbd> or ⌘ + scroll over the pane.</div></div>
+            <div class="ctl" style="width: 300px">
+              <span class="subtle" style="font-size: 10px">A</span>
+              <input type="range" min="70" max="160" step="5" data-bind="textScale" style="flex: 1; accent-color: var(--accent)" />
+              <span class="subtle" style="font-size: 14px">A</span>
+              <span class="mono muted" style="width: 40px; text-align: right; font-size: 12px"><span data-text="textScale"></span>%</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Models -->
+      <section data-if="tab=models">
+        <div class="card-h"><h3>Main model</h3><p>New sessions start with these. <kbd>/model</kbd> and <kbd>/effort</kbd> change them inside a session.</p></div>
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Model</b><div class="hint" data-if="!model">Automatic: your ChatGPT account when signed in, else Claude Code or Codex.</div></div>
+            <div class="ctl"><select data-bind="model" style="width: 240px" id="modelSel"></select></div>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Reasoning effort</b></div>
+            <div class="ctl"><select data-bind="effort" style="width: 160px" id="effortSel"></select></div>
+          </div>
+        </div>
+      </section>
+      <section data-if="tab=models">
+        <div class="card-h"><h3>Subagents</h3><p>Explore, look things up and make small fixes; the main model orchestrates and checks their work. <kbd>/subagent-model</kbd></p></div>
+        <div class="card">
+          <table class="t">
+            <tr><th>When the main model runs on</th><th>Subagents run on</th><th>Effort</th></tr>
+            <tr><td>ChatGPT account</td><td><select data-bind="subChatgpt" style="width: 190px"><option value="">Same as main model</option><option>gpt-6-luna</option><option>gpt-6-luna-mini</option></select></td><td><select data-bind="subChatgptEffort" style="width: 120px" data-if="subChatgpt"><option value="">Default</option><option>minimal</option><option>low</option><option>medium</option><option>high</option></select></td></tr>
+            <tr><td>Claude Code</td><td><select data-bind="subClaude" style="width: 190px"><option value="">Same as main model</option><option>claude-sonnet-5</option><option>claude-haiku-5</option></select></td><td><span class="subtle" style="font-size: 11.5px">Set by Claude</span></td></tr>
+            <tr><td>Codex</td><td><select data-bind="subCodex" style="width: 190px"><option value="">Same as main model</option><option>gpt-6-luna-codex</option></select></td><td><select style="width: 120px" data-if="subCodex"><option>Default</option><option>low</option></select></td></tr>
+            <tr><td>Local model</td><td><select data-bind="subLocal" style="width: 190px"><option value="">Same as main model</option><option>devstral-3</option></select></td><td><select style="width: 120px" data-if="subLocal"><option>Default</option><option>low</option></select></td></tr>
+          </table>
+        </div>
+      </section>
+
+      <!-- Permissions -->
+      <section data-if="tab=permissions">
+        <div class="card-h"><h3>Permission mode</h3><p>What new sessions may do without asking. <kbd>⇧ Tab</kbd> cycles it inside a session.</p></div>
+        <div class="card modes" data-radio="mode" data-off-if="autoApprove">
+          <button class="mode" data-v="ask"><span class="radio"></span><span><b>Ask</b><div class="hint">Asks before every edit and command.</div></span><span class="badge good k">Safest</span></button>
+          <button class="mode" data-v="auto-edit"><span class="radio"></span><span><b>Auto-edit</b><div class="hint">Edits files freely; commands still ask.</div></span></button>
+          <button class="mode" data-v="plan"><span class="radio"></span><span><b>Plan</b><div class="hint">Read-only. Proposes a plan, changes nothing.</div></span></button>
+          <button class="mode" data-v="yolo-plan"><span class="radio"></span><span><b>Yolo-plan</b><div class="hint">Read-only and never asks.</div></span></button>
+          <button class="mode" data-v="yolo"><span class="radio"></span><span><b>Yolo</b><div class="hint">Never asks before editing files or running commands.</div></span><span class="badge bad k">No guard rails</span></button>
+        </div>
+      </section>
+      <section data-if="tab=permissions">
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Auto-approve in panes</b><div class="hint" data-if="!autoApprove">Start winfer code panes with <code>--yolo</code>.</div><div class="hint warn-t" data-if="autoApprove">Panes start with <code>--yolo</code>, overriding the mode above. Applies to panes started after the change.</div></div>
+            <button class="toggle" data-bind="autoApprove"></button>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Always-allowed commands</b><div class="hint">Commands starting with these never ask. ChatGPT account only.</div></div>
+            <div class="tags"><span class="tag">git<i data-lucide="x"></i></span><span class="tag">cargo<i data-lucide="x"></i></span><span class="tag">pnpm<i data-lucide="x"></i></span><input placeholder="Add…" /></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tokens -->
+      <section data-if="tab=tokens">
+        <div class="card-h"><h3>Lean setup</h3><p>Fewer tools and skills per request, so every request is smaller. Applies to sessions started after the change.</p></div>
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Lean Claude Code <span class="badge good">−71% input tokens</span><span class="info"><i data-lucide="info"></i><span class="tip">A short system prompt and only the tools coding needs: Bash, Read, Edit, Write, Grep, Glob, the plan tools, Agent, plus Skill when it has skills. No user MCP servers. Project CLAUDE.md and project skills still load. Same pass rate in the bench.</span></span></b><div class="hint">When winfer code runs a Claude model.</div></div>
+            <button class="toggle" data-bind="leanClaude"></button>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Lean Codex <span class="badge good">−37% input tokens</span><span class="info"><i data-lucide="info"></i><span class="tip">No ChatGPT apps, plugins and their skills, bundled skills, image generation, computer use, Codex's own browser or goals. Only the skills picked below; each tool result capped at 4k tokens. winfer's tools stay. Same pass rate in the bench.</span></span></b><div class="hint">When winfer code runs a Codex model.</div></div>
+            <button class="toggle" data-bind="leanCodex"></button>
+          </div>
+          <div class="row sub" data-if="leanCodex">
+            <div class="lbl"><b>Short Codex prompt <span class="badge good">−52%</span></b><div class="hint">Swaps Codex's ~5k-token system prompt for a short one. Codex loses its own guidance on its tools.</div></div>
+            <button class="toggle" data-bind="shortCodex"></button>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Codex CLI panes too</b><div class="hint">Same lean setup for plain Codex panes. May miss Codex's prompt cache, so it can cost more.</div></div>
+            <button class="toggle" data-bind="leanCodexCli"></button>
+          </div>
+          <div class="row stacked" data-if="leanClaude|leanCodex" id="skillsRow">
+            <div style="display: flex; align-items: center; gap: 24px">
+              <div class="lbl"><b>Skills</b><div class="hint" data-if="skillsMode=all">All your skills load; each description goes into every request.</div><div class="hint" data-if="skillsMode=selected">Only the ones you pick. Built-in and project skills still load.</div></div>
+              <div class="seg" data-bind="skillsMode"><button data-v="selected">Selected</button><button data-v="all">All</button></div>
+            </div>
+            <div class="ctl" data-if="skillsMode=selected" style="flex-wrap: wrap" data-chips="skills" id="chips"></div>
+          </div>
+        </div>
+      </section>
+      <section data-if="tab=tokens">
+        <div class="card-h"><h3>Context compaction</h3><p>Keeps long conversations going when the context window fills up.</p></div>
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Micro-compact at</b><div class="hint">Trims old tool output and file contents from earlier turns.</div></div>
+            <select data-bind="trimAt" data-num="1" id="trimSel" style="width: 96px"></select>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Full compact at</b><div class="hint" data-if="!overlap">Summarizes the conversation.</div><div class="hint warn-t" data-if="overlap">At or below micro-compact, so micro-compact never runs.</div></div>
+            <select data-bind="compactAt" data-num="1" id="compactSel" style="width: 96px"></select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Local -->
+      <section data-if="tab=local">
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Use local models</b><div class="hint">Run winfer code on a model served from your machine or network (vLLM, LM Studio, Ollama, llama.cpp, oMLX…). Its models appear as <code>local/&lt;model&gt;</code>.</div></div>
+            <button class="toggle" data-bind="local"></button>
+          </div>
+        </div>
+      </section>
+      <section data-if="tab=local&local">
+        <div class="cardhead"><div class="card-h"><h3>Server</h3><p>Needs the OpenAI Responses API (<code>/v1/responses</code>).</p></div><span class="badge good" style="margin-bottom: 8px"><span class="dot" style="width: 6px; height: 6px; box-shadow: none"></span>Connected · 2 models</span></div>
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Address</b><div class="hint mono"><span data-text="url"></span></div></div>
+            <div class="ctl"><input class="input mono" data-bind="host" style="width: 130px" /><span class="subtle">:</span><input class="input mono" data-bind="port" style="width: 64px" /><input class="input mono" data-bind="path" style="width: 64px" /></div>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>API key</b><div class="hint">Most local servers don't need one.</div></div>
+            <input class="input" type="password" placeholder="None" style="width: 200px" />
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Context window</b><div class="hint">Automatic: what the server reports (else 32k).</div></div>
+            <input class="input" placeholder="Automatic" style="width: 110px" />
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Web search</b><div class="hint">A web_search tool, when the server searches the web (oMLX).</div></div>
+            <button class="toggle" data-bind="webSearch"></button>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Connection</b><div class="hint" style="color: var(--success)">qwen3.8-coder-32b (128k), devstral-3 (64k)</div></div>
+            <button class="btn"><i data-lucide="refresh-cw"></i>Test</button>
+          </div>
+        </div>
+      </section>
+      <section data-if="tab=local&local">
+        <div class="cardhead"><div class="card-h"><h3>Thinking</h3><p>Levels as the model's chat template names them. When the server exposes the template (llama.cpp), its own levels win.</p></div></div>
+        <div class="card">
+          <div class="row">
+            <div class="lbl"><b>Send level to chat template</b><div class="hint">As <code>chat_template_kwargs.reasoning_effort</code>. Turn off if the server rejects it.</div></div>
+            <button class="toggle" data-bind="templateEffort"></button>
+          </div>
+          <table class="t">
+            <tr><th>Level</th><th>Thinking budget <span class="info"><i data-lucide="info"></i><span class="tip">Max thinking tokens, sent as thinking_budget (oMLX enforces it). Too small a budget can cost accuracy.</span></span></th><th></th></tr>
+            <tr><td><span class="badge">none</span> <span class="subtle" style="font-size: 11.5px">thinking off</span></td><td class="subtle">—</td><td></td></tr>
+            <tr><td><span class="badge">low</span></td><td><input class="input mono" value="1024" style="width: 100px" /> <span class="subtle">tokens</span></td><td style="text-align: right"><button class="btn ghost"><i data-lucide="trash-2"></i></button></td></tr>
+            <tr><td><span class="badge">medium</span></td><td><input class="input mono" value="4096" style="width: 100px" /> <span class="subtle">tokens</span></td><td style="text-align: right"><button class="btn ghost"><i data-lucide="trash-2"></i></button></td></tr>
+            <tr><td><span class="badge">xhigh</span></td><td><input class="input mono" placeholder="No cap" style="width: 100px" /> <span class="subtle">tokens</span></td><td style="text-align: right"><button class="btn ghost"><i data-lucide="trash-2"></i></button></td></tr>
+            <tr><td colspan="3"><button class="btn ghost"><i data-lucide="plus"></i>Add level</button></td></tr>
+          </table>
+        </div>
+      </section>
+
+      <!-- MCP -->
+      <section data-if="tab=mcp">
+        <div class="cardhead"><div class="card-h"><h3>MCP servers</h3><p>Extra servers for every backend. winfer's own server is added automatically.</p></div><div class="seg" data-bind="mcpView" style="margin-bottom: 8px"><button data-v="list"><i data-lucide="list"></i>List</button><button data-v="json"><i data-lucide="braces"></i>JSON</button></div></div>
+        <div class="card" data-if="mcpView=list">
+          <div class="server"><span class="ic"><i data-lucide="plug"></i></span><div class="lbl"><b>github</b><div class="hint mono">npx -y @modelcontextprotocol/server-github</div></div><span class="badge">1 env var</span><button class="btn ghost"><i data-lucide="pencil"></i></button><button class="btn ghost"><i data-lucide="trash-2"></i></button></div>
+          <div class="server"><span class="ic"><i data-lucide="plug"></i></span><div class="lbl"><b>postgres</b><div class="hint mono">uvx mcp-server-postgres postgres://localhost/dev</div></div><button class="btn ghost"><i data-lucide="pencil"></i></button><button class="btn ghost"><i data-lucide="trash-2"></i></button></div>
+          <div class="server"><button class="btn"><i data-lucide="plus"></i>Add server</button></div>
+        </div>
+        <div class="card" data-if="mcpView=json" style="padding: 12px">
+          <textarea class="input" rows="10" spellcheck="false">{
+  "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "…" } },
+  "postgres": { "command": "uvx", "args": ["mcp-server-postgres", "postgres://localhost/dev"] }
+}</textarea>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  document.getElementById("modelSel").innerHTML = MODEL_OPTIONS;
+  document.getElementById("effortSel").innerHTML = EFFORT_OPTIONS;
+  const pct = `<option value="0">Off</option>` + [30, 40, 50, 60, 70, 75, 80, 85, 90, 95].map((p) => `<option value="${p}">${p}%</option>`).join("");
+  document.getElementById("trimSel").innerHTML = pct;
+  document.getElementById("compactSel").innerHTML = pct;
+  document.getElementById("chips").innerHTML = SKILLS.map((s) => `<button class="chip" data-v="${s}">${s}</button>`).join("");
+  document.getElementById("skillsRow").dataset.if = "leanClaude"; // shown when any lean option is on (see listener)
+  onChange((s) => {
+    s.overlap = s.trimAt > 0 && s.compactAt > 0 && s.trimAt >= s.compactAt;
+    s.url = `http://${s.host}${s.port ? ":" + s.port : ""}${s.path}`;
+    document.getElementById("skillsRow").hidden = !(s.leanClaude || s.leanCodex || s.leanCodexCli);
+    document.querySelectorAll("[data-text=url]").forEach((el) => (el.textContent = s.url));
+    document.querySelectorAll("[data-if*=overlap]").forEach((el) => (el.hidden = el.dataset.if.startsWith("!") ? s.overlap : !s.overlap));
+  });
+  mockup({
+    id: "a-",
+    pitch: "<b>A · Tabs.</b> One long scroll split into six focused tabs. Hints cut to one line; benchmark detail moves into ⓘ tooltips. Web-only options dim when the TUI is picked.",
+    initial: { ...DEFAULTS, tab: "interface", mcpView: "list" },
+  });
+</script>
+</body>
+</html>

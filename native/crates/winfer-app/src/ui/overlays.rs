@@ -243,6 +243,10 @@ impl Root {
         for (i, entry) in results.iter().take(200).enumerate() {
             let e = &self.palette_entries[*entry];
             let waiting = e.title.starts_with("Approve: ") || e.title.starts_with("Go to: ");
+            let is_winfer_new = matches!(
+                e.commands.as_slice(),
+                [Command::Overlay { overlay: Overlay::NewPane, provider: Some(p) }] if p == "winfer"
+            );
             list = list.child(
                 div().id(("palette-row", i)).flex().items_center().gap_2p5().rounded_lg().px_2p5().h(px(34.0)).flex_shrink_0().text_size(px(13.0)).cursor_pointer()
                     .text_color(if i == selected { c.fg } else { c.muted })
@@ -250,7 +254,11 @@ impl Root {
                     .child(div().size(px(24.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md()
                         .bg(if waiting { Hsla { a: 0.14, ..c.warning } } else { c.hover })
                         .text_color(if waiting { c.warning } else if i == selected { c.accent } else { c.subtle })
-                        .child(Icon::new(palette_icon(&e.title)).size(px(13.0))))
+                        .child(if is_winfer_new {
+                            crate::ui::code_pickers::mark(c, "winfer", 13.5, 1.0)
+                        } else {
+                            Icon::new(palette_icon(&e.title)).size(px(13.0)).into_any_element()
+                        }))
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
                         if this.palette_selected != i {
                             this.palette_selected = i;
@@ -259,6 +267,7 @@ impl Root {
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| this.run_palette(i, window, cx)))
                     .child(div().flex_1().truncate().child(e.title.clone()))
+                    .when(is_winfer_new, |d| d.child(crate::ui::code_pickers::recommended_badge(c, true)))
                     .when_some(e.keys.clone(), |d, k| d.child(div().rounded_sm().border_1().border_color(c.edge).bg(c.panel).px_1p5().py(px(1.0)).text_size(px(10.5)).text_color(c.subtle).child(k))),
             );
         }

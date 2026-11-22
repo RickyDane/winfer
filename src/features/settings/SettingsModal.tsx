@@ -173,10 +173,7 @@ function ThemeTile({ t, selected, onPick }: { t: (typeof THEMES)[number]; select
       onClick={onPick}
       title={t.name}
       aria-pressed={selected}
-      className={cn(
-        "w-[160px] overflow-hidden rounded-lg text-left transition-all",
-        selected ? "shadow-md shadow-accent/25" : "shadow-sm hover:shadow-md",
-      )}
+      className="w-[160px] overflow-hidden rounded-lg text-left"
     >
       <div className="flex h-16 gap-1 p-1.5" style={{ background: t.ui.app }}>
         <span className="w-[26px] rounded-sm" style={{ background: t.ui.panel }} />

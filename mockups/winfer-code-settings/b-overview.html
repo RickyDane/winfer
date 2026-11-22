@@ -1,0 +1,290 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>winfer code settings · B · Overview + sections</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .hero { border-radius: 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--panel)), var(--panel) 60%); box-shadow: var(--shadow); padding: 16px; }
+  .hero-h { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .hero-h b { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .hero-h kbd { white-space: nowrap; }
+  .hero-h .subtle { font-size: 12px; }
+  .hero-h .slash { margin-left: auto; display: flex; gap: 4px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .tile { border-radius: 9px; background: var(--panel-raised); box-shadow: var(--shadow); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .tile .k { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--fg-subtle); }
+  .tile .k svg { width: 13px; height: 13px; }
+  .tile select { width: 100%; background-color: var(--panel); }
+  .tile .seg { width: 100%; }
+  .tile .seg button { flex: 1; justify-content: center; }
+  .tile .v { font-size: 11.5px; color: var(--fg-subtle); line-height: 1.4; min-height: 32px; }
+  .acc { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .sec + .sec { border-top: 1px solid var(--border); }
+  .sec-h { display: flex; width: 100%; align-items: center; gap: 12px; padding: 12px 16px; text-align: left; }
+  .sec-h:hover { background: var(--hover); }
+  .sec-h .ic { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--hover); color: var(--fg-muted); }
+  .sec[open] .sec-h .ic { background: var(--accent-soft); color: var(--accent); }
+  .sec-h .t { flex: 1; min-width: 0; }
+  .sec-h .t b { display: block; font-size: 13px; font-weight: 500; }
+  .sec-h .t span { display: block; font-size: 12px; color: var(--fg-subtle); }
+  .sec-h .sum { display: flex; gap: 6px; align-items: center; flex-shrink: 0; font-size: 12px; color: var(--fg-muted); }
+  .sec-h .chev { color: var(--fg-subtle); transition: transform .15s; }
+  .sec[open] .chev { transform: rotate(90deg); }
+  .sec-b { display: none; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 55%, var(--app)); }
+  .sec[open] .sec-b { display: block; }
+  .sec-b .row { padding-left: 56px; }
+  .sec-b .row + .row { border-top-color: color-mix(in srgb, var(--border) 70%, transparent); }
+  .checks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px 24px; padding: 12px 16px 12px 56px; }
+  .check { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12.5px; text-align: left; }
+  .check .box { width: 16px; height: 16px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px var(--border-strong); display: grid; place-items: center; flex-shrink: 0; }
+  .check[aria-checked="true"] .box { background: var(--accent); box-shadow: none; }
+  .check[aria-checked="true"] .box::after { content: "✓"; color: #fff; font-size: 10px; font-weight: 700; }
+  .check small { display: block; color: var(--fg-subtle); font-size: 11.5px; }
+  .minibar { position: relative; width: 120px; height: 6px; border-radius: 3px; background: var(--active); overflow: hidden; }
+  .minibar i { position: absolute; top: 0; bottom: 0; }
+  .note { display: flex; gap: 8px; align-items: flex-start; margin: 0 16px 12px 56px; padding: 8px 10px; border-radius: 7px; font-size: 12px; background: color-mix(in srgb, var(--warning) 10%, transparent); color: var(--warning); }
+  .note svg { width: 14px; height: 14px; margin-top: 1px; }
+  .kv { display: grid; grid-template-columns: 150px 1fr; }
+  .sub-t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .sub-t td { padding: 7px 16px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+  .sub-t td:first-child { padding-left: 56px; color: var(--fg-muted); width: 36%; }
+  .sub-t tr:first-child td { border-top: 0; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="square-terminal"></i></div>
+      <h2>winfer code</h2>
+      <p>winfer's own agent: interface, model and context.</p>
+    </header>
+    <div class="body">
+
+      <div class="hero">
+        <div class="hero-h">
+          <b>New sessions start with</b>
+                    <span class="slash"><span class="subtle" style="font-size: 11.5px; margin-right: 4px">In a session:</span><kbd>/model</kbd><kbd>/effort</kbd><kbd>/mode</kbd><kbd>⇧ Tab</kbd></span>
+        </div>
+        <div class="tiles">
+          <div class="tile">
+            <div class="k"><i data-lucide="layout-panel-left"></i>Interface</div>
+            <div class="seg" data-bind="ui"><button data-v="web">Web</button><button data-v="tui">TUI</button></div>
+            <div class="v" data-if="ui=web">Tool timeline, inline diffs and approvals.</div>
+            <div class="v" data-if="ui=tui">The terminal UI. Open panes keep theirs.</div>
+          </div>
+          <div class="tile">
+            <div class="k"><i data-lucide="cpu"></i>Model</div>
+            <select data-bind="model" id="modelSel"></select>
+            <div class="v" data-if="!model">Now: ChatGPT · gpt-6-luna (signed in)</div>
+            <div class="v" data-if="model">Subagents: see below</div>
+          </div>
+          <div class="tile">
+            <div class="k"><i data-lucide="brain"></i>Effort</div>
+            <select data-bind="effort" id="effortSel"></select>
+            <div class="v">How long the model thinks before it answers.</div>
+          </div>
+          <div class="tile">
+            <div class="k"><i data-lucide="shield-check"></i>Permissions</div>
+            <select data-bind="mode">
+              <option value="ask">Ask</option><option value="auto-edit">Auto-edit</option><option value="plan">Plan</option><option value="yolo-plan">Yolo-plan</option><option value="yolo">Yolo</option>
+            </select>
+            <div class="v" data-text="modeText"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="acc" id="acc">
+        <div class="sec" data-sec="web">
+          <button class="sec-h"><span class="ic"><i data-lucide="app-window"></i></span><span class="t"><b>Web interface</b><span>Status line, transcript and text size</span></span><span class="sum" data-text="webSum"></span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b">
+            <div class="note" data-if="ui=tui"><i data-lucide="info"></i>New panes use the TUI, so these only apply to panes you switch to the web interface.</div>
+            <div class="checks" data-checks>
+              <button class="check" data-k="showContext"><span class="box"></span><span>Context meter<small>In the status line</small></span></button>
+              <button class="check" data-k="showCost"><span class="box"></span><span>Session cost<small>When the backend reports one</small></span></button>
+              <button class="check" data-k="showRate"><span class="box"></span><span>Tokens per second<small>Next to the working indicator</small></span></button>
+              <button class="check" data-k="showPlan"><span class="box"></span><span>Plan above the composer<small>Todos and running subagents</small></span></button>
+              <button class="check" data-k="expandThinking"><span class="box"></span><span>Show thinking<small>Expanded instead of collapsed</small></span></button>
+              <button class="check" data-k="expandShell"><span class="box"></span><span>Live shell output<small>Open while a command runs</small></span></button>
+              <button class="check" data-k="compactTools"><span class="box"></span><span>Compact tool calls<small>One live row, click to expand</small></span></button>
+              <button class="check" data-k="compact"><span class="box"></span><span>Compact layout<small>Tighter spacing</small></span></button>
+            </div>
+            <div class="row">
+              <div class="lbl"><b>Text size</b><div class="hint"><kbd>⌘ +</kbd> <kbd>⌘ −</kbd> <kbd>⌘ 0</kbd> or ⌘ + scroll</div></div>
+              <div class="ctl" style="width: 280px"><input type="range" min="70" max="160" step="5" data-bind="textScale" style="flex: 1; accent-color: var(--accent)" /><span class="mono muted" style="width: 40px; text-align: right; font-size: 12px"><span data-text="textScale"></span>%</span></div>
+            </div>
+            <div class="row">
+              <div class="lbl"><b>Plan sidebar</b><div class="hint">TUI and web: the plan on the right when the pane is wide enough. <kbd>/sidebar</kbd></div></div>
+              <button class="toggle" data-bind="planSidebar"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec" data-sec="sub">
+          <button class="sec-h"><span class="ic"><i data-lucide="git-fork"></i></span><span class="t"><b>Subagents</b><span>A cheaper model for exploring, lookups and small fixes</span></span><span class="sum" data-text="subSum"></span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b">
+            <table class="sub-t">
+              <tr><td>ChatGPT account</td><td><select data-bind="subChatgpt" style="width: 200px"><option value="">Same as main model</option><option>gpt-6-luna</option><option>gpt-6-luna-mini</option></select> <select data-bind="subChatgptEffort" data-if="subChatgpt" style="width: 110px"><option value="">Default effort</option><option>low</option><option>medium</option></select></td></tr>
+              <tr><td>Claude Code</td><td><select data-bind="subClaude" style="width: 200px"><option value="">Same as main model</option><option>claude-sonnet-5</option><option>claude-haiku-5</option></select></td></tr>
+              <tr><td>Codex</td><td><select data-bind="subCodex" style="width: 200px"><option value="">Same as main model</option><option>gpt-6-luna-codex</option></select></td></tr>
+              <tr><td>Local model</td><td><select data-bind="subLocal" style="width: 200px"><option value="">Same as main model</option><option>devstral-3</option></select></td></tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="sec" data-sec="perm">
+          <button class="sec-h"><span class="ic"><i data-lucide="key-round"></i></span><span class="t"><b>Approvals</b><span>Yolo in panes and commands that never ask</span></span><span class="sum" data-text="permSum"></span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b">
+            <div class="row">
+              <div class="lbl"><b>Auto-approve in panes</b><div class="hint">Start panes with <code>--yolo</code>, overriding the permission mode. Applies to new panes.</div></div>
+              <button class="toggle" data-bind="autoApprove"></button>
+            </div>
+            <div class="row">
+              <div class="lbl"><b>Always-allowed commands</b><div class="hint">Commands starting with these run without asking (ChatGPT account).</div></div>
+              <input class="input mono" data-bind="allowed" style="width: 220px" />
+            </div>
+          </div>
+        </div>
+
+        <div class="sec" data-sec="lean">
+          <button class="sec-h"><span class="ic"><i data-lucide="feather"></i></span><span class="t"><b>Lean setup</b><span>Fewer tools and skills, smaller requests</span></span><span class="sum" data-text="leanSum"></span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b">
+            <div class="row">
+              <div class="lbl"><b>Claude Code</b><div class="hint">Short prompt and only the coding tools. Project CLAUDE.md and skills still load.</div></div>
+              <span class="badge good">−71% tokens</span><button class="toggle" data-bind="leanClaude"></button>
+            </div>
+            <div class="row">
+              <div class="lbl"><b>Codex</b><div class="hint">No apps, plugins or bundled skills; tool results capped at 4k tokens.</div></div>
+              <span class="badge good">−37% tokens</span><button class="toggle" data-bind="leanCodex"></button>
+            </div>
+            <div class="row" data-if="leanCodex" style="padding-left: 80px">
+              <div class="lbl"><b>Short Codex prompt</b><div class="hint">Also replaces Codex's ~5k-token system prompt.</div></div>
+              <span class="badge good">−52% tokens</span><button class="toggle sm" data-bind="shortCodex"></button>
+            </div>
+            <div class="row">
+              <div class="lbl"><b>Codex CLI panes too</b><div class="hint">Plain Codex panes get it too. Can miss Codex's prompt cache.</div></div>
+              <button class="toggle" data-bind="leanCodexCli"></button>
+            </div>
+            <div class="row stacked" id="skillsRow">
+              <div style="display: flex; align-items: center; gap: 24px">
+                <div class="lbl"><b>Skills <span class="subtle" style="font-weight: 400" data-if="skillsMode=selected">· <span data-text="skillCount"></span> picked</span></b></div>
+                <div class="seg" data-bind="skillsMode"><button data-v="selected">Selected</button><button data-v="all">All</button></div>
+              </div>
+              <div class="ctl" data-if="skillsMode=selected" style="flex-wrap: wrap" data-chips="skills" id="chips"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec" data-sec="compact">
+          <button class="sec-h"><span class="ic"><i data-lucide="shrink"></i></span><span class="t"><b>Context compaction</b><span>Keeps long conversations going</span></span><span class="sum"><span class="minibar" id="minibar"></span><span class="mono" data-text="compactSum"></span></span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b">
+            <div class="row">
+              <div class="lbl"><b>Micro-compact at</b><div class="hint">Trims old tool output and file contents.</div></div>
+              <select data-bind="trimAt" data-num="1" id="trimSel" style="width: 96px"></select>
+            </div>
+            <div class="row">
+              <div class="lbl"><b>Full compact at</b><div class="hint">Summarizes the conversation.</div></div>
+              <select data-bind="compactAt" data-num="1" id="compactSel" style="width: 96px"></select>
+            </div>
+            <div class="note" id="overlap"><i data-lucide="triangle-alert"></i>Full compact is at or below micro-compact, so micro-compact never runs.</div>
+          </div>
+        </div>
+
+        <div class="sec" data-sec="local">
+          <button class="sec-h"><span class="ic"><i data-lucide="server"></i></span><span class="t"><b>Local models</b><span>An OpenAI-compatible server on your machine or network</span></span><span class="sum" data-text="localSum"></span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b">
+            <div class="row">
+              <div class="lbl"><b>Use local models</b><div class="hint">vLLM, LM Studio, Ollama, llama.cpp, oMLX… Needs <code>/v1/responses</code>. Shown as <code>local/&lt;model&gt;</code>.</div></div>
+              <button class="toggle" data-bind="local"></button>
+            </div>
+            <div data-if="local">
+              <div class="row">
+                <div class="lbl"><b>Server</b><div class="hint" style="color: var(--success)">● Connected · qwen3.8-coder-32b (128k), devstral-3 (64k)</div></div>
+                <div class="ctl"><input class="input mono" data-bind="host" style="width: 120px" /><span class="subtle">:</span><input class="input mono" data-bind="port" style="width: 60px" /><input class="input mono" data-bind="path" style="width: 56px" /><button class="btn"><i data-lucide="refresh-cw"></i>Test</button></div>
+              </div>
+              <div class="row">
+                <div class="lbl"><b>API key</b></div>
+                <input class="input" type="password" placeholder="None" style="width: 180px" />
+                <div class="lbl" style="flex: 0 0 auto"><b>Context</b></div>
+                <input class="input" placeholder="Automatic" style="width: 100px" />
+              </div>
+              <div class="row">
+                <div class="lbl"><b>Thinking levels</b><div class="hint">As the chat template names them; <code>none</code> = off.</div></div>
+                <input class="input mono" data-bind="levels" style="width: 220px" />
+              </div>
+              <div class="row">
+                <div class="lbl"><b>Thinking budgets</b><div class="hint">Max thinking tokens per level (oMLX). Empty = no cap.</div></div>
+                <div class="ctl"><span class="badge">low</span><input class="input mono" value="1024" style="width: 70px" /><span class="badge">medium</span><input class="input mono" value="4096" style="width: 70px" /><span class="badge">xhigh</span><input class="input mono" placeholder="—" style="width: 70px" /></div>
+              </div>
+              <div class="row">
+                <div class="lbl"><b>Send level to chat template</b><div class="hint"><code>chat_template_kwargs</code>. Off if the server rejects it.</div></div>
+                <button class="toggle" data-bind="templateEffort"></button>
+              </div>
+              <div class="row">
+                <div class="lbl"><b>Web search</b><div class="hint">When the server searches the web (oMLX).</div></div>
+                <button class="toggle" data-bind="webSearch"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec" data-sec="mcp">
+          <button class="sec-h"><span class="ic"><i data-lucide="plug"></i></span><span class="t"><b>MCP servers</b><span>Extra servers for every backend; winfer's own is added automatically</span></span><span class="sum">2 servers</span><i class="chev" data-lucide="chevron-right"></i></button>
+          <div class="sec-b" style="padding: 12px 16px 14px 56px">
+            <textarea class="input" rows="7" spellcheck="false">{
+  "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] },
+  "postgres": { "command": "uvx", "args": ["mcp-server-postgres", "postgres://localhost/dev"] }
+}</textarea>
+            <div class="hint" style="margin-top: 6px; color: var(--success)">✓ Valid · 2 servers</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  document.getElementById("modelSel").innerHTML = MODEL_OPTIONS;
+  document.getElementById("effortSel").innerHTML = EFFORT_OPTIONS;
+  const pct = `<option value="0">Off</option>` + [30, 40, 50, 60, 70, 75, 80, 85, 90, 95].map((p) => `<option value="${p}">${p}%</option>`).join("");
+  document.getElementById("trimSel").innerHTML = pct;
+  document.getElementById("compactSel").innerHTML = pct;
+  document.getElementById("chips").innerHTML = SKILLS.map((s) => `<button class="chip" data-v="${s}">${s}</button>`).join("");
+  document.querySelectorAll(".sec-h").forEach((h) => (h.onclick = () => h.parentElement.toggleAttribute("open")));
+  document.querySelector('[data-sec="lean"]').setAttribute("open", "");
+  document.querySelectorAll(".check").forEach((c) => (c.onclick = () => set({ [c.dataset.k]: !state[c.dataset.k] })));
+  const MODES = { ask: "Asks before edits and commands.", "auto-edit": "Edits freely; commands still ask.", plan: "Read-only. Changes nothing.", "yolo-plan": "Read-only, never asks.", yolo: "Never asks. No guard rails." };
+  const WEB = { showContext: "Context", showCost: "Cost", showRate: "Tokens/s", showPlan: "Plan", expandThinking: "Thinking", expandShell: "Shell", compactTools: "Compact tools", compact: "Compact" };
+  onChange((s) => {
+    document.querySelectorAll(".check").forEach((c) => c.setAttribute("aria-checked", !!s[c.dataset.k]));
+    const on = Object.keys(WEB).filter((k) => s[k]).map((k) => WEB[k]);
+    const txt = {
+      modeText: s.autoApprove ? "Overridden: panes auto-approve (--yolo)." : MODES[s.mode],
+      webSum: s.ui === "tui" ? "Not in use (TUI)" : on.length > 3 ? `${on.slice(0, 3).join(" · ")} · +${on.length - 3}` : on.join(" · ") || "Minimal",
+      subSum: [["ChatGPT", s.subChatgpt], ["Claude", s.subClaude], ["Codex", s.subCodex], ["Local", s.subLocal]].filter(([, m]) => m).map(([b, m]) => `${b} → ${m}`).join(" · ") || "Same as main model",
+      permSum: `${s.autoApprove ? "Yolo in panes" : "Auto-approve off"} · ${s.allowed.split(/[,\s]+/).filter(Boolean).length} allowed commands`,
+      leanSum: [s.leanClaude && "Claude", s.leanCodex && "Codex", s.leanCodexCli && "Codex CLI"].filter(Boolean).join(" + ") + (s.leanClaude || s.leanCodex ? ` · ${s.skillsMode === "all" ? "all" : s.skills.length} skills` : "Off"),
+      compactSum: `${s.trimAt ? s.trimAt + "%" : "off"} / ${s.compactAt ? s.compactAt + "%" : "off"}`,
+      localSum: s.local ? `● ${s.host}:${s.port} · 2 models` : "Off",
+      skillCount: s.skills.length,
+    };
+    Object.assign(s, txt);
+    document.querySelectorAll("[data-text]").forEach((el) => (el.textContent = s[el.dataset.text]));
+    document.getElementById("skillsRow").hidden = !(s.leanClaude || s.leanCodex || s.leanCodexCli);
+    document.getElementById("overlap").hidden = !(s.trimAt > 0 && s.compactAt > 0 && s.trimAt >= s.compactAt);
+    document.getElementById("minibar").innerHTML =
+      (s.trimAt ? `<i style="left:${s.trimAt}%;right:0;background:color-mix(in srgb,var(--warning) 60%,transparent)"></i>` : "") +
+      (s.compactAt ? `<i style="left:${s.compactAt}%;right:0;background:var(--accent)"></i>` : "");
+  });
+  mockup({
+    id: "b-",
+    pitch: "<b>B · Overview + sections.</b> The four choices that matter most sit up top as tiles. Everything else folds into sections that show their current state when closed, so the page fits on one screen.",
+    initial: { ...DEFAULTS },
+  });
+</script>
+</body>
+</html>

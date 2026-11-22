@@ -438,7 +438,14 @@ jobs:
           fi
           put WINFER_NOTARIZE 1
 
-      # macOS: winfer.app as .dmg and .app.tar.gz; Windows: the .exe; Linux: a .tar.gz of the binary.
+      # Builds the Windows installer (bundle-windows.sh skips it without ISCC).
+      - name: Inno Setup
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          [ -x "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ] || choco install innosetup -y --no-progress
+
+      # macOS: winfer.app as .dmg and .app.tar.gz; Windows: the portable .exe and an installer; Linux: a .tar.gz of the binary.
       - name: Build
         shell: bash
         run: |

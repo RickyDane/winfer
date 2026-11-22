@@ -155,6 +155,25 @@ pub(super) fn mark(c: Colors, backend: &str, size: f32, opacity: f32) -> AnyElem
     svg().path(SharedString::from(format!("providers/{file}.svg"))).size(px(size)).flex_shrink_0().text_color(alpha(color, opacity)).into_any_element()
 }
 
+/// Accent pill marking winfer code as the recommended agent across settings and pickers.
+pub(super) fn recommended_badge(c: Colors, compact: bool) -> Div {
+    div()
+        .h(px(if compact { 16.0 } else { 19.0 }))
+        .px(px(if compact { 6.0 } else { 7.0 }))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(crate::theme::blend(c.panel, c.accent, if compact { 0.16 } else { 0.18 }))
+        .border_1()
+        .border_color(alpha(c.accent, if compact { 0.34 } else { 0.38 }))
+        .text_size(px(if compact { 9.5 } else { 10.0 }))
+        .font_weight(if compact { FontWeight::MEDIUM } else { FontWeight::SEMIBOLD })
+        .text_color(c.accent)
+        .child("Recommended")
+}
+
 /// A mode's solid glyph in one colour: a question, a pencil, a list, a flag and a bolt.
 pub fn mode_glyph(tint: Hsla, mode: Mode, size: f32) -> AnyElement {
     let file = match mode {

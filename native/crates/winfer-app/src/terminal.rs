@@ -636,7 +636,8 @@ impl SpawnSettings {
         Self {
             auto_approve: state.auto_approve.contains(&pane.provider),
             system_prompt: state.system_prompt_of(),
-            lean: pane.provider == "codex" && state.lean_codex,
+            // Codex CLI panes follow Settings → WinferCode → Lean setup → Codex.
+            lean: pane.provider == "codex" && winfer_backend::harness::config::Config::load().lean_codex,
             hidden_tools: state.hidden_tools(),
         }
     }

@@ -303,7 +303,13 @@ impl Root {
         let s = self.state.read(cx);
         let provider = self.new_pane_provider(cx);
         let agent = s.provider_name(&provider);
-        let installed: Vec<(String, String)> = s.providers.iter().filter(|p| p.installed).map(|p| (p.id.clone(), p.name.clone())).collect();
+        let mut installed: Vec<(String, String)> = s.providers.iter().filter(|p| p.installed).map(|p| (p.id.clone(), p.name.clone())).collect();
+        if let Some(pos) = installed.iter().position(|(id, _)| id == "winfer")
+            && pos > 0
+        {
+            let winfer = installed.remove(pos);
+            installed.insert(0, winfer);
+        }
         let ws_name = s.workspaces.iter().find(|w| w.id == dialog.workspace).map_or(String::new(), |w| w.name.clone());
         let is_repo = dialog.branches.as_ref().is_none_or(|b| !b.is_empty());
         let rows = Self::new_pane_rows(dialog, cx);
@@ -352,15 +358,18 @@ impl Root {
         let mut picker = div().flex().flex_wrap().gap_1p5();
         for (id, name) in installed {
             let on = id == provider;
+            let is_winfer = id == "winfer";
             let pick = id.clone();
             picker = picker.child(
                 div().id(SharedString::from(format!("new-pane-agent-{id}"))).flex().items_center().gap_1p5().h(px(30.0)).px_2p5().rounded_lg().border_1().text_size(px(12.5)).cursor_pointer()
                     .bg(if on { Hsla { a: 0.12, ..c.accent } } else { c.panel })
+                    .border_color(if on { Hsla { a: 0.42, ..c.accent } } else { Hsla { a: 0.65, ..c.border } })
                     .text_color(if on { c.fg } else { c.muted })
-                    .hover(move |d| d.text_color(c.fg))
+                    .when(!on, |d| d.hover(move |d| d.text_color(c.fg).bg(c.hover)))
                     .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.new_pane_provider = Some(pick.clone()))))
                     .child(crate::ui::code_pickers::mark(c, &id, 14.0, 1.0))
                     .child(name)
+                    .when(is_winfer, |d| d.child(crate::ui::code_pickers::recommended_badge(c, true)))
                     .when(on, |d| d.child(Icon::new(IconName::Check).size(px(12.0)).text_color(c.accent))),
             );
         }

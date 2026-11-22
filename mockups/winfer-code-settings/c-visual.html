@@ -1,0 +1,343 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>winfer code settings · C · Visual controls</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .body { flex-direction: row; gap: 20px; padding-right: 16px; scroll-behavior: smooth; }
+  .body > * + * { margin-top: 0; }
+  .col { flex: 1; min-width: 0; }
+  .col > * + * { margin-top: 28px; }
+  .rail { position: sticky; top: 0; align-self: flex-start; width: 118px; flex-shrink: 0; padding-top: 2px; }
+  .rail .h { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); padding: 0 10px 6px; }
+  .rail a { display: block; padding: 5px 10px; border-left: 2px solid var(--border); color: var(--fg-subtle); text-decoration: none; font-size: 12px; }
+  .rail a:hover { color: var(--fg); }
+  .rail a.on { border-color: var(--accent); color: var(--fg); }
+  h4 { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; font-size: 13px; font-weight: 600; }
+  h4 svg { color: var(--accent); }
+  h4 .subtle { font-weight: 400; font-size: 12px; margin-left: auto; }
+  /* Interface tiles */
+  .styles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .style { text-align: left; border-radius: 10px; padding: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .style[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+  .style .pv { height: 92px; border-radius: 7px; background: var(--app); padding: 9px; display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
+  .style .cap { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .style .cap b { font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .style .cap .subtle { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .style .cap .r { flex-shrink: 0; width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-strong); margin-left: auto; }
+  .style[aria-checked="true"] .cap .r { box-shadow: inset 0 0 0 4.5px var(--accent); }
+  .pv .bub { height: 8px; border-radius: 4px; background: var(--active); }
+  .pv .tool { height: 16px; border-radius: 4px; background: var(--panel-raised); box-shadow: var(--shadow); display: flex; align-items: center; gap: 4px; padding: 0 5px; }
+  .pv .tool i { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .pv .tool span { height: 4px; flex: 1; border-radius: 2px; background: var(--active); }
+  .pv .diff { height: 22px; border-radius: 4px; background: linear-gradient(var(--app), var(--app)) padding-box; display: grid; gap: 3px; }
+  .pv .diff span { height: 5px; border-radius: 2px; }
+  .pv .tline { font: 8.5px/1.25 var(--mono); color: var(--fg-subtle); white-space: nowrap; }
+  .pv .tline b { color: var(--success); font-weight: 500; }
+  .pv .tline i { color: var(--accent); font-style: normal; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; margin-top: 10px; }
+  .opt { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; border-radius: 8px; text-align: left; background: var(--panel); box-shadow: var(--shadow); font-size: 12px; }
+  .opt svg { width: 14px; height: 14px; color: var(--fg-subtle); }
+  .opt[aria-pressed="true"] { background: var(--accent-soft); }
+  .opt[aria-pressed="true"] svg { color: var(--accent); }
+  .opt small { color: var(--fg-subtle); font-size: 11px; line-height: 1.3; }
+  .sizer { display: flex; align-items: center; gap: 14px; margin-top: 10px; padding: 10px 14px; border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
+  .sizer .aa { width: 120px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; }
+  /* Models */
+  .route { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 14px 16px; }
+  .route .mainrow { display: flex; align-items: center; gap: 10px; }
+  .route .mainrow .rl { width: 84px; flex-shrink: 0; font-size: 12px; font-weight: 500; }
+  .route .mainrow select { flex: 1; min-width: 0; max-width: 280px; height: 32px; font-size: 13px; }
+  .pills { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--app); box-shadow: var(--shadow); }
+  .pills button { height: 26px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; color: var(--fg-muted); }
+  .pills button[aria-checked="true"] { background: var(--accent); color: var(--on-accent); }
+  .tree { margin: 12px 0 0 14px; padding-left: 18px; border-left: 1.5px dashed var(--border-strong); display: grid; gap: 6px; }
+  .branch { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12.5px; }
+  .branch::before { content: ""; position: absolute; left: -18px; top: 50%; width: 14px; border-top: 1.5px dashed var(--border-strong); }
+  .branch .b { width: 110px; flex-shrink: 0; color: var(--fg-muted); }
+  .branch svg { width: 12px; height: 12px; color: var(--fg-subtle); }
+  /* Permissions */
+  .scale { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 16px 16px 14px; }
+  .track { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); }
+  .track::before { content: ""; position: absolute; left: 10%; right: 10%; top: 9px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--success), var(--warning) 70%, var(--danger)); opacity: .5; }
+  .stop { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  .stop .knob { width: 22px; height: 22px; border-radius: 50%; background: var(--panel-raised); box-shadow: var(--shadow), 0 0 0 3px var(--panel); }
+  .stop[aria-checked="true"] { color: var(--fg); font-weight: 500; }
+  .stop[aria-checked="true"] .knob { background: var(--accent); box-shadow: 0 0 0 3px var(--panel), 0 0 0 5px var(--accent-soft); }
+  .stop small { font-size: 10.5px; color: var(--fg-subtle); font-weight: 400; margin-top: -6px; }
+  .desc { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 9px 12px; border-radius: 8px; background: var(--app); font-size: 12.5px; }
+  .desc svg { color: var(--accent); }
+  /* Lean cards */
+  .leans { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .lean { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .lean .top { display: flex; align-items: center; gap: 10px; }
+  .lean .top b { font-size: 13px; font-weight: 500; flex: 1; }
+  .lean .big { font-size: 26px; font-weight: 600; letter-spacing: -.02em; color: var(--success); line-height: 1; }
+  .lean .big small { font-size: 11.5px; font-weight: 400; color: var(--fg-subtle); letter-spacing: 0; margin-left: 4px; }
+  .bars { display: grid; gap: 4px; }
+  .bars div { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--fg-subtle); }
+  .bars span { height: 6px; border-radius: 3px; }
+  .lean.off .big, .lean.off .bars { opacity: .35; }
+  .lean .sub { display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; }
+  .lean .sub .lbl { font-size: 12px; }
+  /* Compaction */
+  .ctxbar { position: relative; height: 34px; border-radius: 8px; overflow: hidden; display: flex; background: var(--app); box-shadow: var(--shadow); }
+  .ctxbar div { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 11px; white-space: nowrap; overflow: hidden; }
+  .ticks { display: flex; justify-content: space-between; font: 10px var(--mono); color: var(--fg-subtle); padding: 4px 2px 0; }
+  .sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+  .sliders label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+  .sliders label span { display: flex; justify-content: space-between; }
+  .sliders input { accent-color: var(--accent); }
+  /* Local */
+  .conn { display: flex; align-items: center; gap: 0; height: 34px; border-radius: 8px; background: var(--panel-raised); box-shadow: var(--shadow); font: 12.5px var(--mono); overflow: hidden; }
+  .conn span { padding: 0 2px 0 10px; color: var(--fg-subtle); }
+  .conn input { border: 0; background: none; outline: none; height: 100%; padding: 0 4px; font: inherit; }
+  .conn input:focus { background: var(--hover); }
+  .models { display: grid; gap: 0; }
+  .model { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: 12.5px; }
+  .levels { display: flex; gap: 8px; flex-wrap: wrap; }
+  .level { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; border-radius: 8px; background: var(--panel-raised); box-shadow: var(--shadow); font-size: 12px; }
+  .level input { width: 64px; height: 22px; font-size: 11.5px; padding: 0 6px; box-shadow: none; background: var(--app); }
+  .srv { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .srv + .srv { margin-top: 6px; }
+  .srv .ic { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--hover); color: var(--fg-muted); }
+  .add { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 40px; margin-top: 6px; border-radius: 10px; border: 1.5px dashed var(--border-strong); color: var(--fg-muted); font-size: 12.5px; }
+  .add:hover { color: var(--fg); background: var(--hover); }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="square-terminal"></i></div>
+      <h2>winfer code</h2>
+      <p>winfer's own agent: interface, model and context.</p>
+    </header>
+    <div class="body" id="scroller">
+      <div class="col">
+
+        <section id="s-interface">
+          <h4><i data-lucide="layout-panel-left"></i>Interface<span class="subtle">For new panes</span></h4>
+          <div class="styles" data-radio="ui">
+            <button class="style" data-v="web">
+              <div class="pv">
+                <div class="bub" style="width: 55%; margin-left: auto; background: var(--accent-soft)"></div>
+                <div class="tool"><i></i><span></span></div>
+                <div class="diff"><span style="background: color-mix(in srgb, var(--danger) 35%, transparent); width: 70%"></span><span style="background: color-mix(in srgb, var(--success) 35%, transparent); width: 85%"></span><span style="background: color-mix(in srgb, var(--success) 35%, transparent); width: 50%"></span></div>
+                <div class="bub" style="width: 80%"></div>
+              </div>
+              <div class="cap"><b>Web</b><span class="subtle">Timeline, diffs, approvals</span><span class="r"></span></div>
+            </button>
+            <button class="style" data-v="tui">
+              <div class="pv">
+                <div class="tline"><i>❯</i> fix the flaky upload test</div>
+                <div class="tline"><b>●</b> Read src/upload.ts</div>
+                <div class="tline"><b>●</b> Edit src/upload.ts  <span style="color: var(--success)">+4</span> <span style="color: var(--danger)">−2</span></div>
+                <div class="tline"><b>●</b> Bash pnpm test upload</div>
+                <div class="tline">  ⎿ 12 passed</div>
+                <div class="tline"><i>❯</i> <span style="background: var(--fg-subtle)">&nbsp;</span></div>
+              </div>
+              <div class="cap"><b>Terminal (TUI)</b><span class="subtle">Classic terminal UI</span><span class="r"></span></div>
+            </button>
+          </div>
+          <div data-off-if="ui=tui">
+            <div class="opts" data-opts>
+              <button class="opt" data-k="showContext"><i data-lucide="gauge"></i>Context meter<small>Status line</small></button>
+              <button class="opt" data-k="showCost"><i data-lucide="coins"></i>Session cost<small>Status line</small></button>
+              <button class="opt" data-k="showRate"><i data-lucide="zap"></i>Tokens / sec<small>While working</small></button>
+              <button class="opt" data-k="showPlan"><i data-lucide="list-checks"></i>Plan<small>Above the composer</small></button>
+              <button class="opt" data-k="expandThinking"><i data-lucide="brain"></i>Show thinking<small>Expanded</small></button>
+              <button class="opt" data-k="expandShell"><i data-lucide="square-terminal"></i>Live shell<small>Output while it runs</small></button>
+              <button class="opt" data-k="compactTools"><i data-lucide="rows-3"></i>Compact tools<small>One live row</small></button>
+              <button class="opt" data-k="compact"><i data-lucide="fold-vertical"></i>Compact layout<small>Tighter spacing</small></button>
+            </div>
+            <div class="sizer">
+              <span style="font-size: 12px; font-weight: 500; white-space: nowrap">Text size</span>
+              <input type="range" min="70" max="160" step="5" data-bind="textScale" style="flex: 1; accent-color: var(--accent)" />
+              <span class="aa" id="aa">The quick fix</span>
+              <span class="mono muted" style="width: 38px; text-align: right; font-size: 12px"><span data-text="textScale"></span>%</span>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 10px">
+            <div class="row"><div class="lbl"><b>Plan sidebar</b><div class="hint">Both styles: the plan on the right when the pane is wide enough. <kbd>/sidebar</kbd></div></div><button class="toggle" data-bind="planSidebar"></button></div>
+          </div>
+        </section>
+
+        <section id="s-models">
+          <h4><i data-lucide="cpu"></i>Models<span class="subtle"><kbd>/model</kbd> <kbd>/effort</kbd> <kbd>/subagent-model</kbd></span></h4>
+          <div class="route">
+            <div class="mainrow">
+              <span class="rl">Main model</span>
+              <select data-bind="model" id="modelSel"></select>
+            </div>
+            <div class="mainrow" style="margin-top: 8px">
+              <span class="rl">Effort</span>
+              <div class="pills" data-radio="effort">
+                <button data-v="">Default</button><button data-v="low">Low</button><button data-v="medium">Medium</button><button data-v="high">High</button><button data-v="xhigh">XHigh</button><button data-v="max">Max</button>
+              </div>
+            </div>
+            <div class="hint" style="margin: 8px 0 0 94px" data-if="!model">Automatic → ChatGPT · gpt-6-luna (signed in). Else Claude Code, then Codex.</div>
+            <div class="tree">
+              <div class="subtle" style="font-size: 11px; margin-bottom: 2px">Subagents (explore, look up, small fixes) run on</div>
+              <div class="branch"><span class="b">ChatGPT account</span><i data-lucide="arrow-right"></i><select data-bind="subChatgpt" style="width: 170px"><option value="">Same as main</option><option>gpt-6-luna</option><option>gpt-6-luna-mini</option></select><select data-bind="subChatgptEffort" data-if="subChatgpt" style="width: 96px"><option value="">Effort</option><option>low</option><option>medium</option></select></div>
+              <div class="branch"><span class="b">Claude Code</span><i data-lucide="arrow-right"></i><select data-bind="subClaude" style="width: 170px"><option value="">Same as main</option><option>claude-sonnet-5</option><option>claude-haiku-5</option></select></div>
+              <div class="branch"><span class="b">Codex</span><i data-lucide="arrow-right"></i><select data-bind="subCodex" style="width: 170px"><option value="">Same as main</option><option>gpt-6-luna-codex</option></select></div>
+              <div class="branch"><span class="b">Local model</span><i data-lucide="arrow-right"></i><select data-bind="subLocal" style="width: 170px"><option value="">Same as main</option><option>devstral-3</option></select></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="s-permissions">
+          <h4><i data-lucide="shield-check"></i>Permissions<span class="subtle"><kbd>⇧ Tab</kbd> cycles in a session</span></h4>
+          <div class="scale" data-off-if="autoApprove">
+            <div class="track" data-radio="mode">
+              <button class="stop" data-v="plan"><span class="knob"></span>Plan<small>read-only</small></button>
+              <button class="stop" data-v="yolo-plan"><span class="knob"></span>Yolo-plan<small>read-only</small></button>
+              <button class="stop" data-v="ask"><span class="knob"></span>Ask<small>edits + commands</small></button>
+              <button class="stop" data-v="auto-edit"><span class="knob"></span>Auto-edit<small>commands ask</small></button>
+              <button class="stop" data-v="yolo"><span class="knob"></span>Yolo<small>never asks</small></button>
+            </div>
+            <div class="desc"><i data-lucide="info"></i><span data-text="modeText"></span></div>
+          </div>
+          <div class="card" style="margin-top: 10px">
+            <div class="row"><div class="lbl"><b>Auto-approve in panes</b><div class="hint" data-if="!autoApprove">Start panes with <code>--yolo</code>, whatever the mode above.</div><div class="hint warn-t" data-if="autoApprove">On: panes start with --yolo; the mode above is ignored in panes.</div></div><button class="toggle" data-bind="autoApprove"></button></div>
+            <div class="row"><div class="lbl"><b>Always allowed</b><div class="hint">Commands starting with these never ask (ChatGPT account).</div></div><input class="input mono" data-bind="allowed" style="width: 220px" /></div>
+          </div>
+        </section>
+
+        <section id="s-tokens">
+          <h4><i data-lucide="feather"></i>Lean setup<span class="subtle">Smaller requests · new sessions</span></h4>
+          <div class="leans">
+            <div class="lean" id="leanClaude">
+              <div class="top"><b>Claude Code</b><button class="toggle" data-bind="leanClaude"></button></div>
+              <div class="big">−71%<small>input tokens, same pass rate</small></div>
+              <div class="bars"><div><span style="width: 100%; background: var(--active)"></span></div><div><span style="width: 29%; background: var(--success)"></span>with lean</div></div>
+              <div class="hint" style="margin: 0">Short prompt, coding tools only, no user MCP servers. Project CLAUDE.md and skills still load.</div>
+            </div>
+            <div class="lean" id="leanCodex">
+              <div class="top"><b>Codex</b><button class="toggle" data-bind="leanCodex"></button></div>
+              <div class="big"><span data-text="codexPct"></span><small>input tokens, same pass rate</small></div>
+              <div class="bars"><div><span style="width: 100%; background: var(--active)"></span></div><div><span id="codexBar" style="background: var(--success)"></span>with lean</div></div>
+              <div class="sub" data-if="leanCodex"><div class="lbl"><b style="font-size: 12px">Short system prompt</b></div><button class="toggle sm" data-bind="shortCodex"></button></div>
+              <div class="sub"><div class="lbl"><b style="font-size: 12px">Codex CLI panes too</b><div class="hint" style="font-size: 11px">May miss Codex's prompt cache.</div></div><button class="toggle sm" data-bind="leanCodexCli"></button></div>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 10px" id="skillsCard">
+            <div class="row stacked">
+              <div style="display: flex; align-items: center; gap: 24px">
+                <div class="lbl"><b>Skills in lean sessions</b><div class="hint" data-if="skillsMode=selected">Only these. Built-in and project skills still load.</div><div class="hint" data-if="skillsMode=all">All of them; each description goes into every request.</div></div>
+                <div class="seg" data-bind="skillsMode"><button data-v="selected">Selected</button><button data-v="all">All</button></div>
+              </div>
+              <div class="ctl" data-if="skillsMode=selected" style="flex-wrap: wrap" data-chips="skills" id="chips"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="s-compaction">
+          <h4><i data-lucide="shrink"></i>Context compaction<span class="subtle"><kbd>/compaction</kbd></span></h4>
+          <div class="card" style="padding: 14px 16px">
+            <div class="ctxbar" id="ctxbar"></div>
+            <div class="ticks"><span>0%</span><span>context window</span><span>100%</span></div>
+            <div class="sliders">
+              <label><span>Micro-compact at <b class="mono" data-text="trimLabel"></b></span><input type="range" min="0" max="95" step="5" data-bind="trimAt" /><small class="subtle">Trims old tool output and file contents</small></label>
+              <label><span>Full compact at <b class="mono" data-text="compactLabel"></b></span><input type="range" min="0" max="95" step="5" data-bind="compactAt" /><small class="subtle">Summarizes the conversation</small></label>
+            </div>
+            <div class="hint warn-t" id="overlap" style="margin-top: 8px">Full compact is at or below micro-compact, so micro-compact never runs.</div>
+          </div>
+        </section>
+
+        <section id="s-local">
+          <h4><i data-lucide="server"></i>Local models<button class="toggle" data-bind="local" style="margin-left: auto"></button></h4>
+          <div class="card" data-if="!local" style="padding: 14px 16px"><div class="hint" style="margin: 0">Run winfer code on vLLM, LM Studio, Ollama, llama.cpp or oMLX with winfer's own tools. Needs the Responses API (<code>/v1/responses</code>).</div></div>
+          <div class="card" data-if="local">
+            <div class="row">
+              <div class="conn" style="flex: 1"><span>http://</span><input data-bind="host" style="width: 120px" /><span style="padding: 0">:</span><input data-bind="port" style="width: 52px" /><input data-bind="path" style="width: 60px" /></div>
+              <input class="input" type="password" placeholder="API key (optional)" style="width: 160px; height: 34px" />
+              <button class="btn" style="height: 34px"><i data-lucide="refresh-cw"></i>Test</button>
+            </div>
+            <div class="model"><span class="dot"></span><span class="mono" style="flex: 1">local/qwen3.8-coder-32b</span><span class="badge">128k context</span></div>
+            <div class="model"><span class="dot"></span><span class="mono" style="flex: 1">local/devstral-3</span><span class="badge">64k context</span></div>
+            <div class="row stacked">
+              <div class="lbl"><b>Thinking levels and budgets</b><div class="hint">As the chat template names them. Budgets cap thinking tokens (oMLX); empty = no cap. Templates the server exposes (llama.cpp) override these.</div></div>
+              <div class="levels">
+                <span class="level">none <span class="subtle" style="padding-right: 6px">off</span></span>
+                <span class="level">low <input class="input mono" value="1024" /></span>
+                <span class="level">medium <input class="input mono" value="4096" /></span>
+                <span class="level">xhigh <input class="input mono" placeholder="no cap" /></span>
+                <button class="btn ghost"><i data-lucide="plus"></i>Level</button>
+              </div>
+            </div>
+            <div class="row"><div class="lbl"><b>Context window</b><div class="hint">Automatic uses what the server reports.</div></div><input class="input" placeholder="Automatic" style="width: 110px" /></div>
+            <div class="row"><div class="lbl"><b>Send level to chat template</b><div class="hint"><code>chat_template_kwargs.reasoning_effort</code></div></div><button class="toggle" data-bind="templateEffort"></button></div>
+            <div class="row"><div class="lbl"><b>Web search</b><div class="hint">When the server searches the web (oMLX).</div></div><button class="toggle" data-bind="webSearch"></button></div>
+          </div>
+        </section>
+
+        <section id="s-mcp">
+          <h4><i data-lucide="plug"></i>MCP servers<span class="subtle">winfer's own is added automatically</span></h4>
+          <div class="srv"><span class="ic"><i data-lucide="github"></i></span><div class="lbl"><b>github</b><div class="hint mono">npx -y @modelcontextprotocol/server-github</div></div><button class="toggle sm" aria-checked="true"></button><button class="btn ghost"><i data-lucide="ellipsis"></i></button></div>
+          <div class="srv"><span class="ic"><i data-lucide="database"></i></span><div class="lbl"><b>postgres</b><div class="hint mono">uvx mcp-server-postgres postgres://localhost/dev</div></div><button class="toggle sm" aria-checked="true"></button><button class="btn ghost"><i data-lucide="ellipsis"></i></button></div>
+          <button class="add"><i data-lucide="plus"></i>Add server<span class="subtle" style="margin-left: 8px">or paste JSON</span></button>
+        </section>
+      </div>
+      <aside class="rail">
+        <div class="h">On this page</div>
+        <a href="#s-interface">Interface</a><a href="#s-models">Models</a><a href="#s-permissions">Permissions</a><a href="#s-tokens">Lean setup</a><a href="#s-compaction">Compaction</a><a href="#s-local">Local models</a><a href="#s-mcp">MCP servers</a>
+      </aside>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  document.getElementById("modelSel").innerHTML = MODEL_OPTIONS;
+  document.getElementById("chips").innerHTML = SKILLS.map((s) => `<button class="chip" data-v="${s}">${s}</button>`).join("");
+  document.querySelectorAll(".opt").forEach((o) => (o.onclick = () => set({ [o.dataset.k]: !state[o.dataset.k] })));
+  const MODES = {
+    plan: "Read-only: explores and proposes a plan, asks before anything else.",
+    "yolo-plan": "Read-only and never asks. Safe to leave running.",
+    ask: "Asks before every file edit and every command.",
+    "auto-edit": "Edits files freely; commands still ask.",
+    yolo: "Never asks before editing files or running commands.",
+  };
+  onChange((s) => {
+    document.querySelectorAll(".opt").forEach((o) => o.setAttribute("aria-pressed", !!s[o.dataset.k]));
+    s.modeText = MODES[s.mode];
+    s.codexPct = s.shortCodex ? "−52%" : "−37%";
+    s.trimLabel = s.trimAt ? s.trimAt + "%" : "off";
+    s.compactLabel = s.compactAt ? s.compactAt + "%" : "off";
+    document.querySelectorAll("[data-text]").forEach((el) => (el.textContent = s[el.dataset.text]));
+    document.getElementById("codexBar").style.width = s.shortCodex ? "48%" : "63%";
+    document.getElementById("leanClaude").classList.toggle("off", !s.leanClaude);
+    document.getElementById("leanCodex").classList.toggle("off", !s.leanCodex);
+    document.getElementById("skillsCard").hidden = !(s.leanClaude || s.leanCodex || s.leanCodexCli);
+    document.getElementById("aa").style.fontSize = (13 * s.textScale) / 100 + "px";
+    const overlap = s.trimAt > 0 && s.compactAt > 0 && s.trimAt >= s.compactAt;
+    document.getElementById("overlap").hidden = !overlap;
+    const t = s.trimAt || 100, c = s.compactAt || 100;
+    const a = Math.min(t, c), z = [];
+    z.push(`<div style="width:${a}%;color:var(--fg-subtle)">conversation</div>`);
+    if (s.trimAt && !overlap) z.push(`<div style="width:${c - t}%;background:color-mix(in srgb,var(--warning) 22%,transparent);color:var(--warning)">trims</div>`);
+    if (s.compactAt) z.push(`<div style="flex:1;background:color-mix(in srgb,var(--accent) 28%,transparent);color:var(--accent)">summarizes</div>`);
+    document.getElementById("ctxbar").innerHTML = z.join("");
+  });
+  const scroller = document.getElementById("scroller");
+  const links = [...document.querySelectorAll(".rail a")];
+  scroller.addEventListener("scroll", () => {
+    const top = scroller.getBoundingClientRect().top + 40;
+    let cur = links[0];
+    for (const l of links) if (document.querySelector(l.getAttribute("href")).getBoundingClientRect().top <= top) cur = l;
+    links.forEach((l) => l.classList.toggle("on", l === cur));
+  });
+  links[0].classList.add("on");
+  mockup({
+    id: "c-",
+    pitch: "<b>C · Visual controls.</b> Settings shown as what they do: interface previews, a permission scale, model routing, savings meters and a context-window bar. One scroll with an “On this page” rail.",
+    initial: { ...DEFAULTS },
+  });
+</script>
+</body>
+</html>

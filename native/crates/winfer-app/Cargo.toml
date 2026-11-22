@@ -44,3 +44,7 @@ minisign-verify = "0.2"
 gpui-kit = { workspace = true, features = ["test-support"] }
 # Signs test bundles as `tauri signer sign` does.
 minisign = "0.9"
+
+# The Windows icon and version info (build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

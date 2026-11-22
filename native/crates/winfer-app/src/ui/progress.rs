@@ -68,7 +68,7 @@ pub(super) fn progress_bar(progress: Option<&Progress>, status: AgentStatus, c: 
 
 impl Root {
     fn progress_on(&self, cx: &App) -> bool {
-        self.state.read(cx).rest.get("progress").is_none_or(|p| p["enabled"] != false)
+        self.state.read(cx).rest.get("progress").is_some_and(|p| p["enabled"] == true)
     }
 
     /// Runs every second: restores titles when sessions change, names new sessions, and every

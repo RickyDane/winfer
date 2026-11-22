@@ -374,7 +374,7 @@ impl Root {
         let now = now_ms();
         let mut page = div().flex().flex_col().gap_6().child(
             div().flex().items_start().gap_3().px_1()
-                .child(div().flex_1().min_w_0().text_xs().text_color(c.muted).child("When an account runs out of usage, agents move to the next one in this order and continue their session there: winfer code chats right away, terminal panes once the agent stops (they restart on the next account and resume). Every account shares sessions, settings and skills with the default sign-in; only the sign-in is its own."))
+                .child(div().flex_1().min_w_0().text_xs().text_color(c.muted).child("When an account runs out of usage, agents move to the next one in this order and continue their session there: WinferCode chats right away, terminal panes once the agent stops (they restart on the next account and resume). Every account shares sessions, settings and skills with the default sign-in; only the sign-in is its own."))
                 .child(small_button(c, "accounts-refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| {
                     this.reload_accounts(cx);
                     this.refresh_all_usage(cx);

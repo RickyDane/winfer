@@ -46,9 +46,18 @@ impl Root {
         let c = *c;
         let s = self.state.read(cx);
         let default_id = s.default_provider_id();
-        let mut list = div().flex().flex_col();
-        for p in s.providers.iter() {
+        let mut list = div().flex().flex_col().gap(px(2.0));
+        let mut providers: Vec<_> = s.providers.iter().collect();
+        if let Some(pos) = providers.iter().position(|p| p.id == "winfer")
+            && pos > 0
+        {
+            let winfer = providers.remove(pos);
+            providers.insert(0, winfer);
+        }
+        let has_others = providers.len() > 1;
+        for p in providers {
             let id = p.id.clone();
+            let is_winfer = id == "winfer";
             let expanded = self.new_menu.expanded.as_deref() == Some(id.as_str());
             let installed = p.installed;
             let open_id = id.clone();
@@ -56,7 +65,11 @@ impl Root {
                 .when(installed, |d| d.text_color(c.fg).cursor_pointer().hover(move |d| d.bg(c.hover)))
                 .when(!installed, |d| d.text_color(c.subtle))
                 .child(mark(c, backend_key(&id), 15.0, if installed { 1.0 } else { 0.4 }))
-                .child(div().flex_1().min_w_0().truncate().child(p.name.clone()));
+                .child(
+                    div().flex_1().min_w_0().flex().items_center().gap_1p5()
+                        .child(div().truncate().child(p.name.clone()))
+                        .when(is_winfer && installed, |d| d.child(crate::ui::code_pickers::recommended_badge(c, true))),
+                );
             if !installed {
                 row = row.child(div().flex_shrink_0().text_size(px(11.0)).child("not installed"));
             } else {
@@ -78,7 +91,10 @@ impl Root {
                 line = line.child(
                     div().id(SharedString::from(format!("new-star-{id}"))).rounded_sm().p_1().cursor_pointer().hover(move |d| d.bg(c.hover))
                         .tooltip(crate::ui::code_view::tip(if is_default { "Default agent for new panes" } else { "Make this the default agent for new panes" }))
-                        .on_click(cx.listener(move |this, _, _, cx| this.update_state(cx, |s| s.default_provider = Some(star_id.clone()))))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let id = star_id.clone();
+                            this.update_state(cx, |s| s.default_provider = if id == "winfer" { None } else { Some(id) });
+                        }))
                         .child(crate::ui::code_pickers::star_icon(if is_default { c.accent } else { Hsla { a: 0.5, ..c.subtle } }, 12.0)),
                 );
                 if p.model_arg.is_some() && self.models.get(&id).is_none_or(|m| !m.is_empty()) {
@@ -117,6 +133,9 @@ impl Root {
                 block = block.child(div().mb_1().child(models));
             }
             list = list.child(block);
+            if is_winfer && has_others {
+                list = list.child(div().h(px(1.0)).mx_1p5().my_0p5().bg(Hsla { a: 0.55, ..c.border }));
+            }
         }
         Some(
             div().id("new-menu-backdrop").absolute().size_full().occlude()
@@ -125,7 +144,7 @@ impl Root {
                     cx.notify();
                 }))
                 .child(
-                    div().id("new-menu").absolute().top(px(44.0)).right(px(44.0)).w(px(264.0)).max_h(relative(0.8)).overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_1().shadow_lg()
+                    div().id("new-menu").absolute().top(px(44.0)).right(px(44.0)).w(px(296.0)).max_h(relative(0.8)).overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_1().shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(list),
                 )

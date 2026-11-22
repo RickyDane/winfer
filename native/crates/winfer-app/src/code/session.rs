@@ -157,7 +157,7 @@ impl CodeModel {
 
     /// The process exited (the app got `pty://exit` for this pane).
     pub fn on_exit(&mut self, code: u32, cx: &mut Context<Self>) {
-        self.state.apply(Ev::Exited { text: format!("winfer code exited (code {code})") });
+        self.state.apply(Ev::Exited { text: format!("WinferCode exited (code {code})") });
         self.flush(cx);
         cx.notify();
     }

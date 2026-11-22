@@ -455,7 +455,7 @@ impl Root {
         });
 
         let picker_row = (show_model_picker || show_effort_picker).then(|| {
-            div().flex().items_center().gap_1p5().px_2p5().py_1p5()
+            div().flex().items_center().gap_1p5().px_2p5().pt_1p5().pb(px(1.0))
                 .when(show_model_picker, |d| {
                     d.child(
                         div().relative()
@@ -572,7 +572,7 @@ impl Root {
                     .child(start_btn),
             );
 
-        let mut picks = div().flex().items_stretch().justify_center().gap_2p5().w_full();
+        let mut picks = div().flex().items_stretch().justify_center().gap_2p5().w_full().pt_2();
         let mut others = div().flex().flex_wrap().items_stretch().justify_center().gap_2();
         let has_others = agents.iter().any(|(id, _)| id != "winfer");
         for (id, name) in agents {
@@ -580,7 +580,7 @@ impl Root {
             let big = id == "winfer";
             let pick = id.clone();
             let btn = div().id(SharedString::from(format!("welcome-{id}"))).flex().items_center().justify_center().gap_2().h(px(36.0)).rounded_lg().font_weight(FontWeight::MEDIUM)
-                .when(big, |d| d.min_w(px(120.0)).px_4().text_size(px(13.5)))
+                .when(big, |d| d.min_w(px(136.0)).px_4().pt(px(2.0)).text_size(px(13.5)))
                 .when(!big, |d| d.min_w(px(80.0)).px_3().text_size(px(13.0)))
                 .border_1()
                 .when(on, |d| d.bg(Hsla { a: 0.14, ..c.accent }).border_color(Hsla { a: 0.4, ..c.accent }).text_color(c.fg))
@@ -600,9 +600,23 @@ impl Root {
                     }
                 }))
                 .child(mark(c, &id, if big { 18.0 } else { 15.0 }, 1.0))
-                .child(if big { "Winfer code".to_string() } else { name });
+                .child(if big { "WinferCode".to_string() } else { name });
             if big {
-                picks = picks.child(btn);
+                // Paint the badge as a sibling after `btn` so `btn`'s border doesn't draw over it.
+                let wrapped = div()
+                    .relative()
+                    .child(btn)
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(-9.0))
+                            .left_0()
+                            .right_0()
+                            .flex()
+                            .justify_center()
+                            .child(crate::ui::code_pickers::recommended_badge(c, true)),
+                    );
+                picks = picks.child(wrapped);
                 if has_others {
                     picks = picks.child(
                         // A full-height line with "or" sitting on top of it (panel-coloured

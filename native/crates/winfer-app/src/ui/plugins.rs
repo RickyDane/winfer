@@ -373,7 +373,7 @@ impl Root {
                 this.plugins.runtime_errors.clear();
                 if let Ok(found) = found {
                     let providers = found.into_iter().map(|p| crate::model::AgentProvider { info: p.provider, installed: p.installed }).collect();
-                    this.update_state(cx, |s| s.providers = providers);
+                    this.update_state(cx, |s| s.set_providers(providers));
                 }
                 this.load_into_host();
                 cx.notify();
@@ -434,9 +434,23 @@ impl Root {
                 });
             }
             if self.plugins.shown != Some(show) {
+                if !show {
+                    // Hiding the webview while it's first responder leaves the window itself as first
+                    // responder: every key press then beeps and never reaches GPUI again.
+                    let _ = webview.focus_parent();
+                }
                 let _ = webview.set_visible(show);
                 self.plugins.shown = Some(show);
             }
+        }
+    }
+
+    /// Gives macOS keyboard focus (first responder) back to the GPUI view after the plugin webview
+    /// took it with a click. GPUI's view never reclaims it on its own, so without this, typing into
+    /// a terminal after clicking a plugin page goes nowhere.
+    pub(super) fn reclaim_keyboard(&self) {
+        if let Some(webview) = &self.plugins.webview {
+            let _ = webview.focus_parent();
         }
     }
 

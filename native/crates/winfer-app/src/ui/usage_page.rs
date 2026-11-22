@@ -135,13 +135,102 @@ mod local {
 
     #[cfg(not(unix))]
     pub fn step_start(at: f64, step_hours: i64) -> f64 {
-        let step = step_hours as f64 * 3_600_000.0;
-        (at / step).floor() * step
+        super::wall::step_start(&utc_offset, at, step_hours)
     }
 
     #[cfg(not(unix))]
     pub fn add_hours(at: f64, hours: i64) -> f64 {
-        at + hours as f64 * 3_600_000.0
+        super::wall::add_hours(&utc_offset, at, hours)
+    }
+
+    /// Milliseconds to add to a Unix time (ms) to get the local wall-clock time, read off
+    /// `localtime_s`; Windows has no `mktime` in `libc`, so it goes through `wall` instead.
+    #[cfg(windows)]
+    fn utc_offset(at: f64) -> f64 {
+        let secs = (at / 1000.0).floor() as libc::time_t;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_s(&mut tm, &secs) };
+        let days = super::wall::days_from_civil(tm.tm_year as i64 + 1900, tm.tm_mon as i64 + 1, tm.tm_mday as i64);
+        let local = days * 86_400 + tm.tm_hour as i64 * 3600 + tm.tm_min as i64 * 60 + tm.tm_sec as i64;
+        (local - secs as i64) as f64 * 1000.0
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    fn utc_offset(_: f64) -> f64 {
+        0.0
+    }
+}
+
+/// Local calendar arithmetic from a UTC offset function (ms to add to a UTC time to get the local
+/// wall-clock time), for platforms without `mktime`: steps start at local hours and midnights, and
+/// a day is a calendar day even when daylight saving makes it 23 or 25 hours.
+#[cfg_attr(unix, allow(dead_code))]
+mod wall {
+    const HOUR: f64 = 3_600_000.0;
+
+    /// The UTC time whose wall-clock reading is `wall` (ms as if the wall clock were UTC).
+    fn to_utc(offset: &impl Fn(f64) -> f64, wall: f64) -> f64 {
+        let guess = wall - offset(wall);
+        wall - offset(guess)
+    }
+
+    /// Start of the local step (hour, 6 hours or day) `at` falls in.
+    pub fn step_start(offset: &impl Fn(f64) -> f64, at: f64, step_hours: i64) -> f64 {
+        let wall = at + offset(at);
+        let step = step_hours.min(24) as f64 * HOUR;
+        to_utc(offset, (wall / step).floor() * step)
+    }
+
+    /// `hours` of wall-clock time after (or, negative, before) `at`.
+    pub fn add_hours(offset: &impl Fn(f64) -> f64, at: f64, hours: i64) -> f64 {
+        to_utc(offset, at + offset(at) + hours as f64 * HOUR)
+    }
+
+    /// Days since 1970-01-01 of a civil date (proleptic Gregorian).
+    pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146_097 + doe - 719_468
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const DAY: f64 = 24.0 * HOUR;
+        /// 2024-03-31 01:00 UTC, when Central European time moves from +1 to +2.
+        const JUMP: f64 = 19_813.0 * DAY + HOUR;
+        fn cet(t: f64) -> f64 {
+            if t < JUMP { HOUR } else { 2.0 * HOUR }
+        }
+
+        #[test]
+        fn civil_days_count_from_the_epoch() {
+            assert_eq!(days_from_civil(1970, 1, 1), 0);
+            assert_eq!(days_from_civil(2024, 3, 31), 19_813);
+        }
+
+        #[test]
+        fn days_start_at_local_midnight_and_follow_daylight_saving() {
+            let noon_before = 19_812.0 * DAY + 12.0 * HOUR;
+            let midnight = step_start(&cet, noon_before, 24);
+            assert_eq!(midnight, 19_811.0 * DAY + 23.0 * HOUR); // 00:00 at +1
+            assert_eq!(add_hours(&cet, midnight, 24), 19_812.0 * DAY + 23.0 * HOUR); // 00:00 on the 31st
+            // The 31st is a 23-hour day: its next midnight comes 23 hours later, at +2.
+            let after = add_hours(&cet, midnight, 48);
+            assert_eq!(after, 19_813.0 * DAY + 22.0 * HOUR);
+            assert_eq!(step_start(&cet, after + 5.0 * HOUR, 24), after);
+        }
+
+        #[test]
+        fn hour_steps_floor_to_the_local_hour() {
+            let at = 19_813.0 * DAY + 8.0 * HOUR + 1_234_567.0; // 10:20 local
+            assert_eq!(step_start(&cet, at, 1), 19_813.0 * DAY + 8.0 * HOUR);
+            assert_eq!(step_start(&cet, at, 6), 19_813.0 * DAY + 4.0 * HOUR); // 06:00 local
+        }
     }
 }
 

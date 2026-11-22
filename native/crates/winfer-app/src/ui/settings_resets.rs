@@ -43,14 +43,14 @@ pub const RESETS: &[Reset] = &[
             s.theme_picks.clear();
         },
     },
-    Reset { id: "agents.default", page: "agents", label: "Default agent", changed: |s| s.default_provider.is_some(), reset: |s| s.default_provider = None },
+    Reset { id: "agents.default", page: "agents", label: "Default agent", changed: |s| s.default_provider.as_deref().is_some_and(|p| p != "winfer"), reset: |s| s.default_provider = None },
     Reset { id: "agents.models", page: "agents", label: "Models", changed: |s| !s.agent_models.is_empty(), reset: |s| s.agent_models.clear() },
     Reset { id: "agents.autoApprove", page: "agents", label: "Auto-approve", changed: |s| !s.auto_approve.is_empty(), reset: |s| s.auto_approve.clear() },
     Reset { id: "agents.prompt", page: "agents", label: "System prompt", changed: |s| s.system_prompt.is_some(), reset: |s| s.system_prompt = None },
     Reset { id: "agents.tools", page: "agents", label: "Optional tools", changed: |s| !s.enabled_tools.is_empty(), reset: |s| s.enabled_tools.clear() },
     Reset { id: "review.tests", page: "agents", label: "Run tests when an agent finishes", changed: |s| rest_get(s, "review", "autoTests") == Some(&Value::Bool(true)), reset: |s| rest_set(s, "review", "autoTests", Value::Bool(false)) },
     Reset { id: "review.screenshots", page: "agents", label: "Screenshot the dev server", changed: |s| rest_get(s, "review", "screenshots") == Some(&Value::Bool(false)), reset: |s| rest_set(s, "review", "screenshots", Value::Bool(true)) },
-    Reset { id: "progress.enabled", page: "agents", label: "Estimate how far working agents are", changed: |s| rest_get(s, "progress", "enabled") == Some(&Value::Bool(false)), reset: |s| rest_set(s, "progress", "enabled", Value::Bool(true)) },
+    Reset { id: "progress.enabled", page: "agents", label: "Estimate how far working agents are", changed: |s| rest_get(s, "progress", "enabled") == Some(&Value::Bool(true)), reset: |s| rest_set(s, "progress", "enabled", Value::Bool(false)) },
     Reset {
         id: "progress.interval",
         page: "agents",

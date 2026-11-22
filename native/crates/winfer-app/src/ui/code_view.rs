@@ -15,7 +15,7 @@ use base64::Engine;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::InteractiveElementExt as _;
 use gpui_kit::component::{Icon, Sizable, Size as KitSize};
-use gpui_kit::component::input::{Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, MoveDown, MoveUp, OutdentInline, Position, Textarea, TextareaState};
+use gpui_kit::component::input::{Enter as InputEnter, Escape as InputEscape, IndentInline, InputEvent, MoveDown, MoveEnd, MoveHome, MovePageDown, MovePageUp, MoveUp, OutdentInline, Position, Textarea, TextareaState};
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis};
 use gpui_kit::component::text::{TextView, TextViewStyle};
 use gpui_kit::component::tooltip::Tooltip;
@@ -558,7 +558,7 @@ pub(super) fn attachment_from_clipboard_image(img: &Image, existing: usize) -> O
 
 impl CodeView {
     pub fn new(model: Entity<CodeModel>, app: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3).soft_wrap(true).submit_on_enter(true).placeholder("Message winfer code…  (/ for commands, @ for files)"));
+        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 3).soft_wrap(true).submit_on_enter(true).placeholder("Message WinferCode…  (/ for commands, @ for files)"));
         cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| match event {
             InputEvent::PressEnter { shift: false, secondary: false } => this.enter(window, cx),
             InputEvent::Change => {
@@ -734,6 +734,26 @@ impl CodeView {
                 .collect();
         }
         Vec::new()
+    }
+
+    /// PageUp/PageDown/Home/End scroll the transcript. Home/End only do so while the composer is
+    /// empty, so they still move the caret in a draft (on macOS they always scroll, as in Cocoa).
+    fn scroll_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let state = &self.model.read(cx).state;
+        if state.items.is_empty() || state.sheet.is_some() || self.preview.is_some() {
+            return false;
+        }
+        let page = (self.list.viewport_bounds().size.height - px(48.0)).max(px(48.0));
+        match key {
+            "pageup" => self.list.scroll_by(-page),
+            "pagedown" => self.list.scroll_by(page),
+            "home" | "end" if !cfg!(target_os = "macos") && !self.draft(cx).is_empty() => return false,
+            "home" => self.list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.0) }),
+            "end" => self.list.scroll_to_end(),
+            _ => return false,
+        }
+        cx.notify();
+        true
     }
 
     fn move_popup(&mut self, down: bool, window: &Window, cx: &mut Context<Self>) -> bool {
@@ -1599,18 +1619,31 @@ fn scroll_edge_fade_strengths(offset_y: f32, max_offset_y: f32) -> (f32, f32) {
 }
 
 fn paint_scroll_edge_fades(bounds: Bounds<Pixels>, handle: &ScrollHandle, color: Hsla, window: &mut Window) {
+    paint_scroll_edge_fades_with(bounds, handle, color, EdgeFade { height: WORK_GROUP_FADE_H, max_share: 0.42, alphas: [1.0, 0.80, 0.48, 0.16, 0.0] }, window);
+}
+
+/// How tall and strong [`paint_scroll_edge_fades_with`] paints: at most `height` px or `max_share` of
+/// the box, with `alphas` from the clipped edge inwards.
+pub(crate) struct EdgeFade {
+    pub height: f32,
+    pub max_share: f32,
+    pub alphas: [f32; 5],
+}
+
+pub(crate) fn paint_scroll_edge_fades_with(bounds: Bounds<Pixels>, handle: &ScrollHandle, color: Hsla, fade: EdgeFade, window: &mut Window) {
     let h = bounds.size.height / px(1.0);
     if h <= 4.0 {
         return;
     }
     let (top_s, bot_s) = scroll_edge_fade_strengths(handle.offset().y / px(1.0), handle.max_offset().y / px(1.0));
-    let fade_h = WORK_GROUP_FADE_H.min(h * 0.42).round();
+    let fade_h = fade.height.min(h * fade.max_share).round();
     if fade_h <= 1.0 {
         return;
     }
     // 4-band eased falloff (outer clipped edge -> inner clear edge) for a tall, soft feathered dissolve.
     let ys = [0.0, (fade_h * 0.22).round(), (fade_h * 0.48).round(), (fade_h * 0.76).round(), fade_h];
-    const ALPHAS: [f32; 5] = [1.0, 0.80, 0.48, 0.16, 0.0];
+    #[allow(non_snake_case)]
+    let ALPHAS = fade.alphas;
 
     if top_s > 0.001 {
         let top_y = bounds.origin.y / px(1.0);
@@ -2298,7 +2331,7 @@ impl CodeView {
                 .child(label)
                 .child(div().text_size(px(10.0)).opacity(0.55).child(key_hint))
         };
-        let head = div().flex().items_center().gap_2().text_size(px(12.5)).text_color(c.warning).child(Icon::new(IconName::ShieldQuestionMark).size(px(15.0))).child(if a.questions.is_empty() { format!("{} wants to run", a.tool) } else { "winfer code is asking".to_string() });
+        let head = div().flex().items_center().gap_2().text_size(px(12.5)).text_color(c.warning).child(Icon::new(IconName::ShieldQuestionMark).size(px(15.0))).child(if a.questions.is_empty() { format!("{} wants to run", a.tool) } else { "WinferCode is asking".to_string() });
         let mut body = div().flex().flex_col().gap_2();
         let actions;
         if a.questions.is_empty() {
@@ -2969,6 +3002,26 @@ impl Render for CodeView {
                     cx.stop_propagation();
                 }
             }))
+            .capture_action(cx.listener(|this, _: &MovePageUp, _, cx| {
+                if this.scroll_key("pageup", cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MovePageDown, _, cx| {
+                if this.scroll_key("pagedown", cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MoveHome, _, cx| {
+                if this.scroll_key("home", cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MoveEnd, _, cx| {
+                if this.scroll_key("end", cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
                 if this.accept_popup(window, cx) {
                     cx.stop_propagation();
@@ -3002,6 +3055,11 @@ impl Render for CodeView {
                         this.set_input("", window, cx);
                     } else if this.model.read(cx).state.busy {
                         this.send(Cmd::Interrupt, cx);
+                    }
+                } else if !e.keystroke.modifiers.modified() && matches!(k, "pageup" | "pagedown" | "home" | "end") {
+                    // Focus outside the composer (e.g. after clicking the transcript).
+                    if this.scroll_key(k, cx) {
+                        cx.stop_propagation();
                     }
                 } else if k == "tab" && e.keystroke.modifiers.shift {
                     this.cycle_mode(cx);
