@@ -13,6 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const FIRST_CHECK: Duration = Duration::from_secs(10);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
+fn now_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64)
+}
+
 #[derive(Clone)]
 pub(super) struct Available {
     pub version: String,
@@ -28,14 +32,6 @@ pub(super) struct Available {
 pub(super) struct Progress {
     got: AtomicU64,
     total: AtomicU64,
-}
-
-impl Progress {
-    /// "42%", or "" while the size isn't known.
-    fn percent(&self) -> String {
-        let (got, total) = (self.got.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed));
-        if total == 0 { String::new() } else { format!(" {}%", got * 100 / total) }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,11 +52,13 @@ pub(super) struct UpdatesUi {
     started: bool,
     /// Set while an update downloads and installs.
     installing: Option<Arc<Progress>>,
+    /// When the last check finished without an error (ms since the epoch).
+    checked_at: Option<f64>,
 }
 
 impl Default for UpdatesUi {
     fn default() -> Self {
-        Self { version: env!("CARGO_PKG_VERSION").to_string(), channel: Channel::Stable, checking: false, error: None, available: None, installed: None, open: None, offered: HashSet::new(), started: false, installing: None }
+        Self { version: env!("CARGO_PKG_VERSION").to_string(), channel: Channel::Stable, checking: false, error: None, available: None, installed: None, open: None, offered: HashSet::new(), started: false, installing: None, checked_at: None }
     }
 }
 
@@ -71,6 +69,25 @@ impl UpdatesUi {
         let release = |v: &str, c: &[&str]| ReleaseChanges { version: v.into(), changes: c.iter().map(|s| s.to_string()).collect() };
         self.installed = Some((self.version.clone(), vec![release("0.2.0", &["Browser: phone view and page handles", "chat pane for winfer code", "fix crash on start"]), release("0.1.9", &["Viewer: PDFs"])]));
         self.open = Some(Notes::Installed);
+    }
+}
+
+/// One change of a release: a dot, its area (if it names one) and the text.
+fn change_row(c: Colors, change: &str, size: f32) -> Div {
+    let (area, text) = updates::split_area(change);
+    let mut cap = text.chars();
+    let text: String = cap.next().map_or(String::new(), |f| f.to_uppercase().chain(cap).collect());
+    div().flex().items_start().gap_2().text_size(px(size)).text_color(c.fg)
+        .child(div().mt(px(size * 0.5)).size(px(5.0)).flex_shrink_0().rounded_full().bg(Hsla { a: 0.7, ..c.accent }))
+        .child(div().flex_1().min_w_0().flex().flex_wrap().items_center().gap_1p5()
+            .when_some(area, |d, a| d.child(div().px_1p5().rounded_sm().bg(c.hover).text_size(px(size - 1.5)).text_color(c.muted).child(a)))
+            .child(div().min_w_0().max_w_full().whitespace_normal().child(text)))
+}
+
+fn channel_name(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "Stable",
+        Channel::Nebula => "Nebula",
     }
 }
 
@@ -149,6 +166,9 @@ impl Root {
                     return;
                 }
                 this.updates.checking = false;
+                if found.is_ok() {
+                    this.updates.checked_at = Some(now_ms());
+                }
                 match found {
                     Ok(Some(a)) => {
                         let count: usize = a.notes.iter().map(|r| r.changes.len()).sum();
@@ -253,11 +273,6 @@ impl Root {
         .detach();
     }
 
-    /// "Installing… 42%" while an update installs.
-    fn install_label(&self) -> Option<String> {
-        self.updates.installing.as_ref().map(|p| format!("Installing…{}", p.percent()))
-    }
-
     pub(super) fn close_release_notes(&mut self, cx: &mut Context<Self>) -> bool {
         let was = self.updates.open.take().is_some();
         if was {
@@ -291,14 +306,7 @@ impl Root {
         for r in shown {
             let mut list = div().flex().flex_col().gap_2();
             for change in &r.changes {
-                let (area, text) = updates::split_area(change);
-                let mut cap = text.chars();
-                let text: String = cap.next().map_or(String::new(), |f| f.to_uppercase().chain(cap).collect());
-                list = list.child(div().flex().items_start().gap_2().text_size(px(13.0)).text_color(c.fg)
-                    .child(div().mt(px(7.0)).size(px(6.0)).flex_shrink_0().rounded_full().bg(Hsla { a: 0.7, ..c.accent }))
-                    .child(div().flex_1().min_w_0().flex().flex_wrap().items_center().gap_1p5()
-                        .when_some(area, |d, a| d.child(div().px_1p5().rounded_sm().bg(c.hover).text_size(px(11.0)).text_color(c.muted).child(a)))
-                        .child(div().min_w_0().max_w_full().whitespace_normal().child(text))));
+                list = list.child(change_row(c, change, 13.0));
             }
             body = body.child(div().flex().flex_col().gap_2().when(several, |d| d.child(div().text_size(px(11.0)).text_color(c.subtle).child(r.version.to_uppercase()))).child(list));
         }
@@ -329,57 +337,134 @@ impl Root {
         )
     }
 
-    /// App version, channel and update actions, pinned to the bottom of the settings sidebar.
-    /// Settings → Updates: the release channel, the available update and what's new.
+    /// Settings → Updates: the status with its action, the release channel and the release notes.
     pub(super) fn page_updates(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
+        use super::settings_kit::{alpha, badge, icon_tile, meter, panel, radio, section};
         let u = &self.updates;
         let (channel, checking, version) = (u.channel, u.checking, u.version.clone());
         let available = u.available.clone();
-        let error = u.error.clone();
-        let has_installed = u.installed.as_ref().is_some_and(|(v, _)| *v == version);
-        let installing = self.install_label();
+        let error = u.error.clone().filter(|_| available.is_none());
+        let installed = u.installed.clone().filter(|(v, _)| *v == version);
+        let progress = u.installing.as_ref().map(|p| (p.got.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed)));
+        let checked_at = u.checked_at;
         let mono = crate::fonts::mono(cx);
-        let button = |id: &'static str, label: &'static str, primary: bool| {
-            div().id(id).h(px(30.0)).flex().items_center().justify_center().gap_1p5().rounded_md().px_3().text_size(px(12.5)).cursor_pointer().flex_shrink_0()
-                .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).hover(|d| d.opacity(0.9)))
-                .when(!primary, |d| d.border_1().border_color(c.edge).text_color(c.fg).hover(move |d| d.bg(c.hover)))
+        let button = |id: &'static str, icon: IconName, label: String, primary: bool| {
+            div().id(id).h(px(32.0)).flex().items_center().justify_center().gap_1p5().rounded_md().px_3().text_size(px(12.5)).cursor_pointer().flex_shrink_0()
+                .when(primary, |d| d.bg(c.accent).text_color(c.on_accent).font_weight(FontWeight::MEDIUM).hover(|d| d.opacity(0.9)))
+                .when(!primary, |d| d.border_1().border_color(c.edge).bg(c.raised).text_color(c.fg).hover(move |d| d.bg(c.hover)))
+                .child(Icon::new(icon).size(px(13.0)))
                 .child(label)
         };
-        let hero = div().flex().items_center().gap_3p5().p_4().rounded(px(10.0)).border_1()
-            .bg(if available.is_some() { Hsla { a: 0.08, ..c.accent } } else { c.panel })
-            .child(div().size(px(40.0)).flex_shrink_0().flex().items_center().justify_center().rounded_lg()
-                .bg(if available.is_some() { c.accent } else { c.hover }).text_color(if available.is_some() { c.on_accent } else { c.muted })
-                .child(Icon::new(if available.is_some() { IconName::Download } else { IconName::CircleCheck }).size(px(19.0))))
+        let (icon, tint) = match (&available, &error, progress) {
+            (Some(_), _, Some(_)) => (IconName::LoaderCircle, c.accent),
+            (Some(_), _, None) => (IconName::Download, c.accent),
+            (None, Some(_), _) => (IconName::CircleAlert, c.danger),
+            _ => (IconName::CircleCheck, c.success),
+        };
+        let title = match (&available, &error, progress) {
+            (Some(a), _, Some(_)) => format!("Installing winfer {}", a.version),
+            (Some(a), _, None) => format!("winfer {} is available", a.version),
+            (None, Some(_), _) => "Couldn't check for updates".to_string(),
+            _ => "winfer is up to date".to_string(),
+        };
+        let changes = |notes: &[ReleaseChanges]| notes.iter().map(|r| r.changes.len()).sum::<usize>();
+        let subtitle = match (&available, &error, progress) {
+            (Some(_), _, Some(_)) => "winfer restarts once it's installed".to_string(),
+            (Some(a), _, None) => {
+                let n = changes(&a.notes);
+                let releases = a.notes.len();
+                format!("You have {version}{}{}", if n > 0 { format!(" · {n} change{}", if n == 1 { "" } else { "s" }) } else { String::new() }, if releases > 1 { format!(", {releases} releases") } else { String::new() })
+            }
+            (None, Some(e), _) => e.clone(),
+            _ if channel == Channel::Stable && version.contains('-') => format!("{version} · moves to Stable with the next stable release"),
+            _ => format!("You have {version}, the latest {} release", channel_name(channel)),
+        };
+        let action = match (&available, progress) {
+            (Some(_), Some(_)) => None,
+            (Some(_), None) => Some(button("update-install", IconName::Download, "Install and restart".into(), true).on_click(cx.listener(|this, _, _, cx| this.install_update(cx))).into_any_element()),
+            (None, _) => Some(button("update-check", IconName::RefreshCw, if checking { "Checking…".into() } else { "Check now".into() }, false).when(checking, |d| d.opacity(0.6)).on_click(cx.listener(|this, _, _, cx| this.check_updates(false, cx))).into_any_element()),
+        };
+        let top = div().flex().items_center().gap_3p5()
+            .child(icon_tile(tint, icon, 40.0))
             .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
-                .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(match &available {
-                    Some(a) if installing.is_some() => format!("Installing winfer {}", a.version),
-                    Some(a) => format!("winfer {} is available", a.version),
-                    None => "winfer is up to date".to_string(),
-                }))
-                .child(div().text_size(px(12.0)).text_color(c.muted).font_family(mono).child(match (&available, &error) {
-                    (_, Some(e)) => e.clone(),
-                    (Some(_), _) if installing.is_some() => "winfer restarts once it's installed".to_string(),
-                    (Some(_), _) => format!("You have {version} · restarting stops the agents in your panes"),
-                    (None, _) if channel == Channel::Stable && version.contains('-') => format!("{version} · moves to stable with the next stable release"),
-                    (None, _) => version.clone(),
-                })))
-            .when(available.is_some() || has_installed, |d| d.child(button("update-notes", "What's new", false).on_click(cx.listener(move |this, _, _, cx| this.show_release_notes(this.updates.available.is_some(), cx)))))
-            .child(match (available, installing) {
-                (Some(_), Some(label)) => button("update-install", "", true).opacity(0.7).cursor_default().child(label),
-                (Some(_), None) => button("update-install", "Install and restart", true).on_click(cx.listener(|this, _, _, cx| this.install_update(cx))),
-                (None, _) => button("update-check", if checking { "Checking…" } else { "Check now" }, false).on_click(cx.listener(|this, _, _, cx| this.check_updates(false, cx))),
-            });
-        let seg = |id: &'static str, label: &'static str, target: Channel| {
-            let on = channel == target;
-            div().id(id).h(px(24.0)).px_2p5().flex().items_center().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
-                .text_color(if on { c.fg } else { c.muted }).when(on, |d| d.bg(c.active))
-                .hover(move |d| d.text_color(c.fg))
-                .on_click(cx.listener(move |this, _, _, cx| this.set_update_channel(target, cx)))
-                .child(label)
+                .child(div().text_size(px(15.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(title))
+                .child(div().truncate().text_size(px(12.0)).text_color(if error.is_some() { c.danger } else { c.muted }).child(subtitle)))
+            .children(action);
+        let bar = progress.map(|(got, total)| {
+            let share = if total > 0 { got as f32 / total as f32 } else { 0.0 };
+            let mb = |b: u64| format!("{:.0} MB", b as f64 / 1_048_576.0);
+            div().flex().items_center().gap_3()
+                .child(div().flex_1().child(meter(c, share, c.accent, 6.0)))
+                .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).child(if total > 0 { format!("{} of {} · {}%", mb(got), mb(total), got * 100 / total) } else { "Starting the download…".into() }))
+        });
+        let fact = |icon: IconName, text: String, color: Hsla| div().flex().items_center().gap_1p5().text_color(color).child(Icon::new(icon).size(px(12.0))).child(text);
+        let checked = match (checking, checked_at) {
+            (true, _) => "Checking…".to_string(),
+            (false, Some(at)) => match super::dialogs::relative_time(at).as_str() {
+                "now" => "Checked just now".to_string(),
+                ago => format!("Checked {ago} ago"),
+            },
+            (false, None) => "Not checked since winfer started".to_string(),
         };
-        let channel_row = super::settings::row(c, "Channel", Some("Stable: tested releases. Nebula: every change as soon as it lands.".into()),
-            div().flex().gap_0p5().p(px(2.0)).rounded(px(8.0)).border_1().border_color(c.edge).bg(c.app)
-                .child(seg("channel-stable", "Stable", Channel::Stable)).child(seg("channel-nebula", "Nebula", Channel::Nebula)));
-        div().flex().flex_col().gap_5().child(hero).child(super::settings::card(c, "Release channel", None).child(channel_row))
+        let meta = div().flex().flex_wrap().items_center().gap_x_4().gap_y_1().pt_3().border_t_1().border_color(c.border).text_size(px(11.5))
+            .child(fact(IconName::Clock, checked, c.subtle))
+            .when(!cfg!(debug_assertions), |d| d.child(fact(IconName::RefreshCcw, "winfer checks every 6 hours".into(), c.subtle)))
+            .when(available.is_some(), |d| d.child(fact(IconName::TriangleAlert, "Restarting stops the agents in your panes".into(), c.warning)));
+        let hero = panel(c).gap_3().p_4()
+            .when(available.is_some(), |d| d.border_color(alpha(c.accent, 0.6)).bg(alpha(c.accent, 0.05)))
+            .child(top)
+            .children(bar)
+            .child(meta);
+
+        let choice = |id: &'static str, target: Channel, icon: IconName, tint: Hsla, title: &'static str, preview: bool, text: &'static str| {
+            let on = channel == target;
+            div().id(id).flex_1().min_w_0().flex().items_start().gap_3().p_3().rounded(px(10.0)).border_1().cursor_pointer()
+                .border_color(if on { c.accent } else { c.edge }).bg(c.panel)
+                .when(on, |d| d.border_2())
+                .when(!on, |d| d.hover(move |d| d.bg(c.hover)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.updates.channel != target {
+                        this.set_update_channel(target, cx);
+                    }
+                }))
+                .child(icon_tile(tint, icon, 30.0))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                    .child(div().flex().items_center().gap_2().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title).when(preview, |d| d.child(badge(c.accent, "preview"))))
+                    .child(div().text_size(px(12.0)).text_color(c.subtle).child(text)))
+                .child(radio(c, on))
+        };
+        let channels = div().flex().gap_3()
+            .child(choice("channel-stable", Channel::Stable, IconName::ShieldCheck, c.success, "Stable", false, "Tested releases."))
+            .child(choice("channel-nebula", Channel::Nebula, IconName::Sparkles, c.accent, "Nebula", true, "Every change as soon as it lands. Newest features, rougher edges."));
+        let leaving_nebula = (channel == Channel::Stable && version.contains('-')).then(|| {
+            div().flex().items_start().gap_2p5().px_3().py_2p5().rounded(px(9.0)).border_1().border_color(c.edge).bg(c.panel).text_size(px(12.0)).text_color(c.muted)
+                .child(Icon::new(IconName::Info).size(px(14.0)).text_color(c.accent).flex_shrink_0())
+                .child(div().flex_1().min_w_0().child(format!("This is a Nebula build ({version}). Stable releases are older, so winfer stays on it until the next stable release, then moves over on its own.")))
+        });
+
+        let (notes_title, notes_note, notes) = match (&available, &installed) {
+            (Some(a), _) if changes(&a.notes) > 0 => (format!("What's coming in {}", a.version), (a.notes.len() > 1).then(|| format!("{} releases since yours", a.notes.len())), a.notes.clone()),
+            (_, Some((v, r))) if changes(r) > 0 => (format!("What's new in {v}"), (r.len() > 1).then(|| format!("{} releases since your last version", r.len())), r.clone()),
+            _ => (String::new(), None, Vec::new()),
+        };
+        let notes_list = (!notes.is_empty()).then(|| {
+            let mut list = panel(c).overflow_hidden();
+            for (i, r) in notes.iter().filter(|r| !r.changes.is_empty()).enumerate() {
+                let mut block = div().flex().flex_col().gap_1p5().px_4().py_3().when(i > 0, |d| d.border_t_1().border_color(c.border))
+                    .child(div().font_family(mono.clone()).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(r.version.clone()));
+                for change in &r.changes {
+                    block = block.child(change_row(c, change, 12.5));
+                }
+                list = list.child(block);
+            }
+            list
+        });
+
+        div().flex().flex_col().gap_4()
+            .child(hero)
+            .child(section(c, "Release channel", None))
+            .child(channels)
+            .children(leaving_nebula)
+            .when_some(notes_list, |d, list| d.child(section(c, &notes_title, notes_note)).child(list))
     }
 }

@@ -496,8 +496,8 @@ mod tests {
         use crate::harness::session::{Entry, Saved};
         let saved = Saved {
             transcript: vec![
-                Entry { role: "tool".into(), text: "Bash\tpnpm dev".into(), state: Some("running".into()), background: true },
-                Entry { role: "tool".into(), text: "Read\tsrc/a.ts".into(), state: Some("done".into()), background: false },
+                Entry { role: "tool".into(), text: "Bash\tpnpm dev".into(), state: Some("running".into()), background: true, ..Default::default() },
+                Entry { role: "tool".into(), text: "Read\tsrc/a.ts".into(), state: Some("done".into()), background: false, ..Default::default() },
             ],
             ..Default::default()
         };

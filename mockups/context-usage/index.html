@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en" data-theme="gruvbox-dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Winfer native-gpui · Context Usage Modal Overhaul</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Floating Review Toolbar -->
+  <header class="review-shell">
+    <div class="review-bar">
+      <div class="review-brand">
+        <span class="brand-dot"></span>
+        <span>native-gpui · Context Usage</span>
+      </div>
+
+      <div class="review-sep"></div>
+
+      <div class="review-group" id="variant-tabs" role="tablist" aria-label="Design direction">
+        <button class="rv-tab on" data-variant="a" role="tab" aria-selected="true">
+          A · Cockpit Split <span class="rv-rec">Rec</span>
+        </button>
+        <button class="rv-tab" data-variant="b" role="tab" aria-selected="false">
+          B · Zoomed Anatomy
+        </button>
+        <button class="rv-tab" data-variant="c" role="tab" aria-selected="false">
+          C · Compact Tabbed
+        </button>
+      </div>
+
+      <div class="review-sep"></div>
+
+      <div class="review-group" id="scenario-tabs" aria-label="Session scenario">
+        <button class="rv-pill on" data-scenario="early">4% · Screenshot</button>
+        <button class="rv-pill" data-scenario="active">61% · Active</button>
+        <button class="rv-pill" data-scenario="critical">89% · Near limit</button>
+      </div>
+
+      <div class="review-sep"></div>
+
+      <div class="review-group" id="theme-tabs" aria-label="Theme">
+        <select id="theme-select" class="rv-select" aria-label="Theme">
+          <option value="gruvbox-dark" selected>Gruvbox Dark</option>
+          <option value="dark">Winfer Dark</option>
+          <option value="catppuccin-mocha">Catppuccin Mocha</option>
+          <option value="light">Winfer Light</option>
+        </select>
+        <button class="rv-pill" id="compare-toggle" title="Toggle before/after comparison with current modal">
+          Compare current
+        </button>
+      </div>
+    </div>
+    <p class="review-pitch" id="review-pitch"></p>
+  </header>
+
+  <!-- Simulated winfer-code workspace backdrop -->
+  <main class="stage">
+    <div class="fake-backdrop" aria-hidden="true">
+      <div class="fake-topbar">
+        <div class="fake-dots"><i></i><i></i><i></i></div>
+        <div class="fake-title">winfer — /Coding/winfer · main</div>
+        <div class="fake-right">Claude Opus 4.6 · 1M</div>
+      </div>
+      <div class="fake-chat">
+        <div class="fake-msg user">
+          <div class="fake-bubble">Can you inspect the context usage sheet and check how token breakdown is rendered?</div>
+        </div>
+        <div class="fake-msg">
+          <div class="fake-tool">
+            <span class="fake-tool-dot"></span>
+            <span>Bash</span>
+            <span class="fake-tool-dim">rg -n "What fills the context" native/</span>
+          </div>
+          <div class="fake-lines">
+            <div class="fake-line w72"></div>
+            <div class="fake-line w88"></div>
+            <div class="fake-line w54"></div>
+          </div>
+        </div>
+        <div class="fake-composer">
+          <span>/cost</span>
+          <span class="fake-composer-hint">Shift+Tab mode · Enter send</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal Scrim + Mount -->
+    <div class="scrim" id="scrim">
+      <div class="compare-layout" id="compare-layout">
+        <!-- Optional Current/Before Reference -->
+        <aside class="before-wrap" id="before-wrap" hidden>
+          <div class="before-tag">Current native-gpui modal</div>
+          <div class="old-modal" id="old-modal"></div>
+        </aside>
+
+        <!-- New Overhauled Modal -->
+        <section class="after-wrap">
+          <div class="before-tag after" id="after-tag" hidden>Overhauled mockup</div>
+          <div id="modal-mount"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

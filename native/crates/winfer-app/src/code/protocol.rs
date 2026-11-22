@@ -189,6 +189,8 @@ pub struct Source {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ContextPart {
     #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
     pub label: String,
     #[serde(default)]
     pub tokens: u64,
@@ -204,6 +206,12 @@ pub struct Restored {
     pub text: String,
     #[serde(default)]
     pub state: Option<String>,
+    #[serde(default)]
+    pub from_model: Option<String>,
+    #[serde(default)]
+    pub from_actual: Option<String>,
+    #[serde(default)]
+    pub to_model: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -242,6 +250,8 @@ pub enum Ev {
         #[serde(default)]
         effort: Option<String>,
         #[serde(default)]
+        ultracode: bool,
+        #[serde(default)]
         subagent_model: Option<String>,
         #[serde(default)]
         subagent_effort: Option<String>,
@@ -266,6 +276,15 @@ pub enum Ev {
     User { text: String },
     Cleared,
     Answered { id: String },
+    Handoff {
+        from_model: String,
+        #[serde(default)]
+        from_actual: Option<String>,
+        to_model: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    HandoffCancel,
     Account {},
     #[serde(other)]
     Unknown,
@@ -301,6 +320,7 @@ pub enum Cmd {
     Answer { id: String, answers: Vec<String> },
     SetModel(String),
     SetEffort(Option<String>),
+    SetUltracode(bool),
     SetSubagent { model: Option<String>, effort: Option<String> },
     SetMode(Mode),
     Compact,
@@ -342,6 +362,7 @@ impl Cmd {
             Cmd::Answer { id, answers } => json!({ "type": "answer", "id": id, "answers": answers }),
             Cmd::SetModel(m) => json!({ "type": "set_model", "model": m }),
             Cmd::SetEffort(e) => json!({ "type": "set_effort", "effort": e }),
+            Cmd::SetUltracode(on) => json!({ "type": "set_ultracode", "ultracode": on }),
             Cmd::SetSubagent { model, effort } => json!({ "type": "set_subagent", "model": model, "effort": effort }),
             Cmd::SetMode(m) => json!({ "type": "set_mode", "mode": m.id() }),
             Cmd::Compact => json!({ "type": "compact" }),
@@ -376,10 +397,11 @@ impl Cmd {
 }
 
 /// Mirrors `tui::app::COMMANDS`.
-pub const COMMANDS: [(&str, &str); 23] = [
+pub const COMMANDS: [(&str, &str); 24] = [
     ("/model", "Switch model (ChatGPT, Claude, Codex, Muse)"),
     ("/subagent-model", "Model subagents run on while the main model orchestrates"),
     ("/effort", "Set reasoning effort"),
+    ("/ultracode", "Toggle Ultracode multi-agent mode (Claude & Codex)"),
     ("/mode", "Permission mode: ask, auto-edit, plan, yolo-plan, yolo"),
     ("/new", "Start a new conversation"),
     ("/resume", "Resume a past session"),
@@ -468,6 +490,8 @@ mod tests {
         assert!(c.line().ends_with('\n'));
         assert_eq!(Cmd::SetMode(Mode::YoloPlan).json()["mode"], "yolo-plan");
         assert_eq!(Cmd::SetEffort(None).json()["effort"], Value::Null);
+        assert_eq!(Cmd::SetUltracode(true).json()["type"], "set_ultracode");
+        assert_eq!(Cmd::SetUltracode(true).json()["ultracode"], true);
     }
 
     #[test]

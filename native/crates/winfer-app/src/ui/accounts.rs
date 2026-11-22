@@ -3,8 +3,7 @@
 //! its agent stops, resumes its session and is told to continue.
 
 use super::commands::Command;
-use super::review::small_button;
-use super::usage::{Account, left_now, tightest, usage_key};
+use super::usage::{Account, left_now, overall_left, tightest, usage_key};
 use super::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -50,6 +49,8 @@ pub(super) struct Failover {
     exhausted: HashSet<String>,
     /// Label editors on the Accounts page.
     labels: HashMap<String, Entity<InputState>>,
+    /// The account whose label is being edited on the Accounts page.
+    renaming: Option<String>,
     adding: bool,
     seconds: u64,
 }
@@ -233,7 +234,7 @@ impl Root {
         let s = self.state.read(cx);
         let mut candidates: Vec<(String, f64)> = s.providers.iter().filter(|p| p.installed && p.id != from && p.id != "shell" && p.command.is_some()).filter_map(|p| {
             let key = self.account_for_start(&p.id).map_or_else(|| p.id.clone(), |a| usage_key(&a));
-            let left = tightest(self.usage.snapshots.get(&key), now).map_or(if p.id == "opencode" { 50.0 } else { -1.0 }, |w| left_now(w, now));
+            let left = overall_left(self.usage.snapshots.get(&key), now).unwrap_or(if p.id == "opencode" { 50.0 } else { -1.0 });
             (left >= 10.0).then(|| (p.id.clone(), left))
         }).collect();
         candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -358,6 +359,10 @@ impl Root {
             if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
                 let label = input.read(cx).value().trim().to_string();
                 let current = this.usage.accounts.iter().find(|a| a.id == id).map(|a| a.label.clone());
+                if this.failover.renaming.as_deref() == Some(id.as_str()) {
+                    this.failover.renaming = None;
+                    cx.notify();
+                }
                 if !label.is_empty() && Some(&label) != current.as_ref() {
                     let id = id.clone();
                     this.account_call(move || backend_accounts::accounts_update(id, Some(label), None), cx);
@@ -369,52 +374,142 @@ impl Root {
         input
     }
 
-    /// Settings → Accounts: several sign-ins per agent, used in order as each runs out.
+    /// Starts renaming an account in place (the label becomes a field until Enter or a click away).
+    fn start_account_rename(&mut self, account: &Account, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.label_input(account, window, cx);
+        let label = account.label.clone();
+        input.update(cx, |i, cx| {
+            i.set_value(label, window, cx);
+            i.focus(window, cx);
+            i.select_all(window, cx);
+        });
+        self.failover.renaming = Some(account.id.clone());
+        cx.notify();
+    }
+
+    fn add_account(&mut self, provider: String, cx: &mut Context<Self>) {
+        if self.failover.adding {
+            return;
+        }
+        self.failover.adding = true;
+        cx.spawn(async move |this, cx| {
+            let added = backend::background(move || backend_accounts::accounts_add(provider, String::new()).map(|a| serde_json::to_value(a).unwrap_or_default())).await;
+            let _ = this.update(cx, |this, cx| {
+                this.failover.adding = false;
+                match added.map_err(|e| e.to_string()).and_then(|r| r) {
+                    Ok(a) => {
+                        let (id, label) = (a["id"].as_str().unwrap_or_default().to_string(), a["label"].as_str().unwrap_or_default().to_string());
+                        this.reload_accounts(cx);
+                        this.sign_in(id, label, cx);
+                    }
+                    Err(e) => this.toast(e, cx),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Settings → Accounts: each agent's sign-ins as a failover chain, used in order as each runs out
+    /// (mockups/settings-overhaul/accounts.html).
     pub(super) fn page_accounts(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        use super::settings_kit::{alpha, badge, meter, mini_switch, panel};
+        use super::settings_more::{Btn, agent_mark, btn, note_tile};
         let now = now_ms();
-        let mut page = div().flex().flex_col().gap_6().child(
-            div().flex().items_start().gap_3().px_1()
-                .child(div().flex_1().min_w_0().text_xs().text_color(c.muted).child("When an account runs out of usage, agents move to the next one in this order and continue their session there: WinferCode chats right away, terminal panes once the agent stops (they restart on the next account and resume). Every account shares sessions, settings and skills with the default sign-in; only the sign-in is its own."))
-                .child(small_button(c, "accounts-refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| {
-                    this.reload_accounts(cx);
-                    this.refresh_all_usage(cx);
-                }))),
+        let mono = crate::fonts::mono(cx);
+        let mut page = div().flex().flex_col().gap(px(22.0)).pt_2().child(
+            div().flex().gap_3()
+                .child(note_tile(c, IconName::Route, "Runs out? Next account.", "Agents move down the list and continue their session. WinferCode chats switch right away; terminal panes when the agent stops."))
+                .child(note_tile(c, IconName::Link2, "Only the sign-in is separate.", "Every account shares sessions, settings and skills with the default sign-in.")),
         );
-        for provider in ACCOUNT_PROVIDERS {
+        for (pi, provider) in ACCOUNT_PROVIDERS.into_iter().enumerate() {
             let list: Vec<Account> = self.usage.accounts.iter().filter(|a| a.provider == provider).cloned().collect();
             let ids: Vec<String> = list.iter().map(|a| a.id.clone()).collect();
             let name = self.state.read(cx).provider_name(provider);
             let adding = self.failover.adding;
-            let mut rows = div().flex().flex_col().overflow_hidden().rounded_lg().border_1().border_color(c.edge).bg(c.panel);
+            let live = |a: &Account| a.enabled && a.signed_in && a.exhausted_until.is_none();
+            let ready: Vec<String> = list.iter().filter(|a| live(a)).map(|a| a.label.clone()).collect();
+            let mut rows = panel(c).overflow_hidden();
+            let mut n = 0;
             for (i, account) in list.iter().enumerate() {
-                let label = self.label_input(account, window, cx);
-                let w = tightest(self.usage.snapshots.get(&usage_key(&account.id)), now).cloned();
                 let out = account.exhausted_until.is_some();
-                let mut facts = div().flex().flex_wrap().items_center().gap_x_2().text_size(px(11.0)).text_color(c.subtle);
-                facts = facts.child(if is_default(&account.id) { "Default sign-in".to_string() } else { account.dir.split("/accounts/").last().map_or(account.dir.clone(), |d| format!("accounts/{d}")) });
-                if !account.signed_in {
-                    facts = facts.child(div().text_color(c.warning).child("Not signed in"));
+                let is_live = live(account);
+                if is_live {
+                    n += 1;
                 }
-                if out {
+                let (num, num_color) = if is_live { (n.to_string(), c.accent) } else if out { ("!".to_string(), c.danger) } else { ("–".to_string(), c.subtle) };
+                // The label, or a field while renaming it.
+                let renaming = self.failover.renaming.as_deref() == Some(account.id.as_str());
+                let name_line = if renaming {
+                    let input = self.label_input(account, window, cx);
+                    div().w(px(170.0)).child(Input::new(&input))
+                } else {
+                    let acc = account.clone();
+                    div().flex().items_center().gap_1().min_w_0()
+                        .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(if account.enabled { c.fg } else { c.muted }).child(account.label.clone()))
+                        .child(div().id(SharedString::from(format!("rename-{}", account.id))).flex_shrink_0().size(px(20.0)).flex().items_center().justify_center().rounded_sm().text_color(c.subtle).cursor_pointer()
+                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                            .tooltip(|window, cx| Tooltip::new("Rename").build(window, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| this.start_account_rename(&acc, window, cx)))
+                            .child(Icon::new(IconName::Pencil).size(px(11.0))))
+                };
+                let location = if is_default(&account.id) {
+                    badge(c.muted, "Default sign-in")
+                } else {
+                    div().truncate().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(account.dir.split("/accounts/").last().map_or(account.dir.clone(), |d| format!("accounts/{d}")))
+                };
+                // What the account can do now: its usage, or why it can't be used.
+                let usage = if !account.signed_in {
+                    let (sid, slabel) = (account.id.clone(), account.label.clone());
+                    div().flex().flex_col().items_start().gap_1()
+                        .child(badge(c.warning, "Not signed in").child(Icon::new(IconName::LogIn).size(px(11.0))))
+                        .when(!is_default(&account.id), |d| d.child(btn(c, SharedString::from(format!("signin-{}", account.id)), None, "Sign in", Btn::Primary, true).h(px(22.0)).text_size(px(11.5))
+                            .on_click(cx.listener(move |this, _, _, cx| this.sign_in(sid.clone(), slabel.clone(), cx)))))
+                } else if out {
                     let id = account.id.clone();
                     let resets = account.exhausted_until.filter(|u| *u > 0.0).map_or(String::new(), |u| format!(" · resets in {}", super::usage::duration(u - now)));
-                    facts = facts.child(div().id(SharedString::from(format!("clear-{}", account.id))).text_color(c.danger).cursor_pointer()
-                        .tooltip(|window, cx| Tooltip::new("Try this account again now").build(window, cx))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let id = id.clone();
-                            this.account_call(move || {
-                                backend_accounts::accounts_clear_exhausted(id);
-                                Ok(())
-                            }, cx);
-                        }))
-                        .child(format!("Out of usage{resets}")));
-                } else if let Some(w) = &w {
+                    div().flex().flex_col().items_start().gap_1()
+                        .child(badge(c.danger, format!("Out of usage{resets}")))
+                        .child(btn(c, SharedString::from(format!("retry-{}", account.id)), Some(IconName::RotateCcw), "Try again now", Btn::Plain, true).h(px(22.0)).text_size(px(11.5))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let id = id.clone();
+                                this.account_call(move || {
+                                    backend_accounts::accounts_clear_exhausted(id);
+                                    Ok(())
+                                }, cx);
+                            })))
+                } else if let Some(w) = tightest(self.usage.snapshots.get(&usage_key(&account.id)), now) {
                     let left = left_now(w, now);
                     let color = if left <= 10.0 { c.danger } else if left <= 30.0 { c.warning } else { c.success };
-                    facts = facts.child(div().text_color(color).child(format!("{}% of {} left", left.round(), w.label.to_lowercase())));
-                }
+                    div().flex().flex_col().gap_1()
+                        .child(div().flex().items_center().text_size(px(11.0)).text_color(c.subtle).child(format!("{} window", w.label.to_lowercase())).child(div().flex_1())
+                            .child(div().font_family(mono.clone()).font_weight(FontWeight::SEMIBOLD).text_color(color).child(format!("{}% left", left.round()))))
+                        .child(meter(c, (left / 100.0) as f32, color, 5.0))
+                } else {
+                    let key = usage_key(&account.id);
+                    let poll = self.usage.poll.get(&key);
+                    let (text, color, tip) = if self.usage.in_flight.contains(&key) {
+                        ("Refreshing usage…".to_string(), c.subtle, None)
+                    } else if let Some(kind) = poll.and_then(|p| p.error_kind) {
+                        let msg = match kind {
+                            super::usage::UsageErrorKind::RateLimited => "Rate limited — retrying later",
+                            super::usage::UsageErrorKind::AuthExpired => "Sign-in expired — run once to renew",
+                            super::usage::UsageErrorKind::Transient => "Couldn't refresh usage — retrying",
+                        };
+                        (msg.to_string(), c.warning, poll.and_then(|p| p.last_error.clone()))
+                    } else {
+                        ("No usage reported yet".to_string(), c.subtle, None)
+                    };
+                    div().child(
+                        div()
+                            .id(SharedString::from(format!("acct-usage-status-{}", account.id)))
+                            .text_size(px(11.0))
+                            .text_color(color)
+                            .when_some(tip, |d, tip| d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)))
+                            .child(text),
+                    )
+                };
                 let icon = move |id: String, icon: IconName, tip: &'static str, enabled: bool| {
-                    div().id(SharedString::from(id)).size_7().flex().items_center().justify_center().rounded_md().text_color(c.subtle)
+                    div().id(SharedString::from(id)).size(px(26.0)).flex().items_center().justify_center().rounded_md().text_color(c.subtle)
                         .when(enabled, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)))
                         .when(!enabled, |d| d.opacity(0.3))
                         .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
@@ -435,12 +530,14 @@ impl Root {
                         this.account_call(move || backend_accounts::accounts_reorder(provider, next), cx);
                     })
                 };
-                let mut buttons = div().flex().items_center().gap_0p5()
+                let mut acts = div().flex_shrink_0().flex().items_center().gap_0p5()
                     .child(icon(format!("up-{}", account.id), IconName::ArrowUp, "Use earlier", i > 0).on_click(reorder(-1)))
                     .child(icon(format!("down-{}", account.id), IconName::ArrowDown, "Use later", i + 1 < list.len()).on_click(reorder(1)));
-                if !is_default(&account.id) {
+                if is_default(&account.id) {
+                    acts = acts.child(div().w(px(54.0)));
+                } else {
                     let (sid, slabel, rid, rlabel) = (account.id.clone(), account.label.clone(), account.id.clone(), account.label.clone());
-                    buttons = buttons
+                    acts = acts
                         .child(icon(format!("login-{}", account.id), IconName::LogIn, if account.signed_in { "Sign in again" } else { "Sign in" }, true)
                             .on_click(cx.listener(move |this, _, _, cx| this.sign_in(sid.clone(), slabel.clone(), cx))))
                         .child(icon(format!("remove-{}", account.id), IconName::Trash, "Remove account", true)
@@ -452,56 +549,58 @@ impl Root {
                             })));
                 }
                 let (tid, enabled) = (account.id.clone(), account.enabled);
-                buttons = buttons.child(div().ml_1().child(self.toggle(SharedString::from(format!("enable-{}", account.id)), enabled, c, cx, move |this, cx| {
-                    let id = tid.clone();
-                    this.account_call(move || backend_accounts::accounts_update(id, None, Some(!enabled)), cx);
-                })));
+                acts = acts.child(div().w(px(1.0)).h(px(18.0)).mx_1p5().bg(c.border))
+                    .child(div().id(SharedString::from(format!("enable-{}", account.id))).flex().items_center().gap_1p5().rounded_md().px_1().py_0p5().cursor_pointer()
+                        .text_size(px(11.5)).text_color(if enabled { c.muted } else { c.subtle })
+                        .hover(move |d| d.text_color(c.fg))
+                        .tooltip(move |window, cx| Tooltip::new(if enabled { "Used when the ones above run out" } else { "Skipped when switching accounts" }).build(window, cx))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let id = tid.clone();
+                            this.account_call(move || backend_accounts::accounts_update(id, None, Some(!enabled)), cx);
+                        }))
+                        .child(mini_switch(c, enabled))
+                        .child("In rotation"));
                 rows = rows.child(
-                    div().flex().items_center().gap_3().px_3p5().py_2p5().when(i > 0, |d| d)
-                        .child(div().w_4().text_center().text_size(px(11.0)).text_color(c.subtle).child((i + 1).to_string()))
-                        .child(div().min_w_0().flex_1().flex().flex_col().gap_0p5().child(Input::new(&label)).child(facts))
-                        .child(buttons),
+                    div().flex().items_center().gap_3().px_3p5().min_h(px(60.0)).py_2()
+                        .when(i > 0, |d| d.border_t_1().border_color(c.border))
+                        .when(!account.enabled, |d| d.bg(alpha(c.app, 0.35)))
+                        .child(div().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().bg(alpha(num_color, 0.14)).font_family(mono.clone()).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(num_color).child(num))
+                        .child(div().w(px(160.0)).flex_shrink_0().min_w_0().flex().flex_col().items_start().gap_1().child(name_line).child(location))
+                        .child(div().flex_1().min_w_0().child(usage))
+                        .child(acts),
                 );
             }
+            if list.is_empty() {
+                rows = rows.child(div().px_3p5().py_3().text_size(px(12.0)).text_color(c.subtle).child("No accounts yet. Add one to sign in with another login."));
+            } else {
+                let footer = if ready.is_empty() {
+                    div().text_color(c.warning).child("No account has usage left — agents wait for the first reset.")
+                } else {
+                    let rest = if ready.len() > 1 { format!(", then {}", ready[1..].join(", ")) } else { String::new() };
+                    div().flex().gap_1().child("Now using").child(div().font_weight(FontWeight::MEDIUM).text_color(c.muted).child(ready[0].clone())).child(rest)
+                };
+                rows = rows.child(div().flex().items_center().gap_2().px_3p5().py_2().border_t_1().border_color(c.border).bg(alpha(c.app, 0.35)).text_size(px(11.5)).text_color(c.subtle)
+                    .child(Icon::new(IconName::CornerDownRight).size(px(12.0)))
+                    .child(footer));
+            }
             let add_provider = provider.to_string();
-            page = page.child(
-                div().flex().flex_col().gap_2()
-                    .child(div().flex().items_center().gap_2().px_1()
-                        .child(div().flex_1().text_size(px(13.0)).text_color(c.fg).child(name))
-                        .child(small_button(c, SharedString::from(format!("add-{provider}")), "Add account").when(adding, |d| d.opacity(0.5)).on_click(cx.listener(move |this, _, _, cx| {
-                            if this.failover.adding {
-                                return;
-                            }
-                            this.failover.adding = true;
-                            let provider = add_provider.clone();
-                            cx.spawn(async move |this, cx| {
-                                let added = backend::background(move || backend_accounts::accounts_add(provider, String::new()).map(|a| serde_json::to_value(a).unwrap_or_default())).await;
-                                let _ = this.update(cx, |this, cx| {
-                                    this.failover.adding = false;
-                                    match added.map_err(|e| e.to_string()).and_then(|r| r) {
-                                        Ok(a) => {
-                                            let (id, label) = (a["id"].as_str().unwrap_or_default().to_string(), a["label"].as_str().unwrap_or_default().to_string());
-                                            this.reload_accounts(cx);
-                                            this.sign_in(id, label, cx);
-                                        }
-                                        Err(e) => this.toast(e, cx),
-                                    }
-                                });
-                            })
-                            .detach();
-                        }))))
-                    .child(rows),
-            );
+            let head = div().flex().items_center().gap_2().px_0p5()
+                .child(agent_mark(c, provider, 24.0))
+                .child(div().text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(name))
+                .child(div().text_size(px(12.0)).text_color(c.subtle).child(format!("{} account{} · {} ready", list.len(), if list.len() == 1 { "" } else { "s" }, ready.len())))
+                .child(div().flex_1())
+                .when(pi == 0, |d| d.child(btn(c, "accounts-refresh", Some(IconName::RefreshCw), "Refresh usage", Btn::Ghost, true).on_click(cx.listener(|this, _, _, cx| {
+                    this.refresh_usage_manual(cx);
+                }))))
+                .child(btn(c, SharedString::from(format!("add-{provider}")), Some(IconName::Plus), if adding { "Adding…" } else { "Add account" }, Btn::Plain, !adding)
+                    .on_click(cx.listener(move |this, _, _, cx| this.add_account(add_provider.clone(), cx))));
+            page = page.child(div().flex().flex_col().gap_2p5().child(head).child(rows));
         }
         page
     }
 
     pub(super) fn refresh_all_usage(&mut self, cx: &mut Context<Self>) {
-        let mut targets: Vec<(String, Option<String>)> = vec![("claude".into(), None), ("codex".into(), None), ("agy".into(), None)];
-        targets.extend(self.usage.accounts.iter().filter(|a| a.enabled && a.signed_in && !is_default(&a.id)).map(|a| (a.provider.clone(), Some(a.id.clone()))));
-        for (provider, account) in targets {
-            self.refresh_one(provider, account, cx);
-        }
+        self.refresh_usage_manual(cx);
     }
 }
 

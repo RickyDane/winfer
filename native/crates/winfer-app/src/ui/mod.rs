@@ -7,5 +7,6 @@ pub mod terminal_view;
 pub mod code_pickers;
 pub mod nebula;
 pub mod code_sheets;
+pub mod code_usage_sheet;
 pub mod code_view;
 pub mod viz;

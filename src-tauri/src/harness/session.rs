@@ -21,6 +21,22 @@ pub struct Saved {
     pub usage: Option<super::event::Usage>,
     /// The Claude Code / Codex account the session last ran on (see accounts.rs).
     pub account: Option<String>,
+    /// Uncommitted cross-backend handoff still waiting to be injected into the next user turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_handoff: Option<PendingHandoff>,
+}
+
+/// Tracks a model/backend switch whose transcript digest hasn't been delivered to the new backend yet.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PendingHandoff {
+    pub from_spec: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_actual: Option<String>,
+    pub to_spec: String,
+    /// Index of the uncommitted `"handoff"` marker in `Saved::transcript`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_index: Option<usize>,
 }
 
 impl Saved {
@@ -62,7 +78,7 @@ fn context_from_log(kind: super::backend::Kind, log: &str) -> Option<super::even
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Entry {
-    /// "user" | "assistant" | "tool" | "notice"
+    /// "user" | "assistant" | "tool" | "notice" | "handoff"
     pub role: String,
     pub text: String,
     /// Tools: "running" | "done" | "failed" (a background task's own status once it has one).
@@ -71,6 +87,15 @@ pub struct Entry {
     /// Tools: a background shell or subagent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
+    /// Handoff: source `backend/model` spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_model: Option<String>,
+    /// Handoff: resolved source model id when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_actual: Option<String>,
+    /// Handoff: destination `backend/model` spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_model: Option<String>,
 }
 
 fn dir() -> PathBuf {

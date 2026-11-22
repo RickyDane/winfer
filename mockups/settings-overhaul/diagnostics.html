@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Diagnostics</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .stat { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 11px 13px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .stat .k { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg-subtle); }
+  .stat .k svg { width: 12px; height: 12px; }
+  .stat .v { font-size: 21px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--fg-subtle); margin-left: 2px; letter-spacing: 0; }
+  .stat .d { font-size: 11px; color: var(--fg-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chart { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 12px 14px 10px; }
+  .chart .ch { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 500; margin-bottom: 8px; }
+  .chart .ch .r { margin-left: auto; font-weight: 400; font-size: 11.5px; color: var(--fg-subtle); display: flex; gap: 12px; align-items: center; }
+  .chart .ch .lg { display: inline-flex; align-items: center; gap: 5px; }
+  .chart .ch .lg i { width: 10px; height: 2px; border-radius: 1px; background: var(--accent); }
+  .chart .ch .lg i.pk { background: none; border-top: 1.5px dashed var(--warning); height: 0; }
+  .chart svg.spark { display: block; width: 100%; height: 96px; overflow: visible; }
+  .chart .ax { display: flex; justify-content: space-between; font: 10px var(--mono); color: var(--fg-subtle); margin-top: 4px; }
+  .sys { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 9px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); font-size: 12px; color: var(--fg-muted); }
+  .sys span { display: inline-flex; align-items: center; gap: 6px; }
+  .sys svg { width: 13px; height: 13px; color: var(--fg-subtle); }
+  .sys .mono { font-size: 11.5px; }
+  .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .act { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); text-align: left; }
+  .act:hover { background: color-mix(in srgb, var(--panel) 70%, var(--hover)); }
+  .act .lbl b { font-size: 12.5px; font-weight: 500; display: block; }
+  .act .lbl small { display: block; font-size: 11.5px; color: var(--fg-subtle); line-height: 1.4; }
+  .act > svg { width: 14px; height: 14px; color: var(--fg-subtle); margin-left: auto; flex-shrink: 0; }
+  .unclean { align-items: flex-start; }
+  .unclean .lbl b { display: block; font-weight: 500; }
+  .unclean .lbl small { display: block; color: var(--fg-muted); font-size: 11.5px; margin-top: 2px; line-height: 1.45; }
+  .folder { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .folder code { flex: 1; min-width: 0; background: var(--app); padding: 6px 9px; border-radius: 6px; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .files { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .frow { display: grid; grid-template-columns: 26px 1fr 170px 60px; gap: 12px; align-items: center; padding: 10px 14px; }
+  .frow + .frow { border-top: 1px solid var(--border); }
+  .frow b { font: 12.5px var(--mono); }
+  .frow small { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .frow .sz { font: 11.5px var(--mono); color: var(--fg-muted); text-align: right; }
+  .frow .bar { height: 5px; }
+  .crash { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .crash .chh { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .crash .chh small { color: var(--fg-subtle); font-size: 11.5px; }
+  .crash .chh .r { margin-left: auto; display: flex; gap: 6px; }
+  .crash pre { margin: 0; height: 250px; overflow: auto; padding: 10px 14px; background: var(--app); font: 11px/1.55 var(--mono); color: var(--fg-muted); }
+  .crash pre .e { color: var(--danger); } .crash pre .f { color: var(--fg); } .crash pre .s { color: var(--fg-subtle); }
+  .dumps .item { min-height: 46px; }
+  .btn.dangerline { color: var(--danger); box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent); background: none; }
+  .btn.dangerline:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .done { color: var(--success); font-size: 11.5px; display: inline-flex; align-items: center; gap: 4px; }
+  .done svg { width: 12px; height: 12px; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="activity"></i></div>
+      <h2>Diagnostics</h2>
+      <p>Memory, logs and crash reports.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="overview"><i data-lucide="gauge"></i>Overview<span class="tdot warn" data-if="unclean"></span></button>
+      <button data-v="logs"><i data-lucide="scroll-text"></i>Logs<span class="tcount">14 MB</span></button>
+      <button data-v="crash"><i data-lucide="bug"></i>Crashes<span class="tcount">2</span></button>
+    </div>
+    <div class="body">
+
+      <!-- ───────── Overview ───────── -->
+      <div class="pane" data-if="tab=overview">
+        <div class="banner unclean" data-if="unclean"><i data-lucide="triangle-alert"></i><span class="lbl" style="flex:1"><b>The last run didn't exit cleanly</b><small>Probably a crash or an out-of-memory kill. Its last memory samples are in the log; export a report and attach it to a bug.</small></span><span class="r"><button class="btn sm" data-goto="crash">See crash</button><button class="icbtn" id="dismiss" title="Dismiss"><i data-lucide="x"></i></button></span></div>
+        <div class="stats">
+          <div class="stat"><span class="k"><i data-lucide="memory-stick"></i>winfer now</span><span class="v"><span id="rss">412</span><small>MB</small></span><span class="d">resident memory</span></div>
+          <div class="stat"><span class="k"><i data-lucide="trending-up"></i>Session peak</span><span class="v">538<small>MB</small></span><span class="d">at 10:42, 38 min ago</span></div>
+          <div class="stat"><span class="k"><i data-lucide="cpu"></i>System free</span><span class="v">9.6<small>of 32 GB</small></span><div class="bar" style="margin-top:3px"><i class="good" style="width:30%"></i></div></div>
+          <div class="stat"><span class="k"><i data-lucide="square-terminal"></i>Terminals</span><span class="v">7<small>panes</small></span><span class="d">18 MB scrollback</span></div>
+        </div>
+        <div class="chart">
+          <div class="ch">Memory, last 2 minutes<span class="r"><span class="lg"><i></i>winfer</span><span class="lg"><i class="pk"></i>session peak 538 MB</span><span>sampled every 5 s</span></span></div>
+          <svg class="spark" id="spark" viewBox="0 0 600 96" preserveAspectRatio="none"></svg>
+          <div class="ax"><span>−2 min</span><span>−1 min</span><span>now</span></div>
+        </div>
+        <div class="sys"><span><i data-lucide="tag"></i>winfer <span class="mono">0.42.0</span></span><span><i data-lucide="laptop"></i>macOS 27.2 · arm64</span><span><i data-lucide="clock"></i>up 2 h 14 min</span><span style="margin-left:auto"><i data-lucide="refresh-cw"></i>live, every 5 s</span></div>
+        <h5>Report a problem<span class="r">no settings, chats or secrets are included</span></h5>
+        <div class="acts">
+          <button class="act" id="copy"><span class="ic acc"><i data-lucide="clipboard-copy"></i></span><span class="lbl"><b>Copy summary</b><small>Version, memory and the crash-log tail, to paste into a bug report</small></span><span class="done" data-if="copied"><i data-lucide="check"></i>Copied</span></button>
+          <button class="act"><span class="ic acc"><i data-lucide="file-archive"></i></span><span class="lbl"><b>Export report…</b><small>A zip with the summary, both logs and the memory timeline</small></span><i data-lucide="chevron-right"></i></button>
+        </div>
+      </div>
+
+      <!-- ───────── Logs ───────── -->
+      <div class="pane" data-if="tab=logs">
+        <div class="folder"><span class="ic"><i data-lucide="folder"></i></span><code>/Users/dane/Library/Logs/dev.winfer.app</code><button class="btn"><i data-lucide="folder-open"></i>Show in Finder</button></div>
+        <div class="files">
+          <div class="frow"><span class="ic"><i data-lucide="file-text"></i></span><span><b>winfer.log</b><small>The app log · rotates at 5 MB</small></span><div class="bar"><i style="width:84%"></i></div><span class="sz">4.2 MB</span></div>
+          <div class="frow"><span class="ic"><i data-lucide="file-warning"></i></span><span><b>crash.log</b><small>Panics with backtraces</small></span><div class="bar"><i class="warn" style="width:6%"></i></div><span class="sz">38 KB</span></div>
+          <div class="frow"><span class="ic"><i data-lucide="file-box"></i></span><span><b>2 minidumps</b><small>Native crash dumps · see Crashes</small></span><div class="bar"><i class="bad" style="width:100%"></i></div><span class="sz">9.8 MB</span></div>
+        </div>
+        <div class="optlist">
+          <button class="opt"><i data-lucide="list-plus"></i><span class="lbl">Verbose logging<small>Also records debug lines: more detail, but the log grows faster. Kept across restarts.</small></span><span class="toggle" data-bind="verbose"></span></button>
+        </div>
+        <div class="danger" style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;box-shadow:0 0 0 1px color-mix(in srgb,var(--danger) 25%,transparent)">
+          <span class="ic bad"><i data-lucide="trash-2"></i></span>
+          <span class="lbl" style="flex:1"><b style="font-size:12.5px;font-weight:500;display:block">Clear logs</b><small style="font-size:11.5px;color:var(--fg-subtle)">Deletes winfer.log and crash.log. Minidumps are kept.</small></span>
+          <button class="btn dangerline" data-if="!clearAsk" id="clear">Clear…</button>
+          <span data-if="clearAsk" style="display:flex;gap:6px;align-items:center"><span style="font-size:11.5px;color:var(--danger)">Delete both logs?</span><button class="btn sm" id="clearNo">Cancel</button><button class="btn sm" style="background:var(--danger);color:#fff;box-shadow:none" id="clearYes">Clear</button></span>
+        </div>
+      </div>
+
+      <!-- ───────── Crashes ───────── -->
+      <div class="pane" data-if="tab=crash">
+        <div class="crash">
+          <div class="chh"><span class="ic bad"><i data-lucide="bug"></i></span><span><b style="font-weight:500">Latest crash</b><br /><small>The end of crash.log · today 09:58 · full backtraces are in the file and the report</small></span><span class="r"><button class="btn sm"><i data-lucide="copy"></i>Copy</button><button class="btn sm"><i data-lucide="external-link"></i>Open file</button></span></div>
+          <pre id="tail"></pre>
+        </div>
+        <h5>Minidumps<span class="r">attach the newest .dmp to a crash report</span></h5>
+        <div class="list dumps">
+          <div class="item"><span class="ic"><i data-lucide="file-box"></i></span><span class="lbl" style="flex:1"><b class="mono" style="font-size:12px">winfer-2026-11-22-0958.dmp</b><small>Today 09:58 · 5.1 MB</small></span><span class="badge warn">newest</span><span class="acts"><button class="btn sm"><i data-lucide="folder-open"></i>Show</button></span></div>
+          <div class="item"><span class="ic"><i data-lucide="file-box"></i></span><span class="lbl" style="flex:1"><b class="mono" style="font-size:12px">winfer-2026-11-18-2214.dmp</b><small>18 Nov 22:14 · 4.7 MB</small></span><span class="acts"><button class="btn sm"><i data-lucide="folder-open"></i>Show</button></span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  document.querySelectorAll("button.opt").forEach((b) => { const t = b.querySelector(".toggle[data-bind]"); if (t) b.onclick = () => set({ [t.dataset.bind]: !state[t.dataset.bind] }); });
+  document.querySelectorAll("[data-goto]").forEach((b) => (b.onclick = () => set({ tab: b.dataset.goto })));
+  $("dismiss").onclick = () => set({ unclean: false });
+  $("copy").onclick = () => { set({ copied: true }); setTimeout(() => set({ copied: false }), 1500); };
+  $("clear").onclick = () => set({ clearAsk: true });
+  $("clearNo").onclick = $("clearYes").onclick = () => set({ clearAsk: false });
+  $("tail").innerHTML = `<span class="s">2026-11-22T09:58:12.418Z</span> <span class="e">thread 'main' panicked at crates/winfer-app/src/ui/code_view.rs:812:41:</span>
+<span class="f">index out of bounds: the len is 14 but the index is 14</span>
+<span class="s">stack backtrace:</span>
+   0: rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::panic_bounds_check
+   3: <span class="f">winfer_app::ui::code_view::CodeView::visible_rows</span>
+             at crates/winfer-app/src/ui/code_view.rs:812:41
+   4: <span class="f">winfer_app::ui::code_view::CodeView::render</span>
+             at crates/winfer-app/src/ui/code_view.rs:1204:22
+   5: gpui::view::AnyView::render
+   6: gpui::window::Window::draw
+   7: gpui::app::App::flush_effects
+   8: gpui::platform::mac::window::display_layer
+   9: CA::Layer::layout_and_display_if_needed
+  10: CA::Transaction::commit
+<span class="s">note: Some details are omitted, run with \`RUST_BACKTRACE=full\` for a verbose backtrace.</span>
+
+<span class="s">2026-11-18T22:14:03.009Z</span> <span class="e">thread 'tokio-runtime-worker' panicked at src-tauri/src/relay.rs:233:18:</span>
+<span class="f">called \`Result::unwrap()\` on an \`Err\` value: ConnectionReset</span>
+<span class="s">stack backtrace:</span>
+   0: rust_begin_unwind
+   1: core::result::unwrap_failed
+   2: <span class="f">winfer_backend::relay::Relay::pump</span>`;
+  // Memory sparkline: 24 samples, scaled to the peak.
+  const S = [362, 368, 371, 380, 377, 384, 392, 390, 398, 405, 401, 410, 418, 412, 409, 414, 420, 417, 411, 408, 413, 415, 410, 412];
+  const peak = 538, W = 600, H = 96, x = (i) => (i / (S.length - 1)) * W, y = (v) => H - ((v - 320) / 240) * H;
+  const line = S.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  $("spark").innerHTML = `<defs><linearGradient id="gm" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+    ${[0.25, 0.5, 0.75].map((f) => `<line x1="0" x2="${W}" y1="${H * f}" y2="${H * f}" stroke="var(--border)" stroke-width="1"/>`).join("")}
+    <line x1="0" x2="${W}" y1="${y(peak)}" y2="${y(peak)}" stroke="var(--warning)" stroke-width="1.2" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+    <path d="${line}L${W},${H}L0,${H}Z" fill="url(#gm)"/>
+    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <circle cx="${x(S.length - 1)}" cy="${y(S.at(-1))}" r="3.5" fill="var(--accent)"/>`;
+  mockup({
+    id: "diagnostics",
+    tabs: ["overview", "logs", "crash"],
+    pitch: "<b>Diagnostics.</b> Overview has memory as stat tiles and a real chart with the session peak, plus version, OS and uptime, and the two report actions. Logs keeps files, sizes, verbose logging and a clearly destructive Clear apart. Crashes gets a scrollable backtrace and the minidumps.",
+    initial: { unclean: true, verbose: false, copied: false, clearAsk: false },
+  });
+</script>
+</body>
+</html>

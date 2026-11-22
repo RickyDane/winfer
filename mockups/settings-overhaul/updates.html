@@ -1,0 +1,146 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Updates</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .mockstate { display: inline-flex; gap: 2px; margin-left: 8px; padding: 2px; border-radius: 8px; background: #0006; vertical-align: middle; }
+  .mockstate button { height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; color: #a1a1aa; }
+  .mockstate button[aria-checked="true"] { background: #ffffff22; color: #fff; }
+  .uhero { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .uhero.avail { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent), var(--shadow); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .uhero.err { box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent), var(--shadow); }
+  .uhero .uh { display: flex; align-items: center; gap: 14px; padding: 16px; }
+  .uhero .ic { width: 42px; height: 42px; border-radius: 11px; }
+  .uhero .ic svg { width: 20px; height: 20px; }
+  .uhero .ic.solid { background: var(--accent); color: var(--on-accent); }
+  .uhero h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .uhero p { margin: 3px 0 0; font-size: 12px; color: var(--fg-muted); }
+  .uhero .r { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .uhero .meta { display: flex; gap: 16px; padding: 9px 16px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--fg-subtle); }
+  .uhero .meta span { display: inline-flex; align-items: center; gap: 5px; }
+  .uhero .meta svg { width: 12px; height: 12px; }
+  .uhero .meta .warn-t svg { color: var(--warning); }
+  .prog { padding: 0 16px 14px; display: flex; align-items: center; gap: 10px; font: 11.5px var(--mono); color: var(--fg-muted); }
+  .prog .bar { flex: 1; height: 6px; }
+  .btn.big { height: 32px; padding: 0 14px; font-size: 12.5px; }
+  .btn[disabled] { opacity: .55; pointer-events: none; }
+  .chan .choice { flex-direction: row; align-items: flex-start; gap: 12px; padding: 12px 14px; }
+  .chan .choice .ic { width: 32px; height: 32px; border-radius: 8px; }
+  .chan .choice .ic svg { width: 16px; height: 16px; }
+  .chan .choice .lbl { flex: 1; min-width: 0; }
+  .chan .choice .lbl b { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .chan .choice .lbl small { display: block; font-size: 11.5px; color: var(--fg-subtle); line-height: 1.45; margin-top: 2px; }
+  .chan .choice .lbl .v { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; font: 11px var(--mono); color: var(--fg-muted); }
+  .chan .choice .radio { margin-left: 0; margin-top: 2px; }
+  .notes { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .rel { padding: 10px 14px 12px; }
+  .rel + .rel { border-top: 1px solid var(--border); }
+  .rel .rh { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+  .rel .rh b { font: 600 12px var(--mono); }
+  .rel .rh small { color: var(--fg-subtle); font-size: 11.5px; }
+  .rel ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; }
+  .rel li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--fg-muted); line-height: 1.45; }
+  .rel li::before { content: ""; flex-shrink: 0; width: 4px; height: 4px; border-radius: 50%; background: var(--fg-subtle); transform: translateY(-2px); }
+  .area { flex-shrink: 0; font-size: 10.5px; padding: 0 6px; height: 17px; display: inline-flex; align-items: center; border-radius: 5px; background: var(--hover); color: var(--fg-muted); }
+  .area.new { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+  .area.fix { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="download"></i></div>
+      <h2>Updates</h2>
+      <p>winfer's release channel and updates.</p>
+    </header>
+    <div class="body">
+      <div class="uhero" id="hero">
+        <div class="uh">
+          <span class="ic" id="hIc"></span>
+          <div style="min-width:0"><h3 id="hTitle"></h3><p id="hSub"></p></div>
+          <div class="r">
+            <button class="btn" data-if="st=available,current,error"><i data-lucide="sparkles"></i>What's new</button>
+            <button class="btn primary big" data-if="st=available" id="install"><i data-lucide="download"></i>Install and restart</button>
+            <button class="btn primary big" data-if="st=installing" disabled><i data-lucide="loader"></i>Installing… <span data-text="pct"></span>%</button>
+            <button class="btn big" data-if="st=current,error" id="check"><i data-lucide="refresh-cw"></i><span id="checkLbl">Check now</span></button>
+          </div>
+        </div>
+        <div class="prog" data-if="st=installing"><div class="bar"><i id="pbar"></i></div><span><span data-text="mb"></span> of 38 MB</span></div>
+        <div class="meta">
+          <span><i data-lucide="clock"></i><span id="checked">Checked 12 min ago</span></span>
+          <span><i data-lucide="calendar-sync"></i>winfer checks every 6 hours</span>
+          <span data-if="st=available" class="warn-t"><i data-lucide="triangle-alert"></i>Restarting stops the agents in your panes</span>
+        </div>
+      </div>
+
+      <h5>Release channel</h5>
+      <div class="grid2 chan" data-radio="channel">
+        <button class="choice" data-v="stable"><span class="ic good"><i data-lucide="shield-check"></i></span><span class="lbl"><b>Stable</b><small>Tested releases, about every two weeks.</small><span class="v"><i data-lucide="tag" style="width:11px;height:11px"></i>latest 0.42.0</span></span><span class="radio"></span></button>
+        <button class="choice" data-v="nebula"><span class="ic acc"><i data-lucide="orbit"></i></span><span class="lbl"><b>Nebula<span class="badge acc">preview</span></b><small>Every change as soon as it lands. Newest features, rougher edges.</small><span class="v"><i data-lucide="tag" style="width:11px;height:11px"></i>latest 0.43.0-nebula.12</span></span><span class="radio"></span></button>
+      </div>
+      <div class="note" data-if="channel=nebula"><i data-lucide="info"></i><span>Going back to Stable later? Nebula builds are newer than Stable, so winfer stays on its Nebula build until the next stable release, then moves over on its own.</span></div>
+
+      <h5 id="notesTitle"><span id="notesLbl"></span><span class="r" id="notesR"></span></h5>
+      <div class="notes" id="notes"></div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const REL = {
+    "0.43.0": [["new", "WinferCode", "Settings pages rebuilt with tabs and live previews"], ["new", "Local models", "Model-maker logos and search in the model list"], ["", "Agents", "Update all installed agents with one button"], ["fix", "Terminal", "Scrolling a long list no longer scrolls the page behind it"]],
+    "0.42.1": [["fix", "Voice", "The live-voice shortcut shows in its description again"], ["fix", "Mobile", "Pairing codes no longer expire early on slow relays"]],
+    "0.42.0": [["new", "WinferCode", "Lean Codex setup with a short prompt by default"], ["", "Usage", "Limits show when they run out at the current pace"], ["fix", "Diagnostics", "Crash tail is scrollable"]],
+  };
+  const notes = (vs) => vs.map((v) => `<div class="rel"><div class="rh"><b>${v}</b><small>${v === "0.42.0" ? "installed · 14 Nov" : v === "0.42.1" ? "19 Nov" : "today"}</small></div><ul>${REL[v].map(([k, a, t]) => `<li><span class="area ${k}">${a}</span>${t}</li>`).join("")}</ul></div>`).join("");
+  let timer;
+  $("install").onclick = () => {
+    set({ st: "installing", pct: 0, mb: "0.0" });
+    clearInterval(timer);
+    timer = setInterval(() => {
+      const p = Math.min(100, state.pct + 7);
+      set({ pct: p, mb: ((p / 100) * 38).toFixed(1) });
+      if (p >= 100) clearInterval(timer);
+    }, 220);
+  };
+  $("check").onclick = () => {
+    $("checkLbl").textContent = "Checking…";
+    setTimeout(() => set({ st: "available" }), 900);
+  };
+  onChange((s) => {
+    const H = {
+      current: ["good", "circle-check", "winfer is up to date", `You have 0.42.0 on ${s.channel === "stable" ? "Stable" : "Nebula"}.`],
+      available: ["solid", "download", "winfer 0.43.0 is available", "You have 0.42.0 · 4 changes, 2 releases"],
+      installing: ["solid", "loader", "Installing winfer 0.43.0", "winfer restarts once it's installed"],
+      error: ["bad", "wifi-off", "Couldn't check for updates", "error sending request: connection timed out (api.winfer.dev)"],
+    }[s.st];
+    $("hIc").className = "ic " + H[0];
+    $("hIc").innerHTML = `<i data-lucide="${H[1]}"></i>`;
+    $("hTitle").textContent = H[2];
+    $("hSub").textContent = H[3];
+    $("hSub").className = s.st === "error" ? "mono" : "";
+    $("hSub").style.color = s.st === "error" ? "var(--danger)" : "";
+    $("hero").className = "uhero" + (s.st === "available" || s.st === "installing" ? " avail" : s.st === "error" ? " err" : "");
+    $("checkLbl").textContent = s.st === "error" ? "Try again" : "Check now";
+    $("checked").textContent = s.st === "error" ? "Last successful check 7 h ago" : "Checked 12 min ago";
+    $("pbar").style.width = (s.pct || 0) + "%";
+    const up = s.st === "available" || s.st === "installing";
+    $("notesLbl").innerHTML = up ? "What's coming in 0.43.0" : "What's new in 0.42.0";
+    $("notesR").innerHTML = up ? "2 releases since yours" : "installed 14 Nov";
+    $("notes").innerHTML = notes(up ? ["0.43.0", "0.42.1"] : ["0.42.0"]);
+    lucide.createIcons();
+  });
+  mockup({
+    id: "updates",
+    pitch: `<b>Updates.</b> The status becomes one card with the action, install progress and when winfer last checked. The channel is two cards that say what each means, and the release notes are inline instead of only in a dialog. <span class="mockstate" data-radio="st"><button data-v="current">Up to date</button><button data-v="available">Available</button><button data-v="installing">Installing</button><button data-v="error">Error</button></span>`,
+    initial: { st: "available", channel: "stable", nebulaBuild: false, pct: 0, mb: "0.0" },
+  });
+</script>
+</body>
+</html>

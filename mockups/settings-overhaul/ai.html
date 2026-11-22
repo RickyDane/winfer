@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · AI</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .uses { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .use { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); transition: opacity .2s; }
+  .use b { display: block; font-size: 12.5px; font-weight: 500; }
+  .use small { display: block; font-size: 11px; color: var(--fg-subtle); line-height: 1.35; }
+  .use .eg { margin-top: 5px; display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--fg-muted); padding: 2px 6px; border-radius: 5px; background: var(--app); }
+  .use .eg .bar { width: 40px; height: 4px; }
+  .uses.off .use { opacity: .35; }
+  .provs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .provs .choice { padding: 12px; gap: 6px; position: relative; }
+  .provs .choice .top { display: flex; align-items: center; gap: 8px; }
+  .provs .choice b { font-size: 12.5px; font-weight: 500; }
+  .provs .choice small { font-size: 11px; color: var(--fg-subtle); line-height: 1.35; }
+  .provs .choice .st { margin-top: 2px; }
+  .provs .choice.na { opacity: .5; cursor: not-allowed; }
+  .provs .choice.na:hover { background: var(--panel); }
+  .omark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--hover); color: var(--fg-muted); }
+  .omark svg { width: 14px; height: 14px; }
+  .detail { border-radius: 12px; background: var(--panel); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow); overflow: hidden; }
+  .detail .dh { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .detail .dh b { font-size: 13px; font-weight: 500; }
+  .detail .dh small { display: block; font-size: 11.5px; color: var(--fg-subtle); }
+  .detail .dh .r { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .detail .row { padding: 11px 14px; }
+  .who { display: flex; align-items: center; gap: 10px; }
+  .avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #10a37f; color: #fff; font-weight: 600; font-size: 12px; }
+  .suggest { display: flex; gap: 4px; margin-top: 6px; }
+  .suggest .chip { height: 20px; font-size: 10.5px; font-family: var(--mono); }
+  .waiting { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--active); border-top-color: var(--accent); animation: sp 0.8s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .order { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg-subtle); }
+  .order svg { width: 11px; height: 11px; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="sparkles"></i></div>
+      <h2>AI</h2>
+      <p>The model winfer itself uses for short texts.</p>
+    </header>
+    <div class="body">
+      <h5>What it writes</h5>
+      <div class="uses" id="uses">
+        <div class="use"><span class="ic acc"><i data-lucide="loader"></i></span><span><b>Progress estimates</b><small>How far each working agent is</small><span class="eg">auth-refactor <span class="bar"><i style="width:72%"></i></span>72%</span></span></div>
+        <div class="use"><span class="ic acc"><i data-lucide="clipboard-check"></i></span><span><b>Review summaries</b><small>What an agent changed, on its review card</small><span class="eg">"Fixed the login redirect loop"</span></span></div>
+        <div class="use"><span class="ic acc"><i data-lucide="type"></i></span><span><b>Titles &amp; short texts</b><small>Pane and chat titles, and the like</small><span class="eg">"Login redirect fix"</span></span></div>
+      </div>
+
+      <h5>Runs on<span class="r"><span class="order">Automatic order: ChatGPT <i data-lucide="arrow-right"></i> Codex <i data-lucide="arrow-right"></i> Claude Code</span></span></h5>
+      <div class="provs" data-radio="prov">
+        <button class="choice" data-v="chatgpt"><span class="top"><span class="amark" style="--c:#10a37f;width:26px;height:26px"><i data-lucide="message-circle" style="width:14px;height:14px"></i></span><b>ChatGPT</b><span class="radio"></span></span><small>Your Plus or Pro plan. No API key.</small><span class="st" id="stChatgpt"></span></button>
+        <button class="choice" data-v="codex"><span class="top"></span><small>Headless, with your Codex login.</small><span class="st"><span class="badge good">Installed</span></span></button>
+        <button class="choice" data-v="claude"><span class="top"></span><small>Headless, with your Claude login.</small><span class="st"><span class="badge good">Installed</span></span></button>
+        <button class="choice" data-v="off"><span class="top"><span class="omark"><i data-lucide="power-off"></i></span><b>Off</b><span class="radio"></span></span><small>No progress estimates or review summaries.</small><span class="st"><span class="badge">Nothing runs</span></span></button>
+      </div>
+
+      <!-- ChatGPT -->
+      <div class="detail" data-if="prov=chatgpt">
+        <div class="dh"><span class="amark" style="--c:#10a37f;width:30px;height:30px"><i data-lucide="message-circle" style="width:15px;height:15px"></i></span>
+          <span><b>ChatGPT account</b><small>Runs on your ChatGPT plan's usage. Set a weekly limit or disconnect winfer in <a class="link" href="#">ChatGPT's settings</a>.</small></span></div>
+        <div class="row" data-if="signed">
+          <div class="who" style="flex:1"><span class="avatar">R</span><span class="lbl"><b>ricky@example.com</b><div class="hint">ChatGPT Pro · signed in</div></span></div>
+          <div class="ctl"><span class="badge good" data-if="tested=ok"><i data-lucide="check" style="width:11px;height:11px"></i>Connected · 184 ms</span><button class="btn" id="test"><i data-lucide="activity"></i><span data-text="testLabel"></span></button><button class="btn ghost" id="signout">Sign out</button></div>
+        </div>
+        <div class="row" data-if="!signed&!waiting">
+          <div class="lbl"><b>Not signed in</b><div class="hint">Until you are, winfer uses the Codex CLI's login, since Codex is installed.</div></div>
+          <div class="ctl"><button class="btn primary" id="signin"><i data-lucide="log-in"></i>Continue with ChatGPT</button></div>
+        </div>
+        <div class="row" data-if="waiting">
+          <div class="waiting" style="flex:1"><span class="spin"></span>Finish signing in in your browser…</div>
+          <div class="ctl"><button class="btn ghost" id="cancel">Cancel</button></div>
+        </div>
+        <div class="row" data-off-if="!signed">
+          <div class="lbl"><b>Model</b><div class="hint">From your plan's models.</div></div>
+          <div class="ctl"><select data-bind="gptModel" style="width:200px"><option value="gpt-6-luna">gpt-6-luna (default)</option><option>gpt-6-luna-mini</option><option>gpt-6.1-sol</option></select></div>
+        </div>
+      </div>
+
+      <!-- Codex / Claude -->
+      <div class="detail" data-if="prov=codex,claude">
+        <div class="dh"><span id="cliMark"></span><span><b id="cliName"></b><small id="cliHow"></small></span><span class="r"><span class="badge good"><i data-lucide="check" style="width:11px;height:11px"></i>Logged in</span></span></div>
+        <div class="row">
+          <div class="lbl"><b>Model</b><div class="hint">Empty uses the CLI's default model.</div></div>
+          <div class="ctl" style="flex-direction:column;align-items:flex-end;gap:0"><input class="input mono" style="width:224px" data-bind="cliModel" id="cliModel" /><div class="suggest" id="suggest"></div></div>
+        </div>
+      </div>
+
+      <!-- Off -->
+      <div class="note" data-if="prov=off"><i data-lucide="info"></i><span><b>winfer's own AI is off.</b> Agents keep working; panes just show no progress estimate and review cards no summary.</span></div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const cardTop = (id) => `${mark(id, 26)}<b>${AGENTS[id].name}</b><span class="radio"></span>`;
+  document.querySelector('[data-v="codex"] .top').innerHTML = cardTop("codex");
+  document.querySelector('[data-v="claude"] .top').innerHTML = cardTop("claude");
+  const CLI = {
+    codex: { how: "Runs Codex headless with your Codex login, read-only and without your Codex config.", ph: "Codex default", s: ["gpt-6.1-sol-codex", "gpt-6-luna-codex"] },
+    claude: { how: "Runs Claude Code headless with your Claude login, without tools, MCP servers or your settings.", ph: "Claude default", s: ["claude-haiku-5", "claude-sonnet-5"] },
+  };
+  $("test").onclick = () => { set({ testLabel: "Testing…", tested: "" }); setTimeout(() => set({ testLabel: "Test connection", tested: "ok" }), 700); };
+  $("signout").onclick = () => set({ signed: false, tested: "" });
+  $("signin").onclick = () => { set({ waiting: true }); state.t = setTimeout(() => set({ waiting: false, signed: true }), 2200); };
+  $("cancel").onclick = () => { clearTimeout(state.t); set({ waiting: false }); };
+  let lastProv;
+  onChange((s) => {
+    $("stChatgpt").innerHTML = s.signed ? '<span class="badge good">Signed in</span>' : '<span class="badge warn">Sign in below</span>';
+    $("uses").classList.toggle("off", s.prov === "off");
+    if (CLI[s.prov]) {
+      const c = CLI[s.prov];
+      $("cliMark").innerHTML = mark(s.prov, 30);
+      $("cliName").textContent = AGENTS[s.prov].name;
+      $("cliHow").textContent = c.how;
+      $("cliModel").placeholder = c.ph;
+      if (lastProv !== s.prov) state.cliModel = "", ($("cliModel").value = "");
+      $("suggest").innerHTML = c.s.map((m) => `<button class="chip" data-m="${m}">${m}</button>`).join("");
+      $("suggest").querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => set({ cliModel: b.dataset.m })));
+    }
+    lastProv = s.prov;
+    lucide.createIcons();
+  });
+  mockup({
+    id: "ai",
+    pitch: "<b>AI.</b> Starts with what winfer's own model actually writes, then the provider as cards: ones you can't use yet say why, and only the chosen one opens its settings (the ChatGPT sign-in lives inside its card). Test and sign-in results are badges in place, not loose lines.",
+    initial: { prov: "chatgpt", signed: true, waiting: false, tested: "", testLabel: "Test connection", gptModel: "gpt-6-luna", cliModel: "" },
+  });
+</script>
+</body>
+</html>

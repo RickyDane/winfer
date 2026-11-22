@@ -61,8 +61,32 @@ pub fn run_command(text: &str, s: &mut CodeState) -> Option<Effect> {
         "/effort" => {
             if arg.is_empty() {
                 s.set_sheet(Some(Sheet::Effort));
+            } else if arg == "ultracode" || arg.starts_with("ultracode ") {
+                let tail = arg.strip_prefix("ultracode").unwrap_or("").trim();
+                let next = match tail {
+                    "on" | "true" | "1" => true,
+                    "off" | "false" | "0" => false,
+                    _ => !s.ultracode,
+                };
+                if super::names::supports_ultracode(&s.model) {
+                    s.send(Cmd::SetUltracode(next));
+                } else {
+                    s.notice("Ultracode is available for Claude Code and Codex models.");
+                }
             } else {
                 s.send(Cmd::SetEffort(if arg == "default" { None } else { Some(arg) }));
+            }
+        }
+        "/ultracode" => {
+            if !super::names::supports_ultracode(&s.model) {
+                s.notice("Ultracode is available for Claude Code and Codex models.");
+            } else {
+                let next = match arg.as_str() {
+                    "on" | "true" | "1" => true,
+                    "off" | "false" | "0" => false,
+                    _ => !s.ultracode,
+                };
+                s.send(Cmd::SetUltracode(next));
             }
         }
         "/mode" => match Mode::parse(&arg) {
@@ -166,6 +190,14 @@ mod tests {
         assert_eq!(s.mode, Mode::Plan);
         run_command("/effort default", &mut s);
         assert_eq!(s.effort, "default");
+        s.model = "claude/opus".into();
+        run_command("/ultracode on", &mut s);
+        assert!(s.ultracode);
+        run_command("/effort ultracode off", &mut s);
+        assert!(!s.ultracode);
+        s.model = "codex/gpt-6.1-sol".into();
+        run_command("/ultracode", &mut s);
+        assert!(s.ultracode);
         run_command("/submodel claude/haiku low", &mut s);
         assert_eq!((s.sub_model.as_deref(), s.sub_effort.as_deref()), (Some("haiku"), Some("low")));
         run_command("/subagent-model main", &mut s);

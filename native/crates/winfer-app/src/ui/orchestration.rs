@@ -93,6 +93,7 @@ pub fn judge(cs: &[Contender]) -> Verdict {
 }
 
 pub fn format_tokens(n: f64) -> String {
+    let n = if n <= 0.0 { 0.0 } else { n };
     if n >= 1e9 {
         format!("{:.*}B", if n >= 1e10 { 1 } else { 2 }, n / 1e9)
     } else if n >= 1e6 {

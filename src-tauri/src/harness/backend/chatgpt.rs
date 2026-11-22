@@ -341,6 +341,7 @@ pub(super) fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: Opti
                 st.model = m;
             }
             Cmd::SetEffort(e) => shared.state.lock().unwrap().effort = e,
+            Cmd::SetUltracode(_) => {}
             Cmd::SetSubagent { model, effort } => {
                 let mut st = shared.state.lock().unwrap();
                 st.sub_model = model;

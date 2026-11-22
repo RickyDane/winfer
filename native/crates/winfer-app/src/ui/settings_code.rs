@@ -3,6 +3,7 @@
 //! The settings themselves load and save in `settings_harness.rs`.
 
 use super::settings::{plain_button, row};
+use super::settings_kit::{alpha, badge, checkbox, intro, kbd, mini_switch, panel, radio, section, small_label};
 use super::settings_harness::{BACKENDS, WINFER_PROVIDER, digits, effort_label, hint, parse_efforts, parse_servers};
 use super::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea};
@@ -121,10 +122,6 @@ const EFFORTS: [(&str, &str); 7] = [("", "Default"), ("minimal", "Min"), ("low",
 /// The chips the skill field shows while the list is closed.
 const MAX_SKILL_CHIPS: usize = 6;
 
-fn alpha(color: Hsla, a: f32) -> Hsla {
-    Hsla { a, ..color }
-}
-
 /// How risky a permission mode is, as a color.
 fn mode_color(c: Colors, mode: &str, auto_approve: bool) -> Hsla {
     match mode {
@@ -214,46 +211,6 @@ fn visible_skills(items: &[SkillItem], picked: &[String], filter: &SkillFilter, 
         .filter(|s| skill_matches(s, &q))
         .cloned()
         .collect()
-}
-
-fn mini_switch(c: Colors, on: bool) -> Div {
-    div().w(px(28.0)).h(px(16.0)).flex_shrink_0().flex().rounded_full().p(px(2.0)).bg(if on { c.accent } else { c.active }).when(on, |d| d.justify_end()).child(div().size(px(12.0)).rounded_full().bg(hsla(0.0, 0.0, 1.0, 1.0)))
-}
-
-fn radio(c: Colors, on: bool) -> Div {
-    let d = div().size(px(14.0)).flex_shrink_0().rounded_full().flex().items_center().justify_center();
-    if on { d.bg(c.accent).child(div().size(px(5.0)).rounded_full().bg(hsla(0.0, 0.0, 1.0, 1.0))) } else { d.border_1().border_color(c.border_strong) }
-}
-
-fn checkbox(c: Colors, on: bool) -> Div {
-    let d = div().size(px(14.0)).flex_shrink_0().rounded(px(4.0)).flex().items_center().justify_center();
-    if on { d.bg(c.accent).child(Icon::new(IconName::Check).size(px(10.0)).text_color(c.on_accent)) } else { d.border_1().border_color(c.border_strong) }
-}
-
-fn panel(c: Colors) -> Div {
-    div().flex().flex_col().rounded(px(10.0)).border_1().border_color(c.edge).bg(c.panel)
-}
-
-fn kbd(c: Colors, mono: &SharedString, text: &str) -> Div {
-    div().px_1p5().rounded_sm().bg(c.hover).font_family(mono.clone()).text_size(px(10.5)).text_color(c.muted).child(text.to_string())
-}
-
-/// A line above a tab's content, with shortcuts or a control on the right.
-fn intro(c: Colors, text: &str, right: Option<AnyElement>) -> Div {
-    div().flex().items_center().gap_2p5().mx(px(2.0)).text_size(px(12.0)).text_color(c.subtle).child(text.to_string()).child(div().flex_1()).children(right)
-}
-
-fn section(c: Colors, title: &str, right: Option<String>) -> Div {
-    div().flex().items_center().gap_2().mx(px(2.0)).mb(px(-6.0)).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.muted).child(title.to_string()).child(div().flex_1())
-        .when_some(right, |d, r| d.child(div().font_weight(FontWeight::NORMAL).text_color(c.subtle).child(r)))
-}
-
-fn badge(color: Hsla, text: impl Into<SharedString>) -> Div {
-    div().h(px(18.0)).flex().items_center().gap_1().px_1p5().rounded_full().bg(alpha(color, 0.15)).text_size(px(10.5)).font_weight(FontWeight::MEDIUM).text_color(color).child(text.into())
-}
-
-fn small_label(c: Colors, title: impl Into<SharedString>, sub: impl Into<SharedString>) -> Div {
-    div().flex_1().min_w_0().flex().flex_col().gap_0p5().child(div().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(title.into())).child(div().text_size(px(11.5)).text_color(c.subtle).child(sub.into()))
 }
 
 /// The web interface as it will look: updates with every display option and the text size.
@@ -408,7 +365,7 @@ impl Root {
             .child(line(vec![("●".into(), c.success), ("Bash pnpm test upload".into(), c.subtle)]))
             .child(line(vec![("  ⎿ 12 passed".into(), c.subtle)]));
         let styles = div().flex().gap_3()
-            .child(style_card("style-web", "Web", "Timeline, inline diffs, approvals", web_mini, web, cx))
+            .child(style_card("style-web", "Native", "Timeline, inline diffs, approvals", web_mini, web, cx))
             .child(style_card("style-tui", "Terminal (TUI)", "The classic terminal UI", tui_mini, !web, cx));
 
         // The display options, and a preview beside them that follows every change.
@@ -469,7 +426,7 @@ impl Root {
         div().flex().flex_col().gap_4()
             .child(intro(c, "How new WinferCode panes look. Open panes keep the style they started with.", None))
             .child(styles)
-            .child(section(c, "Web interface", Some(if web { "Preview updates as you change things".into() } else { "Only for panes that use the web interface".into() })))
+            .child(section(c, "Native interface", Some(if web { "Preview updates as you change things".into() } else { "Only for panes that use the native interface".into() })))
             .child(options)
             .child(text_size)
             .child(panel(c).child(row(c, "Plan sidebar", Some("Both styles: the plan sits on the right when the pane is wide enough. /sidebar toggles it in a session.".into()), sidebar)))
@@ -736,7 +693,7 @@ impl Root {
         let all = st["leanAllSkills"] == true;
         let items = skill_items(self.harness_page.skills.as_deref().unwrap_or_default());
         let all_tokens: u64 = items.iter().map(|s| s.tokens).sum();
-        let mode_seg = self.code_segmented("skills-mode", vec![(false, "Selected"), (true, "All")], all, c, cx, |this, v, cx| this.save_harness("leanAllSkills", json!(v), cx));
+        let mode_seg = self.seg_control("skills-mode", vec![(false, "Selected"), (true, "All")], all, c, cx, |this, v, cx| this.save_harness("leanAllSkills", json!(v), cx));
         let note = if self.harness_page.skills.is_none() {
             "Loading your skills…".to_string()
         } else if items.is_empty() {
@@ -1060,23 +1017,6 @@ impl Root {
         }
     }
 
-    /// Two to four choices side by side.
-    fn code_segmented<T: Clone + PartialEq + 'static>(&self, id: &str, options: Vec<(T, &'static str)>, current: T, c: Colors, cx: &mut Context<Self>, pick: impl Fn(&mut Self, T, &mut Context<Self>) + Clone + 'static) -> Div {
-        let mut seg = div().flex_shrink_0().flex().gap(px(2.0)).p(px(2.0)).rounded(px(8.0)).bg(c.app).border_1().border_color(c.edge);
-        for (i, (value, label)) in options.into_iter().enumerate() {
-            let on = value == current;
-            let pick = pick.clone();
-            seg = seg.child(
-                div().id(SharedString::from(format!("{id}-{i}"))).h(px(24.0)).flex().items_center().gap_1p5().px_2p5().rounded(px(6.0)).text_size(px(12.0)).cursor_pointer()
-                    .when(on, |d| d.bg(c.active).text_color(c.fg))
-                    .when(!on, |d| d.text_color(c.muted).hover(move |d| d.text_color(c.fg)))
-                    .on_click(cx.listener(move |this, _, _, cx| pick(this, value.clone(), cx)))
-                    .child(label),
-            );
-        }
-        seg
-    }
-
     /// The context window as a bar, with the two compaction levels as markers to drag.
     fn compaction_card(&mut self, c: Colors, st: &Value, cx: &mut Context<Self>) -> Div {
         let mono = crate::fonts::mono(cx);
@@ -1388,7 +1328,7 @@ impl Root {
         let servers = st["mcpServers"].as_object().cloned().unwrap_or_default();
         let json_view = self.harness_page.ui.mcp_json;
         let mono = crate::fonts::mono(cx);
-        let view = self.code_segmented("mcp-view", vec![(false, "List"), (true, "JSON")], json_view, c, cx, |this, v, cx| {
+        let view = self.seg_control("mcp-view", vec![(false, "List"), (true, "JSON")], json_view, c, cx, |this, v, cx| {
             this.harness_page.ui.mcp_json = v;
             cx.notify();
         });

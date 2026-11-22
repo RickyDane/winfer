@@ -486,6 +486,8 @@ pub enum Cmd {
     Answer(String, Vec<String>),
     SetModel(String),
     SetEffort(Option<String>),
+    /// Toggle Ultracode multi-agent mode (Claude Code's native `ultracode`, Codex's multi-agent + ultra effort).
+    SetUltracode(bool),
     /// The model (None: the main one) and effort subagents run on from now on.
     SetSubagent { model: Option<String>, effort: Option<String> },
     SetMode(Mode),

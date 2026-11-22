@@ -11,6 +11,7 @@ pub mod claude_skills;
 pub mod config;
 pub mod diff;
 pub mod event;
+pub mod handoff;
 pub mod mcp_client;
 pub mod serve;
 pub mod session;
@@ -305,6 +306,7 @@ fn headless(launch: tui::app::Launch, json: bool, full_prompt: bool) -> i32 {
             cwd,
             model,
             effort: cfg.effort.clone(),
+            ultracode: cfg.ultracode,
             mode,
             resume: None,
             account: backend::account_for(kind, None),

@@ -166,6 +166,8 @@ struct Bridge {
     bg_owner: String,
     model: Option<String>,
     effort: Option<String>,
+    /// Ultracode mode: enables multi-agent v2 on the server and runs turns at `ultra` reasoning effort.
+    ultracode: bool,
     /// Whether we put the thread on Codex's fast tier, so a later non-fast model turns it back.
     fast: bool,
     cwd: String,
@@ -236,6 +238,9 @@ fn server_args(opts: &Opts) -> Vec<String> {
         args.extend(crate::pty::lean_codex_args(config.lean_codex_prompt));
     }
     args.extend(subagent_args(opts));
+    if opts.ultracode {
+        args.extend(["--enable".to_string(), "multi_agent_v2".to_string()]);
+    }
     args
 }
 
@@ -275,6 +280,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         bg_owner: opts.bg_owner.clone(),
         model: Some(opts.model.clone()).filter(|m| !m.is_empty()),
         effort: opts.effort.clone(),
+        ultracode: opts.ultracode,
         fast: false,
         cwd: cwd.clone(),
         approvals: HashMap::new(),
@@ -464,6 +470,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
                 Cmd::SetModel(m) => b.model = Some(m),
                 Cmd::SetEffort(e) => b.effort = e,
+                Cmd::SetUltracode(on) => {
+                    b.ultracode = on;
+                    if opts.ultracode != on {
+                        opts.ultracode = on;
+                        args = server_args(&opts);
+                        respawn = true;
+                    }
+                }
                 Cmd::SetMode(m) => {
                     b.mode = m;
                     crate::harness::bg::set_mode(&b.bg_owner, m);
@@ -652,7 +666,9 @@ impl Bridge {
             }
             self.fast = fast;
         }
-        if let Some(e) = &self.effort {
+        if self.ultracode {
+            params["effort"] = json!("ultra");
+        } else if let Some(e) = &self.effort {
             params["effort"] = json!(e);
         }
         self.request("turn/start", params, Pending::Turn);
@@ -1689,6 +1705,7 @@ mod tests {
             bg_owner: String::new(),
             model: None,
             effort: None,
+            ultracode: false,
             fast: false,
             cwd: String::new(),
             approvals: HashMap::new(),
@@ -1791,6 +1808,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             model: String::new(),
             effort: None,
+            ultracode: false,
             mode: Mode::Ask,
             resume: None,
             system: None,
@@ -1812,6 +1830,86 @@ mod tests {
             subagent_args(&opts),
             ["-c", "agents.default_subagent_model=\"gpt-mini\"", "-c", "agents.default_subagent_reasoning_effort=\"low\""]
         );
+    }
+
+    #[test]
+    fn ultracode_enables_multi_agent_v2_and_ultra_effort() {
+        let mut opts = Opts {
+            cwd: std::env::temp_dir(),
+            model: String::new(),
+            effort: Some("medium".into()),
+            ultracode: false,
+            mode: Mode::Ask,
+            resume: None,
+            system: None,
+            mcp: Default::default(),
+            allowed_commands: Vec::new(),
+            trim_at: 0,
+            compact_at: 0,
+            lean: false,
+            skills: crate::harness::claude_skills::LeanSkills::All,
+            bg_owner: String::new(),
+            sub_model: None,
+            sub_effort: None,
+            account: None,
+        };
+        assert!(!server_args(&opts).windows(2).any(|w| w == ["--enable", "multi_agent_v2"]));
+        opts.ultracode = true;
+        assert!(server_args(&opts).windows(2).any(|w| w == ["--enable", "multi_agent_v2"]));
+
+        let (events, _rx) = channel();
+        let (me, lines) = channel();
+        let proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let mut b = Bridge {
+            events,
+            proc,
+            next: 0,
+            pending: HashMap::new(),
+            thread: Some("main".into()),
+            turn: None,
+            queued: Vec::new(),
+            mode: Mode::Ask,
+            bg_owner: String::new(),
+            model: Some("gpt-6.1-sol".into()),
+            effort: Some("medium".into()),
+            ultracode: true,
+            fast: false,
+            cwd: String::new(),
+            approvals: HashMap::new(),
+            asks: HashMap::new(),
+            diffs: HashMap::new(),
+            children: HashMap::new(),
+            usage: Usage::default(),
+            turn_tokens: TurnTokens::default(),
+            reasoning_streamed: false,
+            turn_base: 0,
+            turn_input_base: 0,
+            turn_cached_base: 0,
+            skills: HashMap::new(),
+            turns: Vec::new(),
+            commands: HashMap::new(),
+            background: HashSet::new(),
+            processes: HashMap::new(),
+            trim_at: 0,
+            compact_at: 0,
+            settled: false,
+            sub_model: None,
+            limit: None,
+            low: false,
+        };
+        b.start_turn(UserMsg { text: "hi".into(), ..Default::default() });
+        b.ultracode = false;
+        b.start_turn(UserMsg { text: "bye".into(), ..Default::default() });
+        let mut turns = Vec::new();
+        while turns.len() < 2 {
+            match lines.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(In::Line(l)) => if let Ok(v) = serde_json::from_str::<Value>(&l) { turns.push(v); }
+                _ => break,
+            }
+        }
+        drop(b);
+        assert_eq!(turns[0]["params"]["effort"], "ultra");
+        assert_eq!(turns[1]["params"]["effort"], "medium");
     }
 
     #[test]

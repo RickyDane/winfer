@@ -277,6 +277,7 @@ mod tests {
             cwd: dir.clone(),
             model: model.into(),
             effort: None,
+            ultracode: false,
             mode: Mode::Yolo,
             resume: None,
             system: None,

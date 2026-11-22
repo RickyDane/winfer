@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · General</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .term { display: grid; grid-template-columns: 1fr 300px; gap: 14px; }
+  .tpv { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; }
+  .tpv .bar0 { display: flex; align-items: center; gap: 5px; padding: 0 2px 7px; font-size: 10.5px; color: var(--fg-subtle); }
+  .tpv .bar0 i { width: 8px; height: 8px; border-radius: 50%; background: var(--active); }
+  .tpv .bar0 .r { margin-left: auto; font-family: var(--mono); }
+  .screen { flex: 1; height: 170px; border-radius: 7px; background: var(--app); padding: 10px 12px; overflow: hidden; font-family: var(--mono); line-height: 1.45; color: var(--fg-muted); white-space: pre; }
+  .screen .g { color: var(--success); } .screen .a { color: var(--accent); } .screen .w { color: var(--warning); } .screen .s { color: var(--fg-subtle); }
+  .sizer { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .sizer .big { font-size: 26px; font-weight: 600; letter-spacing: -.02em; }
+  .sizer .big small { font-size: 12px; color: var(--fg-subtle); font-weight: 400; letter-spacing: 0; margin-left: 3px; }
+  .presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .presets button { height: 26px; border-radius: 6px; font-size: 11.5px; color: var(--fg-muted); background: var(--app); box-shadow: var(--shadow); }
+  .presets button[aria-checked="true"] { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+  .keyhint { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 11px; color: var(--fg-subtle); align-items: center; }
+  .editors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .editors .choice { flex-direction: row; align-items: center; gap: 9px; padding: 9px 10px; }
+  .editors .choice b { font-size: 12.5px; font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .emark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .more { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-subtle); margin: -6px 2px 0; }
+  .keys { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; padding: 6px 14px; }
+  .key { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+  .key:nth-last-child(-n+2) { border-bottom: 0; }
+  .key span { flex: 1; color: var(--fg-muted); }
+  .key .k { display: flex; gap: 3px; }
+  .key .k kbd { min-width: 20px; text-align: center; }
+  .key.chg span::after { content: "changed"; margin-left: 6px; font-size: 10px; color: var(--accent); }
+  .cardfoot { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--fg-subtle); }
+  .cardfoot .r { margin-left: auto; display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="sliders-horizontal"></i></div>
+      <h2>General</h2>
+      <p>Terminals, your code editor and keyboard shortcuts.</p>
+    </header>
+    <div class="body">
+      <h5><i data-lucide="square-terminal"></i>Terminal text<span class="r"><kbd>⌘=</kbd><kbd>⌘-</kbd><kbd>⌘0</kbd> or ⌘ + scroll, in any terminal</span></h5>
+      <div class="term">
+        <div class="tpv">
+          <div class="bar0"><i></i><i></i><i></i><span style="margin-left:6px">claude · winfer</span><span class="r" data-text="sizeLabel"></span></div>
+          <div class="screen" id="screen"><span class="s">~/Coding/winfer</span> <span class="a">main</span> <span class="g">❯</span> cargo test -p winfer-app
+<span class="s">   Compiling</span> winfer-app v0.42.0
+<span class="s">    Finished</span> test profile in 14.2s
+<span class="g">test result: ok.</span> 233 passed; 0 failed
+<span class="w">warning:</span> unused import `Hsla`
+  <span class="s">--></span> src/ui/model_logos.rs:4:5
+<span class="s">~/Coding/winfer</span> <span class="a">main</span> <span class="g">❯</span> █</div>
+        </div>
+        <div class="sizer">
+          <div style="display:flex;align-items:baseline;justify-content:space-between"><span class="big"><span data-text="size"></span><small>px</small></span><button class="btn ghost sm" data-if="changed" id="resetSize"><i data-lucide="undo-2"></i>12.5</button></div>
+          <div class="slider"><span class="subtle" style="font-size:11px">A</span><input type="range" min="8" max="28" step="0.5" data-bind="size" data-num="1" /><span class="subtle" style="font-size:15px">A</span></div>
+          <div class="presets" data-radio="preset"><button data-v="11">Small</button><button data-v="12.5">Default</button><button data-v="14">Large</button><button data-v="16">Huge</button></div>
+          <div class="keyhint">8 – 28 px, in steps of 0.5</div>
+        </div>
+      </div>
+
+      <h5><i data-lucide="code-xml"></i>Open projects and worktrees in<span class="r">8 editors installed</span></h5>
+      <div class="editors" data-radio="editor" id="editors"></div>
+      <div class="more"><i data-lucide="info" style="width:12px;height:12px"></i><span><b class="muted">Automatic</b> uses the first installed editor in this list. winfer looks for 22 editors; install one and it shows up here.</span></div>
+
+      <h5><i data-lucide="keyboard"></i>Keyboard shortcuts<span class="r">2 changed</span></h5>
+      <div class="list">
+        <div class="keys" id="keys"></div>
+        <div class="cardfoot"><i data-lucide="search" style="width:13px;height:13px"></i>Every shortcut, searchable, in the cheat sheet<span class="r"><button class="btn ghost sm"><i data-lucide="undo-2"></i>Reset all</button><button class="btn primary sm"><i data-lucide="pencil"></i>Edit shortcuts</button></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const EDITORS = [["auto", "Automatic", "#52525b", "★"], ["vscode", "VS Code", "#0078d4", "VS"], ["cursor", "Cursor", "#222", "▲"], ["zed", "Zed", "#084ccf", "Z"], ["windsurf", "Windsurf", "#0b9f8c", "W"], ["rustrover", "RustRover", "#e8590c", "RR"], ["webstorm", "WebStorm", "#07c3f2", "WS"], ["xcode", "Xcode", "#1b74e4", "X"], ["sublime", "Sublime Text", "#ff9800", "S"]];
+  $("editors").innerHTML = EDITORS.map(([v, n, col, l]) => `<button class="choice" data-v="${v}"><span class="emark" style="background:${col}">${l}</span><b>${n}</b>${v === "auto" ? '<small class="subtle" style="font-size:10.5px">VS Code</small>' : ""}<span class="radio"></span></button>`).join("");
+  const KEYS = [["New pane", ["⌘", "T"]], ["Split right", ["⌘", "D"], 1], ["Command palette", ["⌘", "K"]], ["Close pane", ["⌘", "W"]], ["Next pane", ["⌃", "⇥"], 1], ["Settings", ["⌘", ","]]];
+  $("keys").innerHTML = KEYS.map(([l, k, c]) => `<div class="key ${c ? "chg" : ""}"><span>${l}</span><span class="k">${k.map((x) => `<kbd>${x}</kbd>`).join("")}</span></div>`).join("");
+  $("resetSize").onclick = () => set({ size: 12.5 });
+  onChange((s) => {
+    if (s.preset !== undefined && s.preset !== s._p) { s._p = s.preset; if (Number(s.preset) !== s.size) state.size = Number(s.preset); }
+    state.preset = String(state.size);
+    s._p = state.preset;
+    document.querySelectorAll('[data-radio="preset"] [data-v]').forEach((b) => b.setAttribute("aria-checked", b.dataset.v === state.preset));
+    document.querySelector('input[data-bind="size"]').value = state.size;
+    document.querySelectorAll('[data-text="size"]').forEach((e) => (e.textContent = state.size));
+    document.querySelector('[data-text="sizeLabel"]').textContent = state.size + " px";
+    $("screen").style.fontSize = state.size * 0.9 + "px";
+    state.changed = state.size !== 12.5;
+    document.querySelectorAll('[data-if="changed"]').forEach((e) => (e.hidden = !state.changed));
+  });
+  mockup({
+    id: "general",
+    pitch: "<b>General.</b> The three one-row cards become three visual sections: a terminal that shows the text size as you drag, installed editors as a picker (with an explicit <i>Automatic</i>), and the shortcuts you'd look for most, with changed ones marked.",
+    initial: { size: 12.5, editor: "auto" },
+  });
+</script>
+</body>
+</html>

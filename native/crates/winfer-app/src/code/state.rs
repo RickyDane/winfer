@@ -68,6 +68,8 @@ pub enum Item {
     Reasoning { key: String, text: String, streaming: bool, started: u64, ended: Option<u64> },
     Tool { key: String, name: String, title: String, input: Value, output: String, ok: Option<bool>, diff: Option<String>, started: u64, ended: Option<u64> },
     Notice { key: String, text: String, error: bool },
+    /// Context handed off from one model/backend to another within the same conversation.
+    Handoff { key: String, from_model: String, from_actual: Option<String>, to_model: String },
     /// Total time the agent worked since the last user message, shown under its last response.
     Worked { key: String, ms: u64 },
 }
@@ -75,7 +77,7 @@ pub enum Item {
 impl Item {
     pub fn key(&self) -> &str {
         match self {
-            Item::User { key, .. } | Item::Text { key, .. } | Item::Reasoning { key, .. } | Item::Tool { key, .. } | Item::Notice { key, .. } | Item::Worked { key, .. } => key,
+            Item::User { key, .. } | Item::Text { key, .. } | Item::Reasoning { key, .. } | Item::Tool { key, .. } | Item::Notice { key, .. } | Item::Handoff { key, .. } | Item::Worked { key, .. } => key,
         }
     }
 }
@@ -115,6 +117,7 @@ pub struct CodeState {
     pub task_log: Option<(String, Option<String>, Option<String>)>,
     pub mode: Mode,
     pub effort: String,
+    pub ultracode: bool,
     pub sub_model: Option<String>,
     pub sub_effort: Option<String>,
     pub items: Vec<Item>,
@@ -138,7 +141,7 @@ impl Default for CodeState {
         Self {
             session: None, model: String::new(), actual_model: None, models: Vec::new(), files: None, cwd: None, backend_session: None,
             title: None, branch: None, trim_at: 0, compact_at: 0, mcp: Vec::new(), sessions: None, breakdown: None, btw: Vec::new(),
-            sheet: None, rate: None, last_rate: None, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), sub_model: None, sub_effort: None,
+            sheet: None, rate: None, last_rate: None, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), ultracode: false, sub_model: None, sub_effort: None,
             items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
             usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, outbox: Vec::new(),
             show_plan: None,
@@ -190,6 +193,7 @@ impl CodeState {
                 self.actual_model = None;
             }
             Cmd::SetEffort(e) => self.effort = e.clone().unwrap_or_else(|| "default".into()),
+            Cmd::SetUltracode(on) => self.ultracode = *on,
             Cmd::SetSubagent { model, effort } => {
                 self.sub_model = model.clone();
                 self.sub_effort = if model.is_some() { effort.clone() } else { None };
@@ -444,7 +448,7 @@ impl CodeState {
                 self.busy = false;
                 self.exited = Some(text);
             }
-            Ev::Ready { session, backend_session, title, model, mode, effort, subagent_model, subagent_effort, cwd, branch, trim_at, compact_at, mcp } => {
+            Ev::Ready { session, backend_session, title, model, mode, effort, ultracode, subagent_model, subagent_effort, cwd, branch, trim_at, compact_at, mcp } => {
                 self.actual_model = if model == self.model { self.actual_model.take() } else { None };
                 self.session = Some(session);
                 self.backend_session = backend_session;
@@ -452,6 +456,7 @@ impl CodeState {
                 self.model = model;
                 self.mode = mode;
                 self.effort = effort.unwrap_or_else(|| "default".into());
+                self.ultracode = ultracode;
                 self.sub_model = subagent_model;
                 self.sub_effort = subagent_effort;
                 self.cwd = Some(cwd);
@@ -501,10 +506,39 @@ impl CodeState {
                             let (name, title) = e.text.split_once('\t').unwrap_or((&e.text, ""));
                             Item::Tool { key: key(), name: name.to_string(), title: title.to_string(), input: Value::Null, output: String::new(), ok: Some(e.state.as_deref() != Some("failed")), diff: None, started: 0, ended: Some(0) }
                         }
+                        "handoff" => match (e.from_model, e.to_model) {
+                            (Some(from_model), Some(to_model)) => Item::Handoff { key: key(), from_model, from_actual: e.from_actual, to_model },
+                            _ => Item::Notice { key: key(), text: e.text, error: false },
+                        },
                         _ => Item::Notice { key: key(), text: e.text, error: false },
                     });
                 }
                 self.notice("Resumed session");
+            }
+            Ev::Handoff { from_model, from_actual, to_model, replace } => {
+                self.busy = false;
+                self.approvals.clear();
+                self.usage.context = 0;
+                close_reasoning(&mut self.items);
+                for i in &mut self.items {
+                    if let Item::Text { streaming, .. } = i {
+                        *streaming = false;
+                    }
+                }
+                if replace {
+                    if let Some(Item::Handoff { from_model: f, from_actual: fa, to_model: t, .. }) = self.items.last_mut() {
+                        *f = from_model;
+                        *fa = from_actual;
+                        *t = to_model;
+                        return;
+                    }
+                }
+                self.items.push(Item::Handoff { key: key(), from_model, from_actual, to_model });
+            }
+            Ev::HandoffCancel => {
+                if matches!(self.items.last(), Some(Item::Handoff { .. })) {
+                    self.items.pop();
+                }
             }
             Ev::Undone { files, error } => {
                 if let Some(i) = find_last(&self.items, |i| matches!(i, Item::User { .. })) {
@@ -580,6 +614,11 @@ impl CodeState {
                     } else if !output.trim().is_empty() {
                         md.push_str(&format!("```\n{}\n```\n\n", output.trim().chars().take(4000).collect::<String>()));
                     }
+                }
+                Item::Handoff { from_model, from_actual, to_model, .. } => {
+                    let from = super::names::model_name(from_model, from_actual.as_deref());
+                    let to = super::names::model_name(to_model, None);
+                    md.push_str(&format!("---\n\n_Context handoff: {from} → {to}_\n\n---\n\n"));
                 }
                 _ => {}
             }
@@ -837,5 +876,43 @@ mod tests {
         assert!((s.last_rate.expect("preserved after turn") - 60.0).abs() < 0.01);
         s.apply(Ev::Cleared);
         assert_eq!(s.last_rate, None);
+    }
+
+    #[test]
+    fn handoff_events_replace_cancel_restore_and_export() {
+        let mut s = CodeState::default();
+        s.apply(Ev::TurnStart);
+        s.apply(ev(json!({ "type": "usage", "context": 45000, "window": 200000, "input": 45000, "cached": 0, "output": 500, "cost": 0.42 })));
+        s.apply(ev(json!({ "type": "text_delta", "id": "a1", "text": "Working on it" })));
+        s.apply(ev(json!({ "type": "handoff", "from_model": "claude/fable", "from_actual": "claude-fable-5-2", "to_model": "codex/gpt-6.1-sol", "replace": false })));
+        assert!(!s.busy);
+        assert_eq!(s.usage.context, 0);
+        assert_eq!(s.usage.cost, Some(0.42));
+        assert!(matches!(&s.items[0], Item::Text { streaming: false, .. }));
+        assert!(matches!(&s.items[1], Item::Handoff { from_model, from_actual, to_model, .. }
+            if from_model == "claude/fable" && from_actual.as_deref() == Some("claude-fable-5-2") && to_model == "codex/gpt-6.1-sol"));
+
+        // Consecutive switch before sending replaces the trailing handoff in place.
+        s.apply(ev(json!({ "type": "handoff", "from_model": "claude/fable", "from_actual": "claude-fable-5-2", "to_model": "agy/gemini-4-neon", "replace": true })));
+        assert_eq!(s.items.len(), 2);
+        assert!(matches!(&s.items[1], Item::Handoff { to_model, .. } if to_model == "agy/gemini-4-neon"));
+
+        let md = s.export_markdown();
+        assert!(md.contains("Context handoff: Fable 5.2 → Gemini 4 Neon"));
+
+        // Canceling drops the trailing uncommitted handoff divider.
+        s.apply(ev(json!({ "type": "handoff_cancel" })));
+        assert_eq!(s.items.len(), 1);
+
+        // Restoring a saved transcript rebuilds Handoff items.
+        s.apply(Ev::Cleared);
+        s.apply(ev(json!({
+            "type": "restore",
+            "transcript": [
+                { "role": "user", "text": "hi" },
+                { "role": "handoff", "text": "Context handoff", "from_model": "claude/fable", "from_actual": "claude-fable-5-2", "to_model": "agy/gemini-4-neon" }
+            ]
+        })));
+        assert!(matches!(&s.items[1], Item::Handoff { from_model, to_model, .. } if from_model == "claude/fable" && to_model == "agy/gemini-4-neon"));
     }
 }

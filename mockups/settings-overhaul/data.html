@@ -1,0 +1,191 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Backup &amp; transfer</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .inc { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .inc .tile { gap: 4px; padding: 10px 12px; }
+  .inc .tile .th { font-size: 12px; }
+  .inc .tile .th .ic { width: 24px; height: 24px; }
+  .inc .tile .ck { margin-left: auto; color: var(--success); display: grid; }
+  .inc .tile .ck svg { width: 13px; height: 13px; }
+  .inc .tile small { font-size: 11px; color: var(--fg-subtle); }
+  .sec { display: flex; flex-direction: column; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .sec.on { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent), var(--shadow); }
+  .sec .sh { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+  .sec .sh .lbl b { font-size: 12.5px; font-weight: 500; }
+  .sec .sh .lbl small { display: block; font-size: 11.5px; color: var(--fg-subtle); }
+  .sec .pp { display: grid; grid-template-columns: 1fr 1fr 190px; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 60%, var(--app)); align-items: start; }
+  .pw { display: flex; flex-direction: column; gap: 5px; }
+  .pw label { font-size: 11px; color: var(--fg-subtle); }
+  .pw .input { width: 100%; height: 30px; }
+  .pw .input.bad { box-shadow: 0 0 0 1.5px var(--danger); }
+  .pw .input.good { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--success) 70%, transparent); }
+  .checks { display: flex; flex-direction: column; gap: 4px; padding-top: 18px; font-size: 11.5px; }
+  .checks span { display: flex; align-items: center; gap: 6px; color: var(--fg-subtle); }
+  .checks span svg { width: 12px; height: 12px; }
+  .checks span.ok { color: var(--success); }
+  .checks span.no { color: var(--danger); }
+  .warnline { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--warning); }
+  .warnline svg { width: 12px; height: 12px; }
+  .action { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .action .file { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .action .file b { font: 12.5px var(--mono); }
+  .action .file small { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .btn.big { height: 32px; padding: 0 14px; font-size: 12.5px; }
+  .btn[disabled] { opacity: .45; pointer-events: none; }
+  .result { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; }
+  .result svg { width: 15px; height: 15px; flex-shrink: 0; }
+  .result.good { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
+  .result.bad { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+  .result .path { font: 11.5px var(--mono); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .result .r { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+  .drop { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 16px; border-radius: 12px; border: 1.5px dashed var(--border-strong); color: var(--fg-muted); font-size: 12.5px; text-align: center; cursor: pointer; }
+  .drop:hover { background: var(--hover); border-color: var(--accent); }
+  .drop .ic { width: 40px; height: 40px; border-radius: 10px; }
+  .drop .ic svg { width: 19px; height: 19px; }
+  .drop small { color: var(--fg-subtle); font-size: 11.5px; }
+  .manifest { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .manifest .mh { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .manifest .mh b { font: 13px var(--mono); }
+  .manifest .mh small { display: block; font-size: 11.5px; color: var(--fg-subtle); margin-top: 1px; }
+  .manifest .mb { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--border); }
+  .manifest .mb div { background: var(--panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+  .manifest .mb b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+  .manifest .mb span { font-size: 11px; color: var(--fg-subtle); display: flex; align-items: center; gap: 4px; }
+  .manifest .mb span svg { width: 11px; height: 11px; }
+  .manifest .mp { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--border); }
+  .manifest .mp .lbl b { font-size: 12.5px; font-weight: 500; }
+  .manifest .mp .lbl small { display: block; font-size: 11.5px; color: var(--fg-subtle); }
+  .danger { border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; background: color-mix(in srgb, var(--danger) 7%, var(--panel)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 30%, transparent); }
+  .danger .lbl b { font-size: 12.5px; font-weight: 500; }
+  .danger .lbl small { display: block; font-size: 11.5px; color: var(--fg-muted); line-height: 1.45; margin-top: 2px; }
+  .btn.dangerfill { background: var(--danger); color: #fff; box-shadow: none; font-weight: 500; }
+  .btn.dangerfill:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
+  .confirm { display: flex; align-items: center; gap: 8px; }
+  .confirm span { font-size: 11.5px; color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="archive-restore"></i></div>
+      <h2>Backup &amp; transfer</h2>
+      <p>Move your setup to another machine, or keep a copy.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="export"><i data-lucide="upload"></i>Export</button>
+      <button data-v="import"><i data-lucide="download"></i>Import</button>
+    </div>
+    <div class="body">
+
+      <!-- ───────── Export ───────── -->
+      <div class="pane" data-if="tab=export">
+        <div class="intro"><span>One file you can import on another machine, or keep as a backup.</span></div>
+        <h5>In the file<span class="r">about <b class="muted" id="size"></b></span></h5>
+        <div class="inc">
+          <div class="tile"><div class="th"><span class="ic"><i data-lucide="sliders-horizontal"></i></span>Settings<span class="ck"><i data-lucide="check"></i></span></div><small>Every page here, shortcuts, themes</small></div>
+          <div class="tile"><div class="th"><span class="ic"><i data-lucide="folders"></i></span>Workspaces<span class="ck"><i data-lucide="check"></i></span></div><small>6 workspaces and their panes</small></div>
+          <div class="tile"><div class="th"><span class="ic"><i data-lucide="puzzle"></i></span>Plugins<span class="ck"><i data-lucide="check"></i></span></div><small>9 plugins with their data</small></div>
+          <div class="tile"><div class="th"><span class="ic"><i data-lucide="chart-column"></i></span>Usage history<span class="ck"><i data-lucide="check"></i></span></div><small>The last 90 days</small></div>
+        </div>
+        <div class="sec" id="secCard">
+          <button class="sh opt" style="padding:10px 14px"><span class="ic warn"><i data-lucide="key-round"></i></span><span class="lbl" style="flex:1"><b>Include secrets</b><small>ChatGPT sign-in, the voice OpenAI key and plugin vault values, encrypted with a passphrase</small></span><span class="toggle" data-bind="secrets"></span></button>
+          <div class="pp" data-if="secrets">
+            <div class="pw"><label>Passphrase</label><input class="input" type="password" id="p1" placeholder="At least 8 characters" /></div>
+            <div class="pw"><label>Repeat</label><input class="input" type="password" id="p2" placeholder="Same again" /></div>
+            <div class="checks"><span id="cLen"><i data-lucide="circle"></i>8 characters or more</span><span id="cMatch"><i data-lucide="circle"></i>Both match</span></div>
+            <div class="warnline"><i data-lucide="triangle-alert"></i>The passphrase can't be recovered. Without it, the file imports without its secrets.</div>
+          </div>
+        </div>
+        <div class="action">
+          <div class="file"><span class="ic acc"><i data-lucide="file-archive"></i></span><span style="min-width:0"><b>winfer-2026-11-22.winfer</b><small id="fileNote"></small></span></div>
+          <button class="btn primary big" id="exportBtn"><i data-lucide="upload"></i><span id="exportLbl">Export…</span></button>
+        </div>
+        <div class="result good" data-if="exp=done"><i data-lucide="circle-check"></i><span style="flex-shrink:0">Exported to</span><span class="path">~/Documents/winfer-2026-11-22.winfer</span><span class="r"><button class="btn sm"><i data-lucide="folder-open"></i>Show in Finder</button></span></div>
+        <div class="result bad" data-if="exp=fail"><i data-lucide="circle-x"></i><span>Export failed: the disk “Backup” is full.</span><span class="r"><button class="btn sm" id="retry"><i data-lucide="rotate-cw"></i>Try again</button></span></div>
+      </div>
+
+      <!-- ───────── Import ───────── -->
+      <div class="pane" data-if="tab=import">
+        <div class="drop" data-if="!file" id="drop">
+          <span class="ic acc"><i data-lucide="file-down"></i></span>
+          <b style="font-weight:500">Drop a .winfer file here</b>
+          <small>or <span class="link" style="color:var(--accent)">choose one…</span> · made with Export on this or another machine</small>
+        </div>
+        <div class="manifest" data-if="file">
+          <div class="mh"><span class="ic acc" style="width:34px;height:34px"><i data-lucide="file-archive"></i></span><span style="flex:1;min-width:0"><b>winfer-2026-11-20.winfer</b><small>From Dane's MacBook Air · 20 Nov 2026, 18:42 · winfer 0.41.2 · 4.1 MB</small></span><button class="btn" id="change"><i data-lucide="replace"></i>Change…</button></div>
+          <div class="mb">
+            <div><b>All</b><span><i data-lucide="sliders-horizontal"></i>settings</span></div>
+            <div><b>4</b><span><i data-lucide="folders"></i>workspaces</span></div>
+            <div><b>7</b><span><i data-lucide="puzzle"></i>plugins</span></div>
+            <div><b>90 d</b><span><i data-lucide="chart-column"></i>usage</span></div>
+            <div><b style="color:var(--warning)">3</b><span><i data-lucide="key-round"></i>secrets</span></div>
+          </div>
+          <div class="mp">
+            <span class="ic warn"><i data-lucide="lock"></i></span>
+            <span class="lbl" style="flex:1"><b>Passphrase for the secrets</b><small>Leave empty to import everything except the secrets.</small></span>
+            <input class="input" type="password" placeholder="Passphrase" style="width:200px" />
+          </div>
+        </div>
+        <div class="danger" data-if="file">
+          <span class="ic bad"><i data-lucide="triangle-alert"></i></span>
+          <span class="lbl" style="flex:1"><b>Replace this machine's data</b><small>Settings, workspaces, plugins and usage history here are replaced by the file's. winfer then restarts, which stops the agents in your panes.</small></span>
+          <button class="btn dangerfill big" data-if="!confirm" id="imp"><i data-lucide="refresh-ccw"></i>Replace and restart</button>
+          <span class="confirm" data-if="confirm"><span>Sure?</span><button class="btn sm" id="cancel">Cancel</button><button class="btn dangerfill sm" id="go">Replace and restart</button></span>
+        </div>
+        <div class="result bad" data-if="file&impErr"><i data-lucide="circle-x"></i><span>Import failed: the passphrase doesn't open the secrets.</span></div>
+        <div class="note" data-if="!file"><i data-lucide="lightbulb"></i><span>An export is also a <b>backup</b>: make one before big changes and import it to go back. Importing never merges; it replaces.</span></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  document.querySelectorAll("button.opt").forEach((b) => { const t = b.querySelector(".toggle[data-bind]"); if (t) b.onclick = () => set({ [t.dataset.bind]: !state[t.dataset.bind] }); });
+  const p1 = $("p1"), p2 = $("p2");
+  [p1, p2].forEach((i) => (i.oninput = () => set({})));
+  $("exportBtn").onclick = () => {
+    set({ exp: "working" });
+    setTimeout(() => set({ exp: state.failNext ? "fail" : "done", failNext: !state.failNext }), 900);
+  };
+  $("retry").onclick = () => $("exportBtn").click();
+  $("drop").onclick = () => set({ file: true });
+  $("change").onclick = () => set({ file: false, confirm: false, impErr: false });
+  $("imp").onclick = () => set({ confirm: true });
+  $("cancel").onclick = () => set({ confirm: false });
+  $("go").onclick = () => set({ confirm: false, impErr: true });
+  const ck = (el, ok, touched) => {
+    el.className = !touched ? "" : ok ? "ok" : "no";
+    el.querySelector("svg, i").outerHTML = `<i data-lucide="${!touched ? "circle" : ok ? "circle-check" : "circle-x"}"></i>`;
+  };
+  onChange((s) => {
+    const len = p1.value.length >= 8, match = p1.value && p1.value === p2.value;
+    ck($("cLen"), len, p1.value.length > 0);
+    ck($("cMatch"), match, p2.value.length > 0);
+    p1.className = "input" + (p1.value ? (len ? " good" : " bad") : "");
+    p2.className = "input" + (p2.value ? (match ? " good" : " bad") : "");
+    const ok = !s.secrets || (len && match);
+    $("exportBtn").disabled = !ok || s.exp === "working";
+    $("exportLbl").textContent = s.exp === "working" ? "Working…" : "Export…";
+    $("fileNote").textContent = !ok ? "Set a passphrase to include the secrets" : s.secrets ? "Settings, workspaces, plugins, usage + 3 encrypted secrets" : "Settings, workspaces, plugins and usage · no secrets";
+    $("size").textContent = s.secrets ? "4.2 MB" : "4.1 MB";
+    $("secCard").classList.toggle("on", !!s.secrets);
+    lucide.createIcons();
+  });
+  mockup({
+    id: "data",
+    tabs: ["export", "import"],
+    pitch: "<b>Backup &amp; transfer.</b> Export and Import get a tab each. Export shows what goes in the file, checks the passphrase as you type, and reports the result in place with “Show in Finder”. Import shows what the picked file holds before anything changes, and replacing is a clearly destructive step.",
+    initial: { secrets: false, exp: "idle", file: false, confirm: false, impErr: false, failNext: false },
+  });
+</script>
+</body>
+</html>

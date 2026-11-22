@@ -173,6 +173,174 @@ pub fn working_frames(light: bool) -> &'static [Arc<Image>] {
     let cache = if light { &LIGHT } else { &DARK };
     cache.get_or_init(|| (0..FRAMES).map(|i| Arc::new(Image::from_bytes(ImageFormat::Png, png(Kind::Stop, light, i as f32 / FRAMES as f32 * std::f32::consts::TAU)))).collect())
 }
+pub const ULTRA_INNER_W: u32 = 96;
+pub const ULTRA_INNER_H: u32 = 32;
+/// Extra texel border around each Ultracode nebula frame so `window.paint_image` can crop strictly
+/// inside the atlas tile on all four edges (preventing bilinear bleed from neighboring atlas tiles)
+/// while clipping all four corners with GPU SDF `corner_radii`.
+pub const ULTRA_PAD: u32 = 1;
+const ULTRA_W: u32 = ULTRA_INNER_W + ULTRA_PAD * 2;
+const ULTRA_H: u32 = ULTRA_INNER_H + ULTRA_PAD * 2;
+/// 240 unique frames over a 6.0 s loop (40 unique fps, matching the send button's 6 s swirl
+/// tempo) with zero cross-fading and seamless loop continuity. All 240 tiles (`98×34`) fit inside
+/// one 1024×1024 Metal atlas texture (`10 × 30 = 300` slots).
+pub const ULTRA_FRAMES: usize = 240;
+
+fn fbm4(x: f32, y: f32, seed: u32) -> f32 {
+    let (mut sum, mut amp, mut freq) = (0.0, 0.5, 1.0);
+    for o in 0..4 {
+        sum += amp * value_noise(x * freq, y * freq, seed + o);
+        amp *= 0.5;
+        freq *= 2.03;
+    }
+    sum
+}
+
+/// Paints one opaque BGRA `image::Frame` of the Ultracode nebula at swirl `phase` (`0..TAU`),
+/// using the same domain-warped FBM cloud synthesis and dye harmony as the composer send button
+/// (`paint_rect` / `Kind::Ready`), tuned for wide surfaces (composer card & picker toggle).
+fn paint_ultracode_frame_raw(light: bool, phase: f32) -> image::Frame {
+    let (ox, oy) = (phase.cos() * 0.55, phase.sin() * 0.55);
+    let (bg, dye1, dye2, dye3, strength) = if light {
+        (hexc("#ece7fe"), hexc("#8b5cf6"), hexc("#e879f9"), hexc("#38bdf8"), 0.88)
+    } else {
+        (hexc("#0e0a18"), hexc("#5b21b6"), hexc("#d946ef"), hexc("#38bdf8"), 0.52)
+    };
+    let ar = ULTRA_INNER_W as f32 / ULTRA_INNER_H as f32;
+    let half_spine = ((ar - 1.0) * 0.5).max(0.0);
+    let inv_h = 1.0 / ULTRA_INNER_H as f32;
+    let pad = ULTRA_PAD as f32;
+    let mut out = Vec::with_capacity((ULTRA_W * ULTRA_H * 4) as usize);
+    for py in 0..ULTRA_H {
+        let v = (py as f32 - pad) * inv_h;
+        for px in 0..ULTRA_W {
+            let u = (px as f32 - pad) * inv_h;
+            // Same domain-warped FBM swirl as the send button's nebula (`paint_rect`).
+            let (wx, wy) = (
+                fbm4(u * 2.6 + 3.1 + ox, v * 2.6 + oy, 11),
+                fbm4(u * 2.6 - oy, v * 2.6 + 7.7 + ox, 12),
+            );
+            let (x, y) = (u * 2.8 + wx * 1.7, v * 2.8 + wy * 1.7);
+            let d1 = fbm4(x, y, 1);
+            let d2 = fbm4(x + 5.2, y + 1.3, 2);
+            let d3 = fbm4(x - 3.7, y + 8.1, 3);
+            let (a1, a2, a3) = (
+                smooth(0.28, 0.78, d1),
+                smooth(0.40, 0.85, d2) * 0.9,
+                smooth(0.50, 0.90, d3).powi(2) * 0.8,
+            );
+            let core = smooth(0.55, 1.0, (d1 + d2) * 0.5);
+            let (dx, dy) = (((u - ar * 0.5).abs() - half_spine).max(0.0), v - 0.5);
+            let r = (dx * dx + dy * dy).sqrt() * 2.0;
+
+            let rgb = if light {
+                let mut c = mix(bg, dye1, (a1 * 0.72 * strength).clamp(0.0, 1.0));
+                c = mix(c, dye2, (a2 * 0.66 * strength).clamp(0.0, 1.0));
+                c = mix(c, dye3, (a3 * 0.60 * strength).clamp(0.0, 1.0));
+                let lift = core * 0.08;
+                let rim = 1.0 - smooth(0.60, 1.08, r) * 0.10;
+                [
+                    ((c[0] + lift) * rim).clamp(0.0, 1.0),
+                    ((c[1] + lift) * rim).clamp(0.0, 1.0),
+                    ((c[2] + lift) * rim).clamp(0.0, 1.0),
+                ]
+            } else {
+                let mut c = bg;
+                for k in 0..3 {
+                    c[k] += (dye1[k] * a1 + dye2[k] * a2 + dye3[k] * a3) * strength * 0.75 + core * 0.10 * strength;
+                }
+                let rim = 1.0 - smooth(0.62, 1.08, r) * 0.30;
+                [
+                    (c[0] * rim).clamp(0.0, 1.0).powf(0.94),
+                    (c[1] * rim).clamp(0.0, 1.0).powf(0.94),
+                    (c[2] * rim).clamp(0.0, 1.0).powf(0.94),
+                ]
+            };
+            // RenderImage expects BGRA byte order.
+            out.extend_from_slice(&[(rgb[2] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[0] * 255.0) as u8, 255]);
+        }
+    }
+    let buf = image::RgbaImage::from_raw(ULTRA_W, ULTRA_H, out).expect("ultracode buffer matches size");
+    image::Frame::new(buf)
+}
+
+struct UltraLoopBank {
+    first: OnceLock<Arc<RenderImage>>,
+    sequence: OnceLock<Arc<RenderImage>>,
+    warming: std::sync::atomic::AtomicBool,
+}
+
+impl UltraLoopBank {
+    const fn new() -> Self {
+        Self {
+            first: OnceLock::new(),
+            sequence: OnceLock::new(),
+            warming: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn warm(&'static self, light: bool) {
+        if self.sequence.get().is_some() || self.warming.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        std::thread::spawn(move || {
+            let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
+            let chunk = ULTRA_FRAMES.div_ceil(workers);
+            let parts: Vec<Vec<image::Frame>> = std::thread::scope(|s| {
+                let handles: Vec<_> = (0..workers)
+                    .map(|w| {
+                        let start = w * chunk;
+                        let end = (start + chunk).min(ULTRA_FRAMES);
+                        s.spawn(move || {
+                            (start..end)
+                                .map(|i| paint_ultracode_frame_raw(light, i as f32 / ULTRA_FRAMES as f32 * std::f32::consts::TAU))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().expect("ultracode frame worker")).collect()
+            });
+            let mut frames = smallvec::SmallVec::with_capacity(ULTRA_FRAMES);
+            for part in parts {
+                frames.extend(part);
+            }
+            let _ = self.sequence.set(Arc::new(RenderImage::new(frames)));
+        });
+    }
+
+    fn get(&'static self, light: bool) -> Arc<RenderImage> {
+        self.warm(light);
+        if let Some(seq) = self.sequence.get() {
+            return seq.clone();
+        }
+        self.first
+            .get_or_init(|| Arc::new(RenderImage::new(smallvec![paint_ultracode_frame_raw(light, 0.0)])))
+            .clone()
+    }
+}
+
+static ULTRA_DARK: UltraLoopBank = UltraLoopBank::new();
+static ULTRA_LIGHT: UltraLoopBank = UltraLoopBank::new();
+
+/// Pre-warms the 240-frame Ultracode aurora `RenderImage` on a background thread so toggling
+/// Ultracode on starts at full 60 fps with zero main-thread stall.
+pub fn warm_ultracode(light: bool) {
+    if light {
+        ULTRA_LIGHT.warm(true);
+    } else {
+        ULTRA_DARK.warm(false);
+    }
+}
+
+/// Returns the multi-frame `RenderImage` for the Ultracode aurora (240 frames once warm, or a
+/// 1-frame immediate fallback while the background bake finishes in a few milliseconds).
+pub fn ultracode_sequence(light: bool) -> Arc<RenderImage> {
+    if light {
+        ULTRA_LIGHT.get(true)
+    } else {
+        ULTRA_DARK.get(false)
+    }
+}
 
 pub const SKY_INNER_W: u32 = 256;
 pub const SKY_INNER_H: u32 = 160;
@@ -296,5 +464,35 @@ mod tests {
     fn encodes_png() {
         assert_eq!(&png(Kind::Stop, false, 1.0)[1..4], b"PNG");
         assert_eq!(&png(Kind::Stop, true, 1.0)[1..4], b"PNG");
+    }
+
+    #[test]
+    fn ultracode_frames_flow_smoothly_and_loop_seamlessly() {
+        let f0 = paint_ultracode_frame_raw(false, 0.0);
+        let f_mid = paint_ultracode_frame_raw(false, std::f32::consts::PI);
+        let f_last = paint_ultracode_frame_raw(false, (ULTRA_FRAMES - 1) as f32 / ULTRA_FRAMES as f32 * std::f32::consts::TAU);
+        let f_light = paint_ultracode_frame_raw(true, 0.0);
+
+        let mean_diff = |a: &image::Frame, b: &image::Frame| -> f32 {
+            let (ba, bb) = (a.buffer().as_raw(), b.buffer().as_raw());
+            let sum: u64 = ba.iter().zip(bb.iter()).map(|(&x, &y)| x.abs_diff(y) as u64).sum();
+            sum as f32 / ba.len() as f32
+        };
+        let mean_lum = |f: &image::Frame| -> f32 {
+            let b = f.buffer().as_raw();
+            let sum: u64 = b.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
+            sum as f32 / (b.len() as f32 / 4.0 * 3.0)
+        };
+
+        let mid_diff = mean_diff(&f0, &f_mid);
+        let wrap_diff = mean_diff(&f0, &f_last);
+        assert!(mid_diff > 4.0, "aurora clouds must visibly move across the loop, got mean_diff={mid_diff:.2}");
+        assert!(wrap_diff < 1.5, "loop wrap from last frame to frame 0 must be seamless, got wrap_diff={wrap_diff:.2}");
+        assert!(
+            mean_lum(&f_light) > mean_lum(&f0) + 120.0,
+            "light mode aurora ({:.1}) must be clearly brighter than dark mode ({:.1})",
+            mean_lum(&f_light),
+            mean_lum(&f0)
+        );
     }
 }

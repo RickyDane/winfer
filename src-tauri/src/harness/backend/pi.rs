@@ -330,7 +330,7 @@ impl Bridge {
                 self.write(json!({ "id": "compact", "type": "compact" }));
             }
             // Pi compacts on its own when the context nearly fills; it has no micro-compaction.
-            Cmd::SetSubagent { .. } => {}
+            Cmd::SetSubagent { .. } | Cmd::SetUltracode(_) => {}
             Cmd::SetCompaction { compact, .. } => self.write(json!({ "type": "set_auto_compaction", "enabled": compact > 0 })),
             Cmd::Undo { files } => {
                 if self.busy || self.undoing.is_some() {

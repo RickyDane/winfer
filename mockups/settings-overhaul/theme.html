@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Appearance</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .top { display: grid; grid-template-columns: 232px 1fr; gap: 14px; }
+  .modes { display: flex; flex-direction: column; gap: 8px; }
+  .modes .choice { flex-direction: row; align-items: center; gap: 10px; padding: 9px 10px; }
+  .modes .choice .sw { width: 34px; height: 26px; border-radius: 6px; flex-shrink: 0; box-shadow: inset 0 0 0 1px #8884; overflow: hidden; display: flex; }
+  .modes .choice .sw i { flex: 1; }
+  .modes .choice .lbl b { display: block; font-size: 12.5px; font-weight: 500; }
+  .modes .choice .lbl small { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .modes .tip { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--fg-subtle); padding: 2px 4px 0; flex-wrap: wrap; }
+  /* Live preview in the theme's own colors */
+  .live { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; min-width: 0; }
+  .live .lh { display: flex; align-items: center; gap: 6px; padding: 0 2px 7px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); }
+  .live .lh .r { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; display: flex; gap: 6px; align-items: center; }
+  .split { flex: 1; display: grid; gap: 6px; grid-template-columns: 1fr; min-height: 0; }
+  .split.two { grid-template-columns: 1fr 1fr; }
+  .win { position: relative; border-radius: 7px; overflow: hidden; display: grid; grid-template-columns: 74px 1fr; height: 168px; background: var(--t-app); color: var(--t-fg); font-size: 9.5px; box-shadow: 0 0 0 1px var(--t-border); }
+  .win .sb { background: var(--t-panel); padding: 7px 6px; display: flex; flex-direction: column; gap: 4px; }
+  .win .sb .ws { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; color: var(--t-muted); white-space: nowrap; overflow: hidden; }
+  .win .sb .ws.on { background: color-mix(in srgb, var(--t-accent) 22%, transparent); color: var(--t-fg); }
+  .win .sb .ws i { width: 5px; height: 5px; border-radius: 50%; background: var(--t-a2); flex-shrink: 0; }
+  .win .pn { display: flex; flex-direction: column; min-width: 0; }
+  .win .ph { display: flex; align-items: center; gap: 5px; padding: 5px 8px; border-bottom: 1px solid var(--t-border); color: var(--t-muted); }
+  .win .ph b { color: var(--t-fg); font-weight: 500; }
+  .win .ph .btn0 { margin-left: auto; padding: 1px 6px; border-radius: 4px; background: var(--t-accent); color: var(--t-on); font-size: 8.5px; }
+  .win .tm { flex: 1; padding: 6px 8px; font: 9px/1.5 var(--mono); color: var(--t-muted); white-space: pre; overflow: hidden; }
+  .win .tm .c1 { color: var(--t-a1); } .win .tm .c2 { color: var(--t-a2); } .win .tm .c3 { color: var(--t-a3); } .win .tm .c4 { color: var(--t-a4); } .win .tm .c5 { color: var(--t-a5); }
+  .win .cap { position: absolute; right: 6px; bottom: 5px; padding: 1px 6px; border-radius: 99px; background: var(--t-panel); color: var(--t-muted); font-size: 8.5px; box-shadow: 0 0 0 1px var(--t-border); }
+  /* Gallery */
+  .gal { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .tt { text-align: left; border-radius: 9px; overflow: hidden; background: var(--panel); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .tt:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), var(--shadow); }
+  .tt[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+  .tt .pv { height: 58px; background: var(--t-app); display: grid; grid-template-columns: 20px 1fr; gap: 4px; padding: 5px; }
+  .tt .pv .s { border-radius: 3px; background: var(--t-panel); }
+  .tt .pv .p { border-radius: 3px; background: var(--t-panel); padding: 5px; display: flex; flex-direction: column; gap: 3px; }
+  .tt .pv .p span { height: 3px; border-radius: 2px; }
+  .tt .pv .p .row0 { display: flex; gap: 2px; margin-top: auto; align-items: center; }
+  .tt .pv .p .row0 i { width: 5px; height: 5px; border-radius: 50%; }
+  .tt .pv .p .row0 b { margin-left: auto; width: 14px; height: 5px; border-radius: 3px; background: var(--t-accent); }
+  .tt .nm { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 11.5px; }
+  .tt .nm span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tt .nm svg { width: 12px; height: 12px; color: var(--accent); }
+  .tt .pair { padding: 0 8px 6px; margin-top: -4px; font-size: 10px; color: var(--fg-subtle); display: flex; gap: 4px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .tt .pair svg { width: 10px; height: 10px; flex-shrink: 0; }
+  .tt[aria-checked="true"] .nm { background: var(--accent-soft); font-weight: 500; }
+  .galhead { display: flex; align-items: center; gap: 10px; margin: 0 2px -6px; }
+  .galhead .r { margin-left: auto; font-size: 11.5px; color: var(--fg-subtle); display: flex; align-items: center; gap: 6px; }
+  .seg .n { font: 10px var(--mono); color: var(--fg-subtle); }
+  .seg .use { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="palette"></i></div>
+      <h2>Appearance</h2>
+      <p>Light or dark, and the theme for each.</p>
+    </header>
+    <div class="body">
+      <div class="top">
+        <div class="modes" data-radio="mode">
+          <button class="choice" data-v="light"><span class="sw" id="swL"></span><span class="lbl"><b>Light</b><small id="mL"></small></span><span class="radio"></span></button>
+          <button class="choice" data-v="dark"><span class="sw" id="swD"></span><span class="lbl"><b>Dark</b><small id="mD"></small></span><span class="radio"></span></button>
+          <button class="choice" data-v="system"><span class="sw" id="swS"></span><span class="lbl"><b>System</b><small>Follows macOS · now dark</small></span><span class="radio"></span></button>
+          <div class="tip"><i data-lucide="info" style="width:12px;height:12px"></i>Switch faster: <i data-lucide="sun-moon" style="width:12px;height:12px"></i> in the sidebar · <kbd>⌘K</kbd> Theme</div>
+        </div>
+        <div class="live">
+          <div class="lh"><i data-lucide="eye" style="width:12px;height:12px"></i>Preview<span class="r" id="liveCap"></span></div>
+          <div class="split" id="live"></div>
+        </div>
+      </div>
+
+      <div class="galhead">
+        <div class="seg" data-bind="gal"><button data-v="dark"><i data-lucide="moon"></i>Dark themes<span class="n">10</span><span class="use" data-if="galUseD"></span></button><button data-v="light"><i data-lucide="sun"></i>Light themes<span class="n">7</span><span class="use" data-if="galUseL"></span></button></div>
+        <span class="r" id="galNote"></span>
+      </div>
+      <div class="gal" id="gal"></div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+const THEMES = [["dark","Winfer Dark","dark","light","#09090b","#111113","#161619","#2c2c31","#ececf0","#a1a1aa","#71717a","#7c8cff","#ffffff",["#f26d6d","#4ade80","#f5b544","#6d9cff","#c08cff"]],["light","Winfer Light","light","dark","#ececf0","#f5f5f8","#ffffff","#d7d7dd","#18181b","#52525b","#8a8a93","#4f5ff0","#ffffff",["#c62f2f","#1f8a46","#9a6a00","#2f5fd0","#8a3fc0"]],["catppuccin-mocha","Catppuccin Mocha","dark","catppuccin-latte","#11111b","#1e1e2e","#232334","#45475a","#cdd6f4","#a6adc8","#7f849c","#cba6f7","#11111b",["#f38ba8","#a6e3a1","#f9e2af","#89b4fa","#f5c2e7"]],["catppuccin-latte","Catppuccin Latte","light","catppuccin-mocha","#dce0e8","#eff1f5","#f5f6f9","#bcc0cc","#4c4f69","#6c6f85","#8c8fa1","#8839ef","#eff1f5",["#d20f39","#40a02b","#df8e1d","#1e66f5","#ea76cb"]],["tokyo-night","Tokyo Night","dark","tokyo-night-day","#16161e","#1a1b26","#1f2030","#3b4261","#c0caf5","#a9b1d6","#737aa2","#7aa2f7","#16161e",["#f7768e","#9ece6a","#e0af68","#7aa2f7","#bb9af7"]],["tokyo-night-day","Tokyo Night Day","light","tokyo-night","#d0d5e3","#e1e2e7","#e9e9ed","#a8aecb","#3760bf","#6172b0","#848cb5","#2e7de9","#ffffff",["#f52a65","#587539","#8c6c3e","#2e7de9","#9854f1"]],["dracula","Dracula","dark","light","#21222c","#282a36","#2d2f3d","#44475a","#f8f8f2","#b6b8c8","#6272a4","#bd93f9","#21222c",["#ff5555","#50fa7b","#f1fa8c","#bd93f9","#ff79c6"]],["nord","Nord","dark","light","#242933","#2e3440","#343a47","#4c566a","#eceff4","#d8dee9","#7b88a1","#88c0d0","#2e3440",["#bf616a","#a3be8c","#ebcb8b","#81a1c1","#b48ead"]],["gruvbox-dark","Gruvbox Dark","dark","gruvbox-light","#1d2021","#282828","#2e2c2b","#504945","#ebdbb2","#bdae93","#928374","#83a598","#1d2021",["#cc241d","#98971a","#d79921","#458588","#b16286"]],["gruvbox-light","Gruvbox Light","light","gruvbox-dark","#f2e5bc","#fbf1c7","#f9f5d7","#d5c4a1","#3c3836","#665c54","#928374","#076678","#fbf1c7",["#cc241d","#98971a","#d79921","#458588","#b16286"]],["solarized-dark","Solarized Dark","dark","solarized-light","#00212b","#002b36","#04313d","#174652","#93a1a1","#839496","#586e75","#268bd2","#fdf6e3",["#dc322f","#859900","#b58900","#268bd2","#d33682"]],["solarized-light","Solarized Light","light","solarized-dark","#eee8d5","#fdf6e3","#fffbee","#d9d2bf","#586e75","#657b83","#93a1a1","#268bd2","#fdf6e3",["#dc322f","#859900","#b58900","#268bd2","#d33682"]],["one-dark","One Dark","dark","light","#21252b","#282c34","#2c313a","#3e4451","#abb2bf","#8b929e","#5c6370","#61afef","#21252b",["#e06c75","#98c379","#e5c07b","#61afef","#c678dd"]],["rose-pine","Rosé Pine","dark","rose-pine-dawn","#13111e","#191724","#1f1d2e","#403d52","#e0def4","#908caa","#6e6a86","#c4a7e7","#191724",["#eb6f92","#31748f","#f6c177","#9ccfd8","#c4a7e7"]],["rose-pine-dawn","Rosé Pine Dawn","light","rose-pine","#f2e9e1","#faf4ed","#fffaf3","#cecacd","#575279","#797593","#9893a5","#907aa9","#faf4ed",["#b4637a","#286983","#ea9d34","#56949f","#907aa9"]],["github-dark","GitHub Dark","dark","github-light","#010409","#0d1117","#161b22","#30363d","#e6edf3","#9198a1","#6e7681","#2f81f7","#ffffff",["#ff7b72","#3fb950","#d29922","#58a6ff","#bc8cff"]],["github-light","GitHub Light","light","github-dark","#eaeef2","#f6f8fa","#ffffff","#d0d7de","#1f2328","#59636e","#818b98","#0969da","#ffffff",["#cf222e","#116329","#4d2d00","#0969da","#8250df"]]];
+  const T = Object.fromEntries(THEMES.map(([id, name, mode, pair, app, panel, raised, border, fg, muted, subtle, accent, on, a]) => [id, { id, name, mode, pair, app, panel, raised, border, fg, muted, subtle, accent, on, a }]));
+  const vars = (t) => `--t-app:${t.app};--t-panel:${t.panel};--t-border:${t.border};--t-fg:${t.fg};--t-muted:${t.muted};--t-accent:${t.accent};--t-on:${t.on};` + t.a.map((c, i) => `--t-a${i + 1}:${c}`).join(";");
+  const tile = (t) => `<button class="tt" data-t="${t.id}" style="${vars(t)}"><div class="pv"><div class="s"></div><div class="p"><span style="width:70%;background:${t.fg}"></span><span style="width:45%;background:${t.muted}"></span><div class="row0">${t.a.map((c) => `<i style="background:${c}"></i>`).join("")}<b></b></div></div></div><div class="nm"><span>${t.name}</span><i data-lucide="check" data-check></i></div><div class="pair"><i data-lucide="${t.mode === "dark" ? "sun" : "moon"}"></i>${T[t.pair].name}</div></button>`;
+  const win = (t, cap) => `<div class="win" style="${vars(t)}"><div class="sb"><div class="ws on"><i></i>winfer</div><div class="ws"><i style="background:var(--t-a4)"></i>site</div><div class="ws"><i style="background:var(--t-a3)"></i>relay</div></div><div class="pn"><div class="ph"><b>claude</b>· main<span class="btn0">Review</span></div><div class="tm"><span class="c4">~/winfer</span> <span class="c5">main</span> <span class="c2">❯</span> cargo test
+<span class="c2">test result: ok.</span> 233 passed
+<span class="c3">warning:</span> unused import
+<span class="c1">error[E0425]:</span> not found
+<span class="c2">❯</span> █</div></div>${cap ? `<span class="cap">${cap}</span>` : ""}</div>`;
+  const sw = (el, ids) => ($(el).innerHTML = ids.map((id) => `<i style="background:${T[id].app};box-shadow:inset 0 -8px 0 ${T[id].accent}"></i>`).join(""));
+
+  document.querySelectorAll(".seg[data-bind=gal] button").forEach((b) => b.addEventListener("click", () => {}));
+  onChange((s) => {
+    const list = THEMES.filter((t) => t[2] === s.gal).map((t) => T[t[0]]);
+    const pick = s.gal === "dark" ? s.dark : s.light;
+    $("gal").innerHTML = list.map(tile).join("");
+    document.querySelectorAll(".tt").forEach((b) => {
+      b.setAttribute("aria-checked", b.dataset.t === pick);
+      b.querySelector("[data-check]").style.display = b.dataset.t === pick ? "" : "none";
+      b.onclick = () => set(s.gal === "dark" ? { dark: b.dataset.t } : { light: b.dataset.t });
+    });
+    const now = s.mode === "system" ? "dark" : s.mode;
+    state.galUseD = s.mode !== "light";
+    state.galUseL = s.mode !== "dark";
+    document.querySelectorAll("[data-if^=galUse]").forEach((e) => (e.hidden = !state[e.dataset.if]));
+    $("galNote").innerHTML = s.mode === "system"
+      ? `<i data-lucide="monitor" style="width:12px;height:12px"></i>System mode uses one of each · pick the ${s.gal} one here`
+      : s.gal === now ? `<i data-lucide="circle-check" style="width:12px;height:12px;color:var(--success)"></i>In use now` : `<i data-lucide="${s.gal === "dark" ? "moon" : "sun"}" style="width:12px;height:12px"></i>Used when you switch to ${s.gal}`;
+    $("mL").textContent = T[s.light].name;
+    $("mD").textContent = T[s.dark].name;
+    sw("swL", [s.light]); sw("swD", [s.dark]); sw("swS", [s.light, s.dark]);
+    const two = s.mode === "system";
+    $("live").className = "split" + (two ? " two" : "");
+    $("live").innerHTML = two ? win(T[s.light], "light · day") + win(T[s.dark], "dark · night") : win(T[s.mode === "light" ? s.light : s.dark]);
+    $("liveCap").textContent = two ? `${T[s.light].name} + ${T[s.dark].name}` : T[s.mode === "light" ? s.light : s.dark].name;
+    lucide.createIcons();
+  });
+  // Switching mode shows that mode's gallery.
+  document.querySelectorAll('[data-radio="mode"] [data-v]').forEach((b) => b.addEventListener("click", () => b.dataset.v !== "system" && set({ gal: b.dataset.v })));
+  mockup({
+    id: "theme",
+    pitch: "<b>Appearance.</b> Mode is three cards with each mode's swatch, next to a live preview in the theme's real colors (both side by side in System mode). One gallery with Dark / Light tabs replaces the cards that came and went with the mode; every theme shows its counterpart, and the ⌘K tip is always visible.",
+    initial: { mode: "dark", gal: "dark", dark: "catppuccin-mocha", light: "catppuccin-latte" },
+  });
+</script>
+</body>
+</html>

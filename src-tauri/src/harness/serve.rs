@@ -16,8 +16,9 @@ use serde_json::{json, Value};
 
 use super::backend::{self, Kind, Opts};
 use super::config::{self, Config};
-use super::event::{Cmd, Decision, Ev, Mode, UserMsg};
-use super::session::{self, Entry, Saved};
+use super::event::{Cmd, Decision, Ev, Mode, Todo, UserMsg};
+use super::handoff::{self, HandoffContext};
+use super::session::{self, Entry, PendingHandoff, Saved};
 use super::tui::app::{hook, mentions, project_files, Launch};
 
 enum In {
@@ -48,6 +49,14 @@ struct Serve {
     /// Background tasks' output files, for `task_log`.
     task_files: HashMap<String, String>,
     usage_sent: Option<std::time::Instant>,
+    /// Latest plan/todos from the backend, included in cross-backend context handoffs.
+    todos: Vec<Todo>,
+    /// Short failure/outcome notes for tool entries (keyed by `saved.transcript` index), kept in
+    /// memory so saved session files stay small while handoffs retain error details.
+    tool_notes: HashMap<usize, String>,
+    /// Previous backend's `(kind, session_id)` while a cross-backend handoff is still uncommitted,
+    /// so switching back before sending a message resumes the original session seamlessly.
+    origin_session: Option<(Kind, String)>,
 }
 
 fn out(v: &Value) {
@@ -82,6 +91,7 @@ impl Serve {
             cwd: self.cwd.clone(),
             model: self.model.clone(),
             effort: cfg.effort.clone(),
+            ultracode: cfg.ultracode,
             mode: self.mode,
             resume,
             system: self.system.clone(),
@@ -136,6 +146,7 @@ impl Serve {
             "model": self.spec(),
             "mode": self.mode,
             "effort": cfg.effort,
+            "ultracode": cfg.ultracode,
             "subagent_model": cfg.subagent_for(self.kind.id()).0,
             "subagent_effort": cfg.subagent_for(self.kind.id()).1,
             "cwd": self.cwd.to_string_lossy(),
@@ -155,7 +166,20 @@ impl Serve {
         self.assistant.clear();
         self.tools.clear();
         self.pending.clear();
-        out(&json!({ "type": "restore", "transcript": saved.transcript.iter().map(|e| json!({ "role": e.role, "text": e.text, "state": e.state })).collect::<Vec<_>>() }));
+        self.todos.clear();
+        self.tool_notes.clear();
+        self.origin_session = None;
+        out(&json!({
+            "type": "restore",
+            "transcript": saved.transcript.iter().map(|e| json!({
+                "role": e.role,
+                "text": e.text,
+                "state": e.state,
+                "from_model": e.from_model,
+                "from_actual": e.from_actual,
+                "to_model": e.to_model,
+            })).collect::<Vec<_>>()
+        }));
         let resume = saved.backend_session.clone();
         self.saved = saved;
         self.usage_sent = None;
@@ -212,6 +236,9 @@ impl Serve {
         self.saved = Saved { id: session::new_id(), cwd: self.cwd.to_string_lossy().into_owned(), model: self.spec(), ..Default::default() };
         self.assistant.clear();
         self.tools.clear();
+        self.todos.clear();
+        self.tool_notes.clear();
+        self.origin_session = None;
     }
 
     fn user_message(&mut self, text: &str) {
@@ -269,6 +296,20 @@ impl Serve {
                     }
                 }
             }
+            Ev::ToolEnd { id, ok, output, .. } => {
+                if let Some(&i) = self.tools.get(&id) {
+                    if let Some(entry) = self.saved.transcript.get_mut(i) {
+                        entry.state = Some(if ok { "done" } else { "failed" }.into());
+                    }
+                    if !ok {
+                        let snippet = output.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                        if !snippet.is_empty() {
+                            self.tool_notes.insert(i, snippet.chars().take(200).collect());
+                        }
+                    }
+                }
+            }
+            Ev::Todos(todos) => self.todos = todos,
             Ev::Approval(a) => {
                 self.pending.push(a.id.clone());
                 hook("needs_input", json!({ "session_id": self.saved.id, "message": a.title }));
@@ -290,12 +331,20 @@ impl Serve {
                     self.saved.transcript.truncate(i);
                     self.assistant.retain(|_, v| *v < i);
                     self.tools.retain(|_, v| *v < i);
+                    self.tool_notes.retain(|k, _| *k < i);
+                    if self.saved.pending_handoff.as_ref().and_then(|p| p.marker_index).is_some_and(|m| m >= i) {
+                        self.saved.pending_handoff = None;
+                        self.origin_session = None;
+                    }
                 }
                 self.save();
             }
             // The TUI sends these as the next message; so does the web UI's session.
             Ev::BgNote(note) => {
-                let cmd = UserMsg { text: format!("[winfer] {note}"), images: Vec::new(), skill: None };
+                let mut cmd = UserMsg { text: format!("[winfer] {note}"), images: Vec::new(), skill: None };
+                if self.apply_pending_handoff(&mut cmd) {
+                    self.save();
+                }
                 self.send(if self.busy { Cmd::Steer(cmd) } else { Cmd::Send(cmd) });
             }
             Ev::Exited(_) => {
@@ -306,6 +355,32 @@ impl Serve {
         }
     }
 
+    /// If a cross-backend handoff is pending, builds the context digest from the transcript so far
+    /// and attaches it to `msg`. Must be called before pushing the new user turn to `transcript`.
+    fn apply_pending_handoff(&mut self, msg: &mut UserMsg) -> bool {
+        let Some(pending) = self.saved.pending_handoff.take() else {
+            return false;
+        };
+        self.origin_session = None;
+        let branch = super::tui::app::git_branch(&self.cwd);
+        let git_status = handoff::git_status_short(&self.cwd);
+        let digest = handoff::build_digest(&HandoffContext {
+            from_spec: &pending.from_spec,
+            from_actual: pending.from_actual.as_deref(),
+            to_spec: &pending.to_spec,
+            cwd: &self.cwd,
+            branch: branch.as_deref(),
+            git_status: git_status.as_deref(),
+            todos: &self.todos,
+            transcript: &self.saved.transcript,
+            tool_notes: &self.tool_notes,
+        });
+        if let Some(digest) = digest {
+            handoff::wrap_user_message(msg, &digest);
+        }
+        true
+    }
+
     fn switch_model(&mut self, spec: &str) {
         let (kind, model) = backend::parse_spec(spec);
         let spec = format!("{}/{}", kind.id(), model);
@@ -313,13 +388,106 @@ impl Serve {
         if kind == self.kind {
             self.model = model.clone();
             self.send(Cmd::SetModel(model));
+            // If an uncommitted handoff is still pending, keep its target model up to date.
+            if let Some(pending) = self.saved.pending_handoff.as_mut() {
+                pending.to_spec = spec.clone();
+                if let Some(idx) = pending.marker_index {
+                    if let Some(e) = self.saved.transcript.get_mut(idx).filter(|e| e.role == "handoff") {
+                        e.to_model = Some(spec.clone());
+                        e.text = handoff::fallback_text(&pending.from_spec, &spec);
+                    }
+                }
+                let (from_model, from_actual, to_model) = (pending.from_spec.clone(), pending.from_actual.clone(), pending.to_spec.clone());
+                self.save();
+                out(&json!({
+                    "type": "handoff",
+                    "from_model": from_model,
+                    "from_actual": from_actual,
+                    "to_model": to_model,
+                    "replace": true,
+                }));
+            }
         } else {
-            // Another backend can't continue this one's conversation: it starts fresh.
-            self.kind = kind;
-            self.model = model;
-            self.saved.backend_session = None;
-            self.start_backend(None);
-            out(&json!({ "type": "notice", "text": format!("Switched to {} · new conversation for this backend", kind.label()) }));
+            let returning_to_origin = self
+                .saved
+                .pending_handoff
+                .as_ref()
+                .is_some_and(|p| backend::parse_spec(&p.from_spec).0 == kind);
+
+            if returning_to_origin {
+                if let Some(pending) = self.saved.pending_handoff.take() {
+                    if let Some(idx) = pending.marker_index {
+                        if idx + 1 == self.saved.transcript.len() && self.saved.transcript[idx].role == "handoff" {
+                            self.saved.transcript.pop();
+                        }
+                    }
+                }
+                let resume = self.origin_session.take().filter(|(k, _)| *k == kind).map(|(_, s)| s);
+                self.kind = kind;
+                self.model = model;
+                self.saved.backend_session = resume.clone();
+                self.pending.clear();
+                self.start_backend(resume);
+                self.save();
+                out(&json!({ "type": "handoff_cancel" }));
+            } else if handoff::has_context(&self.saved.transcript) {
+                let (from_spec, from_actual, replace, marker_index) = match self.saved.pending_handoff.take() {
+                    Some(prev) => {
+                        let idx = prev.marker_index.filter(|&i| i < self.saved.transcript.len() && self.saved.transcript[i].role == "handoff");
+                        if let Some(i) = idx {
+                            self.saved.transcript[i].to_model = Some(spec.clone());
+                            self.saved.transcript[i].text = handoff::fallback_text(&prev.from_spec, &spec);
+                        }
+                        (prev.from_spec, prev.from_actual, idx.is_some(), idx)
+                    }
+                    None => {
+                        let from_spec = self.spec();
+                        let from_actual = (!self.actual_model.is_empty()).then(|| self.actual_model.clone());
+                        if let Some(sess) = self.saved.backend_session.take() {
+                            self.origin_session = Some((self.kind, sess));
+                        }
+                        let idx = self.saved.transcript.len();
+                        self.saved.transcript.push(Entry {
+                            role: "handoff".into(),
+                            text: handoff::fallback_text(&from_spec, &spec),
+                            from_model: Some(from_spec.clone()),
+                            from_actual: from_actual.clone(),
+                            to_model: Some(spec.clone()),
+                            ..Default::default()
+                        });
+                        (from_spec, from_actual, false, Some(idx))
+                    }
+                };
+                self.kind = kind;
+                self.model = model;
+                self.saved.backend_session = None;
+                self.saved.usage = None;
+                self.pending.clear();
+                self.saved.pending_handoff = Some(PendingHandoff {
+                    from_spec: from_spec.clone(),
+                    from_actual: from_actual.clone(),
+                    to_spec: spec.clone(),
+                    marker_index,
+                });
+                self.start_backend(None);
+                self.save();
+                out(&json!({
+                    "type": "handoff",
+                    "from_model": from_spec,
+                    "from_actual": from_actual,
+                    "to_model": spec,
+                    "replace": replace,
+                }));
+            } else {
+                // Empty session: switch cleanly without cluttering the welcome screen.
+                self.kind = kind;
+                self.model = model;
+                self.saved.backend_session = None;
+                self.saved.pending_handoff = None;
+                self.origin_session = None;
+                self.pending.clear();
+                self.start_backend(None);
+            }
         }
         out(&json!({ "type": "model", "model": self.spec() }));
         // The subagent model is per backend.
@@ -362,10 +530,15 @@ impl Serve {
                     Err(e) => { out(&json!({ "type": "error", "text": format!("Couldn't attach files: {e}") })); return; }
                 };
                 let n = images.len();
-                self.user_message(&if n == 0 { text.clone() } else { format!("{text}{}[{n} image{}]", if text.is_empty() { "" } else { " " }, if n == 1 { "" } else { "s" }) });
                 // `@path` mentions, as in the TUI: images attach, text files inline for ChatGPT.
                 let full = text.clone() + &mentions(&self.cwd, self.kind, &text, &mut images);
-                let msg = UserMsg { text: full, images, skill: v.get("skill").and_then(Value::as_str).map(String::from) };
+                let mut msg = UserMsg { text: full, images, skill: v.get("skill").and_then(Value::as_str).map(String::from) };
+                // Build any pending handoff digest BEFORE appending this turn to the transcript.
+                let had_handoff = self.apply_pending_handoff(&mut msg);
+                self.user_message(&if n == 0 { text.clone() } else { format!("{text}{}[{n} image{}]", if text.is_empty() { "" } else { " " }, if n == 1 { "" } else { "s" }) });
+                if had_handoff {
+                    self.save();
+                }
                 let steer = s("type") == "steer" && self.busy;
                 self.send(if steer { Cmd::Steer(msg) } else { Cmd::Send(msg) });
             }
@@ -401,6 +574,11 @@ impl Serve {
                 let effort = v.get("effort").and_then(Value::as_str).filter(|e| *e != "default").map(String::from);
                 Config::update(|c| c.effort = effort.clone());
                 self.send(Cmd::SetEffort(effort));
+            }
+            "set_ultracode" => {
+                let on = v.get("ultracode").and_then(Value::as_bool).unwrap_or(false);
+                Config::update(|c| c.ultracode = on);
+                self.send(Cmd::SetUltracode(on));
             }
             "set_subagent" => {
                 let get = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && *s != "default").map(String::from);
@@ -583,6 +761,9 @@ pub fn run(launch: Launch) -> i32 {
         pending: Vec::new(),
         task_files: HashMap::new(),
         usage_sent: None,
+        todos: Vec::new(),
+        tool_notes: HashMap::new(),
+        origin_session: None,
     };
     app.fresh_session();
 
@@ -635,9 +816,14 @@ pub fn run(launch: Launch) -> i32 {
     });
 
     if let Some(p) = launch.prompt.filter(|p| !p.trim().is_empty()) {
+        let mut msg = UserMsg { text: p.clone(), images: Vec::new(), skill: None };
+        let had_handoff = app.apply_pending_handoff(&mut msg);
         app.user_message(&p);
+        if had_handoff {
+            app.save();
+        }
         out(&json!({ "type": "user", "text": p }));
-        app.send(Cmd::Send(UserMsg { text: p, images: Vec::new(), skill: None }));
+        app.send(Cmd::Send(msg));
     }
 
     for msg in rx {
@@ -656,4 +842,77 @@ pub fn run(launch: Launch) -> i32 {
         let _ = ratatui::crossterm::terminal::disable_raw_mode();
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_serve() -> Serve {
+        let (tx, _rx) = channel();
+        Serve {
+            tx,
+            cwd: std::env::temp_dir(),
+            kind: Kind::Claude,
+            model: "fable".into(),
+            actual_model: "claude-fable-5-2".into(),
+            mode: Mode::Ask,
+            system: None,
+            handle: None,
+            generation: 0,
+            saved: Saved { id: "test-handoff".into(), cwd: std::env::temp_dir().to_string_lossy().into_owned(), model: "claude/fable".into(), ..Default::default() },
+            assistant: HashMap::new(),
+            tools: HashMap::new(),
+            busy: false,
+            pending: Vec::new(),
+            task_files: HashMap::new(),
+            usage_sent: None,
+            todos: Vec::new(),
+            tool_notes: HashMap::new(),
+            origin_session: None,
+        }
+    }
+
+    #[test]
+    fn pending_handoff_injects_digest_once_without_polluting_transcript() {
+        let mut s = test_serve();
+        s.user_message("Add context handoff");
+        s.saved.transcript.push(Entry { role: "assistant".into(), text: "Planned the digest builder.".into(), ..Default::default() });
+        s.saved.pending_handoff = Some(PendingHandoff {
+            from_spec: "claude/fable".into(),
+            from_actual: Some("claude-fable-5-2".into()),
+            to_spec: "agy/gemini-4-neon".into(),
+            marker_index: None,
+        });
+
+        let mut msg = UserMsg { text: "Implement it now".into(), images: Vec::new(), skill: None };
+        assert!(s.apply_pending_handoff(&mut msg));
+        assert!(msg.text.contains("<context_handoff from=\"claude/fable (claude-fable-5-2)\" to=\"agy/gemini-4-neon\""));
+        assert!(msg.text.contains("Add context handoff"));
+        assert!(msg.text.contains("Planned the digest builder."));
+        assert!(msg.text.ends_with("\n\nImplement it now"));
+        assert!(s.saved.pending_handoff.is_none());
+
+        // Subsequent message must not re-inject the handoff block.
+        let mut next = UserMsg { text: "Looks good".into(), images: Vec::new(), skill: None };
+        assert!(!s.apply_pending_handoff(&mut next));
+        assert_eq!(next.text, "Looks good");
+    }
+
+    #[test]
+    fn tool_end_records_failure_note_for_handoff() {
+        let mut s = test_serve();
+        s.user_message("Run tests");
+        s.on_event(Ev::ToolStart { id: "t1".into(), name: "Bash".into(), title: "cargo test".into(), input: json!({}) });
+        s.on_event(Ev::ToolEnd { id: "t1".into(), ok: false, output: "error[E0308]: mismatched types\nmore details".into(), diff: None });
+        s.saved.pending_handoff = Some(PendingHandoff {
+            from_spec: "claude/fable".into(),
+            from_actual: None,
+            to_spec: "codex/gpt-6.1-sol".into(),
+            marker_index: None,
+        });
+        let mut msg = UserMsg { text: "Fix the type error".into(), images: Vec::new(), skill: None };
+        assert!(s.apply_pending_handoff(&mut msg));
+        assert!(msg.text.contains("Bash cargo test (failed) — error[E0308]: mismatched types"));
+    }
 }

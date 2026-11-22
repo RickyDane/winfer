@@ -373,7 +373,7 @@ impl Bridge {
             // OpenCode compacts the session on its own when it fills up.
             Cmd::SetCompaction { .. } => {}
             // Its subagents (if any) run on the main model.
-            Cmd::SetSubagent { .. } => {}
+            Cmd::SetSubagent { .. } | Cmd::SetUltracode(_) => {}
             Cmd::Undo { .. } => self.emit(Ev::Undone(Err("OpenCode can't undo a turn from winfer code.".into()))),
             Cmd::StopTask(id) if crate::harness::bg::stop(&id) => {}
             Cmd::StopTask(_) => self.emit(Ev::Notice("OpenCode's subagents can't be stopped on their own; Esc stops the turn.".into())),
@@ -812,6 +812,7 @@ mod tests {
             cwd: "/tmp".into(),
             model: "opencode/big-pickle".into(),
             effort: None,
+            ultracode: false,
             mode,
             resume: None,
             system: Some("Be brief.".into()),

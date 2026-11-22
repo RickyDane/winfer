@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings overhaul · all pages</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  body { padding: 30px 0; }
+  h1 { color: #fff; font-size: 18px; margin: 0 0 4px; }
+  .lead { color: #d4d4d8; font-size: 12.5px; margin: 0 0 22px; }
+  .wrap { width: 1000px; }
+  .g { margin-bottom: 18px; }
+  .g h2 { color: #a1a1aa; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; margin: 0 0 8px; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .cards a { display: flex; gap: 12px; padding: 14px; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); text-decoration: none; color: var(--fg); }
+  .cards a:hover { background: var(--hover); }
+  .cards b { display: block; font-size: 13px; font-weight: 600; }
+  .cards small { display: block; color: var(--fg-subtle); font-size: 12px; line-height: 1.45; margin-top: 2px; }
+  :root.light h1 { color: #000; } :root.light .lead { color: #333; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Settings overhaul</h1>
+  <p class="lead">One mockup per page, in the same visual-tabs language as WinferCode. Every mockup is clickable; the sidebar moves between pages.</p>
+  <div id="groups"></div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  if (localStorage.getItem("mock.theme") === "light") document.documentElement.classList.add("light");
+  const DESC = {
+    general: "Startup, panes, notifications and the window, as quick toggles.",
+    theme: "Theme gallery with a live preview, fonts and density.",
+    agents: "One card per agent; defaults, review and progress in tabs.",
+    "winfer-code": "Already done (mockup D).",
+    accounts: "Accounts per agent with switching rules on one screen.",
+    ai: "Which model winfer itself uses, per job.",
+    voice: "Talk and listen, with mic level and voice preview.",
+    plugins: "Installed and catalog in tabs, cards with permissions.",
+    skills: "A searchable library with sources and per-agent use.",
+    usage: "Limits as meters, spend chart and warning thresholds.",
+    mobile: "Pairing, devices and what the phone may do.",
+    data: "Export / import as a two-sided flow with what's included.",
+    updates: "Channel, current version and release notes.",
+    diagnostics: "Health overview, memory, logs and crash reports.",
+  };
+  $("groups").innerHTML = NAV.map(([g, items]) => `<div class="g"><h2>${g}</h2><div class="cards">${items.map(([id, ic, l]) => `<a href="${href(id)}"><span class="ic acc"><i data-lucide="${ic}"></i></span><span><b>${l}</b><small>${DESC[id]}</small></span></a>`).join("")}</div></div>`).join("");
+  lucide.createIcons();
+</script>
+</body>
+</html>

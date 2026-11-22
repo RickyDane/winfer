@@ -1,0 +1,172 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Accounts</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .why { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .why .note b { display: block; margin-bottom: 1px; }
+  .chain { position: relative; }
+  .acc { display: grid; grid-template-columns: 14px 26px 1fr 190px auto; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; position: relative; }
+  .acc + .acc { border-top: 1px solid var(--border); }
+  .acc.drag { background: var(--hover); }
+  .grip { color: var(--fg-subtle); cursor: grab; opacity: .55; display: grid; place-items: center; }
+  .grip:hover { opacity: 1; }
+  .grip svg { width: 14px; height: 14px; }
+  .num { position: relative; z-index: 1; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font: 600 11px var(--mono); background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 3px var(--panel); }
+  .acc.off .num { background: var(--hover); color: var(--fg-subtle); }
+  .acc.out .num { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+  /* connector line through the numbers */
+  .acc:has(+ .acc) .num::after { content: ""; position: absolute; left: 50%; top: 27px; height: 36px; border-left: 1.5px dashed var(--border-strong); z-index: -1; }
+  .who { min-width: 0; }
+  .who .nm { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+  .who .nm .pen { opacity: 0; width: 22px; height: 22px; }
+  .acc:hover .who .nm .pen { opacity: 1; }
+  .who .nm input { height: 24px; width: 160px; font-size: 12.5px; }
+  .who .loc { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 11px; color: var(--fg-subtle); }
+  .who .loc code { padding: 0 4px; font-size: 10.5px; }
+  .use { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--fg-subtle); }
+  .use .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .use .top b { font: 600 12px var(--mono); }
+  .use .bar { height: 5px; }
+  .state { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+  .acts { display: flex; align-items: center; gap: 2px; }
+  .acts .icbtn[disabled] { opacity: .25; pointer-events: none; }
+  .rot { display: flex; align-items: center; gap: 7px; margin-left: 8px; padding-left: 12px; border-left: 1px solid var(--border); font-size: 11.5px; color: var(--fg-muted); cursor: pointer; white-space: nowrap; }
+  .rot .toggle { pointer-events: none; }
+  .acc.off .who, .acc.off .use { opacity: .45; }
+  .sect { display: flex; align-items: center; gap: 10px; margin: 0 2px -6px; }
+  .sect b { font-size: 13px; font-weight: 600; }
+  .sect .subtle { font-size: 11.5px; }
+  .sect .r { margin-left: auto; display: flex; gap: 6px; }
+  .fallback { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--fg-subtle); background: color-mix(in srgb, var(--panel) 60%, var(--app)); }
+  .fallback svg { width: 13px; height: 13px; }
+  .pending .num { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="users"></i></div>
+      <h2>Accounts</h2>
+      <p>Sign-ins and the accounts winfer switches between.</p>
+    </header>
+    <div class="body">
+      <div class="why">
+        <div class="note"><i data-lucide="route"></i><span><b>Runs out? Next account.</b>Agents move down the list and continue their session. WinferCode chats switch right away; terminal panes when the agent stops.</span></div>
+        <div class="note"><i data-lucide="link-2"></i><span><b>Only the sign-in is separate.</b>Every account shares sessions, settings and skills with the default sign-in.</span></div>
+      </div>
+      <div id="sections" style="display:flex;flex-direction:column;gap:22px"></div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  // left = % of the window that runs out first; out = resets-in text when out of usage
+  const DATA = {
+    claude: [
+      { label: "Default", dir: null, signed: true, on: true, left: 62, win: "5-hour" },
+      { label: "Work", dir: "accounts/claude-2", signed: true, on: true, out: "3h 20m" },
+      { label: "Max backup", dir: "accounts/claude-3", signed: true, on: true, left: 24, win: "weekly" },
+      { label: "Old trial", dir: "accounts/claude-4", signed: false, on: false },
+    ],
+    codex: [
+      { label: "Default", dir: null, signed: true, on: true, left: 8, win: "5-hour" },
+      { label: "Pro team", dir: "accounts/codex-2", signed: true, on: true, left: 91, win: "weekly" },
+    ],
+  };
+  let editing = null;
+  let dragging = null;
+  const color = (p) => (p <= 10 ? "bad" : p <= 30 ? "warn" : "good");
+  const cssc = (p) => (p <= 10 ? "var(--danger)" : p <= 30 ? "var(--warning)" : "var(--success)");
+
+  function row(p, a, i, list) {
+    const n = list.slice(0, i + 1).filter((x) => x.on && x.signed && !x.out).length;
+    const live = a.on && a.signed && !a.out;
+    let use;
+    if (a.pending) use = `<div class="state"><span class="badge acc"><i data-lucide="loader" style="width:11px;height:11px"></i>Signing in…</span><span class="subtle" style="font-size:11px">Finish in the new terminal</span></div>`;
+    else if (!a.signed) use = `<div class="state"><span class="badge warn"><i data-lucide="log-in" style="width:11px;height:11px"></i>Not signed in</span><button class="btn sm primary" data-act="signin">Sign in</button></div>`;
+    else if (a.out) use = `<div class="state"><span class="badge bad">Out of usage · resets in ${a.out}</span><button class="btn sm" data-act="retry"><i data-lucide="rotate-ccw"></i>Try again now</button></div>`;
+    else if (a.left != null) use = `<div class="use"><div class="top"><span>${a.win} window</span><b style="color:${cssc(a.left)}">${a.left}% left</b></div><div class="bar"><i class="${color(a.left)}" style="width:${a.left}%"></i></div></div>`;
+    else use = `<div class="use"><span>No usage reported yet</span></div>`;
+    const name = editing === `${p}:${i}` ? `<input class="input" value="${a.label}" data-rename autofocus />` : `${a.label}<button class="icbtn pen" data-act="rename" title="Rename"><i data-lucide="pencil"></i></button>`;
+    return `<div class="acc ${a.on ? "" : "off"} ${a.out ? "out" : ""} ${a.pending ? "pending" : ""}" draggable="true" data-p="${p}" data-i="${i}">
+      <span class="grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>
+      <span class="num">${live ? n : a.out ? "!" : "–"}</span>
+      <div class="who"><div class="nm">${name}</div><div class="loc">${a.dir ? `<code>${a.dir}</code>` : '<span class="badge">Default sign-in</span>'}</div></div>
+      ${use}
+      <div class="acts">
+        <button class="icbtn" data-act="up" title="Use earlier" ${i === 0 ? "disabled" : ""}><i data-lucide="arrow-up"></i></button>
+        <button class="icbtn" data-act="down" title="Use later" ${i === list.length - 1 ? "disabled" : ""}><i data-lucide="arrow-down"></i></button>
+        ${a.dir ? `<button class="icbtn" data-act="signin" title="${a.signed ? "Sign in again" : "Sign in"}"><i data-lucide="log-in"></i></button><button class="icbtn" data-act="remove" title="Remove account"><i data-lucide="trash-2"></i></button>` : '<span style="width:56px"></span>'}
+        <label class="rot" data-act="rot" title="${a.on ? "Used when the ones above run out" : "Skipped"}"><span class="toggle sm" aria-checked="${a.on}"></span>In rotation</label>
+      </div>
+    </div>`;
+  }
+
+  function render() {
+    $("sections").innerHTML = Object.entries(DATA).map(([p, list]) => {
+      const live = list.filter((a) => a.on && a.signed && !a.out);
+      return `<div style="display:flex;flex-direction:column;gap:14px">
+        <div class="sect">${mark(p, 24)}<b>${AGENTS[p].name}</b><span class="subtle">${list.length} accounts · ${live.length} ready</span>
+          <span class="r">${p === "claude" ? '<button class="btn ghost sm" data-refresh><i data-lucide="refresh-cw"></i>Refresh usage</button>' : ""}<button class="btn sm" data-add="${p}"><i data-lucide="plus"></i>Add account</button></span></div>
+        <div class="list chain">${list.map((a, i) => row(p, a, i, list)).join("")}
+          <div class="fallback"><i data-lucide="corner-down-right"></i>${live.length ? `Now using <b class="muted">${live[0].label}</b>${live.length > 1 ? `, then ${live.slice(1).map((a) => a.label).join(", ")}` : ""}` : '<span class="warn-t">No account has usage left — agents wait for the first reset.</span>'}</div>
+        </div></div>`;
+    }).join("");
+    wireRows();
+    lucide.createIcons();
+    const inp = document.querySelector("[data-rename]");
+    if (inp) inp.focus(), inp.select();
+  }
+
+  function wireRows() {
+    document.querySelectorAll(".acc").forEach((r) => {
+      const list = DATA[r.dataset.p];
+      const i = Number(r.dataset.i);
+      const a = list[i];
+      r.querySelectorAll("[data-act]").forEach((b) => (b.onclick = (e) => {
+        e.preventDefault();
+        const act = b.dataset.act;
+        if (act === "up" || act === "down") { const j = act === "up" ? i - 1 : i + 1; [list[i], list[j]] = [list[j], list[i]]; }
+        if (act === "rot") a.on = !a.on;
+        if (act === "retry") delete a.out, (a.left = 100), (a.win = "5-hour");
+        if (act === "signin") a.pending = true, setTimeout(() => { a.pending = false; a.signed = true; a.left = 100; a.win = "5-hour"; render(); }, 1600);
+        if (act === "remove" && confirm(`Remove "${a.label}"? Its sign-in is deleted; sessions and settings stay.`)) list.splice(i, 1);
+        if (act === "rename") editing = `${r.dataset.p}:${i}`;
+        render();
+      }));
+      const inp = r.querySelector("[data-rename]");
+      if (inp) {
+        const save = () => { a.label = inp.value.trim() || a.label; editing = null; render(); };
+        inp.onkeydown = (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") (editing = null), render(); };
+        inp.onblur = save;
+      }
+      r.ondragstart = () => (dragging = { p: r.dataset.p, i }, r.classList.add("drag"));
+      r.ondragover = (e) => { if (dragging?.p === r.dataset.p) e.preventDefault(); };
+      r.ondrop = () => { const [m] = list.splice(dragging.i, 1); list.splice(i, 0, m); dragging = null; render(); };
+      r.ondragend = () => r.classList.remove("drag");
+    });
+    document.querySelectorAll("[data-add]").forEach((b) => (b.onclick = () => {
+      const list = DATA[b.dataset.add];
+      list.push({ label: `Account ${list.length + 1}`, dir: `accounts/${b.dataset.add}-${list.length + 1}`, signed: false, on: true, pending: true });
+      render();
+      setTimeout(() => { const a = list[list.length - 1]; a.pending = false; a.signed = true; a.left = 100; a.win = "5-hour"; render(); }, 2000);
+    }));
+    document.querySelectorAll("[data-refresh]").forEach((b) => (b.onclick = () => { b.innerHTML = '<i data-lucide="loader"></i>Refreshing…'; lucide.createIcons(); setTimeout(render, 900); }));
+  }
+
+  render();
+  mockup({
+    id: "accounts",
+    pitch: "<b>Accounts.</b> Each agent's accounts form a visible failover chain: drag to reorder, a usage meter per account, and clear states (out of usage → <i>Try again now</i>, not signed in → <i>Sign in</i>). The rotation toggle is labelled, rename is a pencil instead of an always-on input, and the long intro is now two short notes.",
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Mobile</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .hero .phone { position: relative; width: 44px; height: 70px; border-radius: 10px; background: var(--app); box-shadow: inset 0 0 0 2px var(--border-strong); flex-shrink: 0; padding: 9px 5px 0; display: flex; flex-direction: column; gap: 4px; }
+  .hero .phone i { height: 9px; border-radius: 3px; background: var(--panel-raised); box-shadow: var(--shadow); }
+  .hero .phone i:first-child { background: var(--accent-soft); }
+  .hero .feat { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+  .hero .feat span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-muted); padding: 2px 8px; border-radius: 99px; background: var(--app); }
+  .hero .feat svg { width: 11px; height: 11px; color: var(--accent); }
+  .e2e { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--success); }
+  .e2e svg { width: 12px; height: 12px; }
+  .pair { display: grid; grid-template-columns: 196px 1fr; gap: 18px; padding: 16px; border-radius: 12px; background: var(--panel); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow); }
+  .qr { position: relative; width: 196px; height: 196px; padding: 10px; border-radius: 10px; background: #fff; display: grid; grid-template-columns: repeat(25, 1fr); cursor: pointer; }
+  .qr i { background: #111; }
+  .qr i.w { background: none; }
+  .qr.dim { opacity: .15; filter: blur(2px); }
+  .qr .expired { position: absolute; inset: 0; display: grid; place-items: center; }
+  .steps { display: flex; flex-direction: column; gap: 9px; }
+  .step { display: flex; gap: 10px; font-size: 12.5px; align-items: flex-start; }
+  .step .n { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 600 10.5px var(--mono); flex-shrink: 0; }
+  .step small { display: block; font-size: 11px; color: var(--fg-subtle); margin-top: 1px; }
+  .pstatus { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--app); font-size: 12px; color: var(--fg-muted); margin-top: auto; }
+  .pstatus .r { margin-left: auto; font: 11px var(--mono); color: var(--fg-subtle); }
+  .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--active); border-top-color: var(--accent); animation: sp .8s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .warnline { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--warning); }
+  .warnline svg { width: 12px; height: 12px; }
+  .pdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .pdot.open { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent); }
+  .pdot.idle { background: var(--fg-subtle); }
+  .pdot.err { background: var(--danger); }
+  .devic { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--hover); color: var(--fg-muted); }
+  .devic svg { width: 15px; height: 15px; }
+  .item.new { animation: flash 1.6s; }
+  @keyframes flash { 0% { background: var(--accent-soft); } 100% { background: none; } }
+  .relay .input { width: 300px; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="smartphone"></i></div>
+      <h2>Mobile</h2>
+      <p>Watch and steer agents from your phone.</p>
+    </header>
+    <div class="body">
+      <div class="hero">
+        <span class="phone"><i></i><i></i><i></i><i></i></span>
+        <span style="flex:1;min-width:0"><span class="big" style="font-size:15px">Your agents, in your pocket</span>
+          <span class="feat"><span><i data-lucide="bell"></i>Notified when one finishes or asks</span><span><i data-lucide="messages-square"></i>Read its thread</span><span><i data-lucide="reply"></i>Answer it</span></span></span>
+        <span class="r" style="flex-direction:column;align-items:flex-end;gap:8px">
+          <button class="btn primary" id="pairBtn"><i data-lucide="qr-code"></i><span data-text="pairLabel"></span></button>
+          <span class="e2e"><i data-lucide="lock"></i>End-to-end encrypted</span></span>
+      </div>
+
+      <div class="pair" data-if="pairing">
+        <div class="qr" id="qr" title="Mockup: click to simulate a scan"></div>
+        <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+          <div class="steps">
+            <div class="step"><span class="n">1</span><span>Scan the code with your phone's camera</span></div>
+            <div class="step"><span class="n">2</span><span>Open the page and add it to your Home Screen</span></div>
+            <div class="step"><span class="n">3</span><span>Allow notifications<small>On iPhone they need iOS 16.4 or later and the Home Screen app.</small></span></div>
+          </div>
+          <div class="warnline"><i data-lucide="key-round"></i>The code holds the key to your agents: don't share it. It works once.</div>
+          <div class="pstatus" id="pstatus"></div>
+        </div>
+      </div>
+
+      <h5>Paired phones<span class="r" id="pcount"></span></h5>
+      <div class="list" id="phones"></div>
+
+      <h5>Relay<span class="r"><span class="badge good"><span class="dot" style="width:6px;height:6px;box-shadow:none"></span>Connected</span></span></h5>
+      <div class="card relay">
+        <div class="row">
+          <div class="lbl"><b>Relay URL</b><div class="hint">Where winfer and your phones meet; it only passes encrypted messages on. Change it only if you run your own (<code>relay/</code> in the winfer repo).</div></div>
+          <div class="ctl" style="flex-direction:column;align-items:flex-end;gap:6px">
+            <input class="input mono" data-bind="relay" />
+            <span style="display:flex;gap:6px;align-items:center"><span class="badge good" data-if="relaySaved">Saved · phones reconnect</span><button class="btn ghost sm" id="relayReset" data-if="notDefault"><i data-lucide="undo-2"></i>Default</button><button class="btn primary sm" id="relaySave" data-off-if="!relayDirty">Save</button></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const DEFAULT_RELAY = "https://winfer.danehub.com";
+  let savedRelay = DEFAULT_RELAY;
+  const PHONES = [
+    { name: "Ricky's iPhone", st: "open", notif: true },
+    { name: "iPad Air", st: "idle", seen: "2 h ago", notif: false },
+  ];
+  let fresh = null;
+  // fake QR: finder squares in 3 corners, pseudo-random data elsewhere
+  const finder = (r, c) => { for (const [fr, fc] of [[0, 0], [0, 18], [18, 0]]) { const y = r - fr, x = c - fc; if (y >= 0 && y < 7 && x >= 0 && x < 7) return y === 0 || y === 6 || x === 0 || x === 6 || (y >= 2 && y <= 4 && x >= 2 && x <= 4) ? 1 : 0; if (y >= -1 && y <= 7 && x >= -1 && x <= 7) return 0; } return null; };
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  const drawQr = () => {
+    let h = "";
+    for (let r = 0; r < 25; r++) for (let c = 0; c < 25; c++) { const f = finder(r, c); h += `<i class="${(f ?? (rnd() > 0.5 ? 1 : 0)) ? "" : "w"}"></i>`; }
+    $("qr").innerHTML = h + (state.expired ? '<div class="expired"></div>' : "");
+  };
+  let tick, phase;
+  const startPair = () => {
+    clearInterval(tick); clearTimeout(phase);
+    seed = Math.floor(Math.random() * 1000);
+    set({ pairing: true, expired: false, relayState: "connecting", left: 600 });
+    drawQr();
+    phase = setTimeout(() => set({ relayState: "waiting" }), 900);
+    tick = setInterval(() => { state.left -= 1; if (state.left <= 0) { clearInterval(tick); set({ expired: true }); } else renderStatus(); }, 1000);
+  };
+  $("pairBtn").onclick = startPair;
+  $("qr").onclick = () => {
+    if (state.expired) return;
+    clearInterval(tick);
+    PHONES.unshift({ name: "Pixel 9", st: "open", notif: true });
+    fresh = "Pixel 9";
+    set({ pairing: false, justPaired: "Pixel 9" });
+  };
+  const renderStatus = () => {
+    const s = state;
+    const mm = `${Math.floor(s.left / 60)}:${String(s.left % 60).padStart(2, "0")}`;
+    $("pstatus").innerHTML = s.expired
+      ? `<i data-lucide="timer-off" style="width:13px;height:13px;color:var(--danger)"></i><span style="color:var(--danger)">The code expired.</span><span class="r"><button class="btn sm" onclick="startPair()">New code</button></span>`
+      : `${s.relayState === "connecting" ? '<span class="spin"></span>Connecting to the relay…' : '<span class="dot"></span>Waiting for your phone…'}<span class="r">expires in ${mm}</span><button class="btn ghost sm" id="copyLink"><i data-lucide="${s.copied ? "check" : "link"}"></i>${s.copied ? "Copied" : "Copy link"}</button>`;
+    const cl = $("copyLink");
+    if (cl) cl.onclick = () => { state.copied = true; renderStatus(); setTimeout(() => { state.copied = false; renderStatus(); }, 1500); };
+    $("qr").classList.toggle("dim", !!s.expired);
+    lucide.createIcons();
+  };
+  $("relaySave").onclick = () => { savedRelay = state.relay; set({ relaySaved: true }); };
+  $("relayReset").onclick = () => { savedRelay = DEFAULT_RELAY; set({ relay: DEFAULT_RELAY, relaySaved: true }); };
+  onChange((s) => {
+    state.pairLabel = s.pairing && !s.expired ? "New code" : "Pair a phone";
+    document.querySelector('[data-text="pairLabel"]').textContent = state.pairLabel;
+    state.relayDirty = s.relay !== savedRelay;
+    state.notDefault = s.relay !== DEFAULT_RELAY || savedRelay !== DEFAULT_RELAY;
+    if (state.relayDirty) state.relaySaved = false;
+    document.querySelectorAll('[data-if="relaySaved"]').forEach((e) => (e.hidden = !state.relaySaved));
+    document.querySelectorAll('[data-if="notDefault"]').forEach((e) => (e.hidden = !state.notDefault));
+    $("relaySave").classList.toggle("is-off", !state.relayDirty);
+    $("pcount").textContent = PHONES.length ? `${PHONES.length} phone${PHONES.length > 1 ? "s" : ""}` : "";
+    $("phones").innerHTML = PHONES.length
+      ? PHONES.map((p, i) => `<div class="item ${fresh === p.name ? "new" : ""}"><span class="devic"><i data-lucide="${p.name.includes("iPad") ? "tablet" : "smartphone"}"></i></span>
+          <span class="lbl" style="flex:1;min-width:0"><b>${p.name}${fresh === p.name ? '<span class="badge good">Just paired</span>' : ""}</b>
+          <small style="display:flex;align-items:center;gap:6px"><span class="pdot ${p.st}"></span>${p.st === "open" ? "Open now" : p.st === "err" ? "Not connected" : `Last seen ${p.seen}`} · <i data-lucide="${p.notif ? "bell" : "bell-off"}" style="width:11px;height:11px"></i>notifications ${p.notif ? "on" : "off"}${p.err ? ` · <span style="color:var(--danger)">relay: ${p.err}</span>` : ""}</small></span>
+          <button class="btn ghost sm danger" data-unpair="${i}"><i data-lucide="unlink"></i>Unpair</button></div>`).join("")
+      : `<div class="empty"><i data-lucide="smartphone"></i>No phone paired yet.<span>Pair one to get a notification when an agent finishes or needs you.</span><button class="btn sm" onclick="startPair()"><i data-lucide="qr-code"></i>Pair a phone</button></div>`;
+    $("phones").querySelectorAll("[data-unpair]").forEach((b) => (b.onclick = () => {
+      const p = PHONES[b.dataset.unpair];
+      if (confirm(`Unpair ${p.name}?\n\n${p.name} will stop getting notifications and can't reach your agents until you pair it again.`)) { PHONES.splice(b.dataset.unpair, 1); set({}); }
+    }));
+    if (s.pairing) renderStatus();
+    lucide.createIcons();
+  });
+  mockup({
+    id: "mobile",
+    pitch: "<b>Mobile.</b> Pairing is a guided panel: the code, three steps, live relay status and a countdown, instead of a hint paragraph. Paired phones get their own list with status and an empty state, and the relay can go back to its default. <i>Mockup: click the QR code to simulate a scan.</i>",
+    initial: { pairing: true, expired: false, relayState: "waiting", left: 584, relay: DEFAULT_RELAY, relaySaved: false, copied: false },
+  });
+  drawQr();
+  phase = setTimeout(() => {}, 0);
+  tick = setInterval(() => { state.left -= 1; if (state.left <= 0) { clearInterval(tick); set({ expired: true }); } else renderStatus(); }, 1000);
+</script>
+</body>
+</html>

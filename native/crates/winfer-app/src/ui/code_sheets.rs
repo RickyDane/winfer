@@ -1,7 +1,7 @@
 //! Panels that open over the chat: model, effort, mode, sessions, usage, tasks and the rest
 //! (port of `features/code/Sheets.tsx`).
 
-use super::code_view::{CodeView, elapsed, rise, tokens};
+use super::code_view::{CodeView, elapsed, rise};
 use crate::code::names::{BACKENDS, ModelTier, backend_of, base_spec, fast_spec, is_fast, model_name, model_tier};
 use crate::code::protocol::*;
 use crate::code::state::{Sheet, now_ms};
@@ -37,7 +37,7 @@ fn effort_hint(level: &str) -> &'static str {
 fn title_of(sheet: Sheet) -> (&'static str, IconName) {
     match sheet {
         Sheet::TaskLog => ("Task output", IconName::SquareTerminal),
-        Sheet::Usage => ("Usage", IconName::Coins),
+        Sheet::Usage => ("Context & usage", IconName::Gauge),
         Sheet::Status => ("Status", IconName::Info),
         Sheet::Help => ("Keys & commands", IconName::CircleQuestionMark),
         Sheet::Mcp => ("MCP servers", IconName::Plug),
@@ -65,6 +65,9 @@ fn dim(c: Colors, text: impl Into<SharedString>) -> Div {
 
 impl CodeView {
     pub(super) fn render_sheet(&mut self, sheet: Sheet, c: Colors, mono: SharedString, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if matches!(sheet, Sheet::Usage | Sheet::Compaction) {
+            return self.render_usage_sheet(c, mono, cx);
+        }
         let (title, icon) = title_of(sheet);
         let body = match sheet {
             Sheet::Model => self.sheet_models(false, c, cx),
@@ -72,7 +75,7 @@ impl CodeView {
             Sheet::Effort => self.sheet_effort(c, cx),
             Sheet::Mode => self.sheet_mode(c, cx),
             Sheet::Sessions => self.sheet_sessions(c, cx),
-            Sheet::Usage => self.sheet_usage(c, cx),
+            Sheet::Usage | Sheet::Compaction => unreachable!(),
             Sheet::Status => self.sheet_status(c, mono.clone(), cx),
             Sheet::Help => self.sheet_help(c, mono.clone(), cx),
             Sheet::Mcp => self.sheet_mcp(c, cx),
@@ -80,7 +83,6 @@ impl CodeView {
             Sheet::Agents => self.sheet_agents(c, cx),
             Sheet::TaskLog => self.sheet_task_log(c, mono.clone(), cx),
             Sheet::Btw => self.sheet_btw(c, cx),
-            Sheet::Compaction => self.sheet_compaction(c, cx),
         };
         if matches!(sheet, Sheet::Model | Sheet::SubagentModel | Sheet::Effort | Sheet::Mode) {
             let st = &self.model.read(cx).state;
@@ -203,15 +205,19 @@ impl CodeView {
     }
 
     fn sheet_effort(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
-        let m = self.model.read(cx);
-        let st = &m.state;
-        let offered = super::code_pickers::match_model(&st.models, &st.model).and_then(|i| i.efforts.clone());
+        let (offered, current, ultra_backend, ultra_on) = {
+            let m = self.model.read(cx);
+            let st = &m.state;
+            let offered = super::code_pickers::match_model(&st.models, &st.model).and_then(|i| i.efforts.clone());
+            let current = if st.effort.is_empty() { "default".to_string() } else { st.effort.clone() };
+            let ultra_backend = crate::code::names::supports_ultracode(&st.model).then(|| crate::code::names::backend_of(&st.model).map(|b| b.0)).flatten();
+            (offered, current, ultra_backend, st.ultracode)
+        };
         let levels: Vec<String> = match offered {
             Some(l) if !l.is_empty() => std::iter::once("default".to_string()).chain(l).collect(),
             Some(_) => vec!["default".to_string()],
             None => std::iter::once("default").chain(EFFORTS).map(String::from).collect(),
         };
-        let current = if st.effort.is_empty() { "default".to_string() } else { st.effort.clone() };
         let mut strip = div().flex().flex_wrap().gap_2();
         for level in &levels {
             let on = current == *level;
@@ -232,7 +238,8 @@ impl CodeView {
                 .child(glyph)
                 .child(effort_label(level)));
         }
-        div().flex().flex_col().gap_3().child(strip).child(div().flex().items_center().gap_2().px_1().text_size(px(12.0)).text_color(c.muted).child(Icon::new(IconName::Info).size(px(13.0)).text_color(c.subtle)).child(effort_hint(&current))).into_any_element()
+        let ultra = ultra_backend.map(|b| self.ultracode_toggle(c, b, ultra_on, false, "sheet", cx));
+        div().flex().flex_col().gap_3().child(strip).children(ultra).child(div().flex().items_center().gap_2().px_1().text_size(px(12.0)).text_color(c.muted).child(Icon::new(IconName::Info).size(px(13.0)).text_color(c.subtle)).child(effort_hint(&current))).into_any_element()
     }
 
     fn sheet_mode(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
@@ -268,39 +275,6 @@ impl CodeView {
                 }))
                 .child(div().flex().flex_col().flex_1().min_w_0().child(div().truncate().child(if s.title.is_empty() { "Untitled".to_string() } else { s.title.clone() }))
                     .child(dim(c, format!("{} · {} messages · {age} ago", model_name(&s.model, None), s.messages)))));
-        }
-        out.into_any_element()
-    }
-
-    fn sheet_usage(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
-        let m = self.model.read(cx);
-        let st = &m.state;
-        let u = &st.usage;
-        let pct = st.context_fraction();
-        let mut out = div().flex().flex_col().gap_3()
-            .child(div().flex().flex_col().gap_1()
-                .child(div().flex().justify_between().text_size(px(12.5)).text_color(c.fg).child("Context").child(format!("{} / {} · {}%", tokens(u.context), tokens(u.window), (pct * 100.0).round())))
-                .child(div().h(px(4.0)).rounded_full().bg(c.border).child(div().h_full().w(relative(pct)).rounded_full().bg(if pct > 0.85 { c.danger } else { c.accent }))));
-        let mut grid = div().flex().flex_wrap().gap_x_4().gap_y_1();
-        for (label, value) in [("Input", tokens(u.input)), ("Cached", tokens(u.cached)), ("Output", tokens(u.output)), ("Cost", u.cost.map_or("—".to_string(), |c| format!("${c:.2}")))] {
-            grid = grid.child(div().flex().flex_col().child(dim(c, label)).child(div().text_size(px(13.0)).text_color(c.fg).child(value)));
-        }
-        out = out.child(grid);
-        match &st.breakdown {
-            None => out = out.child(dim(c, "Reading the context…")),
-            Some((_, None)) => out = out.child(dim(c, "This session's log can't be read, so there's no breakdown.")),
-            Some((total, Some(parts))) => {
-                let total = (*total).max(1);
-                let mut list = div().flex().flex_col().gap_1p5().child(dim(c, "What fills the context (estimated)"));
-                for p in parts {
-                    let share = p.tokens as f32 / total as f32;
-                    list = list.child(div().flex().flex_col().gap_0p5()
-                        .child(div().flex().justify_between().text_size(px(12.0)).text_color(c.fg).child(p.label.clone()).child(format!("{} · {}%", tokens(p.tokens), (share * 100.0).round())))
-                        .child(div().h(px(3.0)).rounded_full().bg(c.border).child(div().h_full().w(relative(share.clamp(0.0, 1.0))).rounded_full().bg(c.accent)))
-                        .children(p.sources.iter().take(4).map(|s| div().flex().justify_between().pl_2().text_size(px(11.0)).text_color(c.subtle).child(s.label.clone()).child(tokens(s.tokens)))));
-                }
-                out = out.child(list);
-            }
         }
         out.into_any_element()
     }
@@ -421,24 +395,6 @@ impl CodeView {
                     (_, Some(e)) => e.clone(),
                     _ => "Thinking…".to_string(),
                 })));
-        }
-        out.into_any_element()
-    }
-
-    fn sheet_compaction(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
-        let st = &self.model.read(cx).state;
-        let (trim, compact) = (st.trim_at, st.compact_at);
-        let mut out = div().flex().flex_col().gap_3().child(dim(c, "When the context fills up, WinferCode first trims old tool output (micro-compact), then summarizes the conversation (full compact)."));
-        for (label, current, is_trim) in [("Micro-compact at", trim, true), ("Full compact at", compact, false)] {
-            let mut row = div().flex().flex_wrap().gap_1();
-            for p in std::iter::once(0u64).chain((30..=95).step_by(5)) {
-                let on = current == p;
-                row = row.child(div().id(SharedString::from(format!("cmp-{is_trim}-{p}"))).px_1p5().h(px(22.0)).flex().items_center().rounded_md().border_1().text_size(px(11.0)).cursor_pointer()
-                    .text_color(if on { c.fg } else { c.muted })
-                    .on_click(cx.listener(move |this, _, _, cx| this.send(if is_trim { Cmd::SetCompaction { trim: Some(p), compact: None } } else { Cmd::SetCompaction { trim: None, compact: Some(p) } }, cx)))
-                    .child(if p == 0 { "Off".to_string() } else { format!("{p}%") }));
-            }
-            out = out.child(div().flex().flex_col().gap_1().child(div().text_size(px(12.5)).text_color(c.fg).child(label)).child(row));
         }
         out.into_any_element()
     }

@@ -333,6 +333,11 @@ pub fn screen_text(state: &CodeState) -> String {
             Item::Reasoning { .. } => {}
             Item::Tool { name, title, ok, .. } => out.push_str(&format!("{} {name} {title}\n", match ok { Some(true) => "✓", Some(false) => "✗", None => "…" })),
             Item::Notice { text, .. } => out.push_str(&format!("· {text}\n")),
+            Item::Handoff { from_model, from_actual, to_model, .. } => {
+                let from = super::names::model_name(from_model, from_actual.as_deref());
+                let to = super::names::model_name(to_model, None);
+                out.push_str(&format!("⇄ Context handoff: {from} → {to}\n"));
+            }
             Item::Worked { .. } => {}
         }
     }
@@ -412,7 +417,8 @@ mod tests {
         let mut s = CodeState::default();
         s.submit("hi", &[], None);
         s.apply(Ev::Text { id: "a".into(), text: "hello".into() });
+        s.apply(Ev::Handoff { from_model: "claude/fable".into(), from_actual: Some("claude-fable-5-2".into()), to_model: "agy/gemini-4-neon".into(), replace: false });
         let t = screen_text(&s);
-        assert!(t.contains("> hi") && t.contains("hello"));
+        assert!(t.contains("> hi") && t.contains("hello") && t.contains("Context handoff: Fable 5.2 → Gemini 4 Neon"));
     }
 }

@@ -13,6 +13,8 @@ pub struct Config {
     /// `backend/model`; empty picks the first backend that's available.
     pub model: String,
     pub effort: Option<String>,
+    /// Ultracode multi-agent mode (Claude Code's `ultracode` flag, Codex's multi-agent + ultra effort).
+    pub ultracode: bool,
     pub mode: Mode,
     /// Extra MCP servers for every backend: `{ name: { command, args, env } }`.
     pub mcp_servers: serde_json::Map<String, Value>,
@@ -101,6 +103,7 @@ impl Default for Config {
         Config {
             model: String::new(),
             effort: None,
+            ultracode: false,
             mode: Mode::Ask,
             mcp_servers: Default::default(),
             allowed_commands: Vec::new(),

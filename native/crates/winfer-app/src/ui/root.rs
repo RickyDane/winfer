@@ -74,6 +74,12 @@ mod settings_skills;
 mod settings_harness;
 #[path = "settings_code.rs"]
 mod settings_code;
+#[path = "settings_kit.rs"]
+mod settings_kit;
+#[path = "settings_agents.rs"]
+mod settings_agents;
+#[path = "settings_system.rs"]
+mod settings_system;
 #[path = "model_logos.rs"]
 mod model_logos;
 #[path = "mobile.rs"]
@@ -1623,6 +1629,23 @@ impl Render for Root {
                 }
                 Ok("review") => self.demo_reviews(cx),
                 Ok("usage") => self.demo_usage(cx),
+                Ok("usage-limits") => {
+                    self.demo_usage(cx);
+                    self.usage.popover = None;
+                    self.usage.snapshots.remove("claude");
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
+                    for (id, sh, wh) in [("a1", 3.5, 50.0), ("a2", 0.3, 95.0), ("a3", 1.2, 140.0)] {
+                        if let Some(s) = self.usage.snapshots.get_mut(id) {
+                            if let Some(w) = s.windows.get_mut(0) { w.resets_at = Some(now + sh * 3_600_000.0); }
+                            if let Some(w) = s.windows.get_mut(1) { w.resets_at = Some(now + wh * 3_600_000.0); }
+                        }
+                    }
+                    self.execute(Command::Settings(Some("usage".into())), window, cx);
+                    self.settings_ui_for_dev(String::new(), window, cx);
+                    if let Some(s) = self.settings.as_mut() {
+                        s.page_tabs.insert("usage", "limits");
+                    }
+                }
                 Ok("history") => {
                     if let Some((id, name)) = self.state.read(cx).active().map(|w| (w.id.clone(), w.name.clone())) {
                         review::demo_history(&id, &name);
@@ -1643,6 +1666,20 @@ impl Render for Root {
                     let (tab, scroll) = other["code-tab:".len()..].split_once('@').unwrap_or((&other["code-tab:".len()..], "0"));
                     self.harness_page.ui.tab = settings_code::tab_named(tab);
                     self.execute(Command::Settings(Some("winfer-code".into())), window, cx);
+                    self.scroll_settings_for_dev(scroll.parse().unwrap_or(0.0), cx);
+                }
+                // Development aid: a tabbed settings page on one of its tabs, optionally scrolled
+                // down (`settings-tab:usage:spend@300`).
+                Ok(other) if other.starts_with("settings-tab:") => {
+                    let rest = &other["settings-tab:".len()..];
+                    let (target, scroll) = rest.split_once('@').unwrap_or((rest, "0"));
+                    let (page, tab) = target.split_once(':').unwrap_or((target, ""));
+                    let page: &'static str = Box::leak(page.to_string().into_boxed_str());
+                    self.execute(Command::Settings(Some(page.into())), window, cx);
+                    self.settings_ui_for_dev(String::new(), window, cx);
+                    if let Some(s) = self.settings.as_mut().filter(|_| !tab.is_empty()) {
+                        s.page_tabs.insert(page, Box::leak(tab.to_string().into_boxed_str()));
+                    }
                     self.scroll_settings_for_dev(scroll.parse().unwrap_or(0.0), cx);
                 }
                 Ok(other) if other.starts_with("settings:") => self.execute(Command::Settings(Some(other["settings:".len()..].to_string())), window, cx),

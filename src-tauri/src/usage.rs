@@ -94,7 +94,7 @@ pub fn claude_windows(input: &Value) -> Vec<Window> {
         .iter()
         .filter_map(|(key, kind, label)| {
             let w = &limits[*key];
-            let used = w["used_percentage"].as_f64().or_else(|| w["utilization"].as_f64())?;
+            let used = w["used_percentage"].as_f64().or_else(|| w["utilization"].as_f64())?.clamp(0.0, 100.0);
             Some(Window {
                 kind: kind.to_string(),
                 label: label.to_string(),
@@ -120,10 +120,11 @@ fn claude_token(auth: &Value, now: i64) -> Option<String> {
 }
 
 /// The sign-in of a Claude account (see accounts.rs; None = the default one).
-fn claude_credentials(account: Option<&str>) -> Option<Value> {
+/// Checks macOS Keychain first and falls back to `.credentials.json` if Keychain has no
+/// unexpired token (for example, if credentials were stored in a file instead).
+fn claude_access_token(account: Option<&str>, now: i64) -> Option<String> {
     let id = account.map_or_else(|| crate::accounts::default_id("claude"), String::from);
     let config = crate::accounts::dir(&id)?;
-    // macOS Claude Code keeps its sign-in in Keychain; other platforms use this file.
     #[cfg(target_os = "macos")]
     {
         use sha2::{Digest, Sha256};
@@ -136,8 +137,10 @@ fn claude_credentials(account: Option<&str>) -> Option<Value> {
                 .args(["find-generic-password", "-s", &service, "-w"])
                 .stdin(Stdio::null()).stderr(Stdio::null()).output().ok();
             if let Some(out) = out.filter(|o| o.status.success()) {
-                if let Ok(auth) = serde_json::from_slice(&out.stdout) {
-                    return Some(auth);
+                if let Ok(auth) = serde_json::from_slice::<Value>(&out.stdout) {
+                    if let Some(token) = claude_token(&auth, now) {
+                        return Some(token);
+                    }
                 }
             }
             if suffix.is_empty() {
@@ -145,7 +148,8 @@ fn claude_credentials(account: Option<&str>) -> Option<Value> {
             }
         }
     }
-    serde_json::from_str(&std::fs::read_to_string(config.join(".credentials.json")).ok()?).ok()
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(config.join(".credentials.json")).ok()?).ok()?;
+    claude_token(&file, now)
 }
 
 fn claude_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
@@ -153,25 +157,169 @@ fn claude_usage_snapshot(body: &Value, at: i64) -> Option<Snapshot> {
     (!windows.is_empty()).then(|| Snapshot { provider: "claude".into(), windows, at, reset_credits: None })
 }
 
+/// Read-only fallback from Claude Code's own `.claude.json` (`cachedUsageUtilization`), when the
+/// live usage endpoint is rate-limited, offline, or the account's OAuth token expired while idle.
+fn claude_cached_snapshot(state: &Value) -> Option<Snapshot> {
+    let cached = &state["cachedUsageUtilization"];
+    let at = cached["fetchedAtMs"].as_i64().filter(|&t| t > 0)?;
+    if let (Some(cached_uuid), Some(account_uuid)) = (
+        cached["accountUuid"].as_str().filter(|s| !s.is_empty()),
+        state["oauthAccount"]["accountUuid"].as_str().filter(|s| !s.is_empty()),
+    ) {
+        if cached_uuid != account_uuid {
+            return None;
+        }
+    }
+    claude_usage_snapshot(&cached["utilization"], at)
+}
+
+/// Last usage reading Claude Code itself cached in the account's `.claude.json` (read-only).
+pub fn claude_cached_usage(account: Option<&str>) -> Option<Snapshot> {
+    let id = account.map_or_else(|| crate::accounts::default_id("claude"), String::from);
+    let dir = crate::accounts::dir(&id)?;
+    let mut files = vec![dir.join(".claude.json")];
+    if id == crate::accounts::default_id("claude") {
+        if let Some(home) = dirs::home_dir() {
+            files.insert(0, home.join(".claude.json"));
+        }
+    }
+    files.iter().find_map(|path| {
+        let text = std::fs::read_to_string(path).ok()?;
+        let state: Value = serde_json::from_str(&text).ok()?;
+        claude_cached_snapshot(&state)
+    })
+}
+
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?skip_spend=1";
+const CLAUDE_FALLBACK_VERSION: &str = "2.1.330";
+
+fn parse_claude_version(output: &str) -> Option<String> {
+    let token = output.split_whitespace().next()?;
+    let mut parts = token.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    if major.chars().all(|c| c.is_ascii_digit()) && !major.is_empty() && minor.chars().all(|c| c.is_ascii_digit()) && !minor.is_empty() {
+        Some(token.to_string())
+    } else {
+        None
+    }
+}
+
+/// Claude Code's own `User-Agent` (`claude-code/<version>`). Anthropic's gateway immediately
+/// rate-limits (`429 Retry-After: 0`) the older `claude-cli` header on `/api/oauth/usage`.
+fn claude_user_agent() -> &'static str {
+    static UA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    UA.get_or_init(|| {
+        let version = crate::env::launcher("claude")
+            .and_then(|launcher| {
+                crate::env::no_window(
+                    Command::new(&launcher.program)
+                        .args(&launcher.args)
+                        .arg("--version")
+                        .env("PATH", crate::env::path_var())
+                        .stdin(Stdio::null())
+                        .stderr(Stdio::null()),
+                )
+                .output()
+                .ok()
+            })
+            .filter(|o| o.status.success())
+            .and_then(|o| parse_claude_version(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or_else(|| CLAUDE_FALLBACK_VERSION.to_string());
+        format!("claude-code/{version}")
+    })
+}
+
+fn parse_retry_after_secs(header: Option<&str>) -> Option<u64> {
+    header.and_then(|v| v.trim().parse::<u64>().ok()).filter(|&s| s > 0)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClaudeUsageError {
+    RateLimited { retry_after_secs: Option<u64>, message: String },
+    AuthExpired(String),
+    Transient(String),
+}
+
+impl ClaudeUsageError {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::RateLimited { message, .. } | Self::AuthExpired(message) | Self::Transient(message) => message,
+        }
+    }
+}
+
+fn claude_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(12)))
+        .http_status_as_error(false)
+        .build()
+        .into()
+}
+
+fn fetch_claude_usage_once(agent: &ureq::Agent, token: &str) -> Result<Snapshot, (u16, ClaudeUsageError)> {
+    let mut response = agent
+        .get(CLAUDE_USAGE_URL)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", claude_user_agent())
+        .header("Accept", "application/json")
+        .call()
+        .map_err(|_| (0, ClaudeUsageError::Transient("Couldn't refresh Claude limits. Check your connection and Claude Code sign-in.".into())))?;
+    let status = response.status().as_u16();
+    match status {
+        200..=299 => {
+            let body: Value = response
+                .body_mut()
+                .read_json()
+                .map_err(|_| (status, ClaudeUsageError::Transient("Claude returned an invalid usage response.".into())))?;
+            claude_usage_snapshot(&body, now_ms())
+                .ok_or_else(|| (status, ClaudeUsageError::Transient("Claude returned no plan limits.".into())))
+        }
+        429 => {
+            let retry_after_secs = parse_retry_after_secs(response.headers().get("retry-after").and_then(|v| v.to_str().ok()));
+            Err((status, ClaudeUsageError::RateLimited {
+                retry_after_secs,
+                message: "Claude is limiting how often usage can be read; trying again later.".into(),
+            }))
+        }
+        401 | 403 => Err((status, ClaudeUsageError::AuthExpired("Claude sign-in expired. Use Claude Code once to renew it, then refresh.".into()))),
+        _ => Err((status, ClaudeUsageError::Transient("Couldn't refresh Claude limits. Check your connection and Claude Code sign-in.".into()))),
+    }
+}
+
+/// Account-wide limits with structured error info for callers that implement per-account backoff.
+pub async fn usage_claude_detailed(account: Option<String>) -> Result<Snapshot, ClaudeUsageError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = claude_access_token(account.as_deref(), now_ms())
+            .ok_or_else(|| ClaudeUsageError::AuthExpired("Claude sign-in unavailable or expired. Sign in through Claude Code, then refresh.".into()))?;
+        let agent = claude_agent();
+        match fetch_claude_usage_once(&agent, &token) {
+            Ok(snapshot) => Ok(snapshot),
+            // Claude Code may have rotated the bearer token concurrently; re-read once and retry if it changed.
+            Err((401 | 403, err)) => {
+                if let Some(fresh) = claude_access_token(account.as_deref(), now_ms()).filter(|t| t != &token) {
+                    fetch_claude_usage_once(&agent, &fresh).map_err(|(_, e)| e)
+                } else {
+                    Err(err)
+                }
+            }
+            // Retry once on transient network/5xx/timeout errors (never on 429).
+            Err((status, _)) if status == 0 || status == 408 || status >= 500 => {
+                std::thread::sleep(std::time::Duration::from_millis(1200));
+                fetch_claude_usage_once(&agent, &token).map_err(|(_, e)| e)
+            }
+            Err((_, err)) => Err(err),
+        }
+    })
+    .await
+    .map_err(|_| ClaudeUsageError::Transient("Claude usage refresh failed.".into()))?
+}
+
 /// Account-wide limits, including use outside winfer. Errors keep the previous reading visible.
 #[tauri::command]
 pub async fn usage_claude(account: Option<String>) -> Result<Snapshot, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = claude_credentials(account.as_deref()).and_then(|a| claude_token(&a, now_ms()))
-            .ok_or("Claude sign-in unavailable or expired. Sign in through Claude Code, then refresh.")?;
-        let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(10))).build().into();
-        let mut response = agent.get("https://api.anthropic.com/api/oauth/usage")
-            .header("Authorization", &format!("Bearer {token}"))
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .header("User-Agent", "claude-cli")
-            .call().map_err(|e| match e {
-                ureq::Error::StatusCode(429) => "Claude is limiting how often usage can be read; trying again later.",
-                ureq::Error::StatusCode(401 | 403) => "Claude sign-in expired. Use Claude Code once to renew it, then refresh.",
-                _ => "Couldn't refresh Claude limits. Check your connection and Claude Code sign-in.",
-            })?;
-        let body: Value = response.body_mut().read_json().map_err(|_| "Claude returned an invalid usage response.")?;
-        claude_usage_snapshot(&body, now_ms()).ok_or_else(|| "Claude returned no plan limits.".to_string())
-    }).await.map_err(|_| "Claude usage refresh failed.".to_string())?
+    usage_claude_detailed(account).await.map_err(|e| e.message().to_string())
 }
 
 /// Entry point for `winfer statusline`, Claude Code's status line command inside winfer:
@@ -1045,6 +1193,43 @@ mod tests {
         assert!(claude_token(&auth, 100).is_none());
         assert!(claude_token(&json!({ "apiKey": "test-key" }), 0).is_none());
         assert!(claude_token(&json!({ "claudeAiOauth": { "accessToken": "" } }), 0).is_none());
+    }
+
+    #[test]
+    fn parses_claude_cli_version_and_retry_after() {
+        assert_eq!(parse_claude_version("2.1.330 (Claude Code)\n").as_deref(), Some("2.1.330"));
+        assert_eq!(parse_claude_version("3.0.0-beta.1 (Claude Code)").as_deref(), Some("3.0.0-beta.1"));
+        assert_eq!(parse_claude_version("unknown"), None);
+        assert_eq!(parse_retry_after_secs(Some("0")), None);
+        assert_eq!(parse_retry_after_secs(Some(" 120 ")), Some(120));
+        assert_eq!(parse_retry_after_secs(Some("invalid")), None);
+        assert_eq!(parse_retry_after_secs(None), None);
+    }
+
+    #[test]
+    fn reads_claude_cached_usage_for_matching_account() {
+        let state = json!({
+            "oauthAccount": { "accountUuid": "acc-1" },
+            "cachedUsageUtilization": {
+                "fetchedAtMs": 1795283895492_i64,
+                "accountUuid": "acc-1",
+                "utilization": {
+                    "five_hour": { "utilization": 58, "resets_at": "2026-11-21T19:50:00.408352+00:00" },
+                    "seven_day": { "utilization": 21, "resets_at": "2026-11-27T18:00:00.408376+00:00" }
+                }
+            }
+        });
+        let snap = claude_cached_snapshot(&state).unwrap();
+        assert_eq!(snap.at, 1795283895492);
+        assert_eq!(snap.windows.len(), 2);
+        assert_eq!(snap.windows[0].used_percent, 58.0);
+        assert_eq!(snap.windows[1].used_percent, 21.0);
+
+        let mismatched = json!({
+            "oauthAccount": { "accountUuid": "acc-2" },
+            "cachedUsageUtilization": state["cachedUsageUtilization"]
+        });
+        assert!(claude_cached_snapshot(&mismatched).is_none());
     }
 
     /// Read-only integration check; never prints credentials.

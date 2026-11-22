@@ -100,6 +100,7 @@ pub struct CodeView {
     born: HashMap<String, u64>,
     seeded: bool,
     pub(super) picker: super::code_pickers::PickerState,
+    pub(super) usage_sheet: super::code_usage_sheet::UsageSheetState,
     /// An image open full size.
     preview: Option<Arc<Image>>,
     /// Key of the newest user message; a new one snaps the transcript back to the bottom.
@@ -489,6 +490,9 @@ fn signature(item: &Item, env_flipped: &HashSet<String>, env_toggled: &HashMap<S
             }
         }
         Item::Notice { text, .. } => text.len().hash(&mut h),
+        Item::Handoff { from_model, from_actual, to_model, .. } => {
+            (from_model.as_str(), from_actual.as_deref(), to_model.as_str(), model_name(from_model, from_actual.as_deref()), model_name(to_model, None)).hash(&mut h);
+        }
         Item::Worked { ms, .. } => ms.hash(&mut h),
     }
     h.finish()
@@ -582,7 +586,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), preview: None, last_user: None, composer_rows: 3 }
+        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3 }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -679,8 +683,18 @@ impl CodeView {
         let sheet = self.model.read(cx).state.sheet;
         match sheet {
             Some(Sheet::Usage) => {
+                self.usage_sheet.open(super::code_usage_sheet::UsageTab::Overview);
                 let tokens = self.model.read(cx).state.usage.context;
-                self.model.update(cx, |m, cx| m.send(Cmd::ContextBreakdown { tokens }, cx));
+                if tokens > 0 {
+                    self.model.update(cx, |m, cx| m.send(Cmd::ContextBreakdown { tokens }, cx));
+                }
+            }
+            Some(Sheet::Compaction) => {
+                self.usage_sheet.open(super::code_usage_sheet::UsageTab::Compaction);
+                let tokens = self.model.read(cx).state.usage.context;
+                if tokens > 0 {
+                    self.model.update(cx, |m, cx| m.send(Cmd::ContextBreakdown { tokens }, cx));
+                }
             }
             _ => {}
         }
@@ -832,7 +846,7 @@ impl CodeView {
             m.state.set_sheet(sheet);
             cx.notify();
         });
-        if sheet == Some(Sheet::Usage) {
+        if matches!(sheet, Some(Sheet::Usage | Sheet::Compaction)) {
             self.after_command(cx);
         }
         if matches!(sheet, Some(Sheet::Model | Sheet::SubagentModel)) && self.model.read(cx).state.models.is_empty() {
@@ -1569,6 +1583,71 @@ fn notice_row(env: &Env, key: &str, text: &str, error: bool) -> AnyElement {
     ))
 }
 
+fn handoff_row(env: &Env, key: &str, from_model: &str, from_actual: Option<&str>, to_model: &str) -> AnyElement {
+    let c = env.c;
+    let from_backend = crate::code::names::backend_of(from_model).map(|b| b.0);
+    let to_backend = crate::code::names::backend_of(to_model).map(|b| b.0);
+    let from_label = model_name(from_model, from_actual);
+    let to_label = model_name(to_model, None);
+    let from_color = from_backend.map_or(c.fg, |b| super::code_pickers::backend_color(c, b));
+    let to_color = to_backend.map_or(c.fg, |b| super::code_pickers::backend_color(c, b));
+    let label_size = px(11.5 * env.scale);
+    let icon_size = 13.0 * env.scale;
+    let mut from_chip = div().flex().items_center().gap_1().text_color(from_color).font_weight(FontWeight::MEDIUM);
+    if let Some(b) = from_backend {
+        from_chip = from_chip.child(super::code_pickers::mark(c, b, icon_size, 1.0));
+    }
+    from_chip = from_chip.child(from_label.clone());
+    let mut to_chip = div().flex().items_center().gap_1().text_color(to_color).font_weight(FontWeight::MEDIUM);
+    if let Some(b) = to_backend {
+        to_chip = to_chip.child(super::code_pickers::mark(c, b, icon_size, 1.0));
+    }
+    to_chip = to_chip.child(to_label.clone());
+    let tooltip_text = format!("Conversation context handed off from {from_label} to {to_label}");
+    enter(
+        env,
+        key,
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_3()
+            .py_2()
+            .text_size(label_size)
+            .text_color(c.muted)
+            .child(div().h(px(1.0)).flex_1().bg(c.border))
+            .child(
+                div()
+                    .id(SharedString::from(format!("cw-handoff-{key}")))
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .tooltip(tip(tooltip_text))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(Icon::new(IconName::ArrowRightLeft).size(px(12.0 * env.scale)).text_color(c.muted))
+                            .child("Context handoff"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(from_chip)
+                            .child(Icon::new(IconName::ArrowRight).size(px(11.0 * env.scale)).text_color(c.subtle))
+                            .child(to_chip),
+                    ),
+            )
+            .child(div().h(px(1.0)).flex_1().bg(c.border)),
+    )
+}
+
 fn worked_row(env: &Env, key: &str, ms: u64) -> AnyElement {
     let c = env.c;
     enter(env, key, div().w_full().flex().items_center().gap_3().pt_3().pb_1().text_size(px(11.0)).text_color(c.subtle)
@@ -1903,6 +1982,7 @@ pub(super) fn render_item(env: &Env, item: &Item, first: bool, prev: Option<&Ite
         Item::Tool { key, .. } if is_chart(item) => report_row(env, key, std::iter::once(item)),
         Item::Tool { key, name, title, input, output, ok, diff, started, ended } => tool_row(env, key, name, title, input, output, *ok, diff.as_deref(), *started, *ended, link_up, link_down),
         Item::Notice { key, text, error, .. } => notice_row(env, key, text, *error),
+        Item::Handoff { key, from_model, from_actual, to_model } => handoff_row(env, key, from_model, from_actual.as_deref(), to_model),
         Item::Worked { key, ms, .. } => worked_row(env, key, *ms),
     }
 }
@@ -2513,6 +2593,10 @@ impl CodeView {
         let v = cx.entity();
         let open = |sheet: Sheet| { let v = v.clone(); move |_: &ClickEvent, _: &mut Window, cx: &mut App| { let _ = v.update(cx, |this, cx| this.set_sheet(Some(sheet), cx)); } };
         let model_backend = crate::code::names::backend_of(&st.model).map(|b| b.0);
+        let ultra_supported = crate::code::names::supports_ultracode(&st.model);
+        let ultra_on = st.ultracode && ultra_supported;
+        let ultra_ignite_seq = ultra_on.then(|| self.ultra_igniting()).flatten();
+        let ultra_cool_seq = (!ultra_on && ultra_supported).then(|| self.ultra_cooling()).flatten();
         let effort_id = if st.effort.is_empty() { "default".to_string() } else { st.effort.clone() };
         let open_sheet = st.sheet;
         let model_pop = (open_sheet == Some(Sheet::Model)).then(|| self.model_popover(c, cx));
@@ -2548,49 +2632,84 @@ impl CodeView {
                 .tooltip(tip(if on { "Fast mode is on: about 2x speed, higher usage. Click to turn off" } else if listed { "Turn on fast mode: about 2x speed, higher usage" } else { "Try fast mode. Codex doesn't list a fast tier for this model, so it may not apply" }))
                 .on_click(cx.listener(move |this, _, window, cx| this.pick_model(&target, window, cx)))
         });
-        let effort_tip = format!("Reasoning effort: {}", super::code_pickers::effort_label(&effort_id));
-        let effort_btn = div().relative().flex_shrink_0().children(effort_pop).child(
-            pill(c, "cw-effort", Some(super::code_pickers::effort_glyph(c.muted, &effort_id, 14.0)), lay.show_labels.then(|| SharedString::from(effort)), pill_h)
+        let effort_tip = if ultra_on {
+            if model_backend == Some("codex") {
+                "Ultracode ON · Multi-agent v2 + Ultra reasoning".to_string()
+            } else {
+                format!("Reasoning effort: {} · Ultracode ON (Dynamic workflows)", super::code_pickers::effort_label(&effort_id))
+            }
+        } else {
+            format!("Reasoning effort: {}", super::code_pickers::effort_label(&effort_id))
+        };
+        let effort_btn = div().relative().flex_shrink_0().children(effort_pop).child({
+            let (glyph, label) = if ultra_on {
+                let bolt_tint = if c.light { theme::hex("#7c3aed") } else { theme::hex("#7dd3fc") };
+                let lbl = lay.show_labels.then(|| {
+                    if model_backend == Some("codex") || effort == "default" {
+                        SharedString::from("Ultracode")
+                    } else {
+                        SharedString::from(format!("{effort} · Ultra"))
+                    }
+                });
+                (super::code_pickers::effort_glyph(bolt_tint, "ultra", 14.0), lbl)
+            } else {
+                (super::code_pickers::effort_glyph(c.muted, &effort_id, 14.0), lay.show_labels.then(|| SharedString::from(effort)))
+            };
+            pill(c, "cw-effort", Some(glyph), label, pill_h)
                 .tooltip(tip(effort_tip))
                 .when(open_sheet == Some(Sheet::Effort), |d| d.bg(c.hover).text_color(c.fg))
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Effort, cx))),
-        );
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Effort, cx)))
+        });
         let send_btn = nebula_send(c, stop, can_send, animate_send, if stop { IconName::Square } else { IconName::ArrowUp }, send_sz)
             .tooltip(tip(if stop { "Interrupt (Esc)" } else if busy { "Steer the running turn (Enter)" } else { "Send (Enter)" }))
             .on_click(cx.listener(move |this, _, window, cx| if stop { this.send(Cmd::Interrupt, cx) } else { this.enter(window, cx) }));
 
+        let composer_inner_r = px(if lay.compact_v { 11.0 } else { 15.0 });
         let mut card = div()
             .relative()
             .w_full()
             .min_w_0()
             .flex()
             .flex_col()
+            .debug_selector(|| "cw-composer-card".to_string())
             .bg(c.raised)
-            .border_color(c.edge)
-            .shadow(vec![
-                gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.14 } else { 0.55 }), offset: gpui::point(px(0.0), px(8.0)), blur_radius: px(24.0), spread_radius: px(-2.0), inset: false },
-                gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.40 }), offset: gpui::point(px(0.0), px(2.0)), blur_radius: px(6.0), spread_radius: px(0.0), inset: false },
-            ])
+            .border_color(if ultra_on { alpha(theme::hex("#a855f7"), if c.light { 0.30 } else { 0.34 }) } else { c.edge })
+            .shadow(if ultra_on {
+                vec![
+                    gpui::BoxShadow { color: alpha(theme::hex("#a855f7"), if c.light { 0.12 } else { 0.20 }), offset: gpui::point(px(0.0), px(0.0)), blur_radius: px(20.0), spread_radius: px(-2.0), inset: false },
+                    gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.14 } else { 0.55 }), offset: gpui::point(px(0.0), px(8.0)), blur_radius: px(24.0), spread_radius: px(-2.0), inset: false },
+                ]
+            } else {
+                vec![
+                    gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.14 } else { 0.55 }), offset: gpui::point(px(0.0), px(8.0)), blur_radius: px(24.0), spread_radius: px(-2.0), inset: false },
+                    gpui::BoxShadow { color: hsla(0.0, 0.0, 0.0, if c.light { 0.08 } else { 0.40 }), offset: gpui::point(px(0.0), px(2.0)), blur_radius: px(6.0), spread_radius: px(0.0), inset: false },
+                ]
+            })
+            .when(ultra_on || ultra_cool_seq.is_some(), |d| {
+                d.child(super::code_pickers::ultracode_composer_aurora(
+                    c.light,
+                    composer_inner_r,
+                    ultra_ignite_seq,
+                    ultra_cool_seq,
+                ))
+            })
+            .when_some(ultra_ignite_seq, |d, seq| d.child(super::code_pickers::ultracode_composer_ignite(seq, c.light, composer_inner_r)))
             .drag_over::<ExternalPaths>(move |d, _, _, _| d.border_color(c.accent).bg(alpha(c.accent, 0.08)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx);
                 this.focus_composer(window, cx);
                 cx.stop_propagation();
             }));
-        card = match (lay.compact_v, attachments.is_empty()) {
-            (true, true) => card.border_1().rounded_xl(),
-            (false, true) => card.border_1().rounded_2xl(),
-            (true, false) => card.border_b_1().border_l_1().border_r_1().rounded_b_xl(),
-            (false, false) => card.border_b_1().border_l_1().border_r_1().rounded_b_2xl(),
+        card = if lay.compact_v {
+            card.border_1().rounded_xl()
+        } else {
+            card.border_1().rounded_2xl()
         };
         if !attachments.is_empty() {
             let thumb_sz = if lay.compact_v { 40.0 } else { 48.0 };
             let chip_max = if lay.tight_x { 150.0 } else { 220.0 };
-            let chips_base = div()
-                .absolute()
-                .bottom(relative(1.0))
-                .left(px(-1.0))
-                .right(px(-1.0))
+            let mut chips = div()
+                .w_full()
                 .min_w_0()
                 .flex()
                 .flex_wrap()
@@ -2599,12 +2718,7 @@ impl CodeView {
                 .px_3()
                 .pt_2p5()
                 .pb_1()
-                .bg(c.raised)
-                .border_t_1()
-                .border_l_1()
-                .border_r_1()
-                .border_color(c.edge);
-            let mut chips = if lay.compact_v { chips_base.rounded_t_xl() } else { chips_base.rounded_t_2xl() };
+                .debug_selector(|| "cw-attachments".to_string());
             for (i, a) in attachments.iter().enumerate() {
                 let decoded = if a.mime.starts_with("image/") && !a.data.is_empty() {
                     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2815,7 +2929,7 @@ impl CodeView {
         }
         let tight = lay.compact_v || lay.tight_x;
         let edge = if tight { px(6.0) } else { px(8.0) };
-        dock_inset(div().pt(if lay.compact_v { px(2.0) } else { px(4.0) }).pb(edge).child(card), tight).into_any_element()
+        dock_inset(div().pt(if lay.compact_v { px(2.0) } else { px(4.0) }).pb(edge).child(card), tight).flex_shrink_0().into_any_element()
     }
 }
 
@@ -2881,7 +2995,7 @@ impl Render for CodeView {
                         }
                     }
                 };
-                div().w_full().flex().justify_center().px_4().child(div().w_full().pt(px(if ix == 0 { 16.0 } else { 0.0 })).pb(px(if ix + 1 == count { 12.0 } else { 0.0 })).child(inner)).into_any_element()
+                div().w_full().flex().justify_center().px_4().debug_selector(move || format!("cw-row-{ix}")).child(div().w_full().pt(px(if ix == 0 { 16.0 } else { 0.0 })).pb(px(if ix + 1 == count { 12.0 } else { 0.0 })).child(inner)).into_any_element()
             }).size_full().into_any_element()
         };
         let jump = away.then(|| {
@@ -3063,6 +3177,9 @@ impl Render for CodeView {
                     }
                 } else if k == "tab" && e.keystroke.modifiers.shift {
                     this.cycle_mode(cx);
+                } else if k == "tab" && !e.keystroke.modifiers.modified() && this.model.read(cx).state.sheet == Some(Sheet::Effort) && crate::code::names::supports_ultracode(&this.model.read(cx).state.model) {
+                    this.toggle_ultracode(cx);
+                    cx.stop_propagation();
                 } else if this.draft(cx).is_empty() {
                     let first = this.model.read(cx).state.approvals.first().filter(|a| a.questions.is_empty()).map(|a| a.id.clone());
                     if let Some(id) = first {
@@ -3079,7 +3196,7 @@ impl Render for CodeView {
                 this.attach_paths(paths.paths().to_vec(), cx);
                 this.focus_composer(window, cx);
             }))
-            .child(div().flex_1().min_h_0().relative().overflow_hidden().child(transcript).children(jump))
+            .child(div().flex_1().min_h_0().relative().overflow_hidden().debug_selector(|| "cw-transcript".to_string()).child(transcript).children(jump))
             .children(status)
             .children(plan)
             .children(approval_cards)
@@ -3265,6 +3382,14 @@ mod tests {
                 DisplayRow::Item(4),
                 DisplayRow::Item(5),
             ]
+        );
+
+        // Handoff divider stays outside work groups too
+        let handoff = Item::Handoff { key: "h1".into(), from_model: "claude/fable".into(), from_actual: Some("claude-fable-5-2".into()), to_model: "agy/gemini-4-neon".into() };
+        let with_handoff = vec![user("u1"), text("a1", false), handoff, user("u2"), text("a2", false)];
+        assert_eq!(
+            build_display_rows(&with_handoff, false, true),
+            vec![DisplayRow::Item(0), DisplayRow::Item(1), DisplayRow::Item(2), DisplayRow::Item(3), DisplayRow::Item(4)]
         );
 
         // Restored session without timestamps yields None duration
@@ -3692,5 +3817,263 @@ mod tests {
         });
         draw(vcx);
         assert_eq!(fade_for(vcx, "wg-t0"), (1.0, 0.0), "at bottom: only top edge should fade");
+    }
+
+    #[gpui_kit::test]
+    fn composer_attachments_grow_composer_and_shift_transcript_without_overlap(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::session::CodeModel;
+        use crate::code::state::{Attachment, Item};
+        use crate::model::AppState;
+        use base64::Engine;
+        use gpui_kit::{AppContext, px};
+
+        let mut png_bytes = Vec::new();
+        image::DynamicImage::new_rgba8(4, 4)
+            .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+            .unwrap();
+        let png_b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+
+        cx.update(gpui_kit::init);
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                let mut items = vec![Item::User { key: "u0".into(), text: "earlier prompt".into(), at: 1, images: vec![] }];
+                for i in 0..14 {
+                    items.push(Item::Text {
+                        key: format!("fill-{i}"),
+                        text: format!("Filler message {i}\n\nSecond paragraph of filler message {i}."),
+                        streaming: false,
+                    });
+                }
+                items.push(Item::Text {
+                    key: "last".into(),
+                    text: "Final assistant message right above the composer.".into(),
+                    streaming: false,
+                });
+                m.state.items = items;
+                m
+            });
+            CodeView::new(model, app, window, cx)
+        });
+
+        let draw = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        };
+
+        draw(vcx);
+        draw(vcx);
+
+        let card_0 = vcx.debug_bounds("cw-composer-card").expect("composer card rendered");
+        let tr_0 = vcx.debug_bounds("cw-transcript").expect("transcript rendered");
+        let last_0 = vcx.debug_bounds("cw-row-15").expect("last transcript row rendered");
+        assert!(tr_0.bottom() <= card_0.top(), "initial transcript bottom should sit above composer");
+        assert!(last_0.bottom() <= card_0.top(), "initial last row should sit above composer");
+
+        // 1. Attach one image: composer grows in-flow, transcript shrinks, last row shifts up without overlap.
+        let one = png_b64.clone();
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, _| {
+                    m.attachments.push(Attachment { data: one, mime: "image/png".into(), name: "shot-0.png".into(), path: None });
+                });
+                cx.notify();
+            });
+        });
+        draw(vcx);
+        draw(vcx);
+
+        let card_1 = vcx.debug_bounds("cw-composer-card").expect("composer card rendered with 1 attachment");
+        let att_1 = vcx.debug_bounds("cw-attachments").expect("attachments container rendered");
+        let tr_1 = vcx.debug_bounds("cw-transcript").expect("transcript rendered with 1 attachment");
+        let last_1 = vcx.debug_bounds("cw-row-15").expect("last row rendered with 1 attachment");
+
+        let delta_1 = card_1.size.height - card_0.size.height;
+        assert!(delta_1 >= px(48.0), "composer should grow by at least 48px for image thumbnail, got {delta_1:?}");
+        assert!(
+            att_1.top() >= card_1.top() && att_1.bottom() <= card_1.bottom(),
+            "attachments must be contained inside composer card: att={att_1:?}, card={card_1:?}"
+        );
+        let tr_shrink_1 = tr_0.size.height - tr_1.size.height;
+        assert!(
+            (tr_shrink_1 - delta_1).abs() <= px(1.0),
+            "transcript should shrink by composer growth: delta={delta_1:?}, shrink={tr_shrink_1:?}"
+        );
+        assert!(tr_1.bottom() <= card_1.top(), "transcript must not overlap composer: tr={tr_1:?}, card={card_1:?}");
+        assert!(
+            last_1.bottom() < last_0.bottom() - px(40.0),
+            "last row should shift upward: before={last_0:?}, after={last_1:?}"
+        );
+        assert!(last_1.bottom() <= card_1.top(), "last row must stay above composer: last={last_1:?}, card={card_1:?}");
+
+        // 2. Attach enough images to wrap onto multiple rows: composer grows again, transcript shrinks with no overlap.
+        let total_to_wrap = (f32::from(card_1.size.width) / 48.0).ceil() as usize + 4;
+        let more = png_b64.clone();
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, _| {
+                    for i in 1..total_to_wrap {
+                        m.attachments.push(Attachment { data: more.clone(), mime: "image/png".into(), name: format!("shot-{i}.png"), path: None });
+                    }
+                });
+                cx.notify();
+            });
+        });
+        draw(vcx);
+        draw(vcx);
+
+        let card_2 = vcx.debug_bounds("cw-composer-card").expect("composer card rendered with wrapped attachments");
+        let att_2 = vcx.debug_bounds("cw-attachments").expect("wrapped attachments container rendered");
+        let tr_2 = vcx.debug_bounds("cw-transcript").expect("transcript rendered with wrapped attachments");
+        let last_2 = vcx.debug_bounds("cw-row-15").expect("last row rendered with wrapped attachments");
+
+        let delta_2 = card_2.size.height - card_1.size.height;
+        assert!(delta_2 >= px(48.0), "wrapping onto another row should grow composer further, got {delta_2:?}");
+        assert!(
+            att_2.top() >= card_2.top() && att_2.bottom() <= card_2.bottom(),
+            "wrapped attachments must stay inside composer card: att={att_2:?}, card={card_2:?}"
+        );
+        let tr_shrink_2 = tr_1.size.height - tr_2.size.height;
+        assert!(
+            (tr_shrink_2 - delta_2).abs() <= px(1.0),
+            "transcript should shrink by wrapped composer growth: delta={delta_2:?}, shrink={tr_shrink_2:?}"
+        );
+        assert!(tr_2.bottom() <= card_2.top(), "transcript must not overlap wrapped composer: tr={tr_2:?}, card={card_2:?}");
+        assert!(
+            last_2.bottom() < last_1.bottom() - px(40.0),
+            "last row should shift upward further on wrapped attachments: before={last_1:?}, after={last_2:?}"
+        );
+        assert!(last_2.bottom() <= card_2.top(), "last row must stay above wrapped composer: last={last_2:?}, card={card_2:?}");
+
+        // 3. Clearing attachments restores composer and transcript heights.
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, _| m.attachments.clear());
+                cx.notify();
+            });
+        });
+        draw(vcx);
+        draw(vcx);
+
+        let card_3 = vcx.debug_bounds("cw-composer-card").expect("composer card rendered after clear");
+        let tr_3 = vcx.debug_bounds("cw-transcript").expect("transcript rendered after clear");
+        assert!(
+            (card_3.size.height - card_0.size.height).abs() <= px(1.0),
+            "composer height should restore after clearing attachments: before={card_0:?}, after={card_3:?}"
+        );
+        assert!(
+            (tr_3.size.height - tr_0.size.height).abs() <= px(1.0),
+            "transcript height should restore after clearing attachments: before={tr_0:?}, after={tr_3:?}"
+        );
+        assert!(vcx.debug_bounds("cw-attachments").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn ultracode_aurora_animates_distinct_frames_inside_parent_view(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::session::CodeModel;
+        use crate::code::state::Sheet;
+        use crate::model::AppState;
+        use crate::ui::nebula;
+        use gpui_kit::{AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div};
+        use std::collections::HashSet;
+        use std::time::{Duration, Instant};
+
+        struct Host {
+            child: Entity<CodeView>,
+        }
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(self.child.clone())
+            }
+        }
+
+        cx.update(gpui_kit::init);
+        nebula::warm_ultracode(false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while nebula::ultracode_sequence(false).frame_count() < nebula::ULTRA_FRAMES {
+            assert!(Instant::now() < deadline, "ultracode sequence bake timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let (host, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                m.state.model = "claude/sonnet".into();
+                m.state.ultracode = false;
+                m
+            });
+            let child = cx.new(|cx| CodeView::new(model, app, window, cx));
+            Host { child }
+        });
+        vcx.run_until_parked();
+
+        let view = vcx.read(|cx| host.read(cx).child.clone());
+        vcx.update(|window, cx| {
+            view.update(cx, |v, cx| {
+                v.set_sheet(Some(Sheet::Effort), cx);
+                v.toggle_ultracode(cx);
+            });
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        let _ = super::super::code_pickers::take_ultra_paint_log();
+        let mut composer_frames = HashSet::new();
+        let mut card_frames = HashSet::new();
+        for _ in 0..12 {
+            vcx.background_executor.advance_clock(Duration::from_millis(50));
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            for (id, frame_idx, bounds) in super::super::code_pickers::take_ultra_paint_log() {
+                assert!(
+                    f32::from(bounds.size.width) > 20.0 && f32::from(bounds.size.height) > 10.0,
+                    "aurora bounds for {id} must be non-zero, got {bounds:?}"
+                );
+                if id.as_ref() == "ultra-composer-aurora" {
+                    composer_frames.insert(frame_idx);
+                } else if id.as_ref() == "ultra-card-aurora-effort" {
+                    card_frames.insert(frame_idx);
+                }
+            }
+        }
+        assert!(
+            composer_frames.len() >= 8,
+            "ultracode composer aurora must advance through many distinct frames (not stuck on 1-2), saw {:?}",
+            composer_frames
+        );
+        assert!(
+            card_frames.len() >= 8,
+            "ultracode card aurora must advance through many distinct frames (not stuck on 1-2), saw {:?}",
+            card_frames
+        );
+
+        // Wait past the 420ms elastic knob animation and verify the settled handle is evenly centered
+        // vertically and horizontally inside the switch track.
+        vcx.background_executor.advance_clock(Duration::from_millis(600));
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let sw = vcx.debug_bounds("ultra-switch-effort").expect("ultracode switch rendered");
+        let kn = vcx.debug_bounds("ultra-knob-effort").expect("ultracode knob rendered");
+        let top_gap = f32::from(kn.top() - sw.top());
+        let bot_gap = f32::from(sw.bottom() - kn.bottom());
+        let right_gap = f32::from(sw.right() - kn.right());
+        assert!(
+            (top_gap - bot_gap).abs() <= 0.5,
+            "switch knob must be vertically centered: top_gap={top_gap}, bot_gap={bot_gap} (sw={sw:?}, kn={kn:?})"
+        );
+        assert!(
+            (right_gap - top_gap).abs() <= 0.5,
+            "switch knob right margin must match vertical margin: right_gap={right_gap}, top_gap={top_gap} (sw={sw:?}, kn={kn:?})"
+        );
     }
 }

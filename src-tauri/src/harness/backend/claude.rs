@@ -285,6 +285,8 @@ struct Bridge {
     plans: Option<PathBuf>,
     /// The plan file the agent last wrote, handed over with ExitPlanMode.
     plan_file: Option<String>,
+    /// Ultracode multi-agent mode (Claude Code's `ultracode` flag setting).
+    ultracode: bool,
 }
 
 struct Checkpoint {
@@ -396,6 +398,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         }
     };
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
+    if opts.ultracode {
+        let _ = proc.write(&json!({ "type": "control_request", "request_id": "init-ultracode", "request": { "subtype": "apply_flag_settings", "settings": { "ultracode": true } } }));
+    }
     let mut b = Bridge {
         model: String::new(),
         events,
@@ -425,6 +430,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         low: false,
         plans: plans_dir(opts.account.as_deref()),
         plan_file: None,
+        ultracode: opts.ultracode,
     };
     b.set_model(&opts.model);
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
@@ -465,6 +471,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 match &cmd {
                     Cmd::SetModel(m) => opts.model = m.clone(),
                     Cmd::SetEffort(e) => opts.effort = e.clone(),
+                    Cmd::SetUltracode(on) => opts.ultracode = *on,
                     Cmd::SetSubagent { model, .. } if *model != opts.sub_model => {
                         opts.sub_model = model.clone();
                         respawn = true;
@@ -545,6 +552,9 @@ fn micro_compact(b: &mut Bridge, proc: &mut LineProcess, opts: &mut Opts, path: 
     *proc = LineProcess::spawn("claude", &args(opts), &super::env_pairs(&env(opts)), &opts.cwd, me.clone())?;
     b.live.restarted();
     let _ = proc.write(&json!({ "type": "control_request", "request_id": "init", "request": { "subtype": "initialize" } }));
+    if opts.ultracode {
+        let _ = proc.write(&json!({ "type": "control_request", "request_id": "init-ultracode", "request": { "subtype": "apply_flag_settings", "settings": { "ultracode": true } } }));
+    }
     if saved > 0 {
         b.live.usage.context = b.live.usage.context.saturating_sub(saved as u64 / 4);
         b.emit(Ev::Usage(b.live.usage.clone()));
@@ -680,6 +690,10 @@ impl Bridge {
             Cmd::SetEffort(e) => {
                 let level = e.map(|e| if e == "minimal" { "low".to_string() } else { e });
                 self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } }));
+            }
+            Cmd::SetUltracode(on) => {
+                self.ultracode = on;
+                self.control(proc, json!({ "subtype": "apply_flag_settings", "settings": { "ultracode": on } }));
             }
             // Applied by `run`, which restarts Claude Code with it.
             Cmd::SetSubagent { .. } => {}
@@ -1383,7 +1397,7 @@ mod tests {
             compact_at: 0,
             running: Default::default(),
             settled: false, limit: None, low: false,
-            plans: None, plan_file: None,
+            plans: None, plan_file: None, ultracode: false,
         };
         (b, rx)
     }
@@ -1394,6 +1408,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             model: String::new(),
             effort: None,
+            ultracode: false,
             mode: Mode::Ask,
             resume: None,
             system: None,
@@ -1416,11 +1431,33 @@ mod tests {
     }
 
     #[test]
+    fn set_ultracode_sends_apply_flag_settings() {
+        let (mut b, _rx) = bridge();
+        let (me, lines) = channel();
+        let mut proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        assert!(b.on_cmd(Cmd::SetUltracode(true), &mut proc));
+        assert!(b.ultracode);
+        assert!(b.on_cmd(Cmd::SetUltracode(false), &mut proc));
+        assert!(!b.ultracode);
+        let mut sent = Vec::new();
+        while sent.len() < 2 {
+            match lines.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(In::Line(l)) => if let Ok(v) = serde_json::from_str::<Value>(&l) { sent.push(v); }
+                _ => break,
+            }
+        }
+        drop(proc);
+        assert!(sent.iter().any(|v| v["request"]["subtype"] == "apply_flag_settings" && v["request"]["settings"]["ultracode"] == true));
+        assert!(sent.iter().any(|v| v["request"]["subtype"] == "apply_flag_settings" && v["request"]["settings"]["ultracode"] == false));
+    }
+
+    #[test]
     fn lean_mode_trims_the_setup() {
         let opts = |lean, skills| Opts {
             cwd: std::env::temp_dir(),
             model: String::new(),
             effort: None,
+            ultracode: false,
             mode: Mode::Ask,
             resume: None,
             system: None,

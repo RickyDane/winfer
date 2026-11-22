@@ -1,0 +1,1399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Winfer Code · Ultracode Toggle Mockup</title>
+<style>
+  :root {
+    --app: #09090b;
+    --panel: #111113;
+    --raised: #161619;
+    --hover: #1d1d22;
+    --active: #25252b;
+    --border: #222228;
+    --edge: #2c2c34;
+    --fg: #ececf0;
+    --muted: #a1a1aa;
+    --subtle: #71717a;
+    --accent: #7c8cff;
+    --claude: #e08b6a;
+    --codex: #ececf0;
+    --agy: #4f8cff;
+    --warning: #fbbf24;
+    --success: #4ade80;
+    --violet: #a855f7;
+    --cyan: #38bdf8;
+    --magenta: #e879f9;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+    color-scheme: dark;
+  }
+  :root.light {
+    --app: #ececf2;
+    --panel: #f6f6fa;
+    --raised: #ffffff;
+    --hover: #ededf4;
+    --active: #e2e2ec;
+    --border: #e4e4ec;
+    --edge: #d4d4df;
+    --fg: #18181b;
+    --muted: #52525b;
+    --subtle: #7b7b86;
+    --accent: #4f5ff0;
+    --claude: #c2603f;
+    --codex: #18181b;
+    --agy: #2563eb;
+    --warning: #c27c0e;
+    --success: #16a34a;
+    --violet: #7c3aed;
+    --cyan: #0284c7;
+    --magenta: #db2777;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    font: 13px/1.45 var(--sans);
+    color: var(--fg);
+    background: #141418;
+    background-image:
+      radial-gradient(ellipse 60% 45% at 20% 8%, rgba(124, 140, 255, 0.14), transparent 60%),
+      radial-gradient(ellipse 55% 45% at 82% 88%, rgba(168, 85, 247, 0.14), transparent 58%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 14px 18px 18px;
+    gap: 12px;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  :root.light body {
+    background: #d4d5df;
+    background-image:
+      radial-gradient(ellipse 60% 45% at 20% 8%, rgba(99, 102, 241, 0.14), transparent 60%),
+      radial-gradient(ellipse 55% 45% at 82% 88%, rgba(168, 85, 247, 0.12), transparent 58%);
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+
+  /* Top review bar */
+  .reviewbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 7px;
+    border-radius: 12px;
+    background: rgba(9, 9, 12, 0.78);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #e4e4e7;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    z-index: 20;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  :root.light .reviewbar {
+    background: rgba(255, 255, 255, 0.82);
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #18181b;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  }
+  .rbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: inherit;
+    opacity: 0.72;
+    transition: background 140ms ease, opacity 140ms ease, color 140ms ease;
+  }
+  .rbtn:hover { opacity: 1; background: rgba(255, 255, 255, 0.09); }
+  :root.light .rbtn:hover { background: rgba(0, 0, 0, 0.06); }
+  .rbtn.on {
+    opacity: 1;
+    background: var(--accent);
+    color: #fff;
+  }
+  .rbtn.ignite {
+    opacity: 1;
+    background: linear-gradient(135deg, #7c3aed, #a855f7 52%, #0ea5e9);
+    color: #fff;
+    box-shadow: 0 0 14px rgba(168, 85, 247, 0.42);
+  }
+  .rbtn.ignite:hover { filter: brightness(1.1); }
+  .rsep { width: 1px; height: 16px; background: rgba(255, 255, 255, 0.14); margin: 0 2px; }
+  :root.light .rsep { background: rgba(0, 0, 0, 0.12); }
+
+  /* Winfer Native GPUI Window Frame */
+  .window {
+    position: relative;
+    width: min(980px, 100%);
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-radius: 14px;
+    border: 1px solid var(--edge);
+    background: var(--panel);
+    box-shadow: 0 32px 90px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    overflow: hidden;
+  }
+  :root.light .window {
+    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.6) inset;
+  }
+
+  /* Pane Header */
+  .pane-head {
+    height: 40px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    z-index: 2;
+  }
+  .traffic { display: flex; gap: 6px; margin-right: 4px; }
+  .traffic span { width: 10px; height: 10px; border-radius: 50%; background: var(--active); }
+  .traffic span:nth-child(1) { background: #ff5f57; }
+  .traffic span:nth-child(2) { background: #febc2e; }
+  .traffic span:nth-child(3) { background: #28c840; }
+  .pane-num { font: 600 11px var(--mono); color: var(--subtle); }
+  .pane-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px rgba(74, 222, 128, 0.5); }
+  .pane-title { font-size: 12.5px; font-weight: 500; color: var(--fg); }
+  .pane-spacer { flex: 1; }
+  .pane-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 99px;
+    font: 500 11px var(--mono);
+    color: var(--muted);
+    background: var(--hover);
+    border: 1px solid var(--border);
+  }
+  .pane-chip.ultra-chip {
+    color: #e0f2fe;
+    border-color: rgba(56, 189, 248, 0.45);
+    background: linear-gradient(90deg, rgba(124, 58, 237, 0.35), rgba(56, 189, 248, 0.28));
+    box-shadow: 0 0 12px rgba(168, 85, 247, 0.25);
+  }
+  :root.light .pane-chip.ultra-chip {
+    color: #4c1d95;
+    border-color: rgba(124, 58, 237, 0.35);
+    background: linear-gradient(90deg, rgba(167, 139, 250, 0.28), rgba(125, 211, 252, 0.32));
+  }
+
+  /* Chat Canvas */
+  .chat {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--app);
+    overflow: hidden;
+  }
+  .sky-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse 45% 32% at 18% 12%, rgba(88, 80, 220, 0.08), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 85% 88%, rgba(124, 140, 255, 0.07), transparent 70%),
+      radial-gradient(ellipse 65% 38% at 50% 110%, rgba(40, 70, 160, 0.07), transparent 70%);
+    transition: opacity 400ms ease;
+  }
+  .chat.ultra-engaged .sky-glow {
+    background:
+      radial-gradient(ellipse 50% 38% at 18% 14%, rgba(139, 92, 246, 0.13), transparent 70%),
+      radial-gradient(ellipse 45% 35% at 82% 80%, rgba(56, 189, 248, 0.11), transparent 70%),
+      radial-gradient(ellipse 65% 42% at 50% 106%, rgba(232, 121, 249, 0.11), transparent 70%);
+  }
+
+  .transcript {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 22px 24px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .col { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+
+  .msg-user {
+    align-self: flex-end;
+    max-width: 78%;
+    padding: 10px 14px;
+    border-radius: 14px 14px 4px 14px;
+    background: var(--raised);
+    border: 1px solid var(--edge);
+    font-size: 13px;
+    color: var(--fg);
+  }
+  .msg-assistant {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--fg);
+  }
+  .msg-assistant p { margin: 0; color: var(--muted); line-height: 1.55; }
+  .msg-assistant strong { color: var(--fg); font-weight: 600; }
+
+  /* Telemetry / Protocol Inspector Pill */
+  .wire-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    font: 11.5px/1.45 var(--mono);
+    color: var(--muted);
+    transition: border-color 280ms ease, box-shadow 280ms ease;
+  }
+  .wire-card.hot {
+    border-color: rgba(168, 85, 247, 0.45);
+    box-shadow: 0 0 22px rgba(168, 85, 247, 0.12);
+  }
+  .wire-tag {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    background: var(--hover);
+    color: var(--subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .wire-card.hot .wire-tag {
+    background: rgba(168, 85, 247, 0.18);
+    color: #d8b4fe;
+  }
+  :root.light .wire-card.hot .wire-tag { color: #6d28d9; }
+  .wire-code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wire-code .k { color: var(--cyan); }
+  .wire-code .v { color: var(--magenta); }
+
+  /* Composer Dock */
+  .dock {
+    position: relative;
+    z-index: 5;
+    padding: 0 12px 12px;
+    display: flex;
+    justify-content: center;
+  }
+  .composer-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 780px;
+  }
+  .composer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px;
+    background: var(--raised);
+    border: 1px solid var(--edge);
+    box-shadow: 0 8px 24px -2px rgba(0, 0, 0, 0.52), 0 2px 6px rgba(0, 0, 0, 0.38);
+    transition: border-color 300ms ease, box-shadow 360ms ease;
+  }
+  :root.light .composer {
+    box-shadow: 0 8px 24px -2px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
+  }
+  .composer.ultra-on {
+    border-color: rgba(168, 85, 247, 0.52);
+    box-shadow:
+      0 0 24px -2px rgba(168, 85, 247, 0.24),
+      0 8px 26px -2px rgba(0, 0, 0, 0.55);
+  }
+  :root.light .composer.ultra-on {
+    border-color: rgba(124, 58, 237, 0.44);
+    box-shadow:
+      0 0 22px -2px rgba(124, 58, 237, 0.16),
+      0 8px 24px -2px rgba(15, 23, 42, 0.12);
+  }
+
+  /* Composer top-edge prismatic shockwave */
+  .composer-wave {
+    position: absolute;
+    top: -1px;
+    left: 12px;
+    right: 12px;
+    height: 3px;
+    border-radius: 99px;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .composer-wave-beam {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    height: 100%;
+    width: 0%;
+    transform: translateX(-50%);
+    opacity: 0;
+    background: linear-gradient(90deg, transparent, #a855f7 18%, #38bdf8 50%, #e879f9 82%, transparent);
+    filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.9));
+  }
+  .composer-wave-beam.fire {
+    animation: composerWave 1150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes composerWave {
+    0%   { width: 8%; opacity: 1; }
+    35%  { width: 85%; opacity: 1; }
+    100% { width: 112%; opacity: 0; }
+  }
+
+  .composer-input {
+    padding: 13px 16px 6px;
+    min-height: 44px;
+    font-size: 13.5px;
+    color: var(--subtle);
+  }
+  .composer-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px 6px 8px;
+  }
+  .bar-sep { width: 1px; height: 14px; background: var(--border); margin: 0 4px; }
+  .bar-spacer { flex: 1; }
+
+  .pill-anchor { position: relative; display: inline-flex; }
+  .pill {
+    position: relative;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--muted);
+    transition: background 120ms ease, color 120ms ease, border-color 180ms ease, box-shadow 220ms ease;
+    border: 1px solid transparent;
+  }
+  .pill:hover, .pill.open { background: var(--hover); color: var(--fg); }
+  .pill.icon-only { width: 28px; padding: 0; justify-content: center; }
+
+  /* Active Ultracode Effort Pill */
+  .pill.ultra-pill {
+    color: #f4f4f8;
+    font-weight: 500;
+    border-color: rgba(168, 85, 247, 0.44);
+    box-shadow: 0 0 8px rgba(168, 85, 247, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+  :root.light .pill.ultra-pill {
+    color: #2e1065;
+    border-color: rgba(124, 58, 237, 0.5);
+    box-shadow: 0 0 10px rgba(124, 58, 237, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.55);
+  }
+  .pill.ultra-pill:hover, .pill.ultra-pill.open {
+    border-color: var(--cyan);
+    color: #fff;
+  }
+  :root.light .pill.ultra-pill:hover, :root.light .pill.ultra-pill.open { color: #2e1065; }
+  .pill.ultra-pill > .aurora-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 7px;
+    opacity: 0.56;
+    pointer-events: none;
+  }
+  :root.light .pill.ultra-pill > .aurora-bg { opacity: 0.82; }
+  .pill.ultra-pill > *:not(.aurora-bg):not(.sweep-blade) { position: relative; z-index: 2; }
+
+  .send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: radial-gradient(circle at 35% 30%, #d946ef, #5b21b6 58%, #0c041a 100%);
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(168, 85, 247, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.28);
+  }
+
+  /* Popover (Anchored upward above Effort or Model pill) */
+  .popover {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    border-radius: 12px;
+    border: 1px solid var(--edge);
+    background: var(--raised);
+    box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.32);
+    transform-origin: bottom left;
+    animation: popRise 220ms cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 30;
+  }
+  :root.light .popover {
+    box-shadow: 0 18px 46px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
+  }
+  .popover.hidden { display: none; }
+  @keyframes popRise {
+    from { opacity: 0; transform: translateY(8px) scale(0.985); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .effort-popover { width: 294px; }
+  .pop-head {
+    height: 40px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--subtle);
+  }
+  .effort-list {
+    padding: 0 8px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .effort-row {
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--muted);
+    transition: background 110ms ease, color 110ms ease;
+  }
+  .effort-row:hover { background: var(--hover); color: var(--fg); }
+  .effort-row.on { background: rgba(124, 140, 255, 0.13); color: var(--fg); }
+  .effort-row .lbl { flex: 1; text-align: left; }
+  .effort-row .check { color: var(--accent); }
+  .effort-row.ultra-boosted {
+    opacity: 0.55;
+  }
+
+  /* Ultracode Section inside Effort Popover */
+  .ultra-section {
+    padding: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .ultra-card {
+    position: relative;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.025);
+    text-align: left;
+    transition: border-color 220ms ease, box-shadow 300ms ease, background 200ms ease, transform 140ms ease;
+  }
+  :root.light .ultra-card { background: rgba(0, 0, 0, 0.025); }
+  .ultra-card:hover {
+    background: var(--hover);
+    border-color: rgba(168, 85, 247, 0.45);
+  }
+  .ultra-card:active { transform: scale(0.988); }
+
+  .ultra-card.on {
+    border-color: rgba(56, 189, 248, 0.4);
+    box-shadow:
+      0 2px 12px rgba(168, 85, 247, 0.2),
+      0 0 0 1px rgba(232, 121, 249, 0.12),
+      inset 0 1px 1px rgba(255, 255, 255, 0.12);
+    animation: borderBreathe 4.2s ease-in-out infinite;
+  }
+  :root.light .ultra-card.on {
+    border-color: rgba(124, 58, 237, 0.52);
+    box-shadow:
+      0 3px 14px rgba(124, 58, 237, 0.2),
+      inset 0 1px 1px rgba(255, 255, 255, 0.65);
+  }
+  @keyframes borderBreathe {
+    0%, 100% { border-color: rgba(56, 189, 248, 0.4); }
+    50%      { border-color: rgba(232, 121, 249, 0.46); }
+  }
+
+  .ultra-card-bg {
+    position: absolute;
+    inset: 0;
+    border-radius: 9px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .ultra-card-bg canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    opacity: 0;
+    transition: opacity 320ms ease;
+  }
+  .ultra-card.on .ultra-card-bg canvas { opacity: 0.58; }
+  :root.light .ultra-card.on .ultra-card-bg canvas { opacity: 0.86; }
+
+  /* Chromatic light-blade sweep */
+  .sweep-blade {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: inherit;
+    z-index: 3;
+  }
+  .sweep-blade::after {
+    content: "";
+    position: absolute;
+    top: -20%;
+    bottom: -20%;
+    left: -55%;
+    width: 48%;
+    transform: skewX(-22deg);
+    background: linear-gradient(90deg, transparent, rgba(232, 121, 249, 0.55) 28%, rgba(255, 255, 255, 0.95) 50%, rgba(56, 189, 248, 0.72) 72%, transparent);
+    opacity: 0;
+  }
+  .sweep-blade.fire::after {
+    animation: bladeSweep 640ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  @keyframes bladeSweep {
+    0%   { left: -55%; opacity: 0.95; }
+    65%  { opacity: 0.92; }
+    100% { left: 130%; opacity: 0; }
+  }
+
+  .ultra-copy {
+    position: relative;
+    z-index: 2;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .ultra-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ultra-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .ultra-card.on .ultra-title { color: #fff; }
+  :root.light .ultra-card.on .ultra-title { color: #2e1065; }
+  .ultra-badge {
+    display: none;
+    padding: 1px 6px;
+    border-radius: 99px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: rgba(56, 189, 248, 0.22);
+    border: 1px solid rgba(56, 189, 248, 0.5);
+    color: #bae6fd;
+  }
+  :root.light .ultra-badge {
+    background: rgba(124, 58, 237, 0.16);
+    border-color: rgba(124, 58, 237, 0.4);
+    color: #6d28d9;
+  }
+  .ultra-card.on .ultra-badge { display: inline-block; animation: badgePop 380ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes badgePop {
+    from { opacity: 0; transform: scale(0.6); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .ultra-sub {
+    font-size: 11px;
+    color: var(--subtle);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ultra-card.on .ultra-sub { color: rgba(255, 255, 255, 0.8); }
+  :root.light .ultra-card.on .ultra-sub { color: #5b21b6; }
+
+  /* Spring-overshoot switch */
+  .ultra-switch {
+    position: relative;
+    z-index: 2;
+    width: 34px;
+    height: 19px;
+    flex-shrink: 0;
+    border-radius: 99px;
+    border: 1px solid var(--edge);
+    background: var(--hover);
+    transition: background 220ms ease, border-color 220ms ease;
+  }
+  .ultra-card.on .ultra-switch {
+    background: linear-gradient(135deg, #8b5cf6, #38bdf8);
+    border-color: rgba(125, 211, 252, 0.8);
+  }
+  .ultra-knob {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    transition: transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1), background 180ms ease, box-shadow 220ms ease;
+  }
+  .ultra-card.on .ultra-knob {
+    transform: translateX(15px);
+    background: #fff;
+    box-shadow: 0 0 9px rgba(56, 189, 248, 0.85);
+  }
+
+  .pop-foot {
+    padding: 4px 12px 10px;
+    font-size: 11.5px;
+    color: var(--subtle);
+    line-height: 1.4;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .kbd {
+    flex-shrink: 0;
+    font: 10px var(--mono);
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--hover);
+    border: 1px solid var(--border);
+    color: var(--subtle);
+  }
+
+  /* Model Popover (side-by-side preview of Model Picker's Reasoning Column) */
+  .model-popover {
+    width: 560px;
+    height: 368px;
+    display: flex;
+  }
+  .mp-rail {
+    width: 52px;
+    padding: 10px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    border-right: 1px solid var(--border);
+  }
+  .mp-tab {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    opacity: 0.65;
+  }
+  .mp-tab.on { background: var(--hover); opacity: 1; }
+  .mp-mid {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+  .mp-search {
+    height: 42px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--subtle);
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  .mp-models { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+  .mp-row {
+    height: 36px;
+    padding: 0 10px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    color: var(--fg);
+  }
+  .mp-row:hover { background: var(--hover); }
+  .mp-row.on { background: rgba(124, 140, 255, 0.13); }
+  .mp-right {
+    width: 204px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .mp-right .effort-list { flex: 1; overflow-y: auto; }
+  .mp-right .ultra-card { padding: 7px 9px; gap: 8px; }
+  .mp-right .ultra-title { font-size: 12px; }
+  .mp-right .ultra-sub { font-size: 10.5px; }
+  .mp-right .ultra-badge { display: none !important; }
+  .mp-right .ultra-switch { width: 30px; height: 17px; }
+  .mp-right .ultra-knob { width: 13px; height: 13px; }
+  .mp-right .ultra-card.on .ultra-knob { transform: translateX(13px); }
+
+  /* Full-screen unclipped FX overlay for starburst particles & shockwave rings */
+  #fx-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 999;
+  }
+</style>
+</head>
+<body>
+  <canvas id="fx-canvas"></canvas>
+
+  <div class="reviewbar">
+    <button class="rbtn on" data-backend="claude" onclick="selectBackend('claude')">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" style="color:var(--claude)"><path d="M8 1l1.7 4.7L14.5 7l-4.8 1.5L8 13.5 6.3 8.5 1.5 7l4.8-1.3z"/></svg>
+      Claude Code (Opus 5.5)
+    </button>
+    <button class="rbtn" data-backend="codex" onclick="selectBackend('codex')">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="8" cy="8" r="5.5"/><path d="M5.5 8l2 2 3-4"/></svg>
+      Codex (GPT 6.1 Sol)
+    </button>
+    <button class="rbtn" data-backend="agy" onclick="selectBackend('agy')">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" style="color:var(--agy)"><path d="M3 12L8 3l5 9"/><path d="M5.5 9h5"/></svg>
+      Antigravity (No Ultracode)
+    </button>
+    <span class="rsep"></span>
+    <button class="rbtn on" data-view="effort" onclick="selectView('effort')">Effort Popover</button>
+    <button class="rbtn" data-view="model" onclick="selectView('model')">Model Picker</button>
+    <span class="rsep"></span>
+    <button class="rbtn ignite" onclick="replayIgnition()">⚡ Replay Ignition</button>
+    <button class="rbtn" id="theme-btn" onclick="toggleTheme()">☀ Light</button>
+  </div>
+
+  <div class="window">
+    <div class="pane-head">
+      <div class="traffic"><span></span><span></span><span></span></div>
+      <span class="pane-num">01</span>
+      <span class="pane-dot"></span>
+      <span class="pane-title">Refactor auth middleware &amp; audit race conditions</span>
+      <span class="pane-spacer"></span>
+      <span class="pane-chip" id="head-model-chip">claude/opus</span>
+      <span class="pane-chip ultra-chip" id="head-ultra-chip" style="display:none">⚡ ULTRACODE</span>
+    </div>
+
+    <div class="chat" id="chat-area">
+      <div class="sky-glow"></div>
+
+      <div class="transcript">
+        <div class="col">
+          <div class="msg-user">
+            Audit all token refresh paths across the gateway and eliminate the concurrent refresh race.
+          </div>
+          <div class="msg-assistant">
+            <p>
+              <strong>Click the Ultracode toggle inside the Effort popover below</strong> (or press <kbd class="kbd">Tab</kbd>) to watch the full ignition burst, dual chromatic shockwaves, aurora drift, Effort pill transformation, and composer top-edge wave.
+            </p>
+            <div class="wire-card" id="wire-card">
+              <span class="wire-tag" id="wire-tag">Harness Wire</span>
+              <span class="wire-code" id="wire-code"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dock">
+        <div class="composer-wrap">
+          <div class="composer" id="composer">
+            <div class="composer-wave"><div class="composer-wave-beam" id="composer-wave-beam"></div></div>
+            <div class="composer-input">Ask a follow-up, or type /ultracode…</div>
+            <div class="composer-bar">
+              <button class="pill icon-only" title="Attach files">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <span class="bar-sep"></span>
+              <button class="pill">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                Auto-edit
+              </button>
+
+              <!-- Model Pill + Model Picker Popover -->
+              <div class="pill-anchor">
+                <div class="popover model-popover hidden" id="model-popover">
+                  <div class="mp-rail">
+                    <button class="mp-tab">★</button>
+                    <button class="mp-tab on" id="mp-tab-claude" onclick="selectBackend('claude')" style="color:var(--claude)">✳</button>
+                    <button class="mp-tab" id="mp-tab-codex" onclick="selectBackend('codex')">◎</button>
+                    <button class="mp-tab" id="mp-tab-agy" onclick="selectBackend('agy')" style="color:var(--agy)">△</button>
+                  </div>
+                  <div class="mp-mid">
+                    <div class="mp-search">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                      Search models…
+                    </div>
+                    <div class="mp-models" id="mp-models"></div>
+                  </div>
+                  <div class="mp-right">
+                    <div class="pop-head"><span>Reasoning</span><span id="mp-model-name">Opus 5.5</span></div>
+                    <div class="effort-list" id="mp-effort-list"></div>
+                    <div class="ultra-section" id="mp-ultra-section"></div>
+                  </div>
+                </div>
+
+                <button class="pill" id="model-pill" onclick="togglePopover('model')">
+                  <span id="model-pill-icon"></span>
+                  <span id="model-pill-label">Opus 5.5</span>
+                </button>
+              </div>
+
+              <!-- Effort Pill + Effort Popover -->
+              <div class="pill-anchor">
+                <div class="popover effort-popover" id="effort-popover">
+                  <div class="pop-head">
+                    <span>Reasoning</span>
+                    <span id="ep-model-name">Opus 5.5</span>
+                  </div>
+                  <div class="effort-list" id="ep-effort-list"></div>
+                  <div class="ultra-section" id="ep-ultra-section"></div>
+                  <div class="pop-foot">
+                    <span id="ep-hint">Thorough reasoning</span>
+                    <kbd class="kbd" id="ep-tab-kbd">Tab</kbd>
+                  </div>
+                </div>
+
+                <button class="pill open" id="effort-pill" onclick="togglePopover('effort')">
+                  <canvas class="aurora-bg" id="pill-aurora" width="160" height="40" style="display:none"></canvas>
+                  <div class="sweep-blade" id="pill-sweep"></div>
+                  <span id="effort-pill-icon"></span>
+                  <span id="effort-pill-label">high</span>
+                </button>
+              </div>
+
+              <button class="pill" style="color:var(--subtle)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                main
+              </button>
+
+              <span class="bar-spacer"></span>
+              <span style="font:11px var(--mono);color:var(--subtle);margin-right:6px">↑18.4k ↓2.1k</span>
+              <button class="send-btn" title="Send">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const BACKENDS = {
+  claude: {
+    id: "claude",
+    spec: "claude/opus",
+    name: "Opus 5.5",
+    icon: `<span style="color:var(--claude);font-size:13px">✳</span>`,
+    efforts: ["default", "low", "medium", "high", "xhigh", "max"],
+    models: [
+      { id: "claude/fable", name: "Claude Fable 5.1" },
+      { id: "claude/opus", name: "Claude Opus 5.5", active: true },
+      { id: "claude/sonnet", name: "Claude Sonnet 5.5" },
+      { id: "claude/haiku", name: "Claude Haiku 5.5" },
+    ],
+    supportsUltra: true,
+    ultraSub: "Dynamic multi-agent workflows",
+    ultraSubCompact: "Dynamic workflows",
+    ultraHint: "Ultracode runs dynamic multi-agent workflows alongside your effort",
+  },
+  codex: {
+    id: "codex",
+    spec: "codex/gpt-6.1-sol",
+    name: "GPT 6.1 Sol",
+    icon: `<span style="font-size:13px">◎</span>`,
+    efforts: ["default", "minimal", "low", "medium", "high", "xhigh"],
+    models: [
+      { id: "codex/gpt-6.1-sol", name: "GPT 6.1 Sol", active: true },
+      { id: "codex/gpt-6-luna", name: "GPT 6 Luna" },
+    ],
+    supportsUltra: true,
+    ultraSub: "Multi-agent v2 · Ultra effort",
+    ultraSubCompact: "Multi-agent · Ultra",
+    ultraHint: "Ultracode boosts Codex to Ultra reasoning + multi-agent v2",
+  },
+  agy: {
+    id: "agy",
+    spec: "agy/gemini-4-neon",
+    name: "Gemini 4 Neon",
+    icon: `<span style="color:var(--agy);font-size:12px">△</span>`,
+    efforts: ["default", "low", "medium", "high"],
+    models: [
+      { id: "agy/gemini-4-neon", name: "Gemini 4 Neon", active: true },
+      { id: "agy/gemini-4-flash", name: "Gemini 4 Flash" },
+    ],
+    supportsUltra: false,
+  }
+};
+
+const LABELS = { default: "Default", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra" };
+const HINTS = {
+  default: "The model's own default",
+  minimal: "Barely any reasoning, fastest",
+  low: "Quick answers, light reasoning",
+  medium: "Balanced",
+  high: "Thorough reasoning",
+  xhigh: "Very thorough, slower",
+  max: "As much reasoning as the model can do",
+  ultra: "Beyond max, for the hardest problems",
+};
+
+const state = {
+  backend: "claude",
+  effort: "high",
+  ultracode: false,
+  openPopover: "effort", // "effort" | "model" | null
+  light: false,
+};
+
+function effortGlyphSvg(level, color, size = 16) {
+  if (level === "ultra") {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="${color}"><path d="M9.3 1.2L3.2 8.7h4.2L6.6 14.8l6.2-7.5H8.6l.7-6.1z"/></svg>`;
+  }
+  if (level === "max") {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="${color}"><path d="M8.5 1.5c.8 2.4 3.5 3.8 3.5 7a4 4 0 1 1-8 0c0-1.5.7-3 1.8-4.1-.1 1.2.4 2 1.2 2.2-.2-2 .5-3.9 1.5-5.1z"/></svg>`;
+  }
+  if (level === "default") {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="${color}"><path d="M8 1.5l1.4 4.1 4.1 1.4-4.1 1.4L8 12.5 6.6 8.4 2.5 7l4.1-1.4z"/></svg>`;
+  }
+  const map = { minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5 };
+  const filled = map[level] || 0;
+  let bars = "";
+  for (let i = 1; i <= 5; i++) {
+    const h = 3 + i * 2.1;
+    const op = i <= filled ? 1 : 0.25;
+    bars += `<rect x="${1 + (i - 1) * 3}" y="${14.5 - h}" width="2" height="${h}" rx="1" fill="${color}" fill-opacity="${op}"/>`;
+  }
+  return `<svg width="${size}" height="${size}" viewBox="0 0 16 16">${bars}</svg>`;
+}
+
+function renderEffortList(container, b, ultraActive) {
+  const levels = [...b.efforts].reverse();
+  container.innerHTML = levels.map((lvl) => {
+    const on = lvl === state.effort;
+    const boosted = ultraActive && b.id === "codex";
+    const tint = on ? "var(--accent)" : "var(--muted)";
+    return `
+      <button class="effort-row ${on ? "on" : ""} ${boosted ? "ultra-boosted" : ""}" onclick="pickEffort('${lvl}')">
+        ${effortGlyphSvg(lvl, tint, 16)}
+        <span class="lbl">${LABELS[lvl] || lvl}</span>
+        ${on ? `<svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>` : ""}
+      </button>`;
+  }).join("");
+}
+
+function renderUltraCard(container, b, scope, compact) {
+  if (!b.supportsUltra) {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+  container.style.display = "";
+  const on = state.ultracode;
+  const sub = compact ? b.ultraSubCompact : b.ultraSub;
+  container.innerHTML = `
+    <button class="ultra-card ${on ? "on" : ""}" id="ultra-card-${scope}" onclick="toggleUltracode(this)">
+      <div class="ultra-card-bg">
+        <canvas class="aurora-canvas" width="160" height="48"></canvas>
+      </div>
+      <div class="sweep-blade" id="ultra-sweep-${scope}"></div>
+      <div class="ultra-copy">
+        <div class="ultra-title">Ultracode</div>
+        <div class="ultra-sub">${sub}</div>
+      </div>
+      <div class="ultra-switch"><div class="ultra-knob"></div></div>
+    </button>`;
+}
+
+function render() {
+  const b = BACKENDS[state.backend];
+  const ultraActive = state.ultracode && b.supportsUltra;
+
+  // Review bar state
+  document.querySelectorAll("[data-backend]").forEach((el) => el.classList.toggle("on", el.dataset.backend === state.backend));
+  document.querySelectorAll("[data-view]").forEach((el) => el.classList.toggle("on", el.dataset.view === state.openPopover));
+
+  // Header
+  document.getElementById("head-model-chip").textContent = b.spec;
+  document.getElementById("head-ultra-chip").style.display = ultraActive ? "" : "none";
+  document.getElementById("chat-area").classList.toggle("ultra-engaged", ultraActive);
+  document.getElementById("composer").classList.toggle("ultra-on", ultraActive);
+
+  // Wire telemetry
+  const wireCard = document.getElementById("wire-card");
+  const wireCode = document.getElementById("wire-code");
+  wireCard.classList.toggle("hot", ultraActive);
+  if (!b.supportsUltra) {
+    wireCode.innerHTML = `Ultracode unavailable for <span class="k">${b.id}</span> — toggle is hidden in Effort picker`;
+  } else if (b.id === "claude") {
+    wireCode.innerHTML = `<span class="k">set_ultracode</span> → Claude <span class="k">apply_flag_settings</span> { <span class="v">"ultracode": ${ultraActive}</span>, <span class="k">"effortLevel"</span>: "${state.effort}" }`;
+  } else {
+    wireCode.innerHTML = ultraActive
+      ? `<span class="k">set_ultracode</span> → Codex <span class="v">--enable multi_agent_v2</span> + turn/start { <span class="v">"effort": "ultra"</span> }`
+      : `<span class="k">set_ultracode</span> → Codex standard server + turn/start { <span class="k">"effort"</span>: "${state.effort}" }`;
+  }
+
+  // Model pill & popover
+  document.getElementById("model-pill-icon").innerHTML = b.icon;
+  document.getElementById("model-pill-label").textContent = b.name;
+  document.getElementById("ep-model-name").textContent = b.name;
+  document.getElementById("mp-model-name").textContent = b.name;
+  document.getElementById("mp-models").innerHTML = b.models.map((m) => `
+    <div class="mp-row ${m.active ? "on" : ""}">
+      ${b.icon}
+      <span style="flex:1">${m.name}</span>
+      ${m.active ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>` : ""}
+    </div>`).join("");
+  ["claude", "codex", "agy"].forEach((id) => {
+    document.getElementById(`mp-tab-${id}`).classList.toggle("on", id === state.backend);
+  });
+
+  // Effort popover & model reasoning column
+  renderEffortList(document.getElementById("ep-effort-list"), b, ultraActive);
+  renderEffortList(document.getElementById("mp-effort-list"), b, ultraActive);
+  renderUltraCard(document.getElementById("ep-ultra-section"), b, "effort", false);
+  renderUltraCard(document.getElementById("mp-ultra-section"), b, "model", true);
+
+  document.getElementById("ep-hint").textContent = ultraActive ? b.ultraHint : (HINTS[state.effort] || "");
+  document.getElementById("ep-tab-kbd").style.display = b.supportsUltra ? "" : "none";
+
+  // Popover visibility
+  document.getElementById("effort-popover").classList.toggle("hidden", state.openPopover !== "effort");
+  document.getElementById("model-popover").classList.toggle("hidden", state.openPopover !== "model");
+  document.getElementById("effort-pill").classList.toggle("open", state.openPopover === "effort");
+  document.getElementById("model-pill").classList.toggle("open", state.openPopover === "model");
+
+  // Effort pill appearance
+  const effortPill = document.getElementById("effort-pill");
+  const pillAurora = document.getElementById("pill-aurora");
+  effortPill.classList.toggle("ultra-pill", ultraActive);
+  pillAurora.style.display = ultraActive ? "" : "none";
+  if (ultraActive) {
+    const boltColor = state.light ? "#7c3aed" : "#7dd3fc";
+    document.getElementById("effort-pill-icon").innerHTML = effortGlyphSvg("ultra", boltColor, 14);
+    document.getElementById("effort-pill-label").textContent =
+      (b.id === "codex" || state.effort === "default") ? "Ultracode" : `${state.effort} · Ultra`;
+  } else {
+    document.getElementById("effort-pill-icon").innerHTML = effortGlyphSvg(state.effort, "var(--muted)", 14);
+    document.getElementById("effort-pill-label").textContent = state.effort;
+  }
+}
+
+function selectBackend(id) {
+  state.backend = id;
+  const b = BACKENDS[id];
+  if (!b.efforts.includes(state.effort)) state.effort = "high";
+  render();
+}
+
+function selectView(view) {
+  state.openPopover = view;
+  render();
+}
+
+function togglePopover(which) {
+  state.openPopover = state.openPopover === which ? null : which;
+  render();
+}
+
+function pickEffort(lvl) {
+  state.effort = lvl;
+  render();
+}
+
+function toggleTheme() {
+  state.light = !state.light;
+  document.documentElement.classList.toggle("light", state.light);
+  document.getElementById("theme-btn").textContent = state.light ? "☾ Dark" : "☀ Light";
+  render();
+}
+
+function triggerSweep(el) {
+  if (!el) return;
+  el.classList.remove("fire");
+  void el.offsetWidth;
+  el.classList.add("fire");
+}
+
+function toggleUltracode(triggerEl) {
+  const b = BACKENDS[state.backend];
+  if (!b.supportsUltra) return;
+  const next = !state.ultracode;
+  state.ultracode = next;
+  render();
+
+  const scope = state.openPopover === "model" ? "model" : "effort";
+  const card = document.getElementById(`ultra-card-${scope}`);
+  const pill = document.getElementById("effort-pill");
+
+  if (next) {
+    triggerSweep(document.getElementById(`ultra-sweep-${scope}`));
+    triggerSweep(document.getElementById("pill-sweep"));
+    triggerSweep(document.getElementById("composer-wave-beam"));
+    if (card) spawnIgnitionBurst(card.getBoundingClientRect(), 1.15);
+    if (pill) spawnIgnitionBurst(pill.getBoundingClientRect(), 0.72);
+  }
+}
+
+function replayIgnition() {
+  const b = BACKENDS[state.backend];
+  if (!b.supportsUltra) selectBackend("claude");
+  if (!state.openPopover) state.openPopover = "effort";
+  state.ultracode = false;
+  render();
+  setTimeout(() => toggleUltracode(), 60);
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Tab" && state.openPopover === "effort") {
+    e.preventDefault();
+    toggleUltracode();
+  }
+});
+
+/* ============================================================================
+   1. Procedural Domain-Warped Aurora (matches native/src/ui/nebula.rs!)
+   ============================================================================ */
+function hash2(x, y, seed) {
+  let h = Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(seed | 0, 0x9e3779b9);
+  h ^= h >>> 15; h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h & 0xffff) / 65535;
+}
+function vnoise(x, y, seed) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = hash2(xi, yi, seed), b = hash2(xi + 1, yi, seed);
+  const c = hash2(xi, yi + 1, seed), d = hash2(xi + 1, yi + 1, seed);
+  return a + (b - a) * sx + (c + (d - c) * sx - (a + (b - a) * sx)) * sy;
+}
+function fbm(x, y, seed) {
+  let sum = 0, amp = 0.5, freq = 1;
+  for (let o = 0; o < 4; o++) {
+    sum += amp * vnoise(x * freq, y * freq, seed + o);
+    amp *= 0.5; freq *= 2.03;
+  }
+  return sum;
+}
+function smooth(lo, hi, v) {
+  const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+  return t * t * (3 - 2 * t);
+}
+
+// Pre-bake 20 seamless drifting aurora frames for dark & light modes (fast, silky 60fps!)
+const AURORA_W = 120, AURORA_H = 36, AURORA_FRAMES = 20;
+const auroraCache = { dark: [], light: [] };
+
+function bakeAurora(light) {
+  const frames = [];
+  const bg = light ? [237/255, 233/255, 254/255] : [13/255, 11/255, 22/255];
+  const d1c = light ? [139/255, 92/255, 246/255] : [91/255, 33/255, 182/255];
+  const d2c = light ? [232/255, 121/255, 249/255] : [162/255, 28/255, 175/255];
+  const d3c = light ? [56/255, 189/255, 248/255] : [2/255, 132/255, 199/255];
+  for (let f = 0; f < AURORA_FRAMES; f++) {
+    const off = document.createElement("canvas");
+    off.width = AURORA_W; off.height = AURORA_H;
+    const ctx = off.getContext("2d");
+    const img = ctx.createImageData(AURORA_W, AURORA_H);
+    const phase = (f / AURORA_FRAMES) * Math.PI * 2;
+    const ox = Math.cos(phase) * 0.55, oy = Math.sin(phase) * 0.55;
+    let p = 0;
+    for (let py = 0; py < AURORA_H; py++) {
+      for (let px = 0; px < AURORA_W; px++) {
+        const u = px / AURORA_H, v = py / AURORA_H;
+        const wx = fbm(u * 2.4 + 3.1 + ox, v * 2.4 + oy, 11);
+        const wy = fbm(u * 2.4 - oy, v * 2.4 + 7.7 + ox, 12);
+        const x = u * 2.6 + wx * 1.65, y = v * 2.6 + wy * 1.65;
+        const n1 = fbm(x, y, 1), n2 = fbm(x + 5.2, y + 1.3, 2), n3 = fbm(x - 3.7, y + 8.1, 3);
+        const a1 = smooth(0.3, 0.8, n1);
+        const a2 = smooth(0.42, 0.86, n2) * 0.85;
+        const a3 = Math.pow(smooth(0.5, 0.92, n3), 2) * 0.78;
+        const star = hash2(px, py, 99) > 0.9972 ? 0.35 : 0;
+        let r, g, b;
+        if (light) {
+          r = bg[0]; g = bg[1]; b = bg[2];
+          const mix = (c, k) => { r += (c[0] - r) * k; g += (c[1] - g) * k; b += (c[2] - b) * k; };
+          mix(d1c, a1 * 0.68); mix(d2c, a2 * 0.62); mix(d3c, a3 * 0.60);
+          r += star * 0.35; g += star * 0.35; b += star * 0.35;
+        } else {
+          r = bg[0] + (d1c[0] * a1 + d2c[0] * a2 + d3c[0] * a3) * 0.44 + star;
+          g = bg[1] + (d1c[1] * a1 + d2c[1] * a2 + d3c[1] * a3) * 0.44 + star;
+          b = bg[2] + (d1c[2] * a1 + d2c[2] * a2 + d3c[2] * a3) * 0.44 + star;
+        }
+        img.data[p++] = Math.min(255, r * 255);
+        img.data[p++] = Math.min(255, g * 255);
+        img.data[p++] = Math.min(255, b * 255);
+        img.data[p++] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    frames.push(off);
+  }
+  return frames;
+}
+auroraCache.dark = bakeAurora(false);
+auroraCache.light = bakeAurora(true);
+
+/* ============================================================================
+   2. Full-screen Starburst Particle + Dual Chromatic Shockwave FX Engine
+   ============================================================================ */
+const fxCanvas = document.getElementById("fx-canvas");
+const fxCtx = fxCanvas.getContext("2d");
+const bursts = [];
+
+function resizeFx() {
+  const dpr = window.devicePixelRatio || 1;
+  fxCanvas.width = Math.floor(window.innerWidth * dpr);
+  fxCanvas.height = Math.floor(window.innerHeight * dpr);
+  fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resizeFx);
+resizeFx();
+
+function spawnIgnitionBurst(rect, radiusScale = 1) {
+  const darkPal = ["#38bdf8", "#c084fc", "#f0abfc", "#fde047", "#ffffff"];
+  const lightPal = ["#6366f1", "#9333ea", "#0284c7", "#db2777", "#d97706"];
+  const pal = state.light ? lightPal : darkPal;
+  const particles = [];
+  const count = Math.round(44 * radiusScale);
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      ox: rect.left + (0.12 + Math.random() * 0.76) * rect.width,
+      oy: rect.top + (0.15 + Math.random() * 0.7) * rect.height,
+      angle: Math.random() * Math.PI * 2,
+      swirl: (Math.random() - 0.5) * 0.75,
+      dist: (24 + Math.random() * 94) * radiusScale,
+      born: Math.random() * 140,
+      life: 680 + Math.random() * 520,
+      star: i % 3 === 0,
+      size: i % 3 === 0 ? (2.8 + Math.random() * 3.8) : (1.8 + Math.random() * 2.6),
+      color: pal[i % pal.length],
+      phase: Math.random() * 12,
+    });
+  }
+  bursts.push({
+    kind: "ignite",
+    start: performance.now(),
+    cx: rect.left + rect.width / 2,
+    cy: rect.top + rect.height / 2,
+    radiusScale,
+    light: state.light,
+    particles,
+  });
+}
+
+function spawnCoolDownRing(rect) {
+  bursts.push({
+    kind: "cool",
+    start: performance.now(),
+    cx: rect.left + rect.width / 2,
+    cy: rect.top + rect.height / 2,
+    maxR: rect.width * 0.45,
+    light: state.light,
+  });
+}
+
+function drawStar(ctx, x, y, r, color, alpha) {
+  const inner = r * 0.28;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.lineTo(x + inner, y - inner);
+  ctx.lineTo(x + r, y);
+  ctx.lineTo(x + inner, y + inner);
+  ctx.lineTo(x, y + r);
+  ctx.lineTo(x - inner, y + inner);
+  ctx.lineTo(x - r, y);
+  ctx.lineTo(x - inner, y - inner);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function easeOutCubic(t) { return 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3); }
+
+function tick(now) {
+  // 1. Update drifting aurora canvases
+  const frames = state.light ? auroraCache.light : auroraCache.dark;
+  const pos = ((now % 5600) / 5600) * frames.length;
+  const i0 = Math.floor(pos) % frames.length;
+  const i1 = (i0 + 1) % frames.length;
+  const mix = pos - Math.floor(pos);
+  document.querySelectorAll(".aurora-canvas, #pill-aurora").forEach((cv) => {
+    if (cv.style.display === "none") return;
+    const ctx = cv.getContext("2d");
+    ctx.globalAlpha = 1;
+    ctx.drawImage(frames[i0], 0, 0, cv.width, cv.height);
+    ctx.globalAlpha = mix;
+    ctx.drawImage(frames[i1], 0, 0, cv.width, cv.height);
+    ctx.globalAlpha = 1;
+  });
+
+  // 2. Render starburst particles
+  fxCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  for (let idx = bursts.length - 1; idx >= 0; idx--) {
+    const b = bursts[idx];
+    const elapsed = now - b.start;
+    if (elapsed > 1450) { bursts.splice(idx, 1); continue; }
+    const t = elapsed / 1400;
+
+    // Starburst particles
+    for (const pt of b.particles) {
+      const p = (elapsed - pt.born) / pt.life;
+      if (p <= 0 || p >= 1) continue;
+      const e = easeOutCubic(p);
+      const ang = pt.angle + pt.swirl * p;
+      const x = pt.ox + Math.cos(ang) * pt.dist * e;
+      const y = pt.oy + Math.sin(ang) * pt.dist * 0.74 * e - 16 * p;
+      const twinkle = 0.58 + 0.42 * Math.abs(Math.sin(t * 28 + pt.phase));
+      const a = Math.pow(1 - p, 1.35) * twinkle;
+      const sz = pt.size * (1 - 0.5 * p);
+      if (pt.star) {
+        drawStar(fxCtx, x, y, sz, pt.color, a);
+      } else {
+        fxCtx.save();
+        fxCtx.globalAlpha = a;
+        fxCtx.fillStyle = pt.color;
+        fxCtx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+        fxCtx.restore();
+      }
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+render();
+requestAnimationFrame(tick);
+// Auto-ignite once shortly after load so the user sees the magic right away!
+setTimeout(() => toggleUltracode(), 550);
+</script>
+</body>
+</html>

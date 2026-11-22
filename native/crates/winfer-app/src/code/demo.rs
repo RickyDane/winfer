@@ -101,6 +101,21 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
             steps.push((400, Ev(json!({ "type": "text", "id": "ta1", "text": "Here is how the profiles compare:\n\n| Profile | Time | Size | Notes |\n|:--------|-----:|-----:|:-----:|\n| debug | 9.1 s | 212 MB | fast incremental |\n| release | 41.2 s | 38 MB | `lto = thin` |\n| bench | 44.8 s | 41 MB | **slowest** |\n\nUse `release` for shipping and `debug` while iterating." }))));
             steps.push((200, Ev(json!({ "type": "turn_done" }))));
         }
+        "handoff" => {
+            steps.truncate(2);
+            steps.push((200, Ev(json!({ "type": "ready", "session": "demo", "model": "claude/fable", "mode": "ask", "cwd": "/tmp/web-os-demo", "branch": "main", "effort": "high" }))));
+            steps.push((300, Type("Sketch the auth middleware\r")));
+            steps.push((200, Ev(json!({ "type": "turn_start" }))));
+            steps.push((300, Ev(json!({ "type": "model", "model": "claude-fable-5-2" }))));
+            steps.push((400, Ev(json!({ "type": "text", "id": "ha1", "text": "I've mapped out the JWT verification middleware and added session cookie parsing in `src/auth.rs`." }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+            steps.push((500, Ev(json!({ "type": "handoff", "from_model": "claude/fable", "from_actual": "claude-fable-5-2", "to_model": "agy/gemini-4-neon", "replace": false }))));
+            steps.push((50, Ev(json!({ "type": "model", "model": "agy/gemini-4-neon" }))));
+            steps.push((400, Type("Now add unit tests for expired tokens\r")));
+            steps.push((200, Ev(json!({ "type": "turn_start" }))));
+            steps.push((400, Ev(json!({ "type": "text", "id": "ha2", "text": "Continuing from the middleware in `src/auth.rs`, I'll add unit tests covering expired JWTs and missing cookies." }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
         "model" => steps.push((1200, Type("/model\r"))),
         "mode" => steps.push((1200, Type("/mode\r"))),
         "effort" => steps.push((1200, Type("/effort\r"))),

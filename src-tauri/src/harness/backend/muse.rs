@@ -523,6 +523,7 @@ impl Bridge {
             Cmd::Approve(..) | Cmd::Answer(..) => {}
             Cmd::SetModel(model) => self.model = model,
             Cmd::SetEffort(effort) => self.effort = effort,
+            Cmd::SetUltracode(_) => {}
             Cmd::SetMode(mode) => {
                 self.mode = mode;
                 self.explain_mode();

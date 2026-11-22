@@ -57,6 +57,33 @@ pub struct Wake {
     pub message: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageErrorKind {
+    RateLimited,
+    AuthExpired,
+    Transient,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct PollState {
+    pub last_attempt_at: f64,
+    pub last_ok_at: f64,
+    pub next_allowed_at: f64,
+    pub rate_limit_streak: u32,
+    pub last_error: Option<String>,
+    pub error_kind: Option<UsageErrorKind>,
+}
+
+const CLAUDE_POLL_INTERVAL_MS: f64 = 5.0 * 60_000.0;
+const AGY_POLL_INTERVAL_MS: f64 = 5.0 * 60_000.0;
+const CODEX_POLL_INTERVAL_MS: f64 = 60_000.0;
+const RATE_LIMIT_BASE_MS: f64 = 2.0 * 60_000.0;
+const RATE_LIMIT_MAX_MS: f64 = 15.0 * 60_000.0;
+const AUTH_RETRY_MS: f64 = 5.0 * 60_000.0;
+const TRANSIENT_NO_DATA_RETRY_MS: f64 = 60_000.0;
+const TRANSIENT_WITH_DATA_RETRY_MS: f64 = 3.0 * 60_000.0;
+const CLAUDE_STAGGER_MS: u64 = 350;
+
 #[derive(Default)]
 pub struct UsageStore {
     pub snapshots: HashMap<String, Snapshot>,
@@ -65,9 +92,97 @@ pub struct UsageStore {
     pub wakes: Vec<Wake>,
     pub popover: Option<String>,
     pub warned: std::collections::HashSet<String>,
-    pub claude_live_at: f64,
-    /// Readings still on their way after a refresh (the Refresh button spins until they're in).
-    pub refreshing: usize,
+    /// Per-account timestamp of the last live Claude API read (so cached statusline data won't overwrite it).
+    pub claude_live_at: HashMap<String, f64>,
+    /// Per-account/provider polling schedule, backoff and last error.
+    pub poll: HashMap<String, PollState>,
+    /// Usage keys with a request currently in flight (deduplicates overlapping refreshes).
+    pub in_flight: std::collections::HashSet<String>,
+}
+
+impl UsageStore {
+    pub fn is_refreshing(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct UsageCache {
+    #[serde(default)]
+    snapshots: HashMap<String, Snapshot>,
+    #[serde(default)]
+    samples: HashMap<String, Vec<(f64, f64)>>,
+}
+
+fn usage_cache_path() -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    backend::app().path().app_data_dir().ok().map(|d| d.join("usage-cache.json"))
+}
+
+fn prune_samples(samples: &mut HashMap<String, Vec<(f64, f64)>>, now: f64) {
+    samples.retain(|key, pts| {
+        if pts.is_empty() {
+            return false;
+        }
+        let expired = key.rsplit(':').next().and_then(|s| s.parse::<f64>().ok()).is_some_and(|r| r > 0.0 && r < now);
+        !expired
+    });
+}
+
+fn poll_interval_ms(provider: &str) -> f64 {
+    match provider {
+        "claude" => CLAUDE_POLL_INTERVAL_MS,
+        "agy" => AGY_POLL_INTERVAL_MS,
+        _ => CODEX_POLL_INTERVAL_MS,
+    }
+}
+
+fn should_auto_poll(provider: &str, state: Option<&PollState>, now: f64) -> bool {
+    let Some(state) = state else { return true };
+    if now < state.next_allowed_at {
+        return false;
+    }
+    now - state.last_ok_at >= poll_interval_ms(provider)
+}
+
+fn apply_poll_error(state: &mut PollState, kind: UsageErrorKind, message: String, retry_after_secs: Option<u64>, has_snapshot: bool, now: f64) {
+    state.last_attempt_at = now;
+    state.last_error = Some(message);
+    state.error_kind = Some(kind);
+    let wait_ms = match kind {
+        UsageErrorKind::RateLimited => {
+            state.rate_limit_streak = state.rate_limit_streak.saturating_add(1).min(6);
+            let exp_ms = RATE_LIMIT_BASE_MS * (1u64 << (state.rate_limit_streak - 1)) as f64;
+            let header_ms = retry_after_secs.map_or(0.0, |s| s as f64 * 1000.0);
+            exp_ms.max(header_ms).min(RATE_LIMIT_MAX_MS)
+        }
+        UsageErrorKind::AuthExpired => {
+            state.rate_limit_streak = 0;
+            AUTH_RETRY_MS
+        }
+        UsageErrorKind::Transient => {
+            state.rate_limit_streak = 0;
+            if has_snapshot { TRANSIENT_WITH_DATA_RETRY_MS } else { TRANSIENT_NO_DATA_RETRY_MS }
+        }
+    };
+    state.next_allowed_at = now + wait_ms;
+}
+
+fn apply_poll_success(state: &mut PollState, provider: &str, now: f64) {
+    state.last_attempt_at = now;
+    state.last_ok_at = now;
+    state.next_allowed_at = now + poll_interval_ms(provider);
+    state.rate_limit_streak = 0;
+    state.last_error = None;
+    state.error_kind = None;
+}
+
+pub(super) fn error_short_label(kind: UsageErrorKind) -> &'static str {
+    match kind {
+        UsageErrorKind::RateLimited => "rate limited",
+        UsageErrorKind::AuthExpired => "sign-in expired",
+        UsageErrorKind::Transient => "refresh failed",
+    }
 }
 
 pub fn used_now(w: &UsageWindow, now: f64) -> f64 {
@@ -96,24 +211,82 @@ pub(super) fn level_color(left: f64, c: &Colors) -> Hsla {
     }
 }
 
+fn least_window<'a>(ws: impl Iterator<Item = &'a UsageWindow>, now: f64) -> Option<&'a UsageWindow> {
+    ws.fold(None, |best: Option<&UsageWindow>, w| match best {
+        Some(b) if left_now(w, now) >= left_now(b, now) => Some(b),
+        _ => Some(w),
+    })
+}
+
+fn richest_credit<'a>(s: &'a Snapshot, now: f64) -> Option<&'a UsageWindow> {
+    s.windows.iter().filter(|w| w.kind == "month-credit").fold(None, |best: Option<&UsageWindow>, w| match best {
+        Some(b) if left_now(w, now) <= left_now(b, now) => Some(b),
+        _ => Some(w),
+    })
+}
+
 /// The window that runs out first; credits count only once every plan limit is out.
 pub fn tightest(s: Option<&Snapshot>, now: f64) -> Option<&UsageWindow> {
     let s = s.filter(|s| !s.windows.is_empty())?;
-    fn least<'a>(ws: impl Iterator<Item = &'a UsageWindow>, now: f64) -> Option<&'a UsageWindow> {
-        ws.fold(None, |best: Option<&UsageWindow>, w| match best {
-            Some(b) if left_now(w, now) >= left_now(b, now) => Some(b),
-            _ => Some(w),
-        })
-    }
     let is_credit = |w: &&UsageWindow| w.kind == "month-credit";
-    let Some(plan) = least(s.windows.iter().filter(|w| !is_credit(w)), now) else { return least(s.windows.iter(), now) };
+    let Some(plan) = least_window(s.windows.iter().filter(|w| !is_credit(w)), now) else { return least_window(s.windows.iter(), now) };
     if left_now(plan, now) > 0.0 {
         return Some(plan);
     }
-    s.windows.iter().filter(is_credit).fold(None, |best: Option<&UsageWindow>, w| match best {
-        Some(b) if left_now(w, now) <= left_now(b, now) => Some(b),
-        _ => Some(w),
-    }).or(Some(plan))
+    richest_credit(s, now).or(Some(plan))
+}
+
+/// Overall percentage left and next reset time across independent model groups (for rings and
+/// provider-level summaries). Within each independent model group the tightest window governs the
+/// group, and separate groups are averaged rather than letting one exhausted group pull the whole
+/// provider to 0%. Credits count only once every plan limit is out.
+pub fn overall_summary(s: Option<&Snapshot>, now: f64) -> Option<(f64, Option<f64>)> {
+    let s = s.filter(|s| !s.windows.is_empty())?;
+    let plan: Vec<&UsageWindow> = s.windows.iter().filter(|w| w.kind != "month-credit").collect();
+    if plan.is_empty() {
+        return least_window(s.windows.iter(), now).map(|w| (left_now(w, now), w.resets_at));
+    }
+    let mut named: Vec<(&str, Vec<&UsageWindow>)> = Vec::new();
+    let mut ungrouped: Vec<&UsageWindow> = Vec::new();
+    for &w in &plan {
+        if let Some(group) = split_group(&w.label).1 {
+            if let Some((_, ws)) = named.iter_mut().find(|(g, _)| *g == group) {
+                ws.push(w);
+            } else {
+                named.push((group, vec![w]));
+            }
+        } else {
+            ungrouped.push(w);
+        }
+    }
+    let pools: Vec<Vec<&UsageWindow>> = if ungrouped.is_empty() {
+        named.into_iter().map(|(_, ws)| ws).collect()
+    } else if ungrouped.iter().any(|w| w.kind == "gemini") {
+        let (gemini, other): (Vec<&UsageWindow>, Vec<&UsageWindow>) = ungrouped.into_iter().partition(|w| w.kind == "gemini");
+        let mut pools: Vec<Vec<&UsageWindow>> = named.into_iter().map(|(_, ws)| ws).collect();
+        if !other.is_empty() {
+            pools.push(other);
+        }
+        pools.push(gemini);
+        pools
+    } else {
+        vec![plan]
+    };
+    let group_tightests: Vec<&UsageWindow> = pools.into_iter().filter_map(|ws| least_window(ws.into_iter(), now)).collect();
+    let plan_left = group_tightests.iter().map(|w| left_now(w, now)).sum::<f64>() / group_tightests.len() as f64;
+    let plan_reset = if group_tightests.len() == 1 {
+        group_tightests[0].resets_at
+    } else {
+        group_tightests.iter().filter_map(|w| w.resets_at).filter(|r| *r > now).reduce(f64::min)
+    };
+    if plan_left > 0.0 {
+        return Some((plan_left, plan_reset));
+    }
+    Some(richest_credit(s, now).map_or((0.0, plan_reset), |w| (left_now(w, now), w.resets_at)))
+}
+
+pub fn overall_left(s: Option<&Snapshot>, now: f64) -> Option<f64> {
+    overall_summary(s, now).map(|(left, _)| left)
 }
 
 /// Splits `"5-hour (Gemini Models)"` into `("5-hour", Some("Gemini Models"))`,
@@ -331,89 +504,269 @@ pub fn pooled_runs_out_at(provider: &str, kind: &str, snapshots: &HashMap<String
 
 impl Root {
     pub(super) fn start_usage(&mut self, cx: &mut Context<Self>) {
+        // Restore persisted snapshots/samples right away so accounts don't flash "no reading" on launch.
+        self.load_usage_cache(cx);
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(3)).await;
-            let mut tick = 0u64;
             loop {
                 if this.update(cx, |this, cx| {
-                    if tick % 2 == 0 {
-                        this.refresh_accounts(cx);
-                    }
                     this.deliver_wakes(cx);
-                    this.refresh_usage(cx);
+                    this.refresh_usage(false, cx);
                 }).is_err() {
                     break;
                 }
-                tick += 1;
                 cx.background_executor().timer(Duration::from_secs(60)).await;
             }
         })
         .detach();
     }
 
-    fn refresh_accounts(&mut self, cx: &mut Context<Self>) {
+    fn load_usage_cache(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         cx.spawn(async move |this, cx| {
-            let list = backend::background(|| serde_json::to_value(accounts::accounts_list()).unwrap_or_default()).await.unwrap_or_default();
-            let parsed: Vec<Account> = serde_json::from_value(list).unwrap_or_default();
+            let cache: Option<UsageCache> = backend::background(|| {
+                let path = usage_cache_path()?;
+                let text = std::fs::read_to_string(path).ok()?;
+                serde_json::from_str(&text).ok()
+            })
+            .await
+            .ok()
+            .flatten();
+            let Some(mut cache) = cache else { return };
+            prune_samples(&mut cache.samples, now_ms());
             let _ = this.update(cx, |this, cx| {
-                this.usage.accounts = parsed;
+                #[cfg(debug_assertions)]
+                if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                for (key, snap) in cache.snapshots {
+                    if !snap.windows.is_empty() && this.usage.snapshots.get(&key).is_none_or(|cur| snap.at > cur.at) {
+                        this.usage.snapshots.insert(key, snap);
+                    }
+                }
+                for (key, pts) in cache.samples {
+                    this.usage.samples.entry(key).or_insert(pts);
+                }
                 cx.notify();
             });
         })
         .detach();
     }
 
-    fn refresh_usage(&mut self, cx: &mut Context<Self>) {
+    fn save_usage_cache(&self) {
         #[cfg(debug_assertions)]
         if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        self.refresh_accounts(cx);
-        let accounts: Vec<Account> = self.usage.accounts.iter().filter(|a| a.enabled && a.signed_in).cloned().collect();
-        let mut targets: Vec<(String, Option<String>)> = vec![("claude".to_string(), None), ("codex".to_string(), None), ("agy".to_string(), None)];
-        targets.extend(accounts.iter().filter(|a| !a.id.ends_with(":default")).map(|a| (a.provider.clone(), Some(a.id.clone()))));
-        for (provider, account) in targets {
-            self.refresh_one(provider, account, cx);
+        let mut samples = self.usage.samples.clone();
+        prune_samples(&mut samples, now_ms());
+        let cache = UsageCache { snapshots: self.usage.snapshots.clone(), samples };
+        let _ = backend::background(move || {
+            let Some(path) = usage_cache_path() else { return };
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Ok(bytes) = serde_json::to_vec(&cache) {
+                let tmp = path.with_extension("json.tmp");
+                if std::fs::write(&tmp, bytes).is_ok() {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            }
+        });
+    }
+
+    /// Manual refresh triggered by a Refresh button (bypasses normal poll intervals, loads fresh
+    /// accounts first, and deduplicates in-flight calls).
+    pub(super) fn refresh_usage_manual(&mut self, cx: &mut Context<Self>) {
+        self.refresh_usage(true, cx);
+    }
+
+    /// Loads the latest accounts first (avoiding startup races where extra accounts aren't loaded
+    /// yet), seeds any missing Claude accounts from Claude Code's local cache, then refreshes due targets.
+    fn refresh_usage(&mut self, manual: bool, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
         }
+        cx.spawn(async move |this, cx| {
+            let (parsed, cached_claude): (Vec<Account>, Vec<(String, Snapshot)>) = backend::background(|| {
+                let list = serde_json::to_value(accounts::accounts_list()).unwrap_or_default();
+                let parsed: Vec<Account> = serde_json::from_value(list).unwrap_or_default();
+                let mut cached = Vec::new();
+                for a in parsed.iter().filter(|a| a.provider == "claude" && a.enabled && a.signed_in) {
+                    let arg = (!a.id.ends_with(":default")).then_some(a.id.as_str());
+                    if let Some(snap) = usage::claude_cached_usage(arg)
+                        .and_then(|s| serde_json::to_value(s).ok())
+                        .and_then(|v| serde_json::from_value::<Snapshot>(v).ok())
+                    {
+                        let key = usage_key(&a.id);
+                        cached.push((key, snap));
+                    }
+                }
+                (parsed, cached)
+            })
+            .await
+            .unwrap_or_default();
+
+            let _ = this.update(cx, |this, cx| {
+                #[cfg(debug_assertions)]
+                if DEMO.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                this.usage.accounts = parsed;
+                // Seed from Claude Code's own local cache only when it's newer than what we have.
+                let mut seeded = false;
+                for (key, mut snap) in cached_claude {
+                    if !snap.windows.is_empty() && this.usage.snapshots.get(&key).is_none_or(|cur| snap.at > cur.at) {
+                        snap.provider = key.clone();
+                        this.usage.snapshots.insert(key, snap);
+                        seeded = true;
+                    }
+                }
+                if seeded {
+                    this.save_usage_cache();
+                }
+
+                let now = now_ms();
+                let claude_default_disabled = this.usage.accounts.iter().any(|a| a.id == "claude:default" && !a.enabled);
+                let codex_default_disabled = this.usage.accounts.iter().any(|a| a.id == "codex:default" && !a.enabled);
+                let mut targets: Vec<(String, Option<String>)> = Vec::new();
+                if !claude_default_disabled {
+                    targets.push(("claude".to_string(), None));
+                }
+                if !codex_default_disabled {
+                    targets.push(("codex".to_string(), None));
+                }
+                targets.push(("agy".to_string(), None));
+                let extras: Vec<(String, Option<String>)> = this
+                    .usage
+                    .accounts
+                    .iter()
+                    .filter(|a| a.enabled && a.signed_in && !a.id.ends_with(":default"))
+                    .map(|a| (a.provider.clone(), Some(a.id.clone())))
+                    .collect();
+                targets.extend(extras);
+
+                let mut claude_idx: u64 = 0;
+                for (provider, account) in targets {
+                    let key = account.as_deref().map_or_else(|| provider.clone(), usage_key);
+                    if !manual && !should_auto_poll(&provider, this.usage.poll.get(&key), now) {
+                        continue;
+                    }
+                    let delay_ms = if provider == "claude" {
+                        let d = claude_idx * CLAUDE_STAGGER_MS;
+                        claude_idx += 1;
+                        d
+                    } else {
+                        0
+                    };
+                    this.refresh_one_delayed(provider, account, delay_ms, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn refresh_one(&mut self, provider: String, account: Option<String>, cx: &mut Context<Self>) {
-        self.usage.refreshing += 1;
+        self.refresh_one_delayed(provider, account, 0, cx);
+    }
+
+    fn refresh_one_delayed(&mut self, provider: String, account: Option<String>, delay_ms: u64, cx: &mut Context<Self>) {
+        let key = account.as_deref().map_or_else(|| provider.clone(), usage_key);
+        if !self.usage.in_flight.insert(key.clone()) {
+            return;
+        }
+        cx.notify();
         cx.spawn(async move |this, cx| {
+            if delay_ms > 0 {
+                cx.background_executor().timer(Duration::from_millis(delay_ms)).await;
+            }
             let (p, a) = (provider.clone(), account.clone());
-            let value = tauri::async_runtime::spawn(async move {
+            enum FetchOutcome {
+                Ok(Value),
+                Err(UsageErrorKind, String, Option<u64>),
+                None,
+            }
+            let outcome = tauri::async_runtime::spawn(async move {
                 if p == "claude" {
-                    usage::usage_claude(a).await.ok().and_then(|s| serde_json::to_value(s).ok())
+                    match usage::usage_claude_detailed(a).await {
+                        Ok(s) => match serde_json::to_value(s) {
+                            Ok(v) => FetchOutcome::Ok(v),
+                            Err(e) => FetchOutcome::Err(UsageErrorKind::Transient, e.to_string(), None),
+                        },
+                        Err(usage::ClaudeUsageError::RateLimited { retry_after_secs, message }) => {
+                            FetchOutcome::Err(UsageErrorKind::RateLimited, message, retry_after_secs)
+                        }
+                        Err(usage::ClaudeUsageError::AuthExpired(message)) => {
+                            FetchOutcome::Err(UsageErrorKind::AuthExpired, message, None)
+                        }
+                        Err(usage::ClaudeUsageError::Transient(message)) => {
+                            FetchOutcome::Err(UsageErrorKind::Transient, message, None)
+                        }
+                    }
                 } else if p == "agy" {
-                    usage::usage_agy().await.ok().and_then(|s| serde_json::to_value(s).ok())
+                    match usage::usage_agy().await {
+                        Ok(s) => match serde_json::to_value(s) {
+                            Ok(v) => FetchOutcome::Ok(v),
+                            Err(e) => FetchOutcome::Err(UsageErrorKind::Transient, e.to_string(), None),
+                        },
+                        Err(msg) => {
+                            let kind = if msg.contains("limiting how often") {
+                                UsageErrorKind::RateLimited
+                            } else if msg.contains("expired") || msg.contains("unavailable") {
+                                UsageErrorKind::AuthExpired
+                            } else {
+                                UsageErrorKind::Transient
+                            };
+                            FetchOutcome::Err(kind, msg, None)
+                        }
+                    }
                 } else {
-                    usage::usage_codex(a).await.and_then(|s| serde_json::to_value(s).ok())
+                    match usage::usage_codex(a).await.and_then(|s| serde_json::to_value(s).ok()) {
+                        Some(v) => FetchOutcome::Ok(v),
+                        None => FetchOutcome::None,
+                    }
                 }
             })
             .await
-            .ok()
-            .flatten();
-            let Some(value) = value else {
-                let _ = this.update(cx, |this, cx| {
-                    this.usage.refreshing = this.usage.refreshing.saturating_sub(1);
-                    cx.notify();
-                });
-                return;
-            };
-            let key = account.as_deref().map_or_else(|| provider.clone(), usage_key);
+            .unwrap_or(FetchOutcome::None);
+
             let live_claude = provider == "claude";
             let _ = this.update(cx, |this, cx| {
-                this.usage.refreshing = this.usage.refreshing.saturating_sub(1);
-                if live_claude {
-                    this.usage.claude_live_at = now_ms();
-                }
-                if let Ok(mut snapshot) = serde_json::from_value::<Snapshot>(value) {
-                    snapshot.provider = key;
-                    this.record_usage(snapshot, cx);
+                this.usage.in_flight.remove(&key);
+                let now = now_ms();
+                match outcome {
+                    FetchOutcome::Ok(value) => {
+                        if let Ok(mut snapshot) = serde_json::from_value::<Snapshot>(value) {
+                            let state = this.usage.poll.entry(key.clone()).or_default();
+                            apply_poll_success(state, &provider, now);
+                            if live_claude {
+                                this.usage.claude_live_at.insert(key.clone(), now);
+                            }
+                            snapshot.provider = key;
+                            this.record_usage(snapshot, cx);
+                        } else {
+                            let has = this.usage.snapshots.contains_key(&key);
+                            let state = this.usage.poll.entry(key.clone()).or_default();
+                            apply_poll_error(state, UsageErrorKind::Transient, "Invalid usage response.".into(), None, has, now);
+                            cx.notify();
+                        }
+                    }
+                    FetchOutcome::Err(kind, message, retry_after_secs) => {
+                        let has = this.usage.snapshots.get(&key).is_some_and(|s| !s.windows.is_empty());
+                        let state = this.usage.poll.entry(key.clone()).or_default();
+                        apply_poll_error(state, kind, message, retry_after_secs, has, now);
+                        cx.notify();
+                    }
+                    FetchOutcome::None => {
+                        let state = this.usage.poll.entry(key.clone()).or_default();
+                        state.last_attempt_at = now;
+                        cx.notify();
+                    }
                 }
             });
         })
@@ -456,6 +809,7 @@ impl Root {
             }
         }
         self.usage.snapshots.insert(key.clone(), snapshot);
+        self.save_usage_cache();
         if let Some(reset) = exhausted.into_iter().next() {
             self.on_account_exhausted(&key, reset, cx);
         }
@@ -468,9 +822,15 @@ impl Root {
         let account = payload["paneId"].as_str().and_then(|id| self.state.read(cx).pane(id)).and_then(|p| p.account_id.clone()).filter(|a| a.split(':').next() == Some(&provider));
         let key = account.as_deref().map_or_else(|| provider.clone(), usage_key);
         let windows: Vec<UsageWindow> = serde_json::from_value(payload["report"]["windows"].clone()).unwrap_or_default();
-        // Status-line limits may be cached by Claude Code: a recent account-wide read wins.
-        if !windows.is_empty() && !(key == "claude" && now_ms() - self.usage.claude_live_at < 5.0 * 60_000.0) {
-            self.record_usage(Snapshot { provider: key, windows, at: now_ms(), reset_credits: None }, cx);
+        let now = now_ms();
+        // Status-line limits may be cached by Claude Code: a recent live API read for this account wins.
+        let recent_live = provider == "claude" && self.usage.claude_live_at.get(&key).is_some_and(|&at| now - at < CLAUDE_POLL_INTERVAL_MS);
+        if !windows.is_empty() && !recent_live {
+            if let Some(state) = self.usage.poll.get_mut(&key) {
+                state.last_error = None;
+                state.error_kind = None;
+            }
+            self.record_usage(Snapshot { provider: key, windows, at: now, reset_credits: None }, cx);
         }
     }
 
@@ -641,8 +1001,7 @@ impl Root {
         let mut row = div().flex().items_center().gap_1();
         for provider in ["claude", "codex", "agy"] {
             let pooled = pooled(provider, &self.usage.snapshots, &self.usage.accounts, now);
-            let Some(w) = tightest(pooled.as_ref().map(|p| &p.0), now) else { continue };
-            let left = left_now(w, now);
+            let Some(left) = overall_left(pooled.as_ref().map(|p| &p.0), now) else { continue };
             let color = level_color(left, &c);
             let label_color = if left < 40.0 { color } else { c.muted };
             let toggle = provider.to_string();
@@ -653,7 +1012,7 @@ impl Root {
                         cx.notify();
                     }))
                     .child(usage_ring(provider, left, color, 22.0, c))
-                    .child(div().text_size(px(11.0)).text_color(label_color).child(format!("{left:.0}%"))),
+                    .child(div().text_size(px(11.0)).text_color(label_color).child(format!("{:.0}%", left.round()))),
             );
         }
         row
@@ -700,16 +1059,37 @@ impl Root {
             let mut rows = div().flex().flex_col().gap_2().pt_1()
                 .child(div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child("ACCOUNTS"));
             for a in accounts {
-                let snapshot = self.usage.snapshots.get(&usage_key(&a.id));
-                let left = tightest(snapshot, now).map(|w| left_now(w, now));
+                let key = usage_key(&a.id);
+                let snapshot = self.usage.snapshots.get(&key);
+                let left = overall_left(snapshot, now);
+                let poll_state = self.usage.poll.get(&key);
+                let busy_acct = self.usage.in_flight.contains(&key);
                 let color = left.map_or(c.subtle, |l| level_color(l, &c));
+                let (status_text, status_color, status_tip) = if !a.signed_in {
+                    ("not signed in".to_string(), c.warning, None)
+                } else if let Some(l) = left {
+                    (format!("{:.0}% left", l.round()), c.subtle, None)
+                } else if busy_acct {
+                    ("refreshing…".to_string(), c.subtle, None)
+                } else if let Some(kind) = poll_state.and_then(|p| p.error_kind) {
+                    (error_short_label(kind).to_string(), c.warning, poll_state.and_then(|p| p.last_error.clone()))
+                } else {
+                    ("no reading".to_string(), c.subtle, None)
+                };
+                let status_el = div()
+                    .id(SharedString::from(format!("usage-acct-status-{}", a.id)))
+                    .flex_shrink_0()
+                    .text_size(px(11.0))
+                    .text_color(status_color)
+                    .when_some(status_tip, |d, tip| d.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)))
+                    .child(status_text);
                 let mut card = div().flex().flex_col().gap_1().rounded_lg().border_1().border_color(c.edge).bg(c.panel).p_2p5()
                     .child(div().flex().items_center().gap_2()
                         .child(div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color))
                         .child(div().flex().flex_1().min_w_0().flex_col()
                             .child(div().truncate().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(a.label.clone()))
                             .when_some(a.email.clone(), |d, e| d.child(div().truncate().text_size(px(11.0)).text_color(c.subtle).child(e))))
-                        .child(div().flex_shrink_0().text_size(px(11.0)).text_color(c.subtle).child(left.map_or("no reading".into(), |l| format!("{l:.0}% left")))));
+                        .child(status_el));
                 // Every window of the account (5-hour, weekly, …) with when it resets.
                 for w in snapshot.map_or(&[][..], |s| s.windows.as_slice()) {
                     let wl = left_now(w, now);
@@ -730,9 +1110,9 @@ impl Root {
             }
             list = list.child(rows);
         }
-        let busy = self.usage.refreshing > 0;
+        let busy = self.usage.is_refreshing();
         let refresh = div().id("usage-refresh").flex().items_center().gap_1p5().h(px(26.0)).px_2().rounded_md().text_size(px(11.5)).text_color(c.muted)
-            .when(!busy, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx))))
+            .when(!busy, |d| d.cursor_pointer().hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.refresh_usage_manual(cx))))
             .when(busy, |d| d.opacity(0.6))
             .child(Icon::new(IconName::RefreshCw).size(px(12.0)).with_animation("usage-refresh-spin", Animation::new(Duration::from_millis(900)).repeat(), move |i, t| if busy { i.transform(Transformation::rotate(percentage(t))) } else { i }))
             .child(if busy { "Refreshing…" } else { "Refresh" });
@@ -820,7 +1200,11 @@ pub(super) fn usage_ring(provider: &str, left: f64, color: Hsla, size: f32, c: C
 
 #[cfg(test)]
 mod tests {
-    use super::{Account, Snapshot, UsageWindow, duration, group_windows, left_now, level_color, pooled, runs_out_at, start_account, theme, tightest, usage_key};
+    use super::{
+        Account, CLAUDE_POLL_INTERVAL_MS, PollState, RATE_LIMIT_BASE_MS, RATE_LIMIT_MAX_MS, Snapshot, TRANSIENT_NO_DATA_RETRY_MS, TRANSIENT_WITH_DATA_RETRY_MS, UsageErrorKind, UsageWindow,
+        apply_poll_error, apply_poll_success, duration, group_windows, left_now, level_color, overall_left, overall_summary, pooled, prune_samples, runs_out_at, should_auto_poll, start_account, theme,
+        tightest, usage_key,
+    };
     use std::collections::HashMap;
 
     fn window(kind: &str, used: f64, resets: Option<f64>) -> UsageWindow {
@@ -935,5 +1319,147 @@ mod tests {
         assert_ne!(level_color(20.0, &c), c.danger);
         assert_eq!(level_color(10.0, &c), c.danger);
         assert_eq!(level_color(0.0, &c), c.danger);
+    }
+
+    #[test]
+    fn overall_averages_independent_model_groups() {
+        let mk = |kind: &str, label: &str, used: f64, resets: Option<f64>| UsageWindow {
+            kind: kind.into(),
+            label: label.into(),
+            used_percent: used,
+            resets_at: resets,
+        };
+        let now = 1_000.0;
+
+        // Reported Antigravity case: Gemini (31% 5h, 51% weekly) + Claude/GPT (0% 5h, 41% weekly) -> avg(31, 0) = 15.5% (rounds to 16%).
+        let agy = Snapshot {
+            provider: "agy".into(),
+            windows: vec![
+                mk("session-0", "5-hour (Gemini Models)", 69.0, Some(5_000.0)),
+                mk("week-0", "Weekly (Gemini Models)", 49.0, Some(50_000.0)),
+                mk("session-1", "5-hour (Claude and GPT models)", 100.0, Some(8_000.0)),
+                mk("week-1", "Weekly (Claude and GPT models)", 59.0, Some(40_000.0)),
+            ],
+            at: now,
+            reset_credits: None,
+        };
+        let (left, reset) = overall_summary(Some(&agy), now).unwrap();
+        assert!((left - 15.5).abs() < 1e-9);
+        assert_eq!(left.round(), 16.0);
+        assert_eq!(reset, Some(5_000.0));
+
+        // When Gemini's 5-hour window resets, Gemini becomes governed by its 51% weekly limit -> avg(51, 0) = 25.5%.
+        let (left_after_reset, reset_after) = overall_summary(Some(&agy), 6_000.0).unwrap();
+        assert!((left_after_reset - 25.5).abs() < 1e-9);
+        assert_eq!(reset_after, Some(8_000.0));
+
+        // Both groups exhausted -> 0%.
+        let agy_out = Snapshot {
+            provider: "agy".into(),
+            windows: vec![
+                mk("session-0", "5-hour (Gemini Models)", 100.0, Some(5_000.0)),
+                mk("week-0", "Weekly (Gemini Models)", 49.0, Some(50_000.0)),
+                mk("session-1", "5-hour (Claude and GPT models)", 100.0, Some(8_000.0)),
+                mk("week-1", "Weekly (Claude and GPT models)", 59.0, Some(40_000.0)),
+            ],
+            at: now,
+            reset_credits: None,
+        };
+        assert_eq!(overall_left(Some(&agy_out), now), Some(0.0));
+
+        // Legacy Antigravity fallback: summary group + standalone gemini bucket -> avg(min(session, week), gemini).
+        let agy_legacy = Snapshot {
+            provider: "agy".into(),
+            windows: vec![
+                mk("session", "5-hour", 100.0, Some(8_000.0)),
+                mk("week", "Weekly", 59.0, Some(40_000.0)),
+                mk("gemini", "Gemini models", 69.0, Some(5_000.0)),
+            ],
+            at: now,
+            reset_credits: None,
+        };
+        let (legacy_left, legacy_reset) = overall_summary(Some(&agy_legacy), now).unwrap();
+        assert!((legacy_left - 15.5).abs() < 1e-9);
+        assert_eq!(legacy_reset, Some(5_000.0));
+
+        // Claude: global 0% 5-hour + 60% weekly + 80% Weekly (Opus) must still read 0%.
+        let claude = Snapshot {
+            provider: "claude".into(),
+            windows: vec![
+                mk("session", "5-hour", 100.0, Some(5_000.0)),
+                mk("week", "Weekly", 40.0, Some(50_000.0)),
+                mk("week-opus", "Weekly (Opus)", 20.0, Some(50_000.0)),
+            ],
+            at: now,
+            reset_credits: None,
+        };
+        assert_eq!(overall_summary(Some(&claude), now), Some((0.0, Some(5_000.0))));
+
+        // Codex: exhausted plan falls back to monthly credits.
+        let codex = Snapshot {
+            provider: "codex".into(),
+            windows: vec![
+                mk("session", "5-hour", 100.0, Some(5_000.0)),
+                mk("week", "Weekly", 40.0, Some(50_000.0)),
+                mk("month-credit", "Monthly credit", 20.0, Some(90_000.0)),
+            ],
+            at: now,
+            reset_credits: None,
+        };
+        assert_eq!(overall_summary(Some(&codex), now), Some((80.0, Some(90_000.0))));
+    }
+
+    #[test]
+    fn claude_polling_throttles_and_backs_off_on_rate_limits() {
+        let mut st = PollState::default();
+        assert!(should_auto_poll("claude", None, 1_000.0));
+        apply_poll_success(&mut st, "claude", 1_000.0);
+        assert!(!should_auto_poll("claude", Some(&st), 1_000.0 + 60_000.0));
+        assert!(should_auto_poll("claude", Some(&st), 1_000.0 + CLAUDE_POLL_INTERVAL_MS));
+
+        // 429 backs off exponentially (2m -> 4m -> 8m -> 15m cap), honoring larger Retry-After.
+        apply_poll_error(&mut st, UsageErrorKind::RateLimited, "429".into(), None, false, 10_000.0);
+        assert_eq!(st.rate_limit_streak, 1);
+        assert_eq!(st.next_allowed_at, 10_000.0 + RATE_LIMIT_BASE_MS);
+        assert!(!should_auto_poll("claude", Some(&st), 10_000.0 + 60_000.0));
+
+        apply_poll_error(&mut st, UsageErrorKind::RateLimited, "429".into(), Some(300), false, 20_000.0);
+        assert_eq!(st.rate_limit_streak, 2);
+        // 300s (5m) > 2nd backoff step (4m), so Retry-After wins.
+        assert_eq!(st.next_allowed_at, 20_000.0 + 300_000.0);
+
+        for _ in 0..5 {
+            apply_poll_error(&mut st, UsageErrorKind::RateLimited, "429".into(), None, false, 30_000.0);
+        }
+        assert_eq!(st.next_allowed_at, 30_000.0 + RATE_LIMIT_MAX_MS);
+
+        // Transient failure retries quickly when no snapshot exists, slower when one exists.
+        apply_poll_error(&mut st, UsageErrorKind::Transient, "net".into(), None, false, 40_000.0);
+        assert_eq!(st.rate_limit_streak, 0);
+        assert_eq!(st.next_allowed_at, 40_000.0 + TRANSIENT_NO_DATA_RETRY_MS);
+        apply_poll_error(&mut st, UsageErrorKind::Transient, "net".into(), None, true, 50_000.0);
+        assert_eq!(st.next_allowed_at, 50_000.0 + TRANSIENT_WITH_DATA_RETRY_MS);
+
+        // Success clears error state and streak.
+        apply_poll_success(&mut st, "claude", 60_000.0);
+        assert_eq!(st.rate_limit_streak, 0);
+        assert!(st.last_error.is_none());
+        assert!(st.error_kind.is_none());
+    }
+
+    #[test]
+    fn prunes_expired_and_empty_samples() {
+        let mut samples: HashMap<String, Vec<(f64, f64)>> = [
+            ("claude:session:1000".into(), vec![(500.0, 20.0)]),
+            ("claude:session:5000".into(), vec![(500.0, 20.0)]),
+            ("claude:week:".into(), vec![(500.0, 10.0)]),
+            ("claude:empty:5000".into(), vec![]),
+        ]
+        .into();
+        prune_samples(&mut samples, 2000.0);
+        assert!(!samples.contains_key("claude:session:1000"));
+        assert!(!samples.contains_key("claude:empty:5000"));
+        assert!(samples.contains_key("claude:session:5000"));
+        assert!(samples.contains_key("claude:week:"));
     }
 }

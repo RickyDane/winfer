@@ -1,6 +1,7 @@
 //! Settings → winfer code and Mobile (port of `HarnessSettings` and `MobileSettings`).
 
-use super::settings::{card, plain_button, row};
+use super::settings_kit::{alpha, badge, empty_state, icon_tile, panel, section};
+use super::settings_system::{Look, button, result_banner};
 use super::*;
 use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
 use serde_json::{Value, json};
@@ -66,6 +67,7 @@ pub(super) struct HarnessPage {
     qr: Option<Arc<Image>>,
     relay: Option<Entity<InputState>>,
     mobile_result: Option<Result<String, String>>,
+    relay_result: Option<Result<String, String>>,
     polled: Option<std::time::Instant>,
     pub(super) local: Option<LocalInputs>,
     pub(super) local_test: Option<Result<String, String>>,
@@ -315,6 +317,39 @@ impl Root {
         cx.notify();
     }
 
+    /// Makes a pairing code and ticks its countdown every second until it's used or expires.
+    fn start_pairing(&mut self, cx: &mut Context<Self>) {
+        self.harness_page.mobile_result = None;
+        match mobile::mobile_pair_start().map(|p| serde_json::to_value(p).unwrap_or_default()) {
+            Ok(p) => {
+                self.harness_page.qr = p["qrSvg"].as_str().map(|svg| Arc::new(Image::from_bytes(ImageFormat::Svg, svg.as_bytes().to_vec())));
+                let device = p["deviceId"].clone();
+                self.harness_page.pairing = Some(p);
+                cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        let ticking = this.update(cx, |this, cx| {
+                            let Some(p) = this.harness_page.pairing.as_ref().filter(|p| p["deviceId"] == device) else { return false };
+                            if now_ms() > p["expiresAt"].as_f64().unwrap_or(0.0) {
+                                this.harness_page.mobile_result = Some(Err("The pairing code expired. Make a new one.".into()));
+                                this.harness_page.pairing = None;
+                                this.harness_page.qr = None;
+                            }
+                            cx.notify();
+                            true
+                        });
+                        if !matches!(ticking, Ok(true)) {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+            Err(e) => self.harness_page.mobile_result = Some(Err(e)),
+        }
+        self.refresh_mobile(cx);
+    }
+
     pub(super) fn page_mobile(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if self.harness_page.polled.is_none_or(|t| t.elapsed() > Duration::from_secs(15)) {
             self.refresh_mobile(cx);
@@ -332,76 +367,145 @@ impl Root {
             let url = url.to_string();
             relay.update(cx, |i, cx| i.set_value(url, window, cx));
         }
-        let pairing = self.harness_page.pairing.clone();
-        let pending = pairing.as_ref().and_then(|p| status.as_ref()?["devices"].as_array()?.iter().find(|d| d["deviceId"] == p["deviceId"]).cloned());
-        let pair = plain_button(c, "mobile-pair", if pairing.is_some() { "New code" } else { "Pair phone" }).on_click(cx.listener(|this, _, _, cx| {
-            this.harness_page.mobile_result = None;
-            match mobile::mobile_pair_start().map(|p| serde_json::to_value(p).unwrap_or_default()) {
-                Ok(p) => {
-                    this.harness_page.qr = p["qrSvg"].as_str().map(|svg| Arc::new(Image::from_bytes(ImageFormat::Svg, svg.as_bytes().to_vec())));
-                    this.harness_page.pairing = Some(p);
-                }
-                Err(e) => this.harness_page.mobile_result = Some(Err(e)),
-            }
-            this.refresh_mobile(cx);
-        }));
-        let mut phone = card(c, "Phone", Some(&card_description("Phone"))).child(row(c, "Pair a phone", hint("Pair a phone"), pair));
-        if let Some(p) = pairing {
-            let link = p["link"].as_str().unwrap_or_default().to_string();
-            let waiting = match &pending {
-                Some(d) if d["connected"] == true => "Waiting for your phone…".to_string(),
-                Some(d) if d["error"].is_string() => format!("Can't reach the relay: {}", d["error"].as_str().unwrap_or_default()),
-                _ => "Connecting to the relay…".to_string(),
-            };
-            phone = phone.child(div().flex().items_center().gap_4().px_3p5().py_3()
-                .child(div().size(px(180.0)).flex_shrink_0().overflow_hidden().rounded_md().bg(gpui_kit::white()).p_1().children(self.harness_page.qr.clone().map(|q| img(q).size_full())))
-                .child(div().min_w_0().flex().flex_col().gap_2().text_xs().text_color(c.muted).child(waiting).child("The code works once, for 10 minutes. It holds the key to your agents: don't share it.")
-                    .child(div().child(plain_button(c, "mobile-copy", "Copy link").on_click(cx.listener(move |this, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
-                        this.harness_page.mobile_result = Some(Ok("Link copied.".into()));
-                        cx.notify();
-                    }))))));
-        }
+        let mono = crate::fonts::mono(cx);
         let now = now_ms();
-        for d in status.iter().flat_map(|s| s["devices"].as_array().into_iter().flatten()).filter(|d| d["paired"] == true) {
-            let phones = d["phones"].as_u64().unwrap_or(0);
-            let connected = d["connected"] == true;
-            let mut parts = vec![if phones > 0 { "Open now".to_string() } else { d["lastSeen"].as_f64().map_or("Paired".to_string(), |t| format!("Last seen {}", ago(t, now))) }, if d["push"] == true { "notifications on".into() } else { "notifications off".into() }];
-            if !connected && let Some(e) = d["error"].as_str() {
-                parts.push(format!("relay: {e}"));
+        let pairing = self.harness_page.pairing.clone();
+        let devices: Vec<Value> = status.iter().flat_map(|s| s["devices"].as_array().cloned().unwrap_or_default()).collect();
+        let pending = pairing.as_ref().and_then(|p| devices.iter().find(|d| d["deviceId"] == p["deviceId"]).cloned());
+
+        // What the phone does, and the button that starts pairing.
+        let phone_art = div().w(px(34.0)).h(px(56.0)).flex_shrink_0().flex().flex_col().gap(px(3.0)).p(px(4.0)).pt(px(8.0)).rounded(px(7.0)).border_2().border_color(c.border_strong).bg(c.app)
+            .children([0.9, 0.7, 0.8].map(|w| div().h(px(5.0)).w(relative(w)).rounded_sm().bg(alpha(c.accent, 0.45))));
+        let feature = |icon: IconName, text: &str| div().flex().items_center().gap_1p5().h(px(22.0)).px_2().rounded_md().bg(c.app).text_size(px(11.5)).text_color(c.muted).child(Icon::new(icon).size(px(12.0)).text_color(c.subtle)).child(text.to_string());
+        let hero = panel(c).flex_row().items_center().gap_4().px_4().py_3p5()
+            .child(phone_art)
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
+                .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child("Your agents, in your pocket"))
+                .child(div().flex().flex_wrap().gap_1p5()
+                    .child(feature(IconName::Bell, "Notified when one finishes or asks"))
+                    .child(feature(IconName::MessageSquare, "Read its thread"))
+                    .child(feature(IconName::Reply, "Answer it"))))
+            .child(div().flex_shrink_0().flex().flex_col().items_end().gap_2()
+                .child(button(c, "mobile-pair", Some(IconName::QrCode), if pairing.is_some() { "New code" } else { "Pair a phone" }, Look::Primary, true).on_click(cx.listener(|this, _, _, cx| this.start_pairing(cx))))
+                .child(div().flex().items_center().gap_1().text_size(px(11.5)).text_color(c.success).child(Icon::new(IconName::Lock).size(px(11.0))).child("End-to-end encrypted")));
+
+        // The code to scan, the steps and how far the pairing is.
+        let pairing_panel = pairing.map(|p| {
+            let link = p["link"].as_str().unwrap_or_default().to_string();
+            let (dot, waiting) = match &pending {
+                Some(d) if d["connected"] == true => (c.success, "Waiting for your phone…".to_string()),
+                Some(d) if d["error"].is_string() => (c.danger, format!("Can't reach the relay: {}", d["error"].as_str().unwrap_or_default())),
+                _ => (c.warning, "Connecting to the relay…".to_string()),
+            };
+            let left = ((p["expiresAt"].as_f64().unwrap_or(0.0) - now) / 1000.0).max(0.0) as u64;
+            let step = |n: &str, title: &str, sub: Option<&str>| div().flex().items_start().gap_2p5()
+                .child(div().size(px(20.0)).flex_shrink_0().flex().items_center().justify_center().rounded_full().bg(alpha(c.accent, 0.16)).text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.accent).child(n.to_string()))
+                .child(div().flex().flex_col().gap_0p5().pt(px(1.0))
+                    .child(div().text_size(px(12.5)).text_color(c.fg).child(title.to_string()))
+                    .when_some(sub, |d, s| d.child(div().text_size(px(11.5)).text_color(c.subtle).child(s.to_string()))));
+            div().flex().gap_4().p_4().rounded(px(12.0)).border_1().border_color(alpha(c.accent, 0.6)).bg(c.panel)
+                .child(div().size(px(184.0)).flex_shrink_0().overflow_hidden().rounded_lg().bg(gpui_kit::white()).p_2().children(self.harness_page.qr.clone().map(|q| img(q).size_full())))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap_3()
+                    .child(step("1", "Scan the code with your phone's camera", None))
+                    .child(step("2", "Open the page and add it to your Home Screen", None))
+                    .child(step("3", "Allow notifications", Some("On iPhone they need iOS 16.4 or later and the Home Screen app.")))
+                    .child(div().flex().items_center().gap_1p5().text_size(px(11.5)).text_color(c.warning).child(Icon::new(IconName::KeyRound).size(px(12.0))).child("The code holds the key to your agents: don't share it. It works once."))
+                    .child(div().flex_1())
+                    .child(div().flex().items_center().gap_2().px_3().py_2().rounded_lg().bg(c.app).text_size(px(12.0)).text_color(c.muted)
+                        .child(div().size(px(7.0)).flex_shrink_0().rounded_full().bg(dot))
+                        .child(div().flex_1().min_w_0().truncate().child(waiting))
+                        .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(format!("expires in {}:{:02}", left / 60, left % 60)))
+                        .child(button(c, "mobile-copy", Some(IconName::Link), "Copy link", Look::Plain, true).on_click(cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
+                            this.toast("Pairing link copied", cx);
+                        })))))
+        });
+        let result = self.harness_page.mobile_result.as_ref().map(|r| result_banner(c, r, None));
+
+        // The phones that can reach your agents.
+        let paired: Vec<&Value> = devices.iter().filter(|d| d["paired"] == true).collect();
+        let count = paired.len();
+        let phones = if paired.is_empty() {
+            panel(c).child(empty_state(c, IconName::Smartphone, "No phones yet. Pair one above to get notified when an agent finishes or asks something."))
+        } else {
+            let mut list = panel(c);
+            for (i, d) in paired.into_iter().enumerate() {
+                let open = d["phones"].as_u64().unwrap_or(0) > 0;
+                let connected = d["connected"] == true;
+                let seen = if open { "Open now".to_string() } else { d["lastSeen"].as_f64().map_or("Paired".to_string(), |t| format!("Last seen {}", ago(t, now))) };
+                let push = d["push"] == true;
+                let error = (!connected).then(|| d["error"].as_str().map(str::to_string)).flatten();
+                let (id, name) = (d["deviceId"].as_str().unwrap_or_default().to_string(), d["name"].as_str().unwrap_or_default().to_string());
+                let button_name = name.clone();
+                list = list.child(div().flex().items_center().gap_3().px_3p5().py_2p5().when(i > 0, |d| d.border_t_1().border_color(c.border))
+                    .child(icon_tile(c.muted, IconName::Smartphone, 30.0))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                        .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(name))
+                        .child(div().flex().items_center().gap_1p5().text_size(px(11.5)).text_color(c.subtle)
+                            .child(div().size(px(7.0)).rounded_full().bg(if open { c.success } else if connected { c.subtle } else { c.danger }))
+                            .child(seen)
+                            .child("·")
+                            .child(Icon::new(if push { IconName::Bell } else { IconName::BellOff }).size(px(11.0)))
+                            .child(if push { "notifications on" } else { "notifications off" })
+                            .when_some(error, |d, e| d.child("·").child(div().truncate().text_color(c.danger).child(format!("relay: {e}"))))))
+                    .child(button(c, SharedString::from(format!("unpair-{id}")), Some(IconName::Unlink), "Unpair", Look::Danger, true).on_click(cx.listener(move |this, _, window, cx| {
+                        let target = id.clone();
+                        this.confirm(&format!("Unpair {button_name}"), format!("{button_name} will stop getting notifications and can't reach your agents until you pair it again."), "Unpair", window, cx, move |this, cx| {
+                            if let Err(e) = mobile::mobile_revoke(target.clone()) {
+                                this.harness_page.mobile_result = Some(Err(e));
+                            }
+                            this.refresh_mobile(cx);
+                        });
+                    }))));
             }
-            let (id, name) = (d["deviceId"].as_str().unwrap_or_default().to_string(), d["name"].as_str().unwrap_or_default().to_string());
-            let button_name = name.clone();
-            phone = phone.child(row(c, name, Some(parts.join(" · ")), div().flex().items_center().gap_2()
-                .child(div().size_2().rounded_full().bg(if phones > 0 { c.success } else if connected { c.subtle } else { c.danger }))
-                .child(plain_button(c, SharedString::from(format!("unpair-{id}")), "Unpair").on_click(cx.listener(move |this, _, window, cx| {
-                    let target = id.clone();
-                    this.confirm(&format!("Unpair {button_name}"), format!("{button_name} will stop getting notifications and can't reach your agents until you pair it again."), "Unpair", window, cx, move |this, cx| {
-                        if let Err(e) = mobile::mobile_revoke(target.clone()) {
-                            this.harness_page.mobile_result = Some(Err(e));
-                        }
-                        this.refresh_mobile(cx);
-                    });
-                })))));
-        }
+            list
+        };
+
+        // Where winfer and the phones meet.
         let url = status.as_ref().and_then(|s| s["relayUrl"].as_str()).unwrap_or_default().to_string();
         let default = status.as_ref().and_then(|s| s["defaultRelayUrl"].as_str()).unwrap_or_default().to_string();
-        let can_save = status.is_some() && relay.read(cx).value().trim().trim_end_matches('/') != url;
+        let typed = relay.read(cx).value().trim().trim_end_matches('/').to_string();
+        let can_save = status.is_some() && typed != url;
         let save_from = relay.clone();
-        let relay_card = card(c, "Relay", Some(&card_description("Relay"))).child(row(c, "Relay URL", (url != default).then(|| format!("Default: {default}")), div().flex().items_center().gap_2()
-            .child(div().w(px(256.0)).child(Input::new(&relay)))
-            .child(plain_button(c, "relay-save", "Save").when(!can_save, |d| d.opacity(0.4)).on_click(cx.listener(move |this, _, _, cx| {
-                if !can_save {
-                    return;
-                }
-                let value = save_from.read(cx).value().to_string();
-                this.harness_page.mobile_result = Some(mobile::mobile_set_relay_url(value).map(|_| "Relay saved. Phones reconnect to it.".to_string()));
-                this.refresh_mobile(cx);
-            })))));
-        div().flex().flex_col().gap_6().child(phone).child(relay_card).children(self.harness_page.mobile_result.as_ref().map(|r| {
-            let (t, col) = match r { Ok(t) => (t.clone(), c.success), Err(t) => (t.clone(), c.danger) };
-            div().px_1().text_xs().text_color(col).child(t)
-        }))
+        let reset_input = relay.clone();
+        let relay_state = if devices.iter().any(|d| d["connected"] == true) {
+            Some(badge(c.success, "Connected"))
+        } else if devices.iter().any(|d| d["error"].is_string()) {
+            Some(badge(c.danger, "Can't reach it"))
+        } else {
+            None
+        };
+        let relay_card = panel(c).flex_row().items_start().gap_4().px_4().py_3p5()
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Relay URL"))
+                .child(div().text_size(px(12.0)).text_color(c.subtle).child(card_description("Relay"))))
+            .child(div().w(px(300.0)).flex_shrink_0().flex().flex_col().gap_2()
+                .child(div().font_family(mono).child(Input::new(&relay)))
+                .child(div().flex().items_center().justify_end().gap_2()
+                    .when(!default.is_empty() && url != default, |d| d.child(button(c, "relay-reset", Some(IconName::Undo2), "Reset to default", Look::Plain, true).on_click(cx.listener(move |this, _, window, cx| {
+                        this.harness_page.relay_result = Some(mobile::mobile_set_relay_url(String::new()).map(|_| "Back on the default relay. Phones reconnect to it.".to_string()));
+                        reset_input.update(cx, |i, cx| i.set_value("", window, cx));
+                        this.refresh_mobile(cx);
+                    }))))
+                    .child(button(c, "relay-save", None, "Save", Look::Primary, can_save).on_click(cx.listener(move |this, _, _, cx| {
+                        if !can_save {
+                            return;
+                        }
+                        let value = save_from.read(cx).value().to_string();
+                        this.harness_page.relay_result = Some(mobile::mobile_set_relay_url(value).map(|_| "Relay saved. Phones reconnect to it.".to_string()));
+                        this.refresh_mobile(cx);
+                    })))));
+        let relay_result = self.harness_page.relay_result.as_ref().map(|r| result_banner(c, r, None));
+
+        div().flex().flex_col().gap_4()
+            .child(hero)
+            .children(pairing_panel)
+            .children(result)
+            .child(section(c, "Paired phones", Some(format!("{count} phone{}", if count == 1 { "" } else { "s" }))))
+            .child(phones)
+            .child(div().flex().items_center().gap_2().mx(px(2.0)).mb(px(-6.0)).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.muted).child("Relay").child(div().flex_1()).children(relay_state))
+            .child(relay_card)
+            .children(relay_result)
     }
 }
 

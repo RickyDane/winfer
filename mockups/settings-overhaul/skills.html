@@ -1,0 +1,299 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Skills</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .tabs .tr { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-subtle); }
+  /* Install-for bar */
+  .targets { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .targets > .k { font-size: 12px; font-weight: 500; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .targets > .k svg { width: 13px; height: 13px; color: var(--accent); }
+  .tchips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1; }
+  .tchip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px 0 4px; border-radius: 7px; font-size: 12px; color: var(--fg-muted); background: var(--app); box-shadow: var(--shadow); }
+  .tchip:hover { color: var(--fg); }
+  .tchip[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent); }
+  .tchip .ck { width: 13px; height: 13px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px var(--border-strong); display: grid; place-items: center; }
+  .tchip[aria-pressed="true"] .ck { background: var(--accent); box-shadow: none; }
+  .tchip[aria-pressed="true"] .ck::after { content: "✓"; color: #fff; font-size: 9px; }
+  .tchip.missing { opacity: .55; }
+  .tchip small { font-size: 10.5px; color: var(--warning); }
+  .tnote { font-size: 11.5px; color: var(--fg-subtle); margin: -8px 4px 0; display: flex; gap: 6px; align-items: center; }
+  .tnote svg { width: 12px; height: 12px; }
+  .tnote.bad { color: var(--danger); }
+  /* Discover: sources + grid */
+  .disc { display: grid; grid-template-columns: 178px 1fr; gap: 14px; align-items: start; }
+  .sources { display: flex; flex-direction: column; gap: 2px; border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 6px; }
+  .sources .gh { padding: 6px 8px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); }
+  .src { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--fg-muted); text-align: left; width: 100%; }
+  .src:hover { background: var(--hover); color: var(--fg); }
+  .src[aria-checked="true"] { background: var(--accent-soft); color: var(--fg); }
+  .src .av { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .src .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src .c { font: 10.5px var(--mono); color: var(--fg-subtle); }
+  .src .x { display: none; width: 18px; height: 18px; border-radius: 4px; place-items: center; color: var(--fg-subtle); }
+  .src:hover .x { display: grid; }
+  .src:hover .c.user { display: none; }
+  .src .x:hover { background: var(--active); color: var(--fg); }
+  .src .x svg { width: 11px; height: 11px; }
+  .addrepo { display: flex; gap: 4px; margin-top: 4px; padding: 4px 2px 2px; border-top: 1px solid var(--border); }
+  .addrepo input { flex: 1; min-width: 0; height: 26px; border: 0; border-radius: 6px; background: var(--app); padding: 0 8px; font: 11.5px var(--mono); outline: none; }
+  .addrepo .btn { height: 26px; padding: 0 8px; }
+  .addrepo-err { font-size: 10.5px; color: var(--danger); padding: 2px 4px 4px; }
+  .srchead { display: flex; align-items: center; gap: 10px; padding: 0 2px; }
+  .srchead .lbl b { font-size: 13px; font-weight: 500; display: flex; gap: 6px; align-items: center; }
+  .srchead .lbl small { display: block; font-size: 11.5px; color: var(--fg-subtle); line-height: 1.4; margin-top: 1px; }
+  .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sk { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 11px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .sk .nm { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; }
+  .sk .nm svg { width: 13px; height: 13px; color: var(--accent); }
+  .sk .path { font: 10.5px var(--mono); color: var(--fg-subtle); }
+  .sk .d { font-size: 11.5px; color: var(--fg-muted); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+  .sk.open .d { -webkit-line-clamp: unset; }
+  .sk .warnbox { display: flex; gap: 6px; padding: 6px 8px; border-radius: 6px; font-size: 11px; line-height: 1.4; background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning); }
+  .sk .warnbox svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 1px; }
+  .sk .ft { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 2px; min-height: 24px; }
+  .sk .ft .st { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--success); }
+  .sk .ft .st svg { width: 12px; height: 12px; }
+  .sk .ft .r { margin-left: auto; }
+  .state { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  /* Installed list */
+  .srow { display: flex; gap: 12px; padding: 11px 14px; align-items: flex-start; }
+  .srow + .srow { border-top: 1px solid var(--border); }
+  .srow .ic { margin-top: 1px; }
+  .srow .sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .srow .nm { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+  .srow .d { font-size: 12px; color: var(--fg-muted); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .copies { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 2px; }
+  .copy { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px 0 3px; border-radius: 5px; background: var(--app); font-size: 11px; color: var(--fg-muted); }
+  .copy .amark { border-radius: 4px; }
+  .copy svg { width: 10px; height: 10px; color: var(--fg-subtle); }
+  .copy.miss { background: none; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--fg-subtle); padding-left: 7px; }
+  .from { font-size: 11px; color: var(--fg-subtle); display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+  .from svg { width: 11px; height: 11px; }
+  .srow .acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-top: 2px; }
+  .busy { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--accent); }
+  .busy svg { width: 13px; height: 13px; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toolbar { display: flex; align-items: center; gap: 10px; }
+  .toolbar .searchbox { flex: 1; }
+  .scrim { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: #0008; border-radius: 0 14px 14px 0; }
+  .confirm { width: 380px; border-radius: 12px; background: var(--panel-raised); box-shadow: 0 20px 60px #000a, 0 0 0 1px var(--border-strong); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .confirm h4 { margin: 0; font-size: 14px; font-weight: 600; }
+  .confirm p { margin: 0; font-size: 12.5px; color: var(--fg-muted); line-height: 1.5; }
+  .confirm .r { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .btn.dangerfill { background: var(--danger); color: #fff; box-shadow: none; font-weight: 500; }
+  .demo { display: inline-flex; gap: 2px; margin-left: 8px; padding: 2px; border-radius: 7px; background: #0006; vertical-align: middle; }
+  .demo button { font-size: 11px; padding: 2px 8px; border-radius: 5px; color: #a1a1aa; }
+  .demo button[aria-checked="true"] { background: #7c8cff; color: #fff; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="wand-sparkles"></i></div>
+      <h2>Skills</h2>
+      <p>Reusable instructions every agent can load.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="installed"><i data-lucide="package-check"></i>Installed<span class="tcount" id="instCount"></span><span class="tdot" id="updDot"></span></button>
+      <button data-v="discover"><i data-lucide="compass"></i>Discover<span class="tcount" id="discCount"></span></button>
+    </div>
+    <div class="body">
+      <!-- Shared: where installs go -->
+      <div class="targets">
+        <span class="k"><i data-lucide="download"></i>Install for</span>
+        <div class="tchips" id="targets"></div>
+      </div>
+      <div class="tnote" id="tnote"></div>
+
+      <!-- ───────── Installed ───────── -->
+      <div class="pane" data-if="tab=installed">
+        <div class="banner acc" id="updBanner"><i data-lucide="arrow-up-circle"></i><span id="updText"></span><span class="r"><button class="btn primary sm" id="updAll"></button></span></div>
+        <div class="toolbar"><label class="searchbox"><i data-lucide="search"></i><input type="search" placeholder="Search installed skills" data-bind="qi" /></label></div>
+        <div class="list" id="installed"></div>
+      </div>
+
+      <!-- ───────── Discover ───────── -->
+      <div class="pane" data-if="tab=discover">
+        <div class="note"><i data-lucide="shield-alert"></i><span>Every folder with a <code>SKILL.md</code> in a GitHub repo is a skill. Skills are <b>instructions and scripts your agents follow</b>, so install them from repos you trust.</span></div>
+        <div class="disc">
+          <div class="sources" data-radio="src" id="sources"></div>
+          <div class="right">
+            <div class="srchead"><span class="lbl" style="flex:1;min-width:0"><b id="srcName"></b><small id="srcDesc"></small></span><button class="btn sm" id="refresh"><i data-lucide="refresh-cw"></i>Refresh</button></div>
+            <label class="searchbox"><i data-lucide="search"></i><input type="search" id="qd" data-bind="qd" /></label>
+            <div id="grid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="scrim" id="scrim" hidden><div class="confirm"><h4 id="cTitle"></h4><p id="cBody"></p><div class="r"><button class="btn" id="cNo">Cancel</button><button class="btn dangerfill" id="cYes">Remove</button></div></div></div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const TARGETS = [
+    { id: "claude", name: "Claude Code", mk: "claude" },
+    { id: "shared", name: "Shared (.agents)", icon: "folder-tree" },
+    { id: "codex", name: "Codex", mk: "codex" },
+    { id: "agy", name: "Gemini / Antigravity", mk: "agy" },
+    { id: "pi", name: "pi", mk: "pi", missing: true },
+  ];
+  const tmark = (t, s = 20) => t.mk ? mark(t.mk, s) : `<span class="amark" style="--c:#a1a1aa;width:${s}px;height:${s}px"><i data-lucide="${t.icon}" style="width:${s * 0.55}px;height:${s * 0.55}px"></i></span>`;
+  const SOURCES = [
+    { id: "caveman", name: "Caveman", repo: "JuliusBrussee/caveman", col: "#a16207", l: "C", desc: "Terse output modes (caveman, ultracave, megacave) and lean coding workflows", builtin: true },
+    { id: "anthropic", name: "Anthropic", repo: "anthropics/skills", col: "#d97757", l: "A", desc: "Anthropic's skills: documents (pdf, docx, xlsx, pptx), frontend design, MCP builder, skill creator", builtin: true },
+    { id: "obra", name: "obra/superpowers", repo: "obra/superpowers", col: "#52525b", l: "o" },
+    { id: "empty", name: "acme/tools", repo: "acme/tools", col: "#52525b", l: "a" },
+  ];
+  const CATALOG = {
+    anthropic: [
+      ["pdf", "document-skills/pdf", 6, "Read, fill and merge PDFs; extract text and tables, OCR scanned pages, add watermarks and build new PDFs from scratch."],
+      ["docx", "document-skills/docx", 9, "Create and edit Word documents with tracked changes, comments and templates."],
+      ["xlsx", "document-skills/xlsx", 7, "Spreadsheets with formulas, formatting and charts; cleans messy tabular data."],
+      ["pptx", "document-skills/pptx", 8, "Slide decks from outlines, with layouts, speaker notes and templates."],
+      ["frontend-design", "frontend-design", 3, "Distinctive, production-grade interfaces that avoid generic AI aesthetics; picks type, color and motion with intent."],
+      ["mcp-builder", "mcp-builder", 5, "Guides building an MCP server: tools, resources, auth and tests, in TypeScript or Python."],
+      ["skill-creator", "skill-creator", 4, "Create and improve skills, then measure how often they trigger and how well they work."],
+      ["webapp-testing", "webapp-testing", 3, "Drive a local web app with Playwright to check features, capture screenshots and read console logs."],
+    ],
+    caveman: [
+      ["caveman", "modes/caveman", 1, "Terse answers: no preamble, no recap, just the result."],
+      ["ultracave", "modes/ultracave", 1, "Even terser; single lines where possible."],
+      ["megacave", "modes/megacave", 1, ""],
+      ["lean-tdd", "workflows/lean-tdd", 2, "Test first, smallest change, no ceremony."],
+    ],
+    obra: [
+      ["brainstorm", "skills/brainstorm", 2, "Explore a problem with the user before planning: questions, options and trade-offs."],
+      ["tdd", "skills/tdd", 3, "Red, green, refactor; write the failing test before the code."],
+      ["systematic-debugging", "skills/debugging", 4, "Reproduce, isolate, form hypotheses and verify fixes one at a time."],
+    ],
+    empty: [],
+  };
+  // name → installed copies, source, update, differs
+  const INST = {
+    "frontend-design": { src: "anthropics/skills", copies: ["claude", "shared"], d: CATALOG.anthropic[4][3] },
+    pdf: { src: "anthropics/skills", copies: ["claude"], up: true, d: CATALOG.anthropic[0][3] },
+    dataviz: { src: "by hand", copies: ["claude", "shared"], link: ["shared"], d: "Charts, dashboards and stat tiles that read as one system, light and dark." },
+    caveman: { src: "JuliusBrussee/caveman", copies: ["claude", "codex"], up: true, d: CATALOG.caveman[0][3] },
+    "release-notes": { src: "in the project", copies: ["proj"], d: "Write release notes from merged PRs in this repo's style." },
+    tdd: { src: "obra/superpowers", copies: ["shared"], differs: true, d: "Our own TDD checklist, adapted for the monorepo." },
+  };
+  const COPY_LABEL = { claude: "Claude Code", shared: "Shared", codex: "Codex", agy: "Gemini", pi: "pi", proj: "Codex · winfer/" };
+  const busy = {};
+  const ask = (title, body, fn) => { $("cTitle").textContent = title; $("cBody").textContent = body; $("scrim").hidden = false; $("cYes").onclick = () => { $("scrim").hidden = true; fn(); }; };
+  $("cNo").onclick = () => ($("scrim").hidden = true);
+  const fake = (k, label, done) => { busy[k] = label; render(); setTimeout(() => { delete busy[k]; done(); render(); }, 1000); };
+  const sel = () => TARGETS.filter((t) => state.targets.includes(t.id));
+  const names = (ids) => ids.map((i) => COPY_LABEL[i]).join(", ");
+
+  function renderTargets() {
+    $("targets").innerHTML = TARGETS.map((t) => `<button class="tchip ${t.missing ? "missing" : ""}" data-t="${t.id}" aria-pressed="${state.targets.includes(t.id)}"><span class="ck"></span>${tmark(t, 18)}${t.name}${t.missing ? "<small>· not found</small>" : ""}</button>`).join("");
+    const none = !state.targets.length;
+    $("tnote").className = "tnote" + (none ? " bad" : "");
+    $("tnote").innerHTML = none ? '<i data-lucide="circle-alert"></i>Pick at least one agent.'
+      : `<i data-lucide="info"></i>New installs and “Add to…” go here. Codex, OpenCode, Cursor and other agents also read the shared <code>.agents</code> folder.`;
+  }
+
+  function renderInstalled() {
+    const q = (state.qi || "").toLowerCase();
+    const list = Object.entries(INST).filter(([n, s]) => !q || (n + s.d).toLowerCase().includes(q));
+    const ups = Object.entries(INST).filter(([, s]) => s.up);
+    $("updBanner").hidden = !ups.length || !!q;
+    $("updText").textContent = ups.length === 1 ? `An update for ${ups[0][0]} is available.` : `${ups.length} skill updates are available.`;
+    $("updAll").textContent = ups.length === 1 ? "Update" : "Update all";
+    $("updDot").hidden = !ups.length;
+    $("instCount").textContent = Object.keys(INST).length;
+    $("installed").innerHTML = list.length ? list.map(([n, s]) => {
+      const missing = s.copies.includes("proj") ? [] : state.targets.filter((t) => !s.copies.includes(t) && !TARGETS.find((x) => x.id === t).missing);
+      const srcIcon = s.src === "by hand" ? "hand" : s.src === "in the project" ? "folder-git-2" : "github";
+      const srcText = s.src === "by hand" ? "added by hand" : s.src === "in the project" ? "in the project" : "from " + s.src;
+      return `<div class="srow"><span class="ic acc"><i data-lucide="wand-sparkles"></i></span>
+        <div class="sbody"><div class="nm">${n}${s.up ? '<span class="badge acc">update available</span>' : ""}</div>
+          <div class="d">${s.d}</div>
+          <div class="copies">${s.copies.map((c) => { const t = TARGETS.find((x) => x.id === c) || { mk: "codex" }; return `<span class="copy">${tmark(t, 15)}${COPY_LABEL[c]}${(s.link || []).includes(c) ? '<i data-lucide="link"></i>' : ""}</span>`; }).join("")}
+            ${missing.map((c) => `<span class="copy miss" title="Not in ${COPY_LABEL[c]} yet">+ ${COPY_LABEL[c]}</span>`).join("")}
+            <span class="from"><i data-lucide="${srcIcon}"></i>${srcText}</span></div></div>
+        <div class="acts">${busy[n] ? `<span class="busy"><i data-lucide="loader-circle"></i>${busy[n]}</span>` : `
+          ${s.up ? `<button class="btn primary sm" data-up="${n}">Update</button>` : ""}
+          ${missing.length ? `<button class="btn sm" data-addto="${n}" title="Copy into the agents picked under Install for">Add to ${names(missing)}</button>` : ""}
+          <button class="icbtn" data-rm="${n}" title="Remove"><i data-lucide="trash-2"></i></button>`}</div></div>`;
+    }).join("")
+      : `<div class="empty"><i data-lucide="search-x"></i>${Object.keys(INST).length ? `No installed skill matches “${state.qi}”` : "No skills installed. Skills are folders with a SKILL.md that agents load from their skills folder."}</div>`;
+  }
+
+  function renderDiscover() {
+    $("sources").innerHTML = '<div class="gh">Sources</div>' + SOURCES.map((s) => `<button class="src" data-v="${s.id}"><span class="av" style="background:${s.col}">${s.l}</span><span class="n">${s.name}</span><span class="c ${s.builtin ? "" : "user"}">${CATALOG[s.id].length}</span>${s.builtin ? "" : `<span class="x" data-delsrc="${s.id}" title="Remove source"><i data-lucide="x"></i></span>`}</button>`).join("") +
+      `<div class="addrepo"><input id="repo" placeholder="owner/repo or URL" /><button class="btn sm" id="addRepo" title="Add source"><i data-lucide="plus"></i></button></div>${state.repoErr ? '<div class="addrepo-err">Enter a GitHub repo as owner/repo or its URL</div>' : ""}`;
+    document.querySelectorAll("#sources [data-v]").forEach((b) => b.setAttribute("aria-checked", b.dataset.v === state.src));
+    const src = SOURCES.find((s) => s.id === state.src) || SOURCES[0];
+    $("srcName").innerHTML = `<i data-lucide="github" style="width:14px;height:14px"></i>${src.repo}`;
+    $("srcDesc").textContent = src.desc || "Added by you";
+    $("qd").placeholder = "Search " + src.name;
+    const items = CATALOG[src.id];
+    $("discCount").textContent = items.length;
+    const q = (state.qd || "").toLowerCase();
+    const shown = items.filter(([n, , , d]) => !q || (n + d).toLowerCase().includes(q));
+    let html;
+    if (state.load === "loading") html = `<div class="state"><div class="empty"><i data-lucide="loader-circle"></i>Reading the repo…</div></div>`;
+    else if (state.load === "error") html = `<div class="state"><div class="empty"><i data-lucide="cloud-off"></i><b class="muted">Couldn't load ${src.repo}</b><span class="mono" style="font-size:11px">GitHub API rate limit exceeded, try again in 12 min</span></div></div>`;
+    else if (!items.length) html = `<div class="state"><div class="empty"><i data-lucide="folder-x"></i>${src.repo} has no skills. No folder in it has a SKILL.md.</div></div>`;
+    else if (!shown.length) html = `<div class="state"><div class="empty"><i data-lucide="search-x"></i>No skill in ${src.repo} matches “${state.qd}”</div></div>`;
+    else html = '<div class="sgrid">' + shown.map(([n, path, files, d]) => {
+      const inst = INST[n];
+      const same = inst && !inst.differs && inst.src === src.repo;
+      const inAll = same && state.targets.every((t) => inst.copies.includes(t));
+      let status = "", btn = "";
+      if (same && !inst.up) status = `<span class="st"><i data-lucide="check"></i>${inAll ? "Installed" : "For " + names(inst.copies)}</span>`;
+      if (same && inst.up) btn = "Update";
+      else if (same && !inAll) btn = "Install for more";
+      else if (!same) btn = "Install";
+      const off = !state.targets.length || Object.keys(busy).length;
+      return `<div class="sk ${state.open === n ? "open" : ""}"><div class="nm"><i data-lucide="wand-sparkles"></i>${n}</div><div class="path">${path} · ${files} file${files > 1 ? "s" : ""}</div>
+        <div class="d" data-open="${n}">${d || '<span class="subtle">No description.</span>'}</div>
+        ${inst && !same ? `<div class="warnbox"><i data-lucide="triangle-alert"></i>A different “${n}” is installed; installing replaces it.</div>` : ""}
+        <div class="ft">${status}<span class="r">${busy[n] ? `<span class="busy"><i data-lucide="loader-circle"></i>${busy[n]}</span>` : btn ? `<button class="btn ${btn === "Install for more" ? "" : "primary"} sm" data-inst="${n}" data-path="${src.repo}" ${off ? 'disabled style="opacity:.45"' : ""}>${btn === "Update" ? '<i data-lucide="arrow-up-circle"></i>' : '<i data-lucide="download"></i>'}${btn}</button>` : ""}</span></div></div>`;
+    }).join("") + "</div>";
+    $("grid").innerHTML = html;
+  }
+
+  function render() {
+    renderTargets(); renderInstalled(); renderDiscover();
+    lucide.createIcons();
+    document.querySelectorAll("#sources [data-v]").forEach((b) => (b.onclick = () => set({ src: b.dataset.v, qd: "", open: "" })));
+    document.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { const s = new Set(state.targets); s.has(b.dataset.t) ? s.delete(b.dataset.t) : s.add(b.dataset.t); set({ targets: [...s] }); }));
+    document.querySelectorAll("[data-up]").forEach((b) => (b.onclick = () => fake(b.dataset.up, "Updating…", () => delete INST[b.dataset.up].up)));
+    document.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => { const s = INST[b.dataset.addto]; fake(b.dataset.addto, "Adding…", () => state.targets.forEach((t) => !s.copies.includes(t) && !TARGETS.find((x) => x.id === t).missing && s.copies.push(t))); }));
+    document.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { const n = b.dataset.rm; ask("Remove skill", `Remove “${n}” from ${names(INST[n].copies)}?`, () => { delete INST[n]; render(); }); }));
+    document.querySelectorAll("[data-open]").forEach((d) => (d.onclick = () => set({ open: state.open === d.dataset.open ? "" : d.dataset.open })));
+    document.querySelectorAll("[data-inst]").forEach((b) => (b.onclick = () => { const n = b.dataset.inst, repo = b.dataset.path; const c = CATALOG[state.src].find((x) => x[0] === n); fake(n, "Installing…", () => { const prev = INST[n]; INST[n] = { src: repo, copies: [...new Set([...(prev && !prev.differs && prev.src === repo ? prev.copies : []), ...state.targets.filter((t) => !TARGETS.find((x) => x.id === t).missing)])], d: c[3] }; }); }));
+    document.querySelectorAll("[data-delsrc]").forEach((x) => (x.onclick = (e) => { e.stopPropagation(); SOURCES.splice(SOURCES.findIndex((s) => s.id === x.dataset.delsrc), 1); set({ src: "anthropic" }); }));
+    const add = () => {
+      const v = $("repo").value.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "");
+      if (!/^[\w.-]+\/[\w.-]+$/.test(v)) return set({ repoErr: true });
+      const id = v.replace(/\W/g, "_");
+      if (!CATALOG[id]) { CATALOG[id] = []; SOURCES.push({ id, name: v, repo: v, col: "#52525b", l: v[0] }); }
+      set({ repoErr: false, src: id });
+    };
+    $("addRepo").onclick = add;
+    $("repo").onkeydown = (e) => e.key === "Enter" && add();
+  }
+  $("updAll").onclick = () => Object.entries(INST).filter(([, s]) => s.up).forEach(([n]) => fake(n, "Updating…", () => delete INST[n].up));
+  $("refresh").onclick = () => { set({ load: "loading" }); setTimeout(() => set({ load: "ok" }), 900); };
+  let last = "";
+  onChange((s) => { const k = JSON.stringify([s.qi, s.qd, s.src, s.open, s.targets, s.repoErr, s.load]); if (k !== last) { last = k; render(); } });
+  mockup({
+    id: "skills",
+    tabs: ["installed", "discover"],
+    pitch: `<b>Skills.</b> “Install for” is a bar at the top of both tabs, so it's clear it drives installs and “Add to…”. Sources get a sidebar with an Add button. Each skill shows which agents have it and where it came from. <span class="demo" data-radio="load"><button data-v="ok">Repo</button><button data-v="loading">Loading</button><button data-v="error">Error</button></span>`,
+    initial: { qi: "", qd: "", src: "anthropic", open: "", targets: ["claude", "shared"], repoErr: false, load: "ok" },
+  });
+</script>
+</body>
+</html>

@@ -455,6 +455,7 @@ impl App {
             cwd: self.cwd.clone(),
             model: self.model.clone(),
             effort: self.config.effort.clone(),
+            ultracode: self.config.ultracode,
             mode: self.config.mode,
             resume,
             system: self.system.clone(),
@@ -867,7 +868,7 @@ impl App {
                         Status::Failed => "failed",
                     };
                     let background = item.background || task.is_some();
-                    transcript.push(Entry { role: "tool".into(), text: format!("{name}\t{title}"), state: Some(state.into()), background });
+                    transcript.push(Entry { role: "tool".into(), text: format!("{name}\t{title}"), state: Some(state.into()), background, ..Default::default() });
                     continue;
                 }
                 Block::Notice { text, kind: NoticeKind::Info } => ("notice", text.clone()),
@@ -1031,13 +1032,31 @@ impl App {
         Some((name.to_string(), args.trim().to_string()))
     }
 
-    fn dispatch(&mut self, msg: UserMsg) {
+    fn dispatch(&mut self, mut msg: UserMsg) {
         // Compaction levels changed in the app's Settings apply from the next turn.
         let saved = Config::load();
         if (saved.trim_at, saved.compact_at) != (self.config.trim_at, self.config.compact_at) {
             self.config.trim_at = saved.trim_at;
             self.config.compact_at = saved.compact_at;
             self.send(Cmd::SetCompaction { trim: saved.trim_at, compact: saved.compact_at });
+        }
+        if let Some(pending) = self.saved.pending_handoff.take() {
+            let branch = git_branch(&self.cwd);
+            let git_status = crate::harness::handoff::git_status_short(&self.cwd);
+            let notes = std::collections::HashMap::new();
+            if let Some(digest) = crate::harness::handoff::build_digest(&crate::harness::handoff::HandoffContext {
+                from_spec: &pending.from_spec,
+                from_actual: pending.from_actual.as_deref(),
+                to_spec: &pending.to_spec,
+                cwd: &self.cwd,
+                branch: branch.as_deref(),
+                git_status: git_status.as_deref(),
+                todos: &self.todos,
+                transcript: &self.saved.transcript,
+                tool_notes: &notes,
+            }) {
+                crate::harness::handoff::wrap_user_message(&mut msg, &digest);
+            }
         }
         if !self.alive {
             // The new backend doesn't know the old one's turns.
@@ -2022,7 +2041,15 @@ impl App {
             self.send(Cmd::SetModel(model));
             self.toast(format!("Model: {label}"), NoticeKind::Success);
         } else {
-            let fresh = self.saved.backend_session.is_some();
+            self.save();
+            let from_spec = self.saved.pending_handoff.as_ref().map(|p| p.from_spec.clone()).unwrap_or_else(|| self.spec());
+            let from_actual = self
+                .saved
+                .pending_handoff
+                .as_ref()
+                .and_then(|p| p.from_actual.clone())
+                .or_else(|| (!self.actual_model.is_empty()).then(|| self.actual_model.clone()));
+            let has_ctx = crate::harness::handoff::has_context(&self.saved.transcript);
             self.kind = kind;
             self.model = model;
             self.actual_model.clear();
@@ -2031,9 +2058,17 @@ impl App {
             self.ctx_shown.set(0.0, 300);
             self.forget_turns();
             self.start_backend(None);
-            if fresh {
-                self.notice(format!("Switched to {label}. It starts with a fresh context."), NoticeKind::Info);
+            if has_ctx {
+                let to_spec = self.spec();
+                self.saved.pending_handoff = Some(crate::harness::session::PendingHandoff {
+                    from_spec: from_spec.clone(),
+                    from_actual,
+                    to_spec: to_spec.clone(),
+                    marker_index: None,
+                });
+                self.notice(format!("Context handoff: {from_spec} → {label}"), NoticeKind::Info);
             } else {
+                self.saved.pending_handoff = None;
                 self.toast(format!("Model: {label}"), NoticeKind::Success);
             }
         }

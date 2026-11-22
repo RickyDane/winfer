@@ -131,6 +131,8 @@ pub struct Opts {
     pub cwd: PathBuf,
     pub model: String,
     pub effort: Option<String>,
+    /// Ultracode multi-agent mode (Claude Code's `ultracode` flag, Codex's multi-agent + ultra effort).
+    pub ultracode: bool,
     pub mode: Mode,
     /// The backend's session to continue.
     pub resume: Option<String>,

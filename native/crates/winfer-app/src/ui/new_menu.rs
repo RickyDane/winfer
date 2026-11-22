@@ -30,9 +30,10 @@ impl Root {
     /// "86%", or "0% · resets Mo. 21:16" once it's nearly out.
     fn usage_hint(&self, provider: &str) -> Option<(String, bool)> {
         let now = crate::code::state::now_ms() as f64;
-        let w = usage::tightest(self.usage.snapshots.get(provider), now)?;
-        let left = usage::left_now(w, now).round();
-        let text = match w.resets_at.filter(|r| *r > now) {
+        let pooled = usage::pooled(provider, &self.usage.snapshots, &self.usage.accounts, now);
+        let (left, resets_at) = usage::overall_summary(pooled.as_ref().map(|p| &p.0), now)?;
+        let left = left.round();
+        let text = match resets_at.filter(|r| *r > now) {
             Some(r) if left < 10.0 => format!("{left:.0}% · resets {}", usage::short_when(r, now)),
             _ => format!("{left:.0}%"),
         };

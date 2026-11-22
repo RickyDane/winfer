@@ -1,0 +1,282 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Agents</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .pagehead .reset { margin-left: auto; }
+  .count { font: 10.5px var(--mono); padding: 1px 6px; border-radius: 99px; background: var(--accent); color: var(--on-accent); }
+  /* Roster: one row per agent, same columns for all */
+  .roster .item { display: grid; grid-template-columns: 26px 1fr 112px 190px 34px 34px; gap: 12px; min-height: 54px; }
+  .roster .item.def { background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .roster .head { min-height: 30px; padding: 6px 14px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-subtle); background: color-mix(in srgb, var(--panel) 60%, var(--app)); }
+  .roster .head span:nth-child(n+5) { text-align: center; }
+  .roster select { width: 100%; }
+  .roster select.set { box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
+  .ver { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+  .ver .m { font: 11px var(--mono); color: var(--fg-muted); }
+  .ver .ok { display: flex; align-items: center; gap: 4px; color: var(--success); }
+  .ver .ok svg { width: 11px; height: 11px; }
+  .upd { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 99px; background: var(--accent); color: var(--on-accent); font-size: 10.5px; font-weight: 500; width: max-content; }
+  .upd svg { width: 11px; height: 11px; }
+  .na { text-align: center; color: var(--fg-subtle); font-size: 11px; }
+  .star, .shield { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; color: var(--fg-subtle); justify-self: center; }
+  .star:hover, .shield:hover { background: var(--hover); color: var(--fg); }
+  .star svg, .shield svg { width: 15px; height: 15px; }
+  .star[aria-checked="true"] { color: var(--accent); }
+  .star[aria-checked="true"] svg { fill: var(--accent); }
+  .shield.on { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+  .roster .nm b { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .roster .nm small { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .cfg { color: var(--accent); text-decoration: none; font-size: 11px; display: inline-flex; align-items: center; gap: 2px; }
+  .cfg svg { width: 11px; height: 11px; }
+  /* Install chips */
+  .avail { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .av { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; background: var(--panel); box-shadow: var(--shadow); min-width: 0; }
+  .av .lbl b { font-size: 12.5px; font-weight: 500; }
+  .av code { display: block; margin-top: 2px; background: none; padding: 0; font-size: 10.5px; color: var(--fg-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* New panes */
+  .agentgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .agentgrid .choice { align-items: center; text-align: center; padding: 12px 6px 10px; gap: 6px; position: relative; }
+  .agentgrid .choice b { font-size: 12px; font-weight: 500; }
+  .agentgrid .choice small { font-size: 10.5px; color: var(--fg-subtle); }
+  .agentgrid .choice.missing { opacity: .45; }
+  .agentgrid .choice .rec { position: absolute; top: 6px; right: 6px; }
+  .chain { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  .chain .step { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px 4px 4px; border-radius: 99px; background: var(--app); box-shadow: var(--shadow); }
+  .chain svg { width: 13px; height: 13px; color: var(--fg-subtle); }
+  .keys { display: flex; gap: 6px; flex-wrap: wrap; }
+  .scope { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-subtle); padding: 2px 7px; border-radius: 99px; background: var(--hover); }
+  .scope svg { width: 11px; height: 11px; }
+  /* Prompt */
+  .editor { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .editor .eh { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--fg-muted); }
+  .editor .eh .r { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .editor textarea { display: block; width: 100%; height: 250px; border: 0; outline: 0; resize: none; background: var(--app); padding: 12px 14px; font: 12px/1.6 var(--mono); color: var(--fg); }
+  .editor .ef { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--border); font: 11px var(--mono); color: var(--fg-subtle); }
+  .editor .ef .r { margin-left: auto; display: flex; gap: 6px; }
+  .applies { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--fg-subtle); }
+  /* Tools */
+  .toolgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; background: var(--panel); box-shadow: var(--shadow); text-align: left; }
+  .tool:hover { background: color-mix(in srgb, var(--panel) 70%, var(--hover)); }
+  .tool.on { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent), var(--shadow); }
+  .tool .lbl b { font-size: 12.5px; font-weight: 500; }
+  .tool .lbl small { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .tool .toggle { pointer-events: none; }
+  .gauge { display: flex; align-items: center; gap: 12px; }
+  .gauge .bar { flex: 1; height: 8px; border-radius: 4px; }
+  /* Review */
+  .flowcard { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .flowcard .fh { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+  .flowcard .fh b { font-size: 13px; font-weight: 500; }
+  .flowcard .fh small { display: block; font-size: 11.5px; color: var(--fg-subtle); }
+  .flowcard .fb { display: grid; grid-template-columns: 1fr 250px; gap: 14px; padding: 0 14px 14px; align-items: stretch; }
+  .rev { border-radius: 9px; background: var(--app); padding: 10px; display: flex; flex-direction: column; gap: 7px; font-size: 11px; color: var(--fg-muted); }
+  .rev .rh { display: flex; align-items: center; gap: 6px; font-weight: 500; color: var(--fg); font-size: 11.5px; }
+  .rev .shot { height: 70px; border-radius: 6px; background: linear-gradient(135deg, #3b3f6a, #2b4a4a); display: grid; place-items: center; color: #fff9; font-size: 10px; }
+  .rev .tests { display: flex; align-items: center; gap: 6px; }
+  .rev .tests svg { width: 12px; height: 12px; color: var(--success); }
+  .prog { display: flex; flex-direction: column; gap: 8px; }
+  .prog .p { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+  .prog .p .bar { flex: 1; }
+  .link { color: var(--accent); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
+  .link svg { width: 12px; height: 12px; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="bot"></i></div>
+      <h2>Agents</h2>
+      <p>Your agents, new panes, the system prompt, tools and review.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="agents"><i data-lucide="bot"></i>Your agents<span class="tcount">7</span><span class="tdot" title="Updates available"></span></button>
+      <button data-v="panes"><i data-lucide="square-plus"></i>New panes</button>
+      <button data-v="prompt"><i data-lucide="message-square-text"></i>System prompt</button>
+      <button data-v="tools"><i data-lucide="wrench"></i>Tools<span class="tcount" data-text="toolCount"></span></button>
+      <button data-v="review"><i data-lucide="list-checks"></i>Review &amp; progress</button>
+    </div>
+    <div class="body">
+
+      <!-- ───────── Your agents ───────── -->
+      <div class="pane" data-if="tab=agents">
+        <div class="intro">
+          <span><b class="muted">7 installed</b> · 2 updates</span>
+          <span class="r"><button class="btn"><i data-lucide="refresh-cw"></i>Check</button><button class="btn primary"><i data-lucide="download"></i>Update 2</button></span>
+        </div>
+        <div class="list roster" id="roster"></div>
+        <div class="note"><i data-lucide="shield-alert"></i><span><b>Auto-approve</b> (<i data-lucide="zap" style="width:11px;height:11px;vertical-align:-1px;color:var(--warning)"></i>) skips permission prompts when the agent starts. Use it only in sandboxes or on work you can undo. <b>★</b> sets the agent new panes start with.</span></div>
+        <h5>Available to install<span class="r">copy the command, run it, then <a class="link" href="#">Check</a></span></h5>
+        <div class="avail" id="avail"></div>
+      </div>
+
+      <!-- ───────── New panes ───────── -->
+      <div class="pane" data-if="tab=panes">
+        <h5>Default agent<span class="r"><span class="keys"><kbd>⌘T</kbd><kbd>⌘D</kbd><kbd>⌘⇧N</kbd></span> start this agent</span></h5>
+        <div class="agentgrid" data-radio="def" id="defgrid"></div>
+        <div class="tile">
+          <div class="th"><span class="ic"><i data-lucide="life-buoy"></i></span>When the default isn't installed<span class="r subtle" style="font-weight:400;font-size:11.5px">fallback order</span></div>
+          <div class="chain"><span class="step">${'' }</span></div>
+        </div>
+        <h5>This workspace<span class="r"><span class="scope"><i data-lucide="folder"></i>winfer</span></span></h5>
+        <div class="optlist">
+          <button class="opt"><i data-lucide="git-branch"></i><span class="lbl">Open new agents in their own worktree<small>Each new pane gets a fresh git worktree, so agents can't overwrite each other's files. Saved for this workspace only.</small></span><span class="toggle" data-bind="worktree"></span></button>
+        </div>
+      </div>
+
+      <!-- ───────── System prompt ───────── -->
+      <div class="pane" data-if="tab=prompt">
+        <div class="intro"><span>Given to every agent when it starts or restarts.</span><span class="r"><span class="applies">Applies to <span id="applies"></span></span></span></div>
+        <div class="editor">
+          <div class="eh"><i data-lucide="file-text" style="width:14px;height:14px"></i>System prompt<span class="badge" data-if="!custom">Default</span><span class="badge acc" data-if="custom">Custom</span>
+            <span class="r"><div class="seg" data-bind="promptMode"><button data-v="default">Default</button><button data-v="custom">Custom</button><button data-v="none">None</button></div></span></div>
+          <textarea id="prompt" spellcheck="false"></textarea>
+          <div class="ef"><span id="lines"></span><span>·</span><span id="toks"></span><span class="r"><button class="btn ghost sm" data-if="dirty">Discard</button><button class="btn primary sm" data-if="dirty">Save</button><span data-if="!dirty" class="subtle" style="font-family:var(--sans)">Saved</span></span></div>
+        </div>
+      </div>
+
+      <!-- ───────── Tools ───────── -->
+      <div class="pane" data-if="tab=tools">
+        <div class="tile">
+          <div class="th"><span class="ic acc"><i data-lucide="gauge"></i></span>Context every request spends on optional tools<span class="r mono subtle" style="font-weight:400;font-size:11.5px" id="toolToks"></span></div>
+          <div class="gauge"><div class="bar"><i id="toolBar"></i></div></div>
+          <div class="tx">Rarely used tools stay off, so they don't cost context on every request. Turn one on when an agent needs it.</div>
+        </div>
+        <h5><i data-lucide="globe"></i>Browser</h5>
+        <div class="toolgrid" id="tBrowser"></div>
+        <h5><i data-lucide="brain"></i>Knowledge<span class="r">from the knowledge-base plugin</span></h5>
+        <div class="toolgrid" id="tKnow"></div>
+      </div>
+
+      <!-- ───────── Review & progress ───────── -->
+      <div class="pane" data-if="tab=review">
+        <div class="flowcard">
+          <div class="fh"><span class="ic acc"><i data-lucide="flag"></i></span><span><b>When an agent finishes</b><small>Checks that run on their own and land on the agent's review card.</small></span></div>
+          <div class="fb">
+            <div class="optlist">
+              <button class="opt"><i data-lucide="flask-conical"></i><span class="lbl">Run the tests<small>The project's test command, in the agent's folder</small></span><span class="toggle" data-bind="tests"></span></button>
+              <button class="opt"><i data-lucide="camera"></i><span class="lbl">Screenshot the dev server<small>Shows the agent's running app</small></span><span class="toggle" data-bind="shot"></span></button>
+            </div>
+            <div class="rev">
+              <div class="rh"><span class="dot"></span>Review · fix-login-redirect</div>
+              <div class="shot" data-if="shot">localhost:5173 · screenshot</div>
+              <div class="tests" data-if="tests"><i data-lucide="circle-check"></i>142 tests passed · 18s</div>
+              <div data-if="!shot&!tests" class="subtle">Only the diff and summary.</div>
+              <div class="subtle">+86 −12 · 4 files</div>
+            </div>
+          </div>
+        </div>
+        <div class="flowcard">
+          <div class="fh"><span class="ic acc"><i data-lucide="loader"></i></span><span><b>Progress estimates</b><small>Asks the <a class="link" href="ai.html">AI model<i data-lucide="arrow-up-right"></i></a> how far each working agent is.</small></span><span class="toggle" data-bind="progress" style="margin-left:auto"></span></div>
+          <div class="fb" data-off-if="!progress">
+            <div class="optlist" style="padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;gap:10px;font-size:12.5px">Check every<span class="seg" data-bind="every" style="margin-left:auto"><button data-v="30">30 s</button><button data-v="60">1 min</button><button data-v="120">2 min</button><button data-v="300">5 min</button></span></div>
+              <div class="subtle" style="font-size:11.5px">Agents whose output hasn't changed since the last check are skipped, so idle panes cost nothing.</div>
+            </div>
+            <div class="rev prog">
+              <div class="p"><span style="width:84px">auth-refactor</span><div class="bar"><i style="width:72%"></i></div><span class="mono">72%</span></div>
+              <div class="p"><span style="width:84px">docs-sweep</span><div class="bar"><i style="width:35%"></i></div><span class="mono">35%</span></div>
+              <div class="p"><span style="width:84px">perf-pass</span><div class="bar"><i style="width:90%" class="good"></i></div><span class="mono">90%</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const ROSTER = [
+    { id: "winfer", ver: "0.42.0", ok: true, models: ["gpt-6-luna", "claude-opus-5-5", "local/qwen3.8-coder"], yolo: true, cfg: true },
+    { id: "claude", ver: "3.4.1", latest: "3.5.0", models: ["opus-5-5", "sonnet-5", "haiku-5"], yolo: true },
+    { id: "codex", ver: "0.98.2", ok: true, models: ["gpt-6.1-sol-codex", "gpt-6-luna-codex"], yolo: true },
+    { id: "agy", ver: "1.12.0", ok: true, models: ["gemini-4-pro", "gemini-4-flash"], yolo: false },
+    { id: "cursor", ver: "2026.11.04", latest: "2026.11.18", models: ["auto", "sonnet-5", "gpt-6-luna"], yolo: false },
+    { id: "opencode", ver: "1.3.0", ok: true, models: null, yolo: true },
+    { id: "pi", ver: "0.9.4", ok: true, models: ["default"], yolo: false },
+  ];
+  const MISSING = [["grok", "Needs grok on PATH", false], ["muse", "Needs muse on PATH", false]];
+  const BROWSER = [["drag", "Drag", "Drag and drop between elements", "mouse-pointer-2", 180], ["drop", "Drop", "Drop files or data onto an element", "file-down", 140], ["media", "Emulate media", "Dark/light scheme, reduced motion or print", "sun-moon", 160], ["back", "Navigate back", "Go back in browser history", "undo-2", 60]];
+  const KNOW = [["explain", "Explain node", "Explain a knowledge graph node", "network", 220], ["save", "Save answer", "Save answer to graph memory", "bookmark-plus", 190]];
+  const DEFAULT_PROMPT = "You are running inside winfer, a workspace of terminal panes with other coding agents.\nUse winfer's tools to coordinate with them and to show things to the user.\n\n- Open web pages only in winfer's browser.\n- Run dev servers with winfer's bg tool.\n- Keep tool output small.";
+  const yolo = Object.fromEntries(ROSTER.map((a) => [a.id, a.id === "codex"]));
+  const model = { claude: "opus-5-5" };
+
+  $("roster").innerHTML =
+    `<div class="item head"><span></span><span>Agent</span><span>Version</span><span>Start model</span><span title="Auto-approve">Auto</span><span title="Default for new panes">★</span></div>` +
+    ROSTER.map((a) => `<div class="item" data-a="${a.id}">${mark(a.id)}
+      <div class="nm"><b>${AGENTS[a.id].name}${a.id === "winfer" ? '<span class="badge acc">Recommended</span>' : ""}</b>${a.cfg ? '<a class="cfg" href="../winfer-code-settings/d-visual-tabs.html">Interface, models &amp; context<i data-lucide="chevron-right"></i></a>' : ""}</div>
+      <div class="ver"><span class="m">${a.ver}</span>${a.latest ? `<button class="upd"><i data-lucide="download"></i>${a.latest}</button>` : '<span class="ok"><i data-lucide="check"></i>Up to date</span>'}</div>
+      ${a.models ? `<select data-m="${a.id}"><option value="">CLI default</option>${a.models.map((m) => `<option>${m}</option>`).join("")}</select>` : '<span class="na">picks its own</span>'}
+      ${a.yolo ? `<button class="shield" data-y="${a.id}" title="Auto-approve"><i data-lucide="shield"></i></button>` : '<span class="na">—</span>'}
+      <button class="star" data-s="${a.id}" title="Default for new panes"><i data-lucide="star"></i></button></div>`).join("");
+  $("avail").innerHTML = MISSING.map(([id, how]) => `<div class="av">${mark(id, 22)}<span class="lbl" style="min-width:0;flex:1"><b>${AGENTS[id].name}</b><code>${how}</code></span><a class="btn sm" href="#"><i data-lucide="external-link"></i>Get it</a></div>`).join("") +
+    `<div class="av" style="grid-column:span 2;justify-content:center;color:var(--fg-muted);font-size:12px;box-shadow:none;border:1.5px dashed var(--border-strong)"><i data-lucide="puzzle" style="width:14px;height:14px"></i>More agents come from <a class="link" href="plugins.html">plugins</a></div>`;
+  $("defgrid").innerHTML = [...ROSTER.map((a) => a.id), "grok", "muse", "shell"].map((id) => {
+    const g = id === "shell" ? { name: "Shell", c: "#a1a1aa" } : null;
+    const inst = ROSTER.some((a) => a.id === id) || id === "shell";
+    return `<button class="choice ${inst ? "" : "missing"}" data-v="${id}">${id === "shell" ? '<span class="amark" style="--c:#a1a1aa;width:30px;height:30px"><i data-lucide="terminal" style="width:15px;height:15px"></i></span>' : mark(id, 30)}<b>${g ? g.name : AGENTS[id].name}</b><small>${inst ? (id === "winfer" ? "recommended" : id === "shell" ? "no agent" : "installed") : "not installed"}</small></button>`;
+  }).join("");
+  document.querySelector(".chain").innerHTML = ["winfer", "claude"].map((id) => `<span class="step">${mark(id, 20)}${AGENTS[id].name}</span>`).join('<i data-lucide="arrow-right"></i>') + '<i data-lucide="arrow-right"></i><span class="step"><span class="amark" style="--c:#a1a1aa;width:20px;height:20px"><i data-lucide="terminal" style="width:11px;height:11px"></i></span>Shell</span>';
+  const toolTile = ([k, l, h, ic, t]) => `<button class="tool" data-t="${k}"><span class="ic"><i data-lucide="${ic}"></i></span><span class="lbl" style="flex:1"><b>${l}</b><small>${h}</small></span><span class="mono subtle" style="font-size:10.5px">~${t} tok</span><span class="toggle sm"></span></button>`;
+  $("tBrowser").innerHTML = BROWSER.map(toolTile).join("");
+  $("tKnow").innerHTML = KNOW.map(toolTile).join("");
+
+  const tools = new Set(["back"]);
+  document.querySelectorAll(".tool").forEach((b) => (b.onclick = () => { tools.has(b.dataset.t) ? tools.delete(b.dataset.t) : tools.add(b.dataset.t); set({}); }));
+  document.querySelectorAll("[data-y]").forEach((b) => (b.onclick = () => { yolo[b.dataset.y] = !yolo[b.dataset.y]; set({}); }));
+  document.querySelectorAll("[data-s]").forEach((b) => (b.onclick = () => set({ def: b.dataset.s })));
+  document.querySelectorAll("[data-m]").forEach((s) => (s.value = model[s.dataset.m] ?? "", s.onchange = () => { model[s.dataset.m] = s.value; set({}); }));
+  const ta = $("prompt");
+  ta.value = DEFAULT_PROMPT;
+  ta.oninput = () => set({ dirty: true, promptMode: "custom" });
+  let lastMode = "default";
+
+  onChange((s) => {
+    document.querySelectorAll("[data-y]").forEach((b) => {
+      b.classList.toggle("on", yolo[b.dataset.y]);
+      b.innerHTML = `<i data-lucide="${yolo[b.dataset.y] ? "zap" : "shield"}"></i>`;
+    });
+    document.querySelectorAll("[data-s]").forEach((b) => b.setAttribute("aria-checked", b.dataset.s === s.def));
+    document.querySelectorAll(".roster .item[data-a]").forEach((r) => r.classList.toggle("def", r.dataset.a === s.def));
+    document.querySelectorAll("[data-m]").forEach((sel) => sel.classList.toggle("set", !!sel.value));
+    document.querySelectorAll(".tool").forEach((b) => { b.classList.toggle("on", tools.has(b.dataset.t)); b.querySelector(".toggle").setAttribute("aria-checked", tools.has(b.dataset.t)); });
+    const tok = [...BROWSER, ...KNOW].filter((t) => tools.has(t[0])).reduce((n, t) => n + t[4], 0);
+    state.toolCount = `${tools.size}/6`;
+    document.querySelector('[data-text="toolCount"]').textContent = state.toolCount;
+    $("toolToks").textContent = `${tok} of 950 tokens`;
+    $("toolBar").style.width = (tok / 950) * 100 + "%";
+    if (s.promptMode !== lastMode) {
+      lastMode = s.promptMode;
+      if (s.promptMode === "default") ta.value = DEFAULT_PROMPT, (state.dirty = false);
+      if (s.promptMode === "none") ta.value = "", (state.dirty = true);
+      ta.readOnly = s.promptMode !== "custom";
+    }
+    state.custom = s.promptMode !== "default";
+    document.querySelectorAll('[data-if="custom"]').forEach((e) => (e.hidden = !state.custom));
+    document.querySelectorAll('[data-if="!custom"]').forEach((e) => (e.hidden = state.custom));
+    document.querySelectorAll('[data-if="dirty"]').forEach((e) => (e.hidden = !state.dirty));
+    document.querySelectorAll('[data-if="!dirty"]').forEach((e) => (e.hidden = state.dirty));
+    const n = ta.value ? ta.value.split("\n").length : 0;
+    $("lines").textContent = `${n} lines`;
+    $("toks").textContent = `~${Math.round(ta.value.length / 4)} tokens`;
+    $("applies").innerHTML = ROSTER.slice(0, 5).map((a) => mark(a.id, 18)).join("") + '<span class="subtle">+2</span>';
+    lucide.createIcons();
+  });
+  mockup({
+    id: "agents",
+    tabs: ["agents", "panes", "prompt", "tools", "review"],
+    pitch: "<b>Agents.</b> One table for all agents with the same columns (version, start model, auto-approve, ★ default), instead of mixed cards. New panes, the system prompt, tools and review each get their own tab, with previews of what they change.",
+    initial: { def: "winfer", worktree: false, promptMode: "default", dirty: false, tests: false, shot: true, progress: false, every: "60" },
+  });
+</script>
+</body>
+</html>

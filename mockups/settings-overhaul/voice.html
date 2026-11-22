@@ -1,0 +1,190 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Voice</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .hero .wave { display: flex; align-items: center; gap: 2px; height: 26px; }
+  .hero .wave i { width: 3px; border-radius: 2px; background: var(--accent); animation: wv 1.1s ease-in-out infinite; }
+  @keyframes wv { 50% { transform: scaleY(.35); } }
+  .conns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .conns .choice { padding: 12px; gap: 6px; }
+  .conns .choice b { font-size: 12.5px; font-weight: 500; }
+  .conns .choice small { font-size: 11px; color: var(--fg-subtle); line-height: 1.4; }
+  .conns .choice .facts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .keyset { display: flex; align-items: center; gap: 8px; }
+  .keyset code { font-size: 11.5px; }
+  .voices { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .voice { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 10px; border-radius: 9px; background: var(--panel); box-shadow: var(--shadow); font-size: 12.5px; text-align: left; }
+  .voice:hover { background: color-mix(in srgb, var(--panel) 70%, var(--hover)); }
+  .voice[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+  .voice span { flex: 1; }
+  .voice small { display: block; font-size: 10px; color: var(--fg-subtle); }
+  .play { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--hover); color: var(--fg-muted); flex-shrink: 0; }
+  .play:hover { background: var(--accent); color: var(--on-accent); }
+  .play svg { width: 11px; height: 11px; }
+  .play.on { background: var(--accent); color: var(--on-accent); }
+  .editor { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+  .editor .eh { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--fg-muted); }
+  .editor .eh .r { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .editor textarea { display: block; width: 100%; height: 160px; border: 0; outline: 0; resize: none; background: var(--app); padding: 12px 14px; font: 12px/1.6 var(--mono); color: var(--fg); }
+  .editor .ef { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--fg-subtle); }
+  .editor .ef svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .ctx { display: flex; gap: 4px; margin-left: auto; }
+  .mic { display: grid; grid-template-columns: 1fr 230px; gap: 14px; }
+  .meter { display: flex; align-items: flex-end; gap: 3px; height: 54px; padding: 10px 12px; border-radius: 9px; background: var(--app); }
+  .meter i { flex: 1; border-radius: 2px; background: var(--active); height: 8%; transition: height .08s; }
+  .meter.live i { background: var(--success); }
+  .bubbles { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 9px; background: var(--app); }
+  .bub { display: flex; align-items: center; gap: 8px; width: max-content; padding: 6px 10px 6px 6px; border-radius: 99px; background: var(--panel-raised); box-shadow: var(--shadow); font-size: 12px; }
+  .bub svg { width: 13px; height: 13px; color: var(--accent); }
+  .bubbles.off .bub { opacity: .35; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="mic"></i></div>
+      <h2>Voice</h2>
+      <p>Talk to your agents, and have them talk back.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="live"><i data-lucide="audio-lines"></i>Live voice<span class="tdot" id="liveDot"></span></button>
+      <button data-v="voice"><i data-lucide="user-round"></i>Voice &amp; behaviour</button>
+      <button data-v="mic"><i data-lucide="mic"></i>Microphone &amp; read aloud</button>
+    </div>
+    <div class="body">
+
+      <!-- ───────── Live voice ───────── -->
+      <div class="pane" data-if="tab=live">
+        <div class="hero">
+          <span class="wave" id="wave"></span>
+          <span><span class="big" style="font-size:15px">Talk with winfer</span><div class="k">A continuous conversation: it hears you, answers aloud and operates winfer. Start it with the wave button in the title bar, or</div></span>
+          <span class="r"><kbd style="font-size:12px;padding:3px 8px">⌥⌘V</kbd></span>
+        </div>
+        <h5>Connection<span class="r" id="uses"></span></h5>
+        <div class="conns" data-radio="conn">
+          <button class="choice" data-v="auto"><span class="cap"><span class="ic acc"><i data-lucide="wand-sparkles"></i></span><b>Automatic</b><span class="radio"></span></span><small>The API key when one is saved, else your ChatGPT plan.</small><span class="facts" id="autoFact"></span></button>
+          <button class="choice" data-v="api"><span class="cap"><span class="ic"><i data-lucide="key-round"></i></span><b>OpenAI API key</b><span class="radio"></span></span><small>OpenAI's realtime model operates winfer directly.</small><span class="facts"><span class="badge good">Fastest</span><span class="badge">Billed to the API account</span></span></button>
+          <button class="choice" data-v="chatgpt"><span class="cap"><span class="ic"><i data-lucide="message-circle"></i></span><b>ChatGPT plan</b><span class="radio"></span></span><small>Its voice model on the Codex CLI's login hands each request to a model that runs winfer's tools.</small><span class="facts"><span class="badge">Actions take a few seconds longer</span></span></button>
+        </div>
+
+        <div class="card" data-if="conn=auto,api">
+          <div class="row">
+            <div class="lbl"><b>OpenAI API key</b><div class="hint" data-if="!keySaved">Create one at <a class="link" href="#">platform.openai.com → API keys</a>.</div><div class="hint" data-if="keySaved">Stored in the keychain.</div></div>
+            <div class="ctl" data-if="!keySaved"><input class="input mono" type="password" placeholder="sk-…" style="width:200px" data-bind="key" /><button class="btn primary" id="saveKey" data-off-if="!key">Save</button></div>
+            <div class="ctl keyset" data-if="keySaved"><span class="badge good" data-if="justSaved"><i data-lucide="check" style="width:11px;height:11px"></i>Saved</span><code>sk-…f3a9</code><button class="btn ghost sm" id="replaceKey">Replace</button><button class="btn ghost sm danger" id="removeKey">Remove</button></div>
+          </div>
+          <div class="row">
+            <div class="lbl"><b>Realtime model</b><div class="hint">Empty uses gpt-realtime.</div></div>
+            <div class="ctl"><input class="input mono" placeholder="gpt-realtime" style="width:200px" data-bind="model" /></div>
+          </div>
+        </div>
+        <div class="note" data-if="conn=chatgpt"><i data-lucide="info"></i><span>The ChatGPT plan always uses its own voice model, on the Codex CLI's login (<code>codex login</code>). <span data-if="!codexLogged" class="warn-t">Codex isn't logged in yet.</span><span data-if="codexLogged" style="color:var(--success)">Codex is logged in.</span></span></div>
+      </div>
+
+      <!-- ───────── Voice & behaviour ───────── -->
+      <div class="pane" data-if="tab=voice">
+        <h5>Voice<span class="r">applies to the next conversation</span></h5>
+        <div class="intro" style="margin-top:4px"><div class="seg" data-bind="voiceSet"><button data-v="api"><i data-lucide="key-round"></i>API key voices</button><button data-v="chatgpt"><i data-lucide="message-circle"></i>ChatGPT plan voices</button></div><span class="r subtle" id="inUse"></span></div>
+        <div class="voices" id="voices"></div>
+        <h5>How it behaves</h5>
+        <div class="editor">
+          <div class="eh"><i data-lucide="message-square-text" style="width:14px;height:14px"></i>System prompt<span class="badge" data-if="!customPrompt">Default</span><span class="badge acc" data-if="customPrompt">Custom</span><span class="r"><button class="btn ghost sm" id="resetPrompt" data-if="customPrompt"><i data-lucide="undo-2"></i>Reset to default</button></span></div>
+          <textarea id="prompt" spellcheck="false"></textarea>
+          <div class="ef"><i data-lucide="plus"></i>winfer adds after it:<span class="ctx"><span class="badge">current panes</span><span class="badge">workspaces</span><span class="badge">browser tabs</span></span><span style="margin-left:10px"><i data-lucide="zap" style="vertical-align:-2px"></i> applies right away, mid-conversation too</span></div>
+        </div>
+      </div>
+
+      <!-- ───────── Microphone ───────── -->
+      <div class="pane" data-if="tab=mic">
+        <div class="mic">
+          <div class="tile">
+            <div class="th"><span class="ic acc"><i data-lucide="mic"></i></span>Microphone</div>
+            <select data-bind="mic" style="width:100%"><option value="">System default</option><option>MacBook Pro Microphone</option><option>AirPods Pro</option><option>Shure MV7 — not connected</option></select>
+            <div style="display:flex;align-items:center;gap:8px"><button class="btn" id="testMic"><i data-lucide="audio-waveform"></i><span data-text="testLabel"></span></button><span id="micResult"></span></div>
+          </div>
+          <div class="tile">
+            <div class="th">Input level<span class="r subtle" style="font-weight:400;font-size:11px" data-if="testing">speak now</span></div>
+            <div class="meter" id="meter"></div>
+          </div>
+        </div>
+        <div class="note"><i data-lucide="info"></i><span>A saved microphone that isn't plugged in stays in the list, marked <b>not connected</b>. After a test, the result shows next to the button.</span></div>
+        <h5 style="margin-top:8px">Read aloud<span class="r">examples of what you'd hear</span></h5>
+        <div class="optlist">
+          <button class="opt"><i data-lucide="volume-2"></i><span class="lbl">Speak agent updates aloud<small>A short sentence when an agent finishes or needs you.</small></span><span class="toggle" data-bind="aloud"></span></button>
+        </div>
+        <div class="bubbles" id="bubbles" style="flex-direction:row;flex-wrap:wrap">
+          <span class="bub">${''}</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const VOICES = {
+    api: ["Marin", "Cedar", "Alloy", "Ash", "Ballad", "Coral", "Echo", "Sage", "Shimmer", "Verse"],
+    chatgpt: ["Cove", "Juniper", "Maple", "Spruce", "Ember", "Vale", "Breeze", "Arbor", "Sol"],
+  };
+  const DEFAULT_PROMPT = "You are winfer's voice. Speak briefly and naturally, like a colleague at the next desk.\nWhen asked to do something in winfer, do it with your tools, then say what you did in one sentence.\nDon't read code or long output aloud; summarize it.";
+  $("wave").innerHTML = [10, 18, 26, 14, 22, 9, 16].map((h, i) => `<i style="height:${h}px;animation-delay:${i * 0.12}s"></i>`).join("");
+  $("bubbles").innerHTML = [["codex", "Codex needs your input"], ["claude", "Claude Code finished"], ["winfer", "WinferCode is waiting for approval"]].map(([a, t]) => `<span class="bub">${mark(a, 22)}<i data-lucide="volume-2"></i>"${t}"</span>`).join("");
+  const ta = $("prompt");
+  ta.value = DEFAULT_PROMPT;
+  ta.oninput = () => set({ customPrompt: ta.value !== DEFAULT_PROMPT });
+  $("resetPrompt").onclick = () => { ta.value = DEFAULT_PROMPT; set({ customPrompt: false }); };
+  $("saveKey").onclick = () => set({ keySaved: true, justSaved: true, key: "" });
+  $("removeKey").onclick = () => set({ keySaved: false, justSaved: false });
+  $("replaceKey").onclick = () => set({ keySaved: false });
+  let playing = null;
+  let timer;
+  $("testMic").onclick = () => {
+    if (state.testing) return;
+    set({ testing: true, testLabel: "Listening…", micRes: "" });
+    const bars = [...$("meter").children];
+    $("meter").classList.add("live");
+    timer = setInterval(() => bars.forEach((b, i) => (b.style.height = Math.max(8, Math.random() * 100 * Math.sin((i / bars.length) * Math.PI)) + "%")), 90);
+    setTimeout(() => {
+      clearInterval(timer);
+      bars.forEach((b) => (b.style.height = "8%"));
+      $("meter").classList.remove("live");
+      set({ testing: false, testLabel: "Test again", micRes: state.mic === "MacBook Pro Microphone" ? "quiet" : "ok" });
+    }, 2200);
+  };
+  $("meter").innerHTML = "<i></i>".repeat(28);
+  document.querySelectorAll("button.opt").forEach((b) => { const t = b.querySelector(".toggle[data-bind]"); if (t) b.onclick = () => set({ [t.dataset.bind]: !state[t.dataset.bind] }); });
+  onChange((s) => {
+    const route = s.conn === "auto" ? (s.keySaved ? "api" : "chatgpt") : s.conn;
+    const ready = route === "api" ? s.keySaved : s.codexLogged;
+    const what = route === "api" ? "OpenAI API key" : "ChatGPT plan (Codex login)";
+    $("uses").innerHTML = `Uses ${what}<span class="badge ${ready ? "good" : "warn"}">${ready ? "Ready" : "Needs setup"}</span>`;
+    $("autoFact").innerHTML = `<span class="badge acc">Now: ${route === "api" ? "API key" : "ChatGPT plan"}</span>`;
+    $("liveDot").className = "tdot" + (ready ? "" : " warn");
+    if (s.conn !== state._c) (state._c = s.conn), (state.voiceSet = route);
+    document.querySelectorAll('.seg[data-bind="voiceSet"] [data-v]').forEach((b) => b.setAttribute("aria-checked", b.dataset.v === state.voiceSet));
+    $("inUse").textContent = state.voiceSet === route ? "the set your connection uses" : "used when you switch connection";
+    const key = state.voiceSet === "api" ? "apiVoice" : "gptVoice";
+    $("voices").innerHTML = VOICES[state.voiceSet].map((v, i) => `<button class="voice" data-voice="${v}" aria-checked="${s[key] === v}"><span>${v}${i === 0 ? "<small>default</small>" : ""}</span><span class="play ${playing === v ? "on" : ""}" data-play="${v}"><i data-lucide="${playing === v ? "square" : "play"}"></i></span></button>`).join("");
+    $("voices").querySelectorAll("[data-voice]").forEach((b) => (b.onclick = () => set({ [key]: b.dataset.voice })));
+    $("voices").querySelectorAll("[data-play]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); playing = playing === b.dataset.play ? null : b.dataset.play; set({}); if (playing) setTimeout(() => { playing = null; set({}); }, 1800); }));
+    const label = s.mic || "System default";
+    $("micResult").innerHTML = s.micRes === "ok" ? `<span class="badge good">Heard you on “${label}”</span>` : s.micRes === "quiet" ? `<span class="badge warn">Very quiet on “${label}”. Speak up or pick another.</span>` : "";
+    $("bubbles").classList.toggle("off", !s.aloud);
+    lucide.createIcons();
+  });
+  mockup({
+    id: "voice",
+    tabs: ["live", "voice", "mic"],
+    pitch: "<b>Voice.</b> The 60-word connection hint becomes three cards that say what each route costs and which one is in use. The API key only shows for the API route. The two unlabelled voice lists are one picker with previews, the microphone test has a real level meter, and the missing shortcut (⌥⌘V) is fixed.",
+    initial: { conn: "auto", keySaved: true, justSaved: false, key: "", model: "", codexLogged: true, voiceSet: "api", apiVoice: "Marin", gptVoice: "Cove", customPrompt: false, mic: "AirPods Pro", testing: false, testLabel: "Test", micRes: "", aloud: false },
+  });
+</script>
+</body>
+</html>

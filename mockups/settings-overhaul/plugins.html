@@ -1,0 +1,269 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Settings · Plugins</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+  .tabs .tr { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-subtle); }
+  .tabs .tr svg { width: 13px; height: 13px; }
+  .tabs .tr .icbtn { height: 26px; width: 26px; padding: 0; }
+  .toolbar { display: flex; align-items: center; gap: 10px; }
+  .toolbar .searchbox { flex: 1; }
+  .toolbar .cnt { font-size: 12px; color: var(--fg-subtle); white-space: nowrap; }
+  .pmark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 26%, transparent); }
+  .pmark svg { width: 16px; height: 16px; }
+  /* Installed rows */
+  .prow { display: flex; gap: 12px; padding: 12px 14px; align-items: flex-start; }
+  .prow + .prow { border-top: 1px solid var(--border); }
+  .prow.off .pmark, .prow.off .pbody { opacity: .55; }
+  .pbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .pname { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+  .pname .v { font: 11px var(--mono); color: var(--fg-subtle); font-weight: 400; }
+  .pdesc { font-size: 12px; color: var(--fg-muted); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .adds { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+  .add { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 5px; background: var(--app); font-size: 11px; color: var(--fg-subtle); }
+  .add svg { width: 11px; height: 11px; }
+  .perr { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; padding: 7px 9px; border-radius: 7px; background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); font: 11px/1.45 var(--mono); }
+  .perr svg { width: 13px; height: 13px; flex-shrink: 0; margin-top: 1px; }
+  .pside { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-top: 4px; }
+  .busy { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--accent); }
+  .busy svg { width: 13px; height: 13px; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .menuwrap { position: relative; }
+  .menu { position: absolute; z-index: 20; right: 0; top: 32px; min-width: 180px; padding: 4px; border-radius: 8px; background: var(--panel-raised); box-shadow: 0 10px 30px #0008, 0 0 0 1px var(--border-strong); }
+  .menu button { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 9px; border-radius: 6px; font-size: 12.5px; color: var(--fg-muted); text-align: left; }
+  .menu button:hover { background: var(--hover); color: var(--fg); }
+  .menu button svg { width: 13px; height: 13px; }
+  .menu button.danger { color: var(--danger); }
+  .menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }
+  /* Discover */
+  .tagrow { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tagrow .chip[aria-pressed="true"]::before { content: none; }
+  .tagrow .chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+  .store { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .scard { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .scard .top { display: flex; gap: 10px; align-items: center; }
+  .scard .top .lbl b { font-size: 13px; font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scard .top .lbl small { font-size: 11px; color: var(--fg-subtle); }
+  .scard .d { font-size: 12px; color: var(--fg-muted); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; min-height: 52px; }
+  .scard.open .d { -webkit-line-clamp: unset; }
+  .scard .ft { display: flex; align-items: center; gap: 5px; margin-top: auto; }
+  .scard .ft .r { margin-left: auto; }
+  .tg { height: 18px; padding: 0 6px; border-radius: 4px; background: var(--app); font-size: 10.5px; color: var(--fg-subtle); display: inline-flex; align-items: center; }
+  .tg.more { color: var(--fg-muted); }
+  .state { border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+  .state .btn { margin-top: 6px; }
+  .skel { height: 132px; border-radius: 10px; background: linear-gradient(90deg, var(--panel) 30%, var(--hover) 50%, var(--panel) 70%); background-size: 300% 100%; animation: shimmer 1.4s infinite; }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+  /* Options */
+  .tbar { display: flex; align-items: center; gap: 2px; height: 34px; padding: 0 8px; border-radius: 8px; background: var(--app); }
+  .tbar .tl { display: flex; gap: 5px; margin-right: 10px; }
+  .tbar .tl i { width: 9px; height: 9px; border-radius: 50%; background: var(--active); }
+  .tbar .ptab { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; color: var(--fg-muted); }
+  .tbar .ptab.on { background: var(--panel-raised); color: var(--fg); box-shadow: var(--shadow); }
+  .tbar .ptab svg { width: 13px; height: 13px; }
+  .optcard { border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .optcard .oh { display: flex; align-items: center; gap: 10px; }
+  .optcard .oh b { font-size: 13px; font-weight: 500; }
+  .optcard .oh small { display: block; font-size: 11.5px; color: var(--fg-subtle); margin-top: 1px; }
+  .optcard .oh .r { margin-left: auto; display: flex; gap: 6px; }
+  .pathline { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 7px; background: var(--app); font: 11.5px var(--mono); color: var(--fg-muted); }
+  .pathline svg { width: 13px; height: 13px; color: var(--fg-subtle); }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .steps div { display: flex; gap: 8px; padding: 9px 10px; border-radius: 8px; background: var(--app); font-size: 11.5px; color: var(--fg-muted); line-height: 1.4; }
+  .steps b.n { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; flex-shrink: 0; }
+  /* Confirm */
+  .scrim { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: #0008; border-radius: 0 14px 14px 0; }
+  .confirm { width: 380px; border-radius: 12px; background: var(--panel-raised); box-shadow: 0 20px 60px #000a, 0 0 0 1px var(--border-strong); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .confirm h4 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+  .confirm p { margin: 0; font-size: 12.5px; color: var(--fg-muted); line-height: 1.5; }
+  .confirm .r { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .btn.dangerfill { background: var(--danger); color: #fff; box-shadow: none; font-weight: 500; }
+  .demo { display: inline-flex; gap: 2px; margin-left: 8px; padding: 2px; border-radius: 7px; background: #0006; vertical-align: middle; }
+  .demo button { font-size: 11px; padding: 2px 8px; border-radius: 5px; color: #a1a1aa; }
+  .demo button[aria-checked="true"] { background: #7c8cff; color: #fff; }
+</style>
+</head>
+<body>
+<div class="dialog">
+  <nav class="side"></nav>
+  <div class="main">
+    <button class="close"><i data-lucide="x"></i><kbd>esc</kbd></button>
+    <header class="pagehead">
+      <div class="pageicon"><i data-lucide="puzzle"></i></div>
+      <h2>Plugins</h2>
+      <p>Panels, tools and agents others built for winfer.</p>
+    </header>
+    <div class="tabs" data-radio="tab">
+      <button data-v="installed"><i data-lucide="package-check"></i>Installed<span class="tcount" id="instCount"></span><span class="tdot" id="updDot" title="Updates available"></span></button>
+      <button data-v="discover"><i data-lucide="compass"></i>Discover<span class="tcount" id="discCount"></span></button>
+      <button data-v="options"><i data-lucide="settings-2"></i>Options</button>
+      <span class="tr" data-if="tab=installed,discover"><i data-lucide="store"></i>Store checked 2 min ago<button class="icbtn" title="Check the store again"><i data-lucide="refresh-cw"></i></button></span>
+    </div>
+    <div class="body">
+
+      <!-- ───────── Installed ───────── -->
+      <div class="pane" data-if="tab=installed">
+        <div class="banner acc" id="updBanner"><i data-lucide="arrow-up-circle"></i><span id="updText"></span><span class="r"><button class="btn primary sm" id="updAll">Update all</button></span></div>
+        <div class="toolbar">
+          <label class="searchbox"><i data-lucide="search"></i><input type="search" placeholder="Search installed plugins" data-bind="qi" /></label>
+          <span class="cnt" id="onCount"></span>
+        </div>
+        <div class="list" id="installed" style="overflow:visible"></div>
+      </div>
+
+      <!-- ───────── Discover ───────── -->
+      <div class="pane" data-if="tab=discover">
+        <div class="note"><i data-lucide="shield-alert"></i><span>Plugins run <b>their own code with full access</b> to your files, terminals and network. Install only plugins you trust; winfer asks once more before installing.</span></div>
+        <div data-if="store=ok">
+          <div class="toolbar" style="margin-bottom:10px">
+            <label class="searchbox"><i data-lucide="search"></i><input type="search" placeholder="Search the store" data-bind="qd" /></label>
+          </div>
+          <div class="tagrow" id="tags"></div>
+        </div>
+        <div class="store" id="store" data-if="store=ok"></div>
+        <div class="store" data-if="store=loading"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+        <div class="state" data-if="store=error"><div class="empty"><i data-lucide="cloud-off"></i><b class="muted">Couldn't load the plugin store</b><span class="mono" style="font-size:11px">GET plugins.winfer.dev/index.json: connection timed out</span><button class="btn"><i data-lucide="refresh-cw"></i>Retry</button></div></div>
+      </div>
+
+      <!-- ───────── Options ───────── -->
+      <div class="pane" data-if="tab=options">
+        <div class="optcard">
+          <div class="oh"><span class="ic acc"><i data-lucide="panel-top"></i></span><span><b>Hide names on plugin tabs</b><small>Plugin pages in the title bar show just their icon. Hover a tab to see its name.</small></span><span class="r"><span class="toggle" data-bind="hideNames"></span></span></div>
+          <div class="tbar" id="tbar"></div>
+        </div>
+        <div class="optcard">
+          <div class="oh"><span class="ic"><i data-lucide="folder-code"></i></span><span><b>Your own plugins</b><small>Build one, or try a plugin that isn't in the store.</small></span><span class="r"><button class="btn"><i data-lucide="folder-open"></i>Open folder</button><button class="btn"><i data-lucide="rotate-cw"></i>Reload</button></span></div>
+          <div class="pathline"><i data-lucide="folder"></i>~/Library/Application Support/dev.winfer.app/plugins<span style="margin-left:auto" class="badge">2 local</span></div>
+          <div class="steps">
+            <div><b class="n">1</b><span>Add a folder with a <code>plugin.json</code> to the plugins folder.</span></div>
+            <div><b class="n">2</b><span>It shows up under <b>Installed</b> with a <span class="badge">local</span> badge, off.</span></div>
+            <div><b class="n">3</b><span>Turn it on. After editing it, press <b>Reload</b>.</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="scrim" id="scrim" hidden><div class="confirm"><h4 id="cTitle"></h4><p id="cBody"></p><div class="r"><button class="btn" id="cNo">Cancel</button><button class="btn" id="cYes"></button></div></div></div>
+  </div>
+</div>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="shared.js"></script>
+<script>
+  const INSTALLED = [
+    { id: "kb", name: "Knowledge base", v: "2.3.1", up: "2.4.0", icon: "brain", c: "#a78bfa", on: true, d: "A graph memory of your projects that agents can query, explain and add to. Answers are saved as nodes, so the next agent starts with what the last one learned.", adds: { tools: 6, recipes: 2, code: 1 } },
+    { id: "linear", name: "Linear", v: "1.8.0", icon: "list-todo", c: "#7c8cff", on: true, d: "Your Linear issues as a panel; start an agent on an issue and it links its branch and review card back.", adds: { tools: 3, panels: 1, recipes: 1, code: 1 } },
+    { id: "gemini", name: "Gemini CLI", v: "0.6.2", up: "0.7.0", icon: "sparkle", c: "#4f8cff", on: true, d: "Adds Google's Gemini CLI as an agent you can start in panes, with model picking and auto-approve.", adds: { agents: 1 } },
+    { id: "pomo", name: "Focus timer", v: "0.3.0", icon: "timer", c: "#fb7185", on: false, d: "A pomodoro timer in the title bar that pauses notifications while you focus.", adds: { panels: 1, code: 1 } },
+    { id: "mine", name: "deploy-helper", v: "0.0.1", local: true, icon: "rocket", c: "#f5b544", on: false, d: "Runs our staging deploy and posts the URL to the agent that asked.", adds: { tools: 1, code: 1 } },
+    { id: "broken", name: "sql-console", v: "0.2.0", local: true, icon: "database", c: "#25a28f", on: false, err: "plugin.json: unknown field `tool` at line 12, column 5 (did you mean `tools`?)", d: "Query local databases from a panel and let agents read schemas.", adds: { tools: 2, panels: 1 } },
+  ];
+  const STORE = [
+    { name: "GitHub PRs", by: "winfer", v: "1.4.0", icon: "git-pull-request", c: "#a1a1aa", tags: ["git", "review"], d: "Open pull requests as a panel; review comments become agent tasks, and finished agents open the PR for you with the review card as its description." },
+    { name: "Sentry", by: "getsentry", v: "0.9.1", icon: "bug", c: "#fb7185", tags: ["errors", "monitoring"], d: "New Sentry issues show up in winfer; hand one to an agent with the stack trace, breadcrumbs and release attached." },
+    { name: "Figma frames", by: "lena.k", v: "0.4.2", icon: "frame", c: "#a78bfa", tags: ["design", "frontend"], d: "Paste a Figma link and agents get the frame as an image plus its layout and tokens, so the first pass already matches the design." },
+    { name: "Docker", by: "winfer", v: "2.0.0", icon: "container", c: "#4f8cff", tags: ["devops", "tools"], d: "Containers, logs and compose stacks in a panel; agents can start, stop and read logs of the services they need." },
+    { name: "Postgres", by: "pgtools", v: "1.1.3", icon: "database", c: "#38bdf8", tags: ["database", "tools"], d: "Read-only schema and query tools for agents, with a panel that shows what they ran." },
+    { name: "Aider", by: "aider-chat", v: "0.3.0", icon: "bot", c: "#7ee787", tags: ["agents"], d: "Adds Aider as an agent you can start in panes." },
+    { name: "Daily standup", by: "maya", v: "0.2.0", icon: "calendar-check", c: "#f5b544", tags: ["review", "productivity"], d: "Each morning, a summary of what your agents did yesterday, per project, ready to paste." },
+    { name: "Playwright traces", by: "winfer", v: "0.8.0", icon: "clapperboard", c: "#25a28f", tags: ["testing", "frontend"], d: "Failed test traces open as a timeline; send one to an agent with the failing step highlighted." },
+    { name: "Obsidian notes", by: "unknown", v: "0.1.0", icon: "notebook-pen", c: "#c084fc", tags: ["notes"], d: "" },
+  ];
+  const ADD_LABEL = { tools: ["wrench", "tool"], agents: ["bot", "agent"], panels: ["panel-right", "panel"], recipes: ["book-open", "recipe"], code: ["code", "code"] };
+  const busy = {};
+  let menuOpen = null;
+  let installedStore = new Set();
+
+  const ask = (title, body, yes, danger, fn) => {
+    $("cTitle").textContent = title; $("cBody").textContent = body;
+    $("cYes").textContent = yes; $("cYes").className = "btn " + (danger ? "dangerfill" : "primary");
+    $("scrim").hidden = false;
+    $("cYes").onclick = () => { $("scrim").hidden = true; fn(); };
+  };
+  $("cNo").onclick = () => ($("scrim").hidden = true);
+  const TRUST = (n) => `“${n}” runs its own code with full access to your files, terminals and network. Only turn on plugins you trust.`;
+  const fakeBusy = (id, label, done) => { busy[id] = label; render(); setTimeout(() => { delete busy[id]; done(); render(); }, 1200); };
+
+  function renderInstalled() {
+    const q = (state.qi || "").toLowerCase();
+    const rows = INSTALLED.filter((p) => !q || (p.name + p.d).toLowerCase().includes(q));
+    $("installed").innerHTML = rows.length ? rows.map((p) => {
+      const adds = Object.entries(p.adds).map(([k, n]) => { const [ic, l] = ADD_LABEL[k]; return `<span class="add"><i data-lucide="${ic}"></i>${k === "code" ? "runs code" : `${n} ${l}${n > 1 ? "s" : ""}`}</span>`; }).join("");
+      return `<div class="prow ${p.on || p.err ? "" : "off"}">
+        <span class="pmark" style="--c:${p.c}"><i data-lucide="${p.icon}"></i></span>
+        <div class="pbody">
+          <div class="pname">${p.name}<span class="v">${p.v}</span>${p.local ? '<span class="badge">local</span>' : ""}${p.up ? `<span class="badge acc"><i data-lucide="arrow-up" style="width:10px;height:10px"></i>${p.up}</span>` : ""}</div>
+          <div class="pdesc">${p.d}</div>
+          <div class="adds">${adds}</div>
+          ${p.err ? `<div class="perr"><i data-lucide="circle-alert"></i><span>${p.err}</span></div>` : ""}
+        </div>
+        <div class="pside">
+          ${busy[p.id] ? `<span class="busy"><i data-lucide="loader-circle"></i>${busy[p.id]}</span>` : `
+          ${p.up ? `<button class="btn sm" data-up="${p.id}">Update</button>` : ""}
+          <span class="menuwrap"><button class="icbtn" data-menu="${p.id}" title="More"><i data-lucide="ellipsis"></i></button>
+            ${menuOpen === p.id ? `<div class="menu">${p.up ? `<button data-up="${p.id}"><i data-lucide="arrow-up-circle"></i>Update to ${p.up}</button>` : ""}${p.local ? '<button><i data-lucide="folder-open"></i>Show in folder</button>' : '<button><i data-lucide="external-link"></i>Store page</button>'}<hr /><button class="danger" data-rm="${p.id}"><i data-lucide="trash-2"></i>Uninstall</button></div>` : ""}</span>
+          ${p.err ? '<span class="badge bad">Error</span>' : `<span class="toggle" role="switch" data-on="${p.id}" aria-checked="${p.on}"></span>`}`}
+        </div></div>`;
+    }).join("") : `<div class="empty"><i data-lucide="search-x"></i>${INSTALLED.length ? `No installed plugin matches “${state.qi}”` : "No plugins installed. Plugins add pages, agents, recipes, commands, voice actions and tools for your agents."}</div>`;
+    const ups = INSTALLED.filter((p) => p.up);
+    $("updBanner").hidden = !ups.length || !!q;
+    $("updText").textContent = ups.length === 1 ? `An update for ${ups[0].name} is available.` : `${ups.length} plugin updates are available: ${ups.map((p) => p.name).join(", ")}.`;
+    $("updAll").textContent = ups.length === 1 ? "Update" : "Update all";
+    $("updDot").hidden = !ups.length;
+    $("onCount").textContent = `${INSTALLED.filter((p) => p.on).length} of ${INSTALLED.length} on`;
+    $("instCount").textContent = INSTALLED.length;
+  }
+
+  function renderStore() {
+    const q = (state.qd || "").toLowerCase();
+    const counts = {};
+    STORE.forEach((p) => p.tags.forEach((t) => (counts[t] = (counts[t] || 0) + 1)));
+    let top = Object.entries(counts).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t]) => t);
+    if (state.tag && !top.includes(state.tag)) top.push(state.tag);
+    $("tags").innerHTML = `<button class="chip" data-tag="" aria-pressed="${!state.tag}">All</button>` + top.map((t) => `<button class="chip" data-tag="${t}" aria-pressed="${state.tag === t}">${t}</button>`).join("");
+    const left = STORE.filter((p) => !installedStore.has(p.name));
+    const rows = left.filter((p) => (!state.tag || p.tags.includes(state.tag)) && (!q || (p.name + p.d + p.by + p.tags.join(" ")).toLowerCase().includes(q)));
+    $("discCount").textContent = left.length;
+    $("store").innerHTML = rows.length ? rows.map((p) => `<div class="scard ${state.open === p.name ? "open" : ""}">
+        <div class="top"><span class="pmark" style="--c:${p.c}"><i data-lucide="${p.icon}"></i></span><span class="lbl" style="min-width:0;flex:1"><b>${p.name}</b><small>${p.by === "unknown" ? "Unknown author" : "by " + p.by} · ${p.v}</small></span></div>
+        <div class="d" data-open="${p.name}">${p.d || '<span class="subtle">No description.</span>'}</div>
+        <div class="ft">${(state.open === p.name ? p.tags : p.tags.slice(0, 2)).map((t) => `<span class="tg">${t}</span>`).join("")}
+          <span class="r">${busy[p.name] ? `<span class="busy"><i data-lucide="loader-circle"></i>Installing…</span>` : `<button class="btn primary sm" data-inst="${p.name}" ${Object.keys(busy).length ? 'disabled style="opacity:.5"' : ""}><i data-lucide="download"></i>Install</button>`}</span></div></div>`).join("")
+      : `<div class="state" style="grid-column:span 2"><div class="empty"><i data-lucide="${left.length ? "search-x" : "party-popper"}"></i>${left.length ? "Nothing in the store matches" : "You have every plugin from the store"}</div></div>`;
+  }
+
+  function renderTbar() {
+    const tabs = [["layout-panel-left", "Panes", true], ["list-todo", "Linear"], ["brain", "Knowledge"], ["timer", "Focus"]];
+    $("tbar").innerHTML = '<span class="tl"><i></i><i></i><i></i></span>' + tabs.map(([ic, l, core], i) => `<span class="ptab ${i === 1 ? "on" : ""}" title="${l}"><i data-lucide="${ic}"></i>${core || !state.hideNames ? l : ""}</span>`).join("") + '<span class="subtle" style="margin-left:auto;font-size:10.5px">title bar preview</span>';
+  }
+
+  function render() {
+    renderInstalled(); renderStore(); renderTbar();
+    lucide.createIcons();
+    document.querySelectorAll("[data-menu]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); menuOpen = menuOpen === b.dataset.menu ? null : b.dataset.menu; render(); }));
+    document.querySelectorAll("[data-on]").forEach((t) => (t.onclick = () => {
+      const p = INSTALLED.find((x) => x.id === t.dataset.on);
+      if (!p.on && p.local && (p.adds.code || p.adds.agents)) return ask("Turn on plugin", TRUST(p.name), "Turn on", false, () => { p.on = true; render(); });
+      p.on = !p.on; render();
+    }));
+    document.querySelectorAll("[data-up]").forEach((b) => (b.onclick = () => { menuOpen = null; const p = INSTALLED.find((x) => x.id === b.dataset.up); fakeBusy(p.id, "Updating…", () => { p.v = p.up; delete p.up; }); }));
+    document.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { menuOpen = null; const p = INSTALLED.find((x) => x.id === b.dataset.rm); ask("Uninstall plugin", `Remove “${p.name}” and its files? Data it stored (like saved secrets) is kept for a reinstall.`, "Uninstall", true, () => { INSTALLED.splice(INSTALLED.indexOf(p), 1); render(); }); render(); }));
+    document.querySelectorAll("[data-tag]").forEach((b) => (b.onclick = () => set({ tag: state.tag === b.dataset.tag ? "" : b.dataset.tag })));
+    document.querySelectorAll("[data-open]").forEach((d) => (d.onclick = () => set({ open: state.open === d.dataset.open ? "" : d.dataset.open })));
+    document.querySelectorAll("[data-inst]").forEach((b) => (b.onclick = () => { const n = b.dataset.inst; ask(`Install ${n}`, TRUST(n), "Install", false, () => fakeBusy(n, "Installing…", () => installedStore.add(n))); }));
+  }
+  $("updAll").onclick = () => INSTALLED.filter((p) => p.up).forEach((p) => fakeBusy(p.id, "Updating…", () => { p.v = p.up; delete p.up; }));
+  document.addEventListener("click", () => { if (menuOpen) { menuOpen = null; render(); } });
+  let last = "";
+  onChange((s) => { const k = [s.qi, s.qd, s.tag, s.open, s.hideNames].join("|"); if (k !== last) { last = k; render(); } });
+  mockup({
+    id: "plugins",
+    tabs: ["installed", "discover", "options"],
+    pitch: `<b>Plugins.</b> Installed, Discover and Options as page tabs. Installed rows show what each plugin adds, with one toggle and a ⋯ menu for update and uninstall. The trust warning shows once, above the store. <span class="demo" data-radio="store"><button data-v="ok">Store</button><button data-v="loading">Loading</button><button data-v="error">Error</button></span>`,
+    initial: { qi: "", qd: "", tag: "", open: "", hideNames: false, store: "ok" },
+  });
+  render();
+</script>
+</body>
+</html>
