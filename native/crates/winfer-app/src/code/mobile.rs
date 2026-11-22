@@ -13,7 +13,7 @@ pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
         match item {
             Item::User { key, text, at, .. } => out.push(json!({ "id": key, "role": "user", "text": text, "ts": (*at > 0).then_some(*at) })),
             Item::Text { key, text, .. } => out.push(json!({ "id": key, "role": "assistant", "text": text, "ts": null })),
-            Item::Tool { key, name, title, ok, started, ended, .. } => {
+            Item::Tool { key, name, title, input, ok, started, ended, .. } => {
                 let task = state.tasks.iter().find(|t| t.ev.tool_id.as_deref() == Some(key.as_str()));
                 let status = match task.and_then(|t| t.ev.status.as_deref()) {
                     Some("running") => "running",
@@ -22,7 +22,21 @@ pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
                     _ if *ok == Some(false) => "failed",
                     _ => "done",
                 };
-                out.push(json!({ "id": key, "role": "tool", "text": if title.is_empty() { name } else { title }, "tool": name, "ts": (*started > 0).then_some(*started), "state": status, "background": task.is_some() }));
+                let desc = input.get("description").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+                let mut row = json!({
+                    "id": key,
+                    "role": "tool",
+                    "text": if title.is_empty() { name } else { title },
+                    "tool": name,
+                    "ts": (*started > 0).then_some(*started),
+                    "ended": ended.filter(|e| *e > 0),
+                    "state": status,
+                    "background": task.is_some(),
+                });
+                if let Some(d) = desc {
+                    row["desc"] = json!(d);
+                }
+                out.push(row);
             }
             _ => {}
         }
@@ -88,12 +102,16 @@ mod tests {
         let mut s = CodeState::default();
         s.apply(ev(json!({ "type": "turn_start" })));
         s.apply(ev(json!({ "type": "text", "id": "a", "text": "Hello" })));
-        s.apply(ev(json!({ "type": "tool_start", "id": "t", "name": "Bash", "title": "ls", "input": {} })));
+        s.apply(ev(json!({ "type": "tool_start", "id": "t", "name": "Bash", "title": "ls", "input": { "description": "List files" } })));
         let t = live_thread(&s, 10);
         assert_eq!(t.iter().map(|m| m["role"].as_str().unwrap()).collect::<Vec<_>>(), ["assistant", "tool"]);
         assert_eq!(t[1]["state"], "running");
+        assert_eq!(t[1]["desc"], "List files");
+        assert!(t[1]["ended"].is_null());
         s.apply(ev(json!({ "type": "tool_end", "id": "t", "ok": false, "output": "" })));
-        assert_eq!(live_thread(&s, 10)[1]["state"], "failed");
+        let done = live_thread(&s, 10);
+        assert_eq!(done[1]["state"], "failed");
+        assert!(done[1]["ended"].as_u64().is_some());
         assert_eq!(live_thread(&s, 1).len(), 1);
     }
 

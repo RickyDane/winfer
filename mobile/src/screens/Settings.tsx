@@ -4,6 +4,7 @@ import type { DesktopClient } from "../client";
 import { go, haptic, isIOS, isStandalone, useClient } from "../hooks";
 import { activePairing, loadPairings, removePairing, setActive } from "../pairing";
 import { Icon } from "./common";
+import { setCompactToolsOverride, useCompactTools } from "./compactTools";
 
 type PushState = "unsupported" | "ios-browser" | "denied" | "off" | "on" | "busy";
 
@@ -23,6 +24,7 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
   const [, bump] = useState(0);
   const pairings = loadPairings();
   const active = activePairing();
+  const compactTools = useCompactTools(state.compactTools);
 
   useEffect(() => {
     currentPush().then(setPush, () => setPush("unsupported"));
@@ -126,6 +128,32 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
             </div>
             <p className="group-foot">{pushNote}</p>
             {err && <div className="inline-error">{err}</div>}
+          </section>
+
+          <section className="group">
+            <h2>Display</h2>
+            <div className="group-card">
+              <div className="row">
+                <span className="row-icon">
+                  <Icon name="wrench" />
+                </span>
+                <span className="row-main">
+                  <b>Compact tool calls</b>
+                  <span>{compactTools ? "Grouped into expandable work rows" : "Show every tool call inline"}</span>
+                </span>
+                <button
+                  className="toggle"
+                  role="switch"
+                  aria-checked={compactTools}
+                  aria-label="Compact tool calls"
+                  onClick={() => {
+                    haptic(8);
+                    setCompactToolsOverride(!compactTools);
+                  }}
+                />
+              </div>
+            </div>
+            <p className="group-foot">Folds consecutive tool calls into a single expandable row with live step status, matching winfer on your desktop.</p>
           </section>
 
           <section className="group">

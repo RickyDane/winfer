@@ -85,11 +85,6 @@ export function Inbox({ client }: { client: DesktopClient }) {
 
   const open = (p: Pane) => go(`/pane/${encodeURIComponent(p.id)}`);
   const canStart = state.workspaces.length > 0 && state.providers.length > 0;
-  // The new-session screen picks the workspace, so the inbox needs only one way in.
-  const startNew = () => {
-    haptic(6);
-    go("/new");
-  };
   let i = 0;
   const card = (p: Pane) => {
     const pv = preview(p);
@@ -183,11 +178,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
           <b>{desktop}</b>
           <span>{link === "online" ? "Connected" : link === "away" ? "Desktop offline" : link === "offline" ? "Offline" : "Connecting…"}</span>
         </div>
-        {canStart && (
-          <button className="btn primary sm" disabled={link !== "online"} onClick={startNew}>
-            <Icon name="plus" size={15} /> New
-          </button>
-        )}
+        {state.panes.length > 0 && <span className="bar-chip num">{state.panes.length} active</span>}
       </header>
       <div className="ptr" ref={ptr} aria-hidden>
         <Icon name="refresh" size={16} />
@@ -232,7 +223,7 @@ export function Inbox({ client }: { client: DesktopClient }) {
                 <img src="./icons/logo.svg" alt="" />
               </span>
               <h3>{state.panes.length ? "Nothing here" : "No agents running"}</h3>
-              <p className="sub">{state.panes.length ? "Try another filter." : canStart ? "Start one with New, or in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
+              <p className="sub">{state.panes.length ? "Try another filter." : canStart ? "Tap + below, or start one in winfer; it appears here live." : "Start one in winfer and it appears here, live."}</p>
             </div>
           )}
         </div>

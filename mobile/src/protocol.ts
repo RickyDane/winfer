@@ -71,7 +71,11 @@ export interface Message {
   role: "user" | "assistant" | "tool" | "thinking";
   text: string;
   tool?: string;
+  /** Short human-readable tool description (e.g. Bash/Agent `description`), used in compact rows. */
+  desc?: string | null;
   ts: number | null;
+  /** Tool completion timestamp (ms epoch), when known. */
+  ended?: number | null;
   /** Tools: whether the call is still running, when the session says. */
   state?: "running" | "done" | "failed";
   /** Tools: a background shell or subagent, which keeps running after its call returns. */
@@ -102,18 +106,20 @@ export type PhoneMsg =
   | { t: "approve" | "decline" | "interrupt"; paneId: string }
   | { t: "choose"; paneId: string; option: number; text?: string }
   | { t: "config.get"; paneId: string }
+  | { t: "models.get"; provider: string }
   | { t: "pane.set"; paneId: string; model?: string; effort?: string }
-  | { t: "pane.new"; workspaceId: string; provider?: string; text?: string }
+  | { t: "pane.new"; workspaceId: string; provider?: string; text?: string; model?: string; effort?: string }
   | { t: "pane.close"; paneId: string }
   | { t: "push.subscribe"; subscription: PushSubscriptionJSON }
   | { t: "push.unsubscribe" };
 
 export type DesktopMsg =
   | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string }
-  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string; theme?: Theme }
+  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string; theme?: Theme; compactTools?: boolean }
   | { t: "status"; pane: Pane; silent?: boolean }
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
   | { t: "config"; id?: string; paneId: string; models: ModelOption[] }
+  | { t: "models"; id?: string; provider: string; models: ModelOption[]; defaultModel?: string | null; defaultEffort?: string | null; defaultEfforts?: string[] }
   | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
   | { t: "error"; id?: string; error: string };
 

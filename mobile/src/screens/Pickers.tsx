@@ -95,14 +95,29 @@ function useSet(client: DesktopClient, pane: Pane, onDone?: () => void) {
   return { busy, err, set };
 }
 
-/** The reasoning levels the current model takes, with what each means. */
-export function EffortPicker({ client, pane, config, online, onClose }: { client: DesktopClient; pane: Pane; config: PaneConfig; online: boolean; onClose: () => void }) {
-  const { busy, err, set } = useSet(client, pane, onClose);
+/** Reusable effort-level bottom sheet (used for both live threads and new sessions). */
+export function EffortListSheet({
+  efforts,
+  selected,
+  sub,
+  disabled,
+  err,
+  onSelect,
+  onClose,
+}: {
+  efforts: string[];
+  selected: string;
+  sub?: string;
+  disabled?: boolean;
+  err?: string | null;
+  onSelect: (level: string) => void;
+  onClose: () => void;
+}) {
   return (
-    <Sheet label="Reasoning effort" title="Reasoning" sub={config.label} onClose={onClose}>
+    <Sheet label="Reasoning effort" title="Reasoning" sub={sub} onClose={onClose}>
       <div className="pick-list">
-        {config.efforts.map((l) => (
-          <button key={l} className="pick-row" data-on={l === config.effort} disabled={!online || busy} onClick={() => void set({ effort: l })}>
+        {efforts.map((l) => (
+          <button key={l} className="pick-row" data-on={l === selected} disabled={disabled} onClick={() => onSelect(l)}>
             <span className="pick-icon">
               <EffortIcon effort={l} size={15} />
             </span>
@@ -110,7 +125,7 @@ export function EffortPicker({ client, pane, config, online, onClose }: { client
               <b>{effortLabel(l)}</b>
               <small>{EFFORT_HINTS[l] ?? ""}</small>
             </span>
-            {l === config.effort && <Icon name="check" size={16} className="pick-check" />}
+            {l === selected && <Icon name="check" size={16} className="pick-check" />}
           </button>
         ))}
       </div>
@@ -119,30 +134,58 @@ export function EffortPicker({ client, pane, config, online, onClose }: { client
   );
 }
 
-/** The models a winfer code chat can switch to, by backend, with a search once the list is long. */
-export function ModelPicker({ client, pane, config, online, onClose }: { client: DesktopClient; pane: Pane; config: PaneConfig; online: boolean; onClose: () => void }) {
-  const [models, setModels] = useState<ModelOption[] | null>(null);
+/** The reasoning levels the current model takes, with what each means. */
+export function EffortPicker({ client, pane, config, online, onClose }: { client: DesktopClient; pane: Pane; config: PaneConfig; online: boolean; onClose: () => void }) {
+  const { busy, err, set } = useSet(client, pane, onClose);
+  return (
+    <EffortListSheet
+      efforts={config.efforts}
+      selected={config.effort}
+      sub={config.label}
+      disabled={!online || busy}
+      err={err}
+      onSelect={(effort) => void set({ effort })}
+      onClose={onClose}
+    />
+  );
+}
+
+/** Reusable model-selection bottom sheet (with search & backend rail when models span backends). */
+export function ModelListSheet({
+  models,
+  selected,
+  defaultLabel,
+  sub,
+  providerIcon,
+  disabled,
+  err,
+  onSelect,
+  onClose,
+}: {
+  models: ModelOption[] | null;
+  selected: string | null;
+  /** When set, adds a top "Default" row that clears an explicit override. */
+  defaultLabel?: string;
+  sub?: string;
+  /** Fallback provider mark when a model id doesn't have a `backend/` prefix. */
+  providerIcon?: string;
+  disabled?: boolean;
+  err?: string | null;
+  onSelect: (modelId: string | null) => void;
+  onClose: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [backend, setBackend] = useState<string | null>(null);
-  const { busy, err, set } = useSet(client, pane, onClose);
 
-  useEffect(() => {
-    let live = true;
-    client
-      .request({ t: "config.get", paneId: pane.id })
-      .then((r) => live && setModels(r.t === "config" ? r.models : []))
-      .catch(() => live && setModels([]));
-    return () => {
-      live = false;
-    };
-  }, [client, pane.id]);
-
-  const backends = useMemo(() => [...new Set((models ?? []).map((m) => m.id.split("/")[0]))], [models]);
+  const backends = useMemo(() => {
+    const ids = (models ?? []).map((m) => (m.id.includes("/") ? m.id.split("/")[0] : null)).filter((b): b is string => !!b);
+    return [...new Set(ids)];
+  }, [models]);
   const q = query.trim().toLowerCase();
   const shown = (models ?? []).filter((m) => (!backend || m.id.split("/")[0] === backend) && (!q || `${m.name} ${m.id} ${m.detail ?? ""}`.toLowerCase().includes(q)));
 
   return (
-    <Sheet label="Model" title="Model" sub={config.label || "Pick a model"} onClose={onClose}>
+    <Sheet label="Model" title="Model" sub={sub || "Pick a model"} onClose={onClose}>
       {(models?.length ?? 0) > 6 && (
         <label className="pick-search">
           <Icon name="search" size={15} />
@@ -168,13 +211,26 @@ export function ModelPicker({ client, pane, config, online, onClose }: { client:
             <span className="spinner" /> Loading models…
           </div>
         )}
+        {models !== null && defaultLabel && !q && !backend && (
+          <button className="pick-row" data-on={selected === null} disabled={disabled} onClick={() => onSelect(null)}>
+            <span className="pick-icon">
+              <Icon name="sparkle" size={15} />
+            </span>
+            <span className="pick-body">
+              <b>Default</b>
+              <small>{defaultLabel}</small>
+            </span>
+            {selected === null && <Icon name="check" size={16} className="pick-check" />}
+          </button>
+        )}
         {models !== null && shown.length === 0 && <div className="loading">{models.length ? "No model matches." : "No models to pick from."}</div>}
         {shown.map((m) => {
-          const on = m.id === config.model;
+          const on = m.id === selected;
+          const markProvider = m.id.includes("/") ? m.id.split("/")[0] : (providerIcon ?? null);
           return (
-            <button key={m.id} className="pick-row" data-on={on} disabled={!online || busy} onClick={() => void set({ model: m.id })}>
+            <button key={m.id} className="pick-row" data-on={on} disabled={disabled} onClick={() => onSelect(m.id)}>
               <span className="pick-icon mark">
-                <ProviderMark provider={m.id.split("/")[0]} size={15} />
+                <ProviderMark provider={markProvider} size={15} />
               </span>
               <span className="pick-body">
                 <b>{m.name}</b>
@@ -187,5 +243,36 @@ export function ModelPicker({ client, pane, config, online, onClose }: { client:
       </div>
       {err && <div className="inline-error">{err}</div>}
     </Sheet>
+  );
+}
+
+/** The models a winfer code chat can switch to, by backend, with a search once the list is long. */
+export function ModelPicker({ client, pane, config, online, onClose }: { client: DesktopClient; pane: Pane; config: PaneConfig; online: boolean; onClose: () => void }) {
+  const [models, setModels] = useState<ModelOption[] | null>(null);
+  const { busy, err, set } = useSet(client, pane, onClose);
+
+  useEffect(() => {
+    let live = true;
+    client
+      .request({ t: "config.get", paneId: pane.id })
+      .then((r) => live && setModels(r.t === "config" ? r.models : []))
+      .catch(() => live && setModels([]));
+    return () => {
+      live = false;
+    };
+  }, [client, pane.id]);
+
+  return (
+    <ModelListSheet
+      models={models}
+      selected={config.model}
+      sub={config.label || "Pick a model"}
+      disabled={!online || busy}
+      err={err}
+      onSelect={(model) => {
+        if (model) void set({ model });
+      }}
+      onClose={onClose}
+    />
   );
 }

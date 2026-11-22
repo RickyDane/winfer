@@ -1,27 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { DesktopClient } from "../client";
 import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
+import { buildDisplayRows, describeStep, useCompactTools, workGroupSummary } from "./compactTools";
 import { Markdown } from "./Markdown";
 import { EffortIcon, EffortPicker, ModelPicker, Sheet, backendOf, effortLabel } from "./Pickers";
 import { Sky } from "./Sky";
-
-type Block = { kind: "msg"; msg: Message } | { kind: "tools"; msgs: Message[] };
-
-/** Fold runs of tool calls into one timeline so the chat stays readable. */
-function blocks(messages: Message[]): Block[] {
-  const out: Block[] = [];
-  for (const msg of messages) {
-    const last = out[out.length - 1];
-    if (msg.role === "tool") {
-      if (last?.kind === "tools") last.msgs.push(msg);
-      else out.push({ kind: "tools", msgs: [msg] });
-    } else out.push({ kind: "msg", msg });
-  }
-  return out;
-}
 
 type ToolState = "running" | "done" | "failed" | "stopped" | "unknown";
 
@@ -68,6 +54,83 @@ function Steps({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: b
       {rows.map((m, i) => (
         <ToolRow key={m.id} m={m} state={states[hidden + i]} up={hidden > 0 || i > 0} down={i < rows.length - 1} />
       ))}
+    </div>
+  );
+}
+
+/** Compacted run of tool calls — mirrors native-gpui's `work_group_row` & `WorkGroupScroll`. */
+function WorkGroup({
+  msgs,
+  active,
+  thinking,
+  sessionActive,
+  legacyLive,
+  fresh,
+}: {
+  msgs: Message[];
+  active: boolean;
+  thinking: boolean;
+  sessionActive: boolean;
+  legacyLive: boolean;
+  fresh: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fades, setFades] = useState({ top: 0, bot: 0 });
+
+  const syncFades = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 1) {
+      setFades((f) => (f.top === 0 && f.bot === 0 ? f : { top: 0, bot: 0 }));
+      return;
+    }
+    const top = Math.min(1, Math.max(0, el.scrollTop / 24));
+    const bot = Math.min(1, Math.max(0, (max - el.scrollTop) / 24));
+    setFades((f) => (Math.abs(f.top - top) < 0.02 && Math.abs(f.bot - bot) < 0.02 ? f : { top, bot }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    syncFades();
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(syncFades);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, msgs.length, syncFades]);
+
+  const states = msgs.map((m, i) => (m.state ? toolState(m, sessionActive) : legacyLive && i === msgs.length - 1 ? "running" : "unknown"));
+  const lastStep = msgs[msgs.length - 1] ?? null;
+
+  return (
+    <div className={`wg${fresh ? " fresh" : ""}`} data-open={open} data-active={active || undefined}>
+      <button
+        className="wg-head"
+        aria-expanded={open}
+        onClick={() => {
+          haptic(5);
+          setOpen((v) => !v);
+        }}
+      >
+        {active && <span className="wg-spinner" aria-hidden />}
+        <span className={active ? "wg-label wg-live" : "wg-label"}>{active ? describeStep(lastStep, thinking) : workGroupSummary(msgs)}</span>
+        <Icon name="right" size={13} className="wg-chev" />
+      </button>
+      {open && (
+        <div className="wg-body-wrap">
+          <div className="wg-scroll" ref={scrollRef} onScroll={syncFades}>
+            <div className="tools">
+              {msgs.map((m, i) => (
+                <ToolRow key={m.id} m={m} state={states[i]} up={i > 0} down={i < msgs.length - 1} />
+              ))}
+            </div>
+          </div>
+          <div className="wg-fade wg-fade-top" style={{ opacity: fades.top }} aria-hidden />
+          <div className="wg-fade wg-fade-bot" style={{ opacity: fades.bot }} aria-hidden />
+        </div>
+      )}
     </div>
   );
 }
@@ -318,7 +381,8 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const working = pane?.status === "working";
   const info = providerInfo(pane?.provider ?? null);
   const active = working || pane?.status === "needs-input";
-  const all = blocks(messages);
+  const compactTools = useCompactTools(state.compactTools);
+  const { rows: displayRows, hasLiveGroup } = buildDisplayRows(messages, working, thinking, compactTools);
   const background = messages.filter((m) => m.background && toolState(m, active) === "running");
   // The foreground call in flight: the newest running one that isn't background work.
   const current = working ? ([...messages].reverse().find((m) => m.role === "tool" && !m.background && m.state === "running") ?? null) : null;
@@ -435,9 +499,21 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
             </div>
           )}
           {empty && <Welcome status={welcomeStatus} where={where} disabled={!ready || !!busy} onPick={pane?.request ? undefined : sendPrompt} />}
-          {all.map((b, i) => {
+          {displayRows.map((b, i) => {
+            if (b.kind === "work-group")
+              return (
+                <WorkGroup
+                  key={b.key}
+                  msgs={b.msgs}
+                  active={b.active}
+                  thinking={b.thinking}
+                  sessionActive={active}
+                  legacyLive={working && i === displayRows.length - 1}
+                  fresh={isFresh(b.msgs[0].id)}
+                />
+              );
             if (b.kind === "tools")
-              return <Steps key={`t-${b.msgs[0].id}`} msgs={b.msgs} active={active} legacyLive={working && i === all.length - 1} fresh={isFresh(b.msgs[0].id)} />;
+              return <Steps key={b.key} msgs={b.msgs} active={active} legacyLive={working && i === displayRows.length - 1} fresh={isFresh(b.msgs[0].id)} />;
             const m = b.msg;
             const fresh = isFresh(m.id) ? " fresh" : "";
             if (m.role === "user")
@@ -453,7 +529,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               </div>
             );
           })}
-          {pane && working && <WorkingRow pane={pane} current={current} thinking={thinking} />}
+          {pane && working && !hasLiveGroup && <WorkingRow pane={pane} current={current} thinking={thinking} />}
           {pane && background.length > 0 && <Background items={background} />}
           {pane && !working && (pane.status === "done" || pane.status === "error") && messages.length > 0 && <EndMark pane={pane} />}
         </div>

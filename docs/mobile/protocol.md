@@ -57,8 +57,9 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | `approve` / `decline` / `interrupt` | `paneId` | `ack` |
 | `choose` | `paneId`, `option` (an option's `n`), `text?` (answer for a "Type something" row) | `ack` |
 | `config.get` | `paneId` | `config` (`models: {id, name, detail?, efforts[]}[]`; empty unless the pane is a winfer code chat) |
+| `models.get` | `provider` (an id from `providers`) | `models` (`provider`, `models: {id, name, detail?, efforts[]}[]`, `defaultModel?`, `defaultEffort?`, `defaultEfforts?`) |
 | `pane.set` | `paneId`, `model?` (a model `id`), `effort?` (one of that model's `efforts`) | `ack` |
-| `pane.new` | `workspaceId`, `provider?` (an id from `providers`; default: the desktop's default agent), `text?` (first message) | `ack` + `paneId` |
+| `pane.new` | `workspaceId`, `provider?` (an id from `providers`; default: the desktop's default agent), `text?` (first message), `model?`, `effort?` | `ack` + `paneId` |
 | `push.subscribe` | `subscription` (PushSubscription JSON) | `ack` |
 | `push.unsubscribe` | | `ack` |
 
@@ -67,7 +68,7 @@ JSON object, `t` = type. Requests carry `id` (string); replies echo it.
 | t | fields |
 |---|---|
 | `welcome` | `id`, `desktop` (name), `version`, `vapidPublicKey` (base64url, uncompressed P-256) |
-| `panes` | `id?`, `panes: Pane[]` (every workspace's, in desktop order), `workspaces: {id, name, active}[]`, `providers: {id, name}[]` (installed agents), `defaultProvider`, `theme?: {id, mode, ui}` (the desktop's themes.json entry; the phone wears its colors) — the whole mirror; sent on `panes.get` and whenever panes come, go or move, or workspaces or agents change |
+| `panes` | `id?`, `panes: Pane[]` (every workspace's, in desktop order), `workspaces: {id, name, active}[]`, `providers: {id, name}[]` (installed agents), `defaultProvider`, `theme?: {id, mode, ui}` (the desktop's themes.json entry; the phone wears its colors), `compactTools?: boolean` (desktop's compact tool calls setting, default true) — the whole mirror; sent on `panes.get` and whenever panes come, go or move, or workspaces or agents change |
 | `status` | `pane: Pane`, `silent?` (pushed whenever a pane's status/message/request changes; `silent: true` for other changes such as a new title, which never push a notification) |
 | `thread` | `id?` (absent for live updates), `paneId`, `messages: Message[]`, `source` (`claude`/`codex`/`opencode`/`winfer`/`screen`) |
 | `ack` | `id`, `ok`, `error?` |

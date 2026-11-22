@@ -18,6 +18,8 @@ export interface ClientState {
   /** Agents the phone can start sessions with. */
   providers: Provider[];
   defaultProvider: string | null;
+  /** Desktop's `codeWeb.compactTools` setting (defaults to true, matching native-gpui). */
+  compactTools: boolean;
   threads: Record<string, Thread>;
   error: string | null;
 }
@@ -42,6 +44,7 @@ export const initialState = (): ClientState => ({
   workspaces: [],
   providers: [],
   defaultProvider: null,
+  compactTools: true,
   threads: {},
   error: null,
 });
@@ -101,6 +104,7 @@ export abstract class BaseClient implements DesktopClient {
           ...(msg.workspaces && { workspaces: msg.workspaces }),
           ...(msg.providers && { providers: msg.providers }),
           ...(msg.defaultProvider !== undefined && { defaultProvider: msg.defaultProvider }),
+          ...(msg.compactTools !== undefined && { compactTools: msg.compactTools }),
         });
         break;
       case "status": {
@@ -135,6 +139,7 @@ export abstract class BaseClient implements DesktopClient {
         break;
       case "ack":
       case "config":
+      case "models":
         break;
     }
   }

@@ -41,19 +41,19 @@ pub(super) struct WelcomeUi {
     effort: Option<String>,
     open: Option<WelcomePicker>,
     /// Cached `winfer code` / harness model catalog (with per-model `efforts`).
-    harness_models: Option<Vec<crate::code::protocol::ModelInfo>>,
+    pub(super) harness_models: Option<Vec<crate::code::protocol::ModelInfo>>,
     loading_harness: bool,
     /// Providers currently fetching `providers_models`.
     loading_providers: std::collections::HashSet<String>,
     /// Saved harness default model & effort, read once.
-    harness_defaults: Option<(Option<String>, Option<String>)>,
+    pub(super) harness_defaults: Option<(Option<String>, Option<String>)>,
     /// Images pasted into the task box (with their decoded thumbnails); winfer code sends them with the first message.
     attachments: Vec<(crate::code::state::Attachment, std::sync::Arc<Image>)>,
 }
 
-const HARNESS_BACKENDS: [&str; 7] = ["claude", "codex", "agy", "cursor", "opencode", "pi", "muse"];
+pub(super) const HARNESS_BACKENDS: [&str; 7] = ["claude", "codex", "agy", "cursor", "opencode", "pi", "muse"];
 
-fn backend_default_efforts(provider: &str) -> Option<Vec<String>> {
+pub(super) fn backend_default_efforts(provider: &str) -> Option<Vec<String>> {
     match provider {
         "winfer" => Some(["low", "medium", "high", "xhigh", "max"].map(String::from).into()),
         "claude" => Some(["low", "medium", "high", "xhigh", "max"].map(String::from).into()),

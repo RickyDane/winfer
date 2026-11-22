@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BaseClient } from "./client";
+import { MockClient } from "./mock";
 import type { DesktopMsg, Message } from "./protocol";
 
 class Client extends BaseClient {
@@ -49,6 +50,26 @@ describe("optimistic messages", () => {
     client.receive([user("one")]);
     expect(messages(client)).toHaveLength(2);
     client.receive([user("one"), user("two")]);
+    expect(messages(client)).toHaveLength(2);
     expect(messages(client).map((m) => m.id)).toEqual(["one", "two"]);
+  });
+});
+
+describe("new session model & effort", () => {
+  it("lists provider models and applies chosen model and effort on pane.new", async () => {
+    const mock = new MockClient();
+    const catalog = await mock.request({ t: "models.get", provider: "winfer" });
+    expect(catalog.t).toBe("models");
+    if (catalog.t !== "models") return;
+    expect(catalog.models.some((m) => m.id === "claude/opus")).toBe(true);
+    expect(catalog.defaultModel).toBe("claude/sonnet");
+
+    const ack = await mock.request({ t: "pane.new", workspaceId: "w-winfer", provider: "winfer", model: "claude/opus", effort: "max" });
+    expect(ack.t).toBe("ack");
+    if (ack.t !== "ack" || !ack.paneId) return;
+    const pane = mock.getState().panes.find((p) => p.id === ack.paneId);
+    expect(pane?.config?.model).toBe("claude/opus");
+    expect(pane?.config?.effort).toBe("max");
+    mock.close();
   });
 });

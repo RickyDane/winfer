@@ -94,8 +94,36 @@ const PANES: Pane[] = [
 const MODELS: ModelOption[] = [
   { id: "claude/opus", name: "Opus 5.5", detail: "Most capable, for complex work", efforts: LEVELS },
   { id: "claude/sonnet", name: "Sonnet 5.5", detail: "Best everyday balance of speed and skill", efforts: LEVELS },
-  { id: "claude/haiku", name: "Haiku 5", detail: "Fastest, for quick answers", efforts: ["default"] },
+  { id: "claude/haiku", name: "Haiku 5", detail: "Fastest, for quick answers", efforts: [] },
+  { id: "codex/gpt-5.4", name: "GPT-5.4", detail: "Strong reasoning and code edits", efforts: ["default", "low", "medium", "high", "xhigh"] },
+  { id: "agy/gemini-4-neon", name: "Gemini 4 Neon", detail: "Fast multimodal coding model", efforts: ["default", "low", "medium", "high"] },
 ];
+
+const PROVIDER_MODELS: Record<string, { models: ModelOption[]; defaultModel?: string; defaultEffort?: string; defaultEfforts?: string[] }> = {
+  winfer: { models: MODELS, defaultModel: "claude/sonnet", defaultEffort: "high", defaultEfforts: LEVELS },
+  claude: {
+    models: [
+      { id: "opus", name: "Opus 5.5", detail: "Most capable, for complex work", efforts: LEVELS },
+      { id: "sonnet", name: "Sonnet 5.5", detail: "Best everyday balance of speed and skill", efforts: LEVELS },
+      { id: "haiku", name: "Haiku 5", detail: "Fastest, for quick answers", efforts: [] },
+    ],
+    defaultModel: "sonnet",
+    defaultEfforts: LEVELS,
+  },
+  codex: {
+    models: [
+      { id: "gpt-5.4", name: "GPT-5.4", detail: "Flagship coding model", efforts: ["default", "low", "medium", "high", "xhigh"] },
+      { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", detail: "Quick edits and triage", efforts: ["default", "low", "medium", "high"] },
+    ],
+    defaultModel: "gpt-5.4",
+    defaultEfforts: ["default", "low", "medium", "high", "xhigh"],
+  },
+  opencode: {
+    models: [{ id: "sonnet", name: "Claude Sonnet", detail: "Default OpenCode model", efforts: [] }],
+    defaultModel: "sonnet",
+    defaultEfforts: [],
+  },
+};
 
 const WORKSPACES: Workspace[] = [
   { id: "w-winfer", name: "winfer", active: true },
@@ -105,6 +133,7 @@ const WORKSPACES: Workspace[] = [
 ];
 
 const PROVIDERS: Provider[] = [
+  { id: "winfer", name: "winfer code" },
   { id: "claude", name: "Claude Code" },
   { id: "codex", name: "Codex" },
   { id: "opencode", name: "OpenCode" },
@@ -122,29 +151,31 @@ const THREADS: Record<string, Message[]> = {
   "p-auth": [
     m("1", "user", "Refactor the auth store to use zustand slices and keep the token refresh logic intact.", 14),
     m("2", "assistant", "I'll start by reading the current store and its callers.", 13),
-    m("3", "tool", "Read src/stores/auth.ts", 13, "Read"),
-    m("4", "tool", "Grep \"useAuth\" — 14 matches", 13, "Grep"),
+    { ...m("3", "tool", "src/stores/auth.ts", 13, "Read"), state: "done", ended: now - 12.9 * min },
+    { ...m("4", "tool", "\"useAuth\" — 14 matches", 12.9, "Grep"), state: "done", ended: now - 12.8 * min },
+    { ...m("4b", "tool", "src/stores/session.ts", 12.8, "Read"), state: "done", ended: now - 12.6 * min },
+    { ...m("4c", "tool", "src/features/auth/refresh.ts", 12.6, "Read"), state: "done", ended: now - 12.4 * min },
     m(
       "5",
       "assistant",
       "The store mixes **session state** and **refresh timers**. Plan:\n\n1. Split into `sessionSlice` and `refreshSlice`\n2. Move `scheduleRefresh()` into the refresh slice\n3. Keep the public `useAuth()` hook unchanged\n\n```ts\nexport const useAuth = create<AuthState>()((...a) => ({\n  ...sessionSlice(...a),\n  ...refreshSlice(...a),\n}));\n```",
       11,
     ),
-    m("6", "tool", "Edit src/stores/auth.ts (+48 −31)", 6, "Edit"),
+    { ...m("6", "tool", "src/stores/auth.ts (+48 −31)", 6, "Edit"), state: "done", ended: now - 5.9 * min },
     m("7", "assistant", "Refactor done. I'd like to run the auth tests to confirm nothing regressed.", 1),
   ],
   "p-docs": [
     m("1", "user", "Add a section on pairing the phone app to the README.", 9),
-    m("2", "tool", "Edit README.md (+22)", 7, "Edit"),
+    { ...m("2", "tool", "README.md (+22)", 7, "Edit"), state: "done", ended: now - 6.9 * min },
     m("3", "assistant", "Updated README with the mobile pairing section.", 6),
   ],
   "p-relay": [
     m("1", "user", "Build the relay worker with Durable Objects.", 4),
     m("2", "assistant", "Scaffolding `relay/` with a hibernatable WebSocket Durable Object.", 3),
-    { ...m("3", "tool", "Bash pnpm wrangler dev", 2.5, "Bash"), state: "running", background: true },
+    { ...m("3", "tool", "pnpm wrangler dev", 2.5, "Bash"), desc: "Start wrangler dev server", state: "running", background: true },
     { ...m("4", "tool", "Explore the Durable Object docs", 2, "Agent"), state: "running", background: true },
-    { ...m("5", "tool", "Read relay/src/index.ts", 1, "Read"), state: "done" },
-    { ...m("6", "tool", "Bash pnpm vitest run", 0.2, "Bash"), state: "running" },
+    { ...m("5", "tool", "relay/src/index.ts", 1, "Read"), state: "done", ended: now - 0.9 * min },
+    { ...m("6", "tool", "pnpm vitest run", 0.2, "Bash"), desc: "Run relay unit tests", state: "running" },
   ],
   "p-q": [
     m("1", "user", "Draft the schema for the usage tables.", 5),
@@ -208,13 +239,44 @@ export class MockClient extends BaseClient {
       case "panes.get":
         this.apply(this.mirror());
         return this.mirror(id);
+      case "models.get": {
+        const entry = PROVIDER_MODELS[msg.provider] ?? { models: [], defaultEfforts: [] };
+        return {
+          t: "models",
+          id,
+          provider: msg.provider,
+          models: entry.models,
+          defaultModel: entry.defaultModel ?? null,
+          defaultEffort: entry.defaultEffort ?? null,
+          defaultEfforts: entry.defaultEfforts ?? [],
+        };
+      }
       case "pane.new": {
         const ws = WORKSPACES.find((w) => w.id === msg.workspaceId);
         const provider = PROVIDERS.find((p) => p.id === msg.provider) ?? PROVIDERS[0];
         if (!ws) return { t: "ack", id, ok: false, error: "That workspace is gone." };
         const paneId = `p-new-${++this.n}`;
         const text = msg.text?.trim();
-        this.panes.push({ id: paneId, workspaceId: ws.id, workspace: ws.name, title: text ? text.slice(0, 40) : ws.name, provider: provider.id, status: text ? "working" : "idle", message: null, updatedAt: Date.now(), request: null, reply: null });
+        const cat = PROVIDER_MODELS[provider.id];
+        const chosenModel = cat?.models.find((m) => m.id === (msg.model ?? cat.defaultModel)) ?? cat?.models[0];
+        const effort = msg.effort ?? cat?.defaultEffort ?? "default";
+        const config =
+          provider.id === "winfer" && chosenModel
+            ? { model: chosenModel.id, label: chosenModel.name, effort, efforts: chosenModel.efforts.length ? chosenModel.efforts : LEVELS, mode: "Yolo", yolo: true, cwd: `/Users/me/code/${ws.name}`, branch: "main" }
+            : null;
+        this.panes.push({
+          id: paneId,
+          workspaceId: ws.id,
+          workspace: ws.name,
+          title: text ? text.slice(0, 40) : ws.name,
+          provider: provider.id,
+          status: text ? "working" : "idle",
+          message: null,
+          updatedAt: Date.now(),
+          request: null,
+          reply: null,
+          config,
+        });
         this.threads[paneId] = [];
         this.apply(this.mirror());
         if (text) {

@@ -3,6 +3,8 @@
 //! so phone requests arrive as `mobile://request` and answers go back with `mobile_send`.
 
 use super::commands::{Command, PaneRef};
+use super::dialogs::ModelInfo as ProviderModelInfo;
+use super::welcome::{HARNESS_BACKENDS, backend_default_efforts};
 use crate::code::protocol::{Cmd, Decision};
 use crate::code::session::CodeModel;
 use std::collections::HashSet;
@@ -13,7 +15,7 @@ use crate::request::{AgentRequest, RequestOption, describe_request};
 use crate::ui::code_pickers::{effort_levels, match_model};
 use serde_json::{Value, json};
 use std::time::Instant;
-use winfer_backend::mobile;
+use winfer_backend::{harness, mobile, providers};
 
 const MAX_REPLY: usize = 4000;
 
@@ -102,6 +104,65 @@ fn chat_config(state: &crate::code::state::CodeState) -> Value {
 fn theme_json(id: &str) -> Value {
     let def = crate::theme::theme_by_id(id);
     json!({ "id": def.id, "mode": def.mode, "ui": def.ui })
+}
+
+/// Effort list for a model on a provider: empty when the model explicitly supports none.
+fn model_efforts(provider: &str, offered: Option<Vec<String>>) -> Vec<String> {
+    match offered {
+        Some(v) if v.is_empty() => Vec::new(),
+        Some(v) => effort_levels(Some(v)),
+        None => backend_default_efforts(provider).map(|v| effort_levels(Some(v))).unwrap_or_default(),
+    }
+}
+
+/// Maps harness + provider model catalogs into the mobile `models` payload list.
+fn provider_models_json(
+    provider: &str,
+    harness_models: Option<&[crate::code::protocol::ModelInfo]>,
+    provider_models: Option<&[ProviderModelInfo]>,
+) -> Vec<Value> {
+    if provider == "winfer" {
+        return harness_models
+            .unwrap_or(&[])
+            .iter()
+            .map(|m| json!({
+                "id": m.spec,
+                "name": if m.label.is_empty() { model_name(&m.spec, None) } else { m.label.clone() },
+                "detail": m.detail,
+                "efforts": model_efforts(provider, m.efforts.clone()),
+            }))
+            .collect();
+    }
+    if HARNESS_BACKENDS.contains(&provider) {
+        let prefix = format!("{provider}/");
+        if let Some(hm) = harness_models {
+            let matched: Vec<Value> = hm
+                .iter()
+                .filter_map(|m| {
+                    let slug = m.spec.strip_prefix(&prefix)?;
+                    Some(json!({
+                        "id": slug,
+                        "name": if m.label.is_empty() { model_name(&m.spec, None) } else { m.label.clone() },
+                        "detail": m.detail,
+                        "efforts": model_efforts(provider, m.efforts.clone()),
+                    }))
+                })
+                .collect();
+            if !matched.is_empty() {
+                return matched;
+            }
+        }
+    }
+    let fallback_efforts = model_efforts(provider, None);
+    provider_models
+        .unwrap_or(&[])
+        .iter()
+        .map(|m| json!({
+            "id": m.id,
+            "name": m.label,
+            "efforts": fallback_efforts,
+        }))
+        .collect()
 }
 
 /// The models a chat pane offers, each with the effort levels it takes.
@@ -260,7 +321,8 @@ impl Root {
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)).collect();
         let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
-        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme) })
+        let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
+        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme), "compactTools": compact_tools })
     }
 
     fn signature(snapshot: &Value) -> String {
@@ -311,12 +373,14 @@ impl Root {
             return;
         }
         let panes: Vec<(String, AgentStatus)> = s.all_panes().map(|p| (p.id.clone(), p.status)).collect();
+        let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
         let layout = json!([
             s.active_workspace_id,
             s.workspaces.iter().map(|w| json!([w.id, w.name, ordered(w).iter().map(|p| p.id.clone()).collect::<Vec<_>>()])).collect::<Vec<_>>(),
             s.providers.iter().filter(|p| p.installed).map(|p| p.id.clone()).collect::<Vec<_>>(),
             s.default_provider,
             s.theme,
+            compact_tools,
         ]).to_string();
         if !self.mobile.started {
             self.mobile.started = true;
@@ -396,6 +460,9 @@ impl Root {
             let mut all = self.mobile_mirror(cx);
             all["t"] = json!("panes");
             return reply(all);
+        }
+        if kind == "models.get" {
+            return self.mobile_models_get(&req, reply, cx);
         }
         if kind == "pane.new" {
             return reply(self.mobile_new_pane(&req, cx));
@@ -570,6 +637,90 @@ impl Root {
         true
     }
 
+    fn mobile_models_get(&mut self, req: &Value, reply: impl Fn(Value) + 'static, cx: &mut Context<Self>) {
+        let s = self.state.read(cx);
+        let provider = req["provider"]
+            .as_str()
+            .filter(|p| !p.is_empty() && *p != "default")
+            .map_or_else(|| s.default_provider_id(), str::to_string);
+        let has_model_arg = s.providers.iter().any(|p| p.id == provider && p.model_arg.is_some());
+        let saved_agent_model = s.agent_models.get(&provider).cloned();
+        let cached_harness = self.welcome.harness_models.clone();
+        let cached_provider = self.models.get(&provider).cloned();
+        let cached_defaults = self.welcome.harness_defaults.clone();
+        let needs_harness = (provider == "winfer" || HARNESS_BACKENDS.contains(&provider.as_str())) && cached_harness.is_none();
+        let needs_defaults = provider == "winfer" && cached_defaults.is_none();
+
+        cx.spawn(async move |this, cx| {
+            let defaults = if needs_defaults {
+                let cfg = tauri::async_runtime::spawn_blocking(harness::config::Config::load).await.ok();
+                cfg.map(|c| ((!c.model.is_empty()).then_some(c.model), c.effort))
+            } else {
+                cached_defaults
+            };
+
+            let harness_models = if needs_harness {
+                let list = tauri::async_runtime::spawn_blocking(harness::backend::all_models).await.unwrap_or_default();
+                let mapped: Vec<crate::code::protocol::ModelInfo> = list
+                    .into_iter()
+                    .map(|m| crate::code::protocol::ModelInfo { spec: m.spec, label: m.label, detail: m.detail, efforts: m.efforts })
+                    .collect();
+                Some(mapped)
+            } else {
+                cached_harness
+            };
+
+            let mut list = provider_models_json(&provider, harness_models.as_deref(), cached_provider.as_deref());
+            let mut fetched_provider: Option<Vec<ProviderModelInfo>> = None;
+            if list.is_empty() && provider != "winfer" && has_model_arg && cached_provider.is_none() {
+                let p = provider.clone();
+                let found = tauri::async_runtime::spawn(async move {
+                    providers::providers_models(p).await.ok().and_then(|m| serde_json::to_value(m).ok())
+                })
+                .await
+                .ok()
+                .flatten();
+                let parsed: Vec<ProviderModelInfo> = found.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+                list = provider_models_json(&provider, None, Some(&parsed));
+                fetched_provider = Some(parsed);
+            }
+
+            let default_model = if provider == "winfer" {
+                defaults.as_ref().and_then(|(m, _)| m.clone())
+            } else {
+                saved_agent_model
+            };
+            let default_effort = if provider == "winfer" {
+                defaults.as_ref().and_then(|(_, e)| e.clone())
+            } else {
+                None
+            };
+            let default_efforts = model_efforts(&provider, None);
+
+            let _ = this.update(cx, |this, _| {
+                if needs_defaults {
+                    this.welcome.harness_defaults = defaults;
+                }
+                if needs_harness {
+                    this.welcome.harness_models = harness_models;
+                }
+                if let Some(parsed) = fetched_provider {
+                    this.models.insert(provider.clone(), parsed);
+                }
+            });
+
+            reply(json!({
+                "t": "models",
+                "provider": provider,
+                "models": list,
+                "defaultModel": default_model,
+                "defaultEffort": default_effort,
+                "defaultEfforts": default_efforts,
+            }));
+        })
+        .detach();
+    }
+
     fn mobile_new_pane(&mut self, req: &Value, cx: &mut Context<Self>) -> Value {
         let s = self.state.read(cx);
         let Some(ws) = s.workspaces.iter().find(|w| Some(w.id.as_str()) == req["workspaceId"].as_str()).map(|w| w.id.clone()) else {
@@ -580,9 +731,11 @@ impl Root {
             return json!({ "t": "ack", "ok": false, "error": "That agent isn't installed on the desktop." });
         };
         let prompt = req["text"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+        let model = req["model"].as_str().map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
+        let effort = req["effort"].as_str().map(str::trim).filter(|e| !e.is_empty() && *e != "default").map(str::to_string);
         let what = prompt.as_ref().map_or(String::new(), |p| format!(": {}", p.chars().take(80).collect::<String>()));
         let id = self.state.update(cx, |s, cx| {
-            let id = s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), prompt, ..Default::default() });
+            let id = s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), prompt, model, effort, ..Default::default() });
             s.log_activity(&ws, format!("Started {name} from your phone{what}"), Some(wanted.clone()));
             cx.notify();
             id
@@ -618,7 +771,8 @@ impl Root {
 #[cfg(test)]
 mod tests {
     use super::agent_api::{Ask, AskOption, PendingQuestions};
-    use super::question_request;
+    use super::{model_efforts, provider_models_json, question_request};
+    use crate::code::protocol::ModelInfo;
     use std::time::Instant;
 
     #[test]
@@ -628,5 +782,25 @@ mod tests {
         let r = question_request(&p);
         assert_eq!(r.text, "DB (1/2)\nWhich?\n(Several apply? Type them, comma-separated.)");
         assert_eq!(r.options.unwrap()[1].label, "Type something");
+    }
+
+    #[test]
+    fn provider_models_respect_explicit_empty_efforts_and_strip_prefix() {
+        let harness = vec![
+            ModelInfo { spec: "claude/opus".into(), label: "Opus".into(), detail: "Deep".into(), efforts: Some(vec!["low".into(), "high".into()]) },
+            ModelInfo { spec: "claude/haiku".into(), label: "Haiku".into(), detail: String::new(), efforts: Some(vec![]) },
+            ModelInfo { spec: "codex/gpt-5".into(), label: "GPT-5".into(), detail: String::new(), efforts: None },
+        ];
+        let claude = provider_models_json("claude", Some(&harness), None);
+        assert_eq!(claude.len(), 2);
+        assert_eq!(claude[0]["id"], "opus");
+        assert_eq!(claude[0]["efforts"], serde_json::json!(["default", "low", "high"]));
+        assert_eq!(claude[1]["id"], "haiku");
+        assert_eq!(claude[1]["efforts"], serde_json::json!([]));
+
+        let winfer = provider_models_json("winfer", Some(&harness), None);
+        assert_eq!(winfer.len(), 3);
+        assert_eq!(winfer[0]["id"], "claude/opus");
+        assert_eq!(model_efforts("codex", None), vec!["default", "low", "medium", "high", "xhigh"]);
     }
 }
