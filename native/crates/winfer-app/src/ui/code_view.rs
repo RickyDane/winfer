@@ -1849,7 +1849,24 @@ struct WorkGroupScroll {
     max_h: Pixels,
     fade_color: Hsla,
     handle: ScrollHandle,
+    view: WeakEntity<CodeView>,
     children: Vec<AnyElement>,
+}
+
+/// Whether a wheel delta over an expanded work group should scroll the transcript instead:
+/// the group overflows but already sits at the end the wheel pushes toward. `ScrollBounce`
+/// would otherwise keep the whole gesture (bouncing) until the pointer leaves the group.
+fn wheel_passes_work_group(offset_y: f32, max_y: f32, dy: f32) -> bool {
+    if max_y <= 0.5 {
+        return false; // Not scrollable: the group doesn't claim the wheel, the list gets it already.
+    }
+    if dy > 0.0 {
+        offset_y >= -0.5
+    } else if dy < 0.0 {
+        offset_y <= -max_y + 0.5
+    } else {
+        false
+    }
 }
 
 impl RenderOnce for WorkGroupScroll {
@@ -1858,6 +1875,33 @@ impl RenderOnce for WorkGroupScroll {
         let handle = self.handle;
         let fade_handle = handle.clone();
         let fade_color = self.fade_color;
+        let (edge_handle, view) = (handle.clone(), self.view);
+
+        // Registered before the ScrollBounce paints, so in the capture phase it runs before the
+        // group claims the wheel: at the group's start or end the transcript list scrolls on.
+        let edge_pass = canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture || e.modifiers.control || e.modifiers.platform || !hitbox.should_handle_scroll(window) {
+                        return;
+                    }
+                    let d = e.delta.pixel_delta(window.line_height());
+                    if d.x.abs() > d.y.abs() || !wheel_passes_work_group(edge_handle.offset().y / px(1.0), edge_handle.max_offset().y / px(1.0), d.y / px(1.0)) {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    let _ = view.update(cx, |v, cx| {
+                        // Scrollbar coordinates clamp, and reaching the end resumes following the tail.
+                        let y = v.list.scroll_px_offset_for_scrollbar().y + d.y;
+                        v.list.set_offset_from_scrollbar(point(px(0.0), y));
+                        cx.notify();
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0();
 
         let content = div()
             .id((root_id.clone(), "content"))
@@ -1897,6 +1941,7 @@ impl RenderOnce for WorkGroupScroll {
             .relative()
             .flex()
             .flex_col()
+            .child(edge_pass)
             .child(gpui_kit::base::ScrollBounce::new((root_id.clone(), "bounce"), &handle, scroll_area))
             .child(fade_overlay)
             .when(!window.is_inspector_picking(cx), |d| {
@@ -2033,6 +2078,7 @@ fn work_group_row(env: &Env, items: &[Item], key: &str, start: usize, end: usize
             max_h: px(cap),
             fade_color: c.panel,
             handle,
+            view: env.view.clone(),
             children,
         };
         let dbg_wg = key.to_string();
@@ -3757,7 +3803,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn expanded_work_group_caps_at_40_percent_height_and_scrolls_inside(cx: &mut gpui_kit::TestAppContext) {
-        use super::{CodeView, scroll_edge_fade_strengths, work_group_max_h};
+        use super::{CodeView, scroll_edge_fade_strengths, wheel_passes_work_group, work_group_max_h};
         use crate::code::session::CodeModel;
         use crate::code::state::Item;
         use crate::model::AppState;
@@ -3909,6 +3955,38 @@ mod tests {
         });
         draw(vcx);
         assert_eq!(fade_for(vcx, "wg-t0"), (1.0, 0.0), "at bottom: only top edge should fade");
+
+        // 5. At the group's ends the wheel scrolls the transcript instead of staying with the group.
+        assert!(wheel_passes_work_group(0.0, 300.0, 10.0) && wheel_passes_work_group(-300.0, 300.0, -10.0));
+        assert!(!wheel_passes_work_group(0.0, 300.0, -10.0) && !wheel_passes_work_group(-300.0, 300.0, 10.0));
+        assert!(!wheel_passes_work_group(-150.0, 300.0, 10.0) && !wheel_passes_work_group(0.0, 0.0, 10.0));
+        let list_y = |vcx: &mut gpui_kit::VisualTestContext| vcx.read(|cx| view.read(cx).list.scroll_px_offset_for_scrollbar().y);
+        let group_y = |vcx: &mut gpui_kit::VisualTestContext| vcx.read(|cx| view.read(cx).wg_scrolls.borrow()["wg-t0"].offset().y);
+        // Move the transcript up from its end, then push past the group's bottom.
+        let at = |vcx: &mut gpui_kit::VisualTestContext| vcx.debug_bounds("wg-body-wg-t0").expect("group body").center();
+        vcx.update(|_, cx| view.update(cx, |v, cx| {
+            let y = v.list.scroll_px_offset_for_scrollbar().y + px(150.0);
+            v.list.set_offset_from_scrollbar(point(px(0.0), y));
+            cx.notify();
+        }));
+        draw(vcx);
+        let before = (list_y(vcx), group_y(vcx));
+        let pos = at(vcx);
+        vcx.simulate_event(ScrollEvent { position: pos, delta: ScrollDelta::Pixels(point(px(0.0), px(-60.0))), ..Default::default() });
+        draw(vcx);
+        let (list_after, group_after) = (list_y(vcx), group_y(vcx));
+        assert_eq!(group_after, before.1, "group already at its end must not move");
+        assert!(list_after < before.0, "transcript should scroll down past the group's end: {:?} -> {list_after:?}", before.0);
+        // Back to the group's top, then one more upward packet scrolls the transcript up.
+        let pos = at(vcx);
+        vcx.simulate_event(ScrollEvent { position: pos, delta: ScrollDelta::Pixels(point(px(0.0), px(5000.0))), ..Default::default() });
+        draw(vcx);
+        assert_eq!(group_y(vcx), px(0.0), "group scrolled back to its top");
+        let top_before = list_y(vcx);
+        let pos = at(vcx);
+        vcx.simulate_event(ScrollEvent { position: pos, delta: ScrollDelta::Pixels(point(px(0.0), px(60.0))), ..Default::default() });
+        draw(vcx);
+        assert!(list_y(vcx) > top_before, "transcript should scroll up past the group's start: {top_before:?} -> {:?}", list_y(vcx));
     }
 
     #[gpui_kit::test]
