@@ -151,6 +151,11 @@
  },
  {
   "page": "winfer-code",
+  "label": "Background task results",
+  "words": "Show a compact row when background task finishes; click to see its output. Off hides them (the agent still gets them)."
+ },
+ {
+  "page": "winfer-code",
   "label": "Compact layout",
   "words": "Tighter spacing in the transcript."
  },
