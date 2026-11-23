@@ -25,6 +25,8 @@ pub struct Style {
     pub width: f32,
     /// Saves the report in a format (asks where); None hides the export buttons.
     pub on_export: Option<Rc<dyn Fn(Format, &mut App)>>,
+    /// Puts the report on the clipboard as a PNG; None hides the button.
+    pub on_copy: Option<Rc<dyn Fn(&mut App)>>,
 }
 
 impl Style {
@@ -103,9 +105,18 @@ pub fn report(s: &Style, key: &str, reports: &[Report]) -> Div {
             col = col.child(line);
         }
     }
-    // The export buttons close the report, like a figure's footer.
+    // The copy and export buttons close the report, like a figure's footer.
+    let copy = s.on_copy.clone().map(|on_copy| {
+        div().id(SharedString::from(format!("viz-{key}-copy-image"))).flex().items_center().gap_1p5().px_2().py_0p5().rounded_md().border_1().border_color(c.border_strong)
+            .cursor_pointer().text_size(px(11.0 * s.scale)).text_color(c.muted)
+            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+            .child(Icon::new(IconName::Copy).size(px(11.0)))
+            .child("Copy image")
+            .tooltip(move |window, cx| Tooltip::new("Copy the report to the clipboard as an image").build(window, cx))
+            .on_click(move |_, _, cx| on_copy(cx))
+    });
     let buttons = s.on_export.clone().map(|on_export| {
-        div().flex().flex_wrap().gap_1().children(Format::ALL.map(|f| {
+        div().flex().flex_wrap().gap_1().children(copy).children(Format::ALL.map(|f| {
             let on_export = on_export.clone();
             div().id(SharedString::from(format!("viz-{key}-export-{}", f.ext()))).flex().items_center().gap_1p5().px_2().py_0p5().rounded_md().border_1().border_color(c.border_strong)
                 .cursor_pointer().text_size(px(11.0 * s.scale)).text_color(c.muted)
@@ -460,6 +471,25 @@ pub fn file_theme(c: &Colors) -> viz_svg::Theme {
         track: hex(c.hover),
         series: (if c.light { LIGHT } else { DARK }).map(String::from).to_vec(),
     }
+}
+
+/// Renders the report as a PNG off the main thread and puts it on the clipboard. `done` gets
+/// whether it worked.
+pub fn copy_image(reports: Vec<Report>, theme: viz_svg::Theme, cx: &mut App, done: impl FnOnce(Result<(), String>, &mut App) + 'static) {
+    cx.spawn(async move |cx| {
+        let png = crate::backend::background(move || viz_svg::encode(&viz_svg::svg(&reports, EXPORT_WIDTH, &theme), Format::Png))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+        let _ = cx.update(|cx| match png {
+            Ok(bytes) => {
+                cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, bytes)));
+                done(Ok(()), cx);
+            }
+            Err(e) => done(Err(e), cx),
+        });
+    })
+    .detach();
 }
 
 /// Width exports are laid out at: four columns, whatever the pane's width.

@@ -1620,7 +1620,21 @@ fn report_row<'a>(env: &Env, key: &str, charts: impl Iterator<Item = &'a Item>) 
             }));
         });
     });
-    let style = super::viz::Style { c: env.c, mono: env.mono.clone(), scale: env.scale, width: env.width, on_export: Some(on_export) };
+    let (view, theme, all) = (env.view.clone(), super::viz::file_theme(&env.c), reports.clone());
+    let on_copy: Rc<dyn Fn(&mut App)> = Rc::new(move |cx| {
+        let view = view.clone();
+        super::viz::copy_image(all.clone(), theme.clone(), cx, move |result, cx| {
+            let text = match result {
+                Ok(()) => "Copied the report as an image".to_string(),
+                Err(e) => format!("Couldn't copy the report: {e}"),
+            };
+            let _ = view.update(cx, |v, cx| v.model.update(cx, |m, cx| {
+                m.state.notice(text);
+                cx.notify();
+            }));
+        });
+    });
+    let style = super::viz::Style { c: env.c, mono: env.mono.clone(), scale: env.scale, width: env.width, on_export: Some(on_export), on_copy: Some(on_copy) };
     enter(env, key, super::viz::report(&style, key, &reports))
 }
 
