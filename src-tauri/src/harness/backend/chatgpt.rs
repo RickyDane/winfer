@@ -779,8 +779,10 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
     let mut streamed_calls = StreamedCalls::default();
     // The message the latest text delta belonged to, for servers whose finished item has another id.
     let mut last_text = String::new();
-    // Whether the model's reasoning streamed (else it was made silently before its first token).
+    // Whether the model streamed raw reasoning (`reasoning_text.delta`), vs hidden/summarized
+    // reasoning (`reasoning_summary_text.delta`, emitted after silent reasoning tokens).
     let mut reasoning_streamed = false;
+    let mut reasoning_summary = false;
     loop {
         if stopped(shared, sub) {
             if sub.is_none() {
@@ -847,9 +849,15 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                 streamed(&d);
                 stream(Ev::TextDelta { id, text: d });
             }
-            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+            "response.reasoning_text.delta" => {
                 let d = ev["delta"].as_str().unwrap_or("");
                 reasoning_streamed = true;
+                streamed(d);
+                stream(Ev::ReasoningDelta { id, text: d.into() });
+            }
+            "response.reasoning_summary_text.delta" => {
+                let d = ev["delta"].as_str().unwrap_or("");
+                reasoning_summary = true;
                 streamed(d);
                 stream(Ev::ReasoningDelta { id, text: d.into() });
             }
@@ -912,7 +920,10 @@ fn request_once(shared: &Shared, tools_on: bool, sub: Option<&Sub>, cap: Option<
                     st.usage.cached += cached;
                     let turn = st.usage.output.saturating_sub(st.turn_base);
                     if sub.is_none() {
-                        let silent = !reasoning_streamed && out.iter().any(|i| i["type"] == "reasoning");
+                        let has_reasoning = u["output_tokens_details"]["reasoning_tokens"].as_u64().unwrap_or(0) > 0
+                            || reasoning_summary
+                            || out.iter().any(|i| i["type"] == "reasoning");
+                        let silent = has_reasoning && !reasoning_streamed;
                         st.turn.request_done(output, std::time::Instant::now(), silent);
                     }
                     st.turn.exact(turn);

@@ -205,6 +205,53 @@ struct Decoder {
 
 type InputMessage = (String, String, String, Value);
 
+/// One entry of a dropdown's option list (`index` is -1 for an `<optgroup>` heading).
+#[derive(Clone, Debug, Deserialize)]
+struct SelectOption {
+    index: i64,
+    label: String,
+    #[serde(default)]
+    disabled: bool,
+    #[serde(default)]
+    group: bool,
+}
+
+/// A page's `<select>` as `browser_select_probe` reports it (`rect` in page pixels).
+#[derive(Clone, Debug, Deserialize)]
+struct SelectProbe {
+    rect: SelectRect,
+    options: Vec<SelectOption>,
+    selected: i64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct SelectRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// The open option list of a page's `<select>`. Headless Chromium's own popup is never painted
+/// into the screencast, so the panel draws the list (port of `SelectMenu.tsx`).
+struct SelectMenu {
+    workspace: String,
+    tab: String,
+    probe: SelectProbe,
+    /// The option the keyboard is on.
+    active: i64,
+}
+
+/// A left press waiting for the look for a `<select>` under it; a release meanwhile is kept
+/// so the page still gets press then release.
+struct PendingPress {
+    params: Value,
+    release: Option<Value>,
+}
+
+const MENU_ROW_H: f32 = 24.0;
+const MENU_MAX_H: f32 = 320.0;
+
 fn decode(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     let mut rgba = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?.into_rgba8();
     for pixel in rgba.chunks_exact_mut(4) {
@@ -392,6 +439,14 @@ pub struct BrowserPanel {
     resize_task: Option<Task<()>>,
     buttons: u32,
     last_click: u32,
+    /// The page's open dropdown, shown as an option list of the panel's own.
+    select_menu: Option<SelectMenu>,
+    press: Option<PendingPress>,
+    /// The last press opened (or closed) an option list instead of reaching the page, so its release mustn't either.
+    swallowed: bool,
+    /// Keys the option list took the press of; their releases aren't the page's.
+    menu_keys: HashSet<String>,
+    menu_scroll: ScrollHandle,
     attach_count: u64,
     /// Console and network entries per tab id.
     console: HashMap<String, Vec<ConsoleEntry>>,
@@ -468,6 +523,11 @@ impl BrowserPanel {
             resize_task: None,
             buttons: 0,
             last_click: 1,
+            select_menu: None,
+            press: None,
+            swallowed: false,
+            menu_keys: HashSet::new(),
+            menu_scroll: ScrollHandle::new(),
             attach_count: 0,
             console: HashMap::new(),
             console_open: false,
@@ -1028,9 +1088,96 @@ impl BrowserPanel {
         }
     }
 
-    fn mouse(&mut self, kind: &str, position: Point<Pixels>, button: &str, clicks: u32, modifiers: &Modifiers) {
+    fn mouse_params(&self, kind: &str, position: Point<Pixels>, button: &str, clicks: u32, modifiers: &Modifiers) -> Value {
         let (x, y) = self.page_point(position);
-        self.send("Input.dispatchMouseEvent", json!({ "type": kind, "x": x, "y": y, "button": button, "buttons": self.buttons, "clickCount": clicks, "modifiers": cdp_modifiers(modifiers) }));
+        json!({ "type": kind, "x": x, "y": y, "button": button, "buttons": self.buttons, "clickCount": clicks, "modifiers": cdp_modifiers(modifiers) })
+    }
+
+    fn mouse(&mut self, kind: &str, position: Point<Pixels>, button: &str, clicks: u32, modifiers: &Modifiers) {
+        let params = self.mouse_params(kind, position, button, clicks, modifiers);
+        self.send("Input.dispatchMouseEvent", params);
+    }
+
+    /// A left press on the page. Headless Chromium's native option popup isn't in the screencast,
+    /// so first look for a `<select>` under the point: one opens the panel's option list instead
+    /// of reaching the page.
+    fn press_left(&mut self, position: Point<Pixels>, clicks: u32, modifiers: &Modifiers, cx: &mut Context<Self>) {
+        let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
+        let (x, y) = self.page_point(position);
+        self.swallowed = false;
+        self.press = Some(PendingPress { params: self.mouse_params("mousePressed", position, "left", clicks, modifiers), release: None });
+        cx.spawn(async move |this, cx| {
+            let (w, t) = (workspace.clone(), tab.clone());
+            let probe = tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                browser::browser_select_probe(app.clone(), app.state::<BrowserManager>(), w, t, x as f64, y as f64).await
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+            .and_then(|v| serde_json::from_value::<SelectProbe>(v).ok());
+            let _ = this.update(cx, |this, cx| {
+                let Some(press) = this.press.take() else { return };
+                let still_here = this.active().is_some_and(|(w, t)| *w == workspace && t.id == tab);
+                match probe.filter(|_| still_here) {
+                    Some(probe) => {
+                        this.swallowed = true;
+                        this.buttons &= !1;
+                        this.menu_keys.clear();
+                        let active = probe.options.iter().find(|o| o.index == probe.selected && !o.disabled && !o.group).or_else(|| probe.options.iter().find(|o| !o.disabled && !o.group)).map_or(-1, |o| o.index);
+                        this.select_menu = Some(SelectMenu { workspace, tab, probe, active });
+                        this.menu_scroll.set_offset(point(px(0.0), px(0.0)));
+                        cx.notify();
+                    }
+                    None => {
+                        let _ = this.input.try_send((workspace.clone(), tab.clone(), "Input.dispatchMouseEvent".into(), press.params));
+                        if let Some(release) = press.release {
+                            let _ = this.input.try_send((workspace, tab, "Input.dispatchMouseEvent".into(), release));
+                        }
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Closes the option list, applying the picked option (`None`: dismissed).
+    fn close_select(&mut self, index: Option<i64>, cx: &mut Context<Self>) {
+        let Some(menu) = self.select_menu.take() else { return };
+        tauri::async_runtime::spawn(async move {
+            let app = backend::app();
+            let _ = browser::browser_select_pick(app.clone(), app.state::<BrowserManager>(), menu.workspace, menu.tab, index).await;
+        });
+        cx.notify();
+    }
+
+    /// A key while the option list is open: the list takes all of them.
+    fn menu_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(menu) = self.select_menu.as_mut() else { return };
+        self.menu_keys.insert(key.to_string());
+        let enabled: Vec<i64> = menu.probe.options.iter().filter(|o| !o.disabled && !o.group).map(|o| o.index).collect();
+        let at = enabled.iter().position(|i| *i == menu.active);
+        let go = |to: isize| enabled.get(to.clamp(0, enabled.len() as isize - 1) as usize).copied();
+        let next = match key {
+            "down" => go(at.map_or(0, |a| a as isize + 1)),
+            "up" => go(at.map_or(enabled.len() as isize - 1, |a| a as isize - 1)),
+            "home" => go(0),
+            "end" => go(enabled.len() as isize - 1),
+            "enter" | "space" => {
+                let active = menu.active;
+                return self.close_select((active >= 0).then_some(active), cx);
+            }
+            "escape" | "tab" => return self.close_select(None, cx),
+            _ => return,
+        };
+        if let Some(next) = next {
+            menu.active = next;
+            if let Some(ix) = menu.probe.options.iter().position(|o| o.index == next && !o.group) {
+                self.menu_scroll.scroll_to_item(ix);
+            }
+            cx.notify();
+        }
     }
 
     fn key(&self, down: bool, stroke: &Keystroke) {
@@ -1058,6 +1205,11 @@ impl BrowserPanel {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.select_menu.is_some() {
+            self.menu_key(&event.keystroke.key, cx);
+            cx.stop_propagation();
+            return;
+        }
         let m = event.keystroke.modifiers;
         if self.picking && event.keystroke.key == "escape" {
             self.toggle_pick(cx);
@@ -1537,6 +1689,97 @@ impl BrowserPanel {
         ]
     }
 
+    /// The open dropdown's option list, under its `<select>` (above it when there's no room),
+    /// scaled with the page. Deferred so it shows above the page image.
+    fn render_select_menu(&self, rect: Bounds<Pixels>, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.select_menu.as_ref()?;
+        let a = self.attachment.as_ref()?;
+        let origin = rect.origin - self.panel_bounds.origin;
+        let (page_w, page_h) = (rect.size.width / px(1.0), rect.size.height / px(1.0));
+        let (sx, sy) = (page_w / a.width.max(1) as f32, page_h / a.height.max(1) as f32);
+        let r = menu.probe.rect;
+        let left = (r.x as f32 * sx).clamp(0.0, (page_w - 40.0).max(0.0));
+        let (select_top, select_bottom) = (r.y as f32 * sy, (r.y + r.height) as f32 * sy);
+        let (below, above) = (page_h - select_bottom - 8.0, select_top - 8.0);
+        let up = below < 160.0 && above > below;
+        let content_h = menu.probe.options.len() as f32 * MENU_ROW_H + 8.0;
+        let height = content_h.min((if up { above } else { below }).clamp(80.0, MENU_MAX_H));
+        let top = if up { select_top - height } else { select_bottom };
+        let mut list = div()
+            .id("select-menu")
+            .absolute()
+            .left(origin.x + px(left))
+            .top(origin.y + px(top))
+            .h(px(height))
+            .min_w(px((r.width as f32 * sx).max(120.0)))
+            .max_w(px((page_w - left).max(120.0)))
+            .overflow_y_scroll()
+            .track_scroll(&self.menu_scroll)
+            .py_1()
+            .flex()
+            .flex_col()
+            .rounded_md()
+            .border_1()
+            .border_color(c.border_strong)
+            .bg(c.raised)
+            .text_size(px(12.0))
+            .text_color(c.fg)
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        for o in &menu.probe.options {
+            if o.group {
+                list = list.child(div().h(px(MENU_ROW_H)).flex_shrink_0().px_3().flex().items_center().font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(o.label.clone()));
+                continue;
+            }
+            let (index, disabled) = (o.index, o.disabled);
+            let chosen = index == menu.probe.selected;
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("select-option-{index}")))
+                    .h(px(MENU_ROW_H))
+                    .flex_shrink_0()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .whitespace_nowrap()
+                    .when(disabled, |d| d.opacity(0.4))
+                    .when(!disabled, |d| d.cursor_pointer())
+                    .when(chosen, |d| d.font_weight(FontWeight::MEDIUM))
+                    .when(index == menu.active, |d| d.bg(c.hover))
+                    .when(!disabled, |d| {
+                        d.on_mouse_move(cx.listener(move |this, _, _, cx| {
+                            if let Some(m) = this.select_menu.as_mut().filter(|m| m.active != index) {
+                                m.active = index;
+                                cx.notify();
+                            }
+                        }))
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.swallowed = true;
+                            this.close_select(Some(index), cx);
+                        }))
+                    })
+                    .child(div().w(px(12.0)).flex_shrink_0().text_color(c.accent).child(if chosen { "✓" } else { "" }))
+                    .child(div().min_w_0().truncate().child(if o.label.is_empty() { "\u{a0}".to_string() } else { o.label.clone() })),
+            );
+        }
+        // Anything else pressed closes it without reaching the page.
+        let dismiss = |this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>| {
+            cx.stop_propagation();
+            this.swallowed = true;
+            this.close_select(None, cx);
+        };
+        let backdrop = div()
+            .absolute()
+            .size_full()
+            .on_mouse_down(MouseButton::Left, cx.listener(dismiss))
+            .on_mouse_down(MouseButton::Right, cx.listener(dismiss))
+            .child(list);
+        Some(deferred(backdrop).with_priority(2).into_any_element())
+    }
+
     /// The agent's cursor and click ripples over the page.
     fn render_cursor(&self, rect: Bounds<Pixels>, c: Colors) -> Option<AnyElement> {
         let (_, tab) = self.active()?;
@@ -1636,7 +1879,12 @@ impl Render for BrowserPanel {
         let has_tab = self.active().is_some();
         let scale = window.scale_factor() as f64;
         let rect = page_rect(self.panel_bounds, own);
+        // A menu of a tab that isn't shown any more has no page to answer.
+        if self.select_menu.as_ref().is_some_and(|m| !self.active().is_some_and(|(w, t)| *w == m.workspace && t.id == m.tab)) {
+            self.close_select(None, cx);
+        }
         let handles = self.render_handles(rect, c, cx);
+        let select_menu = self.render_select_menu(rect, c, cx);
         let cursor = self.render_cursor(rect, c);
         let (pick_box, pick_frac) = self.render_pick_box(rect, c).unzip();
         let accent = c.accent;
@@ -1664,6 +1912,10 @@ impl Render for BrowserPanel {
                 .key_context("Browser")
                 .on_key_down(cx.listener(Self::key_down))
                 .on_key_up(cx.listener(|this, e: &KeyUpEvent, _, _| {
+                    // Keys the option list took (or took the press of) aren't the page's.
+                    if this.select_menu.is_some() || this.menu_keys.remove(&e.keystroke.key) {
+                        return;
+                    }
                     if !e.keystroke.modifiers.platform {
                         this.key(false, &e.keystroke);
                     }
@@ -1675,7 +1927,7 @@ impl Render for BrowserPanel {
                     }
                     this.buttons |= 1;
                     this.last_click = e.click_count as u32;
-                    this.mouse("mousePressed", e.position, "left", e.click_count as u32, &e.modifiers);
+                    this.press_left(e.position, e.click_count as u32, &e.modifiers, cx);
                 }))
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| {
                     if this.size_drag.take().is_some() {
@@ -1683,7 +1935,13 @@ impl Render for BrowserPanel {
                     }
                     this.buttons &= !1;
                     let clicks = this.last_click;
-                    this.mouse("mouseReleased", e.position, "left", clicks, &e.modifiers);
+                    let params = this.mouse_params("mouseReleased", e.position, "left", clicks, &e.modifiers);
+                    // The press is still being looked at: the release follows it.
+                    if let Some(press) = this.press.as_mut() {
+                        press.release = Some(params);
+                    } else if !this.swallowed {
+                        this.send("Input.dispatchMouseEvent", params);
+                    }
                 }))
                 .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, _| {
                     this.buttons |= 2;
@@ -1706,6 +1964,9 @@ impl Render for BrowserPanel {
                         cx.notify();
                         return;
                     }
+                    if this.select_menu.is_some() {
+                        return;
+                    }
                     let button = if this.buttons & 1 != 0 { "left" } else { "none" };
                     this.mouse("mouseMoved", e.position, button, 0, &e.modifiers);
                     if this.picking {
@@ -1718,6 +1979,9 @@ impl Render for BrowserPanel {
                     }
                 }))
                 .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
+                    if this.select_menu.is_some() {
+                        return;
+                    }
                     let delta = e.delta.pixel_delta(px(16.0));
                     let (x, y) = this.page_point(e.position);
                     // The element under the pointer changes as the page scrolls: look again once it has.
@@ -1762,6 +2026,7 @@ impl Render for BrowserPanel {
                 .children(handles)
                 .children(pick_box)
                 .children(cursor)
+                .children(select_menu)
                 .when_some(self.message.clone().filter(|_| !has_tab), |d, text| {
                     let failed = self.workspace.as_ref().is_some_and(|w| self.failed.contains(w));
                     d.child(

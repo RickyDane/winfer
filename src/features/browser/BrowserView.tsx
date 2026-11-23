@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { AgentCursor } from "./AgentCursor";
 import { logBrowser, setPageSize, type Device, type PageSize } from "./browser";
+import { SelectMenu, type SelectProbe } from "./SelectMenu";
 import { viewOf } from "./view";
 
 const MOBILE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true };
@@ -255,16 +256,53 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
     return { x: ((e.clientX - r.left) / r.width) * v.width, y: ((e.clientY - r.top) / r.height) * v.height };
   };
 
+  /** The page's open `<select>`, shown as the panel's own option list (see `SelectMenu`). */
+  const [menu, setMenu] = useState<SelectProbe | null>(null);
+  /** The pending look for a `<select>` under the last press; a release waits for it to keep the order. */
+  const press = useRef<Promise<void> | null>(null);
+  /** The last press opened the option list instead of reaching the page, so its release mustn't either. */
+  const swallowed = useRef(false);
+  /** Keys (by `code`) the page was sent the press of. */
+  const held = useRef(new Set<string>());
+
+  const closeMenu = (index?: number) => {
+    setMenu(null);
+    void invoke("browser_select_pick", { workspaceId, targetId: tabId, index: index ?? null }).catch(() => {});
+    box.current?.focus();
+  };
+  // Another tab's page has no such select.
+  useEffect(() => () => setMenu(null), [workspaceId, tabId]);
+
   const mouse = (type: string) => (e: React.MouseEvent) => {
-    if (type === "mousePressed") box.current?.focus();
-    send("Input.dispatchMouseEvent", {
+    if (type === "mousePressed") {
+      // Focus is ours to place: the default would take it from the option list opened below.
+      e.preventDefault();
+      box.current?.focus();
+    }
+    const params = {
       type,
       ...point(e),
       button: type === "mouseMoved" ? (e.buttons & 1 ? "left" : "none") : BUTTONS[e.button] ?? "left",
       buttons: e.buttons,
       clickCount: type === "mouseMoved" ? 0 : e.detail || 1,
       modifiers: modifiers(e),
-    });
+    };
+    // Headless Chrome's native option popup isn't in the screencast: a click on a <select> opens ours.
+    if (type === "mousePressed" && e.button === 0) {
+      swallowed.current = false;
+      press.current = invoke<SelectProbe | null>("browser_select_probe", { workspaceId, targetId: tabId, x: params.x, y: params.y })
+        .catch(() => null)
+        .then((probe) => {
+          if (probe) {
+            swallowed.current = true;
+            setMenu(probe);
+          } else send("Input.dispatchMouseEvent", params);
+        });
+    } else if (type === "mouseReleased" && press.current) {
+      const pending = press.current;
+      press.current = null;
+      void pending.then(() => swallowed.current || send("Input.dispatchMouseEvent", params));
+    } else if (!swallowed.current || type !== "mouseReleased") send("Input.dispatchMouseEvent", params);
   };
 
   let moveFrame = 0;
@@ -304,6 +342,9 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
         return; // ⌘V arrives as a paste event; other chords belong to the app.
       }
       e.preventDefault();
+      // A key pressed in the option list and released here (it closed on the press) isn't the page's.
+      if (down) held.current.add(e.code);
+      else if (!held.current.delete(e.code)) return;
       const base = { key: e.key, code: e.code, windowsVirtualKeyCode: keyCode(e), modifiers: modifiers(e) };
       if (!down) send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
       else if (e.key === "Enter") send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "\r" });
@@ -350,6 +391,15 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
           className={cn("block h-full w-full bg-white", own && "", device === "mobile" && "rounded-xl")}
         />
         <AgentCursor tabId={tabId} page={page} />
+        {menu && (
+          <SelectMenu
+            probe={menu}
+            frame={{ width: canvas.current?.clientWidth || page.width, height: canvas.current?.clientHeight || page.height }}
+            viewport={viewport.current ?? page}
+            onPick={closeMenu}
+            onClose={() => closeMenu()}
+          />
+        )}
         {attachError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-panel px-8 text-center text-xs text-fg-subtle">
             <span className="text-danger">Couldn't show this tab: {attachError}</span>

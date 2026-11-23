@@ -184,8 +184,16 @@ struct Bridge {
     usage: Usage,
     /// The running turn's output tokens, and the session's output total when it started.
     turn_tokens: TurnTokens,
-    /// Whether the running request's reasoning streamed (summaries), else Codex made it silently.
+    /// Whether the running request streamed raw reasoning (`item/reasoning/textDelta`).
     reasoning_streamed: bool,
+    /// Whether the running request had a reasoning item or reasoning summary deltas (emitted after
+    /// hidden reasoning tokens, so the request must be timed from its start).
+    reasoning_summary: bool,
+    /// Main-thread client tools currently executing (between `item/started` and `item/completed`).
+    active_tools: HashSet<String>,
+    /// When the last client tool of a batch finished while the model request's `tokenUsage` had
+    /// not arrived yet, so `thread/tokenUsage/updated` can open the next request from that moment.
+    tools_finished_at: Option<std::time::Instant>,
     turn_base: u64,
     /// Input tokens of the main thread and its subagents when the running turn started.
     turn_input_base: u64,
@@ -290,6 +298,9 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         usage: Usage::default(),
         turn_tokens: TurnTokens::default(),
         reasoning_streamed: false,
+        reasoning_summary: false,
+        active_tools: HashSet::new(),
+        tools_finished_at: None,
         turn_base: 0,
         turn_input_base: 0,
         turn_cached_base: 0,
@@ -870,6 +881,9 @@ impl Bridge {
                 // next once the tools the last one called have finished.
                 self.turn_tokens.request_started(std::time::Instant::now());
                 self.reasoning_streamed = false;
+                self.reasoning_summary = false;
+                self.active_tools.clear();
+                self.tools_finished_at = None;
                 self.turn_base = self.output_total();
                 self.turn_input_base = self.usage.input + self.children.values().map(|c| c.input).sum::<u64>();
                 self.turn_cached_base = self.usage.cached + self.children.values().map(|c| c.cached).sum::<u64>();
@@ -884,6 +898,8 @@ impl Bridge {
                     }
                 }
                 self.turn = None;
+                self.active_tools.clear();
+                self.tools_finished_at = None;
                 // Codex ends the turn without waiting for long commands (watchers, servers): they
                 // run on as background terminals, so their cards become background shells
                 // instead of being failed with the turn. Codex gives them no name of their own,
@@ -921,8 +937,15 @@ impl Bridge {
                 self.streamed(p);
                 self.emit(Ev::TextDelta { id: s(p, "itemId"), text: s(p, "delta") });
             }
-            "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+            "item/reasoning/textDelta" => {
                 self.reasoning_streamed = true;
+                self.streamed(p);
+                self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") });
+            }
+            "item/reasoning/summaryTextDelta" => {
+                // Summaries arrive after hidden reasoning tokens were already generated, so they
+                // don't count as streamed raw reasoning.
+                self.reasoning_summary = true;
                 self.streamed(p);
                 self.emit(Ev::ReasoningDelta { id: s(p, "itemId"), text: s(p, "delta") });
             }
@@ -948,11 +971,21 @@ impl Bridge {
                 let u = &p["tokenUsage"];
                 let n = |part: &str, k: &str| u[part][k].as_u64().unwrap_or(0);
                 // A request finished (its count grew the total): its tokens over its time. Hidden
-                // reasoning was made before the first streamed token, so then its start counts.
-                if self.turn.is_some() && n("total", "outputTokens") > self.usage.output {
-                    let silent = n("last", "reasoningOutputTokens") > 0 && !self.reasoning_streamed;
-                    self.turn_tokens.request_done(n("last", "outputTokens"), std::time::Instant::now(), silent);
+                // reasoning (including summarized reasoning) was made before the first streamed
+                // delta, so then its start counts.
+                if (self.turn.is_some() || self.turn_tokens.has_request()) && n("total", "outputTokens") > self.usage.output {
+                    let now = std::time::Instant::now();
+                    let silent = (n("last", "reasoningOutputTokens") > 0 || self.reasoning_summary) && !self.reasoning_streamed;
+                    self.turn_tokens.request_done(n("last", "outputTokens"), now, silent);
                     self.reasoning_streamed = false;
+                    self.reasoning_summary = false;
+                    // If the request's client tools finished before usage landed, the next model
+                    // request already started when the last tool completed.
+                    if let Some(at) = self.tools_finished_at.take() {
+                        if self.turn.is_some() && self.active_tools.is_empty() {
+                            self.turn_tokens.request_started(at);
+                        }
+                    }
                 }
                 self.usage = Usage {
                     context: n("last", "inputTokens") + n("last", "outputTokens"),
@@ -1141,14 +1174,22 @@ impl Bridge {
         if item["type"] == "subAgentActivity" {
             return self.sub_agent_activity(item, true);
         }
+        if item["type"] == "reasoning" {
+            self.reasoning_summary = true;
+        }
+        let id = s(item, "id");
+        if self.turn.is_some() && is_client_tool(item) && !id.is_empty() {
+            self.active_tools.insert(id.clone());
+            self.tools_finished_at = None;
+        }
         let Some((name, title)) = self.tool_card(item) else { return };
         if item["type"] == "commandExecution" {
-            self.commands.insert(s(item, "id"), title.clone());
+            self.commands.insert(id.clone(), title.clone());
             if let Some(pid) = item["processId"].as_str() {
-                self.processes.insert(s(item, "id"), pid.to_string());
+                self.processes.insert(id.clone(), pid.to_string());
             }
         }
-        self.emit(Ev::ToolStart { id: s(item, "id"), name, title, input: item.clone() });
+        self.emit(Ev::ToolStart { id, name, title, input: item.clone() });
     }
 
     /// A finished collab call (Codex before 0.16x): what it says about each agent it touched.
@@ -1186,9 +1227,20 @@ impl Bridge {
 
     fn item_completed(&mut self, item: &Value) {
         let id = s(item, "id");
-        // A tool finished: the next model request starts once the last of them has.
-        if self.turn.is_some() && !matches!(item["type"].as_str(), Some("agentMessage" | "reasoning" | "userMessage")) && !self.turn_tokens.generating() {
-            self.turn_tokens.request_started(std::time::Instant::now());
+        let is_bg = self.background.contains(&id);
+        // Client tools finish before the next model request begins. Never clobber an open
+        // request (fast tools can complete before `thread/tokenUsage/updated` arrives): remember
+        // when the last tool finished so `thread/tokenUsage/updated` can open the next one.
+        if self.turn.is_some() && is_client_tool(item) && !is_bg {
+            self.active_tools.remove(&id);
+            if self.active_tools.is_empty() {
+                let now = std::time::Instant::now();
+                if self.turn_tokens.has_request() {
+                    self.tools_finished_at = Some(now);
+                } else {
+                    self.turn_tokens.request_started(now);
+                }
+            }
         }
         match item["type"].as_str().unwrap_or("") {
             "collabAgentToolCall" => {
@@ -1266,6 +1318,24 @@ fn skill_reads(command: &str) -> Option<String> {
         .filter(|n| !n.is_empty())
         .collect();
     (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// Codex item types executed on the client whose completion triggers the next model request
+/// (excludes model outputs, server-side items like `webSearch`, and async notifications).
+fn is_client_tool(item: &Value) -> bool {
+    matches!(
+        item["type"].as_str(),
+        Some(
+            "commandExecution"
+                | "fileChange"
+                | "mcpToolCall"
+                | "dynamicToolCall"
+                | "collabAgentToolCall"
+                | "imageView"
+                | "functionCallOutput"
+                | "sleep"
+        )
+    )
 }
 
 fn s(v: &Value, k: &str) -> String {
@@ -1715,6 +1785,9 @@ mod tests {
             usage: Usage::default(),
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
+            reasoning_summary: false,
+            active_tools: HashSet::new(),
+            tools_finished_at: None,
             turn_base: 0,
             turn_input_base: 0,
             turn_cached_base: 0,
@@ -1759,6 +1832,37 @@ mod tests {
         n(&mut b, "thread/tokenUsage/updated", usage(120, 40, 0));
         let last = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
         assert_eq!(last.turn_streamed, 120, "every token the requests made, hidden reasoning included");
+    }
+
+    #[test]
+    fn reasoning_summary_and_fast_tools_do_not_shorten_request_timing() {
+        let (mut b, rx) = bridge();
+        let n = |b: &mut Bridge, method: &str, p: Value| b.on_notification(method, &p);
+        let usage = |total: u64, last: u64, reasoning: u64| {
+            json!({ "threadId": "main", "tokenUsage": { "total": { "outputTokens": total }, "last": { "outputTokens": last, "reasoningOutputTokens": reasoning } } })
+        };
+        n(&mut b, "turn/started", json!({ "threadId": "main", "turn": { "id": "t1" } }));
+        // Simulated hidden reasoning pause before summary deltas and a server-side webSearch.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "webSearch", "id": "ws1", "query": "test" } }));
+        for _ in 0..4 {
+            n(&mut b, "item/reasoning/summaryTextDelta", json!({ "threadId": "main", "itemId": "r1", "delta": "summary " }));
+        }
+        // A fast client tool starts and completes before `thread/tokenUsage/updated` arrives:
+        // it must not clobber Request 1's start, and must open Request 2 once usage lands.
+        n(&mut b, "item/started", json!({ "threadId": "main", "item": { "type": "fileChange", "id": "f1", "changes": [] } }));
+        n(&mut b, "item/completed", json!({ "threadId": "main", "item": { "type": "fileChange", "id": "f1", "status": "completed", "changes": [] } }));
+        n(&mut b, "thread/tokenUsage/updated", usage(400, 400, 350));
+        let u1 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u1.turn_streamed, 400);
+        assert!(u1.turn_active_ms >= 70, "pre-summary hidden reasoning time must be counted, got {}ms", u1.turn_active_ms);
+        assert!(b.turn_tokens.has_request(), "next request should open after fast tool + usage");
+        // Request 2 also thinks silently before finishing.
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        n(&mut b, "thread/tokenUsage/updated", usage(600, 200, 150));
+        let u2 = rx.try_iter().filter_map(|e| if let Ev::Usage(u) = e { Some(u) } else { None }).last().unwrap();
+        assert_eq!(u2.turn_streamed, 600);
+        assert!(u2.turn_active_ms >= u1.turn_active_ms + 50, "second request must include its own wait time, got {} -> {}ms", u1.turn_active_ms, u2.turn_active_ms);
     }
 
     #[test]
@@ -1882,6 +1986,9 @@ mod tests {
             usage: Usage::default(),
             turn_tokens: TurnTokens::default(),
             reasoning_streamed: false,
+            reasoning_summary: false,
+            active_tools: HashSet::new(),
+            tools_finished_at: None,
             turn_base: 0,
             turn_input_base: 0,
             turn_cached_base: 0,

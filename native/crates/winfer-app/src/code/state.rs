@@ -82,12 +82,35 @@ impl Item {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Rate {
+    pub last_tokens: u64,
+    pub last_at: u64,
     pub tokens: u64,
-    pub at: u64,
-    pub start: u64,
-    pub start_at: u64,
+    pub active_ms: u64,
+}
+
+impl Rate {
+    /// Gaps longer than this between streamed counts (tool runs, waiting on the next request)
+    /// don't count as generation time, matching `harness::event::Tps::IDLE`.
+    const IDLE_MS: u64 = 3_000;
+
+    pub fn sample(&mut self, at: u64, count: u64) {
+        if self.last_at > 0 {
+            let gap = at.saturating_sub(self.last_at);
+            if count > self.last_tokens && gap <= Self::IDLE_MS {
+                self.tokens += count - self.last_tokens;
+                self.active_ms += gap;
+            }
+        }
+        self.last_at = at;
+        self.last_tokens = count;
+    }
+
+    pub fn rate(&self) -> Option<f32> {
+        (self.tokens > 0 && self.active_ms >= 500)
+            .then(|| self.tokens as f32 / (self.active_ms as f32 / 1000.0))
+    }
 }
 
 pub struct CodeState {
@@ -374,10 +397,7 @@ impl CodeState {
                 let streamed = u.turn_streamed.unwrap_or(u.output);
                 let now = now_ms();
                 if self.busy {
-                    self.rate = Some(match self.rate.take() {
-                        Some(r) => Rate { tokens: streamed, at: now, ..r },
-                        None => Rate { start: streamed, start_at: now, tokens: streamed, at: now },
-                    });
+                    self.rate.get_or_insert_with(Rate::default).sample(now, streamed);
                 }
                 let prev = &self.usage;
                 self.usage = Usage {
@@ -577,28 +597,16 @@ impl CodeState {
         self.usage.turn.filter(|t| *t > 0).or(self.usage.turn_streamed.filter(|t| *t > 0)).unwrap_or_else(|| self.usage.output.saturating_sub(self.turn_out_base))
     }
 
-    /// Tokens per second of the running turn (prefers backend-measured active time, else streamed rate).
+    /// Tokens per second of the running turn (prefers backend-measured active time, else gap-filtered streamed rate).
     pub fn tokens_per_second(&self) -> Option<f32> {
-        if let Some(ms) = self.usage.turn_active_ms.filter(|ms| *ms >= 500) {
-            let toks = self.usage.turn_streamed.filter(|t| *t > 0).or(self.usage.turn.filter(|t| *t > 0))?;
-            return Some(toks as f32 / (ms as f32 / 1000.0));
-        }
-        if let Some(r) = self.rate.as_ref() {
-            let dt = r.at.saturating_sub(r.start_at) as f32 / 1000.0;
-            if dt >= 0.8 && r.tokens > r.start {
-                return Some((r.tokens - r.start) as f32 / dt);
+        if let Some(ms) = self.usage.turn_active_ms.filter(|ms| *ms > 0) {
+            if ms >= 500 {
+                let toks = self.usage.turn_streamed.filter(|t| *t > 0)?;
+                return Some(toks as f32 / (ms as f32 / 1000.0));
             }
+            return None;
         }
-        if self.busy {
-            if let Some(started) = self.turn_started {
-                let dt = now_ms().saturating_sub(started) as f32 / 1000.0;
-                let out = self.turn_output();
-                if dt >= 0.8 && out > 0 {
-                    return Some(out as f32 / dt);
-                }
-            }
-        }
-        None
+        self.rate.as_ref().and_then(Rate::rate)
     }
 
     pub fn export_markdown(&self) -> String {
@@ -876,6 +884,32 @@ mod tests {
         assert!((s.last_rate.expect("preserved after turn") - 60.0).abs() < 0.01);
         s.apply(Ev::Cleared);
         assert_eq!(s.last_rate, None);
+
+        // Untimed backends skip tool-run gaps (>3s) instead of averaging over wall time.
+        let mut r = Rate::default();
+        r.sample(1_000, 0);
+        r.sample(1_500, 50);
+        r.sample(2_000, 100);
+        assert!((r.rate().unwrap() - 100.0).abs() < 0.01);
+        // 15s tool run: gap is ignored.
+        r.sample(17_000, 125);
+        r.sample(17_500, 175);
+        assert!((r.rate().unwrap() - 100.0).abs() < 0.01);
+
+        // Subagent-only `turn` tokens must not divide by main-agent `turn_active_ms`.
+        s.apply(Ev::TurnStart);
+        s.apply(ev(json!({
+            "type": "usage",
+            "context": 12000,
+            "window": 200000,
+            "input": 10000,
+            "cached": 0,
+            "output": 500,
+            "turn": 500,
+            "turn_streamed": 0,
+            "turn_active_ms": 1000
+        })));
+        assert_eq!(s.tokens_per_second(), None);
     }
 
     #[test]

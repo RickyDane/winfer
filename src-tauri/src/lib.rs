@@ -217,6 +217,8 @@ pub fn run() {
             browser::browser_resize,
             browser::browser_input,
             browser::browser_selection,
+            browser::browser_select_probe,
+            browser::browser_select_pick,
             browser::log::browser_log,
             browser::inspect::browser_console,
             browser::inspect::browser_console_clear,

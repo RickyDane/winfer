@@ -1480,6 +1480,70 @@ pub async fn browser_fill_secret(
     Ok(())
 }
 
+/// Script for `browser_select_probe`: describes the `<select>` at the point and remembers it.
+fn select_probe_js(x: f64, y: f64) -> String {
+    format!(
+        "(() => {{ const el = document.elementFromPoint({x}, {y}); const s = el && el.closest && el.closest('select'); \
+         if (!s || s.disabled || s.multiple || s.size > 1) return null; window.__winferSelect = s; \
+         const r = s.getBoundingClientRect(); const options = []; \
+         const add = (o, group) => {{ if (!o.hidden) options.push({{ index: o.index, label: o.label || o.text, disabled: o.disabled, group }}); }}; \
+         for (const c of s.children) {{ \
+           if (c.tagName === 'OPTGROUP') {{ options.push({{ index: -1, label: c.label, disabled: true, group: true }}); for (const o of c.children) if (o.tagName === 'OPTION') add(o, false); }} \
+           else if (c.tagName === 'OPTION') add(c, false); }} \
+         return {{ rect: {{ x: r.x, y: r.y, width: r.width, height: r.height }}, options, selected: s.selectedIndex }}; }})()"
+    )
+}
+
+/// Script for `browser_select_pick`: applies `index` (`None`: just forget the remembered select).
+fn select_pick_js(index: Option<i64>) -> String {
+    let index = index.map_or("null".to_string(), |i| i.to_string());
+    format!(
+        "(() => {{ const s = window.__winferSelect; delete window.__winferSelect; if (!s) return; const i = {index}; s.focus(); \
+         if (i !== null && s.selectedIndex !== i) {{ s.selectedIndex = i; \
+           s.dispatchEvent(new Event('input', {{ bubbles: true }})); s.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }})()"
+    )
+}
+
+/// Finds the dropdown `<select>` under a page point (CSS pixels) for the panel's own option list:
+/// headless Chrome opens a native popup that the screencast never paints. Remembers the element for
+/// `browser_select_pick`. `None` for anything else (including multi-selects and listboxes, which
+/// the page draws itself).
+#[tauri::command]
+pub async fn browser_select_probe(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    target_id: String,
+    x: f64,
+    y: f64,
+) -> Res<Option<Value>> {
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let expression = select_probe_js(x, y);
+    let res = instance
+        .call_target(&target_id, "Runtime.evaluate", json!({ "expression": expression, "returnByValue": true }))
+        .await;
+    let res = log::check(&format!("[{workspace_id}] select probe in tab {}", short(&target_id)), res)?;
+    Ok(Some(res["result"]["value"].clone()).filter(|v| v.is_object()))
+}
+
+/// Applies the panel's option list choice to the `<select>` `browser_select_probe` found (`None`:
+/// dismissed), firing the `input` and `change` events a real pick does.
+#[tauri::command]
+pub async fn browser_select_pick(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    target_id: String,
+    index: Option<i64>,
+) -> Res<()> {
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let expression = select_pick_js(index);
+    let res = instance
+        .call_target(&target_id, "Runtime.evaluate", json!({ "expression": expression }))
+        .await;
+    log::check(&format!("[{workspace_id}] select pick in tab {}", short(&target_id)), res).map(drop)
+}
+
 /// Selected text in the page (for ⌘C).
 #[tauri::command]
 pub async fn browser_selection(
@@ -1827,6 +1891,81 @@ mod tests {
                 cdp.call("Input.dispatchKeyEvent", params, Some(&session)).await.unwrap();
             }
             assert_eq!(eval(session.clone(), "document.getElementById('i').value").await, "hi");
+        });
+    }
+
+    /// Real Chrome: the scripts find a dropdown under a point, list its options (groups and
+    /// disabled ones included), skip other elements, and a pick fires `input` then `change`.
+    #[test]
+    fn select_probe_and_pick() {
+        let tmp = std::env::temp_dir().join(format!("winfer-select-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
+        tauri::async_runtime::block_on(async {
+            let cdp = cdp::Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), |_| {})
+                .await
+                .unwrap();
+            let page = "data:text/html,<body style=margin:0>\
+                <select id=a style='position:absolute;left:10px;top:20px;width:100px;height:30px'>\
+                <option>One<option disabled>Two<optgroup label=G><option>Three</option></optgroup></select>\
+                <select id=m multiple style='position:absolute;left:10px;top:100px'><option>x<option>y</select>\
+                <button style='position:absolute;left:10px;top:200px'>b</button>\
+                <script>window.log=[];a.oninput=()=>log.push('input');a.onchange=()=>log.push('change')</script>";
+            let target = cdp.call("Target.createTarget", json!({ "url": page }), None).await.unwrap();
+            let session = cdp
+                .call("Target.attachToTarget", json!({ "targetId": target["targetId"], "flatten": true }), None)
+                .await
+                .unwrap()["sessionId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let eval = |expression: String| {
+                let cdp = &cdp;
+                let session = session.clone();
+                async move {
+                    cdp.call("Runtime.evaluate", json!({ "expression": expression, "returnByValue": true }), Some(&session))
+                        .await
+                        .unwrap()["result"]["value"]
+                        .clone()
+                }
+            };
+            // The page may still be loading.
+            for _ in 0..50 {
+                if eval("document.readyState".into()).await == "complete" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            let probe = eval(select_probe_js(50.0, 30.0)).await;
+            assert_eq!(probe["rect"]["x"], 10);
+            assert_eq!(probe["rect"]["width"], 100);
+            assert_eq!(probe["selected"], 0);
+            let options = probe["options"].as_array().unwrap();
+            let labels: Vec<_> = options.iter().map(|o| o["label"].as_str().unwrap()).collect();
+            assert_eq!(labels, ["One", "Two", "G", "Three"]);
+            assert_eq!(options[1]["disabled"], true);
+            assert_eq!(options[2]["group"], true);
+            assert_eq!(options[3]["index"], 2);
+
+            assert!(eval(select_probe_js(20.0, 110.0)).await.is_null(), "multi-select is drawn by the page");
+            assert!(eval(select_probe_js(15.0, 205.0)).await.is_null(), "a button isn't a dropdown");
+            assert!(eval(select_probe_js(300.0, 300.0)).await.is_null(), "nothing there");
+
+            // The probe for the dropdown again (the misses cleared nothing), then pick "Three".
+            eval(select_probe_js(50.0, 30.0)).await;
+            eval(select_pick_js(Some(2))).await;
+            assert_eq!(eval("a.value".into()).await, "Three");
+            assert_eq!(eval("log.join()".into()).await, "input,change");
+            // Dismissing changes nothing and forgets the select.
+            eval(select_probe_js(50.0, 30.0)).await;
+            eval(select_pick_js(None)).await;
+            assert_eq!(eval("a.value".into()).await, "Three");
+            assert_eq!(eval("String(window.__winferSelect)".into()).await, "undefined");
         });
     }
 }

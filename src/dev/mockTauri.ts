@@ -837,6 +837,8 @@ mockIPC(
       case "browser_detach":
       case "browser_frame_done":
       case "browser_log":
+      case "browser_select_probe":
+      case "browser_select_pick":
         return null;
       case "browser_selection":
         return "";

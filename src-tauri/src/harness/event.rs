@@ -175,6 +175,9 @@ pub struct TurnTokens {
 #[derive(Debug)]
 struct Request {
     start: std::time::Instant,
+    /// Whether `start` came from [`TurnTokens::request_started`] (false when opened lazily on
+    /// the first streamed delta because the backend didn't see the request start).
+    explicit: bool,
     /// `TurnTokens::paced` when it started.
     paced: u64,
     /// Its first and latest generated output (text, reasoning or tool-call arguments).
@@ -218,10 +221,15 @@ impl TurnTokens {
     /// opens a request when the backend didn't see one start.
     pub fn first_token(&mut self, at: std::time::Instant) {
         let paced = self.paced;
-        let r = self.request.get_or_insert(Request { start: at, paced, first: None, last: None, pieces: 0 });
+        let r = self.request.get_or_insert(Request { start: at, explicit: false, paced, first: None, last: None, pieces: 0 });
         r.first.get_or_insert(at);
         r.last = Some(at);
         self.timed = true;
+    }
+
+    /// Whether a main-agent model request is currently open.
+    pub fn has_request(&self) -> bool {
+        self.request.is_some()
     }
 
     /// Whether the running main request has generated anything yet.
@@ -231,21 +239,25 @@ impl TurnTokens {
 
     /// A main-agent model request starts.
     pub fn request_started(&mut self, at: std::time::Instant) {
-        self.request = Some(Request { start: at, paced: self.paced, first: None, last: None, pieces: 0 });
+        self.request = Some(Request { start: at, explicit: true, paced: self.paced, first: None, last: None, pieces: 0 });
         self.timed = true;
     }
 
     /// The running main request ended having made `output` tokens. They count over the time from
     /// its first generated token on: processing the prompt before it isn't generating. Unless
     /// `from_start`: when the model made tokens it didn't stream before its first streamed one
-    /// (reasoning OpenAI hides), or the backend's start already is its first token (Claude's
-    /// `message_start`), its whole time counts, as it does when it streamed too little to time.
+    /// (reasoning OpenAI hides, even if summarized), or the backend's start already is its first
+    /// token (Claude's `message_start`), its whole time counts, as it does when it streamed too
+    /// little to time.
     pub fn request_done(&mut self, output: u64, at: std::time::Instant, from_start: bool) {
         let Some(r) = self.request.take() else { return };
         let plausible = |first: std::time::Instant| output as f64 / at.saturating_duration_since(first).as_secs_f64().max(0.001) <= Self::MAX_RATE;
         let from = match r.first {
             Some(first) if !from_start && r.pieces >= 3 && plausible(first) => first,
-            _ => r.start,
+            _ if !from_start || r.explicit => r.start,
+            // Hidden tokens were made before the first streamed delta, and the backend never saw
+            // this request start: timing them from the first delta would inflate the rate.
+            _ => return,
         };
         self.made += output;
         self.making += at.saturating_duration_since(from);
@@ -272,7 +284,7 @@ impl TurnTokens {
     fn streamed_at(&mut self, text: &str, at: std::time::Instant) -> bool {
         // Output with no request open (one the backend couldn't see start) times from here.
         if self.timed && self.request.is_none() {
-            self.request = Some(Request { start: at, paced: self.paced, first: None, last: None, pieces: 0 });
+            self.request = Some(Request { start: at, explicit: false, paced: self.paced, first: None, last: None, pieces: 0 });
         }
         if let Some(r) = self.request.as_mut() {
             r.first.get_or_insert(at);
@@ -415,6 +427,13 @@ mod tps_tests {
             turn.streamed_at(&"x".repeat(50), at(ms));
         }
         turn.request_done(225, at(2_600), true);
+        assert_eq!((turn.streamed_total(), turn.active_ms()), (225, 2_600));
+        // A second request whose start the backend missed: silent reasoning arrived before the
+        // first delta, so timing from the delta would inflate tok/s and must be skipped.
+        for ms in [8_000, 8_100, 8_200] {
+            turn.streamed_at(&"x".repeat(50), at(ms));
+        }
+        turn.request_done(800, at(8_300), true);
         assert_eq!((turn.streamed_total(), turn.active_ms()), (225, 2_600));
     }
 
