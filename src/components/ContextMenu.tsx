@@ -13,24 +13,27 @@ export function ContextMenu({ x, y, title, items, onClose }: { x: number; y: num
   useLayoutEffect(() => {
     const r = root.current?.getBoundingClientRect();
     if (!r) return;
+    const win = root.current?.ownerDocument.defaultView ?? window;
     setPos({
-      left: Math.max(4, Math.min(x, window.innerWidth - r.width - 4)),
-      top: Math.max(4, Math.min(y, window.innerHeight - r.height - 4)),
+      left: Math.max(4, Math.min(x, win.innerWidth - r.width - 4)),
+      top: Math.max(4, Math.min(y, win.innerHeight - r.height - 4)),
     });
   }, [x, y]);
 
   useEffect(() => {
+    // The window the menu is in: an undocked browser's menu lives in its own window.
+    const win = root.current?.ownerDocument.defaultView ?? window;
     const close = (e: MouseEvent) => !root.current?.contains(e.target as Node) && onClose();
     const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", esc);
-    window.addEventListener("blur", onClose);
-    window.addEventListener("wheel", onClose, { passive: true });
+    win.addEventListener("mousedown", close);
+    win.addEventListener("keydown", esc);
+    win.addEventListener("blur", onClose);
+    win.addEventListener("wheel", onClose, { passive: true });
     return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", esc);
-      window.removeEventListener("blur", onClose);
-      window.removeEventListener("wheel", onClose);
+      win.removeEventListener("mousedown", close);
+      win.removeEventListener("keydown", esc);
+      win.removeEventListener("blur", onClose);
+      win.removeEventListener("wheel", onClose);
     };
   }, [onClose]);
 

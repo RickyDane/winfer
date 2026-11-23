@@ -11,6 +11,7 @@ use gpui_kit::component::{Icon, Sizable};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use base64::Engine as _;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -249,6 +250,35 @@ struct PendingPress {
     release: Option<Value>,
 }
 
+/// The right-click menu over an image in the page (port of the one in `BrowserView.tsx`).
+struct ImageMenu {
+    workspace: String,
+    tab: String,
+    /// Where it opened, in window coordinates.
+    at: Point<Pixels>,
+    /// The image's place in the page, in page pixels.
+    page: (f32, f32),
+    src: String,
+}
+
+/// A clipboard image as the MIME type and bytes a page's paste event carries; formats pages
+/// don't read (TIFF, BMP, ...) become PNG.
+fn clipboard_image(image: &Image) -> Option<(&'static str, Vec<u8>)> {
+    let (mime, bytes) = match image.format {
+        ImageFormat::Png => ("image/png", image.bytes.clone()),
+        ImageFormat::Jpeg => ("image/jpeg", image.bytes.clone()),
+        ImageFormat::Gif => ("image/gif", image.bytes.clone()),
+        ImageFormat::Webp => ("image/webp", image.bytes.clone()),
+        _ => {
+            let decoded = image::load_from_memory(&image.bytes).ok()?;
+            let mut png = Vec::new();
+            decoded.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+            ("image/png", png)
+        }
+    };
+    (!bytes.is_empty()).then_some((mime, bytes))
+}
+
 const MENU_ROW_H: f32 = 24.0;
 const MENU_MAX_H: f32 = 320.0;
 
@@ -443,6 +473,7 @@ pub struct BrowserPanel {
     last_click: u32,
     /// The page's open dropdown, shown as an option list of the panel's own.
     select_menu: Option<SelectMenu>,
+    image_menu: Option<ImageMenu>,
     press: Option<PendingPress>,
     /// The last press opened (or closed) an option list instead of reaching the page, so its release mustn't either.
     swallowed: bool,
@@ -527,6 +558,7 @@ impl BrowserPanel {
             buttons: 0,
             last_click: 1,
             select_menu: None,
+            image_menu: None,
             press: None,
             swallowed: false,
             menu_keys: HashSet::new(),
@@ -1228,11 +1260,7 @@ impl BrowserPanel {
             let k = event.keystroke.key.as_str();
             match k {
                 "c" => self.copy_selection(cx),
-                "v" => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.send("Input.insertText", json!({ "text": text }));
-                    }
-                }
+                "v" => self.paste(cx),
                 "a" | "x" | "z" => {
                     let command = match k {
                         "a" => "selectAll",
@@ -1250,6 +1278,141 @@ impl BrowserPanel {
         }
         self.key(true, &event.keystroke);
         cx.stop_propagation();
+    }
+
+    /// Pastes the clipboard's text, else its image (a screenshot, "Copy image") as a paste of that
+    /// file into the page.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else { return };
+        if let Some(text) = item.text() {
+            self.send("Input.insertText", json!({ "text": text }));
+            return;
+        }
+        let Some((mime, bytes)) = item.entries().iter().find_map(|e| match e {
+            ClipboardEntry::Image(image) => clipboard_image(image),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        tauri::async_runtime::spawn(async move {
+            let app = backend::app();
+            let _ = browser::browser_paste_image(app.clone(), app.state::<BrowserManager>(), workspace, tab, data, mime.into()).await;
+        });
+    }
+
+    /// Opens the image menu when the page has an image under the point.
+    fn probe_image(&self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
+        let (x, y) = self.page_point(position);
+        cx.spawn(async move |this, cx| {
+            let (w, t) = (workspace.clone(), tab.clone());
+            let found = tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                browser::browser_image_at(app.clone(), app.state::<BrowserManager>(), w, t, x as f64, y as f64, false).await
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+            let Some(found) = found else { return };
+            let src = found["src"].as_str().unwrap_or_default().to_string();
+            let _ = this.update(cx, |this, cx| {
+                if this.active().is_some_and(|(w, t)| *w == workspace && t.id == tab) {
+                    this.image_menu = Some(ImageMenu { workspace, tab, at: position, page: (x, y), src });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Puts the image the menu opened over on the clipboard.
+    fn copy_image(&self, menu: ImageMenu, cx: &mut Context<Self>) {
+        cx.spawn(async move |_, cx| {
+            let found = tauri::async_runtime::spawn(async move {
+                let app = backend::app();
+                browser::browser_image_at(app.clone(), app.state::<BrowserManager>(), menu.workspace, menu.tab, menu.page.0 as f64, menu.page.1 as f64, true).await
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+            let bytes = found.and_then(|f| base64::engine::general_purpose::STANDARD.decode(f["data"].as_str()?).ok());
+            if let Some(bytes) = bytes {
+                cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, bytes))));
+            }
+        })
+        .detach();
+    }
+
+    /// The image menu, at the pointer. Deferred so it shows above the page image.
+    fn render_image_menu(&self, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.image_menu.as_ref()?;
+        let origin = menu.at - self.panel_bounds.origin;
+        let row = |id: &'static str, label: &'static str, disabled: bool, run: fn(&mut Self, &mut Context<Self>)| {
+            div()
+                .id(id)
+                .h(px(MENU_ROW_H))
+                .px_3()
+                .flex()
+                .items_center()
+                .whitespace_nowrap()
+                .when(disabled, |d| d.opacity(0.4))
+                .when(!disabled, |d| {
+                    d.cursor_pointer().hover(|s| s.bg(c.hover)).on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.swallowed = true;
+                        run(this, cx);
+                    }))
+                })
+                .child(label)
+        };
+        let list = div()
+            .absolute()
+            .left(origin.x)
+            .top(origin.y)
+            .w(px(180.0))
+            .py_1()
+            .flex()
+            .flex_col()
+            .rounded_md()
+            .border_1()
+            .border_color(c.border_strong)
+            .bg(c.raised)
+            .text_size(px(12.0))
+            .text_color(c.fg)
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .child(row("image-menu-copy", "Copy image", false, |this, cx| {
+                if let Some(menu) = this.image_menu.take() {
+                    this.copy_image(menu, cx);
+                }
+                cx.notify();
+            }))
+            .child(row("image-menu-address", "Copy image address", menu.src.is_empty() || menu.src.starts_with("data:"), |this, cx| {
+                if let Some(menu) = this.image_menu.take() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(menu.src));
+                }
+                cx.notify();
+            }));
+        // Anything else pressed closes it without reaching the page.
+        let dismiss = |this: &mut Self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>| {
+            cx.stop_propagation();
+            this.swallowed = true;
+            this.image_menu = None;
+            cx.notify();
+        };
+        let backdrop = div()
+            .absolute()
+            .size_full()
+            .on_mouse_down(MouseButton::Left, cx.listener(dismiss))
+            .on_mouse_down(MouseButton::Right, cx.listener(dismiss))
+            .child(list);
+        Some(deferred(backdrop).with_priority(2).into_any_element())
     }
 
     fn copy_selection(&self, cx: &mut Context<Self>) {
@@ -1897,7 +2060,11 @@ impl Render for BrowserPanel {
             self.close_select(None, cx);
         }
         let handles = self.render_handles(rect, c, cx);
+        if self.image_menu.as_ref().is_some_and(|m| !self.active().is_some_and(|(w, t)| *w == m.workspace && t.id == m.tab)) {
+            self.image_menu = None;
+        }
         let select_menu = self.render_select_menu(rect, c, cx);
+        let image_menu = self.render_image_menu(c, cx);
         let cursor = self.render_cursor(rect, c);
         let (pick_box, pick_frac) = self.render_pick_box(rect, c).unzip();
         let accent = c.accent;
@@ -1956,9 +2123,12 @@ impl Render for BrowserPanel {
                         this.send("Input.dispatchMouseEvent", params);
                     }
                 }))
-                .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, _| {
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, e: &MouseDownEvent, _, cx| {
                     this.buttons |= 2;
                     this.mouse("mousePressed", e.position, "right", 1, &e.modifiers);
+                    if this.bounds.contains(&e.position) {
+                        this.probe_image(e.position, cx);
+                    }
                 }))
                 .on_mouse_up(MouseButton::Right, cx.listener(|this, e: &MouseUpEvent, _, _| {
                     this.buttons &= !2;
@@ -2040,6 +2210,7 @@ impl Render for BrowserPanel {
                 .children(pick_box)
                 .children(cursor)
                 .children(select_menu)
+                .children(image_menu)
                 .when_some(self.message.clone().filter(|_| !has_tab), |d, text| {
                     let failed = self.workspace.as_ref().is_some_and(|w| self.failed.contains(w));
                     d.child(

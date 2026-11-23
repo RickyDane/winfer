@@ -617,7 +617,9 @@ impl CodeView {
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut App) {
-        self.input.read(cx).focus_handle(cx).focus(window, cx);
+        // `TextareaState::focus` also (re)starts the caret blink; focusing the bare handle of a
+        // freshly created pane can leave the caret hidden.
+        self.input.update(cx, |input, cx| input.focus(window, cx));
     }
 
     fn cycle_mode(&mut self, cx: &mut Context<Self>) {

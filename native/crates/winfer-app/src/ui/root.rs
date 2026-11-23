@@ -1073,8 +1073,7 @@ impl Root {
             let provider = self.state.read(cx).pane(&id).map(|p| p.provider.clone()).unwrap_or_default();
             if self.uses_code(&provider, &id, cx) {
                 if let Some(view) = self.code_view(&id, window, cx) {
-                    let handle = view.read(cx).focus_handle(cx);
-                    handle.focus(window, cx);
+                    view.update(cx, |v, cx| v.focus_composer(window, cx));
                 }
             } else {
                 let view = self.terminal(&id, cx);

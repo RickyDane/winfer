@@ -1784,6 +1784,133 @@ pub async fn browser_selection(
         .to_string())
 }
 
+/// Script for `browser_image_at`. `__X__`, `__Y__` and `__DATA__` are filled in: with data, it
+/// reads the image's pixels as a PNG data URL (which cross-origin or SVG images refuse; the caller
+/// then screenshots `rect` instead).
+const IMAGE_AT_JS: &str = "(async () => { \
+  const el = document.elementFromPoint(__X__, __Y__); \
+  const pic = el && el.closest && el.closest('picture'); \
+  const img = el && el.closest ? (el.closest('img, canvas') || (pic && pic.querySelector('img'))) : null; \
+  if (!img) return null; \
+  const r = img.getBoundingClientRect(); \
+  const x = Math.max(0, r.x), y = Math.max(0, r.y); \
+  const rect = { x: x + scrollX, y: y + scrollY, width: Math.min(r.x + r.width, innerWidth) - x, height: Math.min(r.y + r.height, innerHeight) - y }; \
+  const src = img.tagName === 'IMG' ? (img.currentSrc || img.src) : ''; \
+  if (!__DATA__) return { src, rect }; \
+  try { \
+    let source = img; \
+    if (img.tagName === 'IMG') { \
+      const bitmap = await createImageBitmap(await (await fetch(src)).blob()); \
+      source = document.createElement('canvas'); source.width = bitmap.width; source.height = bitmap.height; \
+      source.getContext('2d').drawImage(bitmap, 0, 0); \
+    } \
+    return { src, rect, data: source.toDataURL('image/png') }; \
+  } catch (e) { return { src, rect }; } \
+})()";
+
+/// The image (`<img>` or `<canvas>`) under a page point (CSS pixels), for the panel's image menu.
+/// `None` when there is none. Without `with_data` only the address is returned; with it the pixels
+/// too, as base64 PNG (`data`).
+#[tauri::command]
+pub async fn browser_image_at(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    target_id: String,
+    x: f64,
+    y: f64,
+    with_data: bool,
+) -> Res<Option<Value>> {
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let expression = IMAGE_AT_JS
+        .replace("__X__", &x.to_string())
+        .replace("__Y__", &y.to_string())
+        .replace("__DATA__", if with_data { "true" } else { "false" });
+    let what = format!("[{workspace_id}] image at point in tab {}", short(&target_id));
+    let res = instance
+        .call_target(&target_id, "Runtime.evaluate", json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }))
+        .await;
+    let res = log::check(&what, res)?;
+    let found = &res["result"]["value"];
+    if !found.is_object() {
+        return Ok(None);
+    }
+    let src = found["src"].as_str().unwrap_or_default();
+    if !with_data {
+        return Ok(Some(json!({ "src": src })));
+    }
+    let data = match found["data"].as_str() {
+        Some(url) => url.strip_prefix("data:image/png;base64,").unwrap_or(url).to_string(),
+        None => {
+            // The page wouldn't hand over the pixels: take what's painted there instead.
+            let rect = &found["rect"];
+            let (width, height) = (rect["width"].as_f64().unwrap_or(0.0), rect["height"].as_f64().unwrap_or(0.0));
+            if width < 1.0 || height < 1.0 {
+                return Err("the image is off screen".into());
+            }
+            let shot = instance
+                .call_target(
+                    &target_id,
+                    "Page.captureScreenshot",
+                    json!({
+                        "format": "png",
+                        "clip": { "x": rect["x"], "y": rect["y"], "width": width, "height": height, "scale": 1 },
+                        "captureBeyondViewport": false
+                    }),
+                )
+                .await;
+            let shot = log::check(&format!("[{workspace_id}] image screenshot in tab {}", short(&target_id)), shot)?;
+            shot["data"].as_str().ok_or("screenshot returned no data")?.to_string()
+        }
+    };
+    Ok(Some(json!({ "src": src, "data": data })))
+}
+
+/// Script for `browser_paste_image`: fires a `paste` event carrying the image on the focused
+/// element, as a real paste would. A file input with nothing handling the event gets the file.
+const PASTE_IMAGE_JS: &str = "(() => { \
+  const bin = atob(__DATA__); const bytes = new Uint8Array(bin.length); \
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); \
+  const file = new File([bytes], __NAME__, { type: __MIME__ }); \
+  const transfer = new DataTransfer(); transfer.items.add(file); \
+  let target = document.activeElement; \
+  while (target && target.shadowRoot && target.shadowRoot.activeElement) target = target.shadowRoot.activeElement; \
+  if (!target) target = document.body; \
+  const event = new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true, composed: true }); \
+  target.dispatchEvent(event); \
+  if (!event.defaultPrevented && target.tagName === 'INPUT' && target.type === 'file') { \
+    target.files = transfer.files; \
+    target.dispatchEvent(new Event('input', { bubbles: true })); target.dispatchEvent(new Event('change', { bubbles: true })); \
+  } \
+})()";
+
+/// Pastes an image (base64 `data` of type `mime`) into the tab: headless Chrome has no system
+/// clipboard to paste from, so the page gets the `paste` event with the image attached.
+#[tauri::command]
+pub async fn browser_paste_image(
+    app: AppHandle,
+    manager: State<'_, BrowserManager>,
+    workspace_id: String,
+    target_id: String,
+    data: String,
+    mime: String,
+) -> Res<()> {
+    if !mime.starts_with("image/") || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')) {
+        return Err("not an image".into());
+    }
+    let ext = mime.trim_start_matches("image/").split(['+', ';']).next().unwrap_or("png");
+    let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
+    let expression = PASTE_IMAGE_JS
+        .replace("__DATA__", &quote(&data))
+        .replace("__NAME__", &quote(&format!("image.{ext}")))
+        .replace("__MIME__", &quote(&mime));
+    let instance = instance(&app, &manager, &workspace_id).await?;
+    let res = instance
+        .call_target(&target_id, "Runtime.evaluate", json!({ "expression": expression }))
+        .await;
+    log::check(&format!("[{workspace_id}] paste image in tab {}", short(&target_id)), res).map(drop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ContextMenu } from "@/components/ContextMenu";
 import { cn } from "@/lib/cn";
 import { AgentCursor } from "./AgentCursor";
 import { logBrowser, setPageSize, type Device, type PageSize } from "./browser";
@@ -42,6 +44,21 @@ const keyCode = (e: KeyboardEvent) => {
   if (/^Key[A-Z]$/.test(e.code)) return e.code.charCodeAt(3);
   if (/^Digit\d$/.test(e.code)) return e.code.charCodeAt(5);
   return CODE_VK[e.code] ?? e.keyCode ?? 0;
+};
+
+const blobBase64 = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+
+const base64Blob = (data: string, type: string) => {
+  const bin = atob(data);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
 };
 
 /** Smallest and largest page size the edges can be dragged to. */
@@ -273,8 +290,34 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
   // Another tab's page has no such select.
   useEffect(() => () => setMenu(null), [workspaceId, tabId]);
 
+  /** The right-click menu over an image in the page: where it opened (window and page coordinates) and the image's address. */
+  const [imageMenu, setImageMenu] = useState<{ x: number; y: number; page: { x: number; y: number }; src: string } | null>(null);
+  useEffect(() => () => setImageMenu(null), [workspaceId, tabId]);
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const { clientX, clientY } = e;
+    const page = point(e);
+    void invoke<{ src: string } | null>("browser_image_at", { workspaceId, targetId: tabId, ...page, withData: false })
+      .then((found) => found && setImageMenu({ x: clientX, y: clientY, page, src: found.src }))
+      .catch(() => {});
+  };
+
+  /** Puts the image at the point on the clipboard. The clipboard item takes a promise so the write stays inside the click's user gesture. */
+  const copyImage = (at: { x: number; y: number }) => {
+    const view = viewOf(box.current);
+    const png = invoke<{ data: string } | null>("browser_image_at", { workspaceId, targetId: tabId, ...at, withData: true }).then((found) => {
+      if (!found) throw new Error("no image there");
+      return base64Blob(found.data, "image/png");
+    });
+    void view.navigator.clipboard
+      .write([new view.ClipboardItem({ "image/png": png })])
+      .catch((err) => logBrowser("error", `copying an image from tab ${tabId} failed: ${String(err)}`));
+  };
+
   const mouse = (type: string) => (e: React.MouseEvent) => {
     if (type === "mousePressed") {
+      setImageMenu(null);
       // Focus is ours to place: the default would take it from the option list opened below.
       e.preventDefault();
       box.current?.focus();
@@ -358,7 +401,15 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
       if (text) {
         e.preventDefault();
         send("Input.insertText", { text });
+        return;
       }
+      // No text: a copied image (a screenshot, "Copy image") goes to the page as a paste of that file.
+      const image = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith("image/"));
+      if (!image) return;
+      e.preventDefault();
+      void blobBase64(image)
+        .then((data) => invoke("browser_paste_image", { workspaceId, targetId: tabId, data, mime: image.type }))
+        .catch((err) => logBrowser("error", `pasting an image into tab ${tabId} failed: ${String(err)}`));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("keydown", onKey);
@@ -387,7 +438,7 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
           onMouseDown={mouse("mousePressed")}
           onMouseUp={mouse("mouseReleased")}
           onMouseMove={onMove}
-          onContextMenu={(e) => e.preventDefault()}
+          onContextMenu={onContextMenu}
           className={cn("block h-full w-full bg-white", own && "", device === "mobile" && "rounded-xl")}
         />
         <AgentCursor tabId={tabId} page={page} />
@@ -400,6 +451,22 @@ export function BrowserView({ workspaceId, tabId, device, size }: { workspaceId:
             onClose={() => closeMenu()}
           />
         )}
+        {imageMenu &&
+          createPortal(
+            <ContextMenu
+              x={imageMenu.x}
+              y={imageMenu.y}
+              items={[
+                { label: "Copy image", run: () => copyImage(imageMenu.page) },
+                { label: "Copy image address", disabled: !imageMenu.src || imageMenu.src.startsWith("data:"), run: () => void viewOf(box.current).navigator.clipboard.writeText(imageMenu.src) },
+              ]}
+              onClose={() => {
+                setImageMenu(null);
+                box.current?.focus();
+              }}
+            />,
+            viewOf(box.current).document.body,
+          )}
         {attachError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-panel px-8 text-center text-xs text-fg-subtle">
             <span className="text-danger">Couldn't show this tab: {attachError}</span>

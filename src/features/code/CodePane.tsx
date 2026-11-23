@@ -475,8 +475,17 @@ export function CodePane({ pane, focused }: { pane: Pane; focused: boolean }) {
   // focus to the composer, which would drop the selection being made.
   const pressInChat = useRef(0);
   useEffect(() => {
-    if (focused && performance.now() - pressInChat.current > 500)
-      root.current?.querySelector("textarea")?.focus();
+    if (!focused || performance.now() - pressInChat.current <= 500) return;
+    const focusComposer = () => {
+      const ta = root.current?.querySelector("textarea");
+      if (ta && document.activeElement !== ta) ta.focus();
+    };
+    focusComposer();
+    // A freshly opened pane mounts while the spawning UI (palette, terminal, button) still
+    // holds focus, so retry once layout and that UI's teardown have settled.
+    const raf = requestAnimationFrame(focusComposer);
+    const timer = setTimeout(focusComposer, 80);
+    return () => { cancelAnimationFrame(raf); clearTimeout(timer); };
   }, [focused]);
 
   return (

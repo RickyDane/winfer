@@ -839,6 +839,8 @@ mockIPC(
       case "browser_log":
       case "browser_select_probe":
       case "browser_select_pick":
+      case "browser_image_at":
+      case "browser_paste_image":
         return null;
       case "browser_selection":
         return "";
