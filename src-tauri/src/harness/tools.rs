@@ -378,7 +378,9 @@ fn shell() -> (String, Vec<&'static str>) {
     let sh = crate::env::user_shell();
     let name = crate::env::shell_name(&sh);
     if cfg!(windows) {
-        return (sh, vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]);
+        // RemoteSigned, not Bypass: local scripts (npm.ps1 shims) still run, and endpoint
+        // protection (Sophos "Lockdown") flags hidden PowerShell started with Bypass.
+        return (sh, vec!["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned"]);
     }
     if matches!(name.as_str(), "bash" | "zsh") { (sh, vec!["-c"]) } else { ("/bin/sh".into(), vec!["-c"]) }
 }
@@ -418,13 +420,21 @@ fn powershell_script(command: &str) -> String {
     )
 }
 
-/// The arguments that hand PowerShell `script`: `-EncodedCommand` (base64 UTF-16LE), which
-/// reaches it intact, where `-Command` loses embedded quotes on Windows PowerShell 5.1. Scripts
-/// too long for a command line (32767 chars) fall back to `-Command`.
-fn powershell_args(script: &str) -> [String; 2] {
-    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    if encoded.len() < 30_000 { ["-EncodedCommand".into(), encoded] } else { ["-Command".into(), script.into()] }
+/// The environment variable that carries the script to PowerShell.
+const POWERSHELL_SCRIPT_VAR: &str = "WINFER_PS_SCRIPT";
+
+/// How PowerShell gets `script`: in [`POWERSHELL_SCRIPT_VAR`], run by a short `-Command`. The
+/// variable reaches it intact, where `-Command` loses embedded quotes on Windows PowerShell 5.1.
+/// Not `-EncodedCommand`: endpoint protection (Sophos "Lockdown") blocks hidden PowerShell
+/// started with base64 commands. Scripts too long for a variable (32767 chars) fall back to
+/// `-Command`. Returns the arguments and the variable to set, if any.
+fn powershell_args(script: &str) -> ([String; 2], Option<(&'static str, String)>) {
+    if script.encode_utf16().count() < 30_000 {
+        let run = format!("& ([scriptblock]::Create($env:{POWERSHELL_SCRIPT_VAR}))");
+        (["-Command".into(), run], Some((POWERSHELL_SCRIPT_VAR, script.into())))
+    } else {
+        (["-Command".into(), script.into()], None)
+    }
 }
 
 fn bash(args: &Value, ctx: &mut Ctx) -> Outcome {
@@ -505,7 +515,15 @@ pub fn shell_command(command: &str, cwd: &Path) -> Command {
     let (sh, flags) = shell();
     let mut cmd = Command::new(sh);
     cmd.args(flags).current_dir(cwd);
-    if cfg!(windows) { cmd.args(powershell_args(&powershell_script(command))) } else { cmd.arg(command) };
+    if cfg!(windows) {
+        let (args, var) = powershell_args(&powershell_script(command));
+        cmd.args(args);
+        if let Some((name, script)) = var {
+            cmd.env(name, script);
+        }
+    } else {
+        cmd.arg(command);
+    }
     cmd.env("PATH", crate::env::path_var()).env("TERM", "dumb").env("NO_COLOR", "1").env("GIT_PAGER", "cat").env("PAGER", "cat");
     #[cfg(unix)]
     {
@@ -776,14 +794,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn powershell_gets_the_script_base64_encoded() {
+    fn powershell_gets_the_script_through_a_variable() {
         let script = "Get-Content -LiteralPath 'C:\\a b\\[x].txt' | head -n 2; \"é\"";
-        let [flag, arg] = powershell_args(script);
-        assert_eq!(flag, "-EncodedCommand");
-        let bytes = base64::engine::general_purpose::STANDARD.decode(arg).unwrap();
-        let units: Vec<u16> = bytes.chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
-        assert_eq!(String::from_utf16(&units).unwrap(), script);
-        assert_eq!(powershell_args(&"x".repeat(20_000))[0], "-Command");
+        let ([flag, arg], var) = powershell_args(script);
+        assert_eq!(flag, "-Command");
+        assert_eq!(arg, "& ([scriptblock]::Create($env:WINFER_PS_SCRIPT))");
+        assert_eq!(var, Some(("WINFER_PS_SCRIPT", script.to_string())));
+        let long = "x".repeat(30_000);
+        assert_eq!(powershell_args(&long), (["-Command".to_string(), long.clone()], None));
     }
 
     #[cfg(windows)]
