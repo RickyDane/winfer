@@ -201,10 +201,17 @@ impl Sizing {
             self.last_check = Some(std::time::Instant::now());
             return FrameAction::Check;
         }
+        // A screenshot (the panel's first picture of a tab, an agent's, the element picker's)
+        // makes Chrome report a frame or two at the page's size in device pixels. Taken for a
+        // resize, it doubled the page on a 2x display each time a tab was shown.
+        let scale = self.viewport.device_scale_factor;
+        let in_device_pixels = |rw: u32, rh: u32| {
+            scale > 1.0 && near(w, (rw as f64 * scale).round() as u32) && near(h, (rh as f64 * scale).round() as u32)
+        };
         let stale = self.replaced.iter().any(|&(rw, rh, at)| {
-            at.elapsed() < STALE_SIZES && near(w, rw) && near(h, rh)
+            at.elapsed() < STALE_SIZES && ((near(w, rw) && near(h, rh)) || in_device_pixels(rw, rh))
         });
-        if stale || w == 0 || h == 0 {
+        if stale || in_device_pixels(self.viewport.width, self.viewport.height) || w == 0 || h == 0 {
             return FrameAction::None;
         }
         self.set(Viewport {
@@ -1961,6 +1968,12 @@ mod tests {
         assert_eq!(sizing.on_frame(&frame(500, 400)), FrameAction::Adopt(500, 400));
         assert_eq!((sizing.viewport.width, sizing.viewport.device_scale_factor), (500, 2.0));
         assert_eq!(sizing.on_frame(&frame(800, 700)), FrameAction::None);
+
+        // A screenshot's frames in device pixels (now, or of the size just replaced) aren't resizes.
+        assert_eq!(sizing.on_frame(&frame(1000, 800)), FrameAction::None);
+        assert_eq!(sizing.on_frame(&frame(1600, 1400)), FrameAction::None);
+        let mut one_x = Sizing::new(Viewport { device_scale_factor: 1.0, ..v.clone() });
+        assert_eq!(one_x.on_frame(&frame(2000, 1400)), FrameAction::Adopt(2000, 1400), "at 1x there's no such mix-up");
     }
 
     /// Real Chrome: a review screenshot loads the page in a throwaway context and returns a JPEG.
@@ -2189,6 +2202,69 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(value["result"]["value"], "hello");
+        });
+    }
+
+    /// Real Chrome: showing tabs the way `browser_attach` does (viewport, screencast, a first
+    /// screenshot) never reads as an agent resizing the page, though the screenshot makes Chrome
+    /// report frames in device pixels.
+    #[test]
+    fn showing_a_tab_again_keeps_its_size() {
+        let tmp = std::env::temp_dir().join(format!("winfer-switch-{:x}", rand::random::<u32>()));
+        let Some(exe) = chrome::find(&tmp.join("managed")) else {
+            eprintln!("no Chrome found; skipping");
+            return;
+        };
+        let launched = chrome::launch(&exe, &tmp.join("profile")).unwrap();
+        let _guard = chrome::ChromeGuard(launched.child);
+        tauri::async_runtime::block_on(async {
+            let (tx, rx) = mpsc::channel::<Event>();
+            let tx = Mutex::new(tx);
+            let cdp = Cdp::connect(&chrome::wait_ws_url(launched.port, Duration::from_secs(45)).unwrap(), move |e| {
+                let _ = tx.lock().unwrap().send(e);
+            })
+            .await
+            .unwrap();
+            let context = cdp.call("Target.createBrowserContext", json!({}), None).await.unwrap()["browserContextId"].as_str().unwrap().to_string();
+            let page = "data:text/html,<style>@keyframes s{to{transform:rotate(360deg)}}div{width:50px;height:50px;background:red;animation:s 1s linear infinite}</style><div></div>";
+            let mut tabs = Vec::new();
+            for _ in 0..2 {
+                let id = cdp.call("Target.createTarget", json!({ "url": page, "browserContextId": context }), None).await.unwrap()["targetId"].as_str().unwrap().to_string();
+                let session = cdp.call("Target.attachToTarget", json!({ "targetId": id, "flatten": true }), None).await.unwrap()["sessionId"].as_str().unwrap().to_string();
+                cdp.call("Page.enable", json!({}), Some(&session)).await.unwrap();
+                tabs.push((id, session));
+            }
+            let v = Viewport { width: 900, height: 600, device_scale_factor: 2.0, mobile: false };
+            let mut shown: Option<String> = None;
+            let mut device_pixel_frames = 0;
+            for round in 0..4 {
+                let (id, session) = &tabs[round % 2];
+                if let Some(previous) = &shown {
+                    let _ = cdp.call("Page.stopScreencast", json!({}), Some(previous)).await;
+                }
+                front(&cdp, id, session, "test").await;
+                apply_viewport(&cdp, id, session, &v).await.unwrap();
+                cdp.call("Page.startScreencast", json!({ "format": "jpeg", "quality": 50, "everyNthFrame": 1 }), Some(session)).await.unwrap();
+                cdp.call("Page.captureScreenshot", json!({ "format": "jpeg", "quality": 80 }), Some(session)).await.unwrap();
+                let mut sizing = Sizing::new(v.clone());
+                let deadline = std::time::Instant::now() + Duration::from_millis(1200);
+                while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+                    let Ok(e) = rx.recv_timeout(left) else { break };
+                    if e.method != "Page.screencastFrame" || e.session_id.as_deref() != Some(session.as_str()) {
+                        continue;
+                    }
+                    cdp.send("Page.screencastFrameAck", json!({ "sessionId": e.params["sessionId"] }), Some(session));
+                    let m = &e.params["metadata"];
+                    if m["deviceWidth"] == 1800 {
+                        device_pixel_frames += 1;
+                    }
+                    assert!(!matches!(sizing.on_frame(m), FrameAction::Adopt(..)), "round {round}: frame {m} taken for a resize");
+                }
+                let size = cdp.call("Runtime.evaluate", json!({ "expression": "[innerWidth, innerHeight]", "returnByValue": true }), Some(session)).await.unwrap();
+                assert_eq!(size["result"]["value"], json!([900, 600]), "round {round}");
+                shown = Some(session.clone());
+            }
+            eprintln!("{device_pixel_frames} frames came in device pixels");
         });
     }
 
