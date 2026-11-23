@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Winfer native-gpui · visualize overhaul</title>
+  <link rel="stylesheet" href="styles.css?v=5" />
+</head>
+<body>
+  <header class="review">
+    <div class="rv-brand"><span class="rv-dot"></span>visualize · graphics overhaul</div>
+    <div class="rv-sep"></div>
+    <div class="rv-group" id="variants">
+      <button data-v="a">A · Instrument</button>
+      <button data-v="b" class="on">B · Editorial</button>
+      <button data-v="c">C · Bento</button>
+      <button data-v="now" class="ghost">Current</button>
+    </div>
+    <div class="rv-sep"></div>
+    <div class="rv-group" id="widths">
+      <button data-w="wide" class="on">Wide</button>
+      <button data-w="narrow">Narrow</button>
+    </div>
+    <div class="rv-sep"></div>
+    <div class="rv-group" id="palettes">
+      <button data-p="current">Current colors</button>
+      <button data-p="theme" class="on">Theme</button>
+      <button data-p="accent">Accent + grays</button>
+      <button data-p="observable">Observable 10</button>
+      <button data-p="pastel">Pastel</button>
+    </div>
+    <div class="rv-sep"></div>
+    <select id="theme" class="rv-select">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+      <option value="gruvbox-dark">Gruvbox dark</option>
+    </select>
+  </header>
+  <p id="notes" class="notes"></p>
+
+  <main class="transcript">
+    <div class="chat" id="chat">
+      <div class="msg user">How did build times change since the cache rework landed?</div>
+      <div class="msg asst">Pulled the last 12 days of CI runs for the workspace. Here's the picture:</div>
+      <div id="report" class="report"></div>
+      <div class="msg asst">Incremental builds fell steadily after the rework on Nov 17; <code>winfer-app</code> is now the long pole at 29s. Cache storage is close to its 10 GB cap, so pruning old artifacts is the next lever.</div>
+    </div>
+  </main>
+
+  <div id="tip" class="tip"></div>
+  <script src="app.js?v=5"></script>
+</body>
+</html>

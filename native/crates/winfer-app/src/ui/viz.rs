@@ -53,14 +53,26 @@ fn alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
 
-const GAP: f32 = 10.0;
+/// Space between the grid's columns; blocks are unframed, so it is the only thing between them.
+const GAP: f32 = 28.0;
+
+/// What the marks sit on: the transcript itself (blocks have no card of their own).
+fn surface(c: &Colors) -> Hsla {
+    c.panel
+}
+
+/// A section label: small caps-like, muted, above a block's hairline.
+fn eyebrow(s: &Style, text: &str) -> Div {
+    div().truncate().text_size(px(10.5 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(s.c.muted).child(text.to_uppercase())
+}
 
 fn heading(s: &Style, title: Option<String>, subtitle: Option<String>, main: bool) -> Option<Div> {
     let c = s.c;
     (title.is_some() || subtitle.is_some()).then(|| {
-        div().px_0p5().when(!main, |d| d.pt_2()).flex().flex_col().gap_0p5()
-            .when_some(title, |d, t| d.child(div().text_size(px(if main { 14.0 } else { 13.0 } * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(t)))
-            .when_some(subtitle, |d, t| d.child(div().text_size(s.small()).text_color(c.muted).child(t)))
+        div().when(!main, |d| d.pt_4()).flex().flex_col().gap_0p5()
+            .when(main, |d| d.child(div().pb_1().child(eyebrow(s, "Report"))))
+            .when_some(title, |d, t| d.child(div().text_size(px(if main { 20.0 } else { 15.0 } * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(t)))
+            .when_some(subtitle, |d, t| d.child(div().text_size(s.small()).text_color(c.subtle).child(t)))
     })
 }
 
@@ -70,25 +82,9 @@ fn heading(s: &Style, title: Option<String>, subtitle: Option<String>, main: boo
 pub fn report(s: &Style, key: &str, reports: &[Report]) -> Div {
     let c = s.c;
     let cols = calc::columns(s.width, GAP);
-    let mut col = div().w_full().flex().flex_col().gap_2().py_1p5();
+    let mut col = div().w_full().flex().flex_col().gap_5().py_1p5();
     for (n, r) in reports.iter().enumerate() {
-        let head = heading(s, r.title.clone(), r.subtitle.clone(), n == 0);
-        if n == 0 {
-            // The main heading carries the export buttons for the whole report.
-            let buttons = s.on_export.clone().map(|on_export| {
-                div().flex().flex_shrink_0().items_center().gap_0p5().text_size(px(11.0)).text_color(c.subtle)
-                    .child(div().mr_1().child(Icon::new(IconName::Download).size(px(12.0))))
-                    .children(Format::ALL.map(|f| {
-                        let on_export = on_export.clone();
-                        div().id(SharedString::from(format!("viz-{key}-export-{}", f.ext()))).px_1p5().py_0p5().rounded_md().cursor_pointer().font_family(s.mono.clone())
-                            .hover(move |d| d.bg(c.hover).text_color(c.fg))
-                            .child(f.label())
-                            .tooltip(move |window, cx| Tooltip::new(format!("Export the report as {}", f.label())).build(window, cx))
-                            .on_click(move |_, _, cx| on_export(f, cx))
-                    }))
-            });
-            col = col.child(div().flex().items_start().gap_3().child(div().flex_1().min_w_0().children(head)).children(buttons));
-        } else if let Some(h) = head {
+        if let Some(h) = heading(s, r.title.clone(), r.subtitle.clone(), n == 0) {
             col = col.child(h);
         }
         let spans: Vec<usize> = r.blocks.iter().map(|b| calc::span_of(b, cols)).collect();
@@ -107,7 +103,20 @@ pub fn report(s: &Style, key: &str, reports: &[Report]) -> Div {
             col = col.child(line);
         }
     }
-    col
+    // The export buttons close the report, like a figure's footer.
+    let buttons = s.on_export.clone().map(|on_export| {
+        div().flex().flex_wrap().gap_1().children(Format::ALL.map(|f| {
+            let on_export = on_export.clone();
+            div().id(SharedString::from(format!("viz-{key}-export-{}", f.ext()))).flex().items_center().gap_1p5().px_2().py_0p5().rounded_md().border_1().border_color(c.border_strong)
+                .cursor_pointer().text_size(px(11.0 * s.scale)).text_color(c.muted)
+                .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                .child(Icon::new(IconName::Download).size(px(11.0)))
+                .child(f.label())
+                .tooltip(move |window, cx| Tooltip::new(format!("Export the report as {}", f.label())).build(window, cx))
+                .on_click(move |_, _, cx| on_export(f, cx))
+        }))
+    });
+    col.children(buttons)
 }
 
 fn block(s: &Style, id: &str, b: &Block, width: f32) -> AnyElement {
@@ -121,17 +130,22 @@ fn block(s: &Style, id: &str, b: &Block, width: f32) -> AnyElement {
         Kind::Stats(items) => stats(s, items).into_any_element(),
         Kind::Bar { labels, series, horizontal: true, stacked, unit } => hbars(s, labels, series, *stacked, unit.as_deref(), width).into_any_element(),
         Kind::Bar { labels, series, horizontal: false, stacked, unit } => vbars(s, labels, series, *stacked, unit.as_deref()).into_any_element(),
-        Kind::Line { labels, series, area, unit } => lines(s, labels, series, *area, unit.as_deref()).into_any_element(),
-        Kind::Pie { slices, ring, center, unit } => pie(s, slices, *ring, center.as_ref(), unit.as_deref(), width).into_any_element(),
+        Kind::Line { labels, series, area, unit } => lines(s, labels, series, *area, unit.as_deref(), width).into_any_element(),
+        Kind::Pie { slices, center, unit, .. } => pie(s, slices, center.as_ref(), unit.as_deref()).into_any_element(),
         Kind::Table { columns, rows } => table(s, columns, rows).into_any_element(),
         Kind::Progress(items) => progress(s, items).into_any_element(),
         Kind::Text(_) => unreachable!(),
     };
     let copy = b.to_csv();
-    div().flex_1().w_full().rounded_xl().border_1().border_color(c.edge).bg(c.raised).p_3().flex().flex_col().gap_2p5()
+    // Summary tiles open the report without a rule or a label (unless the agent named them);
+    // every other block sits under a hairline with its title as a section label.
+    let lead = matches!(b.kind, Kind::Stats(_));
+    let title = b.title.clone().or_else(|| (!lead).then(|| b.kind.name().to_string()));
+    div().flex_1().w_full().flex().flex_col().gap_2p5()
+        .when(!lead, |d| d.border_t_1().border_color(c.border_strong).pt_3())
         .child(
             div().flex().items_center().gap_2().min_h(px(20.0))
-                .child(div().flex_1().min_w_0().truncate().text_size(s.body()).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(b.title.clone().unwrap_or_else(|| b.kind.name().to_string().replace("stat row", "Summary"))))
+                .child(div().flex_1().min_w_0().children(title.map(|t| eyebrow(s, &t))))
                 .child(
                     div().id(SharedString::from(format!("{id}-copy"))).size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().cursor_pointer().text_color(c.subtle)
                         .hover(move |d| d.bg(c.hover).text_color(c.fg))
@@ -145,40 +159,62 @@ fn block(s: &Style, id: &str, b: &Block, width: f32) -> AnyElement {
         .into_any_element()
 }
 
-fn dot(color: Hsla) -> Div {
-    div().size(px(8.0)).flex_shrink_0().rounded_full().bg(color)
-}
-
-fn legend(s: &Style, names: &[&str]) -> Div {
+/// Names with their color: a short stroke for lines, a square for filled marks.
+fn legend(s: &Style, names: &[&str], line: bool) -> Div {
     let c = s.c;
-    div().flex().flex_wrap().gap_x_3().gap_y_1().children(names.iter().enumerate().map(|(i, n)| div().flex().items_center().gap_1p5().text_size(s.small()).text_color(c.muted).child(dot(series_color(&c, i))).child(n.to_string())))
+    let mark = move |color: Hsla| if line { div().w(px(14.0)).h(px(2.0)).flex_shrink_0().rounded(px(1.0)).bg(color) } else { div().size(px(8.0)).flex_shrink_0().rounded(px(2.0)).bg(color) };
+    div().flex().flex_wrap().gap_x_3().gap_y_1().children(names.iter().enumerate().map(|(i, n)| div().flex().items_center().gap_1p5().text_size(s.small()).text_color(c.muted).child(mark(series_color(&c, i))).child(n.to_string())))
 }
 
 fn names(series: &[Series]) -> Vec<&str> {
     series.iter().map(|s| s.name.as_str()).collect()
 }
 
+/// The first tile is the headline, set large; the rest follow as a row of figures divided by
+/// hairlines.
 fn stats(s: &Style, items: &[Stat]) -> Div {
     let c = s.c;
-    div().flex().flex_wrap().gap_2().children(items.iter().map(|t| {
-        div().flex_1().min_w(px(116.0)).rounded_lg().border_1().border_color(c.edge).bg(c.app).px_3().py_2().flex().flex_col().gap_0p5()
-            .child(div().truncate().text_size(s.small()).text_color(c.muted).child(t.label.clone()))
-            .child(div().truncate().text_size(px(21.0 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(t.value.clone()))
-            .when_some(t.delta.clone(), |d, x| d.child(div().text_size(s.small()).font_family(s.mono.clone()).text_color(c.muted).child(x)))
-            .when_some(t.note.clone(), |d, x| d.child(div().text_size(px(11.0 * s.scale)).text_color(c.subtle).child(x)))
-    }))
+    let Some((hero, rest)) = items.split_first() else { return div() };
+    let delta = |x: String| div().flex_shrink_0().text_size(s.small()).font_weight(FontWeight::MEDIUM).text_color(c.muted).child(x);
+    let headline = div().flex().flex_col().gap_1p5().min_w_0()
+        .child(div().truncate().text_size(px(44.0 * s.scale)).line_height(relative(1.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(hero.value.clone()))
+        .child(div().flex().items_center().gap_2().min_w_0().text_size(s.body())
+            .child(div().truncate().text_color(c.muted).child(hero.label.clone()))
+            .when_some(hero.delta.clone(), |d, x| d.child(delta(x)))
+            .when_some(hero.note.clone(), |d, x| d.child(div().truncate().text_size(s.small()).text_color(c.subtle).child(x))));
+    let figures = rest.iter().map(|t| {
+        let label = match &t.note {
+            Some(note) => format!("{} · {note}", t.label),
+            None => t.label.clone(),
+        };
+        div().flex().flex_col().gap_0p5().min_w_0().max_w(px(220.0)).px_4().border_l_1().border_color(c.border_strong)
+            .child(div().flex().items_center().gap_1p5()
+                .child(div().truncate().text_size(px(18.0 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(t.value.clone()))
+                .when_some(t.delta.clone(), |d, x| d.child(delta(x))))
+            .child(div().truncate().text_size(s.small()).text_color(c.subtle).child(label))
+    });
+    div().flex().flex_wrap().items_end().justify_between().gap_x_6().gap_y_4()
+        .child(headline)
+        .when(!rest.is_empty(), |d| d.child(div().flex().flex_wrap().gap_y_3().children(figures)))
 }
 
+/// Meters as a row of ticks, filled in the text color: a budget reads as a count, not a hue.
 fn progress(s: &Style, items: &[Meter]) -> Div {
+    const TICKS: usize = 30;
     let c = s.c;
-    div().flex().flex_col().gap_2().children(items.iter().map(|m| {
+    div().flex().flex_col().gap_3().children(items.iter().map(|m| {
         let frac = (m.value / m.max).clamp(0.0, 1.0) as f32;
-        let value = if (m.max - 100.0).abs() < f64::EPSILON { calc::compact(m.value, Some("%")) } else { format!("{} / {}", calc::compact(m.value, None), calc::compact(m.max, None)) };
-        div().flex().flex_col().gap_1()
+        let on = (frac * TICKS as f32).round() as usize;
+        let percent = (m.max - 100.0).abs() < f64::EPSILON;
+        div().flex().flex_col().gap_1p5()
             .child(div().flex().items_center().gap_2().text_size(s.small())
-                .child(div().flex_1().min_w_0().truncate().text_color(c.muted).child(m.label.clone()))
-                .child(div().flex_shrink_0().font_family(s.mono.clone()).text_color(c.fg).child(value)))
-            .child(div().relative().h(px(6.0)).w_full().rounded_full().bg(c.hover).child(div().absolute().top_0().bottom_0().left_0().w(relative(frac)).rounded_full().bg(c.accent)))
+                .child(div().flex_1().min_w_0().truncate().text_color(c.fg).child(m.label.clone()))
+                .child(div().flex().flex_shrink_0().font_family(s.mono.clone())
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(calc::compact(m.value, percent.then_some("%"))))
+                    .when(!percent, |d| d.child(div().text_color(c.subtle).child(format!(" / {}", calc::compact(m.max, None)))))))
+            .child(div().flex().gap(px(2.0)).h(px(12.0)).w_full().children((0..TICKS).map(|k| {
+                div().flex_1().h_full().rounded(px(1.0)).bg(if k < on { alpha(c.fg, 0.78) } else { c.hover })
+            })))
     }))
 }
 
@@ -195,7 +231,7 @@ fn table(s: &Style, columns: &[Column], rows: &[Vec<String>]) -> Div {
         d.child(div().min_w_0().truncate().child(text))
     };
     div().flex().flex_col().text_size(s.small())
-        .child(div().flex().border_b_1().border_color(c.border_strong).text_color(c.muted).font_weight(FontWeight::MEDIUM).children(columns.iter().map(|col| cell(col.label.clone(), col.align))))
+        .child(div().flex().border_b_1().border_color(c.fg).text_color(c.subtle).font_weight(FontWeight::MEDIUM).children(columns.iter().map(|col| cell(col.label.clone(), col.align))))
         .children(rows.iter().take(SHOWN).map(|row| {
             div().flex().border_b_1().border_color(c.border).text_color(c.fg).children(row.iter().zip(columns).map(|(t, col)| cell(t.clone(), col.align)))
         }))
@@ -205,6 +241,9 @@ fn table(s: &Style, columns: &[Column], rows: &[Vec<String>]) -> Div {
 fn hbars(s: &Style, labels: &[String], series: &[Series], stacked: bool, unit: Option<&str>, width: f32) -> Div {
     let c = s.c;
     let label_w = (width * 0.3).min(104.0 * s.scale);
+    if let [only] = series {
+        return lollipops(s, labels, &only.values, unit, label_w);
+    }
     let values: Vec<Vec<f64>> = series.iter().map(|x| x.values.clone()).collect();
     let (_, top) = calc::nice_ticks(calc::bar_max(&values, stacked), 4);
     let grouped = !stacked && series.len() > 1;
@@ -230,8 +269,29 @@ fn hbars(s: &Style, labels: &[String], series: &[Series], stacked: bool, unit: O
             .child(div().flex_1().min_w_0().flex().flex_col().children(bars))
     });
     div().flex().flex_col().gap_1p5()
-        .when(series.len() > 1, |d| d.child(legend(s, &names(series))))
+        .when(series.len() > 1, |d| d.child(legend(s, &names(series), false)))
         .children(rows)
+}
+
+/// One series as lollipops: a hairline stem and a dot at the value. The largest value wears
+/// the series color and the rest recede to gray, so the leader reads first.
+fn lollipops(s: &Style, labels: &[String], values: &[f64], unit: Option<&str>, label_w: f32) -> Div {
+    const DOT: f32 = 10.0;
+    let c = s.c;
+    let (_, top) = calc::nice_ticks(values.iter().cloned().fold(0.0, f64::max), 4);
+    let lead = values.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| i);
+    let rest = alpha(c.subtle, 0.6);
+    let ring = surface(&c);
+    div().flex().flex_col().children(labels.iter().zip(values).enumerate().map(|(i, (label, v))| {
+        let color = if Some(i) == lead { series_color(&c, 0) } else { rest };
+        let frac = (v.max(0.0) / top) as f32;
+        div().flex().items_center().gap_3().h(px(26.0 * s.scale))
+            .child(div().w(px(label_w)).flex_shrink_0().truncate().text_size(s.small()).text_color(c.muted).child(label.clone()))
+            .child(div().relative().flex_1().h(px(DOT)).mr(px(DOT / 2.0))
+                .child(div().absolute().left_0().top(px(DOT / 2.0 - 1.0)).h(px(2.0)).w(relative(frac)).bg(color))
+                .child(div().absolute().top_0().left(relative(frac)).ml(px(-DOT / 2.0)).size(px(DOT)).rounded_full().bg(color).border_2().border_color(ring)))
+            .child(div().w(px(54.0 * s.scale)).flex_shrink_0().text_size(s.small()).font_family(s.mono.clone()).text_color(c.fg).flex().justify_end().child(calc::compact(*v, unit)))
+    }))
 }
 
 const PLOT_H: f32 = 150.0;
@@ -255,6 +315,7 @@ fn x_labels(s: &Style, labels: &[String]) -> Div {
 
 fn vbars(s: &Style, labels: &[String], series: &[Series], stacked: bool, unit: Option<&str>) -> Div {
     let c = s.c;
+    let gap = surface(&c);
     let values: Vec<Vec<f64>> = series.iter().map(|x| x.values.clone()).collect();
     let (ticks, top) = calc::nice_ticks(calc::bar_max(&values, stacked), 4);
     let plot = div().relative().flex_1().h(px(PLOT_H))
@@ -263,21 +324,27 @@ fn vbars(s: &Style, labels: &[String], series: &[Series], stacked: bool, unit: O
             let group = div().flex_1().h_full().min_w_0().px_1().flex().items_end().justify_center().gap(px(2.0));
             if stacked {
                 let total: f64 = series.iter().map(|x| x.values[i].max(0.0)).sum();
+                // The total rides on the cap, outside the bar, so it never crowds a segment.
                 group.child(
-                    div().h(relative((total / top) as f32)).w_full().max_w(px(36.0)).flex().flex_col().justify_end().overflow_hidden().rounded_t_sm()
-                        .children(series.iter().enumerate().rev().filter(|(_, x)| x.values[i] > 0.0).map(|(k, x)| div().w_full().h(relative((x.values[i] / total) as f32)).bg(series_color(&c, k)).border_t_1().border_color(c.raised))),
+                    div().relative().h(relative((total / top) as f32)).w_full().max_w(px(18.0)).flex().flex_col().justify_end()
+                        .child(div().absolute().bottom_full().left(px(-20.0)).right(px(-20.0)).pb_1().flex().justify_center().text_size(px(10.0 * s.scale)).text_color(c.muted).child(calc::compact(total, unit)))
+                        .child(div().size_full().flex().flex_col().justify_end().overflow_hidden().rounded_t(px(4.0))
+                            .children(series.iter().enumerate().rev().filter(|(_, x)| x.values[i] > 0.0).map(|(k, x)| div().w_full().h(relative((x.values[i] / total) as f32)).bg(series_color(&c, k)).border_t_2().border_color(gap)))),
                 )
             } else {
-                group.children(series.iter().enumerate().map(|(k, x)| div().flex_1().max_w(px(28.0)).h(relative((x.values[i].max(0.0) / top) as f32)).bg(series_color(&c, k)).rounded_t_sm()))
+                group.children(series.iter().enumerate().map(|(k, x)| div().flex_1().max_w(px(20.0)).h(relative((x.values[i].max(0.0) / top) as f32)).bg(series_color(&c, k)).rounded_t(px(4.0))))
             }
         })));
     div().flex().flex_col()
-        .when(series.len() > 1, |d| d.child(div().pb_2().child(legend(s, &names(series)))))
+        .when(series.len() > 1, |d| d.child(div().pb_4().child(legend(s, &names(series), false))))
         .child(div().flex().gap_2().child(y_axis(s, &ticks, top, unit)).child(plot))
         .child(x_labels(s, labels))
 }
 
-fn lines(s: &Style, labels: &[String], series: &[Series], area: bool, unit: Option<&str>) -> Div {
+/// Width of the column right of a line plot that names each series at its last value.
+const END_W: f32 = 92.0;
+
+fn lines(s: &Style, labels: &[String], series: &[Series], area: bool, unit: Option<&str>, width: f32) -> Div {
     let c = s.c;
     let all: Vec<Vec<f64>> = series.iter().map(|x| x.values.clone()).collect();
     let (ticks, top) = calc::nice_ticks(calc::bar_max(&all, false), 4);
@@ -285,7 +352,7 @@ fn lines(s: &Style, labels: &[String], series: &[Series], area: bool, unit: Opti
     let n = labels.len();
     let paths: Vec<(Hsla, Vec<f32>)> = series.iter().enumerate().map(|(k, x)| (series_color(&c, k), x.values.iter().map(|v| (v / top).clamp(0.0, 1.0) as f32).collect())).collect();
     let (grid, base) = (alpha(c.border, 0.7), c.border_strong);
-    let surface = c.raised;
+    let ring = surface(&c);
     let plot = canvas(|_, _, _| {}, move |bounds, _, window, _| {
         for f in &fractions {
             let y = bounds.bottom() - bounds.size.height * *f;
@@ -314,87 +381,64 @@ fn lines(s: &Style, labels: &[String], series: &[Series], area: bool, unit: Opti
                     window.paint_path(p, *color);
                 }
             }
-            // Markers, with a surface ring where lines cross; one point alone is only a marker.
-            if n <= 24 {
-                for (i, f) in fr.iter().enumerate() {
-                    let p = at(i, *f);
-                    window.paint_quad(quad(Bounds::new(point(p.x - px(4.5), p.y - px(4.5)), size(px(9.0), px(9.0))), px(4.5), *color, px(2.0), surface, BorderStyle::default()));
-                }
+            // One marker at the end of each line, with a surface ring where lines meet; one point
+            // alone is only a marker.
+            if let Some(f) = fr.last() {
+                let p = at(n - 1, *f);
+                window.paint_quad(quad(Bounds::new(point(p.x - px(4.5), p.y - px(4.5)), size(px(9.0), px(9.0))), px(4.5), *color, px(2.0), ring, BorderStyle::default()));
             }
         }
     })
     .absolute()
     .size_full();
-    div().flex().flex_col()
-        .when(series.len() > 1, |d| d.child(div().pb_2().child(legend(s, &names(series)))))
-        .child(div().flex().gap_2().child(y_axis(s, &ticks, top, unit)).child(div().relative().flex_1().h(px(PLOT_H)).child(plot)))
-        .child(x_labels(s, labels))
-}
-
-/// The slice outline: a sector, or a ring segment when `inner` is above 0 (radii in px).
-fn sector(center: Point<Pixels>, outer: f32, inner: f32, from: f32, to: f32) -> Option<Path<Pixels>> {
-    let angle = |t: f32| t * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-    let at = |r: f32, t: f32| point(center.x + px(r * angle(t).cos()), center.y + px(r * angle(t).sin()));
-    let steps = (((to - from) * 96.0).ceil() as usize).max(2);
-    let mut p = PathBuilder::fill();
-    if inner > 0.0 {
-        p.move_to(at(outer, from));
-    } else {
-        p.move_to(center);
-        p.line_to(at(outer, from));
-    }
-    for i in 1..=steps {
-        p.line_to(at(outer, from + (to - from) * i as f32 / steps as f32));
-    }
-    if inner > 0.0 {
-        for i in (0..=steps).rev() {
-            p.line_to(at(inner, from + (to - from) * i as f32 / steps as f32));
+    // Direct labels at the line ends when there is room for them, nudged apart so they never
+    // overlap; the legend stays as well.
+    let ends = (n > 0 && series.len() <= 4 && width >= 360.0).then(|| {
+        let min_gap = 30.0 / PLOT_H;
+        let mut at: Vec<(usize, f32)> = series.iter().enumerate().map(|(k, x)| (k, (x.values[n - 1] / top).clamp(0.0, 1.0) as f32)).collect();
+        at.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for i in 1..at.len() {
+            at[i].1 = at[i].1.min(at[i - 1].1 - min_gap);
         }
-    }
-    p.close();
-    p.build().ok()
+        div().relative().w(px(END_W)).h(px(PLOT_H)).flex_shrink_0().children(at.into_iter().map(|(k, f)| {
+            div().absolute().left_0().right_0().bottom(relative(f)).mb(px(-14.0)).flex().flex_col()
+                .child(div().truncate().text_size(px(12.0 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(calc::compact(series[k].values[n - 1], unit)))
+                .child(div().truncate().text_size(px(10.5 * s.scale)).text_color(c.muted).child(series[k].name.clone()))
+        }))
+    });
+    let has_ends = ends.is_some();
+    div().flex().flex_col()
+        .when(series.len() > 1, |d| d.child(div().pb_3().child(legend(s, &names(series), true))))
+        .child(div().flex().gap_2().child(y_axis(s, &ticks, top, unit)).child(div().relative().flex_1().h(px(PLOT_H)).child(plot)).children(ends))
+        .child(div().when(has_ends, |d| d.pr(px(END_W + 8.0))).child(x_labels(s, labels)))
 }
 
-fn pie(s: &Style, slices: &[winfer_backend::viz::Slice], ring: bool, center: Option<&(String, String)>, unit: Option<&str>, width: f32) -> Div {
+/// A pie or ring as one part-to-whole bar: segments split by a surface gap, then each part's
+/// share set large with its name and value under it. Shares compare along one axis, which
+/// reads more exactly than angles.
+fn pie(s: &Style, slices: &[winfer_backend::viz::Slice], center: Option<&(String, String)>, unit: Option<&str>) -> Div {
     let c = s.c;
     let arcs: Vec<Slice> = calc::arcs(slices, 8);
-    let total: f64 = arcs.iter().map(|a| a.value).sum();
     let colors: Vec<Hsla> = arcs.iter().enumerate().map(|(i, a)| if a.other { c.subtle } else { series_color(&c, i) }).collect();
-    let dim = 148.0;
-    let drawn: Vec<(f32, f32, Hsla)> = arcs.iter().zip(&colors).map(|(a, k)| (a.from, a.to, *k)).collect();
-    let many = drawn.len() > 1;
-    let chart = canvas(|_, _, _| {}, move |bounds, _, window, _| {
-        let r = f32::from(bounds.size.width.min(bounds.size.height)) / 2.0;
-        for (from, to, color) in &drawn {
-            // A hairline of surface between neighbours, except around a slice that fills the circle.
-            let gap = if many && to - from > 0.02 { 0.0035 } else { 0.0 };
-            if let Some(path) = sector(bounds.center(), r, if ring { r * 0.62 } else { 0.0 }, from + gap, to - gap) {
-                window.paint_path(path, *color);
-            }
-        }
-    })
-    .absolute()
-    .size_full();
-    let hole = center.cloned().or_else(|| ring.then(|| (calc::compact(total, unit), String::new())));
-    let chart = div().relative().size(px(dim)).flex_shrink_0().child(chart).when_some(hole.filter(|_| ring), |d, (value, label)| {
-        d.child(div().absolute().inset_0().flex().flex_col().items_center().justify_center().px(px(dim * 0.22))
-            .child(div().max_w_full().truncate().text_size(px(19.0 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(value))
-            .when(!label.is_empty(), |d| d.child(div().max_w_full().truncate().text_size(px(10.5 * s.scale)).text_color(c.muted).child(label))))
+    let last = arcs.len().saturating_sub(1);
+    let bar = div().flex().gap(px(2.0)).h(px(18.0)).w_full().children(arcs.iter().zip(&colors).enumerate().map(|(i, (a, k))| {
+        let mut seg = div().h_full().min_w(px(3.0)).flex_basis(px(0.0)).bg(*k).when(i == 0, |d| d.rounded_l(px(4.0))).when(i == last, |d| d.rounded_r(px(4.0)));
+        seg.style().flex_grow = Some(a.value.max(0.0) as f32);
+        seg
+    }));
+    let parts = arcs.iter().zip(&colors).map(|(a, k)| {
+        div().w(px(104.0 * s.scale)).flex().flex_col().gap_0p5()
+            .child(div().flex().items_center().gap_1p5()
+                .child(div().size(px(8.0)).flex_shrink_0().rounded(px(2.0)).bg(*k))
+                .child(div().text_size(px(18.0 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(calc::percent(a.percent))))
+            .child(div().truncate().text_size(px(11.0 * s.scale)).text_color(c.subtle).child(format!("{} · {}", a.label, calc::compact(a.value, unit))))
     });
-    let rows = arcs.iter().zip(&colors).map(|(a, k)| {
-        div().flex().items_center().gap_2().text_size(s.small())
-            .child(dot(*k))
-            .child(div().flex_1().min_w_0().truncate().text_color(c.fg).child(a.label.clone()))
-            .child(div().flex_shrink_0().font_family(s.mono.clone()).text_color(c.muted).child(calc::compact(a.value, unit)))
-            .child(div().w(px(48.0 * s.scale)).flex_shrink_0().flex().justify_end().font_family(s.mono.clone()).text_color(c.subtle).child(calc::percent(a.percent)))
-    });
-    let legend = div().flex_1().w_full().min_w_0().max_w(px(420.0)).flex().flex_col().gap_1p5().children(rows);
-    // Side by side when there is room, else the legend goes under the chart.
-    if width >= 400.0 {
-        div().flex().items_center().gap_5().child(chart).child(legend)
-    } else {
-        div().flex().flex_col().items_center().gap_3().child(chart).child(legend)
-    }
+    div().flex().flex_col().gap_3()
+        .when_some(center.cloned(), |d, (value, label)| d.child(div().flex().items_center().gap_1p5()
+            .child(div().text_size(px(15.0 * s.scale)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(value))
+            .child(div().text_size(s.small()).text_color(c.muted).child(label))))
+        .child(bar)
+        .child(div().flex().flex_wrap().gap_x_3().gap_y_3().children(parts))
 }
 
 /// The chat's colors as the file's: the pane background, cards and tiles, text, the palette.
