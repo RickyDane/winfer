@@ -65,6 +65,21 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
                 { "header": "Dock", "question": "Where should the dock go?", "multi": false, "options": [{ "label": "Bottom", "description": "" }, { "label": "Left", "description": "" }] }
             ] }))));
         }
+        "agents" => {
+            // The live subagent tree: three subagents, one finishing, one failing, one still going.
+            steps.truncate(2);
+            steps.push((300, Type("Find why the login test is flaky\r")));
+            steps.push((300, Ev(json!({ "type": "turn_start" }))));
+            steps.push((300, Ev(json!({ "type": "tool_start", "id": "ag1", "name": "Agent", "title": "Map the auth flow", "input": { "subagent_type": "Explore" } }))));
+            steps.push((100, Ev(json!({ "type": "task", "id": "s1", "tool_id": "ag1", "agent": "Explore", "description": "Map the auth flow", "model": "claude/haiku", "status": "running", "tools": 3, "last": "Grep \"session_token\" src/" }))));
+            steps.push((300, Ev(json!({ "type": "task", "id": "s2", "agent": "general", "description": "Rerun the login test 20 times", "model": "claude/sonnet", "status": "running", "tools": 1, "last": "Bash npm test -- login --repeat 20" }))));
+            steps.push((300, Ev(json!({ "type": "task", "id": "s3", "agent": "Explore", "description": "Check CI logs for timeouts", "model": "claude/haiku", "status": "running", "tools": 2, "last": "Read .github/workflows/ci.yml" }))));
+            steps.push((900, Ev(json!({ "type": "task", "id": "s1", "tools": 5, "last": "Read src/auth/session.ts" }))));
+            steps.push((900, Ev(json!({ "type": "task", "id": "s1", "tools": 7, "last": "Read src/auth/refresh.ts", "status": "done" }))));
+            steps.push((0, Ev(json!({ "type": "tool_end", "id": "ag1", "ok": true, "output": "The session token is refreshed in src/auth/refresh.ts on a 30 s timer, and the login test checks it right after sign-in, so a refresh in between makes it flaky." }))));
+            steps.push((700, Ev(json!({ "type": "task", "id": "s3", "tools": 4, "last": "No CI run in the last 30 days", "status": "failed" }))));
+            steps.push((700, Ev(json!({ "type": "task", "id": "s2", "tools": 2, "last": "7 of 20 runs passed so far" }))));
+        }
         "welcome" => steps.truncate(1),
         "draft" => {
             steps.truncate(2);

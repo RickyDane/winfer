@@ -1,5 +1,5 @@
-//! The side panel's file viewer: markdown rendered, images shown, other text files with line
-//! numbers, with live reload, editing and review comments
+//! The side panel's file viewer: markdown and HTML rendered, images shown, other text files with
+//! line numbers, with live reload, editing and review comments
 //! (port of `src/features/viewer/ViewerPanel.tsx`, `viewer.ts`, `projects.ts` and `comments.ts`).
 
 use crate::backend;
@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use winfer_backend::files;
+
+mod html;
 
 const IMAGE: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
 const POLL: Duration = Duration::from_millis(1500);
@@ -504,6 +506,7 @@ pub struct ViewerPanel {
     mermaid_cache: HashMap<MermaidKey, MermaidState>,
     mermaid_source: HashSet<usize>,
     mermaid_zoom: HashMap<usize, f32>,
+    html: html::HtmlView,
 }
 
 /// Which page of a PDF shows, how far in, and the rendered result.
@@ -525,7 +528,7 @@ impl Default for PdfView {
 impl ViewerPanel {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |this, _, cx| this.sync(cx)).detach();
-        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new() }
+        Self { state, shown: None, content: Content::Loading, source: false, editor: None, editor_synced: None, editing: false, edit_base: 0, conflict: false, composing: None, comment_line: 0, jump: None, send_open: false, poll: None, pdf: PdfView::default(), mermaid_cache: HashMap::new(), mermaid_source: HashSet::new(), mermaid_zoom: HashMap::new(), html: Default::default() }
     }
 
     /// Shows `path` (absolute), opening its tab; `background` leaves the side panel as it is.
@@ -1356,7 +1359,7 @@ impl ViewerPanel {
                     this.begin_comment(last, window, cx);
                 }))))
                 .when(comments > 0, |d| d.child(button("viewer-send", IconName::Send, self.send_open).on_click(cx.listener(|this, _, _, cx| { this.send_open = !this.send_open; cx.notify(); }))))
-                .child(button("viewer-reload", IconName::RotateCw, false).on_click(cx.listener(|this, _, _, cx| this.load(cx))))
+                .child(button("viewer-reload", IconName::RotateCw, false).on_click(cx.listener(|this, _, _, cx| { this.html.loaded = None; this.load(cx); })))
         };
         row.child(button("viewer-copy", IconName::Copy, false).on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
             .child(button("viewer-reveal", IconName::FolderOpen, false).on_click(move |_, _, cx| cx.reveal_path(std::path::Path::new(&reveal))))
@@ -1434,7 +1437,9 @@ impl Render for ViewerPanel {
         let ext = extension(&path);
         let is_markdown = matches!(ext.as_str(), "md" | "markdown" | "mdx");
         let is_mermaid = matches!(ext.as_str(), "mmd" | "mermaid");
-        let header = self.render_header(&path, is_markdown, is_markdown || is_mermaid, c, window, cx);
+        let is_html = html::is_html(&path);
+        let header = self.render_header(&path, is_markdown, is_markdown || is_mermaid || is_html, c, window, cx);
+        self.sync_html(window, cx);
         let body: AnyElement = match &self.content {
             Content::Loading => div().p_4().text_xs().text_color(c.subtle).child("Loading…").into_any_element(),
             Content::Failed(err) => div().p_4().text_xs().text_color(c.danger).child(err.clone()).into_any_element(),
@@ -1444,6 +1449,7 @@ impl Render for ViewerPanel {
                 let text = text.clone();
                 self.render_markdown(&path, text, &theme_id, c, cx)
             }
+            Content::Text { .. } if !self.editing && is_html && !self.source => self.render_html(c, cx),
             Content::Text { text, .. } if !self.editing && is_mermaid && !self.source => {
                 let text = text.clone();
                 self.render_mermaid_file(&path, text, &theme_id, c, cx)

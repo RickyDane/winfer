@@ -32,7 +32,20 @@ pub struct Attachment {
 pub struct CodeTask {
     pub ev: TaskEv,
     pub started_at: u64,
+    /// When it left `running` (done, failed or stopped), so its time stops counting.
+    pub ended_at: Option<u64>,
     pub recent_lines: Vec<String>,
+}
+
+impl CodeTask {
+    pub fn running(&self) -> bool {
+        self.ev.status.as_deref().is_none_or(|s| s == "running")
+    }
+
+    /// How long it ran, or has been running so far.
+    pub fn elapsed_ms(&self, now: u64) -> u64 {
+        self.ended_at.unwrap_or(now).saturating_sub(self.started_at)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +211,34 @@ impl CodeState {
             self.btw.clear();
         }
         self.sheet = sheet;
+    }
+
+    /// The subagents the live tree above the composer shows, in the order they started: the running
+    /// ones, and while a turn runs also those it started that already finished. Shells aren't in it.
+    pub fn tree_agents(&self) -> Vec<&CodeTask> {
+        let turn = self.busy.then_some(self.turn_started).flatten();
+        let mut out: Vec<&CodeTask> = self.tasks.iter().filter(|t| t.ev.agent.is_some() && (t.running() || turn.is_some_and(|at| t.started_at >= at))).collect();
+        out.sort_by_key(|t| t.started_at);
+        out
+    }
+
+    /// The task whose output sheet is open, while it still runs (its log is polled then).
+    pub fn live_log_task(&self) -> Option<&CodeTask> {
+        let id = self.log_task.as_deref().filter(|_| self.sheet == Some(Sheet::TaskLog))?;
+        self.tasks.iter().find(|t| t.ev.id == id && t.running())
+    }
+
+    /// What a task's output sheet shows: its log file's tail, or, for subagents (which have no log
+    /// file), the output of the tool call that started it.
+    pub fn task_output(&self, id: &str) -> Option<String> {
+        let logged = self.task_log.as_ref().filter(|(i, ..)| i == id).and_then(|(_, text, _)| text.clone()).filter(|t| !t.trim().is_empty());
+        logged.or_else(|| {
+            let tool_id = self.tasks.iter().find(|t| t.ev.id == id)?.ev.tool_id.clone()?;
+            self.items.iter().rev().find_map(|i| match i {
+                Item::Tool { key, output, .. } if *key == tool_id && !output.trim().is_empty() => Some(output.clone()),
+                _ => None,
+            })
+        })
     }
 
     pub fn open_task_log(&mut self, id: &str) {
@@ -369,7 +410,7 @@ impl CodeState {
                 let i = match self.tasks.iter().position(|x| x.ev.id == t.id) {
                     Some(i) => i,
                     None => {
-                        self.tasks.push(CodeTask { ev: TaskEv { id: t.id.clone(), ..Default::default() }, started_at: now, recent_lines: Vec::new() });
+                        self.tasks.push(CodeTask { ev: TaskEv { id: t.id.clone(), ..Default::default() }, started_at: now, ended_at: None, recent_lines: Vec::new() });
                         self.tasks.len() - 1
                     }
                 };
@@ -378,6 +419,11 @@ impl CodeState {
                     ($($f:ident),*) => { $( if t.$f.is_some() { task.ev.$f = t.$f.clone(); } )* };
                 }
                 merge!(tool_id, title, description, agent, tools, last, status, output_file, exit_code, model);
+                if task.running() {
+                    task.ended_at = None;
+                } else if task.ended_at.is_none() {
+                    task.ended_at = Some(now);
+                }
                 if let Some(last) = &t.last {
                     if task.recent_lines.last() != Some(last) {
                         task.recent_lines.push(last.clone());
@@ -788,6 +834,43 @@ mod tests {
         assert_eq!(t.ev.title.as_deref(), Some("build"));
         assert_eq!(t.ev.status.as_deref(), Some("done"));
         assert_eq!(t.recent_lines, ["one", "two"]);
+    }
+
+    #[test]
+    fn tree_shows_running_subagents_and_this_turns_finished_ones() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "task", "id": "old", "agent": "Explore", "status": "done" })));
+        s.apply(ev(json!({ "type": "task", "id": "sh", "title": "npm test", "status": "running" })));
+        assert!(s.tree_agents().is_empty(), "a finished subagent from an earlier turn and a shell stay out");
+        s.tasks[0].started_at -= 1000;
+        s.busy = true;
+        s.turn_started = Some(now_ms());
+        s.apply(ev(json!({ "type": "task", "id": "a", "agent": "Explore", "status": "running" })));
+        s.apply(ev(json!({ "type": "task", "id": "b", "agent": "general", "status": "running" })));
+        s.apply(ev(json!({ "type": "task", "id": "a", "status": "done" })));
+        let ids: Vec<&str> = s.tree_agents().iter().map(|t| t.ev.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        let a = s.tasks.iter().find(|t| t.ev.id == "a").unwrap();
+        assert!(!a.running() && a.ended_at.is_some());
+        s.busy = false;
+        let ids: Vec<&str> = s.tree_agents().iter().map(|t| t.ev.id.as_str()).collect();
+        assert_eq!(ids, ["b"], "once the turn ends only running ones stay");
+    }
+
+    #[test]
+    fn subagent_output_falls_back_to_its_tool_card() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "tool_start", "id": "call1", "name": "Agent", "title": "Explore auth", "input": {} })));
+        s.apply(ev(json!({ "type": "task", "id": "a", "tool_id": "call1", "agent": "Explore", "status": "running" })));
+        assert_eq!(s.task_output("a"), None);
+        s.apply(ev(json!({ "type": "tool_end", "id": "call1", "ok": true, "output": "Found 3 call sites" })));
+        assert_eq!(s.task_output("a").as_deref(), Some("Found 3 call sites"));
+        s.open_task_log("a");
+        assert_eq!(s.live_log_task().map(|t| t.ev.id.as_str()), Some("a"));
+        s.apply(ev(json!({ "type": "task_log", "id": "a", "text": "log tail" })));
+        assert_eq!(s.task_output("a").as_deref(), Some("log tail"), "a log file wins");
+        s.apply(ev(json!({ "type": "task", "id": "a", "status": "done" })));
+        assert!(s.live_log_task().is_none());
     }
 
     #[test]

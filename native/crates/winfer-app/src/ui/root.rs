@@ -90,6 +90,8 @@ mod updates_ui;
 pub mod voice_tools;
 #[path = "voice_ui.rs"]
 mod voice_ui;
+#[path = "voice_orchestrator.rs"]
+mod voice_orchestrator;
 
 use agent_api::PendingQuestions;
 use commands::Command;
@@ -346,6 +348,8 @@ pub struct Root {
     /// Settings → Diagnostics: the list of usage data sent (telemetry.rs).
     pub(super) usage_info_open: bool,
     voice: voice_ui::VoiceUi,
+    /// Live voice's orchestrators, one per workspace that has used one.
+    orch: voice_orchestrator::Orchestrators,
     /// The tile area's bounds as of the last frame.
     tile_bounds: Bounds<Pixels>,
     drag: Option<Drag>,
@@ -448,6 +452,7 @@ impl Root {
                     this.tick_worktrees(cx);
                     this.tick_failover(cx);
                     this.deliver_bg_notes(cx);
+                    this.tick_orchestrators(cx);
                     this.expire_questions(cx);
                 }).is_err() {
                     break;
@@ -536,7 +541,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), orch: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -634,11 +639,15 @@ impl Root {
                     status::set_task(&self.state, &pane_id, &task, cx);
                 }
             }
-            SessionEvent::SpawnFailed(id) => self.state.update(cx, |s, cx| {
-                s.starting.remove(&id);
-                s.set_pane_status(&id, AgentStatus::Error, true);
-                cx.notify();
-            }),
+            SessionEvent::SpawnFailed(id) => {
+                // An orchestrator that couldn't start: the next request tries again.
+                self.orchestrator_exited(&id, 1, cx);
+                self.state.update(cx, |s, cx| {
+                    s.starting.remove(&id);
+                    s.set_pane_status(&id, AgentStatus::Error, true);
+                    cx.notify();
+                })
+            }
             SessionEvent::Backend(event, payload) if event.starts_with("browser://") => {
                 self.browser.update(cx, |b, cx| b.on_event(&event, &payload, cx));
             }
@@ -663,8 +672,10 @@ impl Root {
                 }
                 "bg://note" => {
                     let (id, text) = (payload["paneId"].as_str().unwrap_or_default().to_string(), payload["text"].as_str().unwrap_or_default().to_string());
-                    self.bg_notes.entry(id).or_default().push(text);
-                    self.deliver_bg_notes(cx);
+                    if !self.orchestrator_note(&id, text.clone(), cx) {
+                        self.bg_notes.entry(id).or_default().push(text);
+                        self.deliver_bg_notes(cx);
+                    }
                 }
                 "bg://task" => {
                     self.on_bg_task(&payload, cx);
@@ -673,7 +684,7 @@ impl Root {
                     let id = payload["paneId"].as_str().unwrap_or_default().to_string();
                     let code = payload["code"].as_u64().unwrap_or(0) as u32;
                     let pid = payload["pid"].as_u64().map(|p| p as u32);
-                    if terminal::on_exit(&id, code, pid) {
+                    if terminal::on_exit(&id, code, pid) && !self.orchestrator_exited(&id, code, cx) {
                         if let Some(model) = self.code_models.get(&id) {
                             model.update(cx, |m, cx| m.on_exit(code, cx));
                         }
@@ -1638,6 +1649,14 @@ impl Render for Root {
         // Development aid: open a layer at launch, to look at it without driving the keyboard.
         #[cfg(debug_assertions)]
         if self.state.read(cx).hydrated && !std::mem::replace(&mut self.dev_layer_opened, true) {
+            // Development aid: hand the orchestrator a request at launch, as if said to live voice.
+            if let Ok(request) = std::env::var("WINFER_NATIVE_ORCHESTRATE") {
+                let result = self.orchestrate(&request, false, cx);
+                eprintln!("[orchestrate] {result:?}");
+                if let Err(e) = result {
+                    self.toast(e, cx);
+                }
+            }
             match std::env::var("WINFER_NATIVE_LAYER").as_deref() {
                 Ok("palette") => self.execute(Command::Palette(None), window, cx),
                 Ok("new-pane") => self.update_state(cx, |s| s.overlay = crate::model::Overlay::NewPane),
@@ -1762,6 +1781,8 @@ impl Render for Root {
         let indicator = self.drop_indicator(&c, cx);
         let device_on = side_open && self.state.read(cx).side_panel() == SidePanel::Device;
         self.android.update(cx, |a, cx| a.set_visible(device_on, cx));
+        let viewer_on = side_open && self.state.read(cx).side_panel() == SidePanel::Viewer && !self.modal_layer_open(cx);
+        self.viewer.update(cx, |v, cx| v.set_html_allowed(viewer_on, window, cx));
         let mut side_panel = side_open.then(|| self.render_side_panel(&c, cx));
         let palette = self.render_palette(&c, cx);
         let sheet = self.render_cheat_sheet(&c, cx);
@@ -1836,10 +1857,11 @@ impl Render for Root {
             .on_mouse_move(cx.listener(Self::mouse_moved))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_released))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_released))
-            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, _| {
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 this.note_user_activity();
-                // A click that reaches GPUI is outside the plugin webview: keys belong to GPUI again.
+                // A click that reaches GPUI is outside the plugin and HTML webviews: keys belong to GPUI again.
                 this.reclaim_keyboard();
+                this.viewer.read(cx).reclaim_keyboard();
             }))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.note_user_activity();

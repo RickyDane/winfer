@@ -235,6 +235,9 @@ impl Root {
 
     /// An agent finished. Hooks fire per turn and idle detection can flap, so wait for it to stay finished.
     pub(super) fn agent_finished(&mut self, pane: &str, cx: &mut Context<Self>) {
+        if crate::voice::orchestrator_workspace(pane).is_some() {
+            return;
+        }
         self.voice_agent_note(pane, "finished", cx);
         if self.state.read(cx).pane(pane).is_some_and(|p| p.status != AgentStatus::Done) {
             self.estimate_now(pane, cx);

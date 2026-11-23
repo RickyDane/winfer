@@ -9,6 +9,7 @@ use crate::model::layout::Preset;
 use serde_json::{Value, json};
 
 pub const END_CONVERSATION: &str = "end_conversation";
+pub const ORCHESTRATE: &str = "orchestrate";
 
 /// The pane arguments every pane tool takes.
 fn pane_param() -> Value {
@@ -38,7 +39,7 @@ pub fn agent_tools() -> Vec<Value> {
         tool("send_to_pane", "Type a message into a pane, e.g. an instruction for an agent or a command in a shell pane. Submits unless submit is false. Write the message as the agent should receive it.", json!({ "pane": pane_param(), "text": { "type": "string" }, "submit": { "type": "boolean" } }), &["pane", "text"]),
         tool("spawn_agent", "Start one new agent pane, optionally with a first prompt and its own git worktree. Providers: the installed agent ids, or shell.", json!({ "provider": { "type": "string" }, "prompt": { "type": "string" }, "worktree": { "type": "boolean" } }), &["provider"]),
         tool("open_url", "Open a URL in winfer's browser panel (reuses a tab already on that site unless new_tab).", json!({ "url": { "type": "string" }, "new_tab": { "type": "boolean" } }), &["url"]),
-        tool("open_file", "Show a file in winfer's file viewer (markdown rendered, images shown). Relative paths start at the workspace folder.", json!({ "path": { "type": "string" }, "line": { "type": "number" } }), &["path"]),
+        tool("open_file", "Show a file in winfer's file viewer (markdown and HTML rendered, images shown). Relative paths start at the workspace folder.", json!({ "path": { "type": "string" }, "line": { "type": "number" } }), &["path"]),
         tool("usage_status", "How much of an agent's plan usage is left (5-hour and weekly windows, resets). Defaults to the focused pane's agent.", json!({ "pane": pane_param() }), &[]),
     ]
 }
@@ -95,6 +96,17 @@ pub fn registry_tools(providers: &[(String, String)]) -> Vec<Value> {
         }
     }
     tools
+}
+
+/// Hands a request to the orchestrator (`voice_orchestrator.rs`), the agent that works for the
+/// user in the background.
+pub fn orchestrate_tool() -> Value {
+    tool(
+        ORCHESTRATE,
+        "Hand a request to your orchestrator, an agent working for the user in the background with full access: git, files, shell, tests, panes, the browser, earlier chats. Use it for anything that needs looking into or several steps: what changed or what an agent did, planning work and giving it to agents, reviewing and merging their work. It answers later in a [winfer] Orchestrator message.",
+        json!({ "request": { "type": "string", "description": "The user's request in their words, with the context that matters" }, "fresh": { "type": "boolean", "description": "Start a new orchestrator conversation first (the user wants to start over)" } }),
+        &["request"],
+    )
 }
 
 pub fn end_tool() -> Value {

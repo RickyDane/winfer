@@ -35,6 +35,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>winfer uses the microphone for voice input and live voice.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>winfer turns what you say into text when you dictate a message.</string>
 </dict></plist>
 PLIST
 

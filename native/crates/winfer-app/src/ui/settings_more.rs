@@ -109,6 +109,7 @@ struct Inputs {
     live_model: Entity<InputState>,
     live_prompt: Entity<TextareaState>,
     writer_model: Entity<InputState>,
+    orchestrator_model: Entity<InputState>,
 }
 
 #[derive(Default)]
@@ -149,6 +150,14 @@ impl Root {
         let live_model = cx.new(|cx| InputState::new(window, cx).placeholder(DEFAULT_LIVE_MODEL).default_value(live_model_value));
         let live_prompt = cx.new(|cx| TextareaState::new(window, cx).soft_wrap(true).default_value(prompt_value));
         let writer_model = cx.new(|cx| InputState::new(window, cx).placeholder("CLI default").default_value(writer_value));
+        let orchestrator_value = self.voice_str("orchestratorModel", cx).unwrap_or_default();
+        let orchestrator_model = cx.new(|cx| InputState::new(window, cx).placeholder("winfer code default").default_value(orchestrator_value));
+        cx.subscribe(&orchestrator_model, |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                this.set_rest("voice", "orchestratorModel", json!(input.read(cx).value().trim()), cx);
+            }
+        })
+        .detach();
         cx.subscribe(&api_key, |_, _, _: &InputEvent, cx| cx.notify()).detach();
         cx.subscribe(&live_model, |this, input, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
@@ -169,7 +178,7 @@ impl Root {
             }
         })
         .detach();
-        self.more.inputs = Some(Inputs { api_key, live_model, live_prompt, writer_model });
+        self.more.inputs = Some(Inputs { api_key, live_model, live_prompt, writer_model, orchestrator_model });
         self.refresh_more(cx);
     }
 
@@ -366,7 +375,16 @@ impl Root {
                 .child(div().flex_1().min_w_0().child("The ChatGPT plan always uses its own voice model, on the Codex CLI's login (codex login)."))
                 .child(if ready { badge(c.success, "Codex is logged in") } else { badge(c.warning, "Codex isn't logged in yet") }));
         }
-        page
+        let orchestrator_model = self.more.inputs.as_ref().unwrap().orchestrator_model.clone();
+        let running = self.has_orchestrator(cx);
+        page.child(section(c, "Orchestrator", Some("works for you in the background".into())))
+            .child(panel(c).overflow_hidden()
+                .child(card_row(c, "What it does", Some("Voice hands it everything that needs looking into or several steps: what changed, planning work and giving it to agents, following them up and merging. It runs winfer code with full access, without asking, except to merge, discard or close.".into()), div()))
+                .child(card_row(c, "Model", Some("A winfer code model (e.g. claude/opus). Empty uses winfer code's default. Applies to the next orchestrator.".into()), div().w(px(190.0)).child(Input::new(&orchestrator_model))).border_t_1().border_color(c.border))
+                .child(card_row(c, "Conversation", Some(if running { "Running for this workspace; it remembers what you asked.".into() } else { "Starts with your first request.".into() }), btn(c, "orchestrator-fresh", Some(IconName::RotateCcw), "Start fresh", Btn::Plain, running).on_click(cx.listener(|this, _, _, cx| {
+                    let ws = this.state.read(cx).active_workspace_id.clone();
+                    this.stop_orchestrator(&ws, cx);
+                }))).border_t_1().border_color(c.border)))
     }
 
     fn voice_behaviour(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {

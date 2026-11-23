@@ -371,15 +371,50 @@ impl CodeView {
         out.into_any_element()
     }
 
+    /// A task's output: its status line, for subagents the steps it took, then its log or result.
     fn sheet_task_log(&mut self, c: Colors, mono: SharedString, cx: &mut Context<Self>) -> AnyElement {
         let st = &self.model.read(cx).state;
-        match &st.task_log {
-            None => dim(c, "Loading…").into_any_element(),
-            Some((_, None, _)) => dim(c, "No output yet.").into_any_element(),
-            Some((_, Some(text), file)) => div().flex().flex_col().gap_1()
-                .when_some(file.clone(), |d, f| d.child(dim(c, f)))
-                .child(div().rounded_md().border_1().border_color(c.edge).bg(c.app).p_2().font_family(mono).text_size(px(11.5)).text_color(c.muted).whitespace_normal().child(text.clone())).into_any_element(),
+        let Some(id) = st.log_task.clone() else { return dim(c, "No task selected.").into_any_element() };
+        let task = st.tasks.iter().find(|t| t.ev.id == id);
+        let output = st.task_output(&id);
+        let file = st.task_log.as_ref().filter(|(i, ..)| *i == id).and_then(|(_, _, f)| f.clone());
+        let asked = st.task_log.as_ref().is_some_and(|(i, ..)| *i == id);
+        let mut out = div().flex().flex_col().gap_2();
+        if let Some(t) = task {
+            let (icon, color, label) = match t.ev.status.as_deref() {
+                Some("done") => (IconName::CircleCheck, c.success, "done"),
+                Some("failed") => (IconName::CircleX, c.danger, "failed"),
+                Some("stopped") => (IconName::CircleSlash, c.subtle, "stopped"),
+                _ => (IconName::LoaderCircle, c.accent, "running"),
+            };
+            let title = t.ev.description.clone().or(t.ev.title.clone()).unwrap_or_else(|| id.clone());
+            let mut meta = vec![label.to_string()];
+            match &t.ev.agent {
+                Some(a) => meta.push(format!("{a} · {} tools", t.ev.tools.unwrap_or(0))),
+                None => meta.push("background shell".into()),
+            }
+            if let Some(m) = &t.ev.model { meta.push(model_name(m, None)); }
+            meta.push(elapsed(t.elapsed_ms(now_ms())));
+            if let (Some(code), false) = (t.ev.exit_code, t.running()) { meta.push(format!("exit {code}")); }
+            out = out.child(div().flex().items_center().gap_1p5().child(Icon::new(icon).size(px(13.0)).text_color(color)).child(div().flex_1().min_w_0().truncate().text_size(px(12.5)).text_color(c.fg).child(title)))
+                .child(dim(c, meta.join(" · ")));
+            if t.ev.agent.is_some() && !t.recent_lines.is_empty() {
+                let mut steps = div().flex().flex_col().gap_0p5().font_family(mono.clone()).text_size(px(11.0));
+                let n = t.recent_lines.len();
+                for (i, l) in t.recent_lines.iter().enumerate() {
+                    let current = t.running() && i + 1 == n;
+                    steps = steps.child(div().flex().gap_1p5().child(div().text_color(c.subtle).child(if current { "›" } else { "·" })).child(div().flex_1().min_w_0().whitespace_normal().text_color(if current { c.fg } else { c.muted }).child(l.clone())));
+                }
+                out = out.child(div().text_size(px(10.5)).text_color(c.subtle).child("RECENT STEPS")).child(steps);
+            }
         }
+        if let Some(f) = file { out = out.child(dim(c, f)); }
+        match output {
+            Some(text) => out.child(div().rounded_md().border_1().border_color(c.edge).bg(c.app).p_2().font_family(mono).text_size(px(11.5)).text_color(c.muted).whitespace_normal().child(text)),
+            None if task.is_some_and(|t| t.running()) => out.child(dim(c, if task.is_some_and(|t| t.ev.agent.is_some()) { "Its result shows here when it finishes." } else if asked { "No output yet." } else { "Loading…" })),
+            None => out.child(dim(c, "No output.")),
+        }
+        .into_any_element()
     }
 
     fn sheet_btw(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {

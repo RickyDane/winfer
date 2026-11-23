@@ -480,7 +480,7 @@ impl Root {
     }
 
     /// Whether a GPUI layer covers the main area: the native webview would hide it.
-    fn modal_layer_open(&self, cx: &App) -> bool {
+    pub(super) fn modal_layer_open(&self, cx: &App) -> bool {
         let s = self.state.read(cx);
         s.palette_query.is_some() || s.cheat_sheet_open || s.settings_open || s.overlay != Overlay::None || s.diff_pane_id.is_some()
             || !self.questions.is_empty() || !self.plugins.approvals.is_empty() || self.orchestration.has_layer() || self.plugins.apps_open

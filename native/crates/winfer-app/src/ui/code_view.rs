@@ -72,7 +72,18 @@ impl Env {
     }
 }
 
+/// A push-to-talk dictation in progress: what the draft was and where the words go.
+struct Dictating {
+    base: String,
+    at: usize,
+    started: u64,
+    stopping: bool,
+    /// Something was heard or went wrong; else a held press that ends says it heard nothing.
+    heard: bool,
+}
+
 pub struct CodeView {
+    dictation: Option<Dictating>,
     pub(super) model: Entity<CodeModel>,
     pub(super) app: Entity<AppState>,
     list: ListState,
@@ -609,7 +620,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false }
+        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -976,6 +987,75 @@ impl CodeView {
         self.paste_clipboard_item(&item, cx)
     }
 
+    /// Mic button pressed: listen, and show what's heard in the composer as it comes.
+    fn start_dictation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dictation.is_some() || !crate::dictation::supported() {
+            return;
+        }
+        let base = self.draft(cx);
+        let at = base.chars().count();
+        self.dictation = Some(Dictating { base, at, started: now_ms(), stopping: false, heard: false });
+        let (tx, rx) = async_channel::unbounded();
+        crate::dictation::start(tx);
+        self.tick(cx);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(ev) = rx.recv().await {
+                let ended = ev == crate::dictation::Event::Ended;
+                if this.update_in(cx, |this, window, cx| this.on_dictation(ev, window, cx)).is_err() {
+                    crate::dictation::cancel();
+                    break;
+                }
+                if ended {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Mic button released (or the pointer let go elsewhere): finish and keep the text.
+    fn stop_dictation(&mut self, cx: &mut Context<Self>) {
+        if let Some(d) = self.dictation.as_mut().filter(|d| !d.stopping) {
+            d.stopping = true;
+            crate::dictation::stop();
+            cx.notify();
+        }
+    }
+
+    fn on_dictation(&mut self, ev: crate::dictation::Event, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::dictation::Event;
+        match ev {
+            Event::Text { text, .. } => {
+                if let Some(d) = self.dictation.as_mut() {
+                    d.heard |= !text.trim().is_empty();
+                    let (draft, _) = crate::dictation::insert(&d.base, d.at, &text);
+                    self.set_input(&draft, window, cx);
+                }
+            }
+            Event::Error(msg) => {
+                if let Some(d) = self.dictation.as_mut() {
+                    d.heard = true;
+                }
+                self.model.update(cx, |m, cx| {
+                    m.state.notice(format!("Dictation: {msg}"));
+                    cx.notify();
+                });
+            }
+            Event::Ended => {
+                // A quick tap is likely a miss; a real hold that caught nothing gets a hint.
+                if self.dictation.take().is_some_and(|d| !d.heard && now_ms().saturating_sub(d.started) > 1200) {
+                    self.model.update(cx, |m, cx| {
+                        m.state.notice("Dictation: didn't hear anything. Check the microphone in System Settings → Sound → Input.");
+                        cx.notify();
+                    });
+                }
+                self.focus_composer(window, cx);
+            }
+        }
+        cx.notify();
+    }
+
     fn pick_files(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
         cx.spawn(async move |this, cx| {
@@ -995,8 +1075,9 @@ impl CodeView {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let keep = this.update(cx, |this, cx| {
-                    let busy = this.model.read(cx).state.busy;
+                    let busy = this.live(cx);
                     if busy {
+                        this.poll_task_log(cx);
                         cx.notify();
                     } else {
                         this.ticking = false;
@@ -1009,6 +1090,20 @@ impl CodeView {
             }
         })
         .detach();
+    }
+
+    /// Something on screen counts time: a running turn, a subagent still running in the background, or dictation.
+    fn live(&self, cx: &App) -> bool {
+        let st = &self.model.read(cx).state;
+        st.busy || st.tasks.iter().any(|t| t.ev.agent.is_some() && t.running()) || st.live_log_task().is_some() || self.dictation.is_some()
+    }
+
+    /// Asks again for the tail of a running task whose output sheet is open (called each tick).
+    fn poll_task_log(&mut self, cx: &mut Context<Self>) {
+        let id = self.model.read(cx).state.live_log_task().map(|t| t.ev.id.clone());
+        if let Some(id) = id {
+            self.model.update(cx, |m, cx| m.send(Cmd::TaskLog(id), cx));
+        }
     }
 
     fn prefs(&self, cx: &App) -> (f32, bool, bool, bool, bool, bool, bool, bool, bool) {
@@ -2536,6 +2631,100 @@ impl CodeView {
         Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head).when(open, |d| d.child(list)), false).into_any_element())
     }
 
+    /// The live subagent tree above the composer: the main agent and the subagents it started, each
+    /// with its status, type, model, tool count and time. A row opens its output; its chevron shows
+    /// what it did last. Hidden once no subagent runs and the turn that started them is over.
+    fn render_agent_tree(&self, c: Colors, mono: SharedString, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let st = &self.model.read(cx).state;
+        let agents = st.tree_agents();
+        if agents.is_empty() {
+            return None;
+        }
+        let now = now_ms();
+        let running = agents.iter().filter(|t| t.running()).count();
+        let failed = agents.iter().filter(|t| t.ev.status.as_deref() == Some("failed")).count();
+        let finished = agents.len() - running - failed;
+        let open = !self.flipped.contains("agent-tree");
+        let mut counts = Vec::new();
+        if running > 0 { counts.push(format!("{running} running")); }
+        if finished > 0 { counts.push(format!("{finished} done")); }
+        if failed > 0 { counts.push(format!("{failed} failed")); }
+        let head = div().id("cw-agents-head").flex().items_center().gap_2().h(px(34.0)).px_3().cursor_pointer().text_size(px(12.0)).text_color(c.muted)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle("agent-tree", open, cx)))
+            .child(Icon::new(IconName::Workflow).size(px(13.0)).text_color(c.accent))
+            .child(div().text_color(c.fg).child("Subagents"))
+            .child(div().flex_1().min_w_0().truncate().text_color(c.subtle).child(counts.join(" · ")))
+            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronUp }).size(px(12.0)).text_color(c.subtle));
+        if !open {
+            return Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head), false).into_any_element());
+        }
+        let branch = |last: bool| div().w(px(14.0)).flex_shrink_0().font_family(mono.clone()).text_color(alpha(c.subtle, 0.7)).child(if last { "└" } else { "├" });
+        let rail = |last: bool| div().w(px(14.0)).flex_shrink_0().font_family(mono.clone()).text_color(alpha(c.subtle, 0.7)).child(if last { " " } else { "│" });
+        let main_model = model_name(&st.model, None);
+        let mut list = div().flex().flex_col().px_3().pb_2p5().text_size(px(12.0))
+            .child(div().flex().items_center().gap_1p5().h(px(22.0))
+                .child(Icon::new(IconName::Bot).size(px(13.0)).text_color(c.accent))
+                .child(div().text_color(c.fg).child("Main agent"))
+                .child(div().text_color(c.subtle).child(main_model)));
+        let n = agents.len();
+        for (i, t) in agents.iter().enumerate() {
+            let last = i + 1 == n;
+            let id = t.ev.id.clone();
+            let key = format!("agt-{id}");
+            let expanded = self.flipped.contains(&key);
+            let live = t.running();
+            let glyph: AnyElement = match t.ev.status.as_deref() {
+                Some("done") => Icon::new(IconName::CircleCheck).size(px(13.0)).text_color(c.success).into_any_element(),
+                Some("failed") => Icon::new(IconName::CircleX).size(px(13.0)).text_color(c.danger).into_any_element(),
+                Some("stopped") => Icon::new(IconName::CircleSlash).size(px(13.0)).text_color(c.subtle).into_any_element(),
+                _ => spinner(c.accent, 13.0, SharedString::from(format!("agt-sp-{id}"))).into_any_element(),
+            };
+            let kind = t.ev.agent.clone().unwrap_or_default();
+            let title = t.ev.description.clone().or(t.ev.title.clone()).unwrap_or_else(|| kind.clone());
+            let mut meta = Vec::new();
+            if let Some(m) = &t.ev.model { meta.push(model_name(m, None)); }
+            if let Some(n) = t.ev.tools { meta.push(format!("{n} tool{}", if n == 1 { "" } else { "s" })); }
+            meta.push(elapsed(t.elapsed_ms(now)));
+            let has_lines = !t.recent_lines.is_empty();
+            let (id_log, id_stop, key_toggle) = (id.clone(), id.clone(), key.clone());
+            let row = div().id(SharedString::from(format!("agt-row-{id}"))).flex().items_center().gap_1p5().h(px(24.0)).rounded_md().cursor_pointer().hover(move |d| d.bg(c.hover))
+                .tooltip(tip("Open its output"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let id = id_log.clone();
+                    this.model.update(cx, |m, cx| { m.state.open_task_log(&id); m.flush(cx); cx.notify(); });
+                }))
+                .child(branch(last))
+                .child(glyph)
+                .child(div().flex_shrink_0().text_color(if live { c.fg } else { c.muted }).child(kind))
+                .child(div().flex_1().min_w_0().truncate().text_color(c.subtle).child(title))
+                .child(div().flex_shrink_0().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(meta.join(" · ")))
+                .when(live, |d| d.child(div().id(SharedString::from(format!("agt-stop-{id}"))).flex_shrink_0().p_0p5().rounded_md().hover(move |d| d.bg(alpha(c.danger, 0.14)))
+                    .tooltip(tip("Stop this subagent"))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.send(Cmd::StopTask(id_stop.clone()), cx); }))
+                    .child(Icon::new(IconName::CircleStop).size(px(12.0)).text_color(c.danger))))
+                .when(has_lines, |d| d.child(div().id(SharedString::from(format!("agt-more-{id}"))).flex_shrink_0().p_0p5().rounded_md().hover(move |d| d.bg(c.hover))
+                    .tooltip(tip(if expanded { "Hide its recent steps" } else { "Show its recent steps" }))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.toggle(&key_toggle, expanded, cx); }))
+                    .child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.0)).text_color(c.subtle))));
+            list = list.child(row);
+            // Collapsed, a running subagent still shows the step it's on; expanded, its last few.
+            let lines: Vec<String> = if expanded { t.recent_lines.clone() } else if live { t.recent_lines.last().cloned().into_iter().collect() } else { Vec::new() };
+            let k = lines.len();
+            for (j, line) in lines.into_iter().enumerate() {
+                let current = live && j + 1 == k;
+                list = list.child(div().flex().items_center().gap_1p5().h(px(20.0)).text_size(px(11.0))
+                    .child(rail(last))
+                    .child(div().w(px(13.0)).flex_shrink_0().text_color(alpha(c.subtle, 0.7)).child("·"))
+                    .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_color(if current { c.muted } else { c.subtle }).child(line)));
+            }
+        }
+        let cap = (self.pane_size.height / px(1.0) * 0.35).clamp(96.0, 280.0);
+        let body = div().id("cw-agents-body").max_h(px(cap)).overflow_y_scroll().child(list);
+        Some(dock_inset(rise(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head).child(body), "cw-agents", 0, 6.0), false).into_any_element())
+    }
+
     fn render_approval(&mut self, a: &Approval, c: Colors, mono: SharedString, cx: &mut Context<Self>) -> AnyElement {
         let (id, model) = (a.id.clone(), self.model.clone());
         let decide = |label: &'static str, key_hint: &'static str, decision: Decision, primary: bool, key: String, model: Entity<CodeModel>, id: String| {
@@ -2657,6 +2846,21 @@ impl CodeView {
             );
         }
         Some(dock_inset(rise(div().mb_2().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_md().overflow_hidden().child(list), "cw-popup", 0, 6.0), false).into_any_element())
+    }
+
+    /// While dictating: a pulsing dot, the time, and how to finish.
+    fn render_dictation(&self, c: Colors, cx: &App) -> Option<AnyElement> {
+        let d = self.dictation.as_ref()?;
+        let lay = composer_layout(self.pane_size.width / px(1.0), self.pane_size.height / px(1.0));
+        let dot = div().size(px(7.0)).rounded_full().bg(c.danger)
+            .with_animation("cw-dictate-dot", Animation::new(Duration::from_millis(1200)).repeat(), |d, t| d.opacity(0.35 + 0.65 * breathe(t)));
+        let row = div().h(px(26.0)).flex().items_center().gap_2().px(if lay.tight_x { px(8.0) } else { px(12.0) }).text_size(px(11.5)).text_color(c.subtle)
+            .child(dot)
+            .child(div().text_color(c.fg).child(if d.stopping { "Finishing…" } else { "Listening…" }))
+            .child(div().font_family(fonts::mono(cx)).child(elapsed(now_ms().saturating_sub(d.started))))
+            .child(div().flex_1())
+            .when(!d.stopping, |r| r.child(div().child("release to insert")));
+        Some(dock_inset(rise(row, "cw-dictate", 0, 4.0), lay.compact_v || lay.tight_x).into_any_element())
     }
 
     /// Spinner row above the composer while a turn runs: elapsed time, token in/out, cached %, tok/s.
@@ -2797,6 +3001,21 @@ impl CodeView {
                 .tooltip(tip(effort_tip))
                 .when(open_sheet == Some(Sheet::Effort), |d| d.bg(c.hover).text_color(c.fg))
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_picker(Sheet::Effort, cx)))
+        });
+        let mic_btn = crate::dictation::supported().then(|| {
+            let on = self.dictation.as_ref().is_some_and(|d| !d.stopping);
+            let mic_sz = attach_sz;
+            div().id("cw-mic").size(px(mic_sz)).flex_shrink_0().flex().items_center().justify_center().rounded_lg().cursor_pointer()
+                .when(!on, |d| d.text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)))
+                .when(on, |d| d.text_color(c.danger).bg(alpha(c.danger, 0.16)))
+                .tooltip(tip(if on { "Listening · release to insert" } else { "Hold to dictate" }))
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.start_dictation(window, cx);
+                }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_dictation(cx)))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.stop_dictation(cx)))
+                .child(Icon::new(IconName::Mic).size(px(if lay.ultra_v { 13.0 } else { 15.0 })))
         });
         let send_btn = nebula_send(c, stop, can_send, animate_send, if stop { IconName::Square } else { IconName::ArrowUp }, send_sz)
             .tooltip(tip(if stop { "Interrupt (Esc)" } else if busy { "Steer the running turn (Enter)" } else { "Send (Enter)" }))
@@ -2996,6 +3215,7 @@ impl CodeView {
                     .child(model_btn)
                     .children(fast_btn)
                     .child(effort_btn)
+                    .children(mic_btn)
                     .child(send_btn),
             );
         } else {
@@ -3062,6 +3282,7 @@ impl CodeView {
                 });
             let toolbar = div().flex().items_end().gap_0p5().px_1p5().h(px(bar_h))
                 .child(controls)
+                .when_some(mic_btn, |d, mic| d.child(div().flex_shrink_0().pb(px(controls_pb)).child(mic)))
                 .child(div().flex_shrink_0().pb(px(send_pb)).child(send_btn));
             card = card.child(toolbar);
         }
@@ -3088,7 +3309,7 @@ impl Render for CodeView {
             let m = self.model.read(cx);
             (m.state.items.clone(), m.state.approvals.clone(), m.state.busy, m.state.exited.clone(), m.state.sheet)
         };
-        if busy {
+        if self.live(cx) {
             self.tick(cx);
         }
         self.ensure_picker(window, cx);
@@ -3178,9 +3399,11 @@ impl Render for CodeView {
         let text = self.draft(cx);
         let popup = self.render_popup(&text, c, cx);
         let plan = if show_plan { self.render_plan(c, cx) } else { None };
+        let agent_tree = self.render_agent_tree(c, mono.clone(), cx);
         let approval_cards: Vec<AnyElement> = approvals.iter().take(1).map(|a| self.render_approval(a, c, mono.clone(), cx)).collect();
         let more_approvals = approvals.len().saturating_sub(1);
         let status = self.render_status(c, cx);
+        let dictating = self.render_dictation(c, cx);
         let composer = self.render_composer(c, cx);
         let preview = self.preview.clone().map(|image| {
             div()
@@ -3353,10 +3576,12 @@ impl Render for CodeView {
             .child(div().flex_1().min_h_0().relative().overflow_hidden().debug_selector(|| "cw-transcript".to_string()).child(transcript).children(jump))
             .children(status)
             .children(plan)
+            .children(agent_tree)
             .children(approval_cards)
             .when(more_approvals > 0, |d| d.child(col(div().pb_2().px_1().text_size(px(11.0)).text_color(c.subtle).child(format!("{more_approvals} more waiting")))))
             .children(exited_note)
             .children(popup)
+            .children(dictating)
             .child(composer)
             .children(sheet_el)
             .children(preview)

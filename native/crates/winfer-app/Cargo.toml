@@ -40,6 +40,9 @@ libc = "0.2.190"
 # Checks an update's signature against the Tauri app's updater key (see updates.rs).
 minisign-verify = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Foundation", "Media_SpeechRecognition", "Win32_System_WinRT"] }
+
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 # Signs test bundles as `tauri signer sign` does.

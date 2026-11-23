@@ -16,7 +16,7 @@ const IDLE_AFTER: Duration = Duration::from_millis(4000);
 /// Hook agents marked "working" only because the user pressed Enter, and when.
 static GUESSED: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
 
-fn window_focused() -> bool {
+pub(crate) fn window_focused() -> bool {
     use tauri::Manager;
     backend::app().get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(true)
 }
@@ -107,7 +107,7 @@ pub fn submitted(state: &Entity<AppState>, id: &str, line: &str, cx: &mut App) {
 
 pub fn set_task(state: &Entity<AppState>, id: &str, line: &str, cx: &mut App) {
     let line = line.trim();
-    if line.is_empty() || line.starts_with('/') {
+    if line.is_empty() || line.starts_with('/') || crate::voice::orchestrator_workspace(id).is_some() {
         return;
     }
     state.update(cx, |s, cx| {

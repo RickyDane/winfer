@@ -11598,6 +11598,7 @@ dependencies = [
  "tokio-tungstenite",
  "ureq",
  "url",
+ "windows 0.62.2",
  "winfer-backend",
  "winresource",
  "wry",

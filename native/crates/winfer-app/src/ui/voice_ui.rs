@@ -1,7 +1,7 @@
 //! Live voice in the app: start and stop, the model's tool calls, and the HUD
 //! (port of `features/voice/live/session.ts`, `LiveVoiceHUD.tsx` and the voice half of `tools.ts`).
 
-use super::voice_tools::{self, END_CONVERSATION};
+use super::voice_tools::{self, END_CONVERSATION, ORCHESTRATE};
 use super::*;
 use crate::backend;
 use crate::voice::client::{self, Down, Handle, Player, State, Up, Who};
@@ -79,7 +79,7 @@ impl Root {
         self.state.read(cx).rest.get("voice").and_then(|v| v[key].as_str()).unwrap_or_default().to_string()
     }
 
-    fn voice_context(&self, cx: &App) -> voice_tools::Context {
+    pub(super) fn voice_context(&self, cx: &App) -> voice_tools::Context {
         let s = self.state.read(cx);
         voice_tools::Context {
             providers: s.providers.iter().filter(|p| p.installed).map(|p| (p.id.clone(), p.name.clone())).collect(),
@@ -127,6 +127,7 @@ impl Root {
             _ => tools.push(json!({ "type": "function", "name": USE_BROWSER, "description": "Load the tools to see and control web pages in winfer's browser (snapshot, click, type, fill forms, console). Call before acting on a page.", "parameters": { "type": "object", "properties": {} } })),
         }
         tools.push(json!({ "type": "function", "name": BG, "description": "Run a long-running command (dev server, watcher, build) in the workspace folder in the background.", "parameters": { "type": "object", "properties": { "command": { "type": "string" } }, "required": ["command"] } }));
+        tools.push(voice_tools::orchestrate_tool());
         tools.push(voice_tools::end_tool());
         tools.iter().map(voice_tools::clean).collect()
     }
@@ -343,6 +344,7 @@ impl Root {
                 }
                 self.run_voice_agent_tool(name, &args, cx)
             }
+            ORCHESTRATE => self.orchestrate(args["request"].as_str().unwrap_or_default(), args["fresh"] == true, cx),
             "open_url" => {
                 let url = args["url"].as_str().unwrap_or_default().trim().to_string();
                 if url.is_empty() {
@@ -473,6 +475,7 @@ impl Root {
             None => label.to_string(),
         };
         let level = (self.voice.level * 6.0).clamp(0.0, 1.0);
+        let step = self.orchestrator_step(cx);
         let muted = self.voice.muted;
         let lines: Vec<AnyElement> = self.voice.lines.iter().rev().take(4).rev().map(|l| match l {
             Line::You(t) => div().flex().gap_1p5().text_size(px(12.0)).child(div().text_color(c.subtle).child("You")).child(div().flex_1().min_w_0().text_color(c.fg).whitespace_normal().child(t.clone())).into_any_element(),
@@ -496,7 +499,8 @@ impl Root {
                                 cx.notify();
                             })))
                             .child(icon_button("voice-stop", IconName::X, false).on_click(cx.listener(|this, _, _, cx| this.stop_voice(cx)))))
-                        .when(!lines.is_empty(), |d| d.child(div().flex().flex_col().gap_0p5().children(lines))),
+                        .when(!lines.is_empty(), |d| d.child(div().flex().flex_col().gap_0p5().children(lines)))
+                        .when_some(step, |d, step| d.child(div().flex().items_center().gap_1p5().text_size(px(11.0)).text_color(c.accent).child(Icon::new(IconName::LoaderCircle).size(px(12.0))).child(div().flex_1().min_w_0().truncate().child(format!("Orchestrator · {step}"))))),
                 )
                 .into_any_element(),
         )

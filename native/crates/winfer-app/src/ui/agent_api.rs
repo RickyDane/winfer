@@ -119,17 +119,45 @@ impl Root {
     }
 
     fn run_tool(&mut self, call: &str, tool: &str, pane_id: &str, a: &Value, window: &mut Window, cx: &mut Context<Self>) -> Outcome {
+        let orchestrator = crate::voice::orchestrator_workspace(pane_id).map(str::to_string);
         if tool == "__plugin_tools" {
-            return Outcome::Done(Ok(self.plugin_agent_tool_list().to_string()));
+            let mut list = self.plugin_agent_tool_list();
+            // Orchestrators also get winfer's UI actions.
+            if let (Some(_), Value::Array(tools)) = (&orchestrator, &mut list) {
+                tools.extend(self.orchestrator_mcp_tools(cx));
+            }
+            return Outcome::Done(Ok(list.to_string()));
         }
         let (ws, me) = {
             let s = self.state.read(cx);
-            let Some(ws) = s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane_id)) else {
+            let found = match &orchestrator {
+                // An orchestrator isn't one of the workspace's panes: it stands in for the user.
+                Some(w) => s.workspaces.iter().find(|ws| ws.id == *w).map(|ws| {
+                    let me = Pane { id: pane_id.to_string(), provider: "winfer".into(), cwd: ws.root_dir.clone(), workspace_id: ws.id.clone(), ..Default::default() };
+                    (ws.clone(), me)
+                }),
+                None => s.workspaces.iter().find(|w| w.panes.iter().any(|p| p.id == pane_id)).map(|ws| (ws.clone(), ws.panes.iter().find(|p| p.id == pane_id).cloned().unwrap())),
+            };
+            let Some(found) = found else {
                 return Outcome::Done(Err("The calling pane isn't open in winfer anymore.".to_string()));
             };
-            (ws.clone(), ws.panes.iter().find(|p| p.id == pane_id).cloned().unwrap())
+            found
         };
-        let who = describe(self.state.read(cx), &ws, &me);
+        let who = if orchestrator.is_some() { "Orchestrator".to_string() } else { describe(self.state.read(cx), &ws, &me) };
+        if let Some(w) = &orchestrator {
+            match tool {
+                "notify_user" => {
+                    self.orchestrator_says(w, a["message"].as_str().unwrap_or_default(), cx);
+                    return Outcome::Done(Ok("Told the user.".to_string()));
+                }
+                "ask_user" => return Outcome::Done(Err("Nobody sees questions asked this way: put the question in your reply; the voice assistant asks the user.".to_string())),
+                t => {
+                    if let Some(result) = self.orchestrator_action(w, t, a, window, cx) {
+                        return Outcome::Done(result);
+                    }
+                }
+            }
+        }
         match tool {
             "open_url" => {
                 let url = a["url"].as_str().unwrap_or_default().to_string();
@@ -248,6 +276,9 @@ impl Root {
                     cx.notify();
                     id
                 });
+                if crate::voice::orchestrator_workspace(&me.id).is_some() {
+                    self.orchestrator_owns(&ws.id, &new_id, cx);
+                }
                 let s = self.state.read(cx);
                 let fresh = s.workspaces.iter().find(|w| w.id == ws.id).cloned().unwrap_or_default();
                 if ws.id != s.active_workspace_id {

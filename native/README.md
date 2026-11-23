@@ -61,7 +61,7 @@ Done:
 - [x] Settings → Voice (with native microphone test), AI, winfer code, Mobile, Plugins, Skills
 - [x] Viewer: PDFs (hayro, page and zoom), markdown comments per block
 - [x] Settings → winfer code → Local models (host, key, thinking levels and budgets, Test) and the local subagent model
-- [x] winfer code chat pane (the default; Settings → winfer code → "Use TUI style" brings the terminal UI back): transcript with markdown, tool rows and diffs, approvals and questions, plan, slash commands, `@` files, attachments, model/effort/mode pickers, sessions, usage, tasks, context meter. chat panes animate in (rows fade up, spinners, a working indicator, sheets); images open full size, links open in the browser or viewer, and file names in a reply's inline code open in the file viewer; the transcript is virtualized, so long sessions need no paging
+- [x] winfer code chat pane (the default; Settings → winfer code → "Use TUI style" brings the terminal UI back): transcript with markdown, tool rows and diffs, approvals and questions, plan, slash commands, `@` files, attachments, model/effort/mode pickers, sessions, usage, tasks, context meter. chat panes animate in (rows fade up, spinners, a working indicator, sheets); images open full size, links open in the browser or viewer, and file names in a reply's inline code open in the file viewer; the transcript is virtualized, so long sessions need no paging; a live subagent tree above the composer (status, type, model, tools, time, latest step; opens the output, stops one); hold-to-talk dictation from the mic button on the OS speech recognizer (macOS Speech framework built from `src/dictation/macos.swift`, Windows.Media.SpeechRecognition; none on Linux)
 - [x] Live voice with an OpenAI API key: Realtime API over WebSocket (cpal audio), winfer's tools (registry, agent, browser, bg), HUD, mute; ⌘⌥V. Untested against the live API
 - [x] Updates: Stable/Nebula channel, check, What's new, and install in place ("Install and restart"): the signed bundle
   from `latest-native.json` replaces the running app (see Packaging)
@@ -99,10 +99,11 @@ needs write access to that folder) and relaunches; the new copy waits for the ol
 
 ## Development aids (debug builds)
 
+- `scripts/dev-app-macos.sh`: builds the debug binary into `target/debug/winfer-dev.app` and opens it, passing on `WINFER_*` variables, with its own data (`dev.winfer.native.dev`). Needed to try dictation: macOS takes the microphone and speech permission texts from the app responsible for the process, so a bare `cargo run` started from Terminal or the installed winfer can't ask for them
 - `WINFER_NATIVE_SPAWN=shell,claude`: opens these panes at launch
 - `WINFER_NATIVE_CODE_WEB=1`: winfer code panes show the chat, whatever the setting
 - `WINFER_NATIVE_PROMPT=…`: the start prompt of those panes
-- `WINFER_NATIVE_CODE_DEMO=1` (`welcome`, `draft`, `fast`, `model`, `effort`, `mode`, `diff`, `phone`): chat panes play a scripted session instead of starting a process, to check the styling without a login
+- `WINFER_NATIVE_CODE_DEMO=1` (`welcome`, `draft`, `fast`, `model`, `effort`, `mode`, `diff`, `phone`, `agents`): chat panes play a scripted session instead of starting a process, to check the styling without a login
 - `WINFER_VAULT_FILE=path`: keep the keychain values (paired phones, keys) in a file instead, so a test copy can't touch the real ones
 - `WINFER_NATIVE_LAYER=browser|palette|…`, `WINFER_NATIVE_MOBILE=1`, `WINFER_NATIVE_INSTALL_BROWSER=1`: open a layer, the phone view, or download Chromium at launch
 - `WINFER_NATIVE_URL=https://…`: loads this page in the browser panel

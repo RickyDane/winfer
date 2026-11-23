@@ -6,6 +6,7 @@ mod audio;
 mod assets;
 mod backend;
 mod code;
+mod dictation;
 mod fonts;
 mod mermaid;
 mod model;
