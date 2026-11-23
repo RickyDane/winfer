@@ -263,10 +263,12 @@ pub fn extra_system(opts: &Opts) -> Option<String> {
 /// Where the agent is (Claude Code drops it with its default prompt); goes after [`LEAN_PROMPT`]
 /// so the cached prefix stays the same.
 pub fn environment(cwd: &std::path::Path) -> String {
-    let branch = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(cwd)
-        .output()
+    let branch = crate::env::no_window(
+        std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(cwd),
+    )
+    .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| format!(" · git branch {}", String::from_utf8_lossy(&o.stdout).trim()))

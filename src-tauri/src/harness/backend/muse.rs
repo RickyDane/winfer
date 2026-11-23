@@ -207,7 +207,7 @@ fn todos_of(input: &Value) -> Option<Vec<Todo>> {
 /// Skills Muse itself offers (`muse skills list`, TSV), for the `/` picker.
 fn muse_skills() -> Vec<Skill> {
     let Some(muse) = crate::env::find_command("muse") else { return Vec::new() };
-    let Ok(out) = std::process::Command::new(muse).args(["skills", "list"]).output() else { return Vec::new() };
+    let Ok(out) = crate::env::no_window(std::process::Command::new(muse).args(["skills", "list"])).output() else { return Vec::new() };
     let text = String::from_utf8_lossy(&out.stdout);
     let mut skills = Vec::new();
     for line in text.lines().skip(1) {

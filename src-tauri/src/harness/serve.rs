@@ -214,7 +214,7 @@ impl Serve {
     }
 
     fn diff(&self) {
-        let o = std::process::Command::new("git").args(["diff", "HEAD", "--no-color"]).current_dir(&self.cwd).output();
+        let o = crate::env::no_window(std::process::Command::new("git").args(["diff", "HEAD", "--no-color"]).current_dir(&self.cwd)).output();
         match o {
             Ok(o) if o.status.success() => {
                 let d = String::from_utf8_lossy(&o.stdout).into_owned();

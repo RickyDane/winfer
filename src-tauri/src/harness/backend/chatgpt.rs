@@ -450,10 +450,12 @@ fn save_items(id: &str, items: &[Value]) {
 
 fn instructions(opts: &Opts) -> String {
     let cwd = opts.cwd.display();
-    let branch = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(&opts.cwd)
-        .output()
+    let branch = crate::env::no_window(
+        std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&opts.cwd),
+    )
+    .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());

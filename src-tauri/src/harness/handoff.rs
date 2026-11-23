@@ -48,10 +48,12 @@ pub fn fallback_text(from_spec: &str, to_spec: &str) -> String {
 
 /// Short uncommitted git status for `cwd`, capped to [`MAX_STATUS_LINES`] lines.
 pub fn git_status_short(cwd: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["status", "--short", "--untracked-files=normal"])
-        .current_dir(cwd)
-        .output()
+    let out = crate::env::no_window(
+        std::process::Command::new("git")
+            .args(["status", "--short", "--untracked-files=normal"])
+            .current_dir(cwd),
+    )
+    .output()
         .ok()?;
     if !out.status.success() {
         return None;
