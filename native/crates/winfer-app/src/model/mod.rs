@@ -479,6 +479,14 @@ impl AppState {
         self.restore_tasks();
     }
 
+    /// The `ui` settings of a fresh install. (`hydrate` stops early without a workspace, so it
+    /// gets an empty one.)
+    pub fn default_ui() -> Value {
+        let mut state = AppState::default();
+        state.hydrate(serde_json::json!({ "workspaces": [Workspace { id: "w".into(), ..Default::default() }], "ui": {} }));
+        state.snapshot()["ui"].clone()
+    }
+
     pub fn snapshot(&self) -> Value {
         let open: Vec<&str> = self.all_panes().map(|p| p.id.as_str()).collect();
         let tasks: HashMap<_, _> = self.pane_tasks.iter().filter(|(id, _)| open.contains(&id.as_str())).collect();
@@ -658,7 +666,7 @@ impl AppState {
     }
 
     pub fn add_pane(&mut self, provider: &str, opts: AddPane) -> String {
-        crate::telemetry::pane_opened(provider);
+        crate::telemetry::pane_opened(provider, opts.effort.as_deref());
         let workspace_id = opts.workspace_id.clone().unwrap_or_else(|| self.active_workspace_id.clone());
         let background = workspace_id != self.active_workspace_id;
         let id = new_id("p");
@@ -941,5 +949,16 @@ mod tests {
         s.focus_pane(&pane_b);
         assert_eq!(s.active_workspace_id, ws_b);
         assert_eq!(s.focused_pane_id.as_deref(), Some(pane_b.as_str()));
+    }
+}
+
+#[cfg(test)]
+mod default_ui_tests {
+    #[test]
+    fn a_fresh_install_has_the_real_defaults() {
+        let ui = super::AppState::default_ui();
+        assert_eq!(ui["theme"], "dark");
+        assert!(ui["sidebarWidth"].as_f64().is_some_and(|w| w > 0.0));
+        assert!(ui["terminalFontSize"].as_f64().is_some_and(|w| w > 0.0));
     }
 }

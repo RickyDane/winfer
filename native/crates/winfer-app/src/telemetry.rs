@@ -11,6 +11,10 @@
 //! - `panic` (source file and line only, no message) and `tokens_processed` (token counts per
 //!   provider and model per hour, from the usage history).
 //!
+//! - `workspace_size` (open workspaces and panes, when it changes, at most every 10 minutes),
+//!   `settings_drift` once per launch (names of the preferences changed from the defaults; values
+//!   only for fixed choices like the theme), `memory_milestone` after 1, 4, 8, 24 and 72 hours up,
+//!   `effort_used` (winfer code turns per backend and reasoning effort, every 10 minutes);
 //! - `tool_used`: the agents' tool calls per tool and hour (name, calls, failures, average
 //!   time), from Claude Code's and Codex's logs; never inputs or results.
 //! - `$ai_generation` and `$ai_span` (PostHog AI Observability) for live voice: model, token
@@ -65,6 +69,10 @@ struct Telemetry {
     saved: Mutex<Saved>,
     queue: Mutex<Vec<Value>>,
     commands: Mutex<std::collections::BTreeMap<String, u32>>,
+    /// Turns sent in winfer code per (backend, effort).
+    efforts: Mutex<std::collections::BTreeMap<(String, String), u32>>,
+    /// Latest workspace size, the session's largest, and the last one sent.
+    size: Mutex<(Option<WorkspaceSize>, WorkspaceSize, Option<WorkspaceSize>)>,
     /// The build has a key and the environment doesn't forbid it.
     allowed: bool,
     enabled: AtomicBool,
@@ -119,7 +127,7 @@ pub fn init(data_dir: &Path) {
     let pending: Vec<Value> = std::fs::read_to_string(data_dir.join(PENDING_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let _ = std::fs::remove_file(data_dir.join(PENDING_FILE));
     let enabled = !saved.disabled;
-    let t = Telemetry { dir: data_dir.to_path_buf(), saved: Mutex::new(saved), queue: Mutex::new(pending), commands: Mutex::default(), allowed: api_key().is_some() && env_allows(), enabled: AtomicBool::new(enabled) };
+    let t = Telemetry { dir: data_dir.to_path_buf(), saved: Mutex::new(saved), queue: Mutex::new(pending), commands: Mutex::default(), efforts: Mutex::default(), size: Mutex::default(), allowed: api_key().is_some() && env_allows(), enabled: AtomicBool::new(enabled) };
     if T.set(t).is_err() {
         return;
     }
@@ -215,8 +223,116 @@ pub fn provider_label(provider: &str) -> &'static str {
     KNOWN_PROVIDERS.iter().find(|p| **p == provider).copied().unwrap_or("custom")
 }
 
-pub fn pane_opened(provider: &str) {
-    track("pane_opened", json!({ "provider": provider_label(provider) }));
+pub fn pane_opened(provider: &str, effort: Option<&str>) {
+    track("pane_opened", json!({ "provider": provider_label(provider), "effort": effort.map(plain_label) }));
+}
+
+/// A short identifier as is (`high`, `Bash`); anything else as "other".
+fn plain_label(name: &str) -> String {
+    let plain = !name.is_empty() && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
+    if plain { name.to_string() } else { "other".to_string() }
+}
+
+/// A winfer code turn was sent at this reasoning effort (`model` is `backend/model`).
+pub fn turn_sent(model: &str, effort: &str, ultracode: bool) {
+    let Some(t) = T.get() else { return };
+    if !active() {
+        return;
+    }
+    let backend = provider_label(model.split('/').next().unwrap_or_default()).to_string();
+    let effort = if ultracode { "ultracode".to_string() } else { plain_label(effort) };
+    *t.efforts.lock().unwrap_or_else(PoisonError::into_inner).entry((backend, effort)).or_default() += 1;
+}
+
+fn report_efforts() {
+    let Some(t) = T.get() else { return };
+    let counts = std::mem::take(&mut *t.efforts.lock().unwrap_or_else(PoisonError::into_inner));
+    for ((backend, effort), turns) in counts {
+        track("effort_used", json!({ "backend": backend, "effort": effort, "turns": turns }));
+    }
+}
+
+/// How many workspaces and panes are open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceSize {
+    pub workspaces: usize,
+    pub panes: usize,
+    /// In the fullest workspace.
+    pub max_panes: usize,
+}
+
+/// The UI saved its state: the open workspaces and panes now.
+pub fn workspace_size(size: WorkspaceSize) {
+    let Some(t) = T.get() else { return };
+    let mut s = t.size.lock().unwrap_or_else(PoisonError::into_inner);
+    s.0 = Some(size);
+    s.1 = WorkspaceSize { workspaces: s.1.workspaces.max(size.workspaces), panes: s.1.panes.max(size.panes), max_panes: s.1.max_panes.max(size.max_panes) };
+}
+
+fn bucket(n: usize) -> &'static str {
+    match n {
+        0 => "0",
+        1 => "1",
+        2..=4 => "2-4",
+        5..=9 => "5-9",
+        _ => "10+",
+    }
+}
+
+/// Sent when it changed since the last one, at most every 10 minutes.
+fn report_workspace_size() {
+    let Some(t) = T.get() else { return };
+    let size = {
+        let mut s = t.size.lock().unwrap_or_else(PoisonError::into_inner);
+        match s.0 {
+            Some(now) if s.2 != Some(now) => {
+                s.2 = Some(now);
+                Some((now, s.1))
+            }
+            _ => None,
+        }
+    };
+    if let Some((now, max)) = size {
+        track("workspace_size", json!({
+            "workspaces": now.workspaces, "panes": now.panes, "max_panes_per_workspace": now.max_panes,
+            "panes_bucket": bucket(now.panes), "workspaces_bucket": bucket(now.workspaces),
+            "session_max_panes": max.panes, "session_max_workspaces": max.workspaces,
+        }));
+    }
+}
+
+/// Which settings differ from the defaults (names; values only for the ones in [`SETTING_VALUES`]).
+/// Sent once per launch.
+pub fn settings_drift(current: &Value, defaults: &Value) {
+    let changed = changed_settings(current, defaults);
+    let mut props = Map::new();
+    for key in SETTING_VALUES {
+        if let Some(v) = current.get(*key).filter(|v| v.is_boolean() || v.is_number() || v.is_string()) {
+            let v = match v.as_str() {
+                Some(s) if *key == "defaultProvider" => json!(provider_label(s)),
+                Some(s) => json!(plain_label(s)),
+                None => v.clone(),
+            };
+            props.insert(format!("setting_{key}"), v);
+        }
+    }
+    props.insert("changed_count".into(), json!(changed.len()));
+    props.insert("changed".into(), json!(changed));
+    track("settings_drift", Value::Object(props));
+}
+
+/// Settings whose value is sent: choices from a fixed set, numbers and switches.
+const SETTING_VALUES: &[&str] = &["theme", "themeMode", "defaultProvider", "autoApprove", "showPaneCost", "terminalFontSize", "pageTabIconsOnly"];
+
+/// Settings compared with the defaults: preferences, not window state the app saves as it's used
+/// (panel widths, the overview layout, the file viewer).
+const SETTING_KEYS: &[&str] = &[
+    "theme", "themeMode", "themePicks", "defaultProvider", "autoApprove", "showPaneCost", "terminalFontSize",
+    "pageTabIconsOnly", "editor", "shortcuts", "systemPrompt", "enabledTools", "agentModels",
+];
+
+fn changed_settings(current: &Value, defaults: &Value) -> Vec<&'static str> {
+    SETTING_KEYS.iter().copied().filter(|k| current.get(*k).unwrap_or(&Value::Null) != defaults.get(*k).unwrap_or(&Value::Null)).collect()
 }
 
 /// Counts a command by its name without its arguments (`Spawn { provider: .. }` → `Spawn`).
@@ -298,7 +414,9 @@ pub fn shutdown() {
         let mem = diagnostics::memory_snapshot();
         let session_secs = PROCESS_START.get().map(|s| s.elapsed().as_secs());
         report_commands();
-        track("app_exited", json!({ "session_secs": session_secs, "peak_rss_mb": mb(mem.peak_rss_bytes) }));
+        report_efforts();
+        let max = T.get().map(|t| t.size.lock().unwrap_or_else(PoisonError::into_inner).1).unwrap_or_default();
+        track("app_exited", json!({ "session_secs": session_secs, "peak_rss_mb": mb(mem.peak_rss_bytes), "session_max_panes": max.panes, "session_max_workspaces": max.workspaces }));
     }
     if !flush(Duration::from_secs(3)) {
         write_pending(&t.queue.lock().unwrap_or_else(PoisonError::into_inner));
@@ -346,6 +464,24 @@ fn flush(timeout: Duration) -> bool {
     }
 }
 
+/// Hours of uptime at which memory is reported, to catch growth that only long sessions show.
+const MEMORY_MILESTONES_H: [u64; 5] = [1, 4, 8, 24, 72];
+static NEXT_MILESTONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn report_memory_milestones() {
+    let Some(up) = PROCESS_START.get().map(|s| s.elapsed().as_secs() / 3600) else { return };
+    let next = NEXT_MILESTONE.load(Ordering::Relaxed);
+    // Only the latest milestone passed (a sleeping laptop may skip several).
+    let Some(passed) = MEMORY_MILESTONES_H.iter().rposition(|h| up >= *h).filter(|i| *i >= next) else { return };
+    NEXT_MILESTONE.store(passed + 1, Ordering::Relaxed);
+    let mem = diagnostics::memory_snapshot();
+    let panes = T.get().and_then(|t| t.size.lock().unwrap_or_else(PoisonError::into_inner).0).map(|s| s.panes);
+    track("memory_milestone", json!({
+        "hours": MEMORY_MILESTONES_H[passed], "rss_mb": mb(mem.rss_bytes), "peak_rss_mb": mb(mem.peak_rss_bytes), "panes": panes,
+        "pty_sessions": diagnostics::diagnostics_info(crate::backend::app().clone()).pty_sessions,
+    }));
+}
+
 fn run() {
     let mut last_heartbeat = Instant::now();
     // Token use and the heartbeat go out once the app has been up for a while.
@@ -358,6 +494,9 @@ fn run() {
             report_tokens();
             report_tools();
             report_commands();
+            report_efforts();
+            report_workspace_size();
+            report_memory_milestones();
         }
         if last_heartbeat.elapsed() >= HEARTBEAT_EVERY {
             last_heartbeat = Instant::now();
@@ -544,6 +683,20 @@ mod tests {
         let st = |name: &str, calls, failed, ms| tool_stats::Stat { name: name.into(), calls, failed, duration_ms: ms, timed: calls, ..Default::default() };
         let rows = tool_rows(&[st("Bash", 10, 2, 1000), st("Read", 3, 0, 30), st("weird name/x", 1, 0, 5)], &[st("Bash", 4, 1, 400), st("Read", 3, 0, 30)]);
         assert_eq!(rows.iter().map(|r| (r.name.as_str(), r.calls, r.failed, r.duration_ms)).collect::<Vec<_>>(), vec![("Bash", 6, 1, 600), ("other", 1, 0, 5)]);
+    }
+
+    #[test]
+    fn settings_drift_names_changed_preferences_only() {
+        let defaults = json!({ "theme": "dark", "autoApprove": false, "sidebarWidth": 260, "activeWorkspaceId": "a" });
+        let current = json!({ "theme": "light", "autoApprove": false, "sidebarWidth": 300, "activeWorkspaceId": "b", "systemPrompt": "secret" });
+        assert_eq!(changed_settings(&current, &defaults), vec!["theme", "systemPrompt"]);
+    }
+
+    #[test]
+    fn buckets_and_labels() {
+        assert_eq!([bucket(0), bucket(1), bucket(3), bucket(7), bucket(12)], ["0", "1", "2-4", "5-9", "10+"]);
+        assert_eq!(plain_label("xhigh"), "xhigh");
+        assert_eq!(plain_label("my effort/x"), "other");
     }
 
     #[test]

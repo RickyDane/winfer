@@ -343,6 +343,8 @@ pub struct Root {
     /// The browser panel's own window, while it's undocked.
     browser_window: Option<AnyWindowHandle>,
     updates: updates_ui::UpdatesUi,
+    /// Settings → Diagnostics: the list of usage data sent (telemetry.rs).
+    pub(super) usage_info_open: bool,
     voice: voice_ui::VoiceUi,
     /// The tile area's bounds as of the last frame.
     tile_bounds: Bounds<Pixels>,
@@ -499,6 +501,14 @@ impl Root {
                 cx.notify();
             });
             crate::telemetry::app_ready();
+            let _ = loading.read_with(cx, |s, _| {
+                crate::telemetry::settings_drift(&s.snapshot()["ui"], &crate::model::AppState::default_ui());
+                crate::telemetry::workspace_size(crate::telemetry::WorkspaceSize {
+                    workspaces: s.workspaces.len(),
+                    panes: s.all_panes().count(),
+                    max_panes: s.workspaces.iter().map(|w| w.panes.len()).max().unwrap_or(0),
+                });
+            });
             let found = tauri::async_runtime::spawn(providers::providers_list()).await;
             if let Ok(found) = found {
                 let found = found.into_iter().map(|p| crate::model::AgentProvider { info: p.provider, installed: p.installed }).collect();
@@ -526,7 +536,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -536,7 +546,13 @@ impl Root {
         self.save_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(400)).await;
             let _ = this.update(cx, |this, cx| {
-                let snapshot = this.state.read(cx).snapshot();
+                let state = this.state.read(cx);
+                let snapshot = state.snapshot();
+                crate::telemetry::workspace_size(crate::telemetry::WorkspaceSize {
+                    workspaces: state.workspaces.len(),
+                    panes: state.all_panes().count(),
+                    max_panes: state.workspaces.iter().map(|w| w.panes.len()).max().unwrap_or(0),
+                });
                 let json = snapshot.to_string();
                 if json == this.last_saved {
                     return;
@@ -1771,6 +1787,7 @@ impl Render for Root {
         let context_menu = self.render_menu(&c, window, cx);
         let approval = self.render_approval(&c, cx);
         let whats_new = self.render_whats_new(&c, cx);
+        let usage_info = self.render_usage_info(&c, cx);
         let voice_hud = self.render_voice_hud(&c, cx);
         let toasts = self.render_toasts(&c, cx);
         let drag_shield = match &self.drag {
@@ -1921,6 +1938,7 @@ impl Render for Root {
             .children(context_menu)
             .children(approval)
             .children(whats_new)
+            .children(usage_info)
             .children(voice_hud)
             .children(toasts)
             .children(drag_shield)

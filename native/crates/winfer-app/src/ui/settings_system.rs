@@ -4,6 +4,7 @@
 use super::settings_kit::{PageTab, alpha, badge, banner, empty_state, icon_tile, intro, meter, panel, section, small_label, tab_count, tab_dot};
 use super::*;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use serde_json::{Value, json};
 use winfer_backend::{diagnostics, transfer};
 
@@ -516,14 +517,19 @@ impl Root {
     fn usage_data_card(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
         let available = crate::telemetry::available();
         let on = available && crate::telemetry::enabled();
-        let sub = if available {
-            "App version, OS, startup time, memory, crash locations, which features, agents and agent tools are used, and token counts. Never prompts, code, terminal output, paths or names."
-        } else {
-            "This build doesn't send usage data (no key at build time, or DO_NOT_TRACK / WINFER_TELEMETRY=0 is set)."
-        };
+        let sub = if available { "Helps improve winfer. Never your prompts, code or files." } else { "This build doesn't send usage data." };
+        let info = div().id("usage-data-info").size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded_md().cursor_pointer()
+            .text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg))
+            .tooltip(|window, cx| Tooltip::new("What's collected").build(window, cx))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.usage_info_open = true;
+                cx.notify();
+            }))
+            .child(Icon::new(IconName::Info).size(px(15.0)));
         let card = panel(c).flex_row().items_center().gap_3().px_3p5().py_3()
             .child(icon_tile(c.muted, IconName::ChartColumn, 28.0))
-            .child(small_label(c, "Share anonymous usage data", sub));
+            .child(small_label(c, "Share anonymous usage data", sub))
+            .child(info);
         if !available {
             return card;
         }
@@ -725,5 +731,86 @@ mod tests {
         assert_eq!(uptime(8040.0), "2 h 14 min");
         assert_eq!(date_of(1_795_305_600), "2026-11-22");
         assert_eq!(date_of(1_795_392_000), "2026-11-23");
+    }
+}
+
+/// What the usage data holds, in groups (telemetry.rs sends exactly this).
+const USAGE_DATA: &[(IconName, &str, &[&str])] = &[
+    (IconName::Monitor, "App and session", &[
+        "A random install ID, not tied to you or this computer",
+        "App version, operating system and architecture",
+        "Startup time and session length",
+        "Memory use every hour and after 1, 4, 8, 24 and 72 hours",
+    ]),
+    (IconName::LayoutGrid, "Features", &[
+        "Agent panes opened, by provider and reasoning effort",
+        "Commands used, by name and count",
+        "Worktrees created; plugins switched on or off (store plugins by name)",
+        "How many workspaces and panes are open",
+        "Which settings differ from the defaults (values only for choices like the theme)",
+    ]),
+    (IconName::Bot, "Agents and tokens", &[
+        "Tokens per provider and model, per hour",
+        "Agent tool calls per tool: count, failures, average time",
+        "winfer code turns per reasoning effort",
+        "Live voice: model, tokens, response time and tool names",
+    ]),
+    (IconName::Bug, "Reliability", &[
+        "Crashes: the source file and line, never the message",
+        "Whether the previous run ended unexpectedly",
+    ]),
+];
+
+const USAGE_DATA_NEVER: &str = "Prompts, transcripts, code, terminal output, file paths, folder and repository names, URLs, messages, or your location.";
+
+impl Root {
+    /// The list of usage data sent, over everything (Settings → Diagnostics → the info button).
+    pub(super) fn render_usage_info(&mut self, c: &Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.usage_info_open {
+            return None;
+        }
+        let c = *c;
+        let close = |this: &mut Self, cx: &mut Context<Self>| {
+            this.usage_info_open = false;
+            cx.notify();
+        };
+        let mut body = div().id("usage-info-body").flex().flex_col().gap_4().overflow_y_scroll().px_5().py_4();
+        for (icon, title, items) in USAGE_DATA {
+            let mut list = div().flex().flex_col().gap_1p5().pl(px(24.0));
+            for item in *items {
+                list = list.child(div().flex().items_start().gap_2().text_size(px(12.5)).text_color(c.muted)
+                    .child(div().mt(px(7.0)).size(px(4.0)).flex_shrink_0().rounded_full().bg(c.subtle))
+                    .child(div().flex_1().min_w_0().child(*item)));
+            }
+            body = body.child(div().flex().flex_col().gap_2()
+                .child(div().flex().items_center().gap_2().text_size(px(12.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg)
+                    .child(Icon::new(*icon).size(px(15.0)).text_color(c.subtle)).child(*title))
+                .child(list));
+        }
+        body = body.child(div().flex().items_start().gap_2p5().px_3().py_2p5().rounded(px(9.0)).bg(alpha(c.success, 0.1))
+            .child(div().mt(px(1.0)).child(Icon::new(IconName::ShieldCheck).size(px(15.0)).text_color(c.success)))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                .child(div().text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Never sent"))
+                .child(div().text_size(px(12.0)).text_color(c.muted).child(USAGE_DATA_NEVER))));
+        let footer = div().flex().items_center().gap_3().px_5().py_3().border_t_1().border_color(c.border)
+            .child(div().flex_1().text_size(px(11.5)).text_color(c.subtle).child("Turn it off with the switch, or set DO_NOT_TRACK=1."))
+            .child(div().id("usage-info-ok").rounded_md().bg(c.accent).text_color(c.on_accent).px_3().py_1().text_size(px(12.0)).cursor_pointer().hover(|d| d.opacity(0.9))
+                .on_click(cx.listener(move |this, _, _, cx| close(this, cx))).child("Got it"));
+        Some(
+            div().id("usage-info-backdrop").absolute().size_full().flex().items_center().justify_center().bg(hsla(0.0, 0.0, 0.0, 0.4)).occlude()
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| close(this, cx)))
+                .child(
+                    div().id("usage-info").w(px(500.0)).max_h(relative(0.8)).flex().flex_col().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_lg()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(div().flex().items_start().gap_3().px_5().py_3().border_b_1().border_color(c.border)
+                            .child(div().mt(px(2.0)).child(Icon::new(IconName::ChartColumn).size(px(16.0)).text_color(c.accent)))
+                            .child(div().flex_1().min_w_0().flex().flex_col()
+                                .child(div().text_size(px(14.0)).text_color(c.fg).child("Anonymous usage data"))
+                                .child(div().text_size(px(12.0)).text_color(c.subtle).child("What winfer sends to help improve the app. Nothing here identifies you."))))
+                        .child(body)
+                        .child(footer),
+                )
+                .into_any_element(),
+        )
     }
 }

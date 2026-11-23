@@ -210,6 +210,7 @@ impl CodeState {
     /// Applies a command's local effect and queues it for the process.
     pub fn send(&mut self, cmd: Cmd) {
         match &cmd {
+            Cmd::Send { steer: false, .. } => crate::telemetry::turn_sent(&self.model, &self.effort, self.ultracode),
             Cmd::SetMode(m) => self.mode = *m,
             Cmd::SetModel(m) => {
                 self.model = m.clone();
