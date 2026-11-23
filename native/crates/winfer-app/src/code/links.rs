@@ -3,15 +3,35 @@
 
 use std::path::{Path, PathBuf};
 
+/// Splits a trailing line reference off a file name: `:12`, `:12:5`, `:12-30`, `#L12`, `#L12-L30`
+/// and `#L12C3` all give line 12.
+pub fn split_line(token: &str) -> (&str, Option<usize>) {
+    if let Some((name, frag)) = token.rsplit_once("#L") {
+        let digits: String = frag.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(line) = digits.parse() {
+            return (name, Some(line));
+        }
+    }
+    let mut name = token;
+    let mut line = None;
+    // Peel `:N`, `:N-M` and `:N:M` suffixes; the first number is the line.
+    while let Some((head, tail)) = name.rsplit_once(':') {
+        let first = tail.split('-').next().unwrap_or("");
+        if first.is_empty() || !tail.chars().all(|c| c.is_ascii_digit() || c == '-') || !first.chars().all(|c| c.is_ascii_digit()) {
+            break;
+        }
+        line = first.parse().ok();
+        name = head;
+    }
+    (name, line)
+}
+
 /// `name` or `name:line` as an existing file: its absolute path and the line.
 pub fn resolve(token: &str, cwd: Option<&str>) -> Option<(PathBuf, Option<usize>)> {
     if token.is_empty() || token.len() > 300 || token.contains(char::is_whitespace) || !(token.contains('.') || token.contains('/')) {
         return None;
     }
-    let (name, line) = match token.rsplit_once(':') {
-        Some((n, l)) if l.parse::<usize>().is_ok() => (n, l.parse().ok()),
-        _ => (token, None),
-    };
+    let (name, line) = split_line(token);
     if name.contains("://") || name.contains(['*', '<', '>', '|', '?']) {
         return None;
     }
@@ -90,5 +110,18 @@ mod tests {
         assert!(out.contains("```\n`src/main.rs`\n```"));
         assert!(out.ends_with(&format!("and [`src/main.rs`](<{}>).", abs.display())));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn splits_line_references() {
+        assert_eq!(split_line("a/b.rs"), ("a/b.rs", None));
+        assert_eq!(split_line("a/b.rs:12"), ("a/b.rs", Some(12)));
+        assert_eq!(split_line("a/b.rs:12:5"), ("a/b.rs", Some(12)));
+        assert_eq!(split_line("a/b.rs:12-30"), ("a/b.rs", Some(12)));
+        assert_eq!(split_line("a/b.rs#L12"), ("a/b.rs", Some(12)));
+        assert_eq!(split_line("a/b.rs#L12-L30"), ("a/b.rs", Some(12)));
+        assert_eq!(split_line("a/b.rs#L12C3"), ("a/b.rs", Some(12)));
+        assert_eq!(split_line("C:/x/b.rs:7"), ("C:/x/b.rs", Some(7)));
+        assert_eq!(split_line("a/b.rs:x"), ("a/b.rs:x", None));
     }
 }

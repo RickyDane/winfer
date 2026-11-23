@@ -4246,4 +4246,71 @@ mod tests {
             "switch knob right margin must match vertical margin: right_gap={right_gap}, top_gap={top_gap} (sw={sw:?}, kn={kn:?})"
         );
     }
+
+    #[gpui_kit::test]
+    fn clicking_a_file_link_in_the_transcript_emits_open_link(cx: &mut gpui_kit::TestAppContext) {
+        use super::{CodeView, OpenLink};
+        use crate::code::session::CodeModel;
+        use crate::code::state::Item;
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, Modifiers, point, px};
+        use std::{cell::RefCell, rc::Rc};
+
+        let dir = std::env::temp_dir().join(format!("winfer-linkclick-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.rs"), "fn a() {}").unwrap();
+        let cwd = dir.to_str().unwrap().to_string();
+
+        cx.update(gpui_kit::init);
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                m.state.cwd = Some(cwd.clone());
+                m.state.items = vec![Item::Text { key: "a0".into(), text: "`src/a.rs:3` see".into(), streaming: false }];
+                m
+            });
+            CodeView::new(model, app, window, cx)
+        });
+        let got = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sink = got.clone();
+        vcx.update(|_, cx| {
+            cx.subscribe(&view, move |_, OpenLink(h), _| sink.borrow_mut().push(h.clone())).detach();
+        });
+        for _ in 0..3 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let size = vcx.update(|window, _| window.viewport_size());
+        let mut hit = None;
+        let mut y = 4.0;
+        while y < size.height / px(1.0) && hit.is_none() {
+            let mut x = 8.0;
+            while x < 400.0 && hit.is_none() {
+                vcx.simulate_click(point(px(x), px(y)), Modifiers::default());
+                if !got.borrow().is_empty() {
+                    hit = Some(point(px(x), px(y)));
+                }
+                x += 6.0;
+            }
+            y += 6.0;
+        }
+        let hit = hit.expect("no OpenLink emitted by any click");
+        // The way a real click goes: the view re-renders between the press and the release
+        // (pressing focuses the pane, which refocuses the composer).
+        got.borrow_mut().clear();
+        vcx.simulate_mouse_down(hit, gpui_kit::MouseButton::Left, Modifiers::default());
+        vcx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        for _ in 0..2 {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        vcx.simulate_mouse_up(hit, gpui_kit::MouseButton::Left, Modifiers::default());
+        assert!(!got.borrow().is_empty(), "a re-render between press and release swallowed the click");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

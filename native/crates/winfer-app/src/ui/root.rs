@@ -727,10 +727,8 @@ impl Root {
             let link = if href.starts_with("http://") || href.starts_with("https://") {
                 terminal::Link::Web(href.clone())
             } else {
-                let (path, line) = match href.rsplit_once(':') {
-                    Some((p, l)) if l.parse::<usize>().is_ok() => (p.to_string(), l.parse().ok()),
-                    _ => (href.trim_start_matches("file://").to_string(), None),
-                };
+                let (name, line) = crate::code::links::split_line(href);
+                let path = name.trim_start_matches("file://").to_string();
                 // A file the chat named: straight into the viewer.
                 if std::path::Path::new(&path).is_absolute() && std::path::Path::new(&path).is_file() {
                     this.viewer.update(cx, |v, cx| v.open(path, line, false, cx));
