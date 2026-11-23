@@ -56,7 +56,7 @@ pub fn vapid() -> super::push::Vapid {
     }
     let (vapid, pkcs8) = super::push::Vapid::generate();
     if let Err(err) = values::set(SERVICE, VAPID, &super::crypto::b64(&pkcs8)) {
-        eprintln!("winfer: couldn't keep the push key: {err}");
+        crate::diagnostics::log(crate::diagnostics::WARN, "mobile", &format!("couldn't keep the push key: {err}"));
     }
     vapid
 }

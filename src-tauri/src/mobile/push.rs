@@ -52,6 +52,11 @@ fn origin(url: &str) -> Option<&str> {
     Some(&url[..end])
 }
 
+/// The push service's host (`web.push.apple.com`, `fcm.googleapis.com`…), for the log.
+pub fn host(endpoint: &str) -> Option<&str> {
+    origin(endpoint)?.split_once("://").map(|(_, host)| host)
+}
+
 /// Encrypts `payload` for a subscription's `p256dh` key and `auth` secret (RFC 8291).
 pub fn encrypt(payload: &[u8], ua_public: &[u8], auth: &[u8]) -> Option<Vec<u8>> {
     let private = agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &SystemRandom::new()).ok()?;
@@ -121,10 +126,15 @@ pub fn send(vapid: &Vapid, subscription: &Value, payload: &Value) -> Outcome {
         .header("Content-Type", "application/octet-stream")
         .send(&body[..]);
     match result {
-        Ok(r) => match r.status().as_u16() {
+        Ok(mut r) => match r.status().as_u16() {
             200..=299 => Outcome::Sent,
             404 | 410 => Outcome::Gone,
-            code => Outcome::Failed(format!("push service answered {code}")),
+            code => {
+                // Apple and FCM say why (`BadJwtToken`, `VapidPkHashMismatch`…) in the body.
+                let reason = r.body_mut().read_to_string().unwrap_or_default();
+                let reason: String = reason.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect();
+                Outcome::Failed(format!("push service answered {code} {reason}").trim_end().to_string())
+            }
         },
         Err(e) => Outcome::Failed(e.to_string()),
     }
@@ -192,5 +202,6 @@ mod tests {
         assert_eq!(origin("https://web.push.apple.com/QK0x"), Some("https://web.push.apple.com"));
         assert_eq!(origin("https://h:8443"), Some("https://h:8443"));
         assert_eq!(origin("nope"), None);
+        assert_eq!(host("https://web.push.apple.com/QK0x"), Some("web.push.apple.com"));
     }
 }

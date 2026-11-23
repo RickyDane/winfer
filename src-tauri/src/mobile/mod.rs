@@ -30,11 +30,58 @@ pub const DEFAULT_RELAY_URL: &str = "https://winfer.danehub.com";
 const PUSH_THROTTLE: Duration = Duration::from_secs(5);
 /// With winfer focused, the user counts as away (and gets pushes) after this long without input.
 const AWAY_AFTER: Duration = Duration::from_secs(60 * 60);
+/// …or once the whole machine had no keyboard or mouse input this long: a locked or sleeping
+/// Mac keeps winfer "focused", but nobody is there.
+const IDLE_AFTER: Duration = Duration::from_secs(2 * 60);
+
+/// Where the user seems to be, for `should_push`.
+struct Presence {
+    /// A winfer window has focus.
+    focused: bool,
+    /// Since the last key, click or scroll in a winfer window.
+    since_input: Duration,
+    /// Since the last input anywhere on the machine, where the OS tells.
+    system_idle: Option<Duration>,
+    /// A phone was used more recently than winfer on the desktop.
+    on_phone: bool,
+}
 
 /// Pushes go to the phone only when the user isn't at the desktop: no winfer window has focus,
-/// or one does but nothing was typed or clicked in it for `AWAY_AFTER`.
-fn should_push(focused: bool, since_input: Duration) -> bool {
-    !focused || since_input >= AWAY_AFTER
+/// they're using the phone, or the desktop has gone untouched for a while.
+fn should_push(p: &Presence) -> bool {
+    !p.focused || p.on_phone || p.system_idle.is_some_and(|d| d >= IDLE_AFTER) || p.since_input >= AWAY_AFTER
+}
+
+/// How long since any keyboard or mouse input on the machine.
+#[cfg(target_os = "macos")]
+fn system_idle() -> Option<Duration> {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+    }
+    // kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType
+    let secs = unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) };
+    (secs.is_finite() && secs >= 0.0).then(|| Duration::from_secs_f64(secs))
+}
+
+#[cfg(windows)]
+fn system_idle() -> Option<Duration> {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    if unsafe { GetLastInputInfo(&mut info) } == 0 {
+        return None;
+    }
+    Some(Duration::from_millis(unsafe { GetTickCount() }.wrapping_sub(info.dwTime) as u64))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn system_idle() -> Option<Duration> {
+    None
+}
+
+fn log(level: u8, message: &str) {
+    crate::diagnostics::log(level, "mobile", message);
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -57,6 +104,8 @@ struct Mobile {
     last_push: Mutex<HashMap<String, Instant>>,
     /// The last key, click or scroll in a winfer window (reported by the webview).
     last_input: Mutex<Instant>,
+    /// The last message from a paired phone.
+    last_phone: Mutex<Option<Instant>>,
     /// Serializes keychain writes, which happen off the async threads.
     saving: Mutex<()>,
 }
@@ -104,7 +153,7 @@ impl Mobile {
             let _guard = self.saving.lock().unwrap();
             let devices = self.devices.lock().unwrap().clone();
             if let Err(err) = devices::save(&devices) {
-                eprintln!("winfer: couldn't save paired phones: {err}");
+                log(crate::diagnostics::WARN, &format!("couldn't save paired phones: {err}"));
             }
             let json = {
                 let mut config = self.config.lock().unwrap();
@@ -153,11 +202,13 @@ impl Mobile {
                     }
                 }
                 device.last_seen = Some(now);
+                *self.last_phone.lock().unwrap() = Some(Instant::now());
                 None
             } else if !device.paired {
                 return;
             } else {
                 device.last_seen = Some(now);
+                *self.last_phone.lock().unwrap() = Some(Instant::now());
                 match kind.as_str() {
                     "push.subscribe" if msg["subscription"]["endpoint"].is_string() => {
                         device.push_subscription = Some(msg["subscription"].clone());
@@ -200,11 +251,25 @@ impl Mobile {
         if !matches!(status, "done" | "needs-input" | "error") {
             return;
         }
-        let focused = self.app.webview_windows().values().any(|w| w.is_focused().unwrap_or(false));
-        if !should_push(focused, self.last_input.lock().unwrap().elapsed()) {
+        let pane_id = pane["id"].as_str().unwrap_or_default().to_string();
+        let last_input = *self.last_input.lock().unwrap();
+        let presence = Presence {
+            focused: self.app.webview_windows().values().any(|w| w.is_focused().unwrap_or(false)),
+            since_input: last_input.elapsed(),
+            system_idle: system_idle(),
+            on_phone: self.last_phone.lock().unwrap().is_some_and(|t| t > last_input),
+        };
+        if !should_push(&presence) {
+            log(
+                crate::diagnostics::INFO,
+                &format!(
+                    "push for {pane_id} ({status}) held: at the desktop (input {}s ago, system idle {:?})",
+                    presence.since_input.as_secs(),
+                    presence.system_idle.map(|d| d.as_secs())
+                ),
+            );
             return;
         }
-        let pane_id = pane["id"].as_str().unwrap_or_default().to_string();
         {
             let mut last = self.last_push.lock().unwrap();
             if last.get(&pane_id).is_some_and(|t| t.elapsed() < PUSH_THROTTLE) {
@@ -235,15 +300,21 @@ impl Mobile {
             .filter_map(|d| Some((d.device_id.clone(), d.push_subscription.clone()?)))
             .collect();
         if targets.is_empty() {
+            log(crate::diagnostics::INFO, &format!("push for {pane_id} ({status}) skipped: no phone has notifications on"));
             return;
         }
+        let status = status.to_string();
         std::thread::spawn(move || {
             let mut gone = Vec::new();
             for (device, subscription) in targets {
+                let host = subscription["endpoint"].as_str().and_then(push::host).unwrap_or("?").to_string();
                 match push::send(self.vapid(), &subscription, &payload) {
-                    push::Outcome::Sent => {}
-                    push::Outcome::Gone => gone.push(device),
-                    push::Outcome::Failed(err) => eprintln!("winfer: push to a phone failed: {err}"),
+                    push::Outcome::Sent => log(crate::diagnostics::INFO, &format!("push for {pane_id} ({status}) sent to {device} via {host}")),
+                    push::Outcome::Gone => {
+                        log(crate::diagnostics::WARN, &format!("push to {device} via {host}: subscription gone, dropped it"));
+                        gone.push(device);
+                    }
+                    push::Outcome::Failed(err) => log(crate::diagnostics::WARN, &format!("push to {device} via {host} failed: {err}")),
                 }
             }
             if !gone.is_empty() {
@@ -271,6 +342,7 @@ pub fn start(app: AppHandle, data_dir: &std::path::Path) {
         vapid: OnceLock::new(),
         last_push: Mutex::default(),
         last_input: Mutex::new(Instant::now()),
+        last_phone: Mutex::default(),
         saving: Mutex::new(()),
     });
     if !has_devices {
@@ -480,10 +552,14 @@ mod tests {
     #[test]
     fn pushes_only_when_the_user_is_away_from_the_desktop() {
         let min = Duration::from_secs(60);
-        assert!(should_push(false, Duration::ZERO), "another app is in front");
-        assert!(!should_push(true, 5 * min), "winfer focused and in use");
-        assert!(!should_push(true, 59 * min));
-        assert!(should_push(true, 60 * min), "focused but untouched for an hour");
+        let at = |focused, since_input, system_idle, on_phone| should_push(&Presence { focused, since_input, system_idle, on_phone });
+        assert!(at(false, Duration::ZERO, None, false), "another app is in front");
+        assert!(!at(true, 5 * min, Some(Duration::ZERO), false), "winfer focused and in use");
+        assert!(!at(true, 59 * min, None, false), "no idle time from the OS");
+        assert!(at(true, 60 * min, None, false), "focused but untouched for an hour");
+        assert!(!at(true, 5 * min, Some(min), false), "reading at the desk");
+        assert!(at(true, 5 * min, Some(2 * min), false), "desktop locked or left with winfer in front");
+        assert!(at(true, Duration::ZERO, Some(Duration::ZERO), true), "the phone was used last");
     }
 
     #[test]
