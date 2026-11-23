@@ -38,6 +38,8 @@ struct Task {
     reported: bool,
     /// The exit went to the listener.
     announced: bool,
+    /// Killed by the watcher for running past `MAX_RUNTIME`.
+    timed_out: bool,
 }
 
 /// What happens to background tasks, for the backend.
@@ -295,7 +297,11 @@ pub fn route_mcp(servers: &mut serde_json::Map<String, Value>, owner: &str) {
 /// How long an exit waits for a running read to show it before it's announced.
 const EXIT_GRACE: Duration = Duration::from_millis(500);
 
-/// Notices tasks that exit on their own (one thread for all, started with the first task).
+/// A task still running after this long is ended, so forgotten servers and watchers don't pile up.
+const MAX_RUNTIME: Duration = Duration::from_secs(4 * 60 * 60);
+
+/// Notices tasks that exit on their own and ends those past `MAX_RUNTIME` (one thread for all,
+/// started with the first task).
 fn watch() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
@@ -304,12 +310,24 @@ fn watch() {
             let mut done = Vec::new();
             for (id, task) in tasks().lock().unwrap().iter_mut() {
                 poll(task);
+                if task.exit.is_none() && !task.timed_out && task.started.elapsed() >= MAX_RUNTIME {
+                    task.timed_out = true;
+                    super::tools::kill_tree(&mut task.child);
+                    let _ = task.child.wait();
+                    poll(task);
+                }
                 if let (Some(code), Some(at)) = (task.exit, task.exited_at)
                     && !task.announced
                     && at.elapsed() >= EXIT_GRACE
                 {
                     task.announced = true;
-                    let tail = if task.reported { String::new() } else { tail(&strip_ansi(&read_from(&task.log, task.seen)), &[], &task.log) };
+                    if task.timed_out {
+                        task.reported = false; // the agent must hear why it ended
+                    }
+                    let mut tail = if task.reported { String::new() } else { tail(&strip_ansi(&read_from(&task.log, task.seen)), &[], &task.log) };
+                    if task.timed_out {
+                        tail = format!("Ended by winfer after the {}h runtime limit.\n{tail}", MAX_RUNTIME.as_secs() / 3600);
+                    }
                     let secs = at.duration_since(task.started).as_secs();
                     done.push(Update::Exited { id: id.clone(), owner: task.owner.clone(), cmd: task.cmd.clone(), name: task.name.clone(), code, secs, seen: task.reported, tail });
                 }
@@ -393,7 +411,7 @@ fn start(cmd: &str, cwd: &Path, args: &Value, stop: &AtomicBool, call_id: &str, 
     };
     let text = |k: &str| args[k].as_str().unwrap_or("").trim().to_string();
     let (name, description) = (text("name"), text("description"));
-    let task = Task { owner: owner.into(), cmd: cmd.into(), name: name.clone(), description: description.clone(), child, log: log.clone(), seen: 0, started: Instant::now(), exit: None, exited_at: None, reported: false, announced: false };
+    let task = Task { owner: owner.into(), cmd: cmd.into(), name: name.clone(), description: description.clone(), child, log: log.clone(), seen: 0, started: Instant::now(), exit: None, exited_at: None, reported: false, announced: false, timed_out: false };
     tasks().lock().unwrap().insert(id.clone(), task);
     emit(Update::Started { id: id.clone(), owner: owner.into(), tool_id: call_id.into(), cmd: cmd.into(), name, description, log: log.clone() });
     watch();
