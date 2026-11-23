@@ -93,6 +93,8 @@ struct State {
     sub_model: Option<String>,
     sub_effort: Option<String>,
     mode: Mode,
+    /// Last mode the model has been told about (starts equal to the initial mode).
+    reported_mode: Mode,
     allowed: HashSet<String>,
     usage: Usage,
     /// The running turn's output tokens, and the session's output total when it started.
@@ -207,6 +209,7 @@ pub(super) fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: Opti
             sub_model: opts.sub_model.clone(),
             sub_effort: opts.sub_effort.clone(),
             mode: opts.mode,
+            reported_mode: opts.mode,
             allowed: opts.allowed_commands.iter().map(|c| format!("bash:{c}")).collect(),
             usage: Usage { window, ..Default::default() },
             trim_at: opts.trim_at,
@@ -240,6 +243,7 @@ pub(super) fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: Opti
     });
     let _ = events.send(Ev::Session(session));
     let _ = events.send(Ev::Model(shared.state.lock().unwrap().model.clone()));
+    bg::set_mode(&shared.bg_owner, opts.mode);
     {
         let me = Arc::downgrade(&shared);
         bg::listen(move |u| {
@@ -347,7 +351,10 @@ pub(super) fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: Opti
                 st.sub_model = model;
                 st.sub_effort = effort;
             }
-            Cmd::SetMode(m) => shared.state.lock().unwrap().mode = m,
+            Cmd::SetMode(m) => {
+                shared.state.lock().unwrap().mode = m;
+                bg::set_mode(&shared.bg_owner, m);
+            }
             Cmd::SetCompaction { trim, compact } => {
                 let mut st = shared.state.lock().unwrap();
                 st.trim_at = trim;
@@ -377,6 +384,7 @@ pub(super) fn run_with(opts: Opts, rx: Receiver<In>, events: Events, local: Opti
         }
     }
     // Background processes end with the backend (winfer code exiting, /model, /new).
+    bg::set_mode(&shared.bg_owner, Mode::Ask);
     bg::stop_owner(&shared.bg_owner);
 }
 
@@ -1014,7 +1022,11 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
         if let Some(msg) = &msg {
             let users = st.items.iter().filter(|i| i["role"] == "user").count();
             st.undo.push(UndoTurn { users, files: HashMap::new() });
-            st.items.push(user_item(msg));
+            let mut msg = msg.clone();
+            if let Some(note) = take_mode_change(&mut st) {
+                msg.text = if msg.text.is_empty() { note } else { format!("{note}\n\n{}", msg.text) };
+            }
+            st.items.push(user_item(&msg));
         }
     }
     let mut steps = 0;
@@ -1077,9 +1089,24 @@ fn turn(shared: &Arc<Shared>, msg: Option<UserMsg>) {
     emit(Ev::TurnDone);
 }
 
+fn take_mode_change(st: &mut State) -> Option<String> {
+    if st.mode == st.reported_mode {
+        return None;
+    }
+    let from = st.reported_mode;
+    st.reported_mode = st.mode;
+    Some(super::mode_change_note(from, st.mode))
+}
+
 /// The user's messages for the running turn, as conversation items.
 fn take_steer(shared: &Shared) -> Vec<Value> {
-    std::mem::take(&mut *shared.steer.lock().unwrap()).iter().map(user_item).collect()
+    let mut msgs = std::mem::take(&mut *shared.steer.lock().unwrap());
+    if let Some(first) = msgs.first_mut() {
+        if let Some(note) = take_mode_change(&mut shared.state.lock().unwrap()) {
+            first.text = if first.text.is_empty() { note } else { format!("{note}\n\n{}", first.text) };
+        }
+    }
+    msgs.iter().map(user_item).collect()
 }
 
 /// Runs a response's tool calls for the main conversation or `sub`, and adds their outputs to
@@ -1183,6 +1210,7 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
             ..Default::default()
         }));
         shared.asking.lock().unwrap().insert(approval_id.clone());
+        let mut plan_blocked = false;
         let decision = loop {
             if stopped(shared, sub) {
                 break Decision::Deny;
@@ -1190,9 +1218,26 @@ fn run_call(shared: &Arc<Shared>, call: &Value, sub: Option<&Sub>) -> String {
             if let Some(d) = shared.decisions.lock().unwrap().remove(&approval_id) {
                 break d;
             }
+            let cur = shared.state.lock().unwrap().mode;
+            if cur != mode {
+                match (risk, cur) {
+                    (_, Mode::Yolo) | (Risk::Edit, Mode::AutoEdit) => break Decision::Allow,
+                    (Risk::Exec, Mode::YoloPlan) => break Decision::Allow,
+                    (Risk::Edit, m) if m.plans() => {
+                        plan_blocked = true;
+                        break Decision::Deny;
+                    }
+                    _ => {}
+                }
+            }
             std::thread::sleep(Duration::from_millis(50));
         };
         shared.asking.lock().unwrap().remove(&approval_id);
+        if plan_blocked {
+            let msg = "Plan mode is on: files can't be edited. Describe the change instead of making it.".to_string();
+            card(Ev::ToolEnd { id, ok: false, output: msg.clone(), diff: None });
+            return msg;
+        }
         match decision {
             Decision::Deny => {
                 let msg = "The user declined this tool call. Don't retry it; ask how to proceed.".to_string();
@@ -1284,10 +1329,15 @@ fn ask_user(shared: &Arc<Shared>, call_id: &str, args: &Value) -> String {
         std::thread::sleep(Duration::from_millis(50));
     };
     shared.asking.lock().unwrap().remove(&approval_id);
-    let (ok, output, card) = match answers {
+    let (ok, mut output, card) = match answers {
         Some(a) => (true, tools::ask_user_result(&questions, &a), a.join(" · ")),
         None => (false, tools::ASK_USER_DECLINED.to_string(), "Dismissed".to_string()),
     };
+    if ok {
+        if let Some(note) = take_mode_change(&mut shared.state.lock().unwrap()) {
+            output.push_str(&format!("\n\n{note}"));
+        }
+    }
     emit(Ev::ToolEnd { id: call_id.to_string(), ok, output: card, diff: None });
     output
 }
@@ -1714,6 +1764,7 @@ mod tests {
                 sub_model: None,
                 sub_effort: None,
                 mode,
+                reported_mode: mode,
                 allowed: HashSet::new(),
                 usage: Usage::default(),
                 trim_at: 0,
@@ -2045,5 +2096,55 @@ mod tests {
         sc.close_unrun(&[json!({ "type": "function_call", "call_id": "call_1" })], &mut |e| evs.push(e));
         assert_eq!(evs.len(), 1);
         assert!(matches!(&evs[0], Ev::ToolEnd { id, ok: false, .. } if id == "call_2"));
+    }
+
+    #[test]
+    fn switching_from_plan_to_yolo_reports_mode_change_and_allows_edits() {
+        let (shared, rx, dir) = shared(Mode::Plan);
+        let sh = shared.clone();
+        let handle = std::thread::spawn(move || {
+            ask_user(
+                &sh,
+                "c1",
+                &json!({ "questions": [{ "question": "Proceed?", "options": [{ "label": "Yes" }] }] }),
+            )
+        });
+        let id = loop {
+            if let Ev::Approval(a) = rx.recv().unwrap() {
+                break a.id;
+            }
+        };
+        shared.state.lock().unwrap().mode = Mode::Yolo;
+        shared.answers.lock().unwrap().insert(id, vec!["Yes".into()]);
+        let out = handle.join().unwrap();
+        assert!(out.contains("Session mode changed from plan to yolo"), "{out}");
+
+        // Mode change was already reported; edits now go through without asking.
+        assert!(take_mode_change(&mut shared.state.lock().unwrap()).is_none());
+        let write = json!({ "name": "write", "call_id": "c2", "arguments": json!({ "path": "b.txt", "content": "ok\n" }).to_string() });
+        let res = run_call(&shared, &write, None);
+        assert!(!res.contains("Plan mode"), "{res}");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "ok\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn switching_to_yolo_unblocks_waiting_approval() {
+        let (shared, rx, dir) = shared(Mode::Ask);
+        let sh = shared.clone();
+        let handle = std::thread::spawn(move || {
+            let write = json!({ "name": "write", "call_id": "c3", "arguments": json!({ "path": "c.txt", "content": "hi\n" }).to_string() });
+            run_call(&sh, &write, None)
+        });
+        loop {
+            if let Ev::Approval(_) = rx.recv().unwrap() {
+                break;
+            }
+        }
+        shared.state.lock().unwrap().mode = Mode::Yolo;
+        let res = handle.join().unwrap();
+        assert!(!res.contains("declined"), "{res}");
+        assert_eq!(std::fs::read_to_string(dir.join("c.txt")).unwrap(), "hi\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

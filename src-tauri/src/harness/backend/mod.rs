@@ -192,6 +192,19 @@ pub fn env_pairs(env: &[(String, String)]) -> Vec<(&str, &str)> {
 /// already in the session, so it asks to continue rather than repeating it.
 pub const CONTINUE_PROMPT: &str = "[winfer] The previous request stopped because the account ran out of usage. winfer switched to another account: continue where you left off.";
 
+/// Short note injected into the conversation when the user changes permission mode, so the
+/// model doesn't keep acting on an earlier read-only/plan refusal or stale sandbox state.
+pub fn mode_change_note(from: Mode, to: Mode) -> String {
+    let summary = match to {
+        Mode::Yolo => "Full write access is now enabled; file edits and commands run without asking.",
+        Mode::AutoEdit => "Workspace file edits are now enabled without asking; commands still ask for approval.",
+        Mode::Ask => "File edits and commands are now allowed with user approval.",
+        Mode::Plan => "Read-only planning mode is active: do not edit files.",
+        Mode::YoloPlan => "Read-only planning mode is active: do not edit files; read-only tools and commands run without asking.",
+    };
+    format!("[winfer] Session mode changed from {} to {}. {summary}", from.label(), to.label())
+}
+
 /// Whether a CLI's error is its plan's usage limit, with the reset time (unix ms) if it says.
 /// Claude Code: "Claude AI usage limit reached|<unix seconds>", "You've hit your limit · resets
 /// 3pm"; Codex: "You've hit your usage limit…".

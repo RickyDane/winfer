@@ -35,6 +35,8 @@ struct Serve {
     model: String,
     actual_model: String,
     mode: Mode,
+    /// Ultracode for this session only: off on launch, new and resume, never persisted to the config.
+    ultracode: bool,
     system: Option<String>,
     handle: Option<backend::Handle>,
     generation: u64,
@@ -91,7 +93,7 @@ impl Serve {
             cwd: self.cwd.clone(),
             model: self.model.clone(),
             effort: cfg.effort.clone(),
-            ultracode: cfg.ultracode,
+            ultracode: self.ultracode,
             mode: self.mode,
             resume,
             system: self.system.clone(),
@@ -146,7 +148,7 @@ impl Serve {
             "model": self.spec(),
             "mode": self.mode,
             "effort": cfg.effort,
-            "ultracode": cfg.ultracode,
+            "ultracode": self.ultracode,
             "subagent_model": cfg.subagent_for(self.kind.id()).0,
             "subagent_effort": cfg.subagent_for(self.kind.id()).1,
             "cwd": self.cwd.to_string_lossy(),
@@ -181,6 +183,7 @@ impl Serve {
             })).collect::<Vec<_>>()
         }));
         let resume = saved.backend_session.clone();
+        self.ultracode = false;
         self.saved = saved;
         self.usage_sent = None;
         self.on_event(Ev::Usage(self.saved.restored_usage()));
@@ -577,7 +580,7 @@ impl Serve {
             }
             "set_ultracode" => {
                 let on = v.get("ultracode").and_then(Value::as_bool).unwrap_or(false);
-                Config::update(|c| c.ultracode = on);
+                self.ultracode = on;
                 self.send(Cmd::SetUltracode(on));
             }
             "set_subagent" => {
@@ -672,6 +675,7 @@ impl Serve {
             "new" => {
                 self.pending.clear();
                 self.fresh_session();
+                self.ultracode = false;
                 self.start_backend(None);
                 out(&json!({ "type": "cleared" }));
                 self.ready();
@@ -751,6 +755,7 @@ pub fn run(launch: Launch) -> i32 {
         model,
         actual_model: String::new(),
         mode: launch.mode.unwrap_or(cfg.mode),
+        ultracode: false,
         system: launch.system.clone(),
         handle: None,
         generation: 0,
@@ -857,6 +862,7 @@ mod tests {
             model: "fable".into(),
             actual_model: "claude-fable-5-2".into(),
             mode: Mode::Ask,
+            ultracode: false,
             system: None,
             handle: None,
             generation: 0,

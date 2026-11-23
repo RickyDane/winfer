@@ -163,6 +163,15 @@ struct Bridge {
     turn: Option<String>,
     queued: Vec<UserMsg>,
     mode: Mode,
+    /// Mode used when the currently running turn was started (cleared on `turn/completed`).
+    turn_mode: Option<Mode>,
+    /// Last mode communicated to Codex (`thread/start`, `thread/resume`, or `turn/start`).
+    applied_mode: Option<Mode>,
+    /// Waiting for `ask_user`'s `item/completed` before interrupting a stale-sandbox turn.
+    awaiting_ask_done: bool,
+    /// Interrupted a turn whose sandbox no longer matches `self.mode`: `(from_mode, optional_user_msg)`
+    /// to start immediately on `turn/completed` with the updated `sandboxPolicy` and `approvalPolicy`.
+    reenter_turn: Option<(Mode, Option<UserMsg>)>,
     bg_owner: String,
     model: Option<String>,
     effort: Option<String>,
@@ -285,6 +294,10 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         turn: None,
         queued: Vec::new(),
         mode: opts.mode,
+        turn_mode: None,
+        applied_mode: None,
+        awaiting_ask_done: false,
+        reenter_turn: None,
         bg_owner: opts.bg_owner.clone(),
         model: Some(opts.model.clone()).filter(|m| !m.is_empty()),
         effort: opts.effort.clone(),
@@ -384,6 +397,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         Some(Pending::Init) => {
                             let _ = b.proc.write(&json!({ "method": "initialized" }));
                             b.request("skills/list", json!({ "cwds": [b.cwd.clone()] }), Pending::Skills);
+                            b.applied_mode = Some(b.mode);
                             match &resume {
                                 Some(thread) => {
                                     let mut p = thread_params.clone();
@@ -452,8 +466,16 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
                 Cmd::Steer(msg) => match (b.thread.clone(), b.turn.clone()) {
                     (Some(thread), Some(turn)) => {
-                        let input = b.input(&msg);
-                        b.request("turn/steer", json!({ "threadId": thread, "expectedTurnId": turn, "input": input }), Pending::Steer(msg));
+                        if let Some(from) = b.turn_mode.filter(|tm| sandbox(*tm) != sandbox(b.mode)) {
+                            // `turn/steer` cannot change the running turn's sandbox; interrupt it
+                            // and start a fresh turn with the new sandboxPolicy and approvalPolicy.
+                            b.awaiting_ask_done = false;
+                            b.reenter_turn = Some((from, Some(msg)));
+                            b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore);
+                        } else {
+                            let input = b.input(&msg);
+                            b.request("turn/steer", json!({ "threadId": thread, "expectedTurnId": turn, "input": input }), Pending::Steer(msg));
+                        }
                     }
                     _ => {
                         b.emit(Ev::TurnStart);
@@ -464,6 +486,8 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     }
                 },
                 Cmd::Interrupt => {
+                    b.awaiting_ask_done = false;
+                    b.reenter_turn = None;
                     if let (Some(thread), Some(turn)) = (b.thread.clone(), b.turn.clone()) {
                         b.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore);
                     }
@@ -491,7 +515,13 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 }
                 Cmd::SetMode(m) => {
                     b.mode = m;
+                    opts.mode = m;
+                    thread_params["approvalPolicy"] = json!(approval_policy(m));
+                    thread_params["sandbox"] = json!(sandbox(m));
+                    start_params["approvalPolicy"] = json!(approval_policy(m));
+                    start_params["sandbox"] = json!(sandbox(m));
                     crate::harness::bg::set_mode(&b.bg_owner, m);
+                    b.resolve_approvals_for_mode();
                 }
                 Cmd::Compact => {
                     if let Some(thread) = b.thread.clone() {
@@ -613,6 +643,8 @@ impl Bridge {
             || !self.queued.is_empty()
             || !self.approvals.is_empty()
             || !self.asks.is_empty()
+            || self.awaiting_ask_done
+            || self.reenter_turn.is_some()
             || !self.background.is_empty()
             || self.children.values().any(|c| c.turn.is_some())
             || self.pending.values().any(|p| !matches!(p, Pending::Skills | Pending::Ignore)))
@@ -657,8 +689,16 @@ impl Bridge {
         }
     }
 
-    fn start_turn(&mut self, msg: UserMsg) {
+    fn start_turn(&mut self, mut msg: UserMsg) {
         let Some(thread) = self.thread.clone() else { return };
+        if let Some(prev) = self.applied_mode.filter(|&prev| prev != self.mode) {
+            if !msg.text.starts_with("[winfer] Session mode changed") {
+                let note = super::mode_change_note(prev, self.mode);
+                msg.text = if msg.text.is_empty() { note } else { format!("{note}\n\n{}", msg.text) };
+            }
+        }
+        self.applied_mode = Some(self.mode);
+        self.turn_mode = Some(self.mode);
         self.turns.push(UserTurn::default());
         let input = self.input(&msg);
         let mut params = json!({
@@ -759,6 +799,8 @@ impl Bridge {
     fn answer(&mut self, id: &str, answers: Option<Vec<String>>) {
         use crate::harness::tools;
         let Some(ask) = self.asks.remove(id) else { return };
+        let answered = answers.is_some();
+        let is_tool = matches!(ask, Ask::Tool { .. });
         let msg = match ask {
             Ask::Tool { rpc, questions } => {
                 let (ok, text) = match answers {
@@ -774,6 +816,50 @@ impl Bridge {
             }
         };
         let _ = self.proc.write(&msg);
+        // If the user switched to a mode with a different sandbox while this question was open
+        // (e.g. Plan → Yolo), the running turn is still locked to the old sandboxPolicy. Once
+        // Codex commits the answer, interrupt the stale turn and immediately resume in a new turn
+        // with the updated sandboxPolicy and approvalPolicy.
+        if answered && self.asks.is_empty() && self.turn.is_some() {
+            if let Some(from) = self.turn_mode.filter(|tm| sandbox(*tm) != sandbox(self.mode)) {
+                self.reenter_turn = Some((from, None));
+                if is_tool {
+                    self.awaiting_ask_done = true;
+                } else {
+                    self.interrupt_for_mode();
+                }
+            }
+        }
+    }
+
+    fn interrupt_for_mode(&mut self) {
+        if let (Some(thread), Some(turn)) = (self.thread.clone(), self.turn.clone()) {
+            self.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn }), Pending::Ignore);
+        }
+    }
+
+    /// Approval decision that `self.mode` can answer without asking the user (for requests that
+    /// arrive during a turn started under a stricter mode).
+    fn auto_decision(mode: Mode, kind: &str) -> Option<&'static str> {
+        match (mode, kind) {
+            (Mode::Yolo, _) => Some("accept"),
+            (Mode::AutoEdit, "file") => Some("accept"),
+            (Mode::YoloPlan, "file") | (Mode::Plan, "file") => Some("decline"),
+            (Mode::YoloPlan, _) => Some("accept"),
+            _ => None,
+        }
+    }
+
+    fn resolve_approvals_for_mode(&mut self) {
+        let ready: Vec<(String, Value, &'static str)> = self
+            .approvals
+            .iter()
+            .filter_map(|(id, (rpc, kind))| Self::auto_decision(self.mode, kind).map(|d| (id.clone(), rpc.clone(), d)))
+            .collect();
+        for (id, rpc, decision) in ready {
+            self.approvals.remove(&id);
+            let _ = self.proc.write(&json!({ "id": rpc, "result": { "decision": decision } }));
+        }
     }
 
     /// Questions for the user: winfer code's `ask_user` and Codex's `request_user_input`.
@@ -823,42 +909,55 @@ impl Bridge {
             "item/commandExecution/requestApproval" | "execCommandApproval" => {
                 let raw = p["command"].as_str().unwrap_or("");
                 let command = strip_shell(raw);
-                Some(Approval {
-                    id: key.clone(),
-                    tool: shell_tool(raw).into(),
-                    title: command,
-                    detail: p["reason"].as_str().unwrap_or("").to_string(),
-                    diff: None,
-                    ..Default::default()
-                })
+                Some((
+                    "command",
+                    Approval {
+                        id: key.clone(),
+                        tool: shell_tool(raw).into(),
+                        title: command,
+                        detail: p["reason"].as_str().unwrap_or("").to_string(),
+                        diff: None,
+                        ..Default::default()
+                    },
+                ))
             }
             "item/fileChange/requestApproval" | "applyPatchApproval" => {
                 let item = p["itemId"].as_str().unwrap_or("");
-                Some(Approval {
-                    id: key.clone(),
-                    tool: "Edit".into(),
-                    title: p["grantRoot"].as_str().map(|r| format!("write access to {r}")).unwrap_or_else(|| "apply changes".into()),
-                    detail: p["reason"].as_str().unwrap_or("").to_string(),
-                    diff: self.diffs.get(item).cloned(),
-                    ..Default::default()
-                })
+                Some((
+                    "file",
+                    Approval {
+                        id: key.clone(),
+                        tool: "Edit".into(),
+                        title: p["grantRoot"].as_str().map(|r| format!("write access to {r}")).unwrap_or_else(|| "apply changes".into()),
+                        detail: p["reason"].as_str().unwrap_or("").to_string(),
+                        diff: self.diffs.get(item).cloned(),
+                        ..Default::default()
+                    },
+                ))
             }
-            "item/permissions/requestApproval" => Some(Approval {
-                id: key.clone(),
-                tool: "Permissions".into(),
-                title: p["reason"].as_str().unwrap_or("more access").to_string(),
-                detail: String::new(),
-                diff: None,
-                ..Default::default()
-            }),
+            "item/permissions/requestApproval" => Some((
+                "permissions",
+                Approval {
+                    id: key.clone(),
+                    tool: "Permissions".into(),
+                    title: p["reason"].as_str().unwrap_or("more access").to_string(),
+                    detail: String::new(),
+                    diff: None,
+                    ..Default::default()
+                },
+            )),
             _ => None,
         };
         match approval {
-            Some(mut a) => {
+            Some((kind, mut a)) => {
+                if let Some(decision) = Self::auto_decision(self.mode, kind) {
+                    let _ = self.proc.write(&json!({ "id": id, "result": { "decision": decision } }));
+                    return;
+                }
                 if p["threadId"].as_str().is_some_and(|t| self.children.contains_key(t)) && a.detail.is_empty() {
                     a.detail = "Asked by a subagent.".into();
                 }
-                self.approvals.insert(key, (id, "approval"));
+                self.approvals.insert(key, (id, kind));
                 self.emit(Ev::Approval(a));
             }
             None => {
@@ -898,6 +997,8 @@ impl Bridge {
                     }
                 }
                 self.turn = None;
+                self.turn_mode = None;
+                self.awaiting_ask_done = false;
                 self.active_tools.clear();
                 self.tools_finished_at = None;
                 // Codex ends the turn without waiting for long commands (watchers, servers): they
@@ -908,6 +1009,16 @@ impl Bridge {
                     let title = crate::harness::bg::short_command(&command);
                     self.task(TaskEv { id: id.clone(), tool_id: Some(id.clone()), title: Some(title), status: Some("running".into()), ..Default::default() });
                     self.background.insert(id);
+                }
+                if let Some((from, msg)) = self.reenter_turn.take() {
+                    if turn["status"] == "interrupted" || msg.is_some() {
+                        let next = msg.unwrap_or_else(|| UserMsg {
+                            text: format!("{} Continue with the user's answer above.", super::mode_change_note(from, self.mode)),
+                            ..Default::default()
+                        });
+                        self.start_turn(next);
+                        return;
+                    }
                 }
                 self.settled = true;
                 self.emit(Ev::TurnDone);
@@ -1274,6 +1385,10 @@ impl Bridge {
                 let ok = item["success"].as_bool() != Some(false);
                 let output = item["contentItems"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
                 self.emit(Ev::ToolEnd { id, ok, output, diff: None });
+                if self.awaiting_ask_done {
+                    self.awaiting_ask_done = false;
+                    self.interrupt_for_mode();
+                }
             }
             "mcpToolCall" => {
                 let ok = item["error"].is_null();
@@ -1772,6 +1887,10 @@ mod tests {
             turn: Some("t0".into()),
             queued: Vec::new(),
             mode: Mode::Ask,
+            turn_mode: None,
+            applied_mode: None,
+            awaiting_ask_done: false,
+            reenter_turn: None,
             bg_owner: String::new(),
             model: None,
             effort: None,
@@ -1973,6 +2092,10 @@ mod tests {
             turn: None,
             queued: Vec::new(),
             mode: Mode::Ask,
+            turn_mode: None,
+            applied_mode: None,
+            awaiting_ask_done: false,
+            reenter_turn: None,
             bg_owner: String::new(),
             model: Some("gpt-6.1-sol".into()),
             effort: Some("medium".into()),
@@ -2069,5 +2192,256 @@ mod tests {
         let evs: Vec<Ev> = rx.try_iter().collect();
         assert!(evs.iter().any(|e| matches!(e, Ev::ReasoningDelta { id, .. } if id == "r1")));
         assert!(evs.iter().any(|e| matches!(e, Ev::ReasoningEnd { id } if id == "r1")), "{evs:?}");
+    }
+
+    #[test]
+    fn switching_from_plan_to_yolo_after_ask_user_reenters_turn_with_full_access() {
+        let (events, ev_rx) = channel();
+        let (me, lines) = channel();
+        let proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let mut b = Bridge {
+            events,
+            proc,
+            next: 0,
+            pending: HashMap::new(),
+            thread: Some("main".into()),
+            turn: None,
+            queued: Vec::new(),
+            mode: Mode::Plan,
+            turn_mode: None,
+            applied_mode: Some(Mode::Plan),
+            awaiting_ask_done: false,
+            reenter_turn: None,
+            bg_owner: String::new(),
+            model: Some("gpt-6.1-sol".into()),
+            effort: None,
+            ultracode: false,
+            fast: false,
+            cwd: "/tmp".into(),
+            approvals: HashMap::new(),
+            asks: HashMap::new(),
+            diffs: HashMap::new(),
+            children: HashMap::new(),
+            usage: Usage::default(),
+            turn_tokens: TurnTokens::default(),
+            reasoning_streamed: false,
+            reasoning_summary: false,
+            active_tools: HashSet::new(),
+            tools_finished_at: None,
+            turn_base: 0,
+            turn_input_base: 0,
+            turn_cached_base: 0,
+            skills: HashMap::new(),
+            turns: Vec::new(),
+            commands: HashMap::new(),
+            background: HashSet::new(),
+            processes: HashMap::new(),
+            trim_at: 0,
+            compact_at: 0,
+            settled: false,
+            sub_model: None,
+            limit: None,
+            low: false,
+        };
+        let next_msg = |lines: &Receiver<In>| -> Value {
+            loop {
+                match lines.recv_timeout(std::time::Duration::from_secs(2)).expect("expected rpc") {
+                    In::Line(l) => if let Ok(v) = serde_json::from_str::<Value>(&l) { return v; }
+                    _ => panic!("closed"),
+                }
+            }
+        };
+
+        // Turn 1 starts in Plan (readOnly).
+        b.start_turn(UserMsg { text: "implement feature".into(), ..Default::default() });
+        let t1 = next_msg(&lines);
+        assert_eq!(t1["method"], "turn/start");
+        assert_eq!(t1["params"]["sandboxPolicy"]["type"], "readOnly");
+        assert_eq!(t1["params"]["approvalPolicy"], "on-request");
+        b.on_notification("turn/started", &json!({ "threadId": "main", "turn": { "id": "t1" } }));
+
+        // Agent asks a question mid-turn.
+        b.on_request(
+            "item/tool/call",
+            json!(7),
+            &json!({
+                "threadId": "main",
+                "tool": crate::harness::tools::ASK_USER,
+                "arguments": { "questions": [{ "question": "Proceed?", "options": [{ "label": "Yes" }] }] },
+            }),
+        );
+        // User switches mode to Yolo, then answers the question.
+        b.mode = Mode::Yolo;
+        b.answer("codex-7", Some(vec!["Yes".into()]));
+        let ask_resp = next_msg(&lines);
+        assert_eq!(ask_resp["id"], 7);
+        assert_eq!(ask_resp["result"]["success"], true);
+
+        // Codex completes the dynamicToolCall item -> bridge interrupts the stale readOnly turn.
+        b.on_notification("item/completed", &json!({ "threadId": "main", "item": { "type": "dynamicToolCall", "id": "c1", "success": true, "contentItems": [] } }));
+        let intr = next_msg(&lines);
+        assert_eq!(intr["method"], "turn/interrupt");
+        assert_eq!(intr["params"]["turnId"], "t1");
+
+        // Codex reports the interrupted turn -> bridge immediately starts a Yolo turn without TurnDone.
+        let _ = ev_rx.try_iter().count();
+        b.on_notification("turn/completed", &json!({ "threadId": "main", "turn": { "id": "t1", "status": "interrupted" } }));
+        let t2 = next_msg(&lines);
+        assert_eq!(t2["method"], "turn/start");
+        assert_eq!(t2["params"]["sandboxPolicy"]["type"], "dangerFullAccess");
+        assert_eq!(t2["params"]["approvalPolicy"], "never");
+        assert!(t2["params"]["input"][0]["text"].as_str().unwrap().contains("Session mode changed from plan to yolo"));
+        assert!(!ev_rx.try_iter().any(|e| matches!(e, Ev::TurnDone)));
+    }
+
+    #[test]
+    fn switching_mode_between_turns_updates_sandbox_and_notifies_model_once() {
+        let (events, _ev_rx) = channel();
+        let (me, lines) = channel();
+        let proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let mut b = Bridge {
+            events,
+            proc,
+            next: 0,
+            pending: HashMap::new(),
+            thread: Some("main".into()),
+            turn: None,
+            queued: Vec::new(),
+            mode: Mode::Plan,
+            turn_mode: None,
+            applied_mode: Some(Mode::Plan),
+            awaiting_ask_done: false,
+            reenter_turn: None,
+            bg_owner: String::new(),
+            model: None,
+            effort: None,
+            ultracode: false,
+            fast: false,
+            cwd: "/tmp".into(),
+            approvals: HashMap::new(),
+            asks: HashMap::new(),
+            diffs: HashMap::new(),
+            children: HashMap::new(),
+            usage: Usage::default(),
+            turn_tokens: TurnTokens::default(),
+            reasoning_streamed: false,
+            reasoning_summary: false,
+            active_tools: HashSet::new(),
+            tools_finished_at: None,
+            turn_base: 0,
+            turn_input_base: 0,
+            turn_cached_base: 0,
+            skills: HashMap::new(),
+            turns: Vec::new(),
+            commands: HashMap::new(),
+            background: HashSet::new(),
+            processes: HashMap::new(),
+            trim_at: 0,
+            compact_at: 0,
+            settled: false,
+            sub_model: None,
+            limit: None,
+            low: false,
+        };
+        let next_msg = |lines: &Receiver<In>| -> Value {
+            loop {
+                match lines.recv_timeout(std::time::Duration::from_secs(2)).expect("expected rpc") {
+                    In::Line(l) => if let Ok(v) = serde_json::from_str::<Value>(&l) { return v; }
+                    _ => panic!("closed"),
+                }
+            }
+        };
+
+        b.start_turn(UserMsg { text: "plan it".into(), ..Default::default() });
+        let t1 = next_msg(&lines);
+        assert_eq!(t1["params"]["sandboxPolicy"]["type"], "readOnly");
+        assert_eq!(t1["params"]["input"][0]["text"], "plan it");
+        b.on_notification("turn/completed", &json!({ "threadId": "main", "turn": { "id": "t1", "status": "completed" } }));
+
+        b.mode = Mode::Yolo;
+        b.start_turn(UserMsg { text: "retry".into(), ..Default::default() });
+        let t2 = next_msg(&lines);
+        assert_eq!(t2["params"]["sandboxPolicy"]["type"], "dangerFullAccess");
+        assert_eq!(t2["params"]["approvalPolicy"], "never");
+        let text2 = t2["params"]["input"][0]["text"].as_str().unwrap();
+        assert!(text2.contains("Session mode changed from plan to yolo") && text2.ends_with("\n\nretry"), "{text2}");
+
+        b.start_turn(UserMsg { text: "next".into(), ..Default::default() });
+        let t3 = next_msg(&lines);
+        assert_eq!(t3["params"]["input"][0]["text"], "next");
+    }
+
+    #[test]
+    fn switching_to_yolo_auto_resolves_pending_and_new_approvals() {
+        let (events, ev_rx) = channel();
+        let (me, lines) = channel();
+        let proc = LineProcess::spawn("cat", &[], &[], &std::env::temp_dir(), me).unwrap();
+        let mut b = Bridge {
+            events,
+            proc,
+            next: 0,
+            pending: HashMap::new(),
+            thread: Some("main".into()),
+            turn: Some("t1".into()),
+            queued: Vec::new(),
+            mode: Mode::Ask,
+            turn_mode: Some(Mode::Ask),
+            applied_mode: Some(Mode::Ask),
+            awaiting_ask_done: false,
+            reenter_turn: None,
+            bg_owner: String::new(),
+            model: None,
+            effort: None,
+            ultracode: false,
+            fast: false,
+            cwd: "/tmp".into(),
+            approvals: HashMap::new(),
+            asks: HashMap::new(),
+            diffs: HashMap::new(),
+            children: HashMap::new(),
+            usage: Usage::default(),
+            turn_tokens: TurnTokens::default(),
+            reasoning_streamed: false,
+            reasoning_summary: false,
+            active_tools: HashSet::new(),
+            tools_finished_at: None,
+            turn_base: 0,
+            turn_input_base: 0,
+            turn_cached_base: 0,
+            skills: HashMap::new(),
+            turns: Vec::new(),
+            commands: HashMap::new(),
+            background: HashSet::new(),
+            processes: HashMap::new(),
+            trim_at: 0,
+            compact_at: 0,
+            settled: false,
+            sub_model: None,
+            limit: None,
+            low: false,
+        };
+        let next_msg = |lines: &Receiver<In>| -> Value {
+            loop {
+                match lines.recv_timeout(std::time::Duration::from_secs(2)).expect("expected rpc") {
+                    In::Line(l) => if let Ok(v) = serde_json::from_str::<Value>(&l) { return v; }
+                    _ => panic!("closed"),
+                }
+            }
+        };
+
+        b.on_request("item/commandExecution/requestApproval", json!(11), &json!({ "command": "cargo test" }));
+        assert_eq!(b.approvals.len(), 1);
+        assert!(matches!(ev_rx.try_recv(), Ok(Ev::Approval(_))));
+
+        b.mode = Mode::Yolo;
+        b.resolve_approvals_for_mode();
+        assert!(b.approvals.is_empty());
+        let r1 = next_msg(&lines);
+        assert_eq!(r1, json!({ "id": 11, "result": { "decision": "accept" } }));
+
+        b.on_request("item/fileChange/requestApproval", json!(12), &json!({ "itemId": "f1" }));
+        let r2 = next_msg(&lines);
+        assert_eq!(r2, json!({ "id": 12, "result": { "decision": "accept" } }));
+        assert!(ev_rx.try_recv().is_err());
     }
 }

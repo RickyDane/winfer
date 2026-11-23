@@ -353,10 +353,10 @@ fn args(opts: &Opts, mcp_dir: Option<&Path>, settings: Option<&str>, catalog: &[
         args.extend(["--effort".into(), e]);
     }
     match opts.mode {
-        Mode::Ask => {}
+        Mode::Ask => args.extend(["--mode".into(), "auto".into()]),
         Mode::AutoEdit => args.extend(["--mode".into(), "accept-edits".into()]),
         Mode::Plan | Mode::YoloPlan => args.extend(["--mode".into(), "plan".into()]),
-        Mode::Yolo => args.push("--dangerously-skip-permissions".into()),
+        Mode::Yolo => args.extend(["--mode".into(), "auto".into(), "--dangerously-skip-permissions".into()]),
     }
     if let Some(dir) = mcp_dir {
         args.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);

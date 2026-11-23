@@ -191,6 +191,7 @@ pub struct Session {
     pub size: Arc<Mutex<Size>>,
     input: mpsc::Sender<String>,
     pub spawned: AtomicBool,
+    ready: AtomicBool,
     pub exited: AtomicBool,
     last_output: AtomicU64,
     /// A repaint was requested and not yet done.
@@ -254,6 +255,7 @@ impl Session {
             size,
             input,
             spawned: AtomicBool::new(false),
+            ready: AtomicBool::new(false),
             exited: AtomicBool::new(false),
             last_output: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
@@ -340,7 +342,7 @@ impl Session {
 
     /// Writes protocol bytes to the process, bypassing the chat's input hook.
     pub fn write_process(&self, data: &str) -> bool {
-        if self.spawned.load(Ordering::Relaxed) && !self.exited.load(Ordering::Relaxed) {
+        if self.ready.load(Ordering::Acquire) && !self.exited.load(Ordering::Relaxed) {
             let _ = self.input.send(data.to_string());
             true
         } else {
@@ -710,6 +712,7 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
         });
         match pty::pty_spawn(backend::app().clone(), request, channel).await {
             Ok(result) => {
+                session.ready.store(true, Ordering::Release);
                 let pid = serde_json::to_value(&result).ok().and_then(|v| v["pid"].as_u64()).map(|p| p as u32);
                 *session.pid.lock() = Some(pid);
                 let busy = pane.provider != "shell" && !pane.resume && pane.attachments.is_empty() && pane.prompt.as_ref().is_some_and(|p| !p.trim().is_empty());
@@ -795,5 +798,17 @@ mod tests {
     fn hover_reports_are_recognized() {
         assert!(is_hover_report("\x1b[<35;10;20M"));
         assert!(!is_hover_report("\x1b[<0;10;20M"));
+    }
+
+    #[test]
+    fn write_process_waits_until_session_is_ready() {
+        let (tx, _rx) = async_channel::unbounded();
+        let session = Session::new("ready-test", tx);
+        session.spawned.store(true, Ordering::Release);
+        assert!(!session.write_process("{\"type\":\"set_mode\",\"mode\":\"yolo\"}\n"));
+        session.ready.store(true, Ordering::Release);
+        assert!(session.write_process("{\"type\":\"set_mode\",\"mode\":\"yolo\"}\n"));
+        session.exited.store(true, Ordering::Release);
+        assert!(!session.write_process("{\"type\":\"set_mode\",\"mode\":\"ask\"}\n"));
     }
 }
