@@ -432,6 +432,8 @@ pub struct BrowserPanel {
     focus: FocusHandle,
     latest: Arc<Mutex<Option<Arc<RenderImage>>>>,
     shown: Option<Arc<RenderImage>>,
+    /// The shown frame belongs to a tab that was left; drop it at the next render.
+    clear_shown: bool,
     attachment: Option<Attachment>,
     bounds: Bounds<Pixels>,
     input: async_channel::Sender<InputMessage>,
@@ -516,6 +518,7 @@ impl BrowserPanel {
             focus: cx.focus_handle(),
             latest: Arc::default(),
             shown: None,
+            clear_shown: false,
             attachment: None,
             bounds: Bounds::default(),
             input,
@@ -991,6 +994,11 @@ impl BrowserPanel {
 
     fn attach(&mut self, workspace: String, tab: String, width: u32, height: u32, scale: f64, mobile: bool, cx: &mut Context<Self>) {
         self.detach();
+        // The previous tab's last frame mustn't show on this one: drop it and give the new
+        // screencast its own slot, so a late frame of the old one can't land here.
+        self.latest = Arc::default();
+        self.clear_shown = true;
+        cx.notify();
         self.attach_count += 1;
         let attach_id = format!("native-{}-{:08x}", self.attach_count, rand::random::<u32>());
         self.attachment = Some(Attachment { workspace: workspace.clone(), tab: tab.clone(), id: attach_id.clone(), width, height, scale, mobile });
@@ -1868,6 +1876,11 @@ impl Render for BrowserPanel {
             }
         }
         self.update_address(window, cx);
+        if std::mem::take(&mut self.clear_shown) {
+            if let Some(old) = self.shown.take() {
+                cx.drop_image(old, Some(window));
+            }
+        }
         if let Some(next) = self.latest.lock().take() {
             if let Some(old) = self.shown.replace(next) {
                 cx.drop_image(old, Some(window));
