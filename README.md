@@ -123,7 +123,7 @@ use your OS login for trusted internal servers, fully quit winfer and launch it 
 `WINFER_BROWSER_SSO_HOSTS` set to comma-separated **exact hostnames**, for example in PowerShell:
 
 ```powershell
-$env:WINFER_BROWSER_SSO_HOSTS = 'd-inf-devops01.medata.de'
+$env:WINFER_BROWSER_SSO_HOSTS = 'local.myhome.example'
 # Launch winfer from this shell, or use `pnpm tauri dev` when building from source.
 ```
 
