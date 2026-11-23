@@ -1577,6 +1577,9 @@ function HarnessSettings() {
             <Row label="Compact tool calls" hint="Collapse tool calls and thinking into one live-updating row; click to expand.">
               <Toggle label="Compact tool calls" checked={codeWeb.compactTools} onChange={(compactTools) => codeWeb.set({ compactTools })} />
             </Row>
+            <Row label="Background task results" hint="Show a compact row when a background task finishes; click to see its output. Off hides them (the agent still gets them).">
+              <Toggle label="Background task results" checked={codeWeb.showBgNotes} onChange={(showBgNotes) => codeWeb.set({ showBgNotes })} />
+            </Row>
             <Row label="Compact layout" hint="Tighter spacing in the transcript.">
               <Toggle label="Compact layout" checked={codeWeb.compact} onChange={(compact) => codeWeb.set({ compact })} />
             </Row>

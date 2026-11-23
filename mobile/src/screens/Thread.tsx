@@ -5,6 +5,7 @@ import { isFreeText, type Message, type Pane, type RequestOption } from "../prot
 import { Composer, Pill, PillIcon } from "./Composer";
 import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
 import { buildDisplayRows, describeStep, useCompactTools, workGroupSummary } from "./compactTools";
+import { useShowBgNotes } from "./bgNotes";
 import { Markdown } from "./Markdown";
 import { EffortIcon, EffortPicker, ModelPicker, Sheet, backendOf, effortLabel } from "./Pickers";
 import { Sky } from "./Sky";
@@ -30,6 +31,21 @@ const clock = (ms: number) => {
 };
 
 /** Consecutive tool calls as the desktop's chat shows them: cards whose icons a line joins. */
+/** A finished background task: one line; tap for its command and output. */
+function BgRow({ msg, fresh }: { msg: Message; fresh: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`bg-row${fresh ? " fresh" : ""}`} data-state={msg.state ?? "done"} data-open={open}>
+      <button onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="bg-dot" />
+        <span className="bg-title">{msg.text}</span>
+        <Icon name="right" size={14} className="bg-chev" />
+      </button>
+      {open && msg.detail && <pre className="bg-detail">{msg.detail}</pre>}
+    </div>
+  );
+}
+
 function Steps({ msgs, active, legacyLive, fresh }: { msgs: Message[]; active: boolean; legacyLive: boolean; fresh: boolean }) {
   // Sessions that don't report states: the last call of the last group runs while the agent works.
   const states = msgs.map((m, i) => (m.state ? toolState(m, active) : legacyLive && i === msgs.length - 1 ? "running" : "unknown"));
@@ -281,7 +297,9 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
   const raw = thread?.messages ?? [];
   // The desktop ends the thread with a marker while the agent is reasoning.
   const thinking = raw.at(-1)?.role === "thinking";
-  const messages = thinking ? raw.slice(0, -1) : raw;
+  const showBgNotes = useShowBgNotes(state.showBgNotes);
+  const unthought = thinking ? raw.slice(0, -1) : raw;
+  const messages = showBgNotes ? unthought : unthought.filter((m) => m.role !== "bg");
   const bgRunning = messages.some((m) => m.background && m.state === "running");
 
   // Live winfer sessions push updates; reads renew the lease and heal reconnects.
@@ -516,6 +534,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               return <Steps key={b.key} msgs={b.msgs} active={active} legacyLive={working && i === displayRows.length - 1} fresh={isFresh(b.msgs[0].id)} />;
             const m = b.msg;
             const fresh = isFresh(m.id) ? " fresh" : "";
+            if (m.role === "bg") return <BgRow key={m.id} msg={m} fresh={fresh !== ""} />;
             if (m.role === "user")
               return (
                 <div key={m.id} className={`turn-user${fresh}`}>

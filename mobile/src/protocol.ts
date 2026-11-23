@@ -68,7 +68,7 @@ export interface Pane {
 export interface Message {
   id: string;
   /** "thinking": a text-less marker ending the thread while the agent reasons; never shown. */
-  role: "user" | "assistant" | "tool" | "thinking";
+  role: "user" | "assistant" | "tool" | "thinking" | "bg";
   text: string;
   tool?: string;
   /** Short human-readable tool description (e.g. Bash/Agent `description`), used in compact rows. */
@@ -80,6 +80,8 @@ export interface Message {
   state?: "running" | "done" | "failed";
   /** Tools: a background shell or subagent, which keeps running after its call returns. */
   background?: boolean;
+  /** "bg": a finished background task: `text` is its one-line summary, `detail` its command and output. */
+  detail?: string;
 }
 
 /** A desktop workspace, in sidebar order. */
@@ -115,7 +117,7 @@ export type PhoneMsg =
 
 export type DesktopMsg =
   | { t: "welcome"; id?: string; desktop: string; version: string; vapidPublicKey: string }
-  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string; theme?: Theme; compactTools?: boolean }
+  | { t: "panes"; id?: string; panes: Pane[]; workspaces?: Workspace[]; providers?: Provider[]; defaultProvider?: string; theme?: Theme; compactTools?: boolean; showBgNotes?: boolean }
   | { t: "status"; pane: Pane; silent?: boolean }
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
   | { t: "config"; id?: string; paneId: string; models: ModelOption[] }

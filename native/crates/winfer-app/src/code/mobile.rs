@@ -38,6 +38,12 @@ pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
                 }
                 out.push(row);
             }
+            Item::Notice { key, text, error: false } => {
+                if let Some(n) = super::bg_note::parse(text) {
+                    let detail = [n.cmd.as_str(), n.output.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
+                    out.push(json!({ "id": key, "role": "bg", "text": n.title(), "detail": detail, "state": if n.failed() { "failed" } else { "done" }, "ts": null }));
+                }
+            }
             _ => {}
         }
     }
@@ -113,6 +119,17 @@ mod tests {
         assert_eq!(done[1]["state"], "failed");
         assert!(done[1]["ended"].as_u64().is_some());
         assert_eq!(live_thread(&s, 1).len(), 1);
+    }
+
+    #[test]
+    fn bg_notes_become_compact_rows() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "bg_note", "text": "Background task bg1 \"Dev\" (`npm run dev`) exited with code 1 after 4s. Its output since your last read:\nboom" })));
+        s.apply(ev(json!({ "type": "notice", "text": "Resumed" })));
+        let t = live_thread(&s, 10);
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0]["role"].as_str(), t[0]["text"].as_str(), t[0]["state"].as_str()), (Some("bg"), Some("Dev · exit 1 · 4s"), Some("failed")));
+        assert_eq!(t[0]["detail"], "npm run dev\n\nboom");
     }
 
     #[test]

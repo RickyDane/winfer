@@ -2,6 +2,7 @@
 //! "Use TUI style" is off (port of `src/features/code`). `protocol` and `state` are the data
 //! model (no UI, unit tested); `session` runs `winfer code --serve`.
 
+pub mod bg_note;
 pub mod commands;
 pub mod links;
 pub mod mobile;

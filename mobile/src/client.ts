@@ -20,6 +20,8 @@ export interface ClientState {
   defaultProvider: string | null;
   /** Desktop's `codeWeb.compactTools` setting (defaults to true, matching native-gpui). */
   compactTools: boolean;
+  /** Desktop's `codeWeb.showBgNotes` setting (defaults to true). */
+  showBgNotes: boolean;
   threads: Record<string, Thread>;
   error: string | null;
 }
@@ -45,6 +47,7 @@ export const initialState = (): ClientState => ({
   providers: [],
   defaultProvider: null,
   compactTools: true,
+  showBgNotes: true,
   threads: {},
   error: null,
 });
@@ -105,6 +108,7 @@ export abstract class BaseClient implements DesktopClient {
           ...(msg.providers && { providers: msg.providers }),
           ...(msg.defaultProvider !== undefined && { defaultProvider: msg.defaultProvider }),
           ...(msg.compactTools !== undefined && { compactTools: msg.compactTools }),
+          ...(msg.showBgNotes !== undefined && { showBgNotes: msg.showBgNotes }),
         });
         break;
       case "status": {

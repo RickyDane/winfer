@@ -19,6 +19,8 @@ export interface CodeWebPrefs {
   expandShell: boolean;
   /** Compact consecutive tool calls and thinking into one live-updating row. */
   compactTools: boolean;
+  /** Background task results (finished/stopped notes) in the transcript. */
+  showBgNotes: boolean;
   /** Tighter spacing in the transcript. */
   compact: boolean;
   /** Text size multiplier (1 = default); only text scales, not spacing. */
@@ -44,6 +46,7 @@ export const DEFAULT_PREFS: CodeWebPrefs = {
   expandThinking: false,
   expandShell: false,
   compactTools: true,
+  showBgNotes: true,
   compact: false,
   textScale: 1,
   favoriteModels: [],

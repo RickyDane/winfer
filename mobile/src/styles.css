@@ -342,6 +342,15 @@ textarea, input, .md, .ask-code, .ask-q p, .turn-user p, .screen-text, .tool-bod
 }
 .turn-user .time { padding-right: 4px; }
 .turn-assistant { padding: 6px 2px; }
+.bg-row { margin: 4px 0; }
+.bg-row > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-lg); background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; text-align: left; }
+.bg-row .bg-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--success, #3fb27f); }
+.bg-row[data-state="failed"] .bg-dot { background: var(--danger); }
+.bg-row[data-state="failed"] > button { color: var(--danger); }
+.bg-row .bg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-row .bg-chev { flex: none; color: var(--subtle); transition: transform 0.2s var(--ease); }
+.bg-row[data-open="true"] .bg-chev { transform: rotate(90deg); }
+.bg-detail { margin: 2px 0 0; padding: 8px 10px; border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--code-bg); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); max-height: 220px; overflow: auto; }
 .screen-text { margin: 0; padding: 10px 12px; border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--code-bg); font: 11.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
 
 /* Tool calls: cards with a tinted icon badge; a line joins consecutive ones' badges. */

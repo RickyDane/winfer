@@ -88,7 +88,7 @@ pub(super) struct CodeUi {
 }
 
 /// The web interface's display options: key, label, line under it, default, icon and group.
-const WEB_OPTS: [(&str, &str, &str, bool, IconName, &str); 9] = [
+const WEB_OPTS: [(&str, &str, &str, bool, IconName, &str); 10] = [
     ("showContext", "Context meter", "Click it for the breakdown", true, IconName::Gauge, "Status line"),
     ("showCost", "Session cost", "When the backend reports one", true, IconName::Coins, "Status line"),
     ("showRate", "Tokens per second", "Next to the working indicator", true, IconName::Zap, "Status line"),
@@ -96,6 +96,7 @@ const WEB_OPTS: [(&str, &str, &str, bool, IconName, &str); 9] = [
     ("expandThinking", "Show thinking", "Expanded, not collapsed", false, IconName::Brain, "Transcript"),
     ("expandShell", "Live shell output", "Open while a command runs", false, IconName::SquareTerminal, "Transcript"),
     ("compactTools", "Compact tool calls", "One live row, click to expand", true, IconName::Rows3, "Transcript"),
+    ("showBgNotes", "Background task results", "One row per finished task; off hides them", true, IconName::Info, "Transcript"),
     ("compact", "Compact layout", "Tighter spacing", false, IconName::FoldVertical, "Transcript"),
     ("sendAnimation", "Animated send button", "Its nebula drifts while working", true, IconName::Sparkles, "Transcript"),
 ];

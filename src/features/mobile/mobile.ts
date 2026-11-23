@@ -36,12 +36,14 @@ export interface MobilePane {
 
 export interface MobileMessage {
   id: string;
-  role: "user" | "assistant" | "tool" | "thinking";
+  role: "user" | "assistant" | "tool" | "thinking" | "bg";
   text: string;
   tool?: string;
   ts: number | null;
   state?: "running" | "done" | "failed";
   background?: boolean;
+  /** "bg": the finished task's command and output. */
+  detail?: string;
 }
 
 /** A workspace as the phone sees it, in the desktop's sidebar order. */

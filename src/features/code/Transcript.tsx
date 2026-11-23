@@ -24,6 +24,7 @@ import { Welcome } from "./Welcome";
 import { HISTORY_PAGE, historyStart } from "./history";
 import { followAfterScroll, isAwayFromBottom } from "./scrollFollow";
 import { useCodeWeb } from "./styles";
+import { bgNoteTitle, parseBgNote, type BgNote } from "./bgNote";
 import { modelName } from "./names";
 import { elapsed } from "../usage/toolStats";
 import { buildDisplayRows, describeStep, fmtWorkedFor, groupDurationMs, summarizeGroup } from "./workGroup";
@@ -419,7 +420,30 @@ const TextRow = memo(function TextRow({ item, dark }: { item: Extract<Item, { ki
   );
 });
 
+/** A finished/stopped background task: one line, click for its command and output. */
+function BgNoteRow({ note }: { note: BgNote }) {
+  const [open, setOpen] = useState(false);
+  const failed = note.code !== null && note.code !== 0;
+  const Icon = failed ? X : note.code === null ? Info : Check;
+  return (
+    <div className={clsx("cw-notice cw-bgnote cw-enter", failed ? "error" : "info", open && "open")}>
+      <Icon size={13} />
+      <span className="cw-bgnote-main" onClick={() => !selecting() && setOpen(!open)}>
+        <span className="cw-bgnote-title">{bgNoteTitle(note)}</span>
+        {open && (
+          <>
+            <code className="cw-bgnote-cmd">{note.cmd}</code>
+            {note.output && <pre className="cw-bgnote-out">{note.output}</pre>}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
 const NoticeRow = memo(function NoticeRow({ item }: { item: Extract<Item, { kind: "notice" }> }) {
+  const bg = item.tone === "info" ? parseBgNote(item.text) : null;
+  if (bg) return <BgNoteRow note={bg} />;
   return (
     <div className={clsx("cw-notice cw-enter", item.tone)}>
       {item.tone === "error" ? <TriangleAlert size={13} /> : <Info size={13} />}
@@ -440,10 +464,15 @@ export function useFresh() {
 }
 
 export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) {
-  const items = useCode((s) => s.items);
+  const allItems = useCode((s) => s.items);
   const busy = useCode((s) => s.busy);
   const compactTools = useCodeWeb((s) => s.compactTools);
+  const showBgNotes = useCodeWeb((s) => s.showBgNotes);
   const fresh = useFresh();
+  const items = useMemo(
+    () => (showBgNotes ? allItems : allItems.filter((i) => !(i.kind === "notice" && i.tone === "info" && parseBgNote(i.text)))),
+    [allItems, showBgNotes],
+  );
   const rows = useMemo(
     () => buildDisplayRows(items, busy, compactTools),
     [items, busy, compactTools],

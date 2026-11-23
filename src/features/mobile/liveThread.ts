@@ -1,5 +1,6 @@
 import type { CodeState } from "@/features/code/store";
 import type { MobileMessage } from "./mobile";
+import { bgNoteTitle, parseBgNote } from "@/features/code/bgNote";
 
 /** Read the same in-memory items as the desktop, including incomplete streamed replies. */
 export function liveThread(state: CodeState, limit: number): MobileMessage[] {
@@ -15,6 +16,10 @@ export function liveThread(state: CodeState, limit: number): MobileMessage[] {
         state: task?.status === "running" ? "running" : task?.status === "failed" ? "failed" : item.ended === undefined ? "running" : item.ok === false ? "failed" : "done",
         background: !!task,
       });
+    }
+    if (item.kind === "notice" && item.tone === "info") {
+      const n = parseBgNote(item.text);
+      if (n) messages.push({ ...base, role: "bg", text: bgNoteTitle(n), detail: [n.cmd, n.output].filter(Boolean).join("\n\n"), state: n.code !== null && n.code !== 0 ? "failed" : "done" });
     }
   }
   const last = state.items.at(-1);

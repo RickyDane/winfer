@@ -322,7 +322,8 @@ impl Root {
         let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
         let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
-        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme), "compactTools": compact_tools })
+        let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);
+        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "theme": theme_json(&s.theme), "compactTools": compact_tools, "showBgNotes": show_bg_notes })
     }
 
     fn signature(snapshot: &Value) -> String {
@@ -374,6 +375,7 @@ impl Root {
         }
         let panes: Vec<(String, AgentStatus)> = s.all_panes().map(|p| (p.id.clone(), p.status)).collect();
         let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
+        let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);
         let layout = json!([
             s.active_workspace_id,
             s.workspaces.iter().map(|w| json!([w.id, w.name, ordered(w).iter().map(|p| p.id.clone()).collect::<Vec<_>>()])).collect::<Vec<_>>(),
@@ -381,6 +383,7 @@ impl Root {
             s.default_provider,
             s.theme,
             compact_tools,
+            show_bg_notes,
         ]).to_string();
         if !self.mobile.started {
             self.mobile.started = true;

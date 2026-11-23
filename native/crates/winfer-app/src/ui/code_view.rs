@@ -2,6 +2,7 @@
 //! (port of `features/code/CodePane.tsx`, `Transcript.tsx` and `Composer.tsx`).
 //! Panels that open over the transcript live in `code_sheets.rs`.
 
+use crate::code::bg_note::BgNote;
 use crate::code::commands::{self, Effect};
 use crate::code::names::{backend_of, model_name};
 use crate::code::protocol::*;
@@ -1008,11 +1009,11 @@ impl CodeView {
         .detach();
     }
 
-    fn prefs(&self, cx: &App) -> (f32, bool, bool, bool, bool, bool, bool, bool) {
+    fn prefs(&self, cx: &App) -> (f32, bool, bool, bool, bool, bool, bool, bool, bool) {
         let s = self.app.read(cx);
         let get = |k: &str, d: bool| s.rest.get("codeWeb").and_then(|v| v[k].as_bool()).unwrap_or(d);
         let scale = s.rest.get("codeWeb").and_then(|v| v["textScale"].as_f64()).unwrap_or(1.0) as f32;
-        (scale, get("compact", false), get("expandThinking", false), get("expandShell", false), get("showCost", true), get("showContext", true), get("showRate", true), get("showPlan", true))
+        (scale, get("compact", false), get("expandThinking", false), get("expandShell", false), get("showCost", true), get("showContext", true), get("showRate", true), get("showPlan", true), get("showBgNotes", true))
     }
 
     /// Steps `codeWeb.textScale` (Settings → winfer code → Text size) by 5% per wheel notch.
@@ -1621,7 +1622,34 @@ fn report_row<'a>(env: &Env, key: &str, charts: impl Iterator<Item = &'a Item>) 
     enter(env, key, super::viz::report(&style, key, &reports))
 }
 
+/// A finished/stopped background task: one line, click for its command and output.
+fn bg_note_row(env: &Env, key: &str, note: &BgNote) -> AnyElement {
+    let c = env.c;
+    let open = env.open(key, false);
+    let toggled = env.toggled.get(key).copied();
+    let show_body = open || matches!(toggled, Some((_, false)));
+    let (icon, color) = if note.failed() { (IconName::X, c.danger) } else if note.code.is_none() { (IconName::Info, c.subtle) } else { (IconName::Check, c.success) };
+    let (view, k) = (env.view.clone(), key.to_string());
+    let head = div().id(SharedString::from(format!("bg-{key}"))).flex().items_center().gap_1p5().h(px(26.0)).px_2().rounded_lg().cursor_pointer().hover(move |d| d.bg(c.hover))
+        .on_click(move |_, _, cx| {
+            let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
+        })
+        .child(Icon::new(icon).size(px(12.0)).text_color(color))
+        .child(div().text_size(env.small()).text_color(if note.failed() { c.danger } else { c.muted }).child(note.title()))
+        .child(toggle_chevron(key, open, toggled, c.subtle));
+    let body = div().flex().flex_col().gap_1().mt_1().mb_1().px_3().py_1p5().rounded_lg().border_1().border_color(c.edge).bg(c.raised).font_family(env.mono.clone()).text_size(env.small()).text_color(c.muted).whitespace_normal()
+        .child(div().text_color(c.subtle).child(note.cmd.clone()))
+        .when(!note.output.is_empty(), |d| d.child(note.output.clone()));
+    enter(env, key, div().w_full().flex().flex_col().items_center().py(px(2.0)).child(head)
+        .when(show_body, |d| d.child(div().max_w(relative(0.9)).child(toggle_body(key, toggled, body)))))
+}
+
 fn notice_row(env: &Env, key: &str, text: &str, error: bool) -> AnyElement {
+    if !error {
+        if let Some(note) = crate::code::bg_note::parse(text) {
+            return bg_note_row(env, key, &note);
+        }
+    }
     let c = env.c;
     let (icon, color) = if error { (IconName::TriangleAlert, c.danger) } else { (IconName::Info, c.subtle) };
     enter(env, key, div().w_full().flex().justify_center().py_1p5().child(
@@ -2571,7 +2599,7 @@ impl CodeView {
 
     /// Spinner row above the composer while a turn runs: elapsed time, token in/out, cached %, tok/s.
     fn render_status(&self, c: Colors, cx: &App) -> Option<AnyElement> {
-        let (_, _, _, _, _, _, show_rate, _) = self.prefs(cx);
+        let (_, _, _, _, _, _, show_rate, ..) = self.prefs(cx);
         let st = &self.model.read(cx).state;
         if !st.busy {
             return None;
@@ -2605,7 +2633,7 @@ impl CodeView {
     }
 
     fn render_composer(&mut self, c: Colors, cx: &mut Context<Self>) -> AnyElement {
-        let (_, _, _, _, show_cost, show_context, show_rate, _) = self.prefs(cx);
+        let (_, _, _, _, show_cost, show_context, show_rate, ..) = self.prefs(cx);
         let m = self.model.read(cx);
         let st = &m.state;
         let busy = st.busy;
@@ -2986,7 +3014,7 @@ impl Render for CodeView {
         let theme_id = self.app.read(cx).theme.clone();
         let c = theme::colors(&theme_id);
         let mono = fonts::mono(cx);
-        let (scale, compact, expand_thinking, expand_shell, .., show_plan) = self.prefs(cx);
+        let (scale, compact, expand_thinking, expand_shell, _, _, _, show_plan, _) = self.prefs(cx);
         let now = now_ms();
         // Text typed from outside (send_to_pane, broadcast) shows up in the composer.
         let (rev, draft) = { let m = self.model.read(cx); (m.draft_rev, m.draft.clone()) };
@@ -3003,6 +3031,7 @@ impl Render for CodeView {
         }
         self.ensure_picker(window, cx);
         let compact_tools = self.compact_tools(cx);
+        let items = if self.prefs(cx).8 { items } else { items.into_iter().filter(|i| !matches!(i, Item::Notice { text, error: false, .. } if crate::code::bg_note::parse(text).is_some())).collect() };
         self.sync_list(&items, busy, compact_tools, now);
         // A newly sent message resumes following the bottom, even when scrolled up.
         let last_user = items.iter().rev().find(|i| matches!(i, Item::User { .. })).map(|i| i.key().to_string());

@@ -5,6 +5,7 @@ import { go, haptic, isIOS, isStandalone, useClient } from "../hooks";
 import { activePairing, loadPairings, removePairing, setActive } from "../pairing";
 import { Icon } from "./common";
 import { setCompactToolsOverride, useCompactTools } from "./compactTools";
+import { setShowBgNotesOverride, useShowBgNotes } from "./bgNotes";
 
 type PushState = "unsupported" | "ios-browser" | "denied" | "off" | "on" | "busy";
 
@@ -25,6 +26,7 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
   const pairings = loadPairings();
   const active = activePairing();
   const compactTools = useCompactTools(state.compactTools);
+  const showBgNotes = useShowBgNotes(state.showBgNotes);
 
   useEffect(() => {
     currentPush().then(setPush, () => setPush("unsupported"));
@@ -149,6 +151,25 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
                   onClick={() => {
                     haptic(8);
                     setCompactToolsOverride(!compactTools);
+                  }}
+                />
+              </div>
+              <div className="row">
+                <span className="row-icon">
+                  <Icon name="info" />
+                </span>
+                <span className="row-main">
+                  <b>Background task results</b>
+                  <span>{showBgNotes ? "One row per finished task" : "Hidden from the thread"}</span>
+                </span>
+                <button
+                  className="toggle"
+                  role="switch"
+                  aria-checked={showBgNotes}
+                  aria-label="Background task results"
+                  onClick={() => {
+                    haptic(8);
+                    setShowBgNotesOverride(!showBgNotes);
                   }}
                 />
               </div>
