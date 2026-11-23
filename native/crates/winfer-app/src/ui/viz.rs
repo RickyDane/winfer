@@ -460,14 +460,11 @@ pub fn file_theme(c: &Colors) -> viz_svg::Theme {
     };
     viz_svg::Theme {
         bg: hex(c.panel),
-        card: hex(c.raised),
-        tile: hex(c.app),
         border: hex(c.edge),
         strong: hex(c.border_strong),
         fg: hex(c.fg),
         muted: hex(c.muted),
         subtle: hex(c.subtle),
-        accent: hex(c.accent),
         track: hex(c.hover),
         series: (if c.light { LIGHT } else { DARK }).map(String::from).to_vec(),
     }
