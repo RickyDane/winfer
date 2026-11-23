@@ -1557,7 +1557,11 @@ mod tests {
         };
         // Through the account's link or the shared folder itself: allowed, in both plan modes.
         let plan = account.join("plans/p.md").to_string_lossy().into_owned();
+        // Without symlinks the account's folder is its own folder.
+        #[cfg(unix)]
         let real = shared.join("p.md").to_string_lossy().into_owned();
+        #[cfg(not(unix))]
+        let real = account.join("plans/p.md").to_string_lossy().into_owned();
         for mode in [Mode::Plan, Mode::YoloPlan] {
             b.mode = mode;
             assert_eq!(ask(&mut b, "w1", "Write", json!({ "file_path": plan })).as_deref(), Some("allow"));

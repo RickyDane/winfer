@@ -2370,7 +2370,15 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
 
-            let probe = eval(select_probe_js(50.0, 30.0)).await;
+            // Layout may lag the load event, especially on slow runners.
+            let mut probe = eval(select_probe_js(50.0, 30.0)).await;
+            for _ in 0..50 {
+                if !probe.is_null() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                probe = eval(select_probe_js(50.0, 30.0)).await;
+            }
             assert_eq!(probe["rect"]["x"], 10);
             assert_eq!(probe["rect"]["width"], 100);
             assert_eq!(probe["selected"], 0);
