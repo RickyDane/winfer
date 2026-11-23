@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TARGET="${1:-$(rustc -vV | sed -n 's/host: //p')}"
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+VERSION="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
 IDENTITY="${WINFER_SIGN_IDENTITY:--}"
 ARCH="${TARGET%%-*}"
 OUT="target/bundle"

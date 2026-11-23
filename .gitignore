@@ -48,3 +48,4 @@ m-video/
 .specsmd/
 __pycache__/
 .codegraph/
+.env

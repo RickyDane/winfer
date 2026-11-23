@@ -120,6 +120,12 @@ async fn run(config: Config, up: async_channel::Sender<Up>, mut capture: mpsc::U
     let mut pending_calls: usize = 0;
     let mut outputs: Vec<(String, String)> = Vec::new();
     let mut speaking = false;
+    // AI Observability (telemetry.rs): one session per connection, one trace per spoken turn.
+    let ai_session = crate::telemetry::new_ai_id();
+    let mut ai_trace = crate::telemetry::new_ai_id();
+    let mut model = model_of_url(&config.url);
+    let mut response_started = std::time::Instant::now();
+    let mut call_started: std::collections::HashMap<String, (String, std::time::Instant)> = std::collections::HashMap::new();
     loop {
         tokio::select! {
             chunk = capture.recv() => {
@@ -137,6 +143,11 @@ async fn run(config: Config, up: async_channel::Sender<Up>, mut capture: mpsc::U
                         notes.push(text);
                     }
                     Some(Down::Results(results)) => {
+                        for (id, _) in &results {
+                            if let Some((name, at)) = call_started.remove(id) {
+                                crate::telemetry::ai_span(&ai_session, &ai_trace, &name, at.elapsed().as_secs_f64());
+                            }
+                        }
                         pending_calls = pending_calls.saturating_sub(results.len());
                         outputs.extend(results);
                         if pending_calls == 0 {
@@ -159,14 +170,21 @@ async fn run(config: Config, up: async_channel::Sender<Up>, mut capture: mpsc::U
                 match event["type"].as_str().unwrap_or_default() {
                     "input_audio_buffer.speech_started" => {
                         user_speaking = true;
+                        ai_trace = crate::telemetry::new_ai_id();
                         // Talking over the model: stop its voice at once.
                         player.clear();
                         speaking = false;
                         let _ = up.send(Up::State(State::Listening)).await;
                     }
                     "input_audio_buffer.speech_stopped" => user_speaking = false,
+                    "session.created" | "session.updated" => {
+                        if let Some(m) = event["session"]["model"].as_str().filter(|m| !m.is_empty()) {
+                            model = m.to_string();
+                        }
+                    }
                     "response.created" => {
                         responding = true;
+                        response_started = std::time::Instant::now();
                         let _ = up.send(Up::State(State::Thinking)).await;
                     }
                     "response.output_audio.delta" | "response.audio.delta" => {
@@ -193,6 +211,19 @@ async fn run(config: Config, up: async_channel::Sender<Up>, mut capture: mpsc::U
                         responding = false;
                         speaking = false;
                         let calls = protocol::calls_of(&event["response"]);
+                        let usage = &event["response"]["usage"];
+                        crate::telemetry::ai_generation(crate::telemetry::AiGeneration {
+                            session_id: &ai_session,
+                            trace_id: &ai_trace,
+                            model: &model,
+                            input_tokens: usage["input_tokens"].as_u64(),
+                            output_tokens: usage["output_tokens"].as_u64(),
+                            latency_secs: response_started.elapsed().as_secs_f64(),
+                            error: event["response"]["status"] == "failed",
+                        });
+                        for call in &calls {
+                            call_started.insert(call.id.clone(), (call.name.clone(), std::time::Instant::now()));
+                        }
                         if event["response"]["status"] == "failed" {
                             let error = &event["response"]["status_details"]["error"];
                             let fatal = protocol::fatal_message(error);
@@ -222,6 +253,7 @@ async fn run(config: Config, up: async_channel::Sender<Up>, mut capture: mpsc::U
         }
         // Events from the app wait until the model is free.
         if !responding && !user_speaking && pending_calls == 0 && !notes.is_empty() {
+            ai_trace = crate::telemetry::new_ai_id();
             let text = notes.drain(..).map(|n| format!("[winfer] {n}")).collect::<Vec<_>>().join("\n");
             sink.send(send(protocol::user_note(&text))).await.map_err(|e| e.to_string())?;
             sink.send(send(protocol::response_create())).await.map_err(|e| e.to_string())?;
@@ -231,8 +263,19 @@ async fn run(config: Config, up: async_channel::Sender<Up>, mut capture: mpsc::U
     Ok(())
 }
 
+/// The model in the Realtime URL's `model=` query, until the session names it.
+fn model_of_url(url: &str) -> String {
+    url::Url::parse(url).ok().and_then(|u| u.query_pairs().find(|(k, _)| k == "model").map(|(_, v)| v.into_owned())).unwrap_or_else(|| "unknown".into())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_the_model_from_the_url() {
+        assert_eq!(super::model_of_url("wss://api.openai.com/v1/realtime?model=gpt-realtime"), "gpt-realtime");
+        assert_eq!(super::model_of_url("ws://127.0.0.1:1"), "unknown");
+    }
+
     impl super::Player {
         fn pending(&self) -> usize {
             self.queue.lock().len()

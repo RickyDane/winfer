@@ -357,6 +357,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
     env:
       RUSTC_WRAPPER: sccache
+      # Anonymous usage data (native/crates/winfer-app/src/telemetry.rs): compiled in; without
+      # the secret the build sends nothing. The host defaults to PostHog US.
+      WINFER_POSTHOG_KEY: ${{ secrets.WINFER_POSTHOG_KEY }}
+      WINFER_POSTHOG_HOST: ${{ vars.WINFER_POSTHOG_HOST }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -370,7 +374,10 @@ jobs:
             echo "::error::Tag $TAG isn't vX.Y.Z (stable) or vX.Y.Z-N (Nebula)"
             exit 1
           fi
-          VERSION=${TAG#v} perl -0pi -e 's/^version = ".*"$/version = "$ENV{VERSION}"/m' native/Cargo.toml
+          # [^"]* rather than ".*"$: Windows checkouts have CRLF line endings, where $ doesn't match
+          # before the \r, so the version silently stayed the placeholder in native/Cargo.toml.
+          VERSION=${TAG#v} perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' native/Cargo.toml
+          grep -q "^version = \"${TAG#v}\"" native/Cargo.toml || { echo "::error::Couldn't stamp $TAG into native/Cargo.toml"; exit 1; }
           git diff --stat
 
       - uses: dtolnay/rust-toolchain@stable

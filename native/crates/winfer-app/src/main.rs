@@ -15,6 +15,7 @@ mod status;
 mod terminal;
 mod updates;
 mod voice;
+mod telemetry;
 mod theme;
 mod ui;
 
@@ -39,6 +40,7 @@ fn main() {
     if run_subcommand() {
         return;
     }
+    telemetry::mark_process_start();
     // Lean Codex always comes with the short system prompt in this build (Settings has no switch
     // for it): keep the shared harness setting in step.
     let mut harness = winfer_backend::harness::config::Config::load();

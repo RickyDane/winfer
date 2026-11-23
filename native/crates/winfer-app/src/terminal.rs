@@ -659,6 +659,7 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
             let info = created.and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())).map(|v| serde_json::from_value::<Option<crate::model::WorktreeInfo>>(v).unwrap_or(None));
             match info {
                 Ok(Some(info)) => {
+                    crate::telemetry::track("worktree_created", serde_json::json!({ "provider": crate::telemetry::provider_label(&pane.provider) }));
                     session.write_note(&format!("\x1b[2mworktree {} (from {}) at {}\x1b[0m\r\n", info.branch, info.base, info.path));
                     pane.cwd = info.path.clone();
                     let _ = events.try_send(Event::Worktree { pane_id: id.clone(), info: Some(info) });

@@ -229,6 +229,9 @@ impl Root {
     fn toggle_plugin(&mut self, plugin: Value, enabled: bool, window: &mut Window, cx: &mut Context<Self>) {
         let id = str_of(&plugin["id"]).to_string();
         let m = &plugin["manifest"];
+        // Store plugins are public, so by id; others only as "local".
+        let reported = if plugin["fromStore"] == true { id.as_str() } else { "local" };
+        crate::telemetry::track("plugin_toggled", serde_json::json!({ "plugin": reported, "enabled": enabled }));
         // Plugin code and agent commands run with winfer's access to files, terminals and the network.
         let risky = enabled && plugin["fromStore"] != true && (m["main"].is_string() || m["providers"].as_array().is_some_and(|p| !p.is_empty()));
         let run = move |this: &mut Root, cx: &mut Context<Root>| {

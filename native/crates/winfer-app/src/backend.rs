@@ -47,6 +47,7 @@ pub fn start() -> Result<(), String> {
     app.manage(chatgpt_voice::ChatgptVoice::default());
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     diagnostics::init(&data_dir);
+    crate::telemetry::init(&data_dir);
     diagnostics::breadcrumb("app setup".to_string());
     if let Err(e) = transfer::apply_pending(&data_dir) {
         diagnostics::error("import", &format!("import failed: {e}"));
@@ -73,4 +74,5 @@ pub fn shutdown() {
     app.state::<browser::BrowserManager>().shutdown();
     app.state::<android::AndroidManager>().shutdown();
     harness::bg::stop_all();
+    crate::telemetry::shutdown();
 }

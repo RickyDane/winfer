@@ -658,6 +658,7 @@ impl AppState {
     }
 
     pub fn add_pane(&mut self, provider: &str, opts: AddPane) -> String {
+        crate::telemetry::pane_opened(provider);
         let workspace_id = opts.workspace_id.clone().unwrap_or_else(|| self.active_workspace_id.clone());
         let background = workspace_id != self.active_workspace_id;
         let id = new_id("p");

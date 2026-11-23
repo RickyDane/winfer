@@ -3278,13 +3278,15 @@ impl Render for CodeView {
                     cx.stop_propagation();
                 }
             }))
-            .capture_action(cx.listener(|this, _: &MoveHome, _, cx| {
-                if this.scroll_key("home", cx) {
+            .capture_action(cx.listener(|this, _: &MoveHome, window, cx| {
+                // cmd-left/right and ctrl-a/e map to the same action: only the bare key scrolls.
+                if !window.modifiers().modified() && this.scroll_key("home", cx) {
                     cx.stop_propagation();
                 }
             }))
-            .capture_action(cx.listener(|this, _: &MoveEnd, _, cx| {
-                if this.scroll_key("end", cx) {
+            .capture_action(cx.listener(|this, _: &MoveEnd, window, cx| {
+                // cmd-left/right and ctrl-a/e map to the same action: only the bare key scrolls.
+                if !window.modifiers().modified() && this.scroll_key("end", cx) {
                     cx.stop_propagation();
                 }
             }))

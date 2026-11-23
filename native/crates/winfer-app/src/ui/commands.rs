@@ -516,6 +516,7 @@ impl Root {
 
     pub(super) fn execute(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) {
         use Command as C;
+        crate::telemetry::command_used(&cmd);
         match cmd {
             C::Spawn { provider, count, prompt, worktree, model } => {
                 let provider = provider.unwrap_or_else(|| self.state.read(cx).default_provider_id());

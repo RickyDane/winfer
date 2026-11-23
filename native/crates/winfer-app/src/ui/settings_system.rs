@@ -508,6 +508,29 @@ impl Root {
             .child(section(c, "Report a problem", Some("no settings, chats or secrets are included".into())))
             .child(report)
             .children(result)
+            .child(section(c, "Usage data", Some("anonymous".into())))
+            .child(self.usage_data_card(c, cx))
+    }
+
+    /// Opt-out for the anonymous usage data (telemetry.rs).
+    fn usage_data_card(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
+        let available = crate::telemetry::available();
+        let on = available && crate::telemetry::enabled();
+        let sub = if available {
+            "App version, OS, startup time, memory, crash locations, which features, agents and agent tools are used, and token counts. Never prompts, code, terminal output, paths or names."
+        } else {
+            "This build doesn't send usage data (no key at build time, or DO_NOT_TRACK / WINFER_TELEMETRY=0 is set)."
+        };
+        let card = panel(c).flex_row().items_center().gap_3().px_3p5().py_3()
+            .child(icon_tile(c.muted, IconName::ChartColumn, 28.0))
+            .child(small_label(c, "Share anonymous usage data", sub));
+        if !available {
+            return card;
+        }
+        card.child(self.toggle("usage-data", on, c, cx, |_, cx| {
+            crate::telemetry::set_enabled(!crate::telemetry::enabled());
+            cx.notify();
+        }))
     }
 
     fn diagnostics_logs(&mut self, info: &Value, c: Colors, cx: &mut Context<Self>) -> Div {

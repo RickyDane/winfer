@@ -136,6 +136,20 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Quit winfer", Quit),
         ]),
+        // Without an Edit menu, macOS never sends cut:/copy:/paste:/selectAll: to a focused WKWebView
+        // (the plugin pages), so Cmd+V etc. do nothing there. GPUI inputs get the same items as actions.
+        Menu::new("Edit").items({
+            use gpui_kit::component::input;
+            [
+                MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+                MenuItem::separator(),
+                MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+                MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+            ]
+        }),
         Menu::new("Window").items([MenuItem::action("Minimize", Minimize), MenuItem::action("Zoom", Zoom)]),
     ]);
 }
@@ -484,6 +498,7 @@ impl Root {
                 }
                 cx.notify();
             });
+            crate::telemetry::app_ready();
             let found = tauri::async_runtime::spawn(providers::providers_list()).await;
             if let Ok(found) = found {
                 let found = found.into_iter().map(|p| crate::model::AgentProvider { info: p.provider, installed: p.installed }).collect();
@@ -498,6 +513,9 @@ impl Root {
         cx.defer_in(window, |this, _, cx| {
             this.start_usage(cx);
             this.start_updates(cx);
+            if crate::telemetry::take_first_run_notice() {
+                this.toast_action("winfer sends anonymous usage data (no prompts, code or paths) to improve the app", "Settings", Command::Settings(Some("diagnostics".into())), cx);
+            }
             this.reload_plugins(cx);
         });
         window.activate_window();
