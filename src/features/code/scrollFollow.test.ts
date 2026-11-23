@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { followAfterScroll, isAwayFromBottom } from "./scrollFollow";
+import { canScrollFurther, followAfterScroll, isAwayFromBottom } from "./scrollFollow";
 
 describe("transcript jump button", () => {
   it("stays hidden after pausing when the transcript fits or is at the bottom", () => {
@@ -67,5 +67,15 @@ describe("transcript scroll following", () => {
   it("keeps following during normal streaming and programmatic downward jumps", () => {
     expect(followAfterScroll(true, 1000, 1000, 100, 0)).toBe(true);
     expect(followAfterScroll(true, 1000, 1100, 0, 0)).toBe(true);
+  });
+});
+
+describe("nested scroll box edges", () => {
+  it("hands the wheel to the transcript only at the box's start or end", () => {
+    expect(canScrollFurther(0, 500, 200, -10)).toBe(false);
+    expect(canScrollFurther(0, 500, 200, 10)).toBe(true);
+    expect(canScrollFurther(300, 500, 200, 10)).toBe(false);
+    expect(canScrollFurther(300, 500, 200, -10)).toBe(true);
+    expect(canScrollFurther(0, 200, 200, 10)).toBe(false);
   });
 });

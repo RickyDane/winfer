@@ -22,7 +22,7 @@ import { Markdown } from "./Markdown";
 import { Linkify } from "./Links";
 import { Welcome } from "./Welcome";
 import { HISTORY_PAGE, historyStart } from "./history";
-import { followAfterScroll, isAwayFromBottom } from "./scrollFollow";
+import { canScrollFurther, followAfterScroll, isAwayFromBottom } from "./scrollFollow";
 import { useCodeWeb } from "./styles";
 import { bgNoteTitle, parseBgNote, type BgNote } from "./bgNote";
 import { modelName } from "./names";
@@ -574,6 +574,28 @@ export const Transcript = memo(function Transcript({ dark }: { dark: boolean }) 
       cancelAnimationFrame(followFrame.current);
       followFrame.current = 0;
     };
+  }, []);
+
+  // Wheel over a nested scroll box (tool output, diff) that hit its start or end keeps
+  // scrolling the transcript, instead of staying latched to the box until the pointer leaves it.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      let nested = false;
+      for (let n = e.target instanceof Element ? e.target : null; n && n !== el; n = n.parentElement) {
+        if (n.scrollHeight - n.clientHeight <= 1 || !/(auto|scroll)/.test(getComputedStyle(n).overflowY)) continue;
+        if (canScrollFurther(n.scrollTop, n.scrollHeight, n.clientHeight, e.deltaY)) return;
+        nested = true;
+      }
+      if (!nested) return;
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
+      el.scrollTop += e.deltaY * unit;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
   return (

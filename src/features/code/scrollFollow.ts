@@ -19,3 +19,11 @@ export function followAfterScroll(
     return intent >= 0 && top > previousTop && distance <= 2;
   return true;
 }
+
+/** Whether a nested scroll box (tool output, diff) can still move in the wheel's direction.
+ * WebKit latches a trackpad gesture to the box under the pointer, so once it reaches its end
+ * the transcript would not move until the pointer leaves it; the caller then scrolls it instead. */
+export function canScrollFurther(top: number, height: number, client: number, delta: number): boolean {
+  if (height - client <= 1) return false;
+  return delta < 0 ? top > 0.5 : top + client < height - 0.5;
+}
