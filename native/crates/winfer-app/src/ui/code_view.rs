@@ -127,6 +127,9 @@ pub struct CodeView {
     seen_items: usize,
     /// "Load more" was clicked: keep the reader's place when the rows are prepended.
     load_pending: bool,
+    /// Pane-level focus handle used while a blocking sheet/lightbox is open so keys don't hit the composer.
+    focus: FocusHandle,
+    restore_composer_focus: bool,
 }
 
 /// Rows shown initially and added per "Load more".
@@ -620,14 +623,24 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false }
+        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false }
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
         self.sky.clone()
     }
 
+    /// True when a full-pane modal sheet or image lightbox is covering the chat.
+    fn has_blocking_modal(&self, cx: &App) -> bool {
+        self.preview.is_some()
+            || self.model.read(cx).state.sheet.is_some_and(|s| !matches!(s, Sheet::Model | Sheet::Effort | Sheet::Mode))
+    }
+
     pub fn focus_composer(&self, window: &mut Window, cx: &mut App) {
+        if self.has_blocking_modal(cx) {
+            self.focus.focus(window, cx);
+            return;
+        }
         // `TextareaState::focus` also (re)starts the caret blink; focusing the bare handle of a
         // freshly created pane can leave the caret hidden.
         self.input.update(cx, |input, cx| input.focus(window, cx));
@@ -1095,7 +1108,7 @@ impl CodeView {
     /// Something on screen counts time: a running turn, a subagent still running in the background, or dictation.
     fn live(&self, cx: &App) -> bool {
         let st = &self.model.read(cx).state;
-        st.busy || st.tasks.iter().any(|t| t.ev.agent.is_some() && t.running()) || st.live_log_task().is_some() || self.dictation.is_some()
+        st.busy || st.tasks.iter().any(|t| t.ev.agent.is_some() && t.running()) || st.live_log_task().is_some() || self.dictation.is_some() || !st.tree_agents(now_ms()).is_empty()
     }
 
     /// Asks again for the tail of a running task whose output sheet is open (called each tick).
@@ -2666,11 +2679,11 @@ impl CodeView {
     /// what it did last. Hidden once no subagent runs and the turn that started them is over.
     fn render_agent_tree(&self, c: Colors, mono: SharedString, cx: &mut Context<Self>) -> Option<AnyElement> {
         let st = &self.model.read(cx).state;
-        let agents = st.tree_agents();
+        let now = now_ms();
+        let agents = st.tree_agents(now);
         if agents.is_empty() {
             return None;
         }
-        let now = now_ms();
         let running = agents.iter().filter(|t| t.running()).count();
         let failed = agents.iter().filter(|t| t.ev.status.as_deref() == Some("failed")).count();
         let finished = agents.len() - running - failed;
@@ -2703,11 +2716,12 @@ impl CodeView {
             let key = format!("agt-{id}");
             let expanded = self.flipped.contains(&key);
             let live = t.running();
+            // Only a task that really runs spins; any other status (even one we don't know) is finished.
             let glyph: AnyElement = match t.ev.status.as_deref() {
-                Some("done") => Icon::new(IconName::CircleCheck).size(px(13.0)).text_color(c.success).into_any_element(),
+                _ if live => spinner(c.accent, 13.0, SharedString::from(format!("agt-sp-{id}"))).into_any_element(),
                 Some("failed") => Icon::new(IconName::CircleX).size(px(13.0)).text_color(c.danger).into_any_element(),
                 Some("stopped") => Icon::new(IconName::CircleSlash).size(px(13.0)).text_color(c.subtle).into_any_element(),
-                _ => spinner(c.accent, 13.0, SharedString::from(format!("agt-sp-{id}"))).into_any_element(),
+                _ => Icon::new(IconName::CircleCheck).size(px(13.0)).text_color(c.success).into_any_element(),
             };
             let kind = t.ev.agent.clone().unwrap_or_default();
             let title = t.ev.description.clone().or(t.ev.title.clone()).unwrap_or_else(|| kind.clone());
@@ -3343,6 +3357,15 @@ impl Render for CodeView {
             self.tick(cx);
         }
         self.ensure_picker(window, cx);
+        let modal_open = self.has_blocking_modal(cx);
+        if modal_open {
+            if self.input.read(cx).focus_handle(cx).is_focused(window) {
+                self.restore_composer_focus = true;
+                self.focus.focus(window, cx);
+            }
+        } else if std::mem::take(&mut self.restore_composer_focus) && self.focus.is_focused(window) {
+            self.focus_composer(window, cx);
+        }
         let compact_tools = self.compact_tools(cx);
         let items = if self.prefs(cx).8 { items } else { items.into_iter().filter(|i| !matches!(i, Item::Notice { text, error: false, .. } if crate::code::bg_note::parse(text).is_some())).collect() };
         self.sync_list(&items, busy, compact_tools, now);
@@ -3448,6 +3471,7 @@ impl Render for CodeView {
                 .justify_center()
                 .bg(alpha(black(), 0.82))
                 .p_6()
+                .occlude()
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -3462,7 +3486,7 @@ impl Render for CodeView {
         let view_for_size = cx.entity();
         let view_for_zoom = cx.entity();
         let measure = canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, cx| {
                 view_for_size.update(cx, |this, cx| {
                     let prev = (
                         composer_layout(this.pane_size.width / px(1.0), this.pane_size.height / px(1.0)),
@@ -3482,12 +3506,14 @@ impl Render for CodeView {
                         cx.notify();
                     }
                 });
+                window.insert_hitbox(bounds, HitboxBehavior::Normal)
             },
-            move |bounds, _, window, _| {
+            move |_, hitbox, window, _| {
                 // Ctrl/⌘ + wheel steps the text size; capture phase so the transcript doesn't scroll.
+                // Checking the hitbox instead of raw bounds ensures occluding modals block zoom too.
                 let view = view_for_zoom.clone();
-                window.on_mouse_event(move |e: &ScrollEvent, phase, _, cx| {
-                    if phase != DispatchPhase::Capture || !(e.modifiers.control || e.modifiers.platform) || !bounds.contains(&e.position) {
+                window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture || !(e.modifiers.control || e.modifiers.platform) || !hitbox.should_handle_scroll(window) {
                         return;
                     }
                     cx.stop_propagation();
@@ -3498,19 +3524,22 @@ impl Render for CodeView {
         .absolute()
         .size_full();
         div().id("code-pane").relative().size_full().rounded_b(px(15.0)).flex().flex_col().text_color(c.fg).font_family(fonts::sans(cx))
+            .track_focus(&self.focus)
             .child(measure)
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 let m = e.keystroke.modifiers;
                 let primary = if cfg!(target_os = "macos") { m.platform && !m.control } else { m.control && !m.platform };
-                if primary && !m.alt && !m.shift && e.keystroke.key.eq_ignore_ascii_case("v") && this.paste_attachments(cx) {
+                if !this.has_blocking_modal(cx) && primary && !m.alt && !m.shift && e.keystroke.key.eq_ignore_ascii_case("v") && this.paste_attachments(cx) {
                     cx.stop_propagation();
                 }
             }))
             // The composer Textarea binds shift-tab to OutdentInline and up/down/tab/escape to
             // input actions, which run before on_key_down, so intercept them in the capture phase.
             .capture_action(cx.listener(|this, _: &OutdentInline, _, cx| {
-                this.cycle_mode(cx);
-                cx.stop_propagation();
+                if this.model.read(cx).state.sheet.is_none() && this.preview.is_none() {
+                    this.cycle_mode(cx);
+                    cx.stop_propagation();
+                }
             }))
             .capture_action(cx.listener(|this, _: &MoveDown, window, cx| {
                 if this.move_popup(true, window, cx) {
@@ -3584,12 +3613,12 @@ impl Render for CodeView {
                     if this.scroll_key(k, cx) {
                         cx.stop_propagation();
                     }
-                } else if k == "tab" && e.keystroke.modifiers.shift {
+                } else if k == "tab" && e.keystroke.modifiers.shift && this.model.read(cx).state.sheet.is_none() && this.preview.is_none() {
                     this.cycle_mode(cx);
                 } else if k == "tab" && !e.keystroke.modifiers.modified() && this.model.read(cx).state.sheet == Some(Sheet::Effort) && crate::code::names::supports_ultracode(&this.model.read(cx).state.model) {
                     this.toggle_ultracode(cx);
                     cx.stop_propagation();
-                } else if this.draft(cx).is_empty() {
+                } else if this.model.read(cx).state.sheet.is_none() && this.preview.is_none() && this.draft(cx).is_empty() {
                     let first = this.model.read(cx).state.approvals.first().filter(|a| a.questions.is_empty()).map(|a| a.id.clone());
                     if let Some(id) = first {
                         let decision = match k { "y" => Some(Decision::Allow), "a" => Some(Decision::Always), "n" => Some(Decision::Deny), _ => None };
@@ -3602,6 +3631,9 @@ impl Render for CodeView {
             }))
             .drag_over::<ExternalPaths>(move |d, _, _, _| d.border_2().border_color(alpha(c.accent, 0.55)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if this.has_blocking_modal(cx) {
+                    return;
+                }
                 this.attach_paths(paths.paths().to_vec(), cx);
                 this.focus_composer(window, cx);
             }))
@@ -4586,5 +4618,100 @@ mod tests {
         vcx.simulate_mouse_up(hit, gpui_kit::MouseButton::Left, Modifiers::default());
         assert!(!got.borrow().is_empty(), "a re-render between press and release swallowed the click");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[gpui_kit::test]
+    fn modal_sheet_blocks_scroll_zoom_and_composer_actions_behind_it(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::session::CodeModel;
+        use crate::code::state::{Item, Sheet};
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, Focusable, Modifiers, ScrollDelta, ScrollEvent, point, px};
+
+        cx.update(gpui_kit::init);
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| {
+                let mut m = CodeModel::for_test(app.clone());
+                for i in 0..24 {
+                    m.state.items.push(Item::User { key: format!("u{i}"), text: format!("User message {i}"), images: Vec::new(), at: 0 });
+                    m.state.items.push(Item::Text {
+                        key: format!("a{i}"),
+                        text: format!("Assistant reply {i}\n\nMore detail on line two for message {i}."),
+                        streaming: false,
+                    });
+                }
+                let long_log = (0..120).map(|i| format!("log line {i}: running background shell step")).collect::<Vec<_>>().join("\n");
+                m.state.log_task = Some("bg-1".into());
+                m.state.task_log = Some(("bg-1".into(), Some(long_log), None));
+                m
+            });
+            CodeView::new(model, app, window, cx)
+        });
+        let draw = |vcx: &mut gpui_kit::VisualTestContext| {
+            for _ in 0..2 {
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+        };
+        draw(vcx);
+
+        let list_y = |vcx: &mut gpui_kit::VisualTestContext| vcx.read(|cx| view.read(cx).list.scroll_px_offset_for_scrollbar().y);
+        let size = vcx.update(|window, _| window.viewport_size());
+        let center = point(size.width * 0.5, size.height * 0.5);
+
+        // Sanity check: before opening the modal, scrolling the chat pane moves the transcript.
+        vcx.update(|window, cx| view.update(cx, |v, cx| v.focus_composer(window, cx)));
+        draw(vcx);
+        assert!(vcx.update(|window, cx| view.read(cx).input.read(cx).focus_handle(cx).is_focused(window)), "composer starts focused");
+        let y_start = list_y(vcx);
+        vcx.simulate_event(ScrollEvent { position: center, delta: ScrollDelta::Pixels(point(px(0.0), px(200.0))), ..Default::default() });
+        draw(vcx);
+        let y_scrolled = list_y(vcx);
+        assert_ne!(y_scrolled, y_start, "transcript should scroll when no modal is open");
+
+        // Open the background task/shell log modal (`Sheet::TaskLog`).
+        vcx.update(|_, cx| view.update(cx, |v, cx| v.set_sheet(Some(Sheet::TaskLog), cx)));
+        draw(vcx);
+
+        // Focus must move out of the composer while the blocking modal is open.
+        assert!(
+            !vcx.update(|window, cx| view.read(cx).input.read(cx).focus_handle(cx).is_focused(window)),
+            "composer must not stay focused behind a blocking modal sheet"
+        );
+
+        // Scroll past both ends of the task log body AND over the scrim corner: transcript must not move.
+        let y_modal_open = list_y(vcx);
+        for dy in [-3000.0, -3000.0, 5000.0, 5000.0] {
+            vcx.simulate_event(ScrollEvent { position: center, delta: ScrollDelta::Pixels(point(px(0.0), px(dy))), ..Default::default() });
+            draw(vcx);
+            assert_eq!(list_y(vcx), y_modal_open, "transcript behind TaskLog modal must not scroll (dy={dy})");
+        }
+        let scrim_corner = point(px(12.0), px(12.0));
+        vcx.simulate_event(ScrollEvent { position: scrim_corner, delta: ScrollDelta::Pixels(point(px(0.0), px(400.0))), ..Default::default() });
+        draw(vcx);
+        assert_eq!(list_y(vcx), y_modal_open, "scrolling on the modal scrim must not scroll the transcript behind it");
+
+        // Ctrl/⌘ + wheel over the open modal must not zoom the chat behind it.
+        let scale_before = vcx.read(|cx| view.read(cx).prefs(cx).0);
+        vcx.simulate_event(ScrollEvent {
+            position: center,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(120.0))),
+            modifiers: Modifiers { platform: true, control: true, ..Default::default() },
+            ..Default::default()
+        });
+        draw(vcx);
+        assert_eq!(vcx.read(|cx| view.read(cx).prefs(cx).0), scale_before, "zoom wheel must not pass through a modal");
+
+        // Pressing Escape closes the modal and restores composer focus.
+        vcx.simulate_keystrokes("escape");
+        draw(vcx);
+        assert_eq!(vcx.read(|cx| view.read(cx).model.read(cx).state.sheet), None, "Escape should close TaskLog sheet");
+        assert!(
+            vcx.update(|window, cx| view.read(cx).input.read(cx).focus_handle(cx).is_focused(window)),
+            "closing the modal should restore focus to the composer"
+        );
     }
 }

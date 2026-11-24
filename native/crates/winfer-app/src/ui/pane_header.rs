@@ -834,7 +834,7 @@ impl Root {
         }
 
         Some(
-            div().id("bg-popover-backdrop").absolute().top_0().left_0().size_full()
+            div().id("bg-popover-backdrop").absolute().top_0().left_0().size_full().occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                     this.bg_popover = None;
                     cx.notify();
@@ -1051,7 +1051,7 @@ impl Root {
                 .child(Icon::new(icon).size(px(13.0)))
         };
         Some(
-            div().absolute().top(px(36.0)).right(px(12.0)).flex().items_center().gap_1().rounded_md().border_1().border_color(c.edge).bg(c.raised).px_2().py_1()
+            div().absolute().top(px(36.0)).right(px(12.0)).flex().items_center().gap_1().rounded_md().border_1().border_color(c.edge).bg(c.raised).px_2().py_1().occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().w(px(176.0)).child(Input::new(&search.input).appearance(false)))
                 .child(div().min_w(px(40.0)).text_right().font_family(mono).text_size(px(11.0)).text_color(c.subtle).child(count))

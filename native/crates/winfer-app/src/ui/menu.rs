@@ -101,7 +101,8 @@ impl Root {
         let x = (menu.at.x / px(1.0)).min(viewport.width / px(1.0) - MENU_WIDTH - 8.0).max(8.0);
         let y = (menu.at.y / px(1.0)).min(viewport.height / px(1.0) - height - 8.0).max(8.0);
         let mut list = div().id("context-menu").absolute().left(px(x)).top(px(y)).w(px(MENU_WIDTH)).flex().flex_col().rounded_lg().border_1().border_color(c.edge).bg(c.raised).p_1()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation());
         if let Some(title) = &menu.title {
             list = list.child(div().px_2().py_1().text_size(px(11.0)).text_color(c.subtle).truncate().child(title.clone()));
         }
@@ -131,7 +132,7 @@ impl Root {
             };
         }
         Some(
-            div().id("menu-backdrop").absolute().size_full()
+            div().id("menu-backdrop").absolute().size_full().occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                     this.close_menu(cx);
                 }))

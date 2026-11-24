@@ -273,6 +273,10 @@ impl Root {
         .detach();
     }
 
+    pub(super) fn release_notes_open(&self) -> bool {
+        self.updates.open.is_some()
+    }
+
     pub(super) fn close_release_notes(&mut self, cx: &mut Context<Self>) -> bool {
         let was = self.updates.open.take().is_some();
         if was {

@@ -455,6 +455,7 @@ impl CodeView {
             .justify_center()
             .bg(Hsla { a: 0.5, ..black() })
             .p_4()
+            .occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.set_sheet(None, cx)))
             .child(super::code_view::rise(panel, SharedString::from("sheet-in-Usage"), 0, 12.0));
 

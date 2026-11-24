@@ -358,6 +358,8 @@ pub struct Root {
     focused_view: Option<String>,
     /// Holds the keyboard when no pane or field does, so app shortcuts always reach `handle_shortcut`.
     focus: FocusHandle,
+    /// Tracks the main workspace area so modals can pull focus out of panes behind them.
+    workspace_focus: FocusHandle,
     focus_outside: u8,
     browser: Entity<BrowserPanel>,
     viewer: Entity<ViewerPanel>,
@@ -542,7 +544,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), orch: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), orch: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -1105,7 +1107,14 @@ impl Root {
     }
 
     fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette_input.is_some() || !self.questions.is_empty() || self.new_pane.is_some() || self.model_dialog.is_some() || self.diff_dialog.is_some() || self.worktrees.dialog.is_some() || self.search.is_some() || self.sidebar.renaming.is_some() || self.orchestration.has_layer() || self.state.read(cx).overlay == crate::model::Overlay::Progress || self.state.read(cx).settings_open || self.history.is_some() {
+        if self.modal_layer_open(cx) {
+            if self.workspace_focus.contains_focused(window, cx) {
+                self.focus.focus(window, cx);
+                self.focused_view = None;
+            }
+            return;
+        }
+        if self.search.is_some() || self.sidebar.renaming.is_some() {
             return;
         }
         let focused = self.state.read(cx).focused_pane_id.clone();
@@ -1550,7 +1559,21 @@ impl Root {
         if self.state.read(cx).settings_open && self.close_skill_list(window, cx) {
             return true;
         }
+        if self.usage_info_open {
+            self.usage_info_open = false;
+            cx.notify();
+            return true;
+        }
         if self.close_release_notes(cx) || self.close_bg_popover(cx) || self.close_welcome_picker(cx) || self.close_pane_note(cx) || self.close_menu(cx) || self.cancel_rename(cx) || self.close_search(cx) || self.close_plugin_layer(cx) || self.close_orchestration_layer(cx) {
+            return true;
+        }
+        if self.usage.popover.take().is_some() {
+            cx.notify();
+            return true;
+        }
+        if self.new_menu.open {
+            self.new_menu = Default::default();
+            cx.notify();
             return true;
         }
         let s = self.state.read(cx);
@@ -1885,6 +1908,7 @@ impl Render for Root {
             .child(self.render_title_bar(&c, window, cx))
             .child(
                 div()
+                    .track_focus(&self.workspace_focus)
                     .flex_1()
                     .min_h_0()
                     .flex()

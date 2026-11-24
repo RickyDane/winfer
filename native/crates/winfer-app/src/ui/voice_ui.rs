@@ -486,7 +486,7 @@ impl Root {
         Some(
             div().absolute().bottom(px(16.0)).left_0().right_0().flex().justify_center()
                 .child(
-                    div().id("voice-hud").w(px(380.0)).flex().flex_col().gap_1p5().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_lg().px_3().py_2()
+                    div().id("voice-hud").w(px(380.0)).flex().flex_col().gap_1p5().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_lg().px_3().py_2().occlude()
                         .child(div().flex().items_center().gap_2()
                             .child(Icon::new(IconName::AudioLines).size(px(15.0)).text_color(color))
                             .child(div().flex_1().text_size(px(12.5)).text_color(c.fg).child(status))

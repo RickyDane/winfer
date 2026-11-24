@@ -239,13 +239,7 @@ impl Root {
         let s = self.state.read(cx);
         matches!(s.view(), crate::model::View::Workspace)
             && s.active().is_some_and(|w| w.layout.is_none())
-            && !s.settings_open
-            && s.overlay == crate::model::Overlay::None
-            && self.palette_input.is_none()
-            && self.questions.is_empty()
-            && self.new_pane.is_none()
-            && self.model_dialog.is_none()
-            && self.diff_dialog.is_none()
+            && !self.modal_layer_open(cx)
             && self.search.is_none()
             && self.history.is_none()
     }

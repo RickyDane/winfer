@@ -27,6 +27,9 @@ pub struct Attachment {
     pub path: Option<String>,
 }
 
+/// How long the subagent tree stays after the last subagent finished.
+pub const TREE_LINGER_MS: u64 = 5000;
+
 /// Session-local task activity, recorded even while its popover is closed.
 #[derive(Clone, Debug, Default)]
 pub struct CodeTask {
@@ -219,9 +222,16 @@ impl CodeState {
 
     /// The subagents the live tree above the composer shows, in the order they started: the running
     /// ones, and while a turn runs also those it started that already finished. Shells aren't in it.
-    pub fn tree_agents(&self) -> Vec<&CodeTask> {
+    /// Once none runs any more, the tree lingers `TREE_LINGER_MS` after the last one finished, then hides.
+    pub fn tree_agents(&self, now: u64) -> Vec<&CodeTask> {
         let turn = self.busy.then_some(self.turn_started).flatten();
         let mut out: Vec<&CodeTask> = self.tasks.iter().filter(|t| t.ev.agent.is_some() && (t.running() || turn.is_some_and(|at| t.started_at >= at))).collect();
+        if !out.iter().any(|t| t.running()) {
+            let last_end = out.iter().filter_map(|t| t.ended_at).max().unwrap_or(0);
+            if now.saturating_sub(last_end) >= TREE_LINGER_MS {
+                out.clear();
+            }
+        }
         out.sort_by_key(|t| t.started_at);
         out
     }
@@ -862,20 +872,34 @@ mod tests {
         let mut s = CodeState::default();
         s.apply(ev(json!({ "type": "task", "id": "old", "agent": "Explore", "status": "done" })));
         s.apply(ev(json!({ "type": "task", "id": "sh", "title": "npm test", "status": "running" })));
-        assert!(s.tree_agents().is_empty(), "a finished subagent from an earlier turn and a shell stay out");
+        assert!(s.tree_agents(now_ms()).is_empty(), "a finished subagent from an earlier turn and a shell stay out");
         s.tasks[0].started_at -= 1000;
         s.busy = true;
         s.turn_started = Some(now_ms());
         s.apply(ev(json!({ "type": "task", "id": "a", "agent": "Explore", "status": "running" })));
         s.apply(ev(json!({ "type": "task", "id": "b", "agent": "general", "status": "running" })));
         s.apply(ev(json!({ "type": "task", "id": "a", "status": "done" })));
-        let ids: Vec<&str> = s.tree_agents().iter().map(|t| t.ev.id.as_str()).collect();
+        let ids: Vec<&str> = s.tree_agents(now_ms()).iter().map(|t| t.ev.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
         let a = s.tasks.iter().find(|t| t.ev.id == "a").unwrap();
         assert!(!a.running() && a.ended_at.is_some());
         s.busy = false;
-        let ids: Vec<&str> = s.tree_agents().iter().map(|t| t.ev.id.as_str()).collect();
+        let ids: Vec<&str> = s.tree_agents(now_ms()).iter().map(|t| t.ev.id.as_str()).collect();
         assert_eq!(ids, ["b"], "once the turn ends only running ones stay");
+    }
+
+    #[test]
+    fn tree_hides_five_seconds_after_the_last_subagent_finished() {
+        let mut s = CodeState::default();
+        s.busy = true;
+        s.turn_started = Some(now_ms());
+        s.apply(ev(json!({ "type": "task", "id": "a", "agent": "Explore", "status": "running" })));
+        s.apply(ev(json!({ "type": "task", "id": "a", "status": "completed" })));
+        let ended = s.tasks[0].ended_at.unwrap();
+        assert_eq!(s.tree_agents(ended + TREE_LINGER_MS - 1).len(), 1);
+        assert!(s.tree_agents(ended + TREE_LINGER_MS).is_empty());
+        s.apply(ev(json!({ "type": "task", "id": "b", "agent": "Explore", "status": "running" })));
+        assert_eq!(s.tree_agents(ended + TREE_LINGER_MS + 1000).len(), 2, "a running one keeps the tree up");
     }
 
     #[test]

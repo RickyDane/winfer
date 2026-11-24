@@ -1409,6 +1409,7 @@ impl BrowserPanel {
         let backdrop = div()
             .absolute()
             .size_full()
+            .occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(dismiss))
             .on_mouse_down(MouseButton::Right, cx.listener(dismiss))
             .child(list);
@@ -1945,6 +1946,7 @@ impl BrowserPanel {
         let backdrop = div()
             .absolute()
             .size_full()
+            .occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(dismiss))
             .on_mouse_down(MouseButton::Right, cx.listener(dismiss))
             .child(list);

@@ -95,7 +95,7 @@ impl CodeView {
             return self.bottom_sheet(title, icon, subtitle, body, c, cx);
         }
         let wide = matches!(sheet, Sheet::Help | Sheet::Usage | Sheet::TaskLog | Sheet::Model | Sheet::SubagentModel);
-        let scrim = div().id("cw-sheet-scrim").absolute().top_0().left_0().size_full().flex().items_center().justify_center().bg(Hsla { a: 0.5, ..black() }).p_4()
+        let scrim = div().id("cw-sheet-scrim").absolute().top_0().left_0().size_full().flex().items_center().justify_center().bg(Hsla { a: 0.5, ..black() }).p_4().occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.set_sheet(None, cx)))
             .child(
                 rise(div().id("cw-sheet").w(px(if wide { 560.0 } else { 440.0 })).max_w_full().max_h_full().flex().flex_col().rounded_xl().border_1().border_color(c.edge).bg(c.raised).shadow_lg()
@@ -117,7 +117,7 @@ impl CodeView {
                 .child(div().flex_1().flex().flex_col().child(div().text_size(px(14.0)).text_color(c.fg).child(title)).when(!subtitle.is_empty(), |d| d.child(div().text_size(px(11.5)).text_color(c.subtle).child(format!("Now: {subtitle}")))))
                 .child(div().id("cw-sheet-x").size(px(26.0)).flex().items_center().justify_center().rounded_lg().cursor_pointer().text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.set_sheet(None, cx))).child(Icon::new(IconName::X).size(px(14.0)))))
             .child(div().id("cw-sheet-body").flex_1().min_h_0().overflow_y_scroll().px_4().pb_4().child(body));
-        let scrim = div().id("cw-sheet-scrim").absolute().top_0().left_0().size_full().flex().flex_col().justify_end().items_center().px_2().bg(Hsla { a: 0.45, ..black() })
+        let scrim = div().id("cw-sheet-scrim").absolute().top_0().left_0().size_full().flex().flex_col().justify_end().items_center().px_2().bg(Hsla { a: 0.45, ..black() }).occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.set_sheet(None, cx)))
             .child(rise(panel, SharedString::from(format!("drawer-{title}")), 0, 36.0));
         scrim.with_animation(SharedString::from(format!("drawer-scrim-{title}")), Animation::new(std::time::Duration::from_millis(200)), |d, t| d.opacity(t)).into_any_element()

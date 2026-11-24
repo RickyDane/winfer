@@ -915,7 +915,8 @@ impl Root {
                 );
             }
             let q_lower = q_text.trim().to_lowercase();
-            let mut list = div().id("skill-list").max_h(px(224.0)).overflow_y_scroll().track_scroll(&self.harness_page.ui.skill_scroll).flex().flex_col().pb_1();
+            let mut list = div().id("skill-list").max_h(px(224.0)).overflow_y_scroll().track_scroll(&self.harness_page.ui.skill_scroll).flex().flex_col().pb_1()
+                .on_scroll(|_: &ScrollEvent, _, cx| cx.stop_propagation());
             if visible.is_empty() {
                 list = list.child(div().p_4().flex().justify_center().text_size(px(12.0)).text_color(c.subtle).child(if items.is_empty() { "No skills found.".to_string() } else { format!("No skill matches “{}”.", q_text.trim()) }));
             }

@@ -479,11 +479,26 @@ impl Root {
         }
     }
 
-    /// Whether a GPUI layer covers the main area: the native webview would hide it.
+    /// Whether a GPUI layer covers the main area: the native webview would hide it, and pane
+    /// focus must stay out of the workspace underneath.
     pub(super) fn modal_layer_open(&self, cx: &App) -> bool {
         let s = self.state.read(cx);
-        s.palette_query.is_some() || s.cheat_sheet_open || s.settings_open || s.overlay != Overlay::None || s.diff_pane_id.is_some()
-            || !self.questions.is_empty() || !self.plugins.approvals.is_empty() || self.orchestration.has_layer() || self.plugins.apps_open
+        s.palette_query.is_some()
+            || s.cheat_sheet_open
+            || s.settings_open
+            || s.overlay != Overlay::None
+            || s.diff_pane_id.is_some()
+            || !self.questions.is_empty()
+            || !self.plugins.approvals.is_empty()
+            || self.orchestration.has_layer()
+            || self.plugins.apps_open
+            || self.release_notes_open()
+            || self.usage_info_open
+            || self.bg_popover.is_some()
+            || self.usage.popover.is_some()
+            || self.new_menu.open
+            || self.pane_note.is_some()
+            || self.menu.is_some()
     }
 
     /// Builds the webview from a task instead of right here (called from `render`): on Windows,
@@ -1082,7 +1097,7 @@ impl Root {
                 })),
         );
         Some(
-            div().id("apps-backdrop").absolute().size_full()
+            div().id("apps-backdrop").absolute().size_full().occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                     this.plugins.apps_open = false;
                     cx.notify();
