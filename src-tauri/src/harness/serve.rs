@@ -46,6 +46,8 @@ struct Serve {
     /// Tool calls by id: their entry in `saved.transcript` (upserted as streaming titles arrive).
     tools: HashMap<String, usize>,
     busy: bool,
+    /// A compaction is running: its turn's end mustn't start another one.
+    compacting: bool,
     /// Approvals waiting for an answer, oldest first.
     pending: Vec<String>,
     /// Background tasks' output files, for `task_log`.
@@ -117,6 +119,12 @@ impl Serve {
         if let Some(h) = &self.handle {
             h.send(cmd);
         }
+    }
+
+    fn compact(&mut self) {
+        self.compacting = true;
+        self.busy = true;
+        self.send(Cmd::Compact);
     }
 
     fn save(&mut self) {
@@ -328,6 +336,14 @@ impl Serve {
                 self.save();
                 let reply = self.saved.transcript.iter().rev().find(|e| e.role == "assistant").map(|e| e.text.clone());
                 hook("turn_done", json!({ "session_id": self.saved.id, "last_assistant_message": reply.unwrap_or_default() }));
+                // The ChatGPT backend compacts itself; the bridges are told to at the threshold.
+                if !std::mem::take(&mut self.compacting) && !self.kind.native() {
+                    let at = Config::load().compact_at as u64;
+                    if let Some(u) = self.saved.usage.as_ref().filter(|u| at > 0 && u.window > 0 && u.context * 100 > u.window * at) {
+                        out(&json!({ "type": "notice", "text": format!("Context at {}%; compacting…", u.context * 100 / u.window) }));
+                        self.compact();
+                    }
+                }
             }
             Ev::Undone(Ok(_)) => {
                 if let Some(i) = self.saved.transcript.iter().rposition(|e| e.role == "user") {
@@ -352,6 +368,7 @@ impl Serve {
             }
             Ev::Exited(_) => {
                 self.busy = false;
+                self.compacting = false;
                 self.pending.clear();
             }
             _ => {}
@@ -600,7 +617,7 @@ impl Serve {
                     self.send(Cmd::SetMode(mode));
                 }
             }
-            "compact" => self.send(Cmd::Compact),
+            "compact" => self.compact(),
             "set_compaction" => {
                 let pct = |k: &str| v.get(k).and_then(Value::as_u64).map(|p| p.min(99) as u8);
                 let cfg = Config::update(|c| {
@@ -766,6 +783,7 @@ pub fn run(launch: Launch) -> i32 {
         pending: Vec::new(),
         task_files: HashMap::new(),
         usage_sent: None,
+        compacting: false,
         todos: Vec::new(),
         tool_notes: HashMap::new(),
         origin_session: None,
@@ -873,6 +891,7 @@ mod tests {
             pending: Vec::new(),
             task_files: HashMap::new(),
             usage_sent: None,
+            compacting: false,
             todos: Vec::new(),
             tool_notes: HashMap::new(),
             origin_session: None,
