@@ -340,7 +340,7 @@ impl Root {
         let pill_bg = if c.light { Hsla { a: 0.055, ..c.fg } } else { Hsla { a: 0.07, ..c.fg } };
         let cost = if compact { None } else { self.pane_cost(pane, c, cx) };
         let branch = pane.worktree.as_ref().map(|t| (t.branch.trim_start_matches("winfer/").to_string(), t.path.clone()));
-        let (t1, t2, t3, t4, t5, t6, t7) = (target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone());
+        let (t1, t3, t4, t5, t6, t7) = (target.clone(), target.clone(), target.clone(), target.clone(), target.clone(), target.clone());
         let menu_pane = pane.clone();
         let branch_el = match branch {
             Some((b, path)) => {
@@ -360,21 +360,6 @@ impl Root {
                 .child("shared folder")
                 .into_any_element(),
         };
-        let model_el = pane.model.clone().map(|m| {
-            div().flex().min_w_0().items_center().gap_1p5()
-                .child(div().text_size(px(10.0)).text_color(Hsla { a: 0.45, ..c.subtle }).child("·"))
-                .child(
-                    div().id(SharedString::from(format!("model-{id}"))).max_w(px(120.0)).truncate().text_size(px(11.0)).text_color(c.muted).cursor_pointer()
-                        .hover(move |d| d.text_color(c.fg))
-                        .tooltip(|window, cx| Tooltip::new("Model · click to change").build(window, cx))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.execute(Command::Focus(t2.clone()), window, cx);
-                            this.execute(Command::Overlay { overlay: Overlay::Model, provider: None }, window, cx);
-                        }))
-                        .child(m),
-                )
-        });
         let url_el = pane.dev_url.clone().map(|u| {
             let open = u.clone();
             div().id(SharedString::from(format!("url-{id}"))).flex().flex_shrink_0().items_center().gap_1().h(px(24.0)).rounded_full().border_1().border_color(Hsla { a: 0.28, ..c.accent }).bg(Hsla { a: 0.14, ..c.accent }).px_2().text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(c.accent).cursor_pointer()
@@ -463,8 +448,7 @@ impl Root {
                 .child(div().min_w_0().truncate().font_family(mono.clone()).text_size(px(10.5)).text_color(c.danger).child("The process stopped with an error")),
             _ => div().flex().min_w_0().items_center().gap_1p5().overflow_hidden().text_size(px(11.0)).text_color(c.subtle)
                 .children(workspace_chip)
-                .child(branch_el)
-                .children(model_el),
+                .child(branch_el),
         };
         let telemetry = cost.map(|cost| div().flex().flex_shrink_0().items_center().h(px(24.0)).px_2().rounded_full().bg(pill_bg).child(cost));
         let island_shadow = if c.light {
