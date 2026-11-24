@@ -37,7 +37,7 @@ mod settings;
 #[path = "review.rs"]
 mod review;
 #[path = "usage.rs"]
-mod usage;
+pub(crate) mod usage;
 #[path = "new_menu.rs"]
 mod new_menu;
 #[path = "pane_note.rs"]

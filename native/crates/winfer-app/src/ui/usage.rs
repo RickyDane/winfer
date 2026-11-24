@@ -385,7 +385,7 @@ pub(super) fn at_text(ms: f64, now: f64) -> String {
 static DEMO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A short "when": "Mon 21:16" within the week, else the date ("Nov 30 21:16").
-pub(super) fn short_when(ms: f64, now: f64) -> String {
+pub(crate) fn short_when(ms: f64, now: f64) -> String {
     let tm = local_tm(ms);
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

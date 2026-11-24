@@ -105,6 +105,8 @@ pub struct Settings {
     lean_codex: bool,
     #[serde(default)]
     lean_codex_prompt: bool,
+    #[serde(default = "yes")]
+    auto_resume: bool,
     #[serde(default)]
     subagents: std::collections::BTreeMap<String, config::SubagentModel>,
     #[serde(default)]
@@ -132,6 +134,7 @@ pub fn harness_settings() -> Settings {
         plan_sidebar: c.plan_sidebar,
         lean_codex: c.lean_codex,
         lean_codex_prompt: c.lean_codex_prompt,
+        auto_resume: c.auto_resume,
         subagents: c.subagents,
         local: c.local,
     }
@@ -162,6 +165,7 @@ pub fn harness_set_settings(settings: Settings) -> Result<(), String> {
         c.plan_sidebar = settings.plan_sidebar;
         c.lean_codex = settings.lean_codex;
         c.lean_codex_prompt = settings.lean_codex_prompt;
+        c.auto_resume = settings.auto_resume;
         c.subagents = settings.subagents.into_iter().filter(|(_, s)| !s.model.trim().is_empty()).collect();
         c.local = settings.local;
     });
@@ -449,5 +453,6 @@ pub(crate) fn event_json(ev: &Ev) -> serde_json::Value {
         Ev::Undone(r) => json!({ "type": "undone", "files": r.as_ref().ok(), "error": r.as_ref().err() }),
         Ev::BgNote(n) => json!({ "type": "bg_note", "text": n }),
         Ev::Account(id) => json!({ "type": "account", "id": id, "label": crate::accounts::label(id) }),
+        Ev::LimitWait { until, queued } => json!({ "type": "limit_wait", "until": until, "queued": queued }),
     }
 }

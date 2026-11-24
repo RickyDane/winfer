@@ -783,6 +783,8 @@ impl App {
             Ev::Undone(result) => self.undone(result),
             Ev::BgNote(note) => self.bg_note(note),
             Ev::Account(id) => self.saved.account = Some(id),
+            // The bridge says what it holds and when it continues in notices.
+            Ev::LimitWait { .. } => {}
             Ev::Exited(reason) => {
                 self.alive = false;
                 self.busy = false;

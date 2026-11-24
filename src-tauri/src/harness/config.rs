@@ -39,6 +39,9 @@ pub struct Config {
     pub lean_codex: bool,
     /// With `lean_codex`, a short system prompt in place of Codex's built-in one.
     pub lean_codex_prompt: bool,
+    /// When every account is out of usage, wait for the limit to reset, then continue the session
+    /// and send the messages that came in meanwhile (Claude Code and Codex).
+    pub auto_resume: bool,
     /// The model subagents run on, per backend id ("chatgpt", "claude", "codex"); a missing or
     /// empty entry means the main model.
     pub subagents: std::collections::BTreeMap<String, SubagentModel>,
@@ -116,6 +119,7 @@ impl Default for Config {
             plan_sidebar: true,
             lean_codex: true,
             lean_codex_prompt: false,
+            auto_resume: true,
             subagents: Default::default(),
             local: LocalLlm::default(),
         }

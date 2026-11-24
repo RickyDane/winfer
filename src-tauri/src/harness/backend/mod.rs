@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use super::claude_skills::{self, LeanSkills};
-use super::event::{Cmd, Events, Mode, ModelInfo, Skill};
+use super::event::{Cmd, Ev, Events, Mode, ModelInfo, Skill, UserMsg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -237,15 +237,140 @@ pub fn switched_notice(from: Option<&str>, to: &str, reset_at: Option<i64>, prov
     format!("Account \"{from}\" is out of usage{until}; continuing on \"{}\".", crate::accounts::label(to))
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 /// How long until `at` (unix ms): "2h 15m", "40m".
 fn in_time(at: i64) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    let minutes = ((at - now).max(0) + 59_999) / 60_000;
+    let minutes = ((at - now_ms()).max(0) + 59_999) / 60_000;
     match (minutes / 60, minutes % 60) {
         (0, m) => format!("{m}m"),
         (h, 0) => format!("{h}h"),
         (h, m) => format!("{h}h {m}m"),
     }
+}
+
+// Waiting out a usage limit ---------------------------------------------------------------------
+
+/// What a bridge sends once the usage limit it waited out has reset. The failed request is
+/// already in the session, so it asks to continue rather than repeating it.
+pub const RESUME_PROMPT: &str = "[winfer] The previous request stopped because the account ran out of usage. The usage limit has reset now: continue where you left off.";
+
+/// After the reset time, this much longer before continuing (the provider's clock and ours differ).
+const RESUME_MARGIN_MS: i64 = 60_000;
+/// When the CLI doesn't say when its limit resets: try again after this long.
+const UNKNOWN_RESET_WAIT_MS: i64 = 30 * 60_000;
+
+/// Every account is out of usage (Settings → WinferCode → Resume after usage limits): the session
+/// waits for the limit to reset, holding the messages sent meanwhile, then continues and sends
+/// them one at a time, each once the agent is done with the one before.
+#[derive(Default)]
+pub struct LimitWait {
+    /// When to continue (unix ms), while waiting.
+    until: Option<i64>,
+    /// Messages to send, oldest first.
+    held: std::collections::VecDeque<UserMsg>,
+}
+
+impl LimitWait {
+    /// Whether the setting is on (read each time, so a change applies to running sessions).
+    pub fn enabled() -> bool {
+        super::config::Config::load().auto_resume
+    }
+
+    pub fn waiting(&self) -> bool {
+        self.until.is_some()
+    }
+
+    /// Starts waiting for the limit to reset at `reset` (unix ms), if the CLI said when.
+    pub fn start(&mut self, reset: Option<i64>, events: &Events) {
+        let now = now_ms();
+        let known = reset.filter(|&r| r > now);
+        let until = known.map_or(now + UNKNOWN_RESET_WAIT_MS, |r| r + RESUME_MARGIN_MS);
+        self.until = Some(until);
+        let when = match known {
+            Some(_) => format!("the limit resets in {}", in_time(until)),
+            None => format!("the limit's reset time isn't known, so winfer tries again in {}", in_time(until)),
+        };
+        let _ = events.send(Ev::Notice(format!("Out of usage. Paused: {when}, then this session continues. Messages sent meanwhile are queued; Esc stops waiting.")));
+        self.emit(events);
+    }
+
+    fn emit(&self, events: &Events) {
+        let _ = events.send(Ev::LimitWait { until: self.until, queued: self.held.len() });
+    }
+
+    /// How long the bridge may wait for its next message before it's time to continue.
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.until.map(|u| std::time::Duration::from_millis((u - now_ms()).max(0) as u64))
+    }
+
+    /// Whether it's time to continue.
+    pub fn due(&self) -> bool {
+        self.until.is_some_and(|u| u <= now_ms())
+    }
+
+    /// Takes the commands that have to wait: messages while paused (or sent behind queued ones).
+    /// Esc stops waiting and drops the queue. Everything else comes back to run.
+    pub fn intercept(&mut self, cmd: Cmd, events: &Events) -> Option<Cmd> {
+        match cmd {
+            Cmd::Send(msg) | Cmd::Steer(msg) if self.waiting() => {
+                self.held.push_back(msg);
+                let _ = events.send(Ev::Notice(format!("Queued until the usage limit resets ({} waiting).", self.held.len())));
+                self.emit(events);
+                None
+            }
+            Cmd::Send(msg) if !self.held.is_empty() => {
+                self.held.push_back(msg);
+                let _ = events.send(Ev::Notice(format!("Queued behind the messages sent while out of usage ({} waiting).", self.held.len())));
+                self.emit(events);
+                None
+            }
+            Cmd::Interrupt if self.waiting() || !self.held.is_empty() => {
+                let was_waiting = self.until.take().is_some();
+                let dropped = std::mem::take(&mut self.held).len();
+                let dropped_text = match dropped {
+                    0 => String::new(),
+                    1 => " Dropped 1 queued message.".to_string(),
+                    n => format!(" Dropped {n} queued messages."),
+                };
+                let text = if was_waiting { format!("Stopped waiting for the usage limit to reset.{dropped_text}") } else { dropped_text.trim().to_string() };
+                let _ = events.send(Ev::Notice(text));
+                self.emit(events);
+                (!was_waiting).then_some(Cmd::Interrupt)
+            }
+            cmd => Some(cmd),
+        }
+    }
+
+    /// Stops waiting: the message that continues the session.
+    pub fn resume(&mut self, events: &Events) -> UserMsg {
+        self.until = None;
+        let _ = events.send(Ev::Notice("The usage limit has reset: continuing.".into()));
+        self.emit(events);
+        UserMsg { text: RESUME_PROMPT.into(), ..Default::default() }
+    }
+
+    /// The next queued message to send (none while paused).
+    pub fn next(&mut self, events: &Events) -> Option<UserMsg> {
+        if self.waiting() {
+            return None;
+        }
+        let msg = self.held.pop_front()?;
+        self.emit(events);
+        Some(msg)
+    }
+}
+
+/// The account to continue on after waiting out a limit, when it isn't the current one (which
+/// stays while it has usage): the first other one with usage left.
+pub fn resume_account(provider: &str, current: Option<&str>) -> Option<String> {
+    let current = current.map_or_else(|| crate::accounts::default_id(provider), String::from);
+    if !crate::accounts::has_alternatives(provider) || crate::accounts::usable(&current) {
+        return None;
+    }
+    crate::accounts::pick(provider, &[current.as_str()])
 }
 
 /// The system prompt for Claude Code in lean mode: the essentials of its long default (which runs
@@ -548,6 +673,74 @@ pub fn drain_closed(rx: &Receiver<In>, held: &mut Vec<Cmd>) -> bool {
 /// Waits for the next message, giving up once the receiver closes.
 pub fn recv(rx: &Receiver<In>) -> Option<In> {
     rx.recv().ok()
+}
+
+/// [`recv`] for a bridge that may be waiting out a usage limit: `Some(None)` when it's time to
+/// continue.
+pub fn recv_or_wake(rx: &Receiver<In>, wait: &LimitWait) -> Option<Option<In>> {
+    match wait.timeout() {
+        None => rx.recv().ok().map(Some),
+        Some(t) => match rx.recv_timeout(t) {
+            Ok(msg) => Some(Some(msg)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Some(None),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod limit_wait_tests {
+    use super::{Cmd, Ev, LimitWait, UserMsg, now_ms};
+
+    fn msg(text: &str) -> UserMsg {
+        UserMsg { text: text.into(), ..Default::default() }
+    }
+
+    fn states(rx: &std::sync::mpsc::Receiver<Ev>) -> Vec<(Option<i64>, usize)> {
+        rx.try_iter().filter_map(|e| match e { Ev::LimitWait { until, queued } => Some((until, queued)), _ => None }).collect()
+    }
+
+    #[test]
+    fn holds_messages_until_the_reset_then_sends_them_in_order() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut w = LimitWait::default();
+        assert!(w.timeout().is_none());
+        let reset = now_ms() + 3_600_000;
+        w.start(Some(reset), &tx);
+        assert!(w.waiting() && !w.due());
+        assert_eq!(states(&rx), vec![(Some(reset + 60_000), 0)]);
+        // Messages and steers wait; other commands go through.
+        assert!(w.intercept(Cmd::Send(msg("a")), &tx).is_none());
+        assert!(w.intercept(Cmd::Steer(msg("b")), &tx).is_none());
+        assert!(matches!(w.intercept(Cmd::Compact, &tx), Some(Cmd::Compact)));
+        assert_eq!(states(&rx).last(), Some(&(Some(reset + 60_000), 2)));
+        assert!(w.next(&tx).is_none(), "nothing goes while waiting");
+        // Due: continue, then the queue one at a time; a new message goes behind it.
+        w.until = Some(now_ms() - 1);
+        assert!(w.due());
+        assert_eq!(w.resume(&tx).text, super::RESUME_PROMPT);
+        assert!(w.timeout().is_none());
+        assert!(w.intercept(Cmd::Send(msg("c")), &tx).is_none());
+        let sent: Vec<String> = std::iter::from_fn(|| w.next(&tx)).map(|m| m.text).collect();
+        assert_eq!(sent, ["a", "b", "c"]);
+        assert_eq!(states(&rx).last(), Some(&(None, 0)));
+        assert!(matches!(w.intercept(Cmd::Send(msg("d")), &tx), Some(Cmd::Send(_))));
+    }
+
+    #[test]
+    fn esc_stops_waiting_and_drops_the_queue() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut w = LimitWait::default();
+        w.start(None, &tx);
+        // An unknown reset tries again in a while.
+        assert!(w.timeout().is_some_and(|t| t.as_secs() > 25 * 60));
+        let _ = w.intercept(Cmd::Send(msg("a")), &tx);
+        assert!(w.intercept(Cmd::Interrupt, &tx).is_none(), "nothing runs to interrupt");
+        assert!(!w.waiting() && w.next(&tx).is_none());
+        assert_eq!(states(&rx).last(), Some(&(None, 0)));
+        // Not waiting: Esc is for the running turn.
+        assert!(matches!(w.intercept(Cmd::Interrupt, &tx), Some(Cmd::Interrupt)));
+    }
 }
 
 #[cfg(test)]

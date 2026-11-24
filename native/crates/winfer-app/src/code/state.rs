@@ -166,6 +166,10 @@ pub struct CodeState {
     pub busy: bool,
     pub turn_started: Option<u64>,
     pub exited: Option<String>,
+    /// Out of usage: when the session continues by itself (unix ms).
+    pub paused_until: Option<u64>,
+    /// Messages sent while out of usage that wait to go.
+    pub queued: usize,
     /// Commands queued for the transport (drained by the view).
     pub outbox: Vec<Cmd>,
     /// A plan handed over for approval, to open in the file viewer (taken by the app).
@@ -179,7 +183,7 @@ impl Default for CodeState {
             title: None, branch: None, trim_at: 0, compact_at: 0, mcp: Vec::new(), sessions: None, breakdown: None, btw: Vec::new(),
             sheet: None, rate: None, last_rate: None, turn_out_base: 0, log_task: None, task_log: None, mode: Mode::Ask, effort: "high".into(), ultracode: false, sub_model: None, sub_effort: None,
             items: Vec::new(), approvals: Vec::new(), tasks: Vec::new(), todos: Vec::new(), plan_done_at: None, skills: Vec::new(),
-            usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, outbox: Vec::new(),
+            usage: Usage { window: 200_000, ..Default::default() }, busy: false, turn_started: None, exited: None, paused_until: None, queued: 0, outbox: Vec::new(),
             show_plan: None,
         }
     }
@@ -514,9 +518,13 @@ impl CodeState {
             Ev::Exited { text } => {
                 self.busy = false;
                 self.exited = Some(text);
+                (self.paused_until, self.queued) = (None, 0);
             }
+            Ev::LimitWait { until, queued } => (self.paused_until, self.queued) = (until, queued),
             Ev::Ready { session, backend_session, title, model, mode, effort, ultracode, subagent_model, subagent_effort, cwd, branch, trim_at, compact_at, mcp } => {
                 self.actual_model = if model == self.model { self.actual_model.take() } else { None };
+                // A new process: whatever the old one held for the usage limit is gone.
+                (self.paused_until, self.queued) = (None, 0);
                 self.session = Some(session);
                 self.backend_session = backend_session;
                 self.title = title;
@@ -709,6 +717,19 @@ mod tests {
         s.apply(ev(json!({ "type": "account", "id": "work", "label": "work@example.com" })));
         s.apply(ev(json!({ "type": "from_a_newer_harness" })));
         assert!(s.tasks.is_empty() && s.items.is_empty());
+    }
+
+    #[test]
+    fn limit_wait_shows_until_it_resumes_and_the_queue_is_sent() {
+        let mut s = CodeState::default();
+        s.apply(ev(json!({ "type": "limit_wait", "until": 1_800_000_000_000u64, "queued": 0 })));
+        assert_eq!((s.paused_until, s.queued), (Some(1_800_000_000_000), 0));
+        s.apply(ev(json!({ "type": "limit_wait", "until": 1_800_000_000_000u64, "queued": 2 })));
+        assert_eq!(s.queued, 2);
+        s.apply(ev(json!({ "type": "limit_wait", "until": null, "queued": 1 })));
+        assert_eq!((s.paused_until, s.queued), (None, 1));
+        s.apply(ev(json!({ "type": "exited", "text": "Claude Code stopped" })));
+        assert_eq!((s.paused_until, s.queued), (None, 0));
     }
 
     #[test]

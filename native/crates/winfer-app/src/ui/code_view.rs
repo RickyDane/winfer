@@ -2631,6 +2631,36 @@ impl CodeView {
         Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(head).when(open, |d| d.child(list)), false).into_any_element())
     }
 
+    /// Out of usage, above the composer: when the session continues by itself and how many
+    /// messages wait to go after it, with a button that stops waiting (like Esc).
+    fn render_limit_wait(&self, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let st = &self.model.read(cx).state;
+        if st.paused_until.is_none() && st.queued == 0 {
+            return None;
+        }
+        let (title, detail) = match st.paused_until {
+            Some(at) => ("Out of usage", format!("continues {}", super::root::usage::short_when(at as f64, now_ms() as f64))),
+            None => ("Sending queued messages", String::new()),
+        };
+        let queued = match st.queued {
+            0 => String::new(),
+            1 => "1 message queued".to_string(),
+            n => format!("{n} messages queued"),
+        };
+        let info = [detail, queued].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        let stop = div().id("cw-limit-stop").flex_shrink_0().h(px(22.0)).px_2().flex().items_center().rounded_md().cursor_pointer().text_color(c.muted)
+            .hover(move |d| d.bg(c.hover).text_color(c.fg))
+            .tooltip(tip(if st.paused_until.is_some() { "Stop waiting and drop the queued messages (Esc)" } else { "Drop the queued messages (Esc)" }))
+            .on_click(cx.listener(|this, _, _, cx| this.send(Cmd::Interrupt, cx)))
+            .child(if st.paused_until.is_some() { "Stop waiting" } else { "Drop queue" });
+        let row = div().flex().items_center().gap_2().h(px(34.0)).px_3().text_size(px(12.0)).text_color(c.muted)
+            .child(Icon::new(IconName::Clock).size(px(13.0)).text_color(c.warning))
+            .child(div().text_color(c.fg).child(title))
+            .child(div().flex_1().min_w_0().truncate().text_color(c.subtle).child(info))
+            .child(stop);
+        Some(dock_inset(div().mb_2().rounded_xl().bg(c.raised).overflow_hidden().child(row), false).into_any_element())
+    }
+
     /// The live subagent tree above the composer: the main agent and the subagents it started, each
     /// with its status, type, model, tool count and time. A row opens its output; its chevron shows
     /// what it did last. Hidden once no subagent runs and the turn that started them is over.
@@ -3400,6 +3430,7 @@ impl Render for CodeView {
         let popup = self.render_popup(&text, c, cx);
         let plan = if show_plan { self.render_plan(c, cx) } else { None };
         let agent_tree = self.render_agent_tree(c, mono.clone(), cx);
+        let limit_wait = self.render_limit_wait(c, cx);
         let approval_cards: Vec<AnyElement> = approvals.iter().take(1).map(|a| self.render_approval(a, c, mono.clone(), cx)).collect();
         let more_approvals = approvals.len().saturating_sub(1);
         let status = self.render_status(c, cx);
@@ -3544,7 +3575,8 @@ impl Render for CodeView {
                         cx.stop_propagation();
                     } else if !this.draft(cx).is_empty() && this.draft(cx).trim_start().starts_with('/') {
                         this.set_input("", window, cx);
-                    } else if this.model.read(cx).state.busy {
+                    } else if { let st = &this.model.read(cx).state; st.busy || st.paused_until.is_some() || st.queued > 0 } {
+                        // While out of usage, Esc stops waiting (and drops the queued messages).
                         this.send(Cmd::Interrupt, cx);
                     }
                 } else if !e.keystroke.modifiers.modified() && matches!(k, "pageup" | "pagedown" | "home" | "end") {
@@ -3577,6 +3609,7 @@ impl Render for CodeView {
             .children(status)
             .children(plan)
             .children(agent_tree)
+            .children(limit_wait)
             .children(approval_cards)
             .when(more_approvals > 0, |d| d.child(col(div().pb_2().px_1().text_size(px(11.0)).text_color(c.subtle).child(format!("{more_approvals} more waiting")))))
             .children(exited_note)

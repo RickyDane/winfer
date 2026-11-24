@@ -281,6 +281,8 @@ struct Bridge {
     limit: Option<(String, Option<i64>)>,
     /// The account's usage is nearly gone: the next turn starts on another account.
     low: bool,
+    /// Out of usage on every account: waiting for the reset, with the messages sent meanwhile.
+    wait: super::LimitWait,
     /// Where Claude Code keeps plan files (`<config dir>/plans`), which plan mode may write.
     plans: Option<PathBuf>,
     /// The plan file the agent last wrote, handed over with ExitPlanMode.
@@ -428,6 +430,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         settled: false,
         limit: None,
         low: false,
+        wait: Default::default(),
         plans: plans_dir(opts.account.as_deref()),
         plan_file: None,
         ultracode: opts.ultracode,
@@ -438,9 +441,11 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     let mut stale_exits = 0;
     // The subagent model changed: Claude Code takes it at start, so it restarts once idle.
     let mut respawn = false;
-    while let Some(msg) = super::recv(&rx) {
+    while let Some(msg) = super::recv_or_wake(&rx, &b.wait) {
         match msg {
-            In::Line(line) => {
+            // Time to continue after waiting out a usage limit (below).
+            None => {}
+            Some(In::Line(line)) => {
                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
                     b.on_line(&v);
                 }
@@ -448,13 +453,15 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     let _ = proc.write(&out);
                 }
             }
-            In::Closed if stale_exits > 0 => stale_exits -= 1,
-            In::Closed => {
+            Some(In::Closed) if stale_exits > 0 => stale_exits -= 1,
+            Some(In::Closed) => {
                 let reason = proc.exit_reason();
                 let _ = b.events.send(Ev::Exited(format!("Claude Code stopped: {reason}")));
                 return;
             }
-            In::Cmd(cmd) => {
+            Some(In::Cmd(cmd)) => {
+                // Out of usage: messages wait for the reset.
+                let Some(cmd) = b.wait.intercept(cmd, &b.events) else { continue };
                 // The account is nearly out: the turn starts on the next one.
                 if matches!(cmd, Cmd::Send(_)) && b.low && b.idle() && b.session.is_some() {
                     b.low = false;
@@ -498,9 +505,26 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         return;
                     }
                 }
+                // No account left: wait for the reset and continue then.
+                None if super::LimitWait::enabled() => b.wait.start(reset, &b.events),
                 // Without the CLI's own message (a rate limit event), it has already reported the error.
                 None if text.is_empty() => {}
                 None => b.emit(Ev::Error(text)),
+            }
+        }
+        if b.wait.due() {
+            let msg = b.wait.resume(&b.events);
+            let next = super::resume_account("claude", opts.account.as_deref()).filter(|_| b.idle() && b.session.is_some());
+            if let Some(next) = next {
+                let notice = format!("Continuing on \"{}\".", crate::accounts::label(&next));
+                if let Err(e) = switch_account(&mut b, &mut proc, &mut opts, next, &rx, &me, &mut stale_exits) {
+                    let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart: {e}")));
+                    return;
+                }
+                b.emit(Ev::Notice(notice));
+            }
+            if !b.on_cmd(Cmd::Send(msg), &mut proc) {
+                return;
             }
         }
         let path = b.micro_compact_file();
@@ -517,6 +541,14 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                         }
                 Err(e) => {
                     let _ = b.events.send(Ev::Exited(format!("Claude Code didn't restart: {e}")));
+                    return;
+                }
+            }
+        }
+        // The messages queued while out of usage go one at a time, each once the agent is done.
+        if b.limit.is_none() && b.idle() {
+            if let Some(msg) = b.wait.next(&b.events) {
+                if !b.on_cmd(Cmd::Send(msg), &mut proc) {
                     return;
                 }
             }
@@ -1396,7 +1428,7 @@ mod tests {
             trim_at: 0,
             compact_at: 0,
             running: Default::default(),
-            settled: false, limit: None, low: false,
+            settled: false, limit: None, low: false, wait: Default::default(),
             plans: None, plan_file: None, ultracode: false,
         };
         (b, rx)

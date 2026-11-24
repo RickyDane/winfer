@@ -40,7 +40,7 @@ pub(super) fn tab_for_label(label: &str) -> CodeTab {
     match label {
         "Model" | "Reasoning effort" | "Main model" | "Subagents" => CodeTab::Models,
         l if l.starts_with("Subagent model") => CodeTab::Models,
-        "Permission mode" | "Auto-approve in panes" | "Always-allowed commands" => CodeTab::Permissions,
+        "Permission mode" | "Auto-approve in panes" | "Always-allowed commands" | "Resume after usage limits" => CodeTab::Permissions,
         "Lean setup" | "Claude Code" | "Codex" | "Lean Claude Code" | "Lean Codex" | "Lean Codex CLI panes" | "Short Codex prompt" | "Codex CLI panes too" | "Skills" | "Skills in lean sessions" | "Micro-compact at" | "Full compact at" | "Context compaction" => CodeTab::Efficiency,
         l if l.starts_with("Selected skills") => CodeTab::Efficiency,
         "Local models" | "Use local models" | "Host / Port" | "API path" | "API key" | "Context window" | "Thinking levels" | "Send level to chat template" | "Web search" | "Connection" => CodeTab::Local,
@@ -616,6 +616,8 @@ impl Root {
         let approve = self.toggle("harness-approve", approve_on, c, cx, move |this, cx| this.update_state(cx, |s| {
             if approve_on { s.auto_approve.retain(|p| p != WINFER_PROVIDER); } else { s.auto_approve.push(WINFER_PROVIDER.into()); }
         }));
+        // Missing from older configs: on by default.
+        let resume = self.harness_toggle("autoResume", st["autoResume"] != false, c, cx);
         let commands = self.harness_page.commands.clone().expect("loaded");
         let mut tags = div().w(px(300.0)).min_h(px(32.0)).flex().flex_wrap().items_center().gap_1p5().p_1().rounded_md().bg(c.raised).border_1().border_color(c.edge);
         for (i, t) in self.allowed_commands().into_iter().enumerate() {
@@ -642,7 +644,8 @@ impl Root {
             .child(scale)
             .child(panel(c)
                 .child(row(c, "Auto-approve in panes", Some("Start WinferCode panes with --yolo, whatever the mode above. Applies to panes started after the change.".into()), approve))
-                .child(div().border_t_1().border_color(c.border).child(row(c, "Always-allowed commands", Some("Commands starting with these never ask. ChatGPT account only; Claude Code and Codex use their own rules.".into()), tags))))
+                .child(div().border_t_1().border_color(c.border).child(row(c, "Always-allowed commands", Some("Commands starting with these never ask. ChatGPT account only; Claude Code and Codex use their own rules.".into()), tags)))
+                .child(div().border_t_1().border_color(c.border).child(row(c, "Resume after usage limits", Some("When every account is out of usage (e.g. the 5-hour limit), a Claude Code or Codex session waits for the reset, then continues and sends the messages queued meanwhile. Esc stops waiting.".into()), resume))))
     }
 
     /* Efficiency */
@@ -1443,6 +1446,7 @@ mod tests {
         assert_eq!(tab_for_label("Use TUI style"), CodeTab::Interface);
         assert_eq!(tab_for_label("Subagent model · Codex"), CodeTab::Models);
         assert_eq!(tab_for_label("Always-allowed commands"), CodeTab::Permissions);
+        assert_eq!(tab_for_label("Resume after usage limits"), CodeTab::Permissions);
         assert_eq!(tab_for_label("Full compact at"), CodeTab::Efficiency);
         assert_eq!(tab_for_label("Lean Codex CLI panes"), CodeTab::Efficiency);
         assert_eq!(tab_for_label("Thinking budget · Low"), CodeTab::Local);

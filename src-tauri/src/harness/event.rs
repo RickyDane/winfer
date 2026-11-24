@@ -47,6 +47,10 @@ pub enum Ev {
     BgNote(String),
     /// The bridge moved to another Claude Code / Codex account (see accounts.rs), by id.
     Account(String),
+    /// Out of usage on every account: the session waits until `until` (unix ms) to continue, with
+    /// `queued` messages to send after it (see `backend::LimitWait`). `until` is None once it
+    /// resumed (or stopped waiting) while messages may still be queued.
+    LimitWait { until: Option<i64>, queued: usize },
 }
 
 /// One update about a background task; unset fields are unchanged.

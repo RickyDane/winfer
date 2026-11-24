@@ -230,6 +230,8 @@ struct Bridge {
     limit: Option<(String, Option<i64>)>,
     /// The account's usage is nearly gone: the next turn starts on another account.
     low: bool,
+    /// Out of usage on every account: waiting for the reset, with the messages sent meanwhile.
+    wait: super::LimitWait,
 }
 
 #[derive(Default)]
@@ -328,6 +330,7 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
         sub_model: opts.sub_model.clone(),
         limit: None,
         low: false,
+        wait: Default::default(),
     };
     crate::harness::bg::set_mode(&b.bg_owner, b.mode);
     b.initialize();
@@ -358,9 +361,19 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
     // winfer code's question tool (Codex's own `request_user_input` only works in its plan mode).
     start_params["dynamicTools"] = dynamic_tools();
 
-    while let Some(msg) = super::recv(&rx) {
+    while let Some(msg) = super::recv_or_wake(&rx, &b.wait) {
+        let msg = match msg {
+            Some(In::Cmd(cmd)) => match b.wait.intercept(cmd, &b.events) {
+                Some(cmd) => Some(In::Cmd(cmd)),
+                // Out of usage: messages wait for the reset.
+                None => continue,
+            },
+            msg => msg,
+        };
         match msg {
-            In::Line(line) => {
+            // Time to continue after waiting out a usage limit (below).
+            None => {}
+            Some(In::Line(line)) => {
                 let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
                 if let Some(id) = v.get("id").filter(|_| v.get("method").is_none()) {
                     // A response to one of our requests.
@@ -443,13 +456,13 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     }
                 }
             }
-            In::Closed if stale_exits > 0 => stale_exits -= 1,
-            In::Closed => {
+            Some(In::Closed) if stale_exits > 0 => stale_exits -= 1,
+            Some(In::Closed) => {
                 let reason = b.proc.exit_reason();
                 b.emit(Ev::Exited(format!("Codex stopped: {reason}")));
                 return;
             }
-            In::Cmd(cmd) => match cmd {
+            Some(In::Cmd(cmd)) => match cmd {
                 // The account is nearly out: the turn starts on the next one, after a restart.
                 Cmd::Send(msg) if b.low && b.idle() && b.thread.is_some() && crate::accounts::has_alternatives("codex") => {
                     b.low = false;
@@ -573,9 +586,30 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                     crate::accounts::clear_exhausted(&opts.account.clone().unwrap_or_else(|| crate::accounts::default_id("codex")));
                     let _ = me.send(In::Cmd(Cmd::Send(switch_send.take().unwrap())));
                 }
+                // No account left: wait for the reset and continue then.
+                None if super::LimitWait::enabled() => b.wait.start(reset, &b.events),
                 // Without the CLI's own message (a rate limit event), it has already reported the error.
                 None if text.is_empty() => {}
                 None => b.emit(Ev::Error(text)),
+            }
+        }
+        if b.wait.due() {
+            let msg = b.wait.resume(&b.events);
+            match super::resume_account("codex", opts.account.as_deref()).filter(|_| b.idle() && b.thread.is_some()) {
+                // Resumes the thread on that account (the restart below), then continues.
+                Some(next) => {
+                    b.emit(Ev::Notice(format!("Continuing on \"{}\".", crate::accounts::label(&next))));
+                    opts.account = Some(next.clone());
+                    b.emit(Ev::Account(next));
+                    switched = Some(msg);
+                }
+                None => {
+                    b.emit(Ev::TurnStart);
+                    match b.thread {
+                        Some(_) => b.start_turn(msg),
+                        None => b.queued.push(msg),
+                    }
+                }
             }
         }
         let restart = match b.micro_compact_file() {
@@ -610,10 +644,20 @@ pub fn run(opts: Opts, rx: Receiver<In>, me: Sender<In>, events: Events) {
                 b.emit(Ev::Notice(format!("Micro-compacted: trimmed {} KB of old tool output.", saved / 1024)));
             }
             if let Some(msg) = switched.take() {
-                let _ = me.send(In::Cmd(Cmd::Send(msg)));
+                // Starts once the thread is back (not through the channel, where it would queue
+                // behind messages held for the usage limit).
+                b.emit(Ev::TurnStart);
+                b.queued.push(msg);
             }
             for cmd in held {
                 let _ = me.send(In::Cmd(cmd));
+            }
+        }
+        // The messages queued while out of usage go one at a time, each once the agent is done.
+        if b.limit.is_none() && b.idle() && b.thread.is_some() {
+            if let Some(msg) = b.wait.next(&b.events) {
+                b.emit(Ev::TurnStart);
+                b.start_turn(msg);
             }
         }
     }
@@ -1918,7 +1962,7 @@ mod tests {
             trim_at: 0,
             compact_at: 0,
             settled: false,
-            sub_model: None, limit: None, low: false,
+            sub_model: None, limit: None, low: false, wait: Default::default(),
         };
         (b, rx)
     }
@@ -2126,6 +2170,7 @@ mod tests {
             sub_model: None,
             limit: None,
             low: false,
+            wait: Default::default(),
         };
         b.start_turn(UserMsg { text: "hi".into(), ..Default::default() });
         b.ultracode = false;
@@ -2242,6 +2287,7 @@ mod tests {
             sub_model: None,
             limit: None,
             low: false,
+            wait: Default::default(),
         };
         let next_msg = |lines: &Receiver<In>| -> Value {
             loop {
@@ -2342,6 +2388,7 @@ mod tests {
             sub_model: None,
             limit: None,
             low: false,
+            wait: Default::default(),
         };
         let next_msg = |lines: &Receiver<In>| -> Value {
             loop {
@@ -2419,6 +2466,7 @@ mod tests {
             sub_model: None,
             limit: None,
             low: false,
+            wait: Default::default(),
         };
         let next_msg = |lines: &Receiver<In>| -> Value {
             loop {

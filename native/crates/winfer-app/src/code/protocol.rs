@@ -286,6 +286,9 @@ pub enum Ev {
     },
     HandoffCancel,
     Account {},
+    /// Out of usage: when the session continues (unix ms; None once it did) and how many
+    /// messages wait to be sent.
+    LimitWait { #[serde(default)] until: Option<u64>, #[serde(default)] queued: usize },
     #[serde(other)]
     Unknown,
 }
