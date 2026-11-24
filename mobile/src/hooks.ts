@@ -33,7 +33,9 @@ window.addEventListener("hashchange", () => {
     flushSync(() => routeListeners.forEach((fn) => fn()));
   };
   const start = (document as { startViewTransition?: (cb: () => void) => unknown }).startViewTransition?.bind(document);
-  const animate = !!start && !matchMedia("(prefers-reduced-motion: reduce)").matches && before.name !== after.name;
+  // A started session takes over the "new" screen in place: no slide, it's the same page.
+  const inPlace = before.name === "new" && after.name === "pane";
+  const animate = !!start && !inPlace && !matchMedia("(prefers-reduced-motion: reduce)").matches && before.name !== after.name;
   if (!animate) return apply();
   document.documentElement.dataset.nav =
     TABS.includes(before.name) && TABS.includes(after.name) ? "tab" : DEPTH[after.name] >= DEPTH[before.name] ? "forward" : "back";
@@ -49,6 +51,9 @@ export function useRoute(): Route {
   const hash = useSyncExternalStore(subscribeRoute, () => current);
   return useMemo(() => parseRoute(hash), [hash]);
 }
+
+/** First messages sent from the "new" screen, shown in the thread until the desktop echoes them. */
+export const firstMessages = new Map<string, string>();
 
 export function go(path: string) {
   location.hash = path;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DesktopClient } from "../client";
-import { go, haptic, useClient } from "../hooks";
+import { firstMessages, go, haptic, useClient } from "../hooks";
 import type { ModelOption } from "../protocol";
 import { Icon, ProviderMark, linkState, providerInfo } from "./common";
 import { Composer, Pill, PillIcon } from "./Composer";
@@ -81,17 +81,19 @@ export function NewSession({ client, workspaceId }: { client: DesktopClient; wor
     setErr(null);
     haptic([8, 30, 8]);
     try {
+      const first = text.trim();
       const explicitEffort = effort && effort !== "default" && availableEfforts.includes(effort) ? effort : undefined;
       const reply = await client.request({
         t: "pane.new",
         workspaceId: chosenWs.id,
         provider: chosenProvider.id,
-        text: text.trim() || undefined,
+        text: first || undefined,
         model: model ?? undefined,
         effort: explicitEffort,
       });
       const id = reply.t === "ack" ? reply.paneId : undefined;
-      // Back from the new thread goes to the agents, not to this form.
+      // The thread replaces this screen in place (same page, no history entry), showing the message right away.
+      if (id && first) firstMessages.set(id, first);
       if (id) location.replace(`#/pane/${encodeURIComponent(id)}`);
       else go("/");
     } catch (e) {

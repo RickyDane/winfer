@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { DesktopClient } from "../client";
-import { ago, go, haptic, useClient, useTick, vtName } from "../hooks";
+import { ago, firstMessages, go, haptic, useClient, useTick, vtName } from "../hooks";
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
@@ -410,7 +410,12 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
 
   const cfg = pane?.config ?? null;
   const backend = cfg ? backendOf(cfg.model) : null;
-  const empty = !!thread && messages.length === 0 && !pane?.reply;
+  // The message this session was started with, until the thread has it.
+  const first = messages.length === 0 && !pane?.reply ? (firstMessages.get(paneId) ?? null) : null;
+  useEffect(() => {
+    if (messages.length > 0) firstMessages.delete(paneId);
+  }, [paneId, messages.length]);
+  const empty = !!thread && messages.length === 0 && !pane?.reply && !first;
   const where = cfg?.cwd ? `${homePath(cfg.cwd)}${cfg.branch ? `  ⎇ ${cfg.branch}` : ""}` : null;
   const welcomeStatus = [cfg?.label || info?.name, backend?.name !== cfg?.label ? backend?.name : null, cfg?.mode].filter(Boolean).join(" · ") || "Ready";
 
@@ -506,7 +511,12 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
       >
         <div className="transcript">
           <ConnNotice state={state} onRetry={() => client.reconnect()} />
-          {!thread && ready && (
+          {first && (
+            <div className="turn-user">
+              <p>{first}</p>
+            </div>
+          )}
+          {!thread && ready && !first && (
             <div className="loading" aria-label="Loading">
               <span className="spinner" /> Loading the thread…
             </div>
@@ -548,6 +558,11 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               </div>
             );
           })}
+          {first && !(pane && working) && (
+            <div className="loading" aria-label="Starting">
+              <span className="spinner" /> Starting {info?.name ?? "the agent"}…
+            </div>
+          )}
           {pane && working && !hasLiveGroup && <WorkingRow pane={pane} current={current} thinking={thinking} />}
           {pane && background.length > 0 && <Background items={background} />}
           {pane && !working && (pane.status === "done" || pane.status === "error") && messages.length > 0 && <EndMark pane={pane} />}
