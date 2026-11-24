@@ -134,6 +134,11 @@ static AGY_MARK: std::sync::LazyLock<std::sync::Arc<Image>> = std::sync::LazyLoc
     std::sync::Arc::new(Image::from_bytes(ImageFormat::Svg, include_bytes!("../../assets/providers/agy-color.svg").to_vec()))
 });
 
+/// WinferCode's multicolour refracted prism, drawn as an image since `svg()` only tints in one colour.
+static WINFER_MARK: std::sync::LazyLock<std::sync::Arc<Image>> = std::sync::LazyLock::new(|| {
+    std::sync::Arc::new(Image::from_bytes(ImageFormat::Svg, include_bytes!("../../assets/providers/winfer-color.svg").to_vec()))
+});
+
 /// A provider's brand colour, tuned for legibility on the active theme.
 pub(super) fn backend_color(c: Colors, backend: &str) -> Hsla {
     match backend {
@@ -154,6 +159,9 @@ pub(super) fn backend_color(c: Colors, backend: &str) -> Hsla {
 pub(super) fn mark(c: Colors, backend: &str, size: f32, opacity: f32) -> AnyElement {
     if backend == "agy" {
         return img(AGY_MARK.clone()).size(px(size)).flex_shrink_0().opacity(opacity).into_any_element();
+    }
+    if backend == "winfer" {
+        return img(WINFER_MARK.clone()).size(px(size * 1.12)).flex_shrink_0().opacity(opacity).into_any_element();
     }
     if backend == "shell" {
         return Icon::new(IconName::SquareTerminal).size(px(size)).flex_shrink_0().text_color(alpha(c.muted, opacity)).into_any_element();
