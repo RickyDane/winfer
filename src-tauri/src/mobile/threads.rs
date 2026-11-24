@@ -24,6 +24,9 @@ pub struct Message {
     /// Tools: a background shell or subagent, which outlives its call.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
+    /// Tools: the chart, table or tiles of a `visualize` call (`viz::Report::to_json`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<Value>,
 }
 
 /// Replies longer than this are cut (phones get the gist; the desktop has the rest).
@@ -102,7 +105,7 @@ fn push(out: &mut Vec<Message>, id: String, role: &'static str, text: &str, tool
         last.text = cut(&format!("{}\n\n{text}", last.text), MAX_TEXT);
         return;
     }
-    out.push(Message { id, role, text, tool, ts, state: None, background: false });
+    out.push(Message { id, role, text, tool, ts, state: None, background: false, report: None });
 }
 
 /// Pushes a tool call and returns its index (None when it has nothing to show).
@@ -113,6 +116,13 @@ fn push_tool(out: &mut Vec<Message>, id: String, text: &str, tool: Option<String
         out[before].state = state;
         before
     })
+}
+
+/// A `visualize` call's report on its row, so the phone draws it instead of a tool line.
+fn attach_report(out: &mut [Message], i: Option<usize>, name: &str, input: &Value) {
+    if let Some(i) = i {
+        out[i].report = crate::viz::phone_report(name, input);
+    }
 }
 
 /// The value of `<tag>…</tag>` in `text`.
@@ -214,9 +224,9 @@ pub fn claude(transcript: &str) -> Vec<Message> {
                         "text" => push(&mut out, id, "assistant", block["text"].as_str().unwrap_or_default(), None, ts),
                         "tool_use" => {
                             let name = block["name"].as_str().unwrap_or("tool");
-                            if let Some(i) = push_tool(&mut out, id, &summary(name, &block["input"]), Some(tool_label(name)), ts, Some("running"))
-                                && let Some(call) = block["id"].as_str()
-                            {
+                            let i = push_tool(&mut out, id, &summary(name, &block["input"]), Some(tool_label(name)), ts, Some("running"));
+                            attach_report(&mut out, i, name, &block["input"]);
+                            if let (Some(i), Some(call)) = (i, block["id"].as_str()) {
                                 by_call.insert(call.to_string(), i);
                             }
                         }
@@ -235,7 +245,7 @@ pub fn claude(transcript: &str) -> Vec<Message> {
 /// says "Thinking…" only then (the marker has no text and is never shown as a message).
 fn mark_thinking(out: &mut Vec<Message>, thinking: bool) {
     if thinking {
-        out.push(Message { id: "thinking".into(), role: "thinking", text: String::new(), tool: None, ts: None, state: None, background: false });
+        out.push(Message { id: "thinking".into(), role: "thinking", text: String::new(), tool: None, ts: None, state: None, background: false, report: None });
     }
 }
 
@@ -275,7 +285,9 @@ pub fn codex(log: &str) -> Vec<Message> {
             k if k.ends_with("_call") => {
                 let name = item["name"].as_str().unwrap_or_else(|| k.trim_end_matches("_call"));
                 let input = if item["arguments"].is_null() { &item["input"] } else { &item["arguments"] };
-                if let (Some(i), Some(call)) = (push_tool(&mut out, id, &summary(name, input), Some(tool_label(name)), ts, Some("running")), item["call_id"].as_str()) {
+                let i = push_tool(&mut out, id, &summary(name, input), Some(tool_label(name)), ts, Some("running"));
+                attach_report(&mut out, i, name, input);
+                if let (Some(i), Some(call)) = (i, item["call_id"].as_str()) {
                     by_call.insert(call.to_string(), i);
                 }
             }
@@ -311,7 +323,8 @@ pub fn opencode(conn: &rusqlite::Connection, session: &str) -> Option<Vec<Messag
                                 Some("error") => Some("failed"),
                                 _ => None,
                             };
-                            push_tool(&mut out, id, &summary(name, &part["state"]["input"]), Some(tool_label(name)), ts, state);
+                            let i = push_tool(&mut out, id, &summary(name, &part["state"]["input"]), Some(tool_label(name)), ts, state);
+                            attach_report(&mut out, i, name, &part["state"]["input"]);
                         }
                         _ => push(&mut out, id, "assistant", part["text"].as_str().unwrap_or_default(), None, ts),
                     }
@@ -406,6 +419,20 @@ mod tests {
         );
         assert_eq!(m[0].ts, Some(1_792_429_797_903));
         assert_eq!(m[2].tool.as_deref(), Some("Bash"));
+    }
+
+    #[test]
+    fn visualize_calls_carry_their_report() {
+        let chart = serde_json::json!({ "blocks": [{ "type": "stats", "items": [{ "label": "A", "value": 3 }] }] });
+        let line = |input: &serde_json::Value, name: &str| {
+            serde_json::json!({"type": "assistant", "uuid": "a", "message": {"content": [{"type": "tool_use", "id": "t", "name": name, "input": input}]}}).to_string()
+        };
+        let m = claude(&line(&chart, "mcp__winfer__visualize"));
+        assert_eq!(m[0].tool.as_deref(), Some("visualize"));
+        assert_eq!(m[0].report.as_ref().unwrap()["blocks"][0]["items"][0]["value"], "3");
+        // Bad specs and other tools stay plain rows.
+        assert!(claude(&line(&serde_json::json!({ "blocks": [] }), "mcp__winfer__visualize"))[0].report.is_none());
+        assert!(claude(&line(&chart, "Bash"))[0].report.is_none());
     }
 
     #[test]

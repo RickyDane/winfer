@@ -65,6 +65,28 @@ export interface Pane {
   config?: PaneConfig | null;
 }
 
+/** A `visualize` report, normalised by the desktop (`viz::Report::to_json`). */
+export interface Report {
+  title: string | null;
+  subtitle: string | null;
+  blocks: ReportBlock[];
+}
+
+export interface Series {
+  name: string;
+  values: number[];
+}
+
+export type ReportBlock = { title: string | null; caption: string | null; span: number | "full" | null } & (
+  | { type: "stats"; items: { label: string; value: string; delta: string | null; note: string | null }[] }
+  | { type: "bar"; labels: string[]; series: Series[]; horizontal: boolean; stacked: boolean; unit: string | null }
+  | { type: "line"; labels: string[]; series: Series[]; area: boolean; unit: string | null }
+  | { type: "pie"; slices: { label: string; value: number }[]; ring: boolean; center: { value: string; label: string } | null; unit: string | null }
+  | { type: "table"; columns: { label: string; align: "left" | "right" | "center" }[]; rows: string[][] }
+  | { type: "progress"; items: { label: string; value: number; max: number }[] }
+  | { type: "text"; markdown: string }
+);
+
 export interface Message {
   id: string;
   /** "thinking": a text-less marker ending the thread while the agent reasons; never shown. */
@@ -80,6 +102,8 @@ export interface Message {
   state?: "running" | "done" | "failed";
   /** Tools: a background shell or subagent, which keeps running after its call returns. */
   background?: boolean;
+  /** Tools: the chart, table or tiles a `visualize` call made; shown instead of the tool row. */
+  report?: Report;
   /** "bg": a finished background task: `text` is its one-line summary, `detail` its command and output. */
   detail?: string;
 }

@@ -97,6 +97,7 @@ interface Message {
   state?: "running" | "done" | "failed"; // tools: from the session (Claude: tool_result /
                           // <task-notification>; Codex: *_call_output; winfer code: saved state)
   background?: boolean;   // tools: a background shell or subagent, which outlives its call
+  report?: Report;        // tools: a `visualize` call's validated report (see mobile/src/protocol.ts); the phone draws it as charts/tables instead of a tool row
 }
 ```
 

@@ -277,6 +277,70 @@ impl Report {
     }
 }
 
+/// Biggest report (as JSON) sent to a phone; bigger ones stay a plain tool row there.
+const MAX_PHONE_JSON: usize = 96_000;
+
+impl Report {
+    /// The validated report as the phone draws it (`mobile/src/screens/Viz.tsx`): the same
+    /// data, normalised, so the phone needs none of the parser's leniency.
+    pub fn to_json(&self) -> Value {
+        use serde_json::json;
+        let series = |s: &[Series]| s.iter().map(|s| json!({ "name": s.name, "values": s.values })).collect::<Vec<_>>();
+        let blocks: Vec<Value> = self
+            .blocks
+            .iter()
+            .map(|b| {
+                let mut v = match &b.kind {
+                    Kind::Stats(items) => json!({ "type": "stats", "items": items.iter().map(|s| json!({ "label": s.label, "value": s.value, "delta": s.delta, "note": s.note })).collect::<Vec<_>>() }),
+                    Kind::Bar { labels, series: s, horizontal, stacked, unit } => json!({ "type": "bar", "labels": labels, "series": series(s), "horizontal": horizontal, "stacked": stacked, "unit": unit }),
+                    Kind::Line { labels, series: s, area, unit } => json!({ "type": "line", "labels": labels, "series": series(s), "area": area, "unit": unit }),
+                    Kind::Pie { slices, ring, center, unit } => json!({
+                        "type": "pie",
+                        "slices": slices.iter().map(|s| json!({ "label": s.label, "value": s.value })).collect::<Vec<_>>(),
+                        "ring": ring,
+                        "center": center.as_ref().map(|(value, label)| json!({ "value": value, "label": label })),
+                        "unit": unit,
+                    }),
+                    Kind::Table { columns, rows } => json!({
+                        "type": "table",
+                        "columns": columns.iter().map(|c| json!({ "label": c.label, "align": match c.align { Align::Left => "left", Align::Right => "right", Align::Center => "center" } })).collect::<Vec<_>>(),
+                        "rows": rows,
+                    }),
+                    Kind::Progress(items) => json!({ "type": "progress", "items": items.iter().map(|m| json!({ "label": m.label, "value": m.value, "max": m.max })).collect::<Vec<_>>() }),
+                    Kind::Text(t) => json!({ "type": "text", "markdown": t }),
+                };
+                v["title"] = json!(b.title);
+                v["caption"] = json!(b.caption);
+                v["span"] = match b.span {
+                    Some(Span::Full) => json!("full"),
+                    Some(Span::Cols(n)) => json!(n),
+                    None => Value::Null,
+                };
+                v
+            })
+            .collect();
+        json!({ "title": self.title, "subtitle": self.subtitle, "blocks": blocks })
+    }
+}
+
+/// The phone's version of a tool call's report: for a `visualize` call whose input parses, else
+/// `None` (the phone shows an ordinary tool row). `input` may be the JSON string Codex passes.
+pub fn phone_report(name: &str, input: &Value) -> Option<Value> {
+    if !is_visualize(name) {
+        return None;
+    }
+    let parsed;
+    let input = match input {
+        Value::String(s) => {
+            parsed = serde_json::from_str::<Value>(s).ok()?;
+            &parsed
+        }
+        v => v,
+    };
+    let json = Report::parse(spec_of(input)).ok()?.to_json();
+    (json.to_string().len() <= MAX_PHONE_JSON).then_some(json)
+}
+
 impl Kind {
     pub fn name(&self) -> &'static str {
         match self {

@@ -167,6 +167,23 @@ const THREADS: Record<string, Message[]> = {
   "p-docs": [
     m("1", "user", "Add a section on pairing the phone app to the README.", 9),
     { ...m("2", "tool", "README.md (+22)", 7, "Edit"), state: "done", ended: now - 6.9 * min },
+    {
+      ...m("2b", "tool", "Build time report", 6.5, "visualize"),
+      state: "done",
+      report: {
+        title: "Build time report",
+        subtitle: "cargo build --timings, release",
+        blocks: [
+          { type: "stats", title: null, caption: null, span: null, items: [{ label: "Median", value: "41s", delta: "-8%", note: null }, { label: "Slowest", value: "2m 04s", delta: "+12%", note: "winfer-app" }] },
+          { type: "bar", title: "Seconds per crate", caption: null, span: null, labels: ["core", "ui", "backend", "relay"], series: [{ name: "build", values: [12, 29, 21, 6] }], horizontal: true, stacked: false, unit: "s" },
+          { type: "bar", title: "Cold vs warm", caption: null, span: null, labels: ["core", "ui", "backend"], series: [{ name: "cold", values: [12, 29, 21] }, { name: "warm", values: [3, 8, 5] }], horizontal: false, stacked: false, unit: null },
+          { type: "line", title: "Trend", caption: "Last 6 builds", span: null, labels: ["1", "2", "3", "4", "5", "6"], series: [{ name: "s", values: [52, 49, 47, 44, 45, 41] }], area: true, unit: "s" },
+          { type: "pie", title: "Language", caption: null, span: null, slices: [{ label: "Rust", value: 80 }, { label: "TS", value: 20 }], ring: true, center: { value: "100k", label: "lines" }, unit: null },
+          { type: "table", title: null, caption: null, span: null, columns: [{ label: "Crate", align: "left" }, { label: "Time", align: "right" }], rows: [["core", "12"], ["ui", "29"]] },
+          { type: "progress", title: null, caption: null, span: null, items: [{ label: "Coverage", value: 72, max: 100 }] },
+        ],
+      },
+    },
     m("3", "assistant", "Updated README with the mobile pairing section.", 6),
   ],
   "p-relay": [

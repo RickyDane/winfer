@@ -36,6 +36,10 @@ pub fn live_thread(state: &CodeState, limit: usize) -> Vec<Value> {
                 if let Some(d) = desc {
                     row["desc"] = json!(d);
                 }
+                // A finished `visualize` call is a chart on the phone too.
+                if let Some(report) = (status != "failed").then(|| winfer_backend::viz::phone_report(name, input)).flatten() {
+                    row["report"] = report;
+                }
                 out.push(row);
             }
             Item::Notice { key, text, error: false } => {
@@ -119,6 +123,19 @@ mod tests {
         assert_eq!(done[1]["state"], "failed");
         assert!(done[1]["ended"].as_u64().is_some());
         assert_eq!(live_thread(&s, 1).len(), 1);
+    }
+
+    #[test]
+    fn visualize_calls_carry_their_report() {
+        let mut s = CodeState::default();
+        let input = json!({ "title": "Times", "blocks": [{ "type": "bar", "labels": ["a", "b"], "series": [{ "name": "s", "values": [1, 2] }] }] });
+        s.apply(ev(json!({ "type": "tool_start", "id": "v", "name": "winfer · visualize", "title": "Times", "input": input })));
+        s.apply(ev(json!({ "type": "tool_end", "id": "v", "ok": true, "output": "" })));
+        s.apply(ev(json!({ "type": "tool_start", "id": "b", "name": "winfer · visualize", "title": "Bad", "input": { "blocks": [] } })));
+        let t = live_thread(&s, 10);
+        assert_eq!(t[0]["report"]["title"], "Times");
+        assert_eq!(t[0]["report"]["blocks"][0]["type"], "bar");
+        assert!(t[1].get("report").is_none());
     }
 
     #[test]

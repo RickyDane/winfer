@@ -15,6 +15,23 @@ const tool = (id: string, toolName = "Bash", text = "ls", extra: Partial<Message
   ...extra,
 });
 
+const report = { title: "T", subtitle: null, blocks: [] };
+
+describe("visualize reports", () => {
+  it("stay rows of their own between tool runs, in both modes", () => {
+    const msgs = [user("u1"), tool("t1"), tool("t2"), tool("v", "visualize", "T", { report }), tool("t3"), tool("t4")];
+    for (const compact of [true, false]) {
+      const kinds = buildDisplayRows(msgs, false, false, compact).rows.map((r) => (r.kind === "msg" ? r.msg.id : r.kind));
+      expect(kinds).toEqual(compact ? ["u1", "work-group", "v", "work-group"] : ["u1", "tools", "v", "tools"]);
+    }
+  });
+
+  it("fall back to a tool row when the call failed", () => {
+    const msgs = [user("u1"), tool("v", "visualize", "T", { report, state: "failed" })];
+    expect(buildDisplayRows(msgs, false, false, false).rows.map((r) => r.kind)).toEqual(["msg", "tools"]);
+  });
+});
+
 describe("buildDisplayRows (compact tools)", () => {
   it("groups multi-tool runs into work groups and leaves single finished tools direct", () => {
     const msgs = [

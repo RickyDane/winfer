@@ -804,3 +804,53 @@ html[data-nav="tab"]::view-transition-new(root) { animation: vt-fade-in 0.24s va
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after, ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
+
+/* ---- visualize reports (Viz.tsx) ---- */
+.viz { display: flex; flex-direction: column; gap: 10px; margin: 8px 0; padding: 12px; border: 1px solid var(--edge); border-radius: var(--r-xl); background: var(--raised); }
+.viz-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.viz-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+.viz-block { margin: 0; min-width: 0; }
+.viz-title { margin-bottom: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.viz-caption { margin: 6px 0 0; font-size: 11.5px; color: var(--subtle); }
+.viz-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.viz-stat { display: flex; flex-direction: column; gap: 2px; padding: 9px 10px; border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); }
+.viz-stat-label { font-size: 11.5px; color: var(--muted); }
+.viz-stat-value { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.viz-stat-delta { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.viz-stat-delta[data-tone="up"] { color: var(--ok); }
+.viz-stat-delta[data-tone="down"] { color: var(--danger); }
+.viz-stat-note { font-size: 11px; color: var(--subtle); }
+.viz-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 6px; padding: 0; list-style: none; font-size: 11.5px; color: var(--muted); }
+.viz-legend li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.viz-legend i { flex: none; width: 9px; height: 9px; border-radius: 3px; }
+.viz-legend.col { flex-direction: column; flex-wrap: nowrap; gap: 5px; margin: 0; }
+.viz-legend-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-legend b { color: var(--fg); font-weight: 600; }
+.viz-legend-pct { min-width: 32px; text-align: right; color: var(--subtle); }
+.viz-hbars { display: flex; flex-direction: column; gap: 8px; }
+.viz-hbar { display: flex; flex-direction: column; gap: 3px; }
+.viz-hbar-label { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-hbar-tracks { display: flex; flex-direction: column; gap: 3px; }
+.viz-track { display: flex; align-items: center; gap: 6px; height: 16px; }
+.viz-seg { height: 100%; min-width: 2px; border-radius: 3px; }
+.viz-seg + .viz-seg { margin-left: -2px; border-left: 2px solid var(--raised); border-radius: 0 3px 3px 0; }
+.viz-track em { font-style: normal; font-size: 11.5px; color: var(--fg); white-space: nowrap; }
+.viz-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.viz-axes line { stroke: var(--border-strong); stroke-width: 1; opacity: 0.6; }
+.viz-axes text { fill: var(--subtle); font-size: 9.5px; }
+.viz-pie { display: flex; align-items: center; gap: 14px; }
+.viz-pie svg { flex: none; width: 128px; height: 128px; }
+.viz-pie .viz-legend { flex: 1; min-width: 0; font-size: 12px; }
+.viz-pie-center .v { fill: var(--fg); font-size: 17px; font-weight: 650; }
+.viz-pie-center .l { fill: var(--muted); font-size: 9.5px; }
+.viz-table-wrap { overflow-x: auto; border: 1px solid var(--edge); border-radius: var(--r-lg); -webkit-overflow-scrolling: touch; }
+.viz-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.viz-table th, .viz-table td { padding: 6px 10px; white-space: nowrap; border-bottom: 1px solid var(--edge); }
+.viz-table th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 11.5px; }
+.viz-table tbody tr:last-child td { border-bottom: 0; }
+.viz-table td { font-variant-numeric: tabular-nums; }
+.viz-progress { display: flex; flex-direction: column; gap: 9px; }
+.viz-meter-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+.viz-meter-head b { color: var(--fg); font-weight: 600; }
+.viz-meter-track { height: 6px; border-radius: 3px; background: var(--active); overflow: hidden; }
+.viz-meter-track span { display: block; height: 100%; border-radius: 3px; }
