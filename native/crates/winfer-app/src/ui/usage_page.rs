@@ -11,13 +11,14 @@ use serde_json::Value;
 use winfer_backend::{tool_stats, usage_history};
 
 /// Agents in chart order.
-pub const SERIES: [&str; 3] = ["claude", "codex", "opencode"];
-const SERIES_COLORS: [&str; 3] = ["#cf6e4e", "#6d7cff", "#25a28f"];
+pub const SERIES: [&str; 4] = ["claude", "codex", "agy", "opencode"];
+const SERIES_COLORS: [&str; 4] = ["#cf6e4e", "#6d7cff", "#38bdf8", "#25a28f"];
 
 fn series_name(p: &str) -> &str {
     match p {
         "claude" => "Claude Code",
         "codex" => "Codex",
+        "agy" => "Antigravity",
         "opencode" => "OpenCode",
         other => other,
     }
@@ -1549,9 +1550,9 @@ fn pooled_reset_line(series: &PooledSeries, out: Option<f64>, now: f64, c: Color
     };
     div().flex().flex_col().gap_0p5().text_size(px(11.0)).text_color(c.subtle)
         .child(text)
-        .when_some(out, |d, o| d.child(div().flex().items_center().gap_1().text_color(c.warning)
-            .child(Icon::new(IconName::TriangleAlert).size(px(11.0)).flex_shrink_0())
-            .child(format!("at this pace runs out in {}", duration(o - now)))))
+        .when_some(out, |d, o| d.child(div().flex().items_start().gap_1().text_color(c.warning)
+            .child(div().pt(px(1.0)).flex_shrink_0().child(Icon::new(IconName::TriangleAlert).size(px(11.0))))
+            .child(div().flex_1().min_w_0().child(format!("at this pace runs out in {}", duration(o - now))))))
 }
 
 /// One compact window cell inside a multi-account provider's per-account row.
@@ -1584,9 +1585,9 @@ fn reset_line(w: &UsageWindow, out: Option<f64>, now: f64, c: Colors) -> Div {
     let reset = w.resets_at.map(|r| if r > now { format!("resets in {}", duration(r - now)) } else { "reset — full again".into() }).unwrap_or_default();
     div().flex().flex_col().gap_0p5().text_size(px(11.0)).text_color(c.subtle)
         .child(reset)
-        .when_some(out, |d, o| d.child(div().flex().items_center().gap_1().text_color(c.warning)
-            .child(Icon::new(IconName::TriangleAlert).size(px(11.0)).flex_shrink_0())
-            .child(format!("at this pace runs out in {}", duration(o - now)))))
+        .when_some(out, |d, o| d.child(div().flex().items_start().gap_1().text_color(c.warning)
+            .child(div().pt(px(1.0)).flex_shrink_0().child(Icon::new(IconName::TriangleAlert).size(px(11.0))))
+            .child(div().flex_1().min_w_0().child(format!("at this pace runs out in {}", duration(o - now))))))
 }
 
 fn window_bar(w: &UsageWindow, label: &str, out: Option<f64>, now: f64, c: Colors) -> Div {

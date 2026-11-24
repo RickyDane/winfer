@@ -169,6 +169,9 @@ impl UsageHistory {
                 let _ = scan_file(&mut conn, &file, cutoff, pi_events);
             }
         }
+        for file in agy_transcripts(cutoff) {
+            let _ = scan_file(&mut conn, &file, cutoff, agy_events);
+        }
         let _ = scan_opencode(&mut conn, cutoff);
         let _ = conn.execute("DELETE FROM events WHERE at < ?1", [cutoff]);
         *self.scanned.lock().unwrap() = Some(std::time::Instant::now());
@@ -619,6 +622,72 @@ fn pi_events(line: &str, _path: &Path, _at: u64, state: &mut Value) -> Option<Ev
     .filter(|e| e.input + e.output + e.cache_read + e.cache_write > 0)
 }
 
+// Antigravity (Gemini) --------------------------------------------------------------------------
+
+fn agy_transcripts(cutoff: i64) -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else { return Vec::new() };
+    let since = std::time::UNIX_EPOCH + std::time::Duration::from_millis(cutoff.max(0) as u64);
+    let mut out = Vec::new();
+    for dir in [home.join(".gemini/antigravity-cli/brain"), home.join(".gemini/antigravity/brain")] {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path().join(".system_generated/logs/transcript.jsonl");
+            if path.metadata().ok().and_then(|m| m.modified().ok()).is_some_and(|m| m >= since) {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+fn strip_effort_suffix(model: &str) -> &str {
+    for suffix in ["-xhigh", "-high", "-medium", "-low", "-default"] {
+        if let Some(base) = model.strip_suffix(suffix) {
+            return base;
+        }
+    }
+    model
+}
+
+fn agy_session_id(path: &Path) -> Option<String> {
+    // .../<session-id>/.system_generated/logs/transcript.jsonl
+    path.parent()?.parent()?.parent()?.file_name().map(|s| s.to_string_lossy().into_owned())
+}
+
+/// One model turn in an Antigravity (`agy`) transcript. `agy` reports `input_tokens` excluding
+/// `cache_read_tokens` and `cache_creation_tokens`.
+fn agy_events(line: &str, path: &Path, at: u64, _state: &mut Value) -> Option<Event> {
+    if !line.contains("\"PLANNER_RESPONSE\"") || !line.contains("\"input_tokens\"") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v["type"] != "PLANNER_RESPONSE" || v["status"] != "DONE" {
+        return None;
+    }
+    let model = strip_effort_suffix(v["model"].as_str()?);
+    let ts = v["created_at"].as_str().and_then(crate::usage::parse_rfc3339)?;
+    let session = agy_session_id(path);
+    let step = v["step_index"].as_u64().map_or(at, |s| s);
+    let input = n(&v["input_tokens"]);
+    let output = n(&v["output_tokens"]);
+    let cache_read = n(&v["cache_read_tokens"]);
+    let cache_write = n(&v["cache_creation_tokens"]).max(n(&v["cache_write_tokens"]));
+    Some(Event {
+        id: format!("agy:{}:{step}", session.as_deref().unwrap_or("")),
+        at: ts,
+        provider: "agy".into(),
+        model: model.into(),
+        input,
+        output,
+        cache_read,
+        cache_write,
+        cache_write_1h: 0,
+        cost: None,
+        cwd: None,
+        session,
+    })
+    .filter(|e| e.input + e.output + e.cache_read + e.cache_write > 0)
+}
+
 // OpenCode --------------------------------------------------------------------------------------
 
 /// Assistant messages updated since the last scan (with a day's margin for ones still running).
@@ -741,6 +810,23 @@ const PRICES: &[(&str, Price)] = &[
     ("gpt-5-mini", Price::new(0.25, 2.0, 0.025, 0.25)),
     ("gpt-5-nano", Price::new(0.05, 0.4, 0.005, 0.05)),
     ("gpt-5", Price::new(1.25, 10.0, 0.125, 1.25)),
+    ("gemini-4-carbon", Price::new(4.0, 20.0, 0.2, 4.0)),
+    ("gemini-4-argon", Price::new(4.0, 20.0, 0.2, 4.0)),
+    ("gemini-4-neon", Price::new(3.0, 15.0, 0.15, 3.0)),
+    ("gemini-4-hydrogen", Price::new(1.5, 7.5, 0.075, 1.5)),
+    ("gemini-pro-orchestrator-neon", Price::new(3.0, 15.0, 0.15, 3.0)),
+    ("gemini-3.8-flash", Price::new(0.75, 3.75, 0.075, 0.75)),
+    ("gemini-3.6-flash", Price::new(0.75, 3.75, 0.075, 0.75)),
+    ("gemini-3.5-flash-lite", Price::new(0.25, 1.5, 0.025, 0.25)),
+    ("gemini-3.1-pro", Price::new(2.0, 12.0, 0.2, 2.0)),
+    ("gemini-3.1-flash-lite", Price::new(0.25, 1.5, 0.025, 0.25)),
+    ("gemini-3-pro", Price::new(2.0, 12.0, 0.2, 2.0)),
+    ("gemini-3-flash", Price::new(0.5, 3.0, 0.05, 0.5)),
+    ("gemini-2.5-pro", Price::new(1.25, 10.0, 0.125, 1.25)),
+    ("gemini-2.5-flash-lite", Price::new(0.1, 0.4, 0.01, 0.1)),
+    ("gemini-2.5-flash", Price::new(0.3, 2.5, 0.03, 0.3)),
+    ("gemini-2.0-flash-lite", Price::new(0.075, 0.3, 0.01875, 0.075)),
+    ("gemini-2.0-flash", Price::new(0.1, 0.4, 0.025, 0.1)),
 ];
 
 /// The price table, plus the models.dev catalog OpenCode keeps (when it's installed) for
@@ -1010,7 +1096,22 @@ mod tests {
         assert_eq!(p.get("us.anthropic.claude-opus-4-1-20250805-v1:0").unwrap().input, 15.0);
         assert_eq!(p.get("claude-opus-4-6").unwrap().input, 5.0);
         assert_eq!(p.get("gpt-5.4-mini").unwrap().input, 0.75);
+        assert_eq!(p.get("gemini-4-neon-medium").unwrap().input, 3.0);
+        assert_eq!(p.get("google/gemini-4-argon").unwrap().output, 20.0);
+        assert_eq!(p.get("gemini-3.8-flash-high").unwrap().input, 0.75);
+        assert_eq!(p.get("gemini-2.5-pro").unwrap().cache_read, 0.125);
         assert!(p.get("llama-3").is_none());
+    }
+
+    #[test]
+    fn parses_antigravity_transcript_events() {
+        let path = Path::new("/Users/me/.gemini/antigravity-cli/brain/conv-42/.system_generated/logs/transcript.jsonl");
+        let line = r#"{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-24T18:56:07Z","model":"gemini-4-neon-medium","input_tokens":2549,"cache_read_tokens":11989,"output_tokens":158}"#;
+        let e = agy_events(line, path, 0, &mut Value::Null).unwrap();
+        assert_eq!((e.id.as_str(), e.provider.as_str(), e.model.as_str()), ("agy:conv-42:4", "agy", "gemini-4-neon"));
+        assert_eq!((e.input, e.output, e.cache_read, e.session.as_deref()), (2549, 158, 11989, Some("conv-42")));
+        let pending = r#"{"step_index":5,"type":"PLANNER_RESPONSE","status":"ACTIVE","created_at":"2026-11-24T18:56:08Z","model":"gemini-4-neon-medium","input_tokens":100}"#;
+        assert!(agy_events(pending, path, 10, &mut Value::Null).is_none());
     }
 
     #[test]
