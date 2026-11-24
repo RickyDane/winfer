@@ -41,6 +41,17 @@ fn pane_header_cursor(archived: bool, dragging: bool) -> Option<CursorStyle> {
     (!archived).then_some(if dragging { CursorStyle::ClosedHand } else { CursorStyle::OpenHand })
 }
 
+/// Last non-empty line of a shell's log file (reads only its final 4 KB).
+fn bg_log_last_line(path: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(4096))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    String::from_utf8_lossy(&buf).lines().rev().map(str::trim).find(|l| !l.is_empty()).map(str::to_string)
+}
+
 fn bg_clock(ms: u64) -> String {
     let s = ms / 1000;
     let h = s / 3600;
@@ -714,6 +725,26 @@ impl Root {
             self.bg_popover = None;
             return None;
         }
+        // Re-render every second while open so elapsed time and shell output stay live.
+        if !self.bg_ticking {
+            self.bg_ticking = true;
+            cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+                let keep = this.update(cx, |this, cx| {
+                    let open = this.bg_popover.is_some();
+                    if open {
+                        cx.notify();
+                    } else {
+                        this.bg_ticking = false;
+                    }
+                    open
+                });
+                if !keep.unwrap_or(false) {
+                    break;
+                }
+            })
+            .detach();
+        }
         let c = *c;
         let mono = crate::fonts::mono(cx);
         let now = crate::code::state::now_ms();
@@ -749,7 +780,10 @@ impl Root {
             let sub_line = if is_agent {
                 item.recent_lines.last().cloned().or_else(|| item.last.clone()).unwrap_or_else(|| "starting…".into())
             } else {
-                item.description.clone().or_else(|| item.last.clone()).unwrap_or_else(|| "running…".into())
+                item.log_file.as_deref().and_then(bg_log_last_line)
+                    .or_else(|| item.description.clone())
+                    .or_else(|| item.last.clone())
+                    .unwrap_or_else(|| "running…".into())
             };
             let (open_pid, open_id, open_log, open_code) = (pane_id.clone(), item.id.clone(), item.log_file.clone(), item.from_code);
             let (stop_pid, stop_id, stop_code) = (pane_id.clone(), item.id.clone(), item.from_code);
