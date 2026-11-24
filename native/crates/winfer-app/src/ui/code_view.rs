@@ -1741,7 +1741,7 @@ fn bg_note_row(env: &Env, key: &str, note: &BgNote) -> AnyElement {
     let show_body = open || matches!(toggled, Some((_, false)));
     let (icon, color) = if note.failed() { (IconName::X, c.danger) } else if note.code.is_none() { (IconName::Info, c.subtle) } else { (IconName::Check, c.success) };
     let (view, k) = (env.view.clone(), key.to_string());
-    let head = div().id(SharedString::from(format!("bg-{key}"))).flex().items_center().gap_1p5().h(px(26.0)).px_2().rounded_lg().cursor_pointer().hover(move |d| d.bg(c.hover))
+    let head = div().id(SharedString::from(format!("bg-{key}"))).flex().items_center().gap_1p5().h(px(26.0)).rounded_lg().cursor_pointer().hover(move |d| d.bg(c.hover))
         .on_click(move |_, _, cx| {
             let _ = view.update(cx, |v, cx| v.toggle(&k, open, cx));
         })
@@ -1751,7 +1751,7 @@ fn bg_note_row(env: &Env, key: &str, note: &BgNote) -> AnyElement {
     let body = div().flex().flex_col().gap_1().mt_1().mb_1().px_3().py_1p5().rounded_lg().border_1().border_color(c.edge).bg(c.raised).font_family(env.mono.clone()).text_size(env.small()).text_color(c.muted).whitespace_normal()
         .child(div().text_color(c.subtle).child(note.cmd.clone()))
         .when(!note.output.is_empty(), |d| d.child(note.output.clone()));
-    enter(env, key, div().w_full().flex().flex_col().items_center().py(px(2.0)).child(head)
+    enter(env, key, div().w_full().flex().flex_col().items_start().py(px(2.0)).child(head)
         .when(show_body, |d| d.child(div().max_w(relative(0.9)).child(toggle_body(key, toggled, body)))))
 }
 

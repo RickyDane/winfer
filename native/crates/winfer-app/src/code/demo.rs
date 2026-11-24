@@ -116,6 +116,18 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
             steps.push((400, Ev(json!({ "type": "text", "id": "ta1", "text": "Here is how the profiles compare:\n\n| Profile | Time | Size | Notes |\n|:--------|-----:|-----:|:-----:|\n| debug | 9.1 s | 212 MB | fast incremental |\n| release | 41.2 s | 38 MB | `lto = thin` |\n| bench | 44.8 s | 41 MB | **slowest** |\n\nUse `release` for shipping and `debug` while iterating." }))));
             steps.push((200, Ev(json!({ "type": "turn_done" }))));
         }
+        "bgnotes" => {
+            steps.truncate(2);
+            steps.push((300, Type("Test the signed saves\r")));
+            steps.push((200, Ev(json!({ "type": "turn_start" }))));
+            steps.push((300, Ev(json!({ "type": "text", "id": "bn1", "text": "I'll run the signed save test, then start the listener." }))));
+            steps.push((200, Ev(json!({ "type": "tool_start", "id": "bn-t1", "name": "Read", "title": "src/auth.rs", "input": { "file_path": "src/auth.rs" } }))));
+            steps.push((200, Ev(json!({ "type": "tool_end", "id": "bn-t1", "ok": true, "output": "ok" }))));
+            steps.push((200, Ev(json!({ "type": "notice", "text": "Background task bg1 \"Test signed development mapping saves\" (`cargo test`) exited with code 0 after 24s. No new output." }))));
+            steps.push((200, Ev(json!({ "type": "notice", "text": "Background task bg2 \"Start paired LAN listener\" (`./listen.sh`) exited with code 1 after 3s. Its output since your last read:\nerror: address in use" }))));
+            steps.push((200, Ev(json!({ "type": "notice", "text": "Background task bg3 \"Build signed-save test APK\" (`./gradlew assemble`) exited with code 0 after 184s. No new output." }))));
+            steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
         "handoff" => {
             steps.truncate(2);
             steps.push((200, Ev(json!({ "type": "ready", "session": "demo", "model": "claude/fable", "mode": "ask", "cwd": "/tmp/web-os-demo", "branch": "main", "effort": "high" }))));
