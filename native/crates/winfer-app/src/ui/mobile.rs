@@ -464,6 +464,11 @@ impl Root {
             all["t"] = json!("panes");
             return reply(all);
         }
+        if kind == "usage.get" {
+            let mut usage = self.mobile_usage(cx);
+            usage["t"] = json!("usage");
+            return reply(usage);
+        }
         if kind == "models.get" {
             return self.mobile_models_get(&req, reply, cx);
         }

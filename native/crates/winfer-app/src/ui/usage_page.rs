@@ -967,6 +967,32 @@ impl Root {
         page.child(footer)
     }
 
+    /// The Limits tab for the phone (`usage.get`): per agent, the pooled limits and each account's.
+    pub(super) fn mobile_usage(&self, cx: &App) -> Value {
+        let now = now_ms();
+        let windows = |key: &str, ws: &[UsageWindow], pooled: Option<&str>| -> Vec<Value> {
+            ws.iter().map(|w| {
+                let out = match pooled {
+                    Some(provider) => super::usage::pooled_runs_out_at(provider, &w.kind, &self.usage.snapshots, &self.usage.accounts, &self.usage.samples, now),
+                    None => runs_out_at(key, w, &self.usage.samples, now),
+                };
+                serde_json::json!({ "kind": w.kind, "label": w.label, "left": left_now(w, now), "resetsAt": w.resets_at, "runsOutAt": out })
+            }).collect()
+        };
+        let providers: Vec<Value> = group_limit_keys(&self.usage.snapshots, &self.usage.accounts).into_iter().map(|(provider, keys)| {
+            let accounts: Vec<Value> = keys.iter().map(|k| {
+                let snap = &self.usage.snapshots[k];
+                serde_json::json!({ "key": k, "label": account_name(k, &self.usage.accounts), "at": snap.at, "windows": windows(k, &snap.windows, None) })
+            }).collect();
+            let pooled = (keys.len() > 1).then(|| {
+                let p = pooled_snapshot(&provider, &keys, &self.usage.snapshots, now);
+                serde_json::json!({ "at": p.at, "windows": windows(&provider, &p.windows, Some(&provider)) })
+            });
+            serde_json::json!({ "id": provider, "name": self.state.read(cx).provider_name(&provider), "accounts": accounts, "pooled": pooled })
+        }).collect();
+        serde_json::json!({ "providers": providers, "now": now })
+    }
+
     fn render_limit_window(&self, key: &str, label: &str, w: &UsageWindow, line: bool, now: f64, c: Colors) -> Div {
         let out = runs_out_at(key, w, &self.usage.samples, now);
         if line {

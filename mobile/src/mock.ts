@@ -256,6 +256,35 @@ export class MockClient extends BaseClient {
       case "panes.get":
         this.apply(this.mirror());
         return this.mirror(id);
+      case "usage.get": {
+        const now = Date.now();
+        const h = 3_600_000;
+        const win = (kind: string, label: string, left: number, resetIn: number, runsOut: number | null = null) => ({
+          kind, label, left, resetsAt: now + resetIn, runsOutAt: runsOut ? now + runsOut : null,
+        });
+        return {
+          t: "usage",
+          id,
+          now,
+          providers: [
+            {
+              id: "claude",
+              name: "Claude Code",
+              pooled: null,
+              accounts: [{ key: "claude", label: "Default", at: now - 90_000, windows: [win("session", "5-hour", 62, 2.4 * h), win("week", "Weekly", 18, 52 * h, 30 * h)] }],
+            },
+            {
+              id: "codex",
+              name: "Codex",
+              pooled: { at: now - 5 * 60_000, windows: [win("session", "5-hour", 88, 3.9 * h), win("week", "Weekly", 54, 96 * h)] },
+              accounts: [
+                { key: "codex", label: "Default", at: now - 5 * 60_000, windows: [win("session", "5-hour", 100, 4.5 * h), win("week", "Weekly", 71, 100 * h)] },
+                { key: "codex:b", label: "Work", at: now - 14 * 60_000, windows: [win("session", "5-hour", 76, 3.3 * h), win("week", "Weekly", 37, 92 * h)] },
+              ],
+            },
+          ],
+        };
+      }
       case "models.get": {
         const entry = PROVIDER_MODELS[msg.provider] ?? { models: [], defaultEfforts: [] };
         return {

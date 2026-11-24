@@ -108,6 +108,31 @@ export interface Message {
   detail?: string;
 }
 
+/** One plan limit (5-hour, weekly…): `left` is the percent still available. */
+export interface UsageWindow {
+  kind: string;
+  label: string;
+  left: number;
+  resetsAt: number | null;
+  /** When the current pace would use it all up, if before the reset. */
+  runsOutAt: number | null;
+}
+
+export interface UsageAccount {
+  key: string;
+  label: string;
+  at: number;
+  windows: UsageWindow[];
+}
+
+/** An agent's plan limits: `pooled` (several accounts combined) and each account's. */
+export interface UsageProvider {
+  id: string;
+  name: string;
+  accounts: UsageAccount[];
+  pooled: { at: number; windows: UsageWindow[] } | null;
+}
+
 /** A desktop workspace, in sidebar order. */
 export interface Workspace {
   id: string;
@@ -133,6 +158,7 @@ export type PhoneMsg =
   | { t: "choose"; paneId: string; option: number; text?: string }
   | { t: "config.get"; paneId: string }
   | { t: "models.get"; provider: string }
+  | { t: "usage.get" }
   | { t: "pane.set"; paneId: string; model?: string; effort?: string }
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string; model?: string; effort?: string }
   | { t: "pane.close"; paneId: string }
@@ -146,6 +172,7 @@ export type DesktopMsg =
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
   | { t: "config"; id?: string; paneId: string; models: ModelOption[] }
   | { t: "models"; id?: string; provider: string; models: ModelOption[]; defaultModel?: string | null; defaultEffort?: string | null; defaultEfforts?: string[] }
+  | { t: "usage"; id?: string; providers: UsageProvider[]; now: number }
   | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
   | { t: "error"; id?: string; error: string };
 

@@ -11,6 +11,7 @@ import { TabBar } from "./screens/TabBar";
 import { Pair } from "./screens/Pair";
 import { Settings } from "./screens/Settings";
 import { Thread } from "./screens/Thread";
+import { Usage } from "./screens/Usage";
 
 const MOCK = new URLSearchParams(location.search).has("mock");
 
@@ -69,6 +70,8 @@ export function App() {
   const screen =
     route.name === "settings" ? (
       <Settings client={client} mock={MOCK} onChanged={changed} />
+    ) : route.name === "usage" ? (
+      <Usage client={client} />
     ) : route.name === "new" ? (
       <NewSession client={client} workspaceId={route.workspaceId} />
     ) : route.name === "pane" ? (
@@ -79,7 +82,7 @@ export function App() {
   return (
     <>
       {screen}
-      {route.name !== "pane" && route.name !== "new" && <TabBar client={client} active={route.name === "settings" ? "settings" : "inbox"} />}
+      {route.name !== "pane" && route.name !== "new" && route.name !== "usage" && <TabBar client={client} active={route.name === "settings" ? "settings" : "inbox"} />}
       <Island client={client} openPaneId={route.name === "pane" ? route.id : null} />
     </>
   );

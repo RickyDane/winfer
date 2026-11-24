@@ -133,6 +133,22 @@ export function Settings({ client, mock, onChanged }: { client: DesktopClient; m
           </section>
 
           <section className="group">
+            <h2>Plan</h2>
+            <div className="group-card">
+              <button className="row" onClick={() => go("/usage")}>
+                <span className="row-icon">
+                  <Icon name="gauge" />
+                </span>
+                <span className="row-main">
+                  <b>Usage &amp; limits</b>
+                  <span>What's left of each plan's limits</span>
+                </span>
+                <Icon name="right" size={16} className="chev" />
+              </button>
+            </div>
+          </section>
+
+          <section className="group">
             <h2>Display</h2>
             <div className="group-card">
               <div className="row">

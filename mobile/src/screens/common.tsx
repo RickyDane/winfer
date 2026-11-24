@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import {
   ArrowDown, ArrowUp, Bell, Bot, Brain, Bug, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleDashed, CircleQuestionMark, Compass, Copy, Ellipsis,
-  FilePen, FileText, FlaskConical, Folder, FolderSearch, Globe, GitBranch, Hand, Info, Laptop, Lightbulb, Link, Minus, Pencil, Plus, RefreshCw, Search, Settings,
+  FilePen, FileText, Gauge, FlaskConical, Folder, FolderSearch, Globe, GitBranch, Hand, Info, Laptop, Lightbulb, Link, Minus, Pencil, Plus, RefreshCw, Search, Settings,
   ShieldQuestionMark, Sparkles, Square, SquareTerminal, Wrench, X, Zap,
 } from "lucide-react";
 import type { ClientState } from "../client";
@@ -61,6 +61,7 @@ const ICONS = {
   wrench: Wrench,
   brain: Brain,
   dashed: CircleDashed,
+  gauge: Gauge,
 } as const;
 export type IconName = keyof typeof ICONS;
 
