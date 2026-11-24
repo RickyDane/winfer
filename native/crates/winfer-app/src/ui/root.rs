@@ -776,7 +776,8 @@ impl Root {
                 terminal::Link::Web(href.clone())
             } else {
                 let (name, line) = crate::code::links::split_line(href);
-                let path = name.trim_start_matches("file://").to_string();
+                // Agents write spaces in link targets as %20: look up the real path.
+                let path = crate::ui::viewer::percent_decode(name.trim_start_matches("file://"));
                 // A file the chat named: straight into the viewer.
                 if std::path::Path::new(&path).is_absolute() && std::path::Path::new(&path).is_file() {
                     this.viewer.update(cx, |v, cx| v.open(path, line, false, cx));
