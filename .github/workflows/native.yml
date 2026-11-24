@@ -1,7 +1,7 @@
 name: native
 
 # Tests the GPUI build in native/ on every platform. Its bundles ship with every Nebula and stable
-# release (release.yml: native-bundle), beside the Tauri app's.
+# release (release.yml: native-bundle). It compiles src-tauri's sources (the deprecated Tauri app's backend).
 on:
   push:
     branches: [main]

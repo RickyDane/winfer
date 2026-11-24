@@ -81,9 +81,9 @@ Not started, roughly in priority order:
 
 | Platform | Download | Update bundle |
 | --- | --- | --- |
-| macOS | `winfer-native-macos-<arch>.dmg` | `winfer-native-macos-<arch>.app.tar.gz` (winfer.app) |
-| Windows | `winfer-native-setup-windows-x86_64.exe` (Inno Setup, per user) or `winfer-native-windows-x86_64.exe` (portable) | the portable `.exe` |
-| Linux | `winfer-native-linux-x86_64.tar.gz` (the binary; needs WebKitGTK 4.1, GTK 3, ALSA) | the same `.tar.gz` |
+| macOS | `winfer-native_<version>_macos-<arch>.dmg` | `winfer-native_<version>_macos-<arch>.app.tar.gz` (winfer.app) |
+| Windows | `winfer-native_<version>_windows-x86_64-setup.exe` (Inno Setup, per user) or `winfer-native_<version>_windows-x86_64.exe` (portable) | the portable `.exe` |
+| Linux | `winfer-native_<version>_linux-x86_64.tar.gz` (the binary; needs WebKitGTK 4.1, GTK 3, ALSA) | the same `.tar.gz` |
 
 On macOS, `WINFER_SIGN_IDENTITY` signs with a Developer ID and the hardened runtime and `WINFER_NOTARIZE=1` notarizes
 and staples (see the script); otherwise the app is ad-hoc signed.

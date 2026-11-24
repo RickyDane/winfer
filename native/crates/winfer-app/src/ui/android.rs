@@ -593,10 +593,20 @@ impl AndroidPanel {
         // The picture lives in an absolutely positioned box inset from the stage, so its size never
         // depends on the image's own pixel size and it can't push the panel taller than its parent.
         // The measured `area` is this same box, which keeps pointer mapping aligned with the picture.
-        let mut fit = div().absolute().top(px(12.0)).left(px(12.0)).right(px(12.0)).bottom(px(12.0))
-            .child(canvas(move |bounds, _, cx| entity.update(cx, |this, _| this.area = bounds), |_, _, _, _| {}).absolute().size_full());
+        let area = self.area;
+        let mut fit = div().absolute().top(px(12.0)).left(px(12.0)).right(px(12.0)).bottom(px(12.0)).flex().items_center().justify_center()
+            .child(canvas(move |bounds, _, cx| entity.update(cx, |this, cx| if this.area != bounds {
+                this.area = bounds;
+                cx.notify();
+            }), |_, _, _, _| {}).absolute().size_full());
         if let Some(image) = self.shown.clone().filter(|_| frames > 0) {
-            fit = fit.child(img(ImageSource::Render(image)).size_full().object_fit(ObjectFit::Contain));
+            // Sized explicitly: gpui's img adds the picture's aspect ratio to its style, which with a
+            // percentage size lets it grow to the picture's own pixel size and spill out of the box.
+            let video = image.size(0);
+            let ratio = (video.width.0 as f32 / video.height.0.max(1) as f32).max(0.01);
+            let (aw, ah) = (area.size.width / px(1.0), area.size.height / px(1.0));
+            let width = aw.min(ah * ratio).max(0.0).floor();
+            fit = fit.child(img(ImageSource::Render(image)).w(px(width)).h(px((width / ratio).floor())).object_fit(ObjectFit::Fill));
         } else {
             fit = fit.child(div().size_full().flex().flex_col().items_center().justify_center().gap_2().p_6().text_center().text_xs().text_color(c.subtle).child(match error {
                 Some(e) => div().flex().flex_col().items_center().gap_2().child(div().text_color(c.danger).child(e)).child(div().id("android-retry").rounded_md().border_1().border_color(c.edge).px_2().py_1().text_color(c.muted).cursor_pointer().on_click(cx.listener(|this, _, _, cx| this.reconnect(cx))).child("Try again")),

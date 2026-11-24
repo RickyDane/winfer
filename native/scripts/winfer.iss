@@ -9,7 +9,7 @@
   #define Arch "x64compatible"
 #endif
 #ifndef OutName
-  #define OutName "winfer-native-setup-windows-x86_64"
+  #define OutName "winfer-native_0.0.0_windows-x86_64-setup"
 #endif
 
 [Setup]

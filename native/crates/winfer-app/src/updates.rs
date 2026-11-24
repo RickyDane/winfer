@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn reads_the_feed_release_yml_writes() {
-        let json = r#"{"version":"0.1.108-3","notes":"- x","pub_date":"2026-11-21T00:00:00Z","platforms":{"darwin-aarch64":{"signature":"c2ln","url":"https://github.com/RickyDane/winfer/releases/download/v0.1.108-3/winfer-native-macos-aarch64.app.tar.gz"}}}"#;
+        let json = r#"{"version":"0.1.108-3","notes":"- x","pub_date":"2026-11-21T00:00:00Z","platforms":{"darwin-aarch64":{"signature":"c2ln","url":"https://github.com/RickyDane/winfer/releases/download/v0.1.108-3/winfer-native_0.1.108-3_macos-aarch64.app.tar.gz"}}}"#;
         let f: Feed = serde_json::from_str(json).unwrap();
         assert_eq!(f.version, "0.1.108-3");
         assert_eq!(f.platforms["darwin-aarch64"].signature, "c2ln");

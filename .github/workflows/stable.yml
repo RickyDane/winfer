@@ -30,8 +30,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FROM: ${{ inputs.from }}
         run: |
-          # Only builds whose bundles all made it (latest.json is uploaded last) can be promoted.
-          finished() { gh release view "$1" --json assets -q '.assets[].name' 2>/dev/null | grep -qx latest.json; }
+          # Only builds whose bundles all made it (latest-native.json is uploaded last) can be promoted.
+          finished() { gh release view "$1" --json assets -q '.assets[].name' 2>/dev/null | grep -qx latest-native.json; }
           if [ -z "$FROM" ]; then
             for t in $(git tag -l 'v*-*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' | sort -V -r); do
               if finished "$t"; then FROM=$t; break; fi

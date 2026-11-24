@@ -59,6 +59,21 @@ function Mirror({ device }: { device: Device }) {
   const typed = useRef("");
   const typeTimer = useRef<number | undefined>(undefined);
 
+  // Fit the screen into the free area (contain, centered). CSS max-% sizing is unreliable here:
+  // the canvas' intrinsic size can push the flex parent taller than the panel and crop the picture.
+  const stage = useRef<HTMLDivElement>(null);
+  const [area, setArea] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = stage.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setArea({ w: entry.contentRect.width, h: entry.contentRect.height }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const ratio = info ? info.videoWidth / info.videoHeight : 9 / 19.5;
+  const fitW = Math.max(0, Math.floor(Math.min(area.w, area.h * ratio)));
+  const fitH = Math.max(0, Math.floor(fitW / ratio));
+
   // Video: start the stream and draw decoded frames.
   useEffect(() => {
     if (mode !== "stream") return;
@@ -194,7 +209,8 @@ function Mirror({ device }: { device: Device }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="relative flex min-h-0 flex-1 items-center justify-center bg-app p-3">
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-app">
+        <div ref={stage} className="absolute inset-3 flex items-center justify-center">
         <canvas
           ref={canvas}
           data-winfer-capture="android"
@@ -204,9 +220,10 @@ function Mirror({ device }: { device: Device }) {
           onWheel={onWheel}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          className={cn("max-h-full max-w-full rounded-[18px] bg-black shadow-lg outline-none focus:ring-2 focus:ring-accent/50", frames === 0 && "invisible")}
-          style={{ aspectRatio: info ? `${info.videoWidth} / ${info.videoHeight}` : undefined }}
+          className={cn("shrink-0 rounded-[18px] bg-black shadow-lg outline-none focus:ring-2 focus:ring-accent/50", frames === 0 && "invisible")}
+          style={{ width: fitW, height: fitH }}
         />
+        </div>
         {frames === 0 && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-xs text-fg-subtle">
             {error ? (

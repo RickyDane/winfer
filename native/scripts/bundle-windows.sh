@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the native GPUI build for Windows in target/bundle:
-#   winfer-native-windows-<arch>.exe         the portable .exe, also the updater bundle installed apps
+#   winfer-native_<version>_windows-<arch>.exe         the portable .exe, also the updater bundle installed apps
 #                                            swap in for themselves (updates.rs)
-#   winfer-native-setup-windows-<arch>.exe   the installer (Inno Setup, per user), when ISCC is found
+#   winfer-native_<version>_windows-<arch>-setup.exe the installer (Inno Setup, per user), when ISCC is found
 # Run it from Git Bash.
 # Usage: native/scripts/bundle-windows.sh [x86_64-pc-windows-msvc|aarch64-pc-windows-msvc]
 set -euo pipefail
@@ -11,8 +11,8 @@ TARGET="${1:-$(rustc -vV | sed -n 's/host: //p')}"
 VERSION="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
 ARCH="${TARGET%%-*}"
 OUT="target/bundle"
-EXE="$OUT/winfer-native-windows-$ARCH.exe"
-SETUP="winfer-native-setup-windows-$ARCH"
+EXE="$OUT/winfer-native_${VERSION}_windows-$ARCH.exe"
+SETUP="winfer-native_${VERSION}_windows-$ARCH-setup"
 cargo build --release -p winfer-app --bin winfer-native --target "$TARGET"
 mkdir -p "$OUT"
 cp "target/$TARGET/release/winfer-native.exe" "$EXE"
