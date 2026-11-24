@@ -45,13 +45,20 @@ pub(super) struct WelcomeUi {
     loading_harness: bool,
     /// Providers currently fetching `providers_models`.
     loading_providers: std::collections::HashSet<String>,
-    /// Saved harness default model & effort, read once.
+    /// Saved harness default model & effort, reread when the harness config changes (chats save their last model there).
     pub(super) harness_defaults: Option<(Option<String>, Option<String>)>,
+    harness_defaults_at: Option<std::time::SystemTime>,
     /// Images pasted into the task box (with their decoded thumbnails); winfer code sends them with the first message.
     attachments: Vec<(crate::code::state::Attachment, std::sync::Arc<Image>)>,
 }
 
 pub(super) const HARNESS_BACKENDS: [&str; 7] = ["claude", "codex", "agy", "cursor", "opencode", "pi", "muse"];
+
+/// The model a new pane of `provider` starts with when none is picked: the agent's saved model
+/// (what `AppState::add_pane` passes as `--model`), else for winfer code its own config default.
+pub(super) fn default_model(provider: &str, agent_models: &std::collections::HashMap<String, String>, harness_model: Option<&str>) -> Option<String> {
+    agent_models.get(provider).cloned().or_else(|| (provider == "winfer").then(|| harness_model.map(str::to_string)).flatten())
+}
 
 pub(super) fn backend_default_efforts(provider: &str) -> Option<Vec<String>> {
     match provider {
@@ -105,9 +112,11 @@ impl Root {
     }
 
     fn ensure_welcome_models(&mut self, provider: &str, cx: &mut Context<Self>) {
-        if self.welcome.harness_defaults.is_none() {
+        let at = std::fs::metadata(harness::config::dir().join("config.json")).and_then(|m| m.modified()).ok();
+        if self.welcome.harness_defaults.is_none() || at != self.welcome.harness_defaults_at {
             let cfg = harness::config::Config::load();
             self.welcome.harness_defaults = Some(((!cfg.model.is_empty()).then_some(cfg.model), cfg.effort));
+            self.welcome.harness_defaults_at = at;
         }
         if (provider == "winfer" || HARNESS_BACKENDS.contains(&provider)) && self.welcome.harness_models.is_none() && !self.welcome.loading_harness {
             self.welcome.loading_harness = true;
@@ -313,11 +322,8 @@ impl Root {
         let workspace = s.active().map(|w| w.name.clone()).unwrap_or_else(|| "this workspace".into());
         let selected_name = s.provider_name(&selected_provider);
         let provider_supports_model = s.providers.iter().any(|p| p.id == selected_provider && p.model_arg.is_some());
-        let saved_agent_model = if selected_provider == "winfer" {
-            self.welcome.harness_defaults.as_ref().and_then(|(m, _)| m.clone())
-        } else {
-            s.agent_models.get(&selected_provider).cloned()
-        };
+        let harness_model = self.welcome.harness_defaults.as_ref().and_then(|(m, _)| m.as_deref());
+        let saved_agent_model = default_model(&selected_provider, &s.agent_models, harness_model);
         let saved_effort = if selected_provider == "winfer" {
             self.welcome.harness_defaults.as_ref().and_then(|(_, e)| e.clone())
         } else {
@@ -338,7 +344,7 @@ impl Root {
         } else {
             selected_provider.as_str()
         };
-        let efforts = self.welcome_efforts_for(&selected_provider, &models, self.welcome.model.as_deref());
+        let efforts = self.welcome_efforts_for(&selected_provider, &models, effective_model);
         let active_effort = self
             .welcome
             .effort

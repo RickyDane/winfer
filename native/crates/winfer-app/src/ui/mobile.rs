@@ -647,19 +647,18 @@ impl Root {
             .filter(|p| !p.is_empty() && *p != "default")
             .map_or_else(|| s.default_provider_id(), str::to_string);
         let has_model_arg = s.providers.iter().any(|p| p.id == provider && p.model_arg.is_some());
-        let saved_agent_model = s.agent_models.get(&provider).cloned();
+        let agent_models = s.agent_models.clone();
         let cached_harness = self.welcome.harness_models.clone();
         let cached_provider = self.models.get(&provider).cloned();
-        let cached_defaults = self.welcome.harness_defaults.clone();
         let needs_harness = (provider == "winfer" || HARNESS_BACKENDS.contains(&provider.as_str())) && cached_harness.is_none();
-        let needs_defaults = provider == "winfer" && cached_defaults.is_none();
 
         cx.spawn(async move |this, cx| {
-            let defaults = if needs_defaults {
+            // Read fresh: winfer code chats save their last model to this config.
+            let defaults = if provider == "winfer" {
                 let cfg = tauri::async_runtime::spawn_blocking(harness::config::Config::load).await.ok();
                 cfg.map(|c| ((!c.model.is_empty()).then_some(c.model), c.effort))
             } else {
-                cached_defaults
+                None
             };
 
             let harness_models = if needs_harness {
@@ -688,11 +687,8 @@ impl Root {
                 fetched_provider = Some(parsed);
             }
 
-            let default_model = if provider == "winfer" {
-                defaults.as_ref().and_then(|(m, _)| m.clone())
-            } else {
-                saved_agent_model
-            };
+            // What `pane.new` without a model really starts with.
+            let default_model = super::welcome::default_model(&provider, &agent_models, defaults.as_ref().and_then(|(m, _)| m.as_deref()));
             let default_effort = if provider == "winfer" {
                 defaults.as_ref().and_then(|(_, e)| e.clone())
             } else {
@@ -701,9 +697,6 @@ impl Root {
             let default_efforts = model_efforts(&provider, None);
 
             let _ = this.update(cx, |this, _| {
-                if needs_defaults {
-                    this.welcome.harness_defaults = defaults;
-                }
                 if needs_harness {
                     this.welcome.harness_models = harness_models;
                 }
@@ -777,6 +770,16 @@ mod tests {
     use super::{model_efforts, provider_models_json, question_request};
     use crate::code::protocol::ModelInfo;
     use std::time::Instant;
+
+    #[test]
+    fn default_model_is_what_a_pane_without_one_starts_with() {
+        use super::super::welcome::default_model;
+        let saved: std::collections::HashMap<String, String> = [("winfer".to_string(), "claude/sonnet".to_string())].into();
+        // The agent's saved model goes to `--model`, so it beats winfer code's own last-used model.
+        assert_eq!(default_model("winfer", &saved, Some("agy/gemini-4-neon")).as_deref(), Some("claude/sonnet"));
+        assert_eq!(default_model("winfer", &Default::default(), Some("agy/gemini-4-neon")).as_deref(), Some("agy/gemini-4-neon"));
+        assert_eq!(default_model("codex", &Default::default(), Some("agy/gemini-4-neon")), None);
+    }
 
     #[test]
     fn questions_show_progress_and_a_free_text_row() {
