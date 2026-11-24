@@ -51,7 +51,7 @@ fn adb_path() -> Result<PathBuf, String> {
     tool("adb", "platform-tools").ok_or_else(|| "adb isn't installed. Install Android Studio's platform-tools (or `brew install android-platform-tools`).".into())
 }
 
-fn adb(serial: Option<&str>) -> Result<Command, String> {
+pub fn adb(serial: Option<&str>) -> Result<Command, String> {
     let mut cmd = Command::new(adb_path()?);
     no_window(&mut cmd).envs(login_env());
     if let Some(serial) = serial {
@@ -60,7 +60,7 @@ fn adb(serial: Option<&str>) -> Result<Command, String> {
     Ok(cmd)
 }
 
-fn run(mut cmd: Command) -> Result<Vec<u8>, String> {
+pub fn run(mut cmd: Command) -> Result<Vec<u8>, String> {
     let out = cmd.stdin(Stdio::null()).output().map_err(|e| format!("couldn't run adb: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
