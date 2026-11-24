@@ -6,6 +6,9 @@ import type { Message } from "../protocol";
 const stripToolPrefix = (tool: string | undefined, text: string) =>
   tool && text.toLowerCase().startsWith(`${tool.toLowerCase()} `) ? text.slice(tool.length + 1) : text;
 
+/** A finished `visualize` call: drawn as a chart row of its own, never folded into a run of tools. */
+export const isReport = (m: Message) => m.role === "tool" && !!m.report && m.state !== "failed";
+
 export type DisplayRow =
   | { kind: "msg"; msg: Message }
   | { kind: "tools"; key: string; msgs: Message[] }
@@ -171,7 +174,7 @@ export function buildDisplayRows(
     const rows: DisplayRow[] = [];
     for (const msg of messages) {
       const last = rows[rows.length - 1];
-      if (msg.role === "tool") {
+      if (msg.role === "tool" && !isReport(msg)) {
         if (last?.kind === "tools") last.msgs.push(msg);
         else rows.push({ kind: "tools", key: `t-${msg.id}`, msgs: [msg] });
       } else {
@@ -197,13 +200,13 @@ export function buildDisplayRows(
 
     let k = turnStart;
     while (k < turnEnd) {
-      if (messages[k].role !== "tool") {
+      if (messages[k].role !== "tool" || isReport(messages[k])) {
         rows.push({ kind: "msg", msg: messages[k] });
         k++;
         continue;
       }
       const start = k;
-      while (k < turnEnd && messages[k].role === "tool") k++;
+      while (k < turnEnd && messages[k].role === "tool" && !isReport(messages[k])) k++;
       const slice = messages.slice(start, k);
       const active = busy && isLastTurn && k === turnEnd;
       if (slice.length === 1 && !active) {

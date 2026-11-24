@@ -4,6 +4,7 @@ import { ago, firstMessages, go, haptic, useClient, useTick, vtName } from "../h
 import { isFreeText, type Message, type Pane, type RequestOption } from "../protocol";
 import { Composer, Pill, PillIcon } from "./Composer";
 import { Avatar, ConnNotice, Icon, ProviderMark, STATUS_LABEL, providerInfo, toolIcon, toolText, toolTint, type IconName } from "./common";
+import { VizReport } from "./Viz";
 import { buildDisplayRows, describeStep, useCompactTools, workGroupSummary } from "./compactTools";
 import { useShowBgNotes } from "./bgNotes";
 import { Markdown } from "./Markdown";
@@ -544,6 +545,7 @@ export function Thread({ client, paneId }: { client: DesktopClient; paneId: stri
               return <Steps key={b.key} msgs={b.msgs} active={active} legacyLive={working && i === displayRows.length - 1} fresh={isFresh(b.msgs[0].id)} />;
             const m = b.msg;
             const fresh = isFresh(m.id) ? " fresh" : "";
+            if (m.report) return <div key={m.id} className={`turn-viz${fresh}`}><VizReport report={m.report} /></div>;
             if (m.role === "bg") return <BgRow key={m.id} msg={m} fresh={fresh !== ""} />;
             if (m.role === "user")
               return (
