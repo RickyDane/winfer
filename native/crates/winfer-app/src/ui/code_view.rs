@@ -130,7 +130,12 @@ pub struct CodeView {
     /// Pane-level focus handle used while a blocking sheet/lightbox is open so keys don't hit the composer.
     focus: FocusHandle,
     restore_composer_focus: bool,
+    /// `plan_done_at` a hide timer is already running for.
+    plan_hide_armed: Option<u64>,
 }
+
+/// How long a fully completed plan stays docked above the composer.
+const PLAN_HIDE_MS: u64 = 15_000;
 
 /// Rows shown initially and added per "Load more".
 const PAGE_ROWS: usize = 30;
@@ -617,13 +622,35 @@ impl CodeView {
             _ => {}
         })
         .detach();
-        cx.observe(&model, |_, _, cx| cx.notify()).detach();
+        cx.observe(&model, |this, _, cx| {
+            this.arm_plan_hide(cx);
+            cx.notify();
+        })
+        .detach();
         cx.observe(&app, |_, _, cx| cx.notify()).detach();
         cx.subscribe(&model, |_, _, _: &CodeEvent, _| {}).detach();
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false }
+        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false, plan_hide_armed: None }
+    }
+
+    /// Once the plan is complete, re-render after `PLAN_HIDE_MS` so `render_plan` drops it.
+    fn arm_plan_hide(&mut self, cx: &mut Context<Self>) {
+        let Some(done_at) = self.model.read(cx).state.plan_done_at else {
+            self.plan_hide_armed = None;
+            return;
+        };
+        if self.plan_hide_armed == Some(done_at) {
+            return;
+        }
+        self.plan_hide_armed = Some(done_at);
+        let wait = (done_at + PLAN_HIDE_MS).saturating_sub(now_ms()) + 50;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(wait)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     pub fn sky_view(&self) -> Entity<SpaceSkyView> {
@@ -2616,7 +2643,7 @@ impl CodeView {
     fn render_plan(&self, c: Colors, cx: &mut Context<Self>) -> Option<AnyElement> {
         let m = self.model.read(cx);
         let st = &m.state;
-        if st.todos.is_empty() {
+        if st.todos.is_empty() || st.plan_done_at.is_some_and(|at| now_ms().saturating_sub(at) >= PLAN_HIDE_MS) {
             return None;
         }
         let (done, total) = plan_counts(&st.todos);
