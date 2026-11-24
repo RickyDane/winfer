@@ -259,9 +259,46 @@ export class MockClient extends BaseClient {
       case "usage.get": {
         const now = Date.now();
         const h = 3_600_000;
-        const win = (kind: string, label: string, left: number, resetIn: number, runsOut: number | null = null) => ({
-          kind, label, left, resetsAt: now + resetIn, runsOutAt: runsOut ? now + runsOut : null,
+        const range = msg.range ?? "7d";
+        const scale = range === "24h" ? 0.22 : range === "30d" ? 3.8 : range === "90d" ? 10.4 : 1;
+        const count = range === "24h" ? 24 : range === "30d" ? 30 : range === "90d" ? 90 : 28;
+        const step = range === "24h" ? h : range === "30d" || range === "90d" ? 24 * h : 6 * h;
+        const win = (kind: string, label: string, left: number, resetIn: number, runsOut: number | null = null) => {
+          const span = kind === "session" ? 5 * h : 7 * 24 * h;
+          const start = now + resetIn - span;
+          const elapsed = Math.max(h * 0.2, now - start);
+          const steps = 6;
+          const samples: [number, number][] = Array.from({ length: steps + 1 }, (_, i) => {
+            const frac = i / steps;
+            const curve = Math.pow(frac, 0.85);
+            const jitter = i === 0 || i === steps ? 0 : Math.sin(i * 2.1 + left) * 2.2;
+            const val = Math.max(left, Math.min(100, 100 - (100 - left) * curve + jitter));
+            return [start + elapsed * frac, +val.toFixed(1)];
+          });
+          return { kind, label, left, resetsAt: now + resetIn, runsOutAt: runsOut ? now + runsOut : null, samples };
+        };
+        const models = [
+          { provider: "claude", model: "claude-opus-4-6", input: Math.round(1_420_000 * scale), output: Math.round(680_000 * scale), cacheRead: Math.round(24_800_000 * scale), cacheWrite: Math.round(3_150_000 * scale), cost: +(14.8 * scale).toFixed(2), priced: true },
+          { provider: "codex", model: "gpt-5.4", input: Math.round(980_000 * scale), output: Math.round(410_000 * scale), cacheRead: Math.round(9_400_000 * scale), cacheWrite: Math.round(620_000 * scale), cost: +(6.35 * scale).toFixed(2), priced: true },
+          { provider: "claude", model: "claude-sonnet-4-6", input: Math.round(540_000 * scale), output: Math.round(290_000 * scale), cacheRead: Math.round(6_100_000 * scale), cacheWrite: Math.round(780_000 * scale), cost: +(2.95 * scale).toFixed(2), priced: true },
+          { provider: "opencode", model: "gemini-3-pro", input: Math.round(310_000 * scale), output: Math.round(145_000 * scale), cacheRead: Math.round(1_250_000 * scale), cacheWrite: 0, cost: +(0.9 * scale).toFixed(2), priced: true },
+        ];
+        const sum = (f: (x: (typeof models)[number]) => number) => models.reduce((a, x) => a + f(x), 0);
+        const buckets = Array.from({ length: count }, (_, i) => {
+          const end = now - (count - 1 - i) * step;
+          const start = end - step;
+          const wave = Math.max(0, Math.sin(i * 0.72 + 0.5) * 0.65 + 0.7 + ((i * 19) % 7) * 0.08);
+          const claude = Math.round(1_150_000 * wave * (scale / (count / 28)));
+          const codex = Math.round(420_000 * wave * (scale / (count / 28)));
+          const opencode = i % 3 === 0 ? Math.round(120_000 * wave * (scale / (count / 28))) : 0;
+          const tokens = claude + codex + opencode;
+          return { start, end, tokens, cost: +((tokens / 2_000_000) * 0.95).toFixed(2), byProvider: { claude, codex, opencode } };
         });
+        const claudeTot = models.filter((x) => x.provider === "claude");
+        const codexTot = models.filter((x) => x.provider === "codex");
+        const openTot = models.filter((x) => x.provider === "opencode");
+        const tokOf = (arr: typeof models) => arr.reduce((a, x) => a + x.input + x.output + x.cacheRead + x.cacheWrite, 0);
+        const costOf = (arr: typeof models) => +arr.reduce((a, x) => a + x.cost, 0).toFixed(2);
         return {
           t: "usage",
           id,
@@ -283,6 +320,21 @@ export class MockClient extends BaseClient {
               ],
             },
           ],
+          tokens: {
+            range,
+            input: sum((x) => x.input),
+            output: sum((x) => x.output),
+            cacheRead: sum((x) => x.cacheRead),
+            cacheWrite: sum((x) => x.cacheWrite),
+            cost: +sum((x) => x.cost).toFixed(2),
+            buckets,
+            models,
+            providers: [
+              { id: "claude", name: "Claude Code", tokens: tokOf(claudeTot), cost: costOf(claudeTot) },
+              { id: "codex", name: "Codex", tokens: tokOf(codexTot), cost: costOf(codexTot) },
+              { id: "opencode", name: "OpenCode", tokens: tokOf(openTot), cost: costOf(openTot) },
+            ],
+          },
         };
       }
       case "models.get": {

@@ -970,13 +970,23 @@ impl Root {
     /// The Limits tab for the phone (`usage.get`): per agent, the pooled limits and each account's.
     pub(super) fn mobile_usage(&self, cx: &App) -> Value {
         let now = now_ms();
-        let windows = |key: &str, ws: &[UsageWindow], pooled: Option<&str>| -> Vec<Value> {
+        let windows = |key: &str, ws: &[UsageWindow], pooled: Option<(&str, &[String])>| -> Vec<Value> {
             ws.iter().map(|w| {
-                let out = match pooled {
-                    Some(provider) => super::usage::pooled_runs_out_at(provider, &w.kind, &self.usage.snapshots, &self.usage.accounts, &self.usage.samples, now),
-                    None => runs_out_at(key, w, &self.usage.samples, now),
+                let (out, pts): (Option<f64>, Vec<[f64; 2]>) = match pooled {
+                    Some((provider, keys)) => {
+                        let out = super::usage::pooled_runs_out_at(provider, &w.kind, &self.usage.snapshots, &self.usage.accounts, &self.usage.samples, now);
+                        let s = pooled_series(&w.kind, keys, &self.usage.snapshots, &self.usage.samples, now);
+                        (out, s.past.into_iter().map(|(t, l)| [t, l]).collect())
+                    }
+                    None => {
+                        let out = runs_out_at(key, w, &self.usage.samples, now);
+                        let prefix = format!("{key}:{}:", w.kind);
+                        let raw = self.usage.samples.iter().find(|(k, _)| k.starts_with(&prefix)).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+                        let pts = raw.iter().filter(|(t, _)| *t <= now).map(|(t, used)| [*t, (100.0 - used).clamp(0.0, 100.0)]).collect();
+                        (out, pts)
+                    }
                 };
-                serde_json::json!({ "kind": w.kind, "label": w.label, "left": left_now(w, now), "resetsAt": w.resets_at, "runsOutAt": out })
+                serde_json::json!({ "kind": w.kind, "label": w.label, "left": left_now(w, now), "resetsAt": w.resets_at, "runsOutAt": out, "samples": pts })
             }).collect()
         };
         let providers: Vec<Value> = group_limit_keys(&self.usage.snapshots, &self.usage.accounts).into_iter().map(|(provider, keys)| {
@@ -986,11 +996,119 @@ impl Root {
             }).collect();
             let pooled = (keys.len() > 1).then(|| {
                 let p = pooled_snapshot(&provider, &keys, &self.usage.snapshots, now);
-                serde_json::json!({ "at": p.at, "windows": windows(&provider, &p.windows, Some(&provider)) })
+                serde_json::json!({ "at": p.at, "windows": windows(&provider, &p.windows, Some((&provider, &keys))) })
             });
             serde_json::json!({ "id": provider, "name": self.state.read(cx).provider_name(&provider), "accounts": accounts, "pooled": pooled })
         }).collect();
         serde_json::json!({ "providers": providers, "now": now })
+    }
+
+    /// Token & cost summary for the phone (`usage.get`), matching the desktop Usage → Spend tab.
+    fn mobile_tokens(&self, rows: &[Value], range: Range, now: f64, cx: &App) -> Value {
+        let bars = to_bars(rows, range, now);
+        let since = bars.first().map_or(now - range.days() as f64 * 86_400_000.0, |b| b.start);
+        let models = model_totals(rows, since);
+        let sum = |f: fn(&ModelTotal) -> f64| -> f64 { models.iter().map(f).sum() };
+
+        let mut by_provider: HashMap<String, (f64, f64)> = HashMap::new();
+        for m in &models {
+            let entry = by_provider.entry(m.provider.clone()).or_default();
+            entry.0 += m.tokens();
+            entry.1 += m.cost;
+        }
+        let mut providers: Vec<Value> = by_provider
+            .into_iter()
+            .filter(|(_, (tok, cost))| *tok > 0.0 || *cost > 0.0)
+            .map(|(id, (tokens, cost))| {
+                let name = self.state.read(cx).provider_name(&id);
+                serde_json::json!({ "id": id, "name": name, "tokens": tokens, "cost": cost })
+            })
+            .collect();
+        providers.sort_by(|a, b| {
+            b["tokens"].as_f64().unwrap_or(0.0).total_cmp(&a["tokens"].as_f64().unwrap_or(0.0))
+        });
+
+        let buckets: Vec<Value> = bars
+            .iter()
+            .map(|b| {
+                let tokens: f64 = b.tokens.values().sum();
+                let cost: f64 = b.cost.values().sum();
+                serde_json::json!({
+                    "start": b.start,
+                    "end": b.end,
+                    "tokens": tokens,
+                    "cost": cost,
+                    "byProvider": b.tokens,
+                })
+            })
+            .collect();
+
+        let model_rows: Vec<Value> = models
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "provider": m.provider,
+                    "model": m.model,
+                    "input": m.input,
+                    "output": m.output,
+                    "cacheRead": m.cache_read,
+                    "cacheWrite": m.cache_write,
+                    "cost": m.cost,
+                    "priced": m.priced,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "range": range.id(),
+            "input": sum(|m| m.input),
+            "output": sum(|m| m.output),
+            "cacheRead": sum(|m| m.cache_read),
+            "cacheWrite": sum(|m| m.cache_write),
+            "cost": sum(|m| m.cost),
+            "buckets": buckets,
+            "models": model_rows,
+            "providers": providers,
+        })
+    }
+
+    /// Serves `usage.get` for the phone with both plan limits and actual token/cost usage.
+    pub(super) fn mobile_usage_get(&mut self, req: &Value, reply: impl Fn(Value) + 'static, cx: &mut Context<Self>) {
+        let range = req["range"].as_str().and_then(Range::parse).unwrap_or(Range::Week);
+        let fresh = self.usage_page.rows.is_some()
+            && self.usage_page.history_at.is_some_and(|at| now_ms() - at < 60_000.0);
+        if fresh {
+            let mut usage = self.mobile_usage(cx);
+            let now = usage["now"].as_f64().unwrap_or_else(now_ms);
+            if let Some(rows) = self.usage_page.rows.as_deref() {
+                usage["tokens"] = self.mobile_tokens(rows, range, now, cx);
+            }
+            usage["t"] = serde_json::json!("usage");
+            return reply(usage);
+        }
+
+        cx.spawn(async move |this, cx| {
+            let found = tauri::async_runtime::spawn(usage_history::usage_history(backend::app().clone(), 90))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(rows) = found
+                    && let Some(arr) = serde_json::to_value(rows).ok().and_then(|v| v.as_array().cloned())
+                {
+                    this.usage_page.rows = Some(arr);
+                    this.usage_page.history_at = Some(now_ms());
+                }
+                let mut usage = this.mobile_usage(cx);
+                let now = usage["now"].as_f64().unwrap_or_else(now_ms);
+                if let Some(rows) = this.usage_page.rows.as_deref() {
+                    usage["tokens"] = this.mobile_tokens(rows, range, now, cx);
+                }
+                usage["t"] = serde_json::json!("usage");
+                reply(usage);
+            });
+        })
+        .detach();
     }
 
     fn render_limit_window(&self, key: &str, label: &str, w: &UsageWindow, line: bool, now: f64, c: Colors) -> Div {

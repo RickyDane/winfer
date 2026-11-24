@@ -116,6 +116,8 @@ export interface UsageWindow {
   resetsAt: number | null;
   /** When the current pace would use it all up, if before the reset. */
   runsOutAt: number | null;
+  /** Historical `[timestampMs, leftPercent]` samples within this window. */
+  samples?: [number, number][];
 }
 
 export interface UsageAccount {
@@ -131,6 +133,39 @@ export interface UsageProvider {
   name: string;
   accounts: UsageAccount[];
   pooled: { at: number; windows: UsageWindow[] } | null;
+}
+
+export type UsageRange = "24h" | "7d" | "30d" | "90d";
+
+export interface UsageTokenBucket {
+  start: number;
+  end: number;
+  tokens: number;
+  cost: number;
+  byProvider: Record<string, number>;
+}
+
+export interface UsageModelTotal {
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  priced: boolean;
+}
+
+export interface UsageTokens {
+  range: UsageRange;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  buckets: UsageTokenBucket[];
+  models: UsageModelTotal[];
+  providers: { id: string; name: string; tokens: number; cost: number }[];
 }
 
 /** A desktop workspace, in sidebar order. */
@@ -158,7 +193,7 @@ export type PhoneMsg =
   | { t: "choose"; paneId: string; option: number; text?: string }
   | { t: "config.get"; paneId: string }
   | { t: "models.get"; provider: string }
-  | { t: "usage.get" }
+  | { t: "usage.get"; range?: UsageRange }
   | { t: "pane.set"; paneId: string; model?: string; effort?: string }
   | { t: "pane.new"; workspaceId: string; provider?: string; text?: string; model?: string; effort?: string }
   | { t: "pane.close"; paneId: string }
@@ -172,7 +207,7 @@ export type DesktopMsg =
   | { t: "thread"; id?: string; paneId: string; messages: Message[]; source: ThreadSource }
   | { t: "config"; id?: string; paneId: string; models: ModelOption[] }
   | { t: "models"; id?: string; provider: string; models: ModelOption[]; defaultModel?: string | null; defaultEffort?: string | null; defaultEfforts?: string[] }
-  | { t: "usage"; id?: string; providers: UsageProvider[]; now: number }
+  | { t: "usage"; id?: string; providers: UsageProvider[]; tokens?: UsageTokens | null; now: number }
   | { t: "ack"; id: string; ok: boolean; error?: string; paneId?: string }
   | { t: "error"; id?: string; error: string };
 
