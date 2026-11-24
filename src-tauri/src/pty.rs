@@ -263,12 +263,26 @@ fn agent_args(
 /// (`Get-Content f | head`, `&&`, `2>/dev/null`) and those commands fail.
 const WINDOWS_SHELL_HINT: &str = "The shell is PowerShell, not bash: read files with your file-read tool (offset/limit), not Get-Content. If you must use Get-Content, use `Get-Content -LiteralPath '<path>' -TotalCount N` (or `| Select-Object -Skip A -First N`); no `head`/`tail`/`sed`, `&&` or `2>/dev/null`.";
 
+/// Built-in guidance appended to every agent's system prompt after the user's own. It isn't part of
+/// the settings (`AppState::system_prompt`), so it can't be edited or reset there.
+pub const BUILTIN_PROMPT: &str = "winfer can render reports natively in the chat with its `visualize` tool: KPI tiles, bar/line/area/pie charts, tables and progress meters. Use it, instead of a markdown table or a list of numbers, when the point of your answer is a comparison, ranking, trend or proportion across numeric values (usage, cost or token figures, benchmarks, test or build results, file sizes, timelines, before/after numbers), or a few headline figures worth showing as tiles. Call it before you write the final answer, put all blocks in a single call, keep each chart to a few series, and add a sentence on what the data means instead of repeating the numbers. Use a plain markdown table for small or text-heavy tables, and skip the tool for single values, short answers and code.";
+
+/// The user's system prompt (if any) followed by [`BUILTIN_PROMPT`].
+fn full_system_prompt(user: Option<String>) -> String {
+    match user.filter(|s| !s.trim().is_empty()) {
+        Some(user) => format!("{user}\n\n{BUILTIN_PROMPT}"),
+        None => BUILTIN_PROMPT.to_string(),
+    }
+}
+
 /// Moves the system prompt into the start prompt for agents with no system prompt flag (only for
 /// a fresh session, which is the only one that gets a start prompt). Plain A/B runs get none.
 fn with_system_prompt(mut req: SpawnRequest) -> SpawnRequest {
-    let Some(system) = req.system_prompt.take().filter(|s| !s.trim().is_empty() && !req.plain) else {
+    let user = req.system_prompt.take();
+    if req.plain {
         return req;
-    };
+    }
+    let system = full_system_prompt(user);
     let system = if cfg!(windows) { format!("{system} {WINDOWS_SHELL_HINT}") } else { system };
     match providers::find(&req.provider_id) {
         Some(p) if p.command.is_some() && !p.system_prompt_args.is_empty() => req.system_prompt = Some(system),
@@ -1073,7 +1087,9 @@ mod tests {
             rows: 24,
         };
         // Windows agents also hear that the shell is PowerShell.
-        let sys = if cfg!(windows) { format!("Use your tools. {WINDOWS_SHELL_HINT}") } else { "Use your tools.".into() };
+        // The built-in prompt follows the user's, and is there even when the user's is empty.
+        let full = format!("Use your tools.\n\n{BUILTIN_PROMPT}");
+        let sys = if cfg!(windows) { format!("{full} {WINDOWS_SHELL_HINT}") } else { full };
         let claude = with_system_prompt(req("claude", Some("fix it"), false));
         assert_eq!(claude.system_prompt.as_deref(), Some(sys.as_str()));
         assert_eq!(claude.prompt.as_deref(), Some("fix it"));
@@ -1095,6 +1111,10 @@ mod tests {
         let mut plain = req("claude", None, false);
         plain.plain = true;
         assert_eq!(with_system_prompt(plain).system_prompt, None);
+        let mut empty = req("claude", None, false);
+        empty.system_prompt = Some("  ".into());
+        let empty = with_system_prompt(empty).system_prompt.unwrap();
+        assert!(empty.starts_with(BUILTIN_PROMPT));
     }
 
     #[test]
