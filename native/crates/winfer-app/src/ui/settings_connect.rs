@@ -19,6 +19,21 @@ pub(super) struct ConnectPage {
     ticking: bool,
     /// The incoming pair request last brought to the front (its code).
     prompted: Option<String>,
+    /// The link being shown is for a server: show the install commands (`Some(docker)`).
+    server: Option<bool>,
+}
+
+/// The relay's installer and the published image (native/crates/winferd).
+const INSTALL_URL: &str = "https://winfer.danehub.com/install.sh";
+const IMAGE: &str = "ghcr.io/rickydane/winferd";
+
+/// The command that installs winferd and pairs it with this link.
+pub(super) fn server_command(link: &str, docker: bool) -> String {
+    if docker {
+        format!("docker run -d --name winferd --restart unless-stopped -v winferd:/data -e WINFERD_PAIR='{link}' {IMAGE}")
+    } else {
+        format!("curl -fsSL {INSTALL_URL} | sh -s -- --pair '{link}'")
+    }
 }
 
 fn now_ms() -> u64 {
@@ -160,6 +175,12 @@ impl Root {
         let Some(connect) = crate::connect::get() else {
             return div().child(empty_state(c, IconName::Network, "Winfer Connect didn't start. See Diagnostics for the log."));
         };
+        // Development aid: open on the "Add a server" panel.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WINFER_NATIVE_CONNECT_ADD_SERVER").is_some() && self.connect_page.server.is_none() && connect.status().pairing.is_none() {
+            connect.pair_create_link();
+            self.connect_page.server = Some(std::env::var("WINFER_NATIVE_CONNECT_ADD_SERVER").is_ok_and(|v| v == "docker"));
+        }
         let status = connect.status();
         self.connect_inputs(&status, window, cx);
         let mono = crate::fonts::mono(cx);
@@ -190,14 +211,25 @@ impl Root {
                     .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
                         .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Pair from here"))
                         .child(div().text_size(px(12.0)).text_color(c.subtle).child("Make a one-time link and paste it into Settings → Connect on the other machine."))
-                        .child(div().flex().child(button(c, "connect-create", Some(IconName::Link), "Create pair link", Look::Primary, status.enabled).on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(connect) = crate::connect::get() {
-                                connect.pair_create_link();
-                                this.connect_page.result = None;
-                                this.connect_tick(cx);
-                            }
-                            cx.notify();
-                        })))))
+                        .child(div().flex().gap_2()
+                            .child(button(c, "connect-create", Some(IconName::Link), "Create pair link", Look::Primary, status.enabled).on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(connect) = crate::connect::get() {
+                                    connect.pair_create_link();
+                                    this.connect_page.result = None;
+                                    this.connect_page.server = None;
+                                    this.connect_tick(cx);
+                                }
+                                cx.notify();
+                            })))
+                            .child(button(c, "connect-server", Some(IconName::Server), "Add a server…", Look::Plain, status.enabled).on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(connect) = crate::connect::get() {
+                                    connect.pair_create_link();
+                                    this.connect_page.result = None;
+                                    this.connect_page.server = Some(false);
+                                    this.connect_tick(cx);
+                                }
+                                cx.notify();
+                            })))))
                     .child(div().w(px(1.0)).bg(c.border))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
                         .child(div().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Got a link?"))
@@ -219,7 +251,44 @@ impl Root {
                     cx.notify();
                 }));
                 self.connect_tick(cx);
-                if side == "host" {
+                if side == "host" && let Some(docker) = self.connect_page.server {
+                    // Add a server: the command that installs winferd there and pairs it.
+                    let command = server_command(&link.unwrap_or_default(), docker);
+                    let copy = command.clone();
+                    let tab = |id: &'static str, label: &'static str, on: bool, cx: &mut Context<Self>| {
+                        div().id(id).px_2p5().h(px(24.0)).flex().items_center().rounded_md().cursor_pointer().text_size(px(12.0))
+                            .when(on, |d| d.bg(c.app).text_color(c.fg)).when(!on, |d| d.text_color(c.subtle))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.connect_page.server = Some(id == "server-docker");
+                                cx.notify();
+                            }))
+                    };
+                    div().flex().flex_col().gap_3().p_4().rounded(px(12.0)).border_1().border_color(alpha(c.accent, 0.6)).bg(c.panel)
+                        .child(div().flex().items_center().gap_2()
+                            .child(Icon::new(IconName::Server).size(px(14.0)).text_color(c.accent))
+                            .child(div().flex_1().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child("Add a server"))
+                            .child(div().flex().gap_1().p_0p5().rounded_lg().bg(c.raised)
+                                .child(tab("server-script", "Linux / macOS", !docker, cx))
+                                .child(tab("server-docker", "Docker", docker, cx))))
+                        .child(div().text_size(px(12.0)).text_color(c.subtle).child(if docker {
+                            "Run this on the server. It pairs by itself; `docker logs winferd` shows the code. Add -e WINFERD_AGENTS=claude,codex to install agents."
+                        } else {
+                            "Run this on the server (over SSH). It installs winferd to ~/.local/bin, runs it as your user's service and prints the same code as here."
+                        }))
+                        .child(div().flex().items_center().gap_2().px_3().py_2().rounded_lg().bg(c.app)
+                            .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_size(px(11.5)).text_color(c.muted).child(command))
+                            .child(button(c, "connect-copy-server", Some(IconName::Copy), "Copy", Look::Primary, true).on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                this.toast("Command copied", cx);
+                            }))))
+                        .child(div().flex().items_center().gap_2().text_size(px(12.0)).text_color(c.muted)
+                            .child(div().size(px(7.0)).rounded_full().bg(c.warning))
+                            .child(div().flex_1().child("Waiting for the server…"))
+                            .child(countdown)
+                            .child(cancel))
+                        .child(div().flex().items_center().gap_1p5().text_size(px(11.5)).text_color(c.warning).child(Icon::new(IconName::KeyRound).size(px(12.0))).child("The command holds a one-time link with full control: only run it on your own servers."))
+                } else if side == "host" {
                     let link = link.unwrap_or_default();
                     let copy = link.clone();
                     div().flex().flex_col().gap_3().p_4().rounded(px(12.0)).border_1().border_color(alpha(c.accent, 0.6)).bg(c.panel)
@@ -406,5 +475,15 @@ impl Root {
             .child(peers)
             .child(section(c, "This machine", None))
             .child(me)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn server_commands_carry_the_link() {
+        let link = "winfer-connect:#p=abc";
+        assert_eq!(super::server_command(link, false), "curl -fsSL https://winfer.danehub.com/install.sh | sh -s -- --pair 'winfer-connect:#p=abc'");
+        assert!(super::server_command(link, true).contains("-e WINFERD_PAIR='winfer-connect:#p=abc' ghcr.io/rickydane/winferd"));
     }
 }
