@@ -167,6 +167,16 @@ pub fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command 
     cmd
 }
 
+/// The shell when `$SHELL` isn't set (servers, containers): zsh, else bash, else sh.
+#[cfg(unix)]
+pub fn default_shell() -> String {
+    ["/bin/zsh", "/usr/bin/zsh", "/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or("/bin/sh")
+        .to_string()
+}
+
 /// The user's shell (used for the "shell" provider).
 pub fn user_shell() -> String {
     #[cfg(unix)]
@@ -174,7 +184,7 @@ pub fn user_shell() -> String {
         login_env()
             .get("SHELL")
             .cloned()
-            .unwrap_or_else(|| "/bin/zsh".into())
+            .unwrap_or_else(default_shell)
     }
     #[cfg(windows)]
     {
@@ -207,7 +217,7 @@ fn resolve() -> Option<HashMap<String, String>> {
     use std::time::{Duration, Instant};
 
     const MARKER: &str = "__WINFER_ENV_START__";
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| default_shell());
 
     let mut cmd = Command::new(&shell);
     cmd.args(["-ilc", &format!("printf '{MARKER}'; env -0")]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
