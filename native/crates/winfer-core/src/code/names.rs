@@ -1,7 +1,9 @@
 //! Model names as the pane headers show them (port of `features/code/names.ts` and `lib/modelName.ts`).
 
+#[cfg(not(test))]
 use parking_lot::Mutex;
 use std::collections::HashMap;
+#[cfg(not(test))]
 use std::sync::LazyLock;
 
 /// winfer code's backends: their spec prefix and name (see `harness::backend::Kind`).
@@ -36,14 +38,26 @@ fn tail(spec: &str) -> &str {
     if backend_of(spec).is_some() { spec.split_once('/').map_or(spec, |(_, t)| t) } else { spec }
 }
 
+#[cfg(not(test))]
 static RESOLVED: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+/// What aliases resolved to. Per thread in tests, which run in parallel and resolve differently.
+fn resolved<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R {
+    #[cfg(not(test))]
+    return f(&mut RESOLVED.lock());
+    #[cfg(test)]
+    {
+        thread_local! { static LOCAL: std::cell::RefCell<HashMap<String, String>> = Default::default(); }
+        LOCAL.with(|m| f(&mut m.borrow_mut()))
+    }
+}
 
 /// Remembers what an alias (claude/opus) resolved to, so the picker shows versions for every one seen.
 pub fn remember_resolved(spec: &str, actual: &str) {
     if actual.is_empty() || actual == tail(spec) {
         return;
     }
-    RESOLVED.lock().insert(spec.to_string(), actual.to_string());
+    resolved(|m| m.insert(spec.to_string(), actual.to_string()));
 }
 
 fn alias(spec: &str) -> Option<&'static str> {
@@ -61,8 +75,8 @@ pub fn model_name(spec: &str, actual: Option<&str>) -> String {
     if let Some(a) = actual.filter(|a| !a.is_empty()) {
         return display_model_name(a);
     }
-    if let Some(r) = RESOLVED.lock().get(spec) {
-        return display_model_name(r);
+    if let Some(r) = resolved(|m| m.get(spec).cloned()) {
+        return display_model_name(&r);
     }
     display_model_name(alias(spec).unwrap_or_else(|| tail(spec)))
 }

@@ -14,4 +14,4 @@ pub mod demo;
 pub use winfer_core::code::names;
 pub use winfer_core::code::protocol;
 pub mod session;
-pub mod state;
+pub use winfer_core::code::state;
