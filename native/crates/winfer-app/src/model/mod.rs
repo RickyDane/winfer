@@ -1,7 +1,7 @@
 //! The app's state (port of `src/stores/workspaces.ts`). The saved JSON matches the Tauri app's
 //! snapshot, so `data_export`/`data_import` move a setup between the two.
 
-pub mod layout;
+pub use winfer_core::layout;
 pub mod progress;
 
 use layout::{GRID, LayoutNode, PRESETS, build_preset, insert_dwindle, leaves, remove_leaf};

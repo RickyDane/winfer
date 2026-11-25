@@ -13,7 +13,9 @@ mod fonts;
 mod mermaid;
 mod model;
 mod pdf;
-mod request;
+mod request {
+    pub use winfer_core::request::*;
+}
 mod status;
 mod terminal;
 mod updates;

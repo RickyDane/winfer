@@ -1,0 +1,14 @@
+[package]
+name = "winfer-core"
+version.workspace = true
+edition.workspace = true
+
+# winfer's GPUI-free core (docs/plans/winfer-connect.md, headless H1): state and logic the desktop app
+# and the headless `winferd` share. Moved here from winfer-app a module at a time; winfer-app
+# re-exports each at its old path.
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+regex = "1"
+parking_lot = "0.12"

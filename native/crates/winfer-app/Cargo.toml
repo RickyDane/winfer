@@ -12,6 +12,7 @@ anyhow = "1"
 gpui-kit.workspace = true
 winfer-backend.workspace = true
 winfer-connect = { path = "../winfer-connect" }
+winfer-core = { path = "../winfer-core" }
 tauri.workspace = true
 serde.workspace = true
 serde_json.workspace = true

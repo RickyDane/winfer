@@ -11638,6 +11638,7 @@ dependencies = [
  "windows 0.62.2",
  "winfer-backend",
  "winfer-connect",
+ "winfer-core",
  "winresource",
  "wry",
 ]
@@ -11698,6 +11699,16 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "ureq",
+]
+
+[[package]]
+name = "winfer-core"
+version = "0.1.101"
+dependencies = [
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
