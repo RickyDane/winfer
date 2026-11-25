@@ -113,6 +113,7 @@ pub struct CodeView {
     seeded: bool,
     pub(super) picker: super::code_pickers::PickerState,
     pub(super) usage_sheet: super::code_usage_sheet::UsageSheetState,
+    pub(super) task_log_scroll: super::code_sheets::TaskLogScroll,
     /// An image open full size.
     preview: Option<Arc<Image>>,
     /// Key of the newest user message; a new one snaps the transcript back to the bottom.
@@ -632,7 +633,7 @@ impl CodeView {
         let list = ListState::new(0, ListAlignment::Bottom, px(800.0));
         list.set_follow_mode(FollowMode::Tail);
         let sky = cx.new(|cx| SpaceSkyView::new(model.clone(), app.clone(), cx));
-        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false, plan_hide_armed: None }
+        Self { dictation: None, model, app, list, rows: Rc::new(Vec::new()), sigs: Vec::new(), input, seen_rev: 0, flipped: if cfg!(debug_assertions) && std::env::var("WINFER_NATIVE_CODE_DEMO").is_ok_and(|v| v == "diff") { ["t1", "t2", "t3", "t4"].map(String::from).into() } else { HashSet::new() }, toggled: HashMap::new(), toggle_seq: 0, scroll_end_pending: false, pane_size: Size::default(), zoom_accum: Pixels::ZERO, images: Rc::new(RefCell::new(HashMap::new())), wg_scrolls: Rc::new(RefCell::new(HashMap::new())), popup: 0, popup_scroll: ScrollHandle::new(), popup_closed_at: None, picks: HashMap::new(), asked_files: false, ticking: false, sky, born: HashMap::new(), seeded: false, picker: Default::default(), usage_sheet: Default::default(), task_log_scroll: Default::default(), preview: None, last_user: None, composer_rows: 3, visible: PAGE_ROWS, hidden: 0, seen_items: 0, load_pending: false, focus: cx.focus_handle(), restore_composer_focus: false, plan_hide_armed: None }
     }
 
     /// Once the plan is complete, re-render after `PLAN_HIDE_MS` so `render_plan` drops it.
@@ -1256,11 +1257,11 @@ fn mix_color(base: Hsla, over: Hsla, t: f32) -> Hsla {
     Rgba { r: a.r * inv + b.r * t, g: a.g * inv + b.g * t, b: a.b * inv + b.b * t, a: a.a * inv + b.a * t }.into()
 }
 
-fn alpha(c: Hsla, a: f32) -> Hsla {
+pub(super) fn alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
 
-fn ease_out(t: f32) -> f32 {
+pub(super) fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(4)
 }
 
@@ -3508,6 +3509,9 @@ impl Render for CodeView {
                 .child(gpui_kit::img(image).max_w_full().max_h_full().object_fit(ObjectFit::Contain))
                 .with_animation("cw-lightbox-in", Animation::new(Duration::from_millis(180)), |d, t| d.opacity(ease_out(t)))
         });
+        if sheet != Some(Sheet::TaskLog) {
+            self.task_log_scroll.reset();
+        }
         let sheet_el = sheet.filter(|s| !matches!(s, Sheet::Model | Sheet::Effort | Sheet::Mode)).map(|s| self.render_sheet(s, c, mono.clone(), window, cx));
         let exited_note = exited.map(|e| col(div().mb_2().rounded_xl().border_1().border_color(alpha(c.danger, 0.5)).bg(alpha(c.danger, 0.08)).px_3().py_2().text_size(px(12.5)).text_color(c.danger).child(e)));
         let view_for_size = cx.entity();
@@ -4740,5 +4744,144 @@ mod tests {
             vcx.update(|window, cx| view.read(cx).input.read(cx).focus_handle(cx).is_focused(window)),
             "closing the modal should restore focus to the composer"
         );
+    }
+
+    #[gpui_kit::test]
+    fn task_log_modal_starts_at_bottom_follows_new_output_and_shows_jump_button(cx: &mut gpui_kit::TestAppContext) {
+        use super::CodeView;
+        use crate::code::protocol::Ev;
+        use crate::code::session::CodeModel;
+        use crate::code::state::Sheet;
+        use crate::model::AppState;
+        use gpui_kit::{AppContext, Modifiers, ScrollDelta, ScrollEvent, point, px};
+
+        cx.update(gpui_kit::init);
+        let (view, vcx) = cx.add_window_view(|window, cx| {
+            let app = cx.new(|_| AppState::new());
+            let model = cx.new(|_| CodeModel::for_test(app.clone()));
+            CodeView::new(model, app, window, cx)
+        });
+        let draw = |vcx: &mut gpui_kit::VisualTestContext| {
+            for _ in 0..2 {
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+        };
+        let scroll_state = |vcx: &mut gpui_kit::VisualTestContext| {
+            vcx.read(|cx| {
+                let h = &view.read(cx).task_log_scroll.handle;
+                (h.offset().y / px(1.0), h.max_offset().y / px(1.0))
+            })
+        };
+        let make_log = |n: usize| (0..n).map(|i| format!("log line {i}: running background shell step")).collect::<Vec<_>>().join("\n");
+
+        // 1. Open while log is still loading, then deliver initial long output: must land at the bottom.
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, cx| {
+                    m.state.open_task_log("bg-1");
+                    cx.notify();
+                });
+            });
+        });
+        draw(vcx);
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, cx| {
+                    m.state.apply(Ev::TaskLog { id: "bg-1".into(), text: Some(make_log(120)), file: None });
+                    cx.notify();
+                });
+            });
+        });
+        draw(vcx);
+
+        let (y0, max0) = scroll_state(vcx);
+        assert!(max0 > 100.0, "expected overflowing task log, got max_offset={max0}");
+        assert!((y0 + max0).abs() <= 1.0, "task log must open at bottom: offset_y={y0}, max_y={max0}");
+        assert!(vcx.debug_bounds("cw-task-log-jump").is_none(), "jump button must stay hidden at bottom");
+
+        // 2. While pinned to the bottom, new log lines auto-scroll to the new bottom.
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, cx| {
+                    m.state.apply(Ev::TaskLog { id: "bg-1".into(), text: Some(make_log(160)), file: None });
+                    cx.notify();
+                });
+            });
+        });
+        draw(vcx);
+
+        let (y1, max1) = scroll_state(vcx);
+        assert!(max1 > max0 + 50.0, "appending lines should increase scroll height: {max0} -> {max1}");
+        assert!((y1 + max1).abs() <= 1.0, "new log lines must auto-scroll to bottom: offset_y={y1}, max_y={max1}");
+        assert!(vcx.debug_bounds("cw-task-log-jump").is_none(), "jump button stays hidden while following");
+
+        // 3. Scrolling upwards detaches from bottom and shows the centered bottom jump button.
+        let body = vcx.debug_bounds("cw-task-log-body").expect("task log body rendered");
+        let body_center = body.center();
+        vcx.simulate_event(ScrollEvent { position: body_center, delta: ScrollDelta::Pixels(point(px(0.0), px(300.0))), ..Default::default() });
+        draw(vcx);
+
+        let (y_up, max_up) = scroll_state(vcx);
+        assert!(y_up > -max_up + 50.0, "scrolling up should move away from bottom: offset_y={y_up}, max_y={max_up}");
+        let jump = vcx.debug_bounds("cw-task-log-jump").expect("jump button must appear when scrolled up");
+        let body_cx = f32::from(body.center().x);
+        let jump_cx = f32::from(jump.center().x);
+        assert!((body_cx - jump_cx).abs() <= 2.0, "jump button must be centered horizontally: body_cx={body_cx}, jump_cx={jump_cx}");
+        assert!(jump.bottom() <= body.bottom() && jump.top() >= body.bottom() - px(60.0), "jump button must sit at bottom of body: body={body:?}, jump={jump:?}");
+
+        // 4. While scrolled upwards, new log lines must NOT pull the scroll position back down.
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, cx| {
+                    m.state.apply(Ev::TaskLog { id: "bg-1".into(), text: Some(make_log(200)), file: None });
+                    cx.notify();
+                });
+            });
+        });
+        draw(vcx);
+
+        let (y_after_append, max_after_append) = scroll_state(vcx);
+        assert!(max_after_append > max_up + 50.0, "expected taller log after append: {max_up} -> {max_after_append}");
+        assert!((y_after_append - y_up).abs() <= 1.0, "scroll position must stay put while scrolled up: before={y_up}, after={y_after_append}");
+        assert!(vcx.debug_bounds("cw-task-log-jump").is_some(), "jump button must remain visible while scrolled up");
+
+        // 5. Clicking the jump button snaps back to the bottom, hides the button, and resumes auto-scroll.
+        let jump = vcx.debug_bounds("cw-task-log-jump").expect("jump button clickable");
+        vcx.simulate_click(jump.center(), Modifiers::default());
+        draw(vcx);
+
+        let (y_snapped, max_snapped) = scroll_state(vcx);
+        assert!((y_snapped + max_snapped).abs() <= 1.0, "clicking jump must scroll to bottom: offset_y={y_snapped}, max_y={max_snapped}");
+        assert!(vcx.debug_bounds("cw-task-log-jump").is_none(), "jump button must hide after jumping to bottom");
+
+        vcx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.model.update(cx, |m, cx| {
+                    m.state.apply(Ev::TaskLog { id: "bg-1".into(), text: Some(make_log(230)), file: None });
+                    cx.notify();
+                });
+            });
+        });
+        draw(vcx);
+        let (y_resumed, max_resumed) = scroll_state(vcx);
+        assert!(max_resumed > max_snapped + 30.0);
+        assert!((y_resumed + max_resumed).abs() <= 1.0, "auto-scroll must resume after clicking jump: offset_y={y_resumed}, max_y={max_resumed}");
+
+        // 6. Scroll up again, close and reopen the modal: reopening must start at the bottom again.
+        vcx.simulate_event(ScrollEvent { position: body_center, delta: ScrollDelta::Pixels(point(px(0.0), px(400.0))), ..Default::default() });
+        draw(vcx);
+        assert!(vcx.debug_bounds("cw-task-log-jump").is_some());
+
+        vcx.update(|_, cx| view.update(cx, |v, cx| v.set_sheet(None, cx)));
+        draw(vcx);
+        vcx.update(|_, cx| view.update(cx, |v, cx| v.set_sheet(Some(Sheet::TaskLog), cx)));
+        draw(vcx);
+
+        let (y_reopen, max_reopen) = scroll_state(vcx);
+        assert!((y_reopen + max_reopen).abs() <= 1.0, "reopening task log must start at bottom: offset_y={y_reopen}, max_y={max_reopen}");
+        assert!(vcx.debug_bounds("cw-task-log-jump").is_none(), "jump button must be hidden on reopen");
     }
 }

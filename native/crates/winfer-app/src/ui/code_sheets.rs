@@ -1,7 +1,7 @@
 //! Panels that open over the chat: model, effort, mode, sessions, usage, tasks and the rest
 //! (port of `features/code/Sheets.tsx`).
 
-use super::code_view::{CodeView, elapsed, rise};
+use super::code_view::{CodeView, alpha, ease_out, elapsed, rise, tip};
 use crate::code::names::{BACKENDS, ModelTier, backend_of, base_spec, fast_spec, is_fast, model_name, model_tier};
 use crate::code::protocol::*;
 use crate::code::state::{Sheet, now_ms};
@@ -10,6 +10,74 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+
+/// Distance from the bottom (px) within which the task log stays pinned to the tail.
+const TASK_LOG_BOTTOM_EPS: f32 = 4.0;
+
+fn task_log_at_bottom(offset_y: f32, max_y: f32) -> bool {
+    max_y <= TASK_LOG_BOTTOM_EPS || (max_y + offset_y) <= TASK_LOG_BOTTOM_EPS
+}
+
+/// Tail-following scroll state for the background task/shell output modal (`Sheet::TaskLog`).
+pub(super) struct TaskLogScroll {
+    pub(super) handle: ScrollHandle,
+    /// Task id currently shown in `Sheet::TaskLog` (`None` while closed).
+    active_task: Option<String>,
+    /// True while auto-following new output at the bottom.
+    follow: bool,
+    /// True for the single frame after clicking the jump button, before prepaint updates `offset`.
+    snap_pending: bool,
+}
+
+impl Default for TaskLogScroll {
+    fn default() -> Self {
+        Self { handle: ScrollHandle::new(), active_task: None, follow: true, snap_pending: false }
+    }
+}
+
+impl TaskLogScroll {
+    pub(super) fn reset(&mut self) {
+        if self.active_task.is_some() || !self.follow || self.snap_pending {
+            self.active_task = None;
+            self.follow = true;
+            self.snap_pending = false;
+        }
+    }
+
+    pub(super) fn snap_to_bottom(&mut self) {
+        self.follow = true;
+        self.snap_pending = true;
+        let max_y = self.handle.max_offset().y;
+        self.handle.set_offset(point(px(0.0), -max_y));
+        self.handle.scroll_to_bottom();
+    }
+
+    /// Synchronizes tail-following state before rendering `Sheet::TaskLog`.
+    /// Returns `true` when the user has scrolled away from the bottom and the jump button should show.
+    pub(super) fn sync_for_render(&mut self, task_id: Option<&str>) -> bool {
+        if self.active_task.as_deref() != task_id {
+            self.active_task = task_id.map(str::to_string);
+            self.follow = true;
+            self.snap_pending = false;
+            self.handle.set_offset(point(px(0.0), px(0.0)));
+            self.handle.scroll_to_bottom();
+            return false;
+        }
+        if std::mem::take(&mut self.snap_pending) {
+            self.follow = true;
+            self.handle.scroll_to_bottom();
+            return false;
+        }
+        let max_y = self.handle.max_offset().y / px(1.0);
+        let offset_y = self.handle.offset().y / px(1.0);
+        let at_bottom = task_log_at_bottom(offset_y, max_y);
+        self.follow = at_bottom;
+        if self.follow {
+            self.handle.scroll_to_bottom();
+        }
+        !at_bottom
+    }
+}
 
 const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -95,6 +163,57 @@ impl CodeView {
             return self.bottom_sheet(title, icon, subtitle, body, c, cx);
         }
         let wide = matches!(sheet, Sheet::Help | Sheet::Usage | Sheet::TaskLog | Sheet::Model | Sheet::SubagentModel);
+        let is_task_log = sheet == Sheet::TaskLog;
+        let task_log_away = if is_task_log {
+            let id = self.model.read(cx).state.log_task.clone();
+            self.task_log_scroll.sync_for_render(id.as_deref())
+        } else {
+            false
+        };
+        let mut scroll_body = div().id("cw-sheet-body").flex_1().min_h_0().overflow_y_scroll().p_3().child(body);
+        if is_task_log {
+            scroll_body = scroll_body.track_scroll(&self.task_log_scroll.handle);
+        }
+        let body_area: AnyElement = if is_task_log {
+            let jump = task_log_away.then(|| {
+                div().absolute().bottom(px(12.0)).left_0().right_0().flex().justify_center().child(
+                    div()
+                        .id("cw-task-log-jump")
+                        .debug_selector(|| "cw-task-log-jump".into())
+                        .size(px(32.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .cursor_pointer()
+                        .bg(c.raised)
+                        .border_1()
+                        .border_color(c.border)
+                        .shadow(vec![BoxShadow { color: alpha(black(), if c.light { 0.12 } else { 0.4 }), offset: point(px(0.0), px(6.0)), blur_radius: px(18.0), spread_radius: px(0.0), inset: false }])
+                        .hover(move |d| d.bg(c.hover))
+                        .tooltip(tip("Jump to latest"))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.task_log_scroll.snap_to_bottom();
+                            cx.notify();
+                        }))
+                        .child(Icon::new(IconName::ArrowDown).size(px(16.0)).text_color(c.fg))
+                        .with_animation("cw-task-log-jump-in", Animation::new(std::time::Duration::from_millis(180)), |d, t| d.opacity(ease_out(t)).mt(px(6.0 * (1.0 - ease_out(t))))),
+                )
+            });
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .debug_selector(|| "cw-task-log-body".into())
+                .child(scroll_body)
+                .children(jump)
+                .into_any_element()
+        } else {
+            scroll_body.into_any_element()
+        };
         let scrim = div().id("cw-sheet-scrim").absolute().top_0().left_0().size_full().flex().items_center().justify_center().bg(Hsla { a: 0.5, ..black() }).p_4().occlude()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.set_sheet(None, cx)))
             .child(
@@ -102,7 +221,7 @@ impl CodeView {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(div().flex().items_center().gap_2().px_4().py_3().child(Icon::new(icon).size(px(14.0)).text_color(c.accent)).child(div().flex_1().text_size(px(13.0)).text_color(c.fg).child(title))
                         .child(div().id("cw-sheet-x").p_0p5().rounded_md().cursor_pointer().text_color(c.subtle).hover(move |d| d.bg(c.hover).text_color(c.fg)).on_click(cx.listener(|this, _, _, cx| this.set_sheet(None, cx))).child(Icon::new(IconName::X).size(px(14.0)))))
-                    .child(div().id("cw-sheet-body").flex_1().min_h_0().overflow_y_scroll().p_3().child(body)), SharedString::from(format!("sheet-in-{title}")), 0, 12.0),
+                    .child(body_area), SharedString::from(format!("sheet-in-{title}")), 0, 12.0),
             );
         scrim.with_animation(SharedString::from(format!("sheet-scrim-{title}")), Animation::new(std::time::Duration::from_millis(180)), |d, t| d.opacity(t)).into_any_element()
     }

@@ -8,6 +8,7 @@ pub enum Step {
     /// Waits until this file exists (and removes it): lets a test decide when the next step plays.
     Gate(&'static str),
     Type(&'static str),
+    OpenTaskLog(&'static str),
     Ev(Value),
 }
 
@@ -142,6 +143,19 @@ pub fn script(mode: &str) -> Vec<(u64, Step)> {
             steps.push((200, Ev(json!({ "type": "turn_start" }))));
             steps.push((400, Ev(json!({ "type": "text", "id": "ha2", "text": "Continuing from the middleware in `src/auth.rs`, I'll add unit tests covering expired JWTs and missing cookies." }))));
             steps.push((200, Ev(json!({ "type": "turn_done" }))));
+        }
+        "tasklog" => {
+            steps.truncate(2);
+            steps.push((300, Type("Run the background build & test watcher\r")));
+            steps.push((200, Ev(json!({ "type": "turn_start" }))));
+            steps.push((200, Ev(json!({ "type": "task", "id": "bg-demo", "title": "Live build & test watcher", "description": "cargo watch -x test", "status": "running", "output_file": "/tmp/web-os-demo/watch.log", "last": "Watching native/crates/winfer-app…" }))));
+            steps.push((400, OpenTaskLog("bg-demo")));
+            let mut lines: Vec<String> = (1..=60).map(|i| format!("[16:10:{:02}] step {i:03}: compiling & testing module_{i:02} ... ok", i % 60)).collect();
+            steps.push((150, Ev(json!({ "type": "task_log", "id": "bg-demo", "file": "/tmp/web-os-demo/watch.log", "text": lines.join("\n") }))));
+            for i in 61..=180 {
+                lines.push(format!("[16:{:02}:{:02}] live log {i:03}: streaming background shell output ... ok", 10 + (i / 60), i % 60));
+                steps.push((900, Ev(json!({ "type": "task_log", "id": "bg-demo", "file": "/tmp/web-os-demo/watch.log", "text": lines.join("\n") }))));
+            }
         }
         "model" => steps.push((1200, Type("/model\r"))),
         "mode" => steps.push((1200, Type("/mode\r"))),

@@ -125,7 +125,7 @@ impl CodeModel {
         #[cfg(debug_assertions)]
         if std::env::var_os("WINFER_NATIVE_CODE_DEMO").is_some() {
             let tx = tx.clone();
-            cx.spawn(async move |_, cx| {
+            cx.spawn(async move |this, cx| {
                 for (delay, step) in super::demo::script(&std::env::var("WINFER_NATIVE_CODE_DEMO").unwrap_or_default()) {
                     cx.background_executor().timer(Duration::from_millis(delay)).await;
                     if let super::demo::Step::Gate(file) = &step {
@@ -134,9 +134,17 @@ impl CodeModel {
                         }
                         continue;
                     }
+                    if let super::demo::Step::OpenTaskLog(id) = &step {
+                        let id = (*id).to_string();
+                        let _ = this.update(cx, |m, cx| {
+                            m.state.open_task_log(&id);
+                            cx.notify();
+                        });
+                        continue;
+                    }
                     let _ = match step {
                         super::demo::Step::Type(text) => tx.try_send(Msg::Input(text.to_string())),
-                        super::demo::Step::Gate(_) => Ok(()),
+                        super::demo::Step::Gate(_) | super::demo::Step::OpenTaskLog(_) => Ok(()),
                         super::demo::Step::Ev(v) => tx.try_send(Msg::Bytes(format!("{v}\n").into_bytes())),
                     };
                 }
