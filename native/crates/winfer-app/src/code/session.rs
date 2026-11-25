@@ -163,6 +163,14 @@ impl CodeModel {
         model
     }
 
+    /// Forgets the transcript, before the history is replayed from the start (a remote chat
+    /// pane re-attaching to its machine).
+    pub fn reset(&mut self, cx: &mut Context<Self>) {
+        self.state = CodeState::default();
+        self.lines = LineBuffer::default();
+        cx.notify();
+    }
+
     /// The process exited (the app got `pty://exit` for this pane).
     pub fn on_exit(&mut self, code: u32, cx: &mut Context<Self>) {
         self.state.apply(Ev::Exited { text: format!("WinferCode exited (code {code})") });

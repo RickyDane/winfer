@@ -46,17 +46,26 @@ fn now_ms() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64)
 }
 
+/// To one phone or paired machine (`connect:<peer>`), or to all of them.
 fn send(device: Option<String>, msg: Value) {
+    if let Some(peer) = device.as_deref().and_then(crate::connect::peer_of) {
+        return crate::connect::send(peer, msg);
+    }
+    if device.is_none() {
+        crate::connect::broadcast(&msg);
+    }
     backend::background(move || {
         let _ = mobile::mobile_send(device, msg);
     });
 }
 
 /// A workspace's panes as the desktop shows them: tiles in layout order, then the rest.
+/// Other machines' panes shown here (Winfer Connect tiles) aren't this desktop's to offer.
 fn ordered(ws: &Workspace) -> Vec<&Pane> {
     let tiled = ws.layout.as_ref().map(leaves).unwrap_or_default();
     let mut panes: Vec<&Pane> = tiled.iter().filter_map(|id| ws.panes.iter().find(|p| p.id == *id)).collect();
     panes.extend(ws.panes.iter().filter(|p| !tiled.contains(&p.id)));
+    panes.retain(|p| p.remote.is_none());
     panes
 }
 
@@ -316,7 +325,7 @@ impl Root {
         })
     }
 
-    fn mobile_mirror(&self, cx: &App) -> Value {
+    pub(super) fn mobile_mirror(&self, cx: &App) -> Value {
         let s = self.state.read(cx);
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| self.snapshot_pane(p, cx)).collect();
         let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
@@ -333,7 +342,7 @@ impl Root {
     }
 
     fn mobile_broadcast(&mut self, id: &str, silent: bool, cx: &App) {
-        let Some(pane) = self.state.read(cx).pane(id).cloned() else { return };
+        let Some(pane) = self.state.read(cx).pane(id).cloned().filter(|p| p.remote.is_none()) else { return };
         let snap = self.snapshot_pane(&pane, cx);
         self.mobile.last_sent.insert(id.to_string(), Self::signature(&snap));
         send(None, if silent { json!({ "t": "status", "pane": snap, "silent": true }) } else { json!({ "t": "status", "pane": snap }) });
@@ -361,6 +370,7 @@ impl Root {
 
     /// Lets the backend tell "at the desktop" from "away": pushes wait while the user works here.
     pub(super) fn note_user_activity(&mut self) {
+        self.connect_note_activity();
         if self.mobile.last_activity.is_none_or(|t| t.elapsed() >= Duration::from_secs(20)) {
             self.mobile.last_activity = Some(Instant::now());
             backend::background(mobile::mobile_activity);
@@ -373,7 +383,7 @@ impl Root {
         if !s.hydrated {
             return;
         }
-        let panes: Vec<(String, AgentStatus)> = s.all_panes().map(|p| (p.id.clone(), p.status)).collect();
+        let panes: Vec<(String, AgentStatus)> = s.all_panes().filter(|p| p.remote.is_none()).map(|p| (p.id.clone(), p.status)).collect();
         let compact_tools = s.rest.get("codeWeb").and_then(|v| v["compactTools"].as_bool()).unwrap_or(true);
         let show_bg_notes = s.rest.get("codeWeb").and_then(|v| v["showBgNotes"].as_bool()).unwrap_or(true);
         let layout = json!([
@@ -473,7 +483,7 @@ impl Root {
         if kind == "pane.new" {
             return reply(self.mobile_new_pane(&req, cx));
         }
-        let pane = req["paneId"].as_str().and_then(|id| self.state.read(cx).pane(id).cloned());
+        let pane = req["paneId"].as_str().and_then(|id| self.state.read(cx).pane(id).cloned()).filter(|p| p.remote.is_none());
         let Some(pane) = pane else {
             return reply(json!({ "t": if kind == "thread.get" { "error" } else { "ack" }, "ok": false, "error": "That agent is gone." }));
         };
@@ -481,7 +491,11 @@ impl Root {
         let ok = json!({ "t": "ack", "ok": true });
         let text = req["text"].as_str().map(str::trim).unwrap_or_default().to_string();
         let short = |t: &str, n: usize| t.chars().take(n).collect::<String>();
-        let log = |this: &mut Self, text: String, cx: &mut Context<Self>| this.update_state(cx, |s| s.log_activity(&pane.workspace_id, text, Some(pane.provider.clone())));
+        let via = crate::connect::peer_of(&device).map_or("from your phone".to_string(), |peer| format!("from {}", crate::connect::peer_name(peer).unwrap_or_else(|| "another machine".into())));
+        let log = |this: &mut Self, text: String, cx: &mut Context<Self>| {
+            let text = text.replace("from your phone", &via);
+            this.update_state(cx, |s| s.log_activity(&pane.workspace_id, text, Some(pane.provider.clone())))
+        };
         match kind.as_str() {
             "config.get" => {
                 let Some(model) = self.chat(&pane.id) else {

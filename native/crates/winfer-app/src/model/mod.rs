@@ -102,6 +102,9 @@ pub struct Pane {
     pub archived: bool,
     #[serde(default)]
     pub account_id: Option<String>,
+    /// Another machine's pane shown here (Winfer Connect); its process runs there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteRef>,
     #[serde(skip)]
     pub workspace_id: String,
     #[serde(skip)]
@@ -211,6 +214,16 @@ impl SidePanel {
             Self::Viewer => "viewer",
         }
     }
+}
+
+/// Where a remote tile's pane lives: the paired machine and its pane id there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRef {
+    pub peer: String,
+    pub pane: String,
+    /// The machine's name when the tile was opened (shown while it's offline).
+    pub machine: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

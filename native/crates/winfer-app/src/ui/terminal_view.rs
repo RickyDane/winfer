@@ -632,6 +632,42 @@ impl EntityInputHandler for TerminalView {
     }
 }
 
+impl TerminalView {
+    /// Winfer Connect: who sizes this pane, when it isn't this tile.
+    fn size_banner(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let pane = self.session.pane_id.clone();
+        let c = theme::colors(&self.state.read(cx).theme);
+        let pill = |text: String| div().absolute().top(px(6.0)).right(px(8.0)).flex().items_center().gap_2().h(px(24.0)).pl_2p5().pr_1().rounded_full()
+            .bg(c.raised).border_1().border_color(c.edge).text_size(px(11.5)).text_color(c.muted).shadow_md().child(text);
+        let button = |id: &'static str, label: &'static str| div().id(id).h(px(18.0)).px_2().flex().items_center().rounded_full().bg(c.accent).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9)).child(label);
+        if let Some(peer) = crate::connect_term::sized_by(&pane) {
+            let name = crate::connect::peer_name(&peer).unwrap_or_else(|| "another machine".into());
+            let session = self.session.clone();
+            return Some(pill(format!("Viewed on {name}")).child(button("take-back", "Take back").on_click(cx.listener(move |_, _, _, cx| {
+                crate::connect_term::reclaim(&session.pane_id);
+                session.write_screen(&[]);
+                cx.notify();
+            }))));
+        }
+        let (peer, _) = crate::connect_term::remote_of(&pane)?;
+        let name = crate::connect::peer_name(&peer).unwrap_or_else(|| "The other machine".into());
+        if !crate::connect::get().is_some_and(|c| c.is_up(&peer)) {
+            return Some(pill(format!("{name} is offline · reconnecting…")).pr_2p5());
+        }
+        if crate::connect_term::is_reclaimed(&pane) {
+            let session = self.session.clone();
+            return Some(pill(format!("Sized by {name}")).child(button("take-over", "Fit here").on_click(cx.listener(move |_, _, _, cx| {
+                crate::connect_term::set_reclaimed(&session.pane_id, false);
+                let size = *session.size.lock();
+                crate::connect_term::send_resize(&session.pane_id, size.cols as u16, size.rows as u16);
+                session.write_screen(&[]);
+                cx.notify();
+            }))));
+        }
+        None
+    }
+}
+
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
@@ -649,9 +685,12 @@ impl Render for TerminalView {
         let focus = self.focus.clone();
         let session = self.session.clone();
         self.session.painted();
+        let size_banner = self.size_banner(cx);
 
         div()
             .size_full()
+            .relative()
+            .children(size_banner)
             .track_focus(&self.focus)
             .key_context("Terminal")
             .on_key_down(cx.listener(Self::key_down))

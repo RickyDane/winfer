@@ -72,6 +72,10 @@ mod settings_plugins;
 mod settings_skills;
 #[path = "settings_harness.rs"]
 mod settings_harness;
+#[path = "settings_connect.rs"]
+mod settings_connect;
+#[path = "connect_ui.rs"]
+mod connect_ui;
 #[path = "settings_code.rs"]
 mod settings_code;
 #[path = "settings_kit.rs"]
@@ -403,6 +407,8 @@ pub struct Root {
     plugin_page: settings_plugins::PluginsPage,
     skill_page: settings_skills::SkillsPage,
     harness_page: settings_harness::HarnessPage,
+    connect_page: settings_connect::ConnectPage,
+    connect: connect_ui::ConnectClient,
     mobile: mobile::MobileBridge,
     new_pane: Option<dialogs::NewPaneDialog>,
     model_dialog: Option<dialogs::ModelDialog>,
@@ -427,7 +433,7 @@ impl Root {
 
         let forward = tx.clone();
         backend::app().listen_any(move |event, payload| {
-            if matches!(event, "pty://exit" | "agent://status" | "notification://action" | "mobile://request" | "mobile://changed" | "mcp://call" | "bg://note" | "bg://task" | "usage://report") || event.starts_with("browser://") {
+            if matches!(event, "pty://exit" | "agent://status" | "notification://action" | "mobile://request" | "mobile://changed" | "connect://changed" | "connect://peer" | "connect://message" | "mcp://call" | "bg://note" | "bg://task" | "usage://report") || event.starts_with("browser://") {
                 let _ = forward.try_send(SessionEvent::Backend(event.to_string(), payload.clone()));
             }
         });
@@ -435,6 +441,17 @@ impl Root {
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = rx.recv().await {
                 if this.update_in(cx, |this, window, cx| this.on_session_event(event, window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        // Winfer Connect's once-a-second chores (with a window, to open tiles).
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                if this.update_in(cx, |this, window, cx| this.tick_connect(window, cx)).is_err() {
                     break;
                 }
             }
@@ -544,7 +561,7 @@ impl Root {
         let viewer = cx.new(|cx| ViewerPanel::new(viewer_state, cx));
         let android_state = state.clone();
         let android = cx.new(|cx| AndroidPanel::new(android_state, cx));
-        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), orch: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
+        Self { android, orchestration: Default::default(), progress_ui: Default::default(), plugins: Default::default(), menu: None, sidebar: Default::default(), meters: Default::default(), search: None, worktrees: Default::default(), failover: Default::default(), usage_page: Default::default(), more: Default::default(), plugin_page: Default::default(), skill_page: Default::default(), harness_page: Default::default(), connect_page: Default::default(), connect: Default::default(), mobile: Default::default(), wakes_loaded: false, usage: Default::default(), review: review::ReviewStore { queue_tests: true, ..Default::default() }, review_opened: false, history: None, settings: None, recording: None, suspend_saving: false, viewer, side_open: Vec::new(), side_shown: None, #[cfg(debug_assertions)] dev_layer_opened: false, new_pane: None, model_dialog: None, diff_dialog: None, models: HashMap::new(), new_menu: Default::default(), pane_note: None, welcome: Default::default(), toasts: Vec::new(), questions: Default::default(), question_serial: 0, question_input: None, question_picked: Vec::new(), palette_input: None, palette_entries: Vec::new(), palette_selected: 0, bg_notes: HashMap::new(), bg_tasks: HashMap::new(), bg_popover: None, bg_ticking: false, applied_theme: None, browser, state, events: tx, terminals: HashMap::new(), code_models: HashMap::new(), code_views: HashMap::new(), code_choice: HashMap::new(), browser_window: None, updates: Default::default(), usage_info_open: false, voice: Default::default(), orch: Default::default(), tile_bounds: Bounds::default(), drag: None, save_task: None, last_saved: String::new(), focused_view: None, focus: cx.focus_handle(), workspace_focus: cx.focus_handle(), focus_outside: 0 }
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -669,6 +686,9 @@ impl Root {
                 "notification://action" => self.on_notification_action(&payload, window, cx),
                 "mobile://request" => self.on_mobile_request(&payload, window, cx),
                 "mobile://changed" => self.on_mobile_changed(cx),
+                "connect://changed" => self.on_connect_changed(window, cx),
+                "connect://peer" => self.on_connect_peer(&payload, cx),
+                "connect://message" => self.on_connect_message(&payload, window, cx),
                 "usage://report" => {
                     self.note_pane_report(&payload);
                     self.on_usage_report(&payload, cx);
@@ -687,6 +707,7 @@ impl Root {
                     let id = payload["paneId"].as_str().unwrap_or_default().to_string();
                     let code = payload["code"].as_u64().unwrap_or(0) as u32;
                     let pid = payload["pid"].as_u64().map(|p| p as u32);
+                    crate::connect_term::exited(&id, code);
                     if terminal::on_exit(&id, code, pid) && !self.orchestrator_exited(&id, code, cx) {
                         if let Some(model) = self.code_models.get(&id) {
                             model.update(cx, |m, cx| m.on_exit(code, cx));
@@ -881,6 +902,9 @@ impl Root {
 
     /// Runs what the user chose in an actionable notification.
     fn on_notification_action(&mut self, payload: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        if self.on_connect_notification(payload, window, cx) || self.on_remote_notification(payload, cx) {
+            return;
+        }
         let id = payload["paneId"].as_str().unwrap_or_default().to_string();
         let Some(pane) = self.state.read(cx).pane(&id).cloned() else { return };
         let name = self.state.read(cx).provider_name(&pane.provider);
@@ -1706,6 +1730,11 @@ impl Render for Root {
                 Ok("light-settings") => {
                     self.update_state(cx, |s| s.theme = "light".into());
                     self.execute(Command::Settings(Some("general".into())), window, cx);
+                }
+                // Development aid: a settings page open at launch (`settings:connect`).
+                Ok(layer) if layer.starts_with("settings:") => {
+                    let page = layer.trim_start_matches("settings:").to_string();
+                    self.execute(Command::Settings(Some(page)), window, cx);
                 }
                 Ok("new-menu") => {
                     self.new_menu.open = true;

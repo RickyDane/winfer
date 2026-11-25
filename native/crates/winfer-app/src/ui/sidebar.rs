@@ -653,12 +653,13 @@ impl Root {
                     .on_click(cx.listener(|this, _, window, cx| this.execute(Command::WorkspaceCreate, window, cx)))
                     .child(Icon::new(IconName::Plus).size(px(13.0)))));
 
+        let connected = self.render_connected(c, cx);
         let feed = self.render_activity_feed(&active_ws, c, cx);
         let footer = self.render_sidebar_footer(false, &settings_tip, c, cx);
         let width = px(self.state.read(cx).sidebar_width as f32);
         div().w(width).h_full().flex_shrink_0().flex().flex_col().overflow_hidden().rounded_2xl().border_1().border_color(c.edge).bg(c.panel)
             .child(top)
-            .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_3().children(needs).child(label).child(list))
+            .child(div().id("sidebar-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_3().children(needs).child(label).child(list).children(connected))
             .children(feed)
             .child(footer)
     }

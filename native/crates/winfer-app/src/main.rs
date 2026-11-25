@@ -6,6 +6,8 @@ mod audio;
 mod assets;
 mod backend;
 mod code;
+mod connect;
+mod connect_term;
 mod dictation;
 mod fonts;
 mod mermaid;

@@ -33,6 +33,7 @@ const GROUPS: [(&str, &[Page]); 5] = [
     ("System", &[
         ("usage", "Usage & limits", IconName::ChartColumn, "Plan limits, spend and warnings."),
         ("mobile", "Mobile", IconName::Smartphone, "Watch and steer agents from your phone."),
+        ("connect", "Connect", IconName::Network, "Pair your other machines and servers."),
         ("data", "Backup & transfer", IconName::ArchiveRestore, "Move your setup to another machine."),
         ("updates", "Updates", IconName::Download, "winfer's release channel and updates."),
         ("diagnostics", "Diagnostics", IconName::Activity, "Memory, logs and crash reports."),
@@ -687,6 +688,7 @@ impl Root {
                 "skills" => self.page_skills(c, window, cx).into_any_element(),
                 "winfer-code" => self.page_harness(c, window, cx).into_any_element(),
                 "mobile" => self.page_mobile(c, window, cx).into_any_element(),
+                "connect" => self.page_connect(c, window, cx).into_any_element(),
                 "usage" => self.page_usage(c, cx).into_any_element(),
                 "updates" => self.page_updates(c, cx).into_any_element(),
                 _ => div().text_xs().text_color(c.subtle).child(format!("The {label} page isn't in the native build yet.")).into_any_element(),

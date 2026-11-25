@@ -122,6 +122,9 @@ impl Root {
         let orchestrator = crate::voice::orchestrator_workspace(pane_id).map(str::to_string);
         if tool == "__plugin_tools" {
             let mut list = self.plugin_agent_tool_list();
+            if let Value::Array(tools) = &mut list {
+                tools.extend(super::connect_ui::agent_tools());
+            }
             // Orchestrators also get winfer's UI actions.
             if let (Some(_), Value::Array(tools)) = (&orchestrator, &mut list) {
                 tools.extend(self.orchestrator_mcp_tools(cx));
@@ -144,6 +147,12 @@ impl Root {
             found
         };
         let who = if orchestrator.is_some() { "Orchestrator".to_string() } else { describe(self.state.read(cx), &ws, &me) };
+        // Winfer Connect: other machines and their panes (`machine:N`).
+        match self.connect_tool(call, tool, a, &who, cx) {
+            Some(super::connect_ui::ToolOutcome::Done(result)) => return Outcome::Done(result),
+            Some(super::connect_ui::ToolOutcome::Later) => return Outcome::Later,
+            None => {}
+        }
         if let Some(w) = &orchestrator {
             match tool {
                 "notify_user" => {
@@ -209,6 +218,11 @@ impl Root {
             (ws, me)
         };
         self.run_sync_tool(tool, &ws, &me, a, "Voice", cx)
+    }
+
+    /// A paired machine's agent running a tool here (see `connect_ui::on_tool_call`).
+    pub(super) fn run_remote_sync_tool(&mut self, tool: &str, ws: &Workspace, me: &Pane, a: &Value, who: &str, cx: &mut Context<Self>) -> Result<String, String> {
+        self.run_sync_tool(tool, ws, me, a, who, cx)
     }
 
     fn run_sync_tool(&mut self, tool: &str, ws: &Workspace, me: &Pane, a: &Value, who: &str, cx: &mut Context<Self>) -> Result<String, String> {

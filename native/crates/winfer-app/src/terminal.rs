@@ -219,8 +219,12 @@ fn writer_thread(pane_id: String, rx: mpsc::Receiver<String>) {
             }
             pending.push(next);
         }
+        let data = pending.concat();
+        if crate::connect_term::send_input(&pane_id, &data) {
+            continue;
+        }
         let app = backend::app();
-        let _ = pty::pty_write(app.state(), pane_id.clone(), pending.concat());
+        let _ = pty::pty_write(app.state(), pane_id.clone(), data);
     }
 }
 
@@ -229,6 +233,9 @@ fn resize_thread(pane_id: String, rx: mpsc::Receiver<(u16, u16)>) {
         // Each resize makes a TUI repaint everything: during a drag it only gets the final one.
         while let Ok(next) = rx.recv_timeout(std::time::Duration::from_millis(60)) {
             size = next;
+        }
+        if crate::connect_term::send_resize(&pane_id, size.0, size.1) {
+            continue;
         }
         let _ = pty::pty_resize(backend::app().state(), pane_id.clone(), size.0, size.1);
     }
@@ -285,7 +292,9 @@ impl Session {
         self.dirty.store(false, Ordering::Release);
     }
 
-    fn on_output(self: &Arc<Self>, bytes: &[u8]) {
+    /// Output from the process (or, for a remote tile, from the other machine).
+    pub fn on_output(self: &Arc<Self>, bytes: &[u8]) {
+        crate::connect_term::tap(&self.pane_id, bytes, self.is_code());
         let first = self.last_output.swap(now_ms(), Ordering::Relaxed) == 0;
         if first {
             let _ = self.events.try_send(Event::FirstOutput(self.pane_id.clone()));
@@ -380,7 +389,15 @@ impl Session {
         }
     }
 
+    /// The tile's size; ignored while a paired machine sizes this pane (see `connect_term`).
     pub fn resize(&self, cols: usize, rows: usize) {
+        if crate::connect_term::sized_by(&self.pane_id).is_some() {
+            return;
+        }
+        self.force_resize(cols, rows);
+    }
+
+    pub fn force_resize(&self, cols: usize, rows: usize) {
         let new = Size { cols: cols.max(2), rows: rows.max(2) };
         {
             let mut size = self.size.lock();
@@ -650,6 +667,16 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
     if session.spawned.swap(true, Ordering::AcqRel) {
         return;
     }
+    // Another machine's pane: its process runs there; attach to it.
+    if let Some(remote) = pane.remote.clone() {
+        crate::connect_term::register(&pane.id, &remote.peer, &remote.pane);
+        session.ready.store(true, Ordering::Release);
+        let size = *session.size.lock();
+        crate::connect::send(&remote.peer, json!({"t": "term.attach", "paneId": remote.pane, "cols": size.cols, "rows": size.rows}));
+        let _ = events.try_send(Event::Spawned { pane_id: pane.id.clone(), busy: false, task: None });
+        let _ = settings;
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         let id = pane.id.clone();
         let mut pane = pane;
@@ -737,6 +764,11 @@ pub fn spawn(session: Arc<Session>, pane: Pane, settings: SpawnSettings, events:
 /// Kills the process and forgets the session.
 pub fn close(pane_id: &str) {
     SESSIONS.remove(pane_id);
+    // A remote tile: detach; the pane keeps running on its machine.
+    if let Some((peer, pane)) = crate::connect_term::unregister(pane_id) {
+        crate::connect::send(&peer, json!({"t": "term.detach", "paneId": pane}));
+        return;
+    }
     let id = pane_id.to_string();
     backend::background(move || pty::pty_kill(backend::app().state(), id));
 }

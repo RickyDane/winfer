@@ -58,6 +58,7 @@ pub fn start() -> Result<(), String> {
     usage_history::start(&app);
     hooks::start(app.clone(), &data_dir).map_err(|e| e.to_string())?;
     mobile::start(app.clone(), &data_dir);
+    crate::connect::start(app.clone(), &data_dir);
     browser::kill_orphans(&app);
     // Development aid: where a test client can reach the hook server.
     #[cfg(debug_assertions)]
