@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824" width="824" height="824">
   <!-- winfer: agent panes tiled side by side (a terminal prompt, a voice waveform, a status
-       line) on the app's indigo. macOS icon grid: 824px tile, 100px margin. -->
+       line) on the app's indigo, full bleed so the UI container rounds the corners cleanly. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#7b88ff"/>
@@ -15,12 +15,9 @@
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
       <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0b0b2a" flood-opacity="0.35"/>
-    </filter>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)" filter="url(#drop)"/>
-  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#sheen)"/>
+  <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
 
   <!-- left pane: terminal prompt -->
   <rect x="190" y="190" width="318" height="644" rx="64" fill="url(#pane)"/>

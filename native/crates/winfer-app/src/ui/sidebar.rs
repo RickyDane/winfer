@@ -692,7 +692,7 @@ impl Root {
             .tooltip(move |window, cx| Tooltip::new(settings_tip.clone()).build(window, cx))
             .on_click(cx.listener(|this, _, window, cx| this.execute(Command::Settings(None), window, cx)))
             .child(Icon::new(IconName::Settings).size(px(14.0)));
-        let logo = div().size(px(26.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(7.0)).bg(Hsla { a: 0.14, ..c.accent }).child(img(LOGO.clone()).size(px(18.0)));
+        let logo = img(LOGO.clone()).size(px(26.0)).flex_shrink_0().rounded(px(7.0)).object_fit(ObjectFit::Cover);
         if rail {
             return div().flex().flex_col().items_center().gap_1().py_2()
                 .child(logo).children(update_button).child(settings_button);
@@ -853,5 +853,14 @@ mod tests {
         assert_eq!(checkout_details("/r/.wt/a/src", Some(&list)), vec!["Branch: winfer/a", "Worktree: /r/.wt/a", "Base branch: main", "Changes: uncommitted changes"]);
         assert_eq!(checkout_details("/x", Some(&None)), vec!["Branch / worktree: unavailable"]);
         assert_eq!(checkout_details("/x", None), vec!["Branch: checking…"]);
+    }
+
+    #[test]
+    fn logo_covers_full_tile_without_outer_padding() {
+        let tree = resvg::usvg::Tree::from_data(include_bytes!("../../assets/logo.svg"), &resvg::usvg::Options::default()).expect("valid logo.svg");
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(26, 26).expect("pixmap");
+        let scale = resvg::tiny_skia::Transform::from_scale(26.0 / tree.size().width(), 26.0 / tree.size().height());
+        resvg::render(&tree, scale, &mut pixmap.as_mut());
+        assert!(pixmap.pixels().iter().all(|p| p.alpha() == 255), "logo.svg left transparent outer pixels when rendered at 26x26");
     }
 }
