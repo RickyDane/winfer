@@ -20,3 +20,5 @@ serde_json.workspace = true
 async-channel = "2"
 parking_lot = "0.12"
 dirs = "7.0.0"
+ureq = "3.4.2"
+sha2 = "0.11.1"

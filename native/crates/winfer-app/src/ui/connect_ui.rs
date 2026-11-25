@@ -4,6 +4,7 @@
 
 use super::commands::{Command, PaneRef};
 use super::menu::MenuItem;
+use super::settings_kit::alpha;
 use super::*;
 use gpui_kit::component::tooltip::Tooltip;
 use serde_json::{Value, json};
@@ -72,6 +73,25 @@ pub struct Mirror {
     pub providers: Vec<(String, String)>,
     pub default_provider: Option<String>,
     pub loaded: bool,
+    /// A winferd's version and the newer release it found.
+    pub server: Option<ServerInfo>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ServerInfo {
+    pub version: String,
+    pub update: Option<String>,
+    pub docker: bool,
+}
+
+impl ServerInfo {
+    fn parse(v: &Value) -> Option<ServerInfo> {
+        Some(ServerInfo {
+            version: v["version"].as_str()?.to_string(),
+            update: v["update"].as_str().map(str::to_string),
+            docker: v["docker"].as_bool().unwrap_or(false),
+        })
+    }
 }
 
 #[derive(Default)]
@@ -331,6 +351,7 @@ impl Root {
                     providers: msg["providers"].as_array().into_iter().flatten().map(|p| (p["id"].as_str().unwrap_or_default().to_string(), p["name"].as_str().unwrap_or_default().to_string())).collect(),
                     default_provider: msg["defaultProvider"].as_str().map(str::to_string),
                     loaded: true,
+                    server: ServerInfo::parse(&msg["server"]),
                 };
                 self.connect.mirrors.insert(peer, mirror);
                 cx.notify();
@@ -711,6 +732,23 @@ impl Root {
                     .child(Icon::new(icon).size(px(12.0)).text_color(c.muted))
                     .child(div().absolute().right(px(-2.0)).bottom(px(-2.0)).size(px(7.0)).rounded_full().bg(if up { c.success } else { c.subtle })))
                 .child(div().flex_1().min_w_0().truncate().child(peer.name.clone()))
+                .when_some(mirror.server.clone().filter(|_| up).and_then(|sv| sv.update.clone().map(|u| (sv, u))), |d, (sv, update)| {
+                    let (peer, name) = (peer.peer_id.clone(), peer.name.clone());
+                    let tip = if sv.docker { format!("winferd {} → {update}\nClick to copy the docker pull command", sv.version) } else { format!("winferd {} → {update}\nClick to update and restart it", sv.version) };
+                    d.child(div().id(SharedString::from(format!("peer-update-{}", peer))).px_1p5().rounded_sm().text_size(px(10.5)).text_color(c.accent).bg(alpha(c.accent, 0.12)).hover(move |d| d.bg(alpha(c.accent, 0.22)))
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            if sv.docker {
+                                cx.write_to_clipboard(ClipboardItem::new_string("docker pull ghcr.io/rickydane/winferd".to_string()));
+                                this.toast(format!("{name} runs in Docker: pull the new image (copied) and recreate the container"), cx);
+                            } else {
+                                this.connect_request(&peer, json!({"t": "server.update"}), Some(format!("Couldn't update {name}")));
+                                this.toast(format!("Updating {name} to {update}…"), cx);
+                            }
+                        }))
+                        .child("Update"))
+                })
                 .when(waiting > 0, |d| d.child(div().text_size(px(10.5)).text_color(c.warning).child(format!("{waiting} need{} you", if waiting == 1 { "s" } else { "" }))))
                 .when(waiting == 0 && agents > 0, |d| d.child(div().text_size(px(10.5)).text_color(c.subtle).font_family(mono.clone()).child(format!("{agents} agent{}", if agents == 1 { "" } else { "s" }))))
                 .when(up && mirror.loaded, |d| d.child(div().id(SharedString::from(format!("peer-new-{}", peer.peer_id))).rounded_sm().p_0p5().text_color(c.subtle).hover(move |d| d.bg(c.active).text_color(c.fg))

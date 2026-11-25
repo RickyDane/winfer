@@ -24,8 +24,20 @@ fn field<'a>(v: &'a Value, camel: &str, snake: &str) -> &'a str {
 }
 
 /// The daemon's chores each second: requests from the CLI, and what it should know.
-pub fn tick(connect: &Connect) {
+pub fn tick(connect: &Connect, host: &crate::host::Host) {
     let dir = dir();
+    if let Ok(tag) = std::fs::read_to_string(dir.join("update")) {
+        let _ = std::fs::remove_file(dir.join("update"));
+        let tag = tag.trim();
+        let result = host.update((!tag.is_empty()).then_some(tag));
+        let _ = std::fs::write(dir.join("update.json"), match &result {
+            Ok(v) => json!({"ok": true, "version": v}),
+            Err(e) => json!({"ok": false, "error": e}),
+        }.to_string());
+        if result.is_ok() {
+            crate::update::restart(&crate::update::exe().unwrap_or_default());
+        }
+    }
     if let Ok(link) = std::fs::read_to_string(dir.join("pair.link")) {
         let _ = std::fs::remove_file(dir.join("pair.link"));
         // The link's one-time key authenticates both sides: confirm the code by ourselves.
@@ -198,5 +210,59 @@ pub fn unpair(name: &str) -> i32 {
                 }
             }
         }
+    }
+}
+
+/// `winferd update [--check] [--version <tag>]`.
+pub fn update(check_only: bool, tag: Option<String>) -> i32 {
+    use crate::update;
+    let latest = match tag.clone().map(Ok).unwrap_or_else(update::check) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Couldn't check for updates: {e}");
+            return 1;
+        }
+    };
+    let newer = winfer_core::version::compare_versions(&latest, update::VERSION) == std::cmp::Ordering::Greater;
+    if check_only || (!newer && tag.is_none()) {
+        println!("winferd {} · newest release {latest}{}", update::VERSION, if newer { " (update available)" } else { " (up to date)" });
+        return 0;
+    }
+    if update::in_docker() {
+        eprintln!("{}", update::docker_hint());
+        return 1;
+    }
+    match backend::acquire_instance_lock() {
+        // A daemon runs: it updates and restarts itself.
+        None => {
+            let _ = std::fs::remove_file(dir().join("update.json"));
+            let _ = std::fs::write(dir().join("update"), &latest);
+            println!("Updating the running winferd to {latest}…");
+            for _ in 0..600 {
+                std::thread::sleep(Duration::from_millis(500));
+                if let Some(v) = std::fs::read_to_string(dir().join("update.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+                    let _ = std::fs::remove_file(dir().join("update.json"));
+                    return if v["ok"] == true {
+                        println!("Updated to {}; winferd restarted.", v["version"].as_str().unwrap_or(&latest));
+                        0
+                    } else {
+                        eprintln!("Update failed: {}", v["error"].as_str().unwrap_or("unknown error"));
+                        1
+                    };
+                }
+            }
+            eprintln!("winferd didn't answer");
+            1
+        }
+        Some(_lock) => match update::exe().and_then(|exe| update::install(&latest, &exe)) {
+            Ok(v) => {
+                println!("Updated to {v}.");
+                0
+            }
+            Err(e) => {
+                eprintln!("Update failed: {e}");
+                1
+            }
+        },
     }
 }

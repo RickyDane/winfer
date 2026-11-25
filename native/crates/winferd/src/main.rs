@@ -4,6 +4,7 @@
 mod control;
 mod host;
 mod service;
+mod update;
 
 use std::time::Duration;
 use winfer_backend::{harness, hooks, mcp, usage};
@@ -17,6 +18,7 @@ usage:
   winferd status                                         paired machines, links and panes
   winferd unpair <name>                                  forget a paired machine
   winferd service install|uninstall                      run at login/boot (systemd user unit, launchd agent)
+  winferd update [--check] [--version <tag>]             update to the newest release (and restart the daemon)
   winferd --version
 
 environment:
@@ -55,6 +57,7 @@ fn main() {
                 Err(e) => fail(&e),
             }
         }
+        Some("update") => std::process::exit(control::update(rest.iter().any(|a| a == "--check"), flag(rest, "--version"))),
         Some("help" | "--help" | "-h") => println!("{HELP}"),
         Some(other) => fail(&format!("unknown command {other}\n\n{HELP}")),
     }
@@ -89,6 +92,7 @@ fn run(args: &[String]) {
     // Servers are reached through the relay; the LAN listener only on request.
     connect.set_discoverable(args.iter().any(|a| a == "--lan"));
     let host = host::Host::start();
+    update::watch();
     if let Some(link) = flag(args, "--pair").or_else(|| std::env::var("WINFERD_PAIR").ok()).filter(|l| !l.trim().is_empty()) {
         control::request_pair(&link);
     }
@@ -96,6 +100,6 @@ fn run(args: &[String]) {
     loop {
         std::thread::sleep(Duration::from_secs(1));
         host.tick();
-        control::tick(connect);
+        control::tick(connect, &host);
     }
 }

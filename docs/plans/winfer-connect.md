@@ -313,8 +313,10 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   `WINFERD_PAIR`, Claude Code starts in a tile), release jobs (`winferd`: tarballs + `.sha256` + `install.sh` per
   release; `winferd-image`: `ghcr.io/<owner>/winferd` amd64+arm64 from those binaries), the relay's `/install.sh`
   redirect (not deployed yet), and Settings → Connect → "Add a server…" (install or `docker run` command with a fresh
-  link). Still to do: the update flow (`winferd update`, "Update available" per server) and a first release to
-  exercise the CI jobs.
+  link). Update flow: `winferd update [--check]` (or the desktop's "Update" pill on the server's row,
+  `server.update`) downloads the newest stable release (`winferd-version.txt`), checks its sha256, swaps the binary and
+  re-executes itself (same pid); servers check every 6 h and report `server {version, update, docker}` in their mirror.
+  Docker servers get the `docker pull` command instead. Still to do: a first release to exercise the CI jobs.
 
 ## Headless risks / notes
 

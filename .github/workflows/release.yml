@@ -115,7 +115,9 @@ jobs:
           name=winferd-${{ matrix.asset }}
           tar -C native/target/${{ matrix.target }}/release -czf "$name.tar.gz" winferd
           shasum -a 256 "$name.tar.gz" | cut -d' ' -f1 > "$name.tar.gz.sha256"
-          gh release upload "$TAG" "$name.tar.gz" "$name.tar.gz.sha256" native/crates/winferd/install.sh --clobber
+          # winferd update reads the newest stable release's tag from releases/latest/download/.
+          echo "$TAG" > winferd-version.txt
+          gh release upload "$TAG" "$name.tar.gz" "$name.tar.gz.sha256" native/crates/winferd/install.sh winferd-version.txt --clobber
 
   # winferd's Docker image (amd64 + arm64) from the release's binaries: ghcr.io/<owner>/winferd
   # :<version>, and :latest (stable) or :nebula (Nebula builds).

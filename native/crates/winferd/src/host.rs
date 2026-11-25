@@ -161,6 +161,24 @@ impl Host {
         self.save();
     }
 
+    /// Installs `tag` (default: the newest release) over this binary and saves the state; the caller
+    /// restarts. Returns the version installed.
+    pub fn update(&self, tag: Option<&str>) -> Result<String, String> {
+        let tag = match tag {
+            Some(t) => t.to_string(),
+            None => crate::update::available().map(Ok).unwrap_or_else(|| {
+                let latest = crate::update::check()?;
+                crate::update::available().ok_or(format!("Already up to date ({latest})."))
+            })?,
+        };
+        let exe = crate::update::exe()?;
+        eprintln!("updating to {tag}…");
+        let version = crate::update::install(&tag, &exe)?;
+        self.save();
+        eprintln!("updated to {version}, restarting");
+        Ok(version)
+    }
+
     fn save(&self) {
         let snapshot = self.state.lock().snapshot();
         let text = snapshot.to_string();
@@ -204,13 +222,17 @@ impl Host {
         let panes: Vec<Value> = s.workspaces.iter().flat_map(ordered).map(|p| Self::pane_json(&s, p)).collect();
         let workspaces: Vec<Value> = s.workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "active": w.id == s.active_workspace_id })).collect();
         let providers: Vec<Value> = s.providers.iter().filter(|p| p.installed && p.id != "shell").map(|p| json!({ "id": p.id, "name": p.name })).collect();
-        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id() })
+        let server = json!({
+            "version": crate::update::VERSION, "latest": crate::update::latest_known(), "update": crate::update::available(),
+            "docker": crate::update::in_docker(), "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+        });
+        json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "server": server })
     }
 
     fn shape_of(s: &AppState) -> String {
         let ws: Vec<String> = s.workspaces.iter().map(|w| format!("{}={}:{}", w.id, w.name, ordered(w).iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(","))).collect();
         let agents: Vec<&str> = s.providers.iter().filter(|p| p.installed).map(|p| p.id.as_str()).collect();
-        format!("{}|{}", ws.join(";"), agents.join(","))
+        format!("{}|{}|{:?}", ws.join(";"), agents.join(","), crate::update::available())
     }
 
     /// Sends what changed since the last push: the whole mirror when panes came, went or moved,
@@ -271,6 +293,24 @@ impl Host {
                 connect::send(peer, json!({"t": "tool.result", "id": msg["id"], "ok": ok, "text": text}));
             }
             "pane.new" => reply(self.new_pane(msg, peer)),
+            "server.update" => {
+                // Takes a while (download): answered from its own thread, then the restart.
+                let (peer, id) = (peer.to_string(), msg["id"].clone());
+                std::thread::spawn(move || {
+                    let Some(host) = HOST.get() else { return };
+                    let result = host.update(None);
+                    let mut answer = match &result {
+                        Ok(v) => json!({"t": "ack", "ok": true, "version": v}),
+                        Err(e) => json!({"t": "ack", "ok": false, "error": e}),
+                    };
+                    answer["id"] = id;
+                    connect::send(&peer, answer);
+                    if result.is_ok() {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        crate::update::restart(&crate::update::exe().unwrap_or_default());
+                    }
+                });
+            }
             "connect.presence" => {}
             "thread.get" => reply(json!({"t": "error", "error": "Open the pane to see it."})),
             "config.get" => reply(json!({"t": "config", "paneId": msg["paneId"], "models": []})),

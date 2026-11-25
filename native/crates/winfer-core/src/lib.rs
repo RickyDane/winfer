@@ -10,6 +10,7 @@ pub mod request;
 pub mod status;
 pub mod terminal;
 pub mod theme;
+pub mod version;
 
 pub mod code {
     pub mod bg_note;

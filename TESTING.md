@@ -168,6 +168,8 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
 - [ ] `winferd status` lists the desktop as online; `winferd unpair <name>` removes it on both sides.
 - [ ] `install.sh --pair '<link>' --name <name>` on a fresh Linux box with systemd: installs to `~/.local/bin`, starts the
   user service, prints the code; the desktop shows `<name>`. Without systemd it says how to start it.
+- [ ] With a newer release out: the server's row shows "Update"; clicking it updates and restarts winferd (tiles
+  re-attach); `winferd update --check` / `winferd update` do the same from the server.
 - [ ] `docker build -f native/crates/winferd/Dockerfile -t winferd .` then `docker run -d -v winferd:/data -e
   WINFERD_PAIR='<link>' -e WINFERD_AGENTS=claude winferd`: pairs (code in `docker logs`), `claude` runs in a tile.
 
