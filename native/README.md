@@ -56,6 +56,12 @@ Done:
   Settings → Usage (cost/token charts, models, by task, limits with projections, tool stats)
 - [x] Title bar: provider menu on New (usage left, default star, per-model start), live-voice button, TLS toggle in the browser, pane notes, review "send back", full Diagnostics page (memory timeline, log folder, crash log)
 - [x] Mobile bridge: same wire protocol (mirror, threads, send, choose, approve, new pane). Chat panes (winfer code) stream their live thread to the phone and hand it their exact approvals and question forms, answered from the phone; plugin approvals show on the phone too
+- [x] Winfer Connect (`crates/winfer-connect`, docs/connect/protocol.md): pair winfer instances by pair link (relay)
+  or on the LAN (mDNS + 6-digit code), end-to-end encrypted over the relay with a direct LAN path when possible;
+  Settings → Connect; the sidebar's Connected section with each machine's sessions, approve/decline/interrupt/close and
+  new sessions there; remote panes as live tiles (terminals and winfer code chats) where opening one takes over its
+  size; native notifications for remote sessions; `list_machines`, `list_remote_panes`, `spawn_remote_agent` and
+  `machine:N` panes in `read_pane`/`send_to_pane` for agents
 - [x] Android mirror: live H.264 (openh264) with screenshot fallback, tap, swipe, scroll, keys, emulator start
 - [x] Limit handoff ("Continue in …") and Codex reset credits
 - [x] Settings → Voice (with native microphone test), AI, winfer code, Mobile, Plugins, Skills

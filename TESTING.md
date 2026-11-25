@@ -138,6 +138,25 @@ Tick what works; note anything that doesn't (what you did, what you expected, wh
 - [ ] Spinners on: diff loading and refresh, sessions refresh, settings Save / Test connection, "Starting browser…", worktree being removed; history shows placeholder cards while searching; review cards show a placeholder summary.
 - [ ] macOS "Reduce motion" turns the animations off (spinners keep turning).
 
+## 6c. Winfer Connect (native)
+Two instances on one Mac: `WINFER_NATIVE_IDENTIFIER=dev.winfer.native.connect-a WINFER_VAULT_FILE=/tmp/a.json` and the
+same with `-b`. Until the relay with peer rooms is deployed, run `npx wrangler dev --port 8799` in `relay/` and set
+Settings → Connect → Relay URL to `http://127.0.0.1:8799` on both. `WINFER_CONNECT_TRACE=1` prints the link's steps.
+- [ ] Settings → Connect shows the other instance under "On this network"; Pair → both show the same code; "Codes match"
+  on both → each lists the other under Paired machines with "LAN · n ms".
+- [ ] Create pair link on A, paste into "Got a link?" on B → same code on both → paired; "They don't match" cancels on both.
+- [ ] The sidebar's Connected section lists the other machine's workspaces and sessions with live status; "+" starts a
+  session there; right-click → Interrupt / Close on that machine.
+- [ ] Click a remote shell: it opens as a tile "… · <machine>"; typing works; the other machine's tile says "Viewed on
+  <name> · Take back"; Take back → this tile says "Sized by <name> · Fit here"; typing takes the size back.
+- [ ] Click a remote WinferCode chat: the chat UI shows its transcript; sending a message runs it on the other machine.
+- [ ] Quit and reopen: remote tiles come back and re-attach. Quit the other machine: tiles say "offline · reconnecting…".
+- [ ] A remote agent finishing while you're away from it: native notification "<title> · finished on <machine>"; none
+  while you were active on that machine in the last 2 minutes.
+- [ ] An agent here calls `list_machines`, `list_remote_panes`, `send_to_pane` with `"<machine>:1"`, `read_pane`, and
+  `spawn_remote_agent`.
+- [ ] Unpair on one side: the other side drops the pairing too.
+
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.
 - [ ] Shortcuts use Ctrl+Shift (Ctrl+Shift+T new pane, Ctrl+Shift+K palette, Ctrl+Shift+/ shortcuts); tooltips and the empty screen show the same keys.
