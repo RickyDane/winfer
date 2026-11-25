@@ -1,0 +1,22 @@
+[package]
+name = "winferd"
+version.workspace = true
+edition.workspace = true
+
+# winfer without a window, for servers (docs/plans/winfer-connect.md, headless H2): runs agents and
+# terminals with winfer-core and serves them to paired winfer instances over Winfer Connect.
+# Must not link GPUI or wry: it builds and runs on display-less Linux.
+
+[[bin]]
+name = "winferd"
+path = "src/main.rs"
+
+[dependencies]
+winfer-core = { path = "../winfer-core" }
+winfer-backend.workspace = true
+winfer-connect = { path = "../winfer-connect" }
+tauri.workspace = true
+serde_json.workspace = true
+async-channel = "2"
+parking_lot = "0.12"
+dirs = "7.0.0"

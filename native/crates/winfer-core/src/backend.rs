@@ -32,6 +32,11 @@ pub fn identifier() -> String {
     std::env::var("WINFER_NATIVE_IDENTIFIER").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| profile().identifier.into())
 }
 
+/// Where this profile keeps its data (the same folder `start` uses).
+pub fn data_dir() -> std::path::PathBuf {
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join(identifier())
+}
+
 static APP: OnceLock<AppHandle> = OnceLock::new();
 
 pub fn app() -> &'static AppHandle {

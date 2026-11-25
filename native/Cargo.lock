@@ -11721,6 +11721,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "winferd"
+version = "0.1.101"
+dependencies = [
+ "async-channel",
+ "dirs 7.0.0",
+ "parking_lot",
+ "serde_json",
+ "tauri",
+ "winfer-backend",
+ "winfer-connect",
+ "winfer-core",
+]
+
+[[package]]
 name = "winnow"
 version = "0.5.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
