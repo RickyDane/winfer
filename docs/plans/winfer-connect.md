@@ -294,6 +294,25 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
 | H7 | Usage + phone | usage/limits per machine, mobile bridge on the server | phone paired to the server gets push with desktop closed |
 | H8 | Headless browser | Chromium on the server, screencast panel over Connect | agent uses browser tools on the server, user watches/clicks from desktop |
 
+### Progress
+
+- **H0** done: backend, Connect and winfer-core build and pass their tests on Debian bookworm without display libraries
+  (shell falls back to bash/sh when zsh is missing).
+- **H1** in part: `winfer-core` has requests, layout, the chat protocol/state/names/bg notes, the model, theme metadata
+  and the terminal palette, the backend start (`backend::Profile`: desktop or server), Connect glue, remote terminals,
+  PTY sessions and agent status (over a `status::Cell`; the app wraps its GPUI entity). Telemetry, window focus and the
+  voice orchestrator come in through `winfer_core::hooks`. Still in the app: the chat session runner
+  (`code/session.rs`), the agent API and the mobile host. `winferd` has its own small host for now.
+- **H2** MVP done (`native/crates/winferd`): `run`, `pair`, `status`, `unpair`, `service install|uninstall`, and the
+  agent subcommands. Its host serves the mirror, `term.*`, pane new/close/send/approve/decline/interrupt, cross-machine
+  tools and its own agents' basic tools. Tested: desktop ⇄ winferd on macOS (LAN and relay) and in a Linux container
+  (relay), shell tiles, restart and re-attach, tools both ways. Not yet: chat panes' first message and approvals on a
+  server, `models.get`/`usage.get`, the live systemd/launchd service (unit tests only).
+- **H3** in part: `install.sh` (tested in a clean container with a local download), the Docker image
+  (`native/crates/winferd/Dockerfile`, agents via `WINFERD_AGENTS`), and a `winferd` job in `release.yml` that uploads
+  `winferd-<os>-<arch>.tar.gz` + `.sha256` + `install.sh` to each release. Still to do: serving `/install.sh` from the
+  relay, the desktop's "Add server…" wizard and the update flow.
+
 ## Headless risks / notes
 
 - **H1 is the long pole:** extraction touches the app's central code. Mitigation: one module per PR, desktop behavior unchanged, tests first.

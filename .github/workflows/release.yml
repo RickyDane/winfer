@@ -70,6 +70,53 @@ jobs:
           fi
           echo "id=$(gh release view "$TAG" --json databaseId -q .databaseId)" >> "$GITHUB_OUTPUT"
 
+  # winferd, winfer for servers (native/crates/winferd): one tarball + checksum per platform,
+  # winferd-<os>-<arch>.tar.gz, which install.sh fetches. Linux builds on 22.04 (glibc 2.35).
+  winferd:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: linux-x86_64
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: linux-aarch64
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            asset: macos-aarch64
+          - platform: macos-15
+            target: x86_64-apple-darwin
+            asset: macos-x86_64
+    runs-on: ${{ matrix.platform }}
+    env:
+      RUSTC_WRAPPER: sccache
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Stamp version
+        run: |
+          VERSION=${TAG#v} perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' native/Cargo.toml
+          grep -q "^version = \"${TAG#v}\"" native/Cargo.toml || { echo "::error::Couldn't stamp $TAG into native/Cargo.toml"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: ./.github/actions/sccache
+      - name: Build
+        working-directory: native
+        run: cargo build --release --locked -p winferd --target ${{ matrix.target }}
+      - name: Package and upload
+        run: |
+          name=winferd-${{ matrix.asset }}
+          tar -C native/target/${{ matrix.target }}/release -czf "$name.tar.gz" winferd
+          shasum -a 256 "$name.tar.gz" | cut -d' ' -f1 > "$name.tar.gz.sha256"
+          gh release upload "$TAG" "$name.tar.gz" "$name.tar.gz.sha256" native/crates/winferd/install.sh --clobber
+
   # The native GPUI build (native/) of this version, into the release.
   native-bundle:
     needs: release

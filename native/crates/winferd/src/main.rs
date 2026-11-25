@@ -3,6 +3,7 @@
 
 mod control;
 mod host;
+mod service;
 
 use std::time::Duration;
 use winfer_backend::{harness, hooks, mcp, usage};
@@ -15,6 +16,7 @@ usage:
   winferd pair <link>                                    pair with a winfer desktop (Settings → Connect)
   winferd status                                         paired machines, links and panes
   winferd unpair <name>                                  forget a paired machine
+  winferd service install|uninstall                      run at login/boot (systemd user unit, launchd agent)
   winferd --version
 
 environment:
@@ -36,12 +38,23 @@ fn main() {
         Some("--version" | "-v" | "-V") => println!("winferd {}", env!("CARGO_PKG_VERSION")),
         None | Some("run") => run(rest),
         Some("pair") => match rest.first() {
-            Some(link) => std::process::exit(control::pair(link)),
+            Some(link) => std::process::exit(control::pair(link, name(rest).as_deref())),
             None => fail("usage: winferd pair <link>"),
         },
         Some("status") => std::process::exit(control::status()),
         Some("unpair") if !rest.is_empty() => std::process::exit(control::unpair(&rest.join(" "))),
         Some("unpair") => fail("usage: winferd unpair <name>"),
+        Some("service") => {
+            let result = match rest.first().map(String::as_str) {
+                Some("install") => service::install(),
+                Some("uninstall") => service::uninstall(),
+                _ => fail("usage: winferd service install|uninstall"),
+            };
+            match result {
+                Ok(text) => println!("{text}"),
+                Err(e) => fail(&e),
+            }
+        }
         Some("help" | "--help" | "-h") => println!("{HELP}"),
         Some(other) => fail(&format!("unknown command {other}\n\n{HELP}")),
     }
@@ -56,6 +69,12 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// This server's name: `--name`, `WINFERD_NAME`, or what `install.sh --name` saved.
+pub fn name(args: &[String]) -> Option<String> {
+    let saved = || dirs::home_dir().and_then(|h| std::fs::read_to_string(h.join(".config/winferd/name")).ok());
+    flag(args, "--name").or_else(|| std::env::var("WINFERD_NAME").ok()).or_else(saved).map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
+}
+
 fn run(args: &[String]) {
     let Some(_lock) = backend::acquire_instance_lock() else {
         fail("winferd is already running (one per user and data folder)");
@@ -64,7 +83,7 @@ fn run(args: &[String]) {
         fail(&format!("winferd failed to start: {err}"));
     }
     let connect = winfer_core::connect::get().expect("connect started");
-    if let Some(name) = flag(args, "--name").or_else(|| std::env::var("WINFERD_NAME").ok()).filter(|n| !n.trim().is_empty()) {
+    if let Some(name) = name(args) {
         connect.rename(&name);
     }
     // Servers are reached through the relay; the LAN listener only on request.

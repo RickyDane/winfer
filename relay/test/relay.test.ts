@@ -54,6 +54,12 @@ const isData = (f: string) => !f.startsWith("{");
 const isPresence = (f: string) => f.startsWith("{");
 
 describe("relay", () => {
+  it("sends /install.sh to the latest release's installer", async () => {
+    const res = await exports.default.fetch("http://relay/install.sh", { redirect: "manual" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://github.com/RickyDane/winfer/releases/latest/download/install.sh");
+  });
+
   it("rejects malformed room/auth", async () => {
     const res = await exports.default.fetch(`http://relay/r/short?role=phone&auth=${AUTH}`, {
       headers: { Upgrade: "websocket" },

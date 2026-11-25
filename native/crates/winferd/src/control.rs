@@ -104,7 +104,7 @@ fn follow(next: impl Fn() -> Option<Value>) -> i32 {
 }
 
 /// `winferd pair <link>`.
-pub fn pair(link: &str) -> i32 {
+pub fn pair(link: &str, name: Option<&str>) -> i32 {
     match backend::acquire_instance_lock() {
         // A daemon runs: it does the pairing.
         None => {
@@ -118,6 +118,9 @@ pub fn pair(link: &str) -> i32 {
                 return 1;
             }
             let connect = winfer_core::connect::get().expect("connect started");
+            if let Some(name) = name {
+                connect.rename(name);
+            }
             if let Err(e) = connect.pair_join_link(link, true) {
                 eprintln!("Pairing failed: {e}");
                 return 1;

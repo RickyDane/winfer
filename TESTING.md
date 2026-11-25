@@ -157,6 +157,20 @@ Settings → Connect → Relay URL to `http://127.0.0.1:8799` on both. `WINFER_C
   `spawn_remote_agent`.
 - [ ] Unpair on one side: the other side drops the pairing too.
 
+## 6d. winferd (servers)
+Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it links only libc). A throwaway copy:
+`WINFER_NATIVE_IDENTIFIER=dev.winfer.server.test winferd run`.
+- [ ] Settings → Connect → Create pair link; on the server `winferd pair '<link>'` (daemon running or not) prints the
+  code and "Paired with …"; the desktop lists the server (server icon) under Connected.
+- [ ] "+" on the server's row starts a shell/agent there; clicking it opens a tile; typing works.
+- [ ] Restart winferd: the tile re-attaches (a new shell); the server's panes are still listed.
+- [ ] An agent on the desktop: `spawn_remote_agent` on the server, `send_to_pane "<server>:1"`, `read_pane` shows its output.
+- [ ] `winferd status` lists the desktop as online; `winferd unpair <name>` removes it on both sides.
+- [ ] `install.sh --pair '<link>' --name <name>` on a fresh Linux box with systemd: installs to `~/.local/bin`, starts the
+  user service, prints the code; the desktop shows `<name>`. Without systemd it says how to start it.
+- [ ] `docker build -f native/crates/winferd/Dockerfile -t winferd .` then `docker run -d -v winferd:/data -e
+  WINFERD_PAIR='<link>' -e WINFERD_AGENTS=claude winferd`: pairs (code in `docker logs`), `claude` runs in a tile.
+
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.
 - [ ] Shortcuts use Ctrl+Shift (Ctrl+Shift+T new pane, Ctrl+Shift+K palette, Ctrl+Shift+/ shortcuts); tooltips and the empty screen show the same keys.

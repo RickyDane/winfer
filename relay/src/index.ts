@@ -14,6 +14,8 @@ const MAX_PHONES = 8;
 const MAX_PEERS = 2;
 const MAX_FRAME = 1 << 20;
 const IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+// winferd's installer (native/crates/winferd/install.sh), uploaded with every stable release.
+const INSTALL_SH = "https://github.com/RickyDane/winfer/releases/latest/download/install.sh";
 
 const text = (body: string, status: number) =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -21,6 +23,7 @@ const text = (body: string, status: number) =>
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/install.sh") return Response.redirect(INSTALL_SH, 302);
     const match = url.pathname.match(/^\/r\/([^/]+)\/?$/);
     if (!match) return env.ASSETS.fetch(request);
 
