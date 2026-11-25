@@ -8,6 +8,12 @@ pub trait Hooks: Send + Sync {
     fn turn_sent(&self, _model: &str, _effort: &str, _ultracode: bool) {}
     /// A pane was added.
     fn pane_opened(&self, _provider: &str, _effort: Option<&str>) {}
+    /// A pane got its own worktree.
+    fn worktree_created(&self, _provider: &str) {}
+    /// The backend set up its data dir (`backend::start`).
+    fn started(&self, _data_dir: &std::path::Path) {}
+    /// The app is quitting (`backend::shutdown`).
+    fn stopping(&self) {}
 }
 
 static HOOKS: OnceLock<Box<dyn Hooks>> = OnceLock::new();

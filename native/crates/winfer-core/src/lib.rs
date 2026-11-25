@@ -1,9 +1,13 @@
 //! winfer's GPUI-free core, shared by the desktop app and the headless `winferd`.
 
+pub mod backend;
+pub mod connect;
+pub mod connect_term;
 pub mod hooks;
 pub mod layout;
 pub mod model;
 pub mod request;
+pub mod terminal;
 pub mod theme;
 
 pub mod code {

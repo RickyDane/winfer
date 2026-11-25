@@ -4,13 +4,32 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use winfer_backend::{android, browser, chatgpt_voice, diagnostics, env, harness, hooks, mobile, plugins, pty, realtime, store, transfer, usage_history};
 
-/// Own folder and identifier: this build runs beside the Tauri app without sharing its database,
-/// hooks or browser profiles.
-const DEFAULT_IDENTIFIER: &str = "dev.winfer.native";
+/// What runs the backend: the desktop app or the headless `winferd`.
+#[derive(Clone, Copy)]
+pub struct Profile {
+    /// Own folder and identifier: the native app runs beside the Tauri app without sharing its
+    /// database, hooks or browser profiles; `winferd` beside both.
+    pub identifier: &'static str,
+    pub server: bool,
+}
+
+pub const DESKTOP: Profile = Profile { identifier: "dev.winfer.native", server: false };
+pub const SERVER: Profile = Profile { identifier: "dev.winfer.server", server: true };
+
+static PROFILE: OnceLock<Profile> = OnceLock::new();
+
+/// Sets the profile, before anything else uses the backend (default: the desktop).
+pub fn configure(profile: Profile) {
+    let _ = PROFILE.set(profile);
+}
+
+pub fn profile() -> Profile {
+    *PROFILE.get_or_init(|| DESKTOP)
+}
 
 /// `WINFER_NATIVE_IDENTIFIER` overrides it, to run a second copy with its own data and lock.
 pub fn identifier() -> String {
-    std::env::var("WINFER_NATIVE_IDENTIFIER").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| DEFAULT_IDENTIFIER.into())
+    std::env::var("WINFER_NATIVE_IDENTIFIER").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| profile().identifier.into())
 }
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
@@ -47,7 +66,9 @@ pub fn start() -> Result<(), String> {
     app.manage(chatgpt_voice::ChatgptVoice::default());
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     diagnostics::init(&data_dir);
-    crate::telemetry::init(&data_dir);
+    if let Some(h) = crate::hooks::get() {
+        h.started(&data_dir);
+    }
     diagnostics::breadcrumb("app setup".to_string());
     if let Err(e) = transfer::apply_pending(&data_dir) {
         diagnostics::error("import", &format!("import failed: {e}"));
@@ -75,5 +96,7 @@ pub fn shutdown() {
     app.state::<browser::BrowserManager>().shutdown();
     app.state::<android::AndroidManager>().shutdown();
     harness::bg::stop_all();
-    crate::telemetry::shutdown();
+    if let Some(h) = crate::hooks::get() {
+        h.stopping();
+    }
 }

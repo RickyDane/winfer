@@ -4,10 +4,16 @@
 
 mod audio;
 mod assets;
-mod backend;
+mod backend {
+    pub use winfer_core::backend::*;
+}
 mod code;
-mod connect;
-mod connect_term;
+mod connect {
+    pub use winfer_core::connect::*;
+}
+mod connect_term {
+    pub use winfer_core::connect_term::*;
+}
 mod dictation;
 mod fonts;
 mod mermaid;
@@ -19,7 +25,9 @@ mod request {
     pub use winfer_core::request::*;
 }
 mod status;
-mod terminal;
+mod terminal {
+    pub use winfer_core::terminal::*;
+}
 mod updates;
 mod voice;
 mod telemetry;
@@ -74,6 +82,7 @@ fn main() {
         eprintln!("winfer is already running");
         return;
     };
+    telemetry::install_hooks();
     if let Err(err) = backend::start() {
         eprintln!("winfer failed to start: {err}");
         std::process::exit(1);

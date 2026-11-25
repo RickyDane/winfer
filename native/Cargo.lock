@@ -11705,13 +11705,19 @@ dependencies = [
 name = "winfer-core"
 version = "0.1.101"
 dependencies = [
+ "alacritty_terminal",
+ "async-channel",
+ "base64 0.23.1",
  "dirs 7.0.0",
  "parking_lot",
  "rand 0.10.3",
  "regex",
  "serde",
  "serde_json",
+ "tauri",
+ "url",
  "winfer-backend",
+ "winfer-connect",
 ]
 
 [[package]]

@@ -121,10 +121,23 @@ impl winfer_core::hooks::Hooks for CoreHooks {
     fn pane_opened(&self, provider: &str, effort: Option<&str>) {
         pane_opened(provider, effort);
     }
+    fn worktree_created(&self, provider: &str) {
+        track("worktree_created", serde_json::json!({ "provider": provider_label(provider) }));
+    }
+    fn started(&self, data_dir: &Path) {
+        init(data_dir);
+    }
+    fn stopping(&self) {
+        shutdown();
+    }
+}
+
+/// Before `backend::start`, which calls `init` through them.
+pub fn install_hooks() {
+    winfer_core::hooks::install(Box::new(CoreHooks));
 }
 
 pub fn init(data_dir: &Path) {
-    winfer_core::hooks::install(Box::new(CoreHooks));
     let first_run = !data_dir.join(FILE).exists();
     let mut saved: Saved = std::fs::read_to_string(data_dir.join(FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     if saved.install_id.is_empty() {

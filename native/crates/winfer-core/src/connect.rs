@@ -20,7 +20,13 @@ pub fn get() -> Option<&'static Connect> {
 }
 
 pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
-    let store = SecretStore::keychain(&format!("{}.connect", crate::backend::identifier()));
+    let server = crate::backend::profile().server;
+    // Servers usually have no keychain (no Secret Service): a 0600 file in the data dir.
+    let store = if server && std::env::var_os("WINFER_VAULT_FILE").is_none() {
+        SecretStore::file(&data_dir.join("secrets.json"), "connect")
+    } else {
+        SecretStore::keychain(&format!("{}.connect", crate::backend::identifier()))
+    };
     let on = Arc::new(move |event: Event| {
         if std::env::var_os("WINFER_CONNECT_TRACE").is_some() && !matches!(event, Event::Changed) {
             eprintln!("[connect] {event:?}");
@@ -36,7 +42,7 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
             Event::Message { peer, msg } => app.emit("connect://message", json!({"peer": peer, "msg": msg})),
         };
     });
-    let connect = Connect::new(Persist::new(data_dir, store), Kind::Desktop, on);
+    let connect = Connect::new(Persist::new(data_dir, store), if server { Kind::Server } else { Kind::Desktop }, on);
     if CONNECT.set(connect.clone()).is_ok() {
         // Reading the peers may ask for the keychain: off the startup path.
         std::thread::spawn(move || {

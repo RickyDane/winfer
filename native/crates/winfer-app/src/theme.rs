@@ -2,7 +2,7 @@
 
 use gpui_kit::{Hsla, Rgba, rgba};
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,36 +118,4 @@ pub fn colors(id: &str) -> Colors {
     }
 }
 
-/// The terminal's palette: 16 ANSI colors, background, foreground, cursor.
-#[derive(Clone, Copy)]
-pub struct Palette {
-    pub ansi: [[u8; 3]; 16],
-    pub background: [u8; 3],
-    pub foreground: [u8; 3],
-    pub light: bool,
-}
-
-fn bytes(s: &str) -> [u8; 3] {
-    let c = rgb_of(s);
-    [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8]
-}
-
-fn palette_for(id: &str) -> Palette {
-    let t = theme_by_id(id);
-    Palette {
-        ansi: std::array::from_fn(|i| bytes(&t.ansi[i])),
-        background: bytes(&t.ui.panel),
-        foreground: bytes(&t.ui.fg),
-        light: t.mode == "light",
-    }
-}
-
-static PALETTE: LazyLock<RwLock<Palette>> = LazyLock::new(|| RwLock::new(palette_for("dark")));
-
-pub fn set_palette(id: &str) {
-    *PALETTE.write().unwrap() = palette_for(id);
-}
-
-pub fn palette() -> Palette {
-    *PALETTE.read().unwrap()
-}
+pub use winfer_core::theme::{Palette, palette, set_palette};
