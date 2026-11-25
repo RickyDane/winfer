@@ -11,7 +11,9 @@ mod connect_term;
 mod dictation;
 mod fonts;
 mod mermaid;
-mod model;
+mod model {
+    pub use winfer_core::model::*;
+}
 mod pdf;
 mod request {
     pub use winfer_core::request::*;

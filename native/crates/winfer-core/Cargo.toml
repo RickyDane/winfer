@@ -10,5 +10,8 @@ edition.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+winfer-backend.workspace = true
 regex = "1"
 parking_lot = "0.12"
+rand = "0.10.3"
+dirs = "7.0.0"

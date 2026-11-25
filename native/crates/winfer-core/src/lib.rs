@@ -2,7 +2,9 @@
 
 pub mod hooks;
 pub mod layout;
+pub mod model;
 pub mod request;
+pub mod theme;
 
 pub mod code {
     pub mod bg_note;

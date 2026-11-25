@@ -11705,10 +11705,13 @@ dependencies = [
 name = "winfer-core"
 version = "0.1.101"
 dependencies = [
+ "dirs 7.0.0",
  "parking_lot",
+ "rand 0.10.3",
  "regex",
  "serde",
  "serde_json",
+ "winfer-backend",
 ]
 
 [[package]]

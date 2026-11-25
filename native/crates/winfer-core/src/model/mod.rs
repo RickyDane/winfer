@@ -1,7 +1,7 @@
 //! The app's state (port of `src/stores/workspaces.ts`). The saved JSON matches the Tauri app's
 //! snapshot, so `data_export`/`data_import` move a setup between the two.
 
-pub use winfer_core::layout;
+pub use crate::layout;
 pub mod progress;
 
 use layout::{GRID, LayoutNode, PRESETS, build_preset, insert_dwindle, leaves, remove_leaf};
@@ -679,7 +679,9 @@ impl AppState {
     }
 
     pub fn add_pane(&mut self, provider: &str, opts: AddPane) -> String {
-        crate::telemetry::pane_opened(provider, opts.effort.as_deref());
+        if let Some(h) = crate::hooks::get() {
+            h.pane_opened(provider, opts.effort.as_deref());
+        }
         let workspace_id = opts.workspace_id.clone().unwrap_or_else(|| self.active_workspace_id.clone());
         let background = workspace_id != self.active_workspace_id;
         let id = new_id("p");
@@ -826,7 +828,7 @@ impl AppState {
     /// Picks a theme for its light or dark mode. Following the system stays on, and the theme
     /// only changes when it is the one for the system's current mode; otherwise it takes over.
     pub fn pick_theme(&mut self, id: &str, system_dark: bool) {
-        let def = crate::theme::theme_by_id(id);
+        let def = crate::theme::meta(id);
         self.theme_picks.insert(def.mode.clone(), def.id.clone());
         if self.theme_mode != "system" || def.mode == if system_dark { "dark" } else { "light" } {
             self.theme = def.id.clone();
@@ -837,10 +839,10 @@ impl AppState {
     /// theme or its counterpart.
     pub fn theme_for_system(&self, system_dark: bool) -> String {
         let want = if system_dark { "dark" } else { "light" };
-        if let Some(pick) = self.theme_picks.get(want).filter(|p| crate::theme::theme_by_id(p).mode == want) {
+        if let Some(pick) = self.theme_picks.get(want).filter(|p| crate::theme::meta(p).mode == want) {
             return pick.clone();
         }
-        let current = crate::theme::theme_by_id(&self.theme);
+        let current = crate::theme::meta(&self.theme);
         if current.mode == want { current.id.clone() } else { current.pair.clone() }
     }
 

@@ -1,4 +1,4 @@
-//! Color themes, the Tauri app's definitions exported to JSON (`assets/themes.json`).
+//! Color themes, the Tauri app's definitions exported to JSON (`winfer-core/assets/themes.json`).
 
 use gpui_kit::{Hsla, Rgba, rgba};
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ pub struct ThemeDef {
 }
 
 pub static THEMES: LazyLock<Vec<ThemeDef>> =
-    LazyLock::new(|| serde_json::from_str(include_str!("../assets/themes.json")).expect("themes.json"));
+    LazyLock::new(|| serde_json::from_str(winfer_core::theme::JSON).expect("themes.json"));
 
 pub fn theme_by_id(id: &str) -> &'static ThemeDef {
     THEMES.iter().find(|t| t.id == id).unwrap_or(&THEMES[0])
