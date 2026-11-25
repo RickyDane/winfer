@@ -1,0 +1,8 @@
+**/target
+**/node_modules
+**/dist
+.git
+graphify-out
+m-video
+.playwright-mcp
+.codegraph

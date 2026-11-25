@@ -309,9 +309,12 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   (relay), shell tiles, restart and re-attach, tools both ways. Not yet: chat panes' first message and approvals on a
   server, `models.get`/`usage.get`, the live systemd/launchd service (unit tests only).
 - **H3** in part: `install.sh` (tested in a clean container with a local download), the Docker image
-  (`native/crates/winferd/Dockerfile`, agents via `WINFERD_AGENTS`), and a `winferd` job in `release.yml` that uploads
-  `winferd-<os>-<arch>.tar.gz` + `.sha256` + `install.sh` to each release. Still to do: serving `/install.sh` from the
-  relay, the desktop's "Add server…" wizard and the update flow.
+  (`native/crates/winferd/Dockerfile` on `node:22-bookworm-slim`, agents via `WINFERD_AGENTS`; tested: pairs from
+  `WINFERD_PAIR`, Claude Code starts in a tile), release jobs (`winferd`: tarballs + `.sha256` + `install.sh` per
+  release; `winferd-image`: `ghcr.io/<owner>/winferd` amd64+arm64 from those binaries), the relay's `/install.sh`
+  redirect (not deployed yet), and Settings → Connect → "Add a server…" (install or `docker run` command with a fresh
+  link). Still to do: the update flow (`winferd update`, "Update available" per server) and a first release to
+  exercise the CI jobs.
 
 ## Headless risks / notes
 

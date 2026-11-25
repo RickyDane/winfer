@@ -63,11 +63,13 @@ impl Host {
                 }
             })
             .expect("event thread");
-        // Which agents are installed takes a few seconds (it runs each CLI).
+        // Which agents are installed takes a few seconds (it runs each CLI); again every few
+        // minutes, for agents installed since (in a shell tile, say).
         let h = host.clone();
-        std::thread::spawn(move || {
+        std::thread::spawn(move || loop {
             let found = tauri::async_runtime::block_on(providers::providers_list());
             h.state.lock().set_providers(found.into_iter().map(|p| AgentProvider { info: p.provider, installed: p.installed }).collect());
+            std::thread::sleep(std::time::Duration::from_secs(120));
         });
         host
     }
