@@ -130,6 +130,13 @@ impl winfer_core::hooks::Hooks for CoreHooks {
     fn stopping(&self) {
         shutdown();
     }
+    fn window_focused(&self) -> bool {
+        use tauri::Manager;
+        crate::backend::app().get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(true)
+    }
+    fn orchestrated(&self, pane_id: &str) -> bool {
+        crate::voice::orchestrator_workspace(pane_id).is_some()
+    }
 }
 
 /// Before `backend::start`, which calls `init` through them.

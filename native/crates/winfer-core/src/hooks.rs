@@ -12,6 +12,14 @@ pub trait Hooks: Send + Sync {
     fn worktree_created(&self, _provider: &str) {}
     /// The backend set up its data dir (`backend::start`).
     fn started(&self, _data_dir: &std::path::Path) {}
+    /// Whether the app's window has the focus.
+    fn window_focused(&self) -> bool {
+        false
+    }
+    /// The pane is a voice orchestrator's (its lines aren't tasks).
+    fn orchestrated(&self, _pane_id: &str) -> bool {
+        false
+    }
     /// The app is quitting (`backend::shutdown`).
     fn stopping(&self) {}
 }
