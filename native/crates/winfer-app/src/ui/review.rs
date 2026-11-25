@@ -6,50 +6,12 @@ use crate::model::{Overlay, WorktreeInfo};
 use super::dialogs::relative_time;
 use base64::Engine as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use serde::Deserialize;
 use serde_json::json;
 use smallvec::smallvec;
 use std::sync::Arc;
+pub use winfer_core::review::{DiffStats, TestRun, diff_stats, reply_language, wrong_script};
+use winfer_core::review::{conflict_note, first_sentence, last_output, shorten, summary_prompt};
 use winfer_backend::{browser, chatgpt, llm, review as review_backend, store, worktree};
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct DiffStats {
-    pub files: Vec<String>,
-    pub adds: u64,
-    pub dels: u64,
-    pub ahead: u64,
-    pub dirty: bool,
-}
-
-/// Files, line counts and commit state from a worktree diff.
-pub fn diff_stats(d: &Value) -> DiffStats {
-    let mut files: Vec<String> = Vec::new();
-    let (mut adds, mut dels) = (0, 0);
-    for line in d["diff"].as_str().unwrap_or_default().split('\n') {
-        if let Some(rest) = line.strip_prefix("diff --git a/") {
-            if let Some(name) = rest.split(" b/").nth(1).filter(|n| !files.iter().any(|f| f == n)) {
-                files.push(name.to_string());
-            }
-        } else if line.starts_with('+') && !line.starts_with("+++") {
-            adds += 1;
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            dels += 1;
-        }
-    }
-    for f in d["untracked"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-        if !files.iter().any(|x| x == f) {
-            files.push(f.to_string());
-        }
-    }
-    DiffStats { files, adds, dels, ahead: d["ahead"].as_u64().unwrap_or(0), dirty: d["dirty"] == true }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct TestRun {
-    pub command: String,
-    pub ok: bool,
-    pub ms: f64,
-}
 
 #[derive(Clone)]
 pub enum Load<T> {
@@ -76,6 +38,7 @@ pub struct Review {
     pub prompt: Option<String>,
     pub finished_at: std::time::SystemTime,
     pub branch: Option<String>,
+    pub base: Option<String>,
     pub dir: String,
     pub stats: Option<DiffStats>,
     pub last_output: String,
@@ -85,6 +48,11 @@ pub struct Review {
     pub screenshot: Load<Arc<RenderImage>>,
     pub screenshot_url: Option<String>,
     pub status: ReviewStatus,
+    /// A paired machine's review: (peer, its id there). Its actions go there as `review.*`.
+    pub remote: Option<(String, String)>,
+    /// The machine's name for the pane, and its conflict note (remote reviews).
+    pub title: Option<String>,
+    pub conflict: Option<(bool, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -108,6 +76,8 @@ pub struct QueueItem {
     pub state: QueueState,
     pub detail: Option<String>,
     pub files: Vec<String>,
+    /// The machine whose queue it is in (remote reviews).
+    pub peer: Option<String>,
 }
 
 impl QueueItem {
@@ -155,59 +125,11 @@ pub struct HistoryUi {
     search: Option<Task<()>>,
 }
 
-const SUMMARY_SYSTEM: &str = "You review the work a coding agent just finished, for a developer deciding whether to merge it. From the diff and the agent's last output, write 2–3 short sentences: what changed and why, then anything risky, unfinished or worth checking (failing steps, TODOs, deleted code). Name files only when it helps. Output only the summary.";
-
-/// The language to write about a task in, named in the prompt.
-pub fn reply_language(task: &str) -> &'static str {
-    let lower = task.to_lowercase();
-    if lower.chars().any(|c| ('\u{400}'..='\u{4ff}').contains(&c)) {
-        return "the language of the task";
-    }
-    let german_word = ["und", "nicht", "bitte", "ist", "das", "der", "die", "mit", "für", "auf", "ich", "wir", "noch", "auch"];
-    if lower.contains(['ä', 'ö', 'ü', 'ß']) || lower.split(|c: char| !c.is_alphanumeric()).any(|w| german_word.contains(&w)) {
-        return "German";
-    }
-    "English"
-}
-
-fn is_non_latin(c: char) -> bool {
-    c.is_alphabetic() && !c.is_ascii() && !('\u{c0}'..='\u{24f}').contains(&c) && !('\u{1e00}'..='\u{1eff}').contains(&c)
-}
-
-/// True when `text` uses a non-Latin script the task doesn't.
-pub fn wrong_script(text: &str, task: &str) -> bool {
-    text.chars().any(is_non_latin) && !task.chars().any(is_non_latin)
-}
-
-fn first_sentence(text: &str) -> &str {
-    let bytes: Vec<(usize, char)> = text.char_indices().collect();
-    for window in bytes.windows(2) {
-        if matches!(window[0].1, '.' | '!' | '?') && window[1].1.is_whitespace() {
-            return &text[..=window[0].0];
-        }
-    }
-    text
-}
-
-fn shorten(text: &str, max: usize) -> String {
-    if text.chars().count() > max { format!("{}…", text.chars().take(max - 3).collect::<String>()) } else { text.to_string() }
-}
-
 /// First sentence of the summary, as a commit message for changes the agent didn't commit.
 pub fn commit_message(review: Option<&Review>) -> Option<String> {
     let review = review?;
-    match &review.summary {
-        Load::Done(text) => Some(shorten(first_sentence(text), 100)),
-        _ => review.prompt.as_ref().map(|p| format!("winfer: {}", p.chars().take(72).collect::<String>())),
-    }
-}
-
-/// The agent's last words, without blank lines and prompt chrome.
-fn last_output(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty() && !l.chars().all(|c| "─━═ >│╭╮╰╯".contains(c))).collect();
-    let tail = lines[lines.len().saturating_sub(25)..].join("\n");
-    let chars: Vec<char> = tail.chars().collect();
-    chars[chars.len().saturating_sub(1800)..].iter().collect()
+    let summary = if let Load::Done(text) = &review.summary { Some(text.as_str()) } else { None };
+    winfer_core::review::commit_message(summary, review.prompt.as_deref())
 }
 
 impl Root {
@@ -281,7 +203,7 @@ impl Root {
     }
 
     fn collect_review(&mut self, pane_id: String, cx: &mut Context<Self>) {
-        let Some(pane) = self.state.read(cx).pane(&pane_id).cloned().filter(|p| p.provider != "shell") else { return };
+        let Some(pane) = self.state.read(cx).pane(&pane_id).cloned().filter(|p| p.provider != "shell" && p.remote.is_none()) else { return };
         cx.spawn(async move |this, cx| {
             let mut diff = String::new();
             let mut stats = None;
@@ -317,6 +239,7 @@ impl Root {
             prompt: pane.prompt.clone().or_else(|| self.state.read(cx).pane_tasks.get(&pane.id).and_then(|t| t.task.clone())),
             finished_at: std::time::SystemTime::now(),
             branch: pane.worktree.as_ref().map(|t| t.branch.clone()),
+            base: pane.worktree.as_ref().map(|t| t.base.clone()),
             dir: pane.worktree.as_ref().map_or_else(|| pane.cwd.clone(), |t| t.path.clone()),
             stats,
             last_output: last_output(&screen),
@@ -326,6 +249,9 @@ impl Root {
             screenshot: Load::Idle,
             screenshot_url: None,
             status: ReviewStatus::Open,
+            remote: None,
+            title: None,
+            conflict: None,
         };
         self.review.reviews.retain(|r| r.id != id);
         self.review.reviews.insert(0, review.clone());
@@ -363,22 +289,8 @@ impl Root {
         if let Some(r) = self.review_mut(&review.id) {
             r.summary = Load::Loading;
         }
-        let mut parts = Vec::new();
-        if let Some(p) = &review.prompt {
-            parts.push(format!("Task: {p}"));
-        }
-        if let Some(s) = &review.stats {
-            let files = if s.files.is_empty() { "none".to_string() } else { s.files.join(", ") };
-            parts.push(format!("Files changed: {files} (+{} −{})", s.adds, s.dels));
-        }
-        if !diff.is_empty() {
-            let clipped: String = diff.chars().take(12_000).collect();
-            parts.push(format!("Diff:\n{clipped}{}", if diff.chars().count() > 12_000 { "\n…(truncated)" } else { "" }));
-        }
-        parts.push(format!("Agent's last output:\n{}", review.last_output));
-        let user = parts.join("\n\n");
+        let (system, user) = summary_prompt(review.prompt.as_deref(), review.stats.as_ref(), &diff, &review.last_output);
         let task = review.prompt.clone().unwrap_or_default();
-        let system = format!("{SUMMARY_SYSTEM} Write it in {}.", reply_language(&task));
         let id = review.id;
         cx.spawn(async move |this, cx| {
             let result = tauri::async_runtime::spawn(async move {
@@ -410,6 +322,9 @@ impl Root {
     }
 
     fn run_tests(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.remote_review(&id, json!({"t": "review.tests"}), cx) {
+            return;
+        }
         let Some(r) = self.review_mut(&id) else { return };
         r.tests = Load::Loading;
         let dir = r.dir.clone();
@@ -505,9 +420,130 @@ impl Root {
         commit_message(self.review.reviews.iter().find(|r| r.pane_id == pane && r.status == ReviewStatus::Open))
     }
 
+    // ---- reviews on paired machines (winferd) ----
+
+    /// `reviews` from a paired machine: its open reviews and merge queue replace the ones shown.
+    pub(super) fn on_remote_reviews(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+        let reviews: Vec<Review> = msg["items"].as_array().into_iter().flatten().filter_map(|v| remote_review_of(peer, v)).collect();
+        let queue: Vec<QueueItem> = msg["queue"].as_array().into_iter().flatten().map(|v| QueueItem {
+            review_id: format!("{peer}|{}", v["reviewId"].as_str().unwrap_or_default()),
+            pane_id: String::new(),
+            workspace_id: String::new(),
+            branch: v["branch"].as_str().unwrap_or_default().to_string(),
+            base: v["base"].as_str().unwrap_or_default().to_string(),
+            state: match v["state"].as_str().unwrap_or_default() {
+                "syncing" => QueueState::Syncing,
+                "testing" => QueueState::Testing,
+                "merging" => QueueState::Merging,
+                "merged" => QueueState::Merged,
+                "conflict" => QueueState::Conflict,
+                "failed" => QueueState::Failed,
+                _ => QueueState::Queued,
+            },
+            detail: v["detail"].as_str().map(str::to_string),
+            files: serde_json::from_value(v["files"].clone()).unwrap_or_default(),
+            peer: Some(peer.to_string()),
+        }).collect();
+        let merged: Vec<String> = queue.iter().filter(|q| q.state == QueueState::Merged && !self.review.queue.iter().any(|o| o.review_id == q.review_id && o.state == QueueState::Merged)).map(|q| q.branch.clone()).collect();
+        self.review.reviews.retain(|r| r.remote.as_ref().is_none_or(|(p, _)| p != peer));
+        self.review.reviews.extend(reviews);
+        self.review.reviews.sort_by(|a, b| b.finished_at.cmp(&a.finished_at));
+        self.review.queue.retain(|q| q.peer.as_deref() != Some(peer));
+        self.review.queue.extend(queue);
+        let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "the server".into());
+        for branch in merged {
+            self.toast(format!("Merged {branch} on {machine}"), cx);
+        }
+        cx.notify();
+    }
+
+    /// Sends a `review.*` request for a remote review; false if `id` is one of this machine's.
+    fn remote_review(&mut self, id: &str, mut msg: Value, cx: &mut Context<Self>) -> bool {
+        let Some((peer, rid)) = remote_id(id) else { return false };
+        let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "the server".into());
+        msg["reviewId"] = json!(rid);
+        let what = match msg["t"].as_str().unwrap_or_default() {
+            "review.merge" => "Couldn't queue the merge",
+            "review.tests" => "Couldn't run the tests",
+            "review.discard" => "Couldn't discard it",
+            "review.send" | "review.resolve" => "Couldn't send it back",
+            _ => "That didn't work",
+        };
+        self.connect_request(peer, msg, Some(format!("{what} on {machine}")));
+        cx.notify();
+        true
+    }
+
+    /// A card's Merge, Discard, Open pane or Dismiss, here or on the machine the review is on.
+    fn review_action(&mut self, id: &str, action: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(review) = self.review.reviews.iter().find(|r| r.id == id).cloned() else { return };
+        let Some((peer, _)) = review.remote.clone() else {
+            match action {
+                "merge" => self.execute(Command::MergeWorktree(PaneRef::Id(review.pane_id)), window, cx),
+                "discard" => self.execute(Command::DiscardWorktree(PaneRef::Id(review.pane_id)), window, cx),
+                "open" => {
+                    self.update_state(cx, |s| s.overlay = Overlay::None);
+                    self.execute(Command::Focus(PaneRef::Id(review.pane_id)), window, cx);
+                }
+                _ => {
+                    self.review.reviews.retain(|x| x.id != id);
+                    cx.notify();
+                }
+            }
+            return;
+        };
+        let machine = crate::connect::peer_name(&peer).unwrap_or_else(|| "the server".into());
+        let (branch, base) = (review.branch.clone().unwrap_or_default(), review.base.clone().unwrap_or_default());
+        let id = id.to_string();
+        match action {
+            "merge" => {
+                let dirty = review.stats.as_ref().is_some_and(|s| s.dirty);
+                let question = if dirty { format!("The agent left uncommitted changes in {branch}. Commit them and merge into {base} on {machine}?") } else { format!("Merge {branch} into {base} on {machine}?") };
+                self.confirm("Merge worktree", question, if dirty { "Commit and merge" } else { "Merge" }, window, cx, move |this, cx| {
+                    this.remote_review(&id, json!({"t": "review.merge", "tests": false}), cx);
+                    this.toast(format!("Merging {branch} into {base} on {machine}…"), cx);
+                });
+            }
+            "discard" => {
+                let detail = format!("Close the agent's pane on {machine}, delete {} and the branch {branch} there? Unmerged work is lost.", review.dir);
+                self.confirm("Discard worktree", detail, "Discard", window, cx, move |this, cx| {
+                    this.remote_review(&id, json!({"t": "review.discard"}), cx);
+                    this.review.reviews.retain(|x| x.id != id);
+                    this.toast(format!("Discarding {branch} on {machine}…"), cx);
+                });
+            }
+            "open" => {
+                self.update_state(cx, |s| s.overlay = Overlay::None);
+                self.open_remote_pane(&peer, &review.pane_id, window, cx);
+            }
+            _ => {
+                self.remote_review(&id, json!({"t": "review.dismiss"}), cx);
+                self.review.reviews.retain(|x| x.id != id);
+                cx.notify();
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn dev_enqueue(&mut self, id: String, cx: &mut Context<Self>) {
+        self.enqueue(vec![id], cx);
+    }
+
+    fn clear_queue(&mut self, cx: &mut Context<Self>) {
+        let mut peers: Vec<String> = self.review.queue.iter().filter(|i| !i.pending()).filter_map(|i| i.peer.clone()).collect();
+        peers.dedup();
+        for peer in peers {
+            self.connect_request(&peer, json!({"t": "review.clear"}), None);
+        }
+        self.review.queue.retain(QueueItem::pending);
+        cx.notify();
+    }
+
     // ---- merge queue ---------------------------------------------------------------------------
 
     fn enqueue(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let tests = self.review.queue_tests;
+        let ids: Vec<String> = ids.into_iter().filter(|id| !self.remote_review(id, json!({"t": "review.merge", "tests": tests}), cx)).collect();
         let mut added = Vec::new();
         for id in ids {
             let Some(review) = self.review.reviews.iter().find(|r| r.id == id && r.status == ReviewStatus::Open) else { continue };
@@ -515,7 +551,7 @@ impl Root {
             if self.review.queue.iter().any(|i| i.review_id == id && i.pending()) {
                 continue;
             }
-            added.push(QueueItem { review_id: id, pane_id: pane, workspace_id: review.workspace_id.clone(), branch: info.branch, base: info.base, state: QueueState::Queued, detail: None, files: Vec::new() });
+            added.push(QueueItem { review_id: id, pane_id: pane, workspace_id: review.workspace_id.clone(), branch: info.branch, base: info.base, state: QueueState::Queued, detail: None, files: Vec::new(), peer: None });
         }
         if added.is_empty() {
             return;
@@ -556,8 +592,12 @@ impl Root {
 
     fn ask_agent_to_resolve(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.review.queue.iter().find(|i| i.review_id == id).cloned() else { return };
-        let files = if item.files.is_empty() { String::new() } else { format!(" in {}", item.files.join(", ")) };
-        let text = format!("Merging your branch {} into {} conflicts{files}. Merge {} into your branch (git merge {}), resolve the conflicts keeping both sides' intent, make sure the tests pass, and commit.", item.branch, item.base, item.base, item.base);
+        if self.remote_review(id, json!({"t": "review.resolve"}), cx) {
+            self.review.queue.retain(|i| i.review_id != id);
+            self.review.reviews.retain(|r| r.id != id);
+            return cx.notify();
+        }
+        let text = winfer_core::review::resolve_prompt(&item.branch, &item.base, &item.files);
         self.execute(Command::SendText { target: PaneRef::Id(item.pane_id), text, submit: true }, window, cx);
         self.review.queue.retain(|i| i.review_id != id);
         self.review.reviews.retain(|r| r.id != id); // a fresh card arrives when the agent finishes again
@@ -601,7 +641,9 @@ impl Root {
         }
         let c = *c;
         let mono = crate::fonts::mono(cx);
-        let open: Vec<Review> = self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open).cloned().collect();
+        let mut open: Vec<Review> = self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open).cloned().collect();
+        // This machine's first, then each paired machine's under its name.
+        open.sort_by_key(|r| r.remote.as_ref().map(|(p, _)| p.clone()));
         // Each open card gets a box to send a follow-up back to its agent.
         self.review.replies.retain(|id, _| open.iter().any(|r| &r.id == id));
         for r in &open {
@@ -624,12 +666,22 @@ impl Root {
         let selected = self.review.selected.clone().filter(|id| open.iter().any(|r| &r.id == id)).or_else(|| open.first().map(|r| r.id.clone()));
         // Left: every finished task; right: the selected one in full.
         let mut list = div().flex().flex_col().gap_0p5();
+        let grouped = open.iter().any(|r| r.remote.is_some());
+        let mut group: Option<Option<String>> = None;
         for r in &open {
+            let peer = r.remote.as_ref().map(|(p, _)| p.clone());
+            if grouped && group.as_ref() != Some(&peer) {
+                let label = peer.as_deref().map_or_else(|| "This machine".to_string(), |p| crate::connect::peer_name(p).unwrap_or_else(|| "Server".into()));
+                list = list.child(div().flex().items_center().gap_1p5().px_2p5().pt_2().pb_1().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle)
+                    .child(Icon::new(if peer.is_some() { IconName::Server } else { IconName::Monitor }).size(px(11.0)))
+                    .child(label.to_uppercase()));
+                group = Some(peer);
+            }
             let on = selected.as_deref() == Some(&r.id);
             let s = self.state.read(cx);
-            let title = s.pane(&r.pane_id).map(|p| s.pane_label(p)).or_else(|| r.prompt.clone()).unwrap_or_else(|| s.provider_name(&r.provider));
+            let title = r.title.clone().or_else(|| s.pane(&r.pane_id).map(|p| s.pane_label(p))).or_else(|| r.prompt.clone()).unwrap_or_else(|| s.provider_name(&r.provider));
             let at = r.finished_at.duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64);
-            let conflict = conflict_note(conflicts.as_ref(), &r.dir).is_some_and(|(base, _)| base);
+            let conflict = note_of(r, conflicts.as_ref()).is_some_and(|(base, _)| base);
             let (test_text, test_color) = match &r.tests {
                 Load::Done(Some(t)) if t.ok => ("tests pass", c.success),
                 Load::Done(Some(_)) => ("tests fail", c.danger),
@@ -696,6 +748,9 @@ impl Root {
                     .when(conflict, |d| d.child(small_button(c, SharedString::from(format!("q-resolve-{id}")), "Ask agent").on_click(cx.listener(move |this, _, window, cx| this.ask_agent_to_resolve(&resolve_id, window, cx)))))
                     .when(stopped, |d| d.child(small_button(c, SharedString::from(format!("q-retry-{id}")), "Retry").on_click(cx.listener(move |this, _, _, cx| this.enqueue(vec![retry_id.clone()], cx)))))
                     .when(removable, |d| d.child(small_button(c, SharedString::from(format!("q-remove-{id}")), "Remove").on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some((peer, rid)) = remote_id(&remove_id) {
+                            this.connect_request(peer, json!({"t": "review.unqueue", "reviewId": rid}), None);
+                        }
                         this.review.queue.retain(|i| i.review_id != remove_id);
                         cx.notify();
                     })))),
@@ -738,7 +793,7 @@ impl Root {
                         .when(!queue.is_empty(), |d| {
                             d.child(
                                 div().px_5().py_2().flex().flex_col().gap_1()
-                                    .child(div().flex().items_center().text_xs().text_color(c.subtle).child(div().flex_1().child("Merge queue")).when(finished, |d| d.child(small_button(c, "queue-clear", "Clear finished").on_click(cx.listener(|this, _, _, cx| { this.review.queue.retain(QueueItem::pending); cx.notify(); })))))
+                                    .child(div().flex().items_center().text_xs().text_color(c.subtle).child(div().flex_1().child("Merge queue")).when(finished, |d| d.child(small_button(c, "queue-clear", "Clear finished").on_click(cx.listener(|this, _, _, cx| this.clear_queue(cx))))))
                                     .child(queue_list),
                             )
                         })
@@ -753,6 +808,12 @@ impl Root {
         let Some(review) = self.review.reviews.iter().find(|r| r.id == id).cloned() else { return };
         let Some(input) = self.review.replies.get(id).cloned() else { return };
         let text = input.read(cx).value().trim().to_string();
+        if review.remote.is_some() && !text.is_empty() {
+            self.remote_review(id, json!({"t": "review.send", "text": text}), cx);
+            self.review.reviews.retain(|x| x.id != id);
+            self.review.replies.remove(id);
+            return cx.notify();
+        }
         if text.is_empty() || self.state.read(cx).pane(&review.pane_id).is_none() {
             return;
         }
@@ -773,6 +834,7 @@ impl Root {
         let mut header = div().flex().items_center().gap_2().text_xs().pb_3()
             .child(Self::agent_tile(&r.provider, crate::model::AgentStatus::Done, c))
             .child(div().text_size(px(14.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.fg).child(agent))
+            .when_some(r.remote.as_ref().map(|(p, _)| crate::connect::peer_name(p).unwrap_or_else(|| "the server".into())), |d, m| d.child(div().flex().items_center().gap_1().text_color(c.subtle).child(Icon::new(IconName::Server).size(px(11.0))).child(format!("on {m}"))))
             .when_some(r.branch.clone(), |d, b| d.child(div().font_family(mono.clone()).text_color(c.subtle).truncate().child(b)))
             .child(div().flex_1())
             .child(div().text_color(c.subtle).child(relative_time(elapsed)));
@@ -795,18 +857,20 @@ impl Root {
             _ if r.test_command.is_some() => small_button(c, SharedString::from(format!("test-{id}")), "Run tests").on_click(cx.listener(move |this, _, _, cx| this.run_tests(test_id.clone(), cx))).into_any_element(),
             _ => div().text_xs().text_color(c.subtle).child("No test command found for this project").into_any_element(),
         };
-        let conflict = conflict_note(conflicts, &r.dir);
+        let conflict = note_of(r, conflicts);
         let blocked = conflict.as_ref().is_some_and(|(base, _)| *base);
         let info = conflict.map(|(_, text)| text);
         let screenshot = if let Load::Done(image) = &r.screenshot { Some(image.clone()) } else { None };
-        let (pane_id, merge_pane, discard_pane, changes_pane, focus_pane) = (r.pane_id.clone(), r.pane_id.clone(), r.pane_id.clone(), r.pane_id.clone(), r.pane_id.clone());
-        let has_worktree = pane.as_ref().is_some_and(|p| p.worktree.is_some());
+        let (pane_id, changes_pane) = (r.pane_id.clone(), r.pane_id.clone());
+        let (merge_id, discard_id, focus_id) = (r.id.clone(), r.id.clone(), r.id.clone());
+        let remote = r.remote.is_some();
+        let has_worktree = if remote { r.branch.is_some() } else { pane.as_ref().is_some_and(|p| p.worktree.is_some()) };
         let dismiss = r.id.clone();
         let queue_id = r.id.clone();
         let comment_id = SharedString::from(format!("review-open-{pane_id}"));
         let reply = self.review.replies.get(&r.id).cloned();
         let reply_id = r.id.clone();
-        let can_reply = pane.is_some();
+        let can_reply = remote || pane.is_some();
         let section = |label: &'static str| div().text_size(px(11.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(label.to_uppercase());
         div().flex().flex_col().gap_4()
             .child(header)
@@ -832,25 +896,19 @@ impl Root {
                     .when(has_worktree, |d| {
                         d.child(div().id(SharedString::from(format!("merge-{}", r.id))).flex().items_center().gap_1p5().h(px(28.0)).px_3().rounded_md().text_size(px(12.5)).font_weight(FontWeight::MEDIUM)
                             .when(!blocked, |d| d.bg(c.accent).text_color(c.on_accent).cursor_pointer().hover(|d| d.opacity(0.9))
-                                .on_click(cx.listener(move |this, _, window, cx| this.execute(Command::MergeWorktree(PaneRef::Id(merge_pane.clone())), window, cx))))
+                                .on_click(cx.listener(move |this, _, window, cx| this.review_action(&merge_id, "merge", window, cx))))
                             .when(blocked, |d| d.bg(c.hover).text_color(c.subtle).tooltip(crate::ui::code_view::tip("Resolve the conflict with its base first")))
                             .child(Icon::new(IconName::GitMerge).size(px(13.0))).child("Merge"))
                             .child(small_button(c, SharedString::from(format!("enqueue-{}", r.id)), "Queue").on_click(cx.listener(move |this, _, _, cx| this.enqueue(vec![queue_id.clone()], cx))))
-                            .child(small_button(c, SharedString::from(format!("changes-{}", r.id)), "Changes").on_click(cx.listener(move |this, _, window, cx| {
+                            .when(!remote, |d| d.child(small_button(c, SharedString::from(format!("changes-{}", r.id)), "Changes").on_click(cx.listener(move |this, _, window, cx| {
                                 this.update_state(cx, |s| s.overlay = Overlay::None);
                                 this.execute(Command::ShowChanges(PaneRef::Id(changes_pane.clone())), window, cx);
-                            })))
-                            .child(small_button(c, SharedString::from(format!("discard-{}", r.id)), "Discard").on_click(cx.listener(move |this, _, window, cx| this.execute(Command::DiscardWorktree(PaneRef::Id(discard_pane.clone())), window, cx))))
+                            }))))
+                            .child(small_button(c, SharedString::from(format!("discard-{}", r.id)), "Discard").on_click(cx.listener(move |this, _, window, cx| this.review_action(&discard_id, "discard", window, cx))))
                     })
                     .child(div().flex_1())
-                    .child(small_button(c, comment_id, "Open pane").on_click(cx.listener(move |this, _, window, cx| {
-                        this.update_state(cx, |s| s.overlay = Overlay::None);
-                        this.execute(Command::Focus(PaneRef::Id(focus_pane.clone())), window, cx);
-                    })))
-                    .child(small_button(c, SharedString::from(format!("dismiss-{}", r.id)), "Dismiss").on_click(cx.listener(move |this, _, _, cx| {
-                        this.review.reviews.retain(|x| x.id != dismiss);
-                        cx.notify();
-                    }))),
+                    .child(small_button(c, comment_id, "Open pane").on_click(cx.listener(move |this, _, window, cx| this.review_action(&focus_id, "open", window, cx))))
+                    .child(small_button(c, SharedString::from(format!("dismiss-{}", r.id)), "Dismiss").on_click(cx.listener(move |this, _, window, cx| this.review_action(&dismiss, "dismiss", window, cx)))),
             )
     }
 
@@ -1019,14 +1077,53 @@ fn day_label(at_ms: f64) -> String {
     }
 }
 
-/// Whether the review's worktree conflicts with its base (true) or is only behind, and a line
-/// saying so.
-fn conflict_note(report: Option<&Value>, dir: &str) -> Option<(bool, String)> {
-    let path = dir.trim_end_matches('/');
-    let item = report?["items"].as_array()?.iter().find(|i| i["path"].as_str().is_some_and(|p| p.trim_end_matches('/') == path))?;
-    let base: Vec<&str> = item["baseConflicts"].as_array()?.iter().filter_map(Value::as_str).collect();
-    let behind = item["behind"].as_u64().unwrap_or(0);
-    (!base.is_empty() || behind > 0).then(|| (!base.is_empty(), if base.is_empty() { format!("{behind} commits behind its base") } else { format!("Conflicts with its base in {}", base.join(", ")) }))
+/// `peer|id` of a remote review (its id here).
+fn remote_id(id: &str) -> Option<(&str, &str)> {
+    id.split_once('|')
+}
+
+/// The conflict note: the machine's own for a remote review, else from this machine's report.
+fn note_of(r: &Review, report: Option<&Value>) -> Option<(bool, String)> {
+    if r.remote.is_some() { r.conflict.clone() } else { conflict_note(report, &r.dir) }
+}
+
+fn remote_review_of(peer: &str, v: &Value) -> Option<Review> {
+    let rid = v["id"].as_str()?.to_string();
+    let load_text = |l: &Value| match l["state"].as_str().unwrap_or_default() {
+        "done" => Load::Done(l["text"].as_str().unwrap_or_default().to_string()),
+        "off" => Load::Off,
+        "error" => Load::Error(l["error"].as_str().unwrap_or_default().to_string()),
+        _ => Load::Loading,
+    };
+    let tests = match v["tests"]["state"].as_str().unwrap_or_default() {
+        "done" => Load::Done(serde_json::from_value(v["tests"]["run"].clone()).ok()),
+        "loading" => Load::Loading,
+        "error" => Load::Error(v["tests"]["error"].as_str().unwrap_or_default().to_string()),
+        _ => Load::Idle,
+    };
+    let text = |k: &str| v[k].as_str().map(str::to_string);
+    Some(Review {
+        id: format!("{peer}|{rid}"),
+        pane_id: text("paneId").unwrap_or_default(),
+        workspace_id: text("workspaceId").unwrap_or_default(),
+        provider: text("provider").unwrap_or_default(),
+        prompt: text("prompt"),
+        finished_at: std::time::UNIX_EPOCH + Duration::from_millis(v["finishedAt"].as_u64().unwrap_or(0)),
+        branch: text("branch"),
+        base: text("base"),
+        dir: text("dir").unwrap_or_default(),
+        stats: serde_json::from_value(v["stats"].clone()).ok(),
+        last_output: text("lastOutput").unwrap_or_default(),
+        summary: load_text(&v["summary"]),
+        tests,
+        test_command: text("testCommand"),
+        screenshot: Load::Idle,
+        screenshot_url: None,
+        status: ReviewStatus::Open,
+        remote: Some((peer.to_string(), rid)),
+        title: text("title"),
+        conflict: v["conflict"].is_object().then(|| (v["conflict"]["base"] == true, v["conflict"]["text"].as_str().unwrap_or_default().to_string())),
+    })
 }
 
 pub(super) fn small_button(c: Colors, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
@@ -1180,33 +1277,4 @@ async fn process_queue_item(this: WeakEntity<Root>, item: QueueItem, cx: &mut As
         this.patch_queue(&id, Merged, None, Vec::new(), cx);
     });
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{commit_message, diff_stats, first_sentence, last_output, reply_language, wrong_script};
-    use serde_json::json;
-
-    #[test]
-    fn stats_count_changes() {
-        let d = json!({ "diff": "diff --git a/x b/x\n--- a/x\n+++ b/x\n-old\n+new\n+more", "untracked": ["y"], "ahead": 2, "dirty": true });
-        let s = diff_stats(&d);
-        assert_eq!(s.files, ["x", "y"]);
-        assert_eq!((s.adds, s.dels, s.ahead, s.dirty), (2, 1, 2, true));
-    }
-
-    #[test]
-    fn languages_and_scripts() {
-        assert_eq!(reply_language("bitte fix das"), "German");
-        assert_eq!(reply_language("fix the bug"), "English");
-        assert!(wrong_script("Готово", "fix it"));
-        assert!(!wrong_script("Done, über", "fix it"));
-    }
-
-    #[test]
-    fn sentences_and_chrome() {
-        assert_eq!(first_sentence("One two. Three."), "One two.");
-        assert_eq!(last_output("hello\n────\n\n> \n"), "hello");
-        assert_eq!(commit_message(None), None);
-    }
 }

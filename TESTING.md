@@ -178,6 +178,12 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
 - [ ] Settings → Accounts → push icon on a signed-in Codex/Claude account → "Push to ‹server›": toast "Signed in on …";
   an agent of that kind on the server starts signed in; the icon turns accent. A refresh on either side reaches the
   other within ~30 s (compare `auth.json` / `.credentials.json`).
+- [ ] Review on a server: start an agent in a worktree on the server and let it change something. When it finishes,
+  Review lists it under the server's name with a summary (`WINFERD_REVIEW_SUMMARY=off` turns that off) and the sidebar
+  shows "1 task to review" under the server. Run tests, Send back (the text reaches the agent there), Queue with "Run
+  tests first" → the queue shows Syncing/Testing/Merging/Merged and the base branch on the server has the merge;
+  Discard deletes the worktree and branch there. Dev aids: `WINFER_NATIVE_CONNECT_SPAWN='~/repo|claude|task'`,
+  `WINFER_NATIVE_CONNECT_REVIEW=open|merge`.
 
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.

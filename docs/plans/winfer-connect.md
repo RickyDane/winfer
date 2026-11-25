@@ -334,6 +334,15 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   against a Linux container (clone of a public repo). Not yet: empty server workspaces listed in the sidebar (they're in
   the "+" menu), a deploy key for private repos.
 
+- **H6** done in its first form: when an agent on a server finishes work, the server makes the review (diff stats,
+  summary by an agent CLI installed there, test command, conflicts with the base) and pushes `reviews` to paired
+  desktops. They show in Review under the server's name (and "N tasks to review" under its row in the sidebar);
+  Merge, Queue, Run tests, Send back, Discard, Dismiss and the queue's Ask agent / Retry / Remove go back as
+  `review.*`, and the merge queue (commit, bring in the base, tests, merge, history) runs on the server. The GPUI-free
+  parts are in `winfer_core::review`. Tested against a Linux container with a stand-in agent: review shown, merged
+  with tests first, recorded in the server's history. Not yet: "Changes" (the diff view) for server reviews, the
+  server's History on the desktop, screenshots of a server's dev server.
+
 ## Headless risks / notes
 
 - **H1 is the long pole:** extraction touches the app's central code. Mitigation: one module per PR, desktop behavior unchanged, tests first.

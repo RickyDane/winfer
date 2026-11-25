@@ -135,7 +135,9 @@ impl Host {
     fn on_backend(&self, name: &str, payload: &Value) {
         match name {
             "agent://status" => {
-                status::hook(&mut *self.state.lock(), payload);
+                if status::hook(&mut *self.state.lock(), payload) {
+                    crate::review::finished(payload["paneId"].as_str().unwrap_or_default());
+                }
             }
             "pty://exit" => {
                 let id = payload["paneId"].as_str().unwrap_or_default().to_string();
@@ -144,7 +146,9 @@ impl Host {
                 connect_term::exited(&id, code);
                 if terminal::on_exit(&id, code, pid) {
                     let next = if code == 0 { AgentStatus::Done } else { AgentStatus::Error };
-                    status::report(&mut *self.state.lock(), &id, next, Some(format!("exited with code {code}")));
+                    if status::report(&mut *self.state.lock(), &id, next, Some(format!("exited with code {code}"))) {
+                        crate::review::finished(&id);
+                    }
                 }
             }
             "connect://message" => {
@@ -169,8 +173,14 @@ impl Host {
                 up
             });
         }
-        status::tick(&mut *self.state.lock());
+        let finished = status::tick(&mut *self.state.lock());
+        for id in &finished {
+            crate::review::finished(id);
+        }
         self.push_changes();
+        if let Some(host) = HOST.get() {
+            crate::review::tick(host);
+        }
         self.save();
     }
 
@@ -296,6 +306,17 @@ impl Host {
                 let mut all = self.mirror();
                 all["t"] = json!("panes");
                 reply(all);
+                connect::send(peer, crate::review::message());
+            }
+            kind if kind.starts_with("review.") => {
+                let Some(host) = HOST.get() else { return };
+                // Discards and tests touch git: off the event thread.
+                let (msg, peer) = (msg.clone(), peer.to_string());
+                std::thread::spawn(move || {
+                    let mut answer = crate::review::on_request(host, &msg);
+                    answer["id"] = msg["id"].clone();
+                    connect::send(&peer, answer);
+                });
             }
             "term.attach" | "term.in" | "term.resize" | "term.detach" => self.on_term(peer, msg),
             "tool.call" => {
@@ -414,11 +435,15 @@ impl Host {
         s.create_workspace(&name, &root)
     }
 
-    fn log(&self, pane: &Pane, text: String) {
+    pub(crate) fn with_state<R>(&self, f: impl FnOnce(&mut AppState) -> R) -> R {
+        f(&mut self.state.lock())
+    }
+
+    pub(crate) fn log(&self, pane: &Pane, text: String) {
         self.state.lock().log_activity(&pane.workspace_id, text, Some(pane.provider.clone()));
     }
 
-    fn type_into(&self, pane: &Pane, text: &str) {
+    pub(crate) fn type_into(&self, pane: &Pane, text: &str) {
         if pane.provider == "winfer" && SESSIONS.get(&pane.id).is_some_and(|s| s.is_code()) {
             write_chat(&pane.id, &Cmd::Send { text: text.to_string(), images: vec![], files: vec![], skill: None, steer: false });
         } else if let Some(session) = SESSIONS.get(&pane.id) {

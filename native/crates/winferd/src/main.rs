@@ -4,6 +4,7 @@
 mod control;
 mod host;
 mod machine;
+mod review;
 mod service;
 mod update;
 

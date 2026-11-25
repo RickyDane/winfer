@@ -433,7 +433,7 @@ impl Root {
     fn open_reviews(&self, cx: &App) -> usize {
         let s = self.state.read(cx);
         let everywhere = s.view() == View::Overview;
-        self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open && (everywhere || r.workspace_id == s.active_workspace_id)).count()
+        self.review.reviews.iter().filter(|r| r.status == ReviewStatus::Open && (everywhere || r.remote.is_some() || r.workspace_id == s.active_workspace_id)).count()
     }
 
     pub(super) fn render_sidebar(&mut self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement + use<> {

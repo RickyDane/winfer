@@ -132,5 +132,22 @@ their own agents. Clients time out after 30 s.
 | `account.push` | either | `provider` (`claude`/`codex`), `accountId` (the sender's), `label`, `parts` → `ack {ok, accountId (the receiver's), label}` |
 | `account.sync` | either | `accountId` (the receiver's), `parts`: a linked sign-in changed (refresh) |
 
+### Review on a server
+
+When an agent on a server finishes work (its worktree has changes), the server makes a review of it: diff stats, a
+summary written by an agent CLI installed there (`WINFERD_REVIEW_SUMMARY=codex|claude|off`), its test command and
+conflicts with the base. Paired desktops get the list whenever it changes and after `panes.get`; merges run in the
+server's merge queue, in the agent's worktree there.
+
+| t | from | fields |
+|---|---|---|
+| `reviews` | server | `items: [{id, paneId, workspaceId, provider, title, prompt?, finishedAt, branch?, base?, dir, stats?, lastOutput, summary: {state, text?, error?}, tests: {state, run?: {command, ok, ms}, error?}, testCommand?, conflict?: {base, text}}]`, `queue: [{reviewId, branch, base, state (waiting/syncing/testing/merging/merged/conflict/failed), detail?, files}]` |
+| `review.merge` | client | `reviewId`, `tests` (run them first) → `ack`; queued, progress comes in `reviews` |
+| `review.tests` | client | `reviewId` → `ack`; the result comes in `reviews` |
+| `review.send` | client | `reviewId`, `text`: typed into the agent's pane; the review closes (a new one comes when it finishes again) |
+| `review.resolve` | client | `reviewId`: asks the agent to merge its base in and resolve the queue's conflict |
+| `review.discard` | client | `reviewId`: closes the pane, deletes the worktree and its branch |
+| `review.dismiss` / `review.unqueue` / `review.clear` | client | `reviewId` (not for `clear`): drop the review / take it out of the queue / clear finished queue items |
+
 A server's `panes` mirror carries `server: {version, latest, update, docker, os, arch, stats: {cpus, load, memTotal, memUsed, diskTotal, diskUsed, uptime}}`. Sign-ins are never logged
 (`WINFER_CONNECT_TRACE` leaves `parts` out).

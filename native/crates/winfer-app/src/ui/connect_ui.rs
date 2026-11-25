@@ -139,6 +139,9 @@ pub(super) struct ConnectClient {
     dev_pushed: bool,
     #[cfg(debug_assertions)]
     dev_folder: bool,
+    /// `WINFER_NATIVE_CONNECT_SPAWN`'s workspace request, once sent.
+    dev_spawn: Option<String>,
+    dev_review: bool,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
     /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
@@ -394,6 +397,7 @@ impl Root {
                     self.connect.active_at.insert(peer, Instant::now());
                 }
             }
+            "reviews" => self.on_remote_reviews(&peer, msg, cx),
             "panes" => {
                 let mirror = Mirror {
                     panes: msg["panes"].as_array().into_iter().flatten().filter_map(RemotePane::parse).collect(),
@@ -428,6 +432,15 @@ impl Root {
             }
             "ack" | "error" => {
                 let id = msg["id"].as_str().unwrap_or_default();
+                #[cfg(debug_assertions)]
+                if self.connect.dev_spawn.as_deref() == Some(id)
+                    && let Some(ws) = msg["workspaceId"].as_str()
+                    && let Ok(what) = std::env::var("WINFER_NATIVE_CONNECT_SPAWN")
+                {
+                    let mut parts = what.split('|').skip(1);
+                    let (provider, prompt) = (parts.next().unwrap_or("default"), parts.next().unwrap_or(""));
+                    self.connect_request(&peer, json!({"t": "pane.new", "workspaceId": ws, "provider": provider, "text": prompt, "worktree": true}), Some("Dev spawn: agent".into()));
+                }
                 if let Some((local, fp, name)) = self.connect.pushes.remove(id)
                     && msg["ok"] == true
                 {
@@ -754,6 +767,32 @@ impl Root {
                 self.folder_clone_dev(&what, cx);
             }
         }
+        // Development aid: open a folder on the first server as a workspace and start an agent there
+        // in a worktree (`WINFER_NATIVE_CONNECT_SPAWN=path|provider|prompt`).
+        #[cfg(debug_assertions)]
+        if let Ok(what) = std::env::var("WINFER_NATIVE_CONNECT_SPAWN")
+            && self.connect.dev_spawn.is_none()
+            && let Some(server) = crate::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.kind == Kind::Server && p.link.via.is_some()))
+            && self.connect.mirrors.get(&server.peer_id).is_some_and(|m| m.loaded && !m.providers.is_empty())
+        {
+            let path = what.split('|').next().unwrap_or("~").to_string();
+            self.connect.dev_spawn = Some(self.connect_request(&server.peer_id, json!({"t": "workspace.new", "path": path}), Some("Dev spawn: workspace".into())));
+        }
+        // Development aid: open Review once a server's review arrives, and with `merge` queue it
+        // there with tests (`WINFER_NATIVE_CONNECT_REVIEW=open|merge`).
+        #[cfg(debug_assertions)]
+        if let Ok(what) = std::env::var("WINFER_NATIVE_CONNECT_REVIEW")
+            && !self.connect.dev_review
+            && let Some(first) = self.review.reviews.iter().find(|r| r.remote.is_some() && matches!(r.summary, super::review::Load::Done(_) | super::review::Load::Off | super::review::Load::Error(_))).map(|r| r.id.clone())
+        {
+            self.connect.dev_review = true;
+            self.review.selected = Some(first.clone());
+            self.update_state(cx, |s| s.overlay = crate::model::Overlay::Review);
+            if what == "merge" {
+                self.review.queue_tests = true;
+                self.dev_enqueue(first, cx);
+            }
+        }
         // Development aid: push this account's sign-in to the first server that's up
         // (`WINFER_NATIVE_CONNECT_PUSH=codex:default`).
         #[cfg(debug_assertions)]
@@ -873,6 +912,19 @@ impl Root {
                     rows = rows.child(div().px_2().py_1().text_size(px(11.5)).text_color(c.subtle).child(label.clone()));
                 } else if live.is_empty() && mirror.loaded {
                     rows = rows.child(div().px_2().py_1().text_size(px(11.5)).text_color(c.subtle).child("No sessions"));
+                }
+                // Finished work on that machine waiting to be merged: opens Review at its first.
+                let to_review: Vec<String> = self.review.reviews.iter().filter(|r| r.status == super::review::ReviewStatus::Open && r.remote.as_ref().is_some_and(|(p, _)| p == &peer.peer_id)).map(|r| r.id.clone()).collect();
+                if let Some(first) = to_review.first().cloned() {
+                    let n = to_review.len();
+                    rows = rows.child(div().id(SharedString::from(format!("peer-review-{}", peer.peer_id))).flex().items_center().gap_2().px_2().py_1().rounded_md().cursor_pointer().text_size(px(12.0)).text_color(c.muted)
+                        .hover(move |d| d.bg(c.hover).text_color(c.fg))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.review.selected = Some(first.clone());
+                            this.update_state(cx, |s| s.overlay = crate::model::Overlay::Review);
+                        }))
+                        .child(Icon::new(IconName::Inbox).size(px(12.0)).text_color(c.accent))
+                        .child(div().flex_1().child(if n == 1 { "1 task to review".to_string() } else { format!("{n} tasks to review") })));
                 }
                 let many_workspaces = mirror.workspaces.len() > 1;
                 for (ws_id, ws_name) in &mirror.workspaces {

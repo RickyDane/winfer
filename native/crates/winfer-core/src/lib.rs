@@ -8,6 +8,7 @@ pub mod hooks;
 pub mod layout;
 pub mod model;
 pub mod request;
+pub mod review;
 pub mod status;
 pub mod terminal;
 pub mod theme;
