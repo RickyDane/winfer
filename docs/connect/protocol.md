@@ -120,3 +120,14 @@ chat model on the replayed and live bytes and writes its commands as `term.in`.
 `tool.call {id, name, args, caller}` → `tool.result {id, ok, text}`. Hosts run `read_pane`, `send_to_pane` (`args.pane`
 = the host's pane id) and `spawn_agent` (`args.workspace` = a workspace name, default the active one) exactly as for
 their own agents. Clients time out after 30 s.
+
+### Servers and shared sign-ins
+
+| t | from | fields |
+|---|---|---|
+| `server.update` | client | — → `ack {ok, version?, error?}`; the server updates to the newest release and restarts |
+| `account.push` | either | `provider` (`claude`/`codex`), `accountId` (the sender's), `label`, `parts` → `ack {ok, accountId (the receiver's), label}` |
+| `account.sync` | either | `accountId` (the receiver's), `parts`: a linked sign-in changed (refresh) |
+
+A server's `panes` mirror carries `server: {version, latest, update, docker, os, arch}`. Sign-ins are never logged
+(`WINFER_CONNECT_TRACE` leaves `parts` out).

@@ -27,6 +27,7 @@ pub struct Host {
     last_saved: Mutex<String>,
     /// A chat pane's first message, sent once its process is up.
     first_messages: Mutex<HashMap<String, String>>,
+    ticks: std::sync::atomic::AtomicU64,
 }
 
 static HOST: OnceLock<Arc<Host>> = OnceLock::new();
@@ -52,6 +53,7 @@ impl Host {
             shape: Mutex::default(),
             last_saved: Mutex::default(),
             first_messages: Mutex::default(),
+            ticks: Default::default(),
         });
         let _ = HOST.set(host.clone());
         let h = host.clone();
@@ -156,6 +158,17 @@ impl Host {
 
     /// Once a second: quiet agents go idle, changes go out, the state is saved.
     pub fn tick(&self) {
+        let n = self.ticks.fetch_add(1, Ordering::Relaxed);
+        if n % 30 == 7 {
+            // Linked sign-ins that refreshed here go to the machine they came from.
+            winfer_core::accounts_sync::tick(|peer, msg| {
+                let up = connect::get().is_some_and(|c| c.is_up(peer));
+                if up {
+                    connect::send(peer, msg);
+                }
+                up
+            });
+        }
         status::tick(&mut *self.state.lock());
         self.push_changes();
         self.save();
@@ -293,6 +306,14 @@ impl Host {
                 connect::send(peer, json!({"t": "tool.result", "id": msg["id"], "ok": ok, "text": text}));
             }
             "pane.new" => reply(self.new_pane(msg, peer)),
+            "account.push" => {
+                let answer = winfer_core::accounts_sync::on_push(peer, msg);
+                if answer["ok"] == true {
+                    eprintln!("signed in to {} as {} (pushed from {})", msg["provider"].as_str().unwrap_or_default(), answer["accountId"].as_str().unwrap_or_default(), connect::peer_name(peer).unwrap_or_default());
+                }
+                reply(answer);
+            }
+            "account.sync" => winfer_core::accounts_sync::on_sync(peer, msg),
             "server.update" => {
                 // Takes a while (download): answered from its own thread, then the restart.
                 let (peer, id) = (peer.to_string(), msg["id"].clone());

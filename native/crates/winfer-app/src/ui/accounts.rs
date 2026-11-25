@@ -533,6 +533,23 @@ impl Root {
                 let mut acts = div().flex_shrink_0().flex().items_center().gap_0p5()
                     .child(icon(format!("up-{}", account.id), IconName::ArrowUp, "Use earlier", i > 0).on_click(reorder(-1)))
                     .child(icon(format!("down-{}", account.id), IconName::ArrowDown, "Use later", i + 1 < list.len()).on_click(reorder(1)));
+                // Push this sign-in to a paired machine (a server, usually).
+                let machines: Vec<(String, String)> = crate::connect::get().map(|c| c.status().peers.into_iter().map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default();
+                if !machines.is_empty() {
+                    let (pid, plabel) = (account.id.clone(), account.label.clone());
+                    let linked: Vec<String> = winfer_core::accounts_sync::links().into_iter().filter(|l| l.local == account.id).map(|l| l.peer).collect();
+                    let tip = if linked.is_empty() { "Sign in on another machine with this account" } else { "Signed in on another machine too (kept in step)" };
+                    acts = acts.child(icon(format!("push-{}", account.id), IconName::Upload, tip, account.signed_in)
+                        .when(!linked.is_empty(), |d| d.text_color(c.accent))
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                            let items = machines.iter().map(|(peer, name)| {
+                                let (peer, id) = (peer.clone(), pid.clone());
+                                let label = if linked.contains(&peer) { format!("Push to {name} again") } else { format!("Push to {name}") };
+                                super::menu::MenuItem::run(label, move |this: &mut Self, _, cx| this.push_account(&id, &peer, cx))
+                            }).collect();
+                            this.open_menu(e.position, Some(format!("Sign in elsewhere as “{plabel}”")), items, cx);
+                        })));
+                }
                 if is_default(&account.id) {
                     acts = acts.child(div().w(px(54.0)));
                 } else {

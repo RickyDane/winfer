@@ -29,10 +29,25 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
     };
     let on = Arc::new(move |event: Event| {
         if std::env::var_os("WINFER_CONNECT_TRACE").is_some() && !matches!(event, Event::Changed) {
-            eprintln!("[connect] {event:?}");
+            // Never a pushed sign-in in a log.
+            match &event {
+                Event::Message { peer, msg } if msg.get("parts").is_some() => eprintln!("[connect] Message from {peer}: {} (sign-in not shown)", msg["t"]),
+                _ => eprintln!("[connect] {event:?}"),
+            }
         }
         let _ = match event {
-            Event::Changed => app.emit("connect://changed", ()),
+            Event::Changed => {
+                // Unpaired machines lose their linked sign-ins.
+                // (Not while the list is empty: it loads after the first events. A link to a machine
+                // that's gone only ever fails to send.)
+                if let Some(c) = CONNECT.get() {
+                    let paired: Vec<String> = c.peers().into_iter().map(|p| p.peer_id).collect();
+                    if !paired.is_empty() {
+                        crate::accounts_sync::retain_peers(&paired);
+                    }
+                }
+                app.emit("connect://changed", ())
+            }
             Event::PeerUp(peer) => app.emit("connect://peer", json!({"peer": peer, "up": true})),
             Event::PeerDown(peer) => {
                 crate::connect_term::drop_peer(&peer);

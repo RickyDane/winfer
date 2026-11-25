@@ -173,6 +173,10 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
 - [ ] `docker build -f native/crates/winferd/Dockerfile -t winferd .` then `docker run -d -v winferd:/data -e
   WINFERD_PAIR='<link>' -e WINFERD_AGENTS=claude winferd`: pairs (code in `docker logs`), `claude` runs in a tile.
 
+- [ ] Settings → Accounts → push icon on a signed-in Codex/Claude account → "Push to ‹server›": toast "Signed in on …";
+  an agent of that kind on the server starts signed in; the icon turns accent. A refresh on either side reaches the
+  other within ~30 s (compare `auth.json` / `.credentials.json`).
+
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.
 - [ ] Shortcuts use Ctrl+Shift (Ctrl+Shift+T new pane, Ctrl+Shift+K palette, Ctrl+Shift+/ shortcuts); tooltips and the empty screen show the same keys.

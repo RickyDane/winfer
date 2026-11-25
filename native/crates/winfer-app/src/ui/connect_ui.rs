@@ -111,8 +111,12 @@ pub(super) struct ConnectClient {
     synced: bool,
     #[cfg(debug_assertions)]
     dev_opened: bool,
+    #[cfg(debug_assertions)]
+    dev_pushed: bool,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
+    /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
+    pushes: HashMap<String, (String, String, String)>,
 }
 
 /// What a Connect agent tool did: answered, or waits for the other machine.
@@ -339,6 +343,21 @@ impl Root {
             return;
         }
         match kind {
+            "account.push" => {
+                let mut answer = winfer_core::accounts_sync::on_push(&peer, msg);
+                answer["id"] = msg["id"].clone();
+                if answer["ok"] == true {
+                    let name = crate::connect::peer_name(&peer).unwrap_or_else(|| "another machine".into());
+                    self.toast(format!("{name} shared its {} sign-in with this machine", msg["provider"].as_str().unwrap_or("agent")), cx);
+                    self.reload_accounts(cx);
+                }
+                crate::connect::send(&peer, answer);
+            }
+            "account.sync" => {
+                let peer = peer.clone();
+                let msg = msg.clone();
+                crate::backend::background(move || winfer_core::accounts_sync::on_sync(&peer, &msg));
+            }
             "connect.presence" => {
                 if msg["active"] == true {
                     self.connect.active_at.insert(peer, Instant::now());
@@ -378,6 +397,12 @@ impl Root {
             }
             "ack" | "error" => {
                 let id = msg["id"].as_str().unwrap_or_default();
+                if let Some((local, fp, name)) = self.connect.pushes.remove(id)
+                    && msg["ok"] == true
+                {
+                    winfer_core::accounts_sync::pushed(&peer, &local, msg["accountId"].as_str().unwrap_or_default(), &fp);
+                    self.toast(format!("Signed in on {name} as “{}”. The two stay in step when either refreshes.", msg["label"].as_str().unwrap_or("the account")), cx);
+                }
                 if let Some(failure) = self.connect.pending.remove(id)
                     && msg["ok"] != true
                 {
@@ -386,6 +411,19 @@ impl Root {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Settings → Accounts → Push to ‹machine›: sends this account's sign-in there.
+    pub(super) fn push_account(&mut self, account: &str, peer: &str, cx: &mut Context<Self>) {
+        let name = crate::connect::peer_name(peer).unwrap_or_else(|| "the other machine".into());
+        match winfer_core::accounts_sync::push_message(account) {
+            Ok((msg, fp)) => {
+                let id = self.connect_request(peer, msg, Some(format!("Couldn't sign in on {name}")));
+                self.connect.pushes.insert(id, (account.to_string(), fp, name.clone()));
+                self.toast(format!("Sending the sign-in to {name}…"), cx);
+            }
+            Err(e) => self.toast(e, cx),
         }
     }
 
@@ -659,6 +697,28 @@ impl Root {
 
     /// Every second: refresh mirrors now and then (pushes keep them current in between).
     pub(super) fn tick_connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Linked sign-ins that refreshed here go to the other machine (every 30 s, off this thread).
+        if self.connect.ticks % 30 == 7 && !winfer_core::accounts_sync::links().is_empty() {
+            crate::backend::background(|| {
+                winfer_core::accounts_sync::tick(|peer, msg| {
+                    let up = crate::connect::get().is_some_and(|c| c.is_up(peer));
+                    if up {
+                        crate::connect::send(peer, msg);
+                    }
+                    up
+                })
+            });
+        }
+        // Development aid: push this account's sign-in to the first server that's up
+        // (`WINFER_NATIVE_CONNECT_PUSH=codex:default`).
+        #[cfg(debug_assertions)]
+        if let Ok(account) = std::env::var("WINFER_NATIVE_CONNECT_PUSH")
+            && !self.connect.dev_pushed
+            && let Some(server) = crate::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.kind == Kind::Server && p.link.via.is_some()))
+        {
+            self.connect.dev_pushed = true;
+            self.push_account(&account, &server.peer_id, cx);
+        }
         // Development aid: open the first remote pane as a tile once it's known.
         #[cfg(debug_assertions)]
         if std::env::var_os("WINFER_NATIVE_CONNECT_OPEN").is_some() && !self.connect.dev_opened {

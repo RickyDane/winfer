@@ -318,6 +318,15 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   re-executes itself (same pid); servers check every 6 h and report `server {version, update, docker}` in their mirror.
   Docker servers get the `docker pull` command instead. Still to do: a first release to exercise the CI jobs.
 
+- **H4** done in its first form (`winfer_core::accounts_sync`): Settings → Accounts → push icon → "Push to ‹machine›"
+  sends `account.push {provider, accountId, label, parts}` (Claude: `credentials` from the Keychain or
+  `.credentials.json` + its `oauthAccount`; Codex: `auth.json`). The receiver writes it into the agent's default sign-in
+  while that's empty, else a new account (`accounts.json`, failover order), 0600 files (Keychain on macOS), marks
+  Claude's onboarding done, and both sides record a link (`account-links.json`). Every 30 s each side sends a changed
+  linked sign-in as `account.sync`. Tested with a fake Codex sign-in desktop ⇄ Linux container both ways, no echo.
+  Links to unpaired machines are dropped. Not yet: "Move" (desktop forgets its copy), wiping pushed sign-ins on unpair,
+  a "Signed out on ‹server›" state.
+
 ## Headless risks / notes
 
 - **H1 is the long pole:** extraction touches the app's central code. Mitigation: one module per PR, desktop behavior unchanged, tests first.
