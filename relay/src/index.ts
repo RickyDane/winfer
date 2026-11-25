@@ -1,13 +1,17 @@
-// winfer mobile relay: dumb, authenticated WebSocket pipe between one winfer desktop
-// and its paired phones. Frames are end-to-end encrypted; the relay never sees plaintext.
-// Protocol: docs/mobile/protocol.md
+// winfer relay: dumb, authenticated WebSocket pipe. Two kinds of rooms:
+// - mobile: one winfer desktop and its paired phones (docs/mobile/protocol.md)
+// - peer: two paired winfer instances, Winfer Connect (docs/connect/protocol.md)
+// Frames are end-to-end encrypted; the relay never sees plaintext.
 import { DurableObject } from "cloudflare:workers";
 
-type Role = "desktop" | "phone";
+type Role = "desktop" | "phone" | "peer";
+type Kind = "mobile" | "peer";
 
 const ROOM_RE = /^[A-Za-z0-9_-]{22}$/; // 16 bytes, base64url
 const AUTH_RE = /^[A-Za-z0-9_-]{43}$/; // 32 bytes, base64url
+const INST_RE = /^[A-Za-z0-9_-]{22}$/; // Winfer Connect instance id, 16 bytes
 const MAX_PHONES = 8;
+const MAX_PEERS = 2;
 const MAX_FRAME = 1 << 20;
 const IDLE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -66,16 +70,41 @@ export class Room extends DurableObject<Env> {
     }
 
     const role = url.searchParams.get("role");
-    if (role !== "desktop" && role !== "phone") return text("bad role", 400);
+    if (role !== "desktop" && role !== "phone" && role !== "peer") return text("bad role", 400);
+    const inst = url.searchParams.get("inst") ?? "";
+    if (role === "peer" && !INST_RE.test(inst)) return text("bad instance", 400);
+    const kind: Kind = role === "peer" ? "peer" : "mobile";
 
     if (stored === undefined) {
       // First connection claims the room. Room ids are 128-bit random, so unguessable.
-      await this.ctx.storage.put("authHash", presented);
+      await this.ctx.storage.put({ authHash: presented, kind });
     } else if (!authorized) {
       return text("forbidden", 403);
+    } else if (((await this.ctx.storage.get<Kind>("kind")) ?? "mobile") !== kind) {
+      return text("wrong room kind", 409);
     }
 
-    if (role === "desktop") {
+    const tags: string[] = [role];
+    if (role === "peer") {
+      // A reconnecting instance replaces its own old socket; a room holds the two paired instances.
+      for (const old of this.ctx.getWebSockets(`inst:${inst}`)) {
+        try {
+          old.close(4000, "replaced");
+        } catch {
+          // already closing
+        }
+      }
+      const others = new Set(
+        this.ctx
+          .getWebSockets("peer")
+          .filter((ws) => ws.readyState === WebSocket.OPEN)
+          .flatMap((ws) => this.ctx.getTags(ws).filter((t) => t.startsWith("inst:") && t !== `inst:${inst}`)),
+      );
+      if (others.size + 1 > MAX_PEERS) {
+        return text("too many peers", 429);
+      }
+      tags.push(`inst:${inst}`);
+    } else if (role === "desktop") {
       for (const old of this.ctx.getWebSockets("desktop")) {
         try {
           old.close(4000, "replaced");
@@ -89,7 +118,7 @@ export class Room extends DurableObject<Env> {
 
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
-    this.ctx.acceptWebSocket(server, [role]);
+    this.ctx.acceptWebSocket(server, tags);
     await this.ctx.storage.setAlarm(Date.now() + IDLE_MS);
     this.broadcastPresence();
     return new Response(null, { status: 101, webSocket: client });
@@ -107,8 +136,10 @@ export class Room extends DurableObject<Env> {
     // Control frames are relay → client only.
     if (message.startsWith("{")) return;
 
-    const target: Role = this.roleOf(ws) === "desktop" ? "phone" : "desktop";
+    const role = this.roleOf(ws);
+    const target: Role = role === "peer" ? "peer" : role === "desktop" ? "phone" : "desktop";
     for (const peer of this.ctx.getWebSockets(target)) {
+      if (peer === ws) continue;
       try {
         peer.send(message);
       } catch {
@@ -139,18 +170,24 @@ export class Room extends DurableObject<Env> {
   }
 
   private roleOf(ws: WebSocket): Role {
-    return this.ctx.getTags(ws).includes("desktop") ? "desktop" : "phone";
+    const tags = this.ctx.getTags(ws);
+    return tags.includes("peer") ? "peer" : tags.includes("desktop") ? "desktop" : "phone";
   }
 
   private broadcastPresence(leaving?: WebSocket): void {
     const sockets = this.ctx
       .getWebSockets()
       .filter((ws) => ws !== leaving && ws.readyState === WebSocket.OPEN);
-    const frame = JSON.stringify({
-      t: "presence",
-      desktop: sockets.some((ws) => this.roleOf(ws) === "desktop"),
-      phones: sockets.filter((ws) => this.roleOf(ws) === "phone").length,
-    });
+    const peers = sockets.filter((ws) => this.roleOf(ws) === "peer").length;
+    const frame = JSON.stringify(
+      peers > 0
+        ? { t: "presence", peers }
+        : {
+            t: "presence",
+            desktop: sockets.some((ws) => this.roleOf(ws) === "desktop"),
+            phones: sockets.filter((ws) => this.roleOf(ws) === "phone").length,
+          },
+    );
     for (const ws of sockets) {
       try {
         ws.send(frame);
