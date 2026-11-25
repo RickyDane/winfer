@@ -75,7 +75,12 @@ impl Root {
             "winfer-code" => Some(self.code_tabs(c, cx)),
             "agents" => Some(self.agents_tabs(c, cx)),
             "voice" => Some(self.voice_tabs(c, cx)),
-            "usage" => Some(self.usage_tabs(c, cx)),
+            "usage" => {
+                self.swap_machine_usage();
+                let tabs = self.usage_tabs(c, cx);
+                self.swap_machine_usage();
+                Some(tabs)
+            }
             "data" => Some(self.data_tabs(c, cx)),
             "diagnostics" => Some(self.diagnostics_tabs(c, cx)),
             "plugins" => Some(self.plugins_tabs(c, cx)),

@@ -142,6 +142,7 @@ pub(super) struct ConnectClient {
     /// `WINFER_NATIVE_CONNECT_SPAWN`'s workspace request, once sent.
     dev_spawn: Option<String>,
     dev_review: bool,
+    dev_usage: bool,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
     /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
@@ -398,6 +399,7 @@ impl Root {
                 }
             }
             "reviews" => self.on_remote_reviews(&peer, msg, cx),
+            "usage" => self.on_remote_usage(&peer, msg, cx),
             "panes" => {
                 let mirror = Mirror {
                     panes: msg["panes"].as_array().into_iter().flatten().filter_map(RemotePane::parse).collect(),
@@ -432,6 +434,7 @@ impl Root {
             }
             "ack" | "error" => {
                 let id = msg["id"].as_str().unwrap_or_default();
+                self.usage_request_failed(id);
                 #[cfg(debug_assertions)]
                 if self.connect.dev_spawn.as_deref() == Some(id)
                     && let Some(ws) = msg["workspaceId"].as_str()
@@ -792,6 +795,21 @@ impl Root {
                 self.review.queue_tests = true;
                 self.dev_enqueue(first, cx);
             }
+        }
+        // Development aid: Settings → Usage showing the first server's (`WINFER_NATIVE_CONNECT_USAGE=limits|spend`).
+        #[cfg(debug_assertions)]
+        if let Ok(tab) = std::env::var("WINFER_NATIVE_CONNECT_USAGE")
+            && !self.connect.dev_usage
+            && let Some(server) = crate::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.kind == Kind::Server && p.link.via.is_some()))
+            && self.connect.mirrors.get(&server.peer_id).is_some_and(|m| m.loaded)
+        {
+            self.connect.dev_usage = true;
+            self.execute(Command::Settings(Some("usage".into())), window, cx);
+            if let Some(s) = self.settings.as_mut() {
+                s.page_tabs.insert("usage", if tab == "spend" { "spend" } else { "limits" });
+            }
+            self.dev_usage_tab(if tab == "spend" { "spend" } else { "limits" }, cx);
+            self.show_usage_of(Some(server.peer_id.clone()), cx);
         }
         // Development aid: push this account's sign-in to the first server that's up
         // (`WINFER_NATIVE_CONNECT_PUSH=codex:default`).

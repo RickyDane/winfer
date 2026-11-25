@@ -7,6 +7,7 @@ mod machine;
 mod review;
 mod service;
 mod update;
+mod limits;
 
 use std::time::Duration;
 use winfer_backend::{harness, hooks, mcp, usage};
@@ -94,6 +95,7 @@ fn run(args: &[String]) {
     // Servers are reached through the relay; the LAN listener only on request.
     connect.set_discoverable(args.iter().any(|a| a == "--lan"));
     let host = host::Host::start();
+    limits::start();
     update::watch();
     if let Some(link) = flag(args, "--pair").or_else(|| std::env::var("WINFERD_PAIR").ok()).filter(|l| !l.trim().is_empty()) {
         control::request_pair(&link);

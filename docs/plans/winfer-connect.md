@@ -343,6 +343,12 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   with tests first, recorded in the server's history. Not yet: "Changes" (the diff view) for server reviews, the
   server's History on the desktop, screenshots of a server's dev server.
 
+- **H7** usage half: the GPUI-free usage code (readings, polling backoff, pooled accounts, token totals, the
+  `usage.get` answer) is in `winfer_core::usage`; winferd polls its sign-ins every minute, takes status-line readings
+  and answers `usage.get` (`raw` for desktops). Settings → Usage has a machine picker; Limits and Spend show the
+  server's numbers (Tools and "By task" stay this machine's). Tested against a Linux container. Phone pairing to a
+  server: next.
+
 ## Headless risks / notes
 
 - **H1 is the long pole:** extraction touches the app's central code. Mitigation: one module per PR, desktop behavior unchanged, tests first.

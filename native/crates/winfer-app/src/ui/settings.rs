@@ -689,7 +689,13 @@ impl Root {
                 "winfer-code" => self.page_harness(c, window, cx).into_any_element(),
                 "mobile" => self.page_mobile(c, window, cx).into_any_element(),
                 "connect" => self.page_connect(c, window, cx).into_any_element(),
-                "usage" => self.page_usage(c, cx).into_any_element(),
+                "usage" => {
+                    // A paired server's numbers, drawn as this machine's are.
+                    self.swap_machine_usage();
+                    let page = self.page_usage(c, cx).into_any_element();
+                    self.swap_machine_usage();
+                    page
+                }
                 "updates" => self.page_updates(c, cx).into_any_element(),
                 _ => div().text_xs().text_color(c.subtle).child(format!("The {label} page isn't in the native build yet.")).into_any_element(),
             };

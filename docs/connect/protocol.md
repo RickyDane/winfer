@@ -132,6 +132,13 @@ their own agents. Clients time out after 30 s.
 | `account.push` | either | `provider` (`claude`/`codex`), `accountId` (the sender's), `label`, `parts` → `ack {ok, accountId (the receiver's), label}` |
 | `account.sync` | either | `accountId` (the receiver's), `parts`: a linked sign-in changed (refresh) |
 
+### Usage on a server
+
+A server polls its own sign-ins' limits (as the desktop polls its own) and reads its agents' logs for token history.
+`usage.get {range?, refresh?, raw?}` → `usage {providers, now, tokens}`, the same answer the desktop gives its phone;
+with `raw: true` also `raw: {snapshots, samples, accounts, rows}`, which a paired desktop's Usage page shows when that
+server is picked ("This Mac ▾" next to the range).
+
 ### Review on a server
 
 When an agent on a server finishes work (its worktree has changes), the server makes a review of it: diff stats, a

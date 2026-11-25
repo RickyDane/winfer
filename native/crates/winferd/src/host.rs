@@ -39,7 +39,7 @@ impl Host {
         // First of all: paired machines ask as soon as their link is up (handled once loaded).
         let forward = tx.clone();
         backend::app().listen_any(move |event, payload| {
-            if matches!(event, "pty://exit" | "agent://status" | "connect://message" | "connect://peer" | "mcp://call") {
+            if matches!(event, "pty://exit" | "agent://status" | "connect://message" | "connect://peer" | "mcp://call" | "usage://report") {
                 let _ = forward.try_send(Event::Backend(event.to_string(), payload.clone()));
             }
         });
@@ -156,6 +156,7 @@ impl Host {
                 self.on_message(&peer, &payload["msg"]);
             }
             "mcp://call" => self.on_mcp_call(payload),
+            "usage://report" => crate::limits::report(self, payload),
             _ => {}
         }
     }
@@ -377,10 +378,20 @@ impl Host {
                     }
                 });
             }
+            "usage.get" => {
+                // Polling and reading the logs take a moment: answered from its own thread.
+                let (peer, msg) = (peer.to_string(), msg.clone());
+                std::thread::spawn(move || {
+                    let Some(host) = HOST.get() else { return };
+                    let mut answer = crate::limits::answer(host, &msg);
+                    answer["id"] = msg["id"].clone();
+                    connect::send(&peer, answer);
+                });
+            }
             "connect.presence" => {}
             "thread.get" => reply(json!({"t": "error", "error": "Open the pane to see it."})),
             "config.get" => reply(json!({"t": "config", "paneId": msg["paneId"], "models": []})),
-            "models.get" | "usage.get" | "pane.set" | "choose" => reply(no("A winfer server can't do that yet.")),
+            "models.get" | "pane.set" | "choose" => reply(no("A winfer server can't do that yet.")),
             "send" | "approve" | "decline" | "interrupt" | "pane.close" => {
                 let pane = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned());
                 let Some(pane) = pane else { return reply(no("That agent is gone.")) };

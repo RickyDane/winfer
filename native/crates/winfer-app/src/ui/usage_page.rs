@@ -4,7 +4,7 @@
 
 use super::dialogs::relative_time;
 use super::orchestration::{format_cost, format_tokens};
-use super::usage::{Account, Snapshot, UsageWindow, duration, left_now, runs_out_at, usage_key};
+use winfer_core::usage::*;
 use super::*;
 use gpui_kit::component::tooltip::Tooltip;
 use serde_json::Value;
@@ -28,285 +28,8 @@ fn series_color(p: &str, c: &Colors) -> Hsla {
     SERIES.iter().position(|s| *s == p).map_or(c.subtle, |i| theme::hex(SERIES_COLORS[i]))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum Range {
-    Day,
-    #[default]
-    Week,
-    Month,
-    Quarter,
-}
-
-impl Range {
-    pub const ALL: [Range; 4] = [Range::Day, Range::Week, Range::Month, Range::Quarter];
-
-    pub fn days(self) -> i64 {
-        match self {
-            Self::Day => 1,
-            Self::Week => 7,
-            Self::Month => 30,
-            Self::Quarter => 90,
-        }
-    }
-
-    pub fn step_hours(self) -> i64 {
-        match self {
-            Self::Day => 1,
-            Self::Week => 6,
-            Self::Month | Self::Quarter => 24,
-        }
-    }
-
-    /// The label in the tab bar's range control.
-    pub fn short(self) -> &'static str {
-        match self {
-            Self::Day => "24 h",
-            Self::Week => "7 d",
-            Self::Month => "30 d",
-            Self::Quarter => "90 d",
-        }
-    }
-
-    fn id(self) -> &'static str {
-        match self {
-            Self::Day => "24h",
-            Self::Week => "7d",
-            Self::Month => "30d",
-            Self::Quarter => "90d",
-        }
-    }
-
-    fn parse(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|r| r.id() == s)
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Bar {
-    pub start: f64,
-    pub end: f64,
-    pub cost: HashMap<String, f64>,
-    pub tokens: HashMap<String, f64>,
-}
-
 fn now_ms() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_millis() as f64)
-}
-
-fn tokens_of(b: &Value) -> f64 {
-    ["input", "output", "cacheRead", "cacheWrite"].iter().filter_map(|k| b[*k].as_f64()).sum()
-}
-
-/// Local calendar arithmetic, so days stay at midnight across daylight saving changes.
-mod local {
-    #[cfg(unix)]
-    fn tm_of(ms: f64) -> libc::tm {
-        let secs = (ms / 1000.0).floor() as libc::time_t;
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        unsafe { libc::localtime_r(&secs, &mut tm) };
-        tm
-    }
-
-    #[cfg(unix)]
-    fn ms_of(mut tm: libc::tm) -> f64 {
-        tm.tm_isdst = -1;
-        (unsafe { libc::mktime(&mut tm) }) as f64 * 1000.0
-    }
-
-    /// Start of the local step (hour, 6 hours or day) `at` falls in.
-    #[cfg(unix)]
-    pub fn step_start(at: f64, step_hours: i64) -> f64 {
-        let mut tm = tm_of(at);
-        tm.tm_min = 0;
-        tm.tm_sec = 0;
-        if step_hours >= 24 {
-            tm.tm_hour = 0;
-        } else {
-            tm.tm_hour -= tm.tm_hour % step_hours as i32;
-        }
-        ms_of(tm)
-    }
-
-    #[cfg(unix)]
-    pub fn add_hours(at: f64, hours: i64) -> f64 {
-        let mut tm = tm_of(at);
-        if hours.abs() >= 24 {
-            tm.tm_mday += (hours / 24) as i32;
-        } else {
-            tm.tm_hour += hours as i32;
-        }
-        ms_of(tm)
-    }
-
-    #[cfg(not(unix))]
-    pub fn step_start(at: f64, step_hours: i64) -> f64 {
-        super::wall::step_start(&utc_offset, at, step_hours)
-    }
-
-    #[cfg(not(unix))]
-    pub fn add_hours(at: f64, hours: i64) -> f64 {
-        super::wall::add_hours(&utc_offset, at, hours)
-    }
-
-    /// Milliseconds to add to a Unix time (ms) to get the local wall-clock time, read off
-    /// `localtime_s`; Windows has no `mktime` in `libc`, so it goes through `wall` instead.
-    #[cfg(windows)]
-    fn utc_offset(at: f64) -> f64 {
-        let secs = (at / 1000.0).floor() as libc::time_t;
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        unsafe { libc::localtime_s(&mut tm, &secs) };
-        let days = super::wall::days_from_civil(tm.tm_year as i64 + 1900, tm.tm_mon as i64 + 1, tm.tm_mday as i64);
-        let local = days * 86_400 + tm.tm_hour as i64 * 3600 + tm.tm_min as i64 * 60 + tm.tm_sec as i64;
-        (local - secs as i64) as f64 * 1000.0
-    }
-
-    #[cfg(all(not(unix), not(windows)))]
-    fn utc_offset(_: f64) -> f64 {
-        0.0
-    }
-}
-
-/// Local calendar arithmetic from a UTC offset function (ms to add to a UTC time to get the local
-/// wall-clock time), for platforms without `mktime`: steps start at local hours and midnights, and
-/// a day is a calendar day even when daylight saving makes it 23 or 25 hours.
-#[cfg_attr(unix, allow(dead_code))]
-mod wall {
-    const HOUR: f64 = 3_600_000.0;
-
-    /// The UTC time whose wall-clock reading is `wall` (ms as if the wall clock were UTC).
-    fn to_utc(offset: &impl Fn(f64) -> f64, wall: f64) -> f64 {
-        let guess = wall - offset(wall);
-        wall - offset(guess)
-    }
-
-    /// Start of the local step (hour, 6 hours or day) `at` falls in.
-    pub fn step_start(offset: &impl Fn(f64) -> f64, at: f64, step_hours: i64) -> f64 {
-        let wall = at + offset(at);
-        let step = step_hours.min(24) as f64 * HOUR;
-        to_utc(offset, (wall / step).floor() * step)
-    }
-
-    /// `hours` of wall-clock time after (or, negative, before) `at`.
-    pub fn add_hours(offset: &impl Fn(f64) -> f64, at: f64, hours: i64) -> f64 {
-        to_utc(offset, at + offset(at) + hours as f64 * HOUR)
-    }
-
-    /// Days since 1970-01-01 of a civil date (proleptic Gregorian).
-    pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-        let y = if m <= 2 { y - 1 } else { y };
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        era * 146_097 + doe - 719_468
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        const DAY: f64 = 24.0 * HOUR;
-        /// 2024-03-31 01:00 UTC, when Central European time moves from +1 to +2.
-        const JUMP: f64 = 19_813.0 * DAY + HOUR;
-        fn cet(t: f64) -> f64 {
-            if t < JUMP { HOUR } else { 2.0 * HOUR }
-        }
-
-        #[test]
-        fn civil_days_count_from_the_epoch() {
-            assert_eq!(days_from_civil(1970, 1, 1), 0);
-            assert_eq!(days_from_civil(2024, 3, 31), 19_813);
-        }
-
-        #[test]
-        fn days_start_at_local_midnight_and_follow_daylight_saving() {
-            let noon_before = 19_812.0 * DAY + 12.0 * HOUR;
-            let midnight = step_start(&cet, noon_before, 24);
-            assert_eq!(midnight, 19_811.0 * DAY + 23.0 * HOUR); // 00:00 at +1
-            assert_eq!(add_hours(&cet, midnight, 24), 19_812.0 * DAY + 23.0 * HOUR); // 00:00 on the 31st
-            // The 31st is a 23-hour day: its next midnight comes 23 hours later, at +2.
-            let after = add_hours(&cet, midnight, 48);
-            assert_eq!(after, 19_813.0 * DAY + 22.0 * HOUR);
-            assert_eq!(step_start(&cet, after + 5.0 * HOUR, 24), after);
-        }
-
-        #[test]
-        fn hour_steps_floor_to_the_local_hour() {
-            let at = 19_813.0 * DAY + 8.0 * HOUR + 1_234_567.0; // 10:20 local
-            assert_eq!(step_start(&cet, at, 1), 19_813.0 * DAY + 8.0 * HOUR);
-            assert_eq!(step_start(&cet, at, 6), 19_813.0 * DAY + 4.0 * HOUR); // 06:00 local
-        }
-    }
-}
-
-/// The range's bars, oldest first, the last one holding `now`; empty steps included.
-pub fn to_bars(rows: &[Value], range: Range, now: f64) -> Vec<Bar> {
-    let step = range.step_hours();
-    let count = (range.days() * 24 / step) as usize;
-    let mut start = local::step_start(now, step);
-    for _ in 0..count - 1 {
-        start = local::add_hours(start, -step);
-    }
-    let mut bars = Vec::with_capacity(count);
-    for _ in 0..count {
-        let end = local::add_hours(start, step);
-        bars.push(Bar { start, end, ..Default::default() });
-        start = end;
-    }
-    let first = bars[0].start;
-    for r in rows {
-        let hour = r["hour"].as_f64().unwrap_or(0.0);
-        if hour < first {
-            continue;
-        }
-        let i = bars.iter().rposition(|b| b.start <= hour).unwrap_or(0);
-        let provider = r["provider"].as_str().unwrap_or_default().to_string();
-        *bars[i].cost.entry(provider.clone()).or_default() += r["cost"].as_f64().unwrap_or(0.0);
-        *bars[i].tokens.entry(provider).or_default() += tokens_of(r);
-    }
-    bars
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ModelTotal {
-    pub provider: String,
-    pub model: String,
-    pub input: f64,
-    pub output: f64,
-    pub cache_read: f64,
-    pub cache_write: f64,
-    pub cost: f64,
-    pub priced: bool,
-}
-
-impl ModelTotal {
-    fn tokens(&self) -> f64 {
-        self.input + self.output + self.cache_read + self.cache_write
-    }
-}
-
-/// Totals per model since `since`, most expensive (then most tokens) first.
-pub fn model_totals(rows: &[Value], since: f64) -> Vec<ModelTotal> {
-    let mut by: Vec<ModelTotal> = Vec::new();
-    for r in rows.iter().filter(|r| r["hour"].as_f64().unwrap_or(0.0) >= since) {
-        let (provider, model) = (r["provider"].as_str().unwrap_or_default(), r["model"].as_str().unwrap_or_default());
-        let i = match by.iter().position(|t| t.provider == provider && t.model == model) {
-            Some(i) => i,
-            None => {
-                by.push(ModelTotal { provider: provider.into(), model: model.into(), input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, cost: 0.0, priced: true });
-                by.len() - 1
-            }
-        };
-        let t = &mut by[i];
-        t.input += r["input"].as_f64().unwrap_or(0.0);
-        t.output += r["output"].as_f64().unwrap_or(0.0);
-        t.cache_read += r["cacheRead"].as_f64().unwrap_or(0.0);
-        t.cache_write += r["cacheWrite"].as_f64().unwrap_or(0.0);
-        t.cost += r["cost"].as_f64().unwrap_or(0.0);
-        t.priced &= r["priced"] != false;
-    }
-    by.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(b.tokens().total_cmp(&a.tokens())));
-    by
 }
 
 /// A round axis maximum at or above `n`.
@@ -389,6 +112,116 @@ pub(super) struct UsagePage {
     /// When the history and the tool calls were last read (ms since the epoch).
     history_at: Option<f64>,
     tools_at: Option<f64>,
+    /// The paired server whose usage is shown (`None`: this machine's).
+    pub machine: Option<String>,
+    /// Paired servers' usage, as they last sent it (`usage.get {raw}`).
+    remote: HashMap<String, RemoteUsage>,
+    /// The `usage.get` whose answer is awaited.
+    remote_pending: Option<String>,
+}
+
+/// A paired server's readings and token history, shown in place of this machine's.
+#[derive(Default)]
+struct RemoteUsage {
+    snapshots: HashMap<String, Snapshot>,
+    samples: HashMap<String, Vec<(f64, f64)>>,
+    accounts: Vec<Account>,
+    rows: Option<Vec<Value>>,
+    at: Option<f64>,
+}
+
+impl Root {
+    /// The paired servers that are up, for the Usage page's machine picker.
+    fn usage_machines(&self) -> Vec<(String, String)> {
+        let Some(connect) = crate::connect::get() else { return Vec::new() };
+        connect.status().peers.into_iter().filter(|p| p.kind == winfer_connect::pairing::Kind::Server && p.link.via.is_some()).map(|p| (p.peer_id, p.name)).collect()
+    }
+
+    /// Shows `machine`'s usage (`None`: this one's), asking it for the numbers.
+    pub(super) fn show_usage_of(&mut self, machine: Option<String>, cx: &mut Context<Self>) {
+        self.usage_page.machine = machine.clone();
+        self.usage_page.hover = None;
+        if let Some(peer) = machine {
+            self.usage_page.remote.entry(peer.clone()).or_default();
+            self.request_remote_usage(&peer, false);
+        }
+        cx.notify();
+    }
+
+    fn request_remote_usage(&mut self, peer: &str, refresh: bool) {
+        let name = crate::connect::peer_name(peer).unwrap_or_else(|| "the server".into());
+        let id = self.connect_request(peer, serde_json::json!({"t": "usage.get", "raw": true, "refresh": refresh}), Some(format!("Couldn't read the usage on {name}")));
+        self.usage_page.remote_pending = Some(id);
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn dev_usage_tab(&self, tab: &str, cx: &mut Context<Self>) {
+        self.save("tab", tab, cx);
+    }
+
+    /// A `usage.get` that came back with an error instead: asked again later.
+    pub(super) fn usage_request_failed(&mut self, id: &str) {
+        if self.usage_page.remote_pending.as_deref() == Some(id) {
+            self.usage_page.remote_pending = None;
+            // Not again right away.
+            if let Some(r) = self.usage_page.machine.clone().and_then(|p| self.usage_page.remote.get_mut(&p)) {
+                r.at = Some(now_ms());
+            }
+        }
+    }
+
+    /// `usage` from a paired server (the answer to [`Root::request_remote_usage`]).
+    pub(super) fn on_remote_usage(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+        if self.usage_page.remote_pending.as_deref() == msg["id"].as_str() {
+            self.usage_page.remote_pending = None;
+        }
+        let raw = &msg["raw"];
+        let remote = RemoteUsage {
+            snapshots: serde_json::from_value(raw["snapshots"].clone()).unwrap_or_default(),
+            samples: serde_json::from_value(raw["samples"].clone()).unwrap_or_default(),
+            accounts: serde_json::from_value(raw["accounts"].clone()).unwrap_or_default(),
+            rows: raw["rows"].as_array().cloned(),
+            at: Some(now_ms()),
+        };
+        self.usage_page.remote.insert(peer.to_string(), remote);
+        cx.notify();
+    }
+
+    /// Puts the shown server's numbers in place of this machine's (and back, called again), so the
+    /// Usage page draws them as it draws its own.
+    pub(super) fn swap_machine_usage(&mut self) {
+        let Some(peer) = self.usage_page.machine.clone() else { return };
+        let Some(r) = self.usage_page.remote.get_mut(&peer) else { return };
+        std::mem::swap(&mut self.usage.snapshots, &mut r.snapshots);
+        std::mem::swap(&mut self.usage.samples, &mut r.samples);
+        std::mem::swap(&mut self.usage.accounts, &mut r.accounts);
+        std::mem::swap(&mut self.usage_page.rows, &mut r.rows);
+        std::mem::swap(&mut self.usage_page.history_at, &mut r.at);
+    }
+
+    /// "This Mac ▾": which machine's usage the page shows (only with a paired server up).
+    fn usage_machine_picker(&self, c: Colors, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let machines = self.usage_machines();
+        if machines.is_empty() && self.usage_page.machine.is_none() {
+            return None;
+        }
+        let here = if cfg!(target_os = "macos") { "This Mac" } else { "This machine" };
+        let label = self.usage_page.machine.as_deref().map_or_else(|| here.to_string(), |p| crate::connect::peer_name(p).unwrap_or_else(|| "Server".into()));
+        let icon = if self.usage_page.machine.is_some() { IconName::Server } else { IconName::Monitor };
+        Some(div().id("usage-machine").flex().items_center().gap_1p5().h(px(28.0)).px_2p5().rounded_md().border_1().border_color(c.edge).bg(c.raised).text_size(px(12.0)).text_color(c.fg).cursor_pointer()
+            .hover(move |d| d.bg(c.hover))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let mut items = vec![super::menu::MenuItem::run(here, |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_usage_of(None, cx))];
+                for (peer, name) in this.usage_machines() {
+                    items.push(super::menu::MenuItem::run(name, move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_usage_of(Some(peer.clone()), cx)));
+                }
+                this.open_menu(e.position, Some("Usage of".into()), items, cx);
+            }))
+            .child(Icon::new(icon).size(px(13.0)).text_color(c.subtle))
+            .child(label)
+            .child(Icon::new(IconName::ChevronDown).size(px(12.0)).text_color(c.subtle)))
+    }
 }
 
 impl Root {
@@ -485,7 +318,16 @@ impl Root {
             PageTab::new("spend", "Spend", IconName::Coins),
             PageTab::new("tools", "Tools", IconName::Wrench),
         ];
+        let remote = self.usage_page.machine.clone();
+        // A server's numbers, while shown, are asked for again once they're 30 s old.
+        if let Some(peer) = &remote
+            && self.usage_page.remote_pending.is_none()
+            && self.usage_page.history_at.is_none_or(|at| now - at > 30_000.0)
+        {
+            self.request_remote_usage(peer, false);
+        }
         let (loading, at) = match tab {
+            _ if remote.is_some() => (self.usage_page.remote_pending.is_some(), self.usage_page.history_at),
             "spend" => (self.usage_page.loading, self.usage_page.history_at),
             "tools" => (self.usage_page.tools_loading, self.usage_page.tools_at),
             _ => (self.usage.is_refreshing(), self.usage.snapshots.values().filter(|s| !s.windows.is_empty()).map(|s| s.at).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.max(t))))),
@@ -510,6 +352,11 @@ impl Root {
             .hover(move |d| d.bg(c.hover).text_color(c.fg))
             .tooltip(|window, cx| Tooltip::new("Refresh").build(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| match tab {
+                _ if this.usage_page.machine.is_some() => {
+                    let peer = this.usage_page.machine.clone().unwrap_or_default();
+                    this.request_remote_usage(&peer, true);
+                    cx.notify();
+                }
                 "spend" => {
                     this.usage_page.by_dir = None;
                     this.load_usage_history(cx);
@@ -523,7 +370,7 @@ impl Root {
             .child(Icon::new(IconName::RefreshCw).size(px(14.0)));
         self.page_tab_bar("usage", tab, tabs, c, cx)
             .child(div().flex_1())
-            .child(div().h(px(38.0)).flex().items_center().gap_2().children(range).child(div().text_size(px(11.5)).text_color(c.subtle).child(age)).child(refresh))
+            .child(div().h(px(38.0)).flex().items_center().gap_2().children(self.usage_machine_picker(c, cx)).children(range).child(div().text_size(px(11.5)).text_color(c.subtle).child(age)).child(refresh))
     }
 
     /// Settings → Usage & limits: the open tab (the tab bar is [`Root::usage_tabs`]).
@@ -533,6 +380,7 @@ impl Root {
             self.save("tab", tab, cx);
         }
         let body = match tab {
+            "tools" if self.usage_page.machine.is_some() => div().text_size(px(12.5)).text_color(c.subtle).child("Tool calls are only counted for this machine so far."),
             "tools" => self.tools_tab(c, cx),
             "spend" => self.history_tab(c, cx),
             _ => self.limits_tab(c, cx),
@@ -551,7 +399,7 @@ impl Root {
 
     fn history_tab(&mut self, c: Colors, cx: &mut Context<Self>) -> Div {
         use super::settings_kit::{alpha, mini_switch, panel, section};
-        if self.usage_page.rows.is_none() && !self.usage_page.loading && self.usage_page.error.is_none() {
+        if self.usage_page.machine.is_none() && self.usage_page.rows.is_none() && !self.usage_page.loading && self.usage_page.error.is_none() {
             self.load_usage_history(cx);
         }
         let range = self.usage_range("range", Range::Week, cx);
@@ -736,6 +584,10 @@ impl Root {
 
     /// Spend per task: each worktree (or folder) the agents worked in, most expensive first.
     fn by_task(&mut self, range: Range, c: Colors, cx: &mut Context<Self>) -> Option<Div> {
+        // Only counted for this machine's folders so far.
+        if self.usage_page.machine.is_some() {
+            return None;
+        }
         if self.usage_page.by_dir.as_ref().is_none_or(|(r, _)| *r != range) {
             self.usage_page.by_dir = Some((range, Vec::new()));
             self.load_by_dir(range, cx);
@@ -970,107 +822,14 @@ impl Root {
 
     /// The Limits tab for the phone (`usage.get`): per agent, the pooled limits and each account's.
     pub(super) fn mobile_usage(&self, cx: &App) -> Value {
-        let now = now_ms();
-        let windows = |key: &str, ws: &[UsageWindow], pooled: Option<(&str, &[String])>| -> Vec<Value> {
-            ws.iter().map(|w| {
-                let (out, pts): (Option<f64>, Vec<[f64; 2]>) = match pooled {
-                    Some((provider, keys)) => {
-                        let out = super::usage::pooled_runs_out_at(provider, &w.kind, &self.usage.snapshots, &self.usage.accounts, &self.usage.samples, now);
-                        let s = pooled_series(&w.kind, keys, &self.usage.snapshots, &self.usage.samples, now);
-                        (out, s.past.into_iter().map(|(t, l)| [t, l]).collect())
-                    }
-                    None => {
-                        let out = runs_out_at(key, w, &self.usage.samples, now);
-                        let prefix = format!("{key}:{}:", w.kind);
-                        let raw = self.usage.samples.iter().find(|(k, _)| k.starts_with(&prefix)).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
-                        let pts = raw.iter().filter(|(t, _)| *t <= now).map(|(t, used)| [*t, (100.0 - used).clamp(0.0, 100.0)]).collect();
-                        (out, pts)
-                    }
-                };
-                serde_json::json!({ "kind": w.kind, "label": w.label, "left": left_now(w, now), "resetsAt": w.resets_at, "runsOutAt": out, "samples": pts })
-            }).collect()
-        };
-        let providers: Vec<Value> = group_limit_keys(&self.usage.snapshots, &self.usage.accounts).into_iter().map(|(provider, keys)| {
-            let accounts: Vec<Value> = keys.iter().map(|k| {
-                let snap = &self.usage.snapshots[k];
-                serde_json::json!({ "key": k, "label": account_name(k, &self.usage.accounts), "at": snap.at, "windows": windows(k, &snap.windows, None) })
-            }).collect();
-            let pooled = (keys.len() > 1).then(|| {
-                let p = pooled_snapshot(&provider, &keys, &self.usage.snapshots, now);
-                serde_json::json!({ "at": p.at, "windows": windows(&provider, &p.windows, Some((&provider, &keys))) })
-            });
-            serde_json::json!({ "id": provider, "name": self.state.read(cx).provider_name(&provider), "accounts": accounts, "pooled": pooled })
-        }).collect();
-        serde_json::json!({ "providers": providers, "now": now })
+        let s = self.state.read(cx);
+        limits_json(&self.usage.snapshots, &self.usage.accounts, &self.usage.samples, &|p| s.provider_name(p), now_ms())
     }
 
     /// Token & cost summary for the phone (`usage.get`), matching the desktop Usage → Spend tab.
     fn mobile_tokens(&self, rows: &[Value], range: Range, now: f64, cx: &App) -> Value {
-        let bars = to_bars(rows, range, now);
-        let since = bars.first().map_or(now - range.days() as f64 * 86_400_000.0, |b| b.start);
-        let models = model_totals(rows, since);
-        let sum = |f: fn(&ModelTotal) -> f64| -> f64 { models.iter().map(f).sum() };
-
-        let mut by_provider: HashMap<String, (f64, f64)> = HashMap::new();
-        for m in &models {
-            let entry = by_provider.entry(m.provider.clone()).or_default();
-            entry.0 += m.tokens();
-            entry.1 += m.cost;
-        }
-        let mut providers: Vec<Value> = by_provider
-            .into_iter()
-            .filter(|(_, (tok, cost))| *tok > 0.0 || *cost > 0.0)
-            .map(|(id, (tokens, cost))| {
-                let name = self.state.read(cx).provider_name(&id);
-                serde_json::json!({ "id": id, "name": name, "tokens": tokens, "cost": cost })
-            })
-            .collect();
-        providers.sort_by(|a, b| {
-            b["tokens"].as_f64().unwrap_or(0.0).total_cmp(&a["tokens"].as_f64().unwrap_or(0.0))
-        });
-
-        let buckets: Vec<Value> = bars
-            .iter()
-            .map(|b| {
-                let tokens: f64 = b.tokens.values().sum();
-                let cost: f64 = b.cost.values().sum();
-                serde_json::json!({
-                    "start": b.start,
-                    "end": b.end,
-                    "tokens": tokens,
-                    "cost": cost,
-                    "byProvider": b.tokens,
-                })
-            })
-            .collect();
-
-        let model_rows: Vec<Value> = models
-            .iter()
-            .map(|m| {
-                serde_json::json!({
-                    "provider": m.provider,
-                    "model": m.model,
-                    "input": m.input,
-                    "output": m.output,
-                    "cacheRead": m.cache_read,
-                    "cacheWrite": m.cache_write,
-                    "cost": m.cost,
-                    "priced": m.priced,
-                })
-            })
-            .collect();
-
-        serde_json::json!({
-            "range": range.id(),
-            "input": sum(|m| m.input),
-            "output": sum(|m| m.output),
-            "cacheRead": sum(|m| m.cache_read),
-            "cacheWrite": sum(|m| m.cache_write),
-            "cost": sum(|m| m.cost),
-            "buckets": buckets,
-            "models": model_rows,
-            "providers": providers,
-        })
+        let s = self.state.read(cx);
+        tokens_json(rows, range, now, &|p| s.provider_name(p))
     }
 
     /// Serves `usage.get` for the phone with both plan limits and actual token/cost usage.
@@ -1254,219 +1013,6 @@ impl Root {
             .child(div().relative().h(px(46.0)).w_full().child(chart))
             .child(reset_line(w, out, now, c))
     }
-}
-
-/// The base provider id for a snapshot entry (real snapshots store the full account key such as
-/// `"claude:account-2"` in `snap.provider`, while demo snapshots store `"claude"`).
-fn snapshot_provider<'a>(key: &'a str, snap: &'a Snapshot) -> &'a str {
-    let raw = if !snap.provider.is_empty() { snap.provider.as_str() } else { key };
-    raw.split(':').next().unwrap_or(raw)
-}
-
-/// Groups non-empty snapshot keys by provider, ordering each provider's accounts by their
-/// failover order in `accounts` (with the default sign-in first when not listed).
-fn group_limit_keys(snapshots: &HashMap<String, Snapshot>, accounts: &[Account]) -> Vec<(String, Vec<String>)> {
-    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
-    let mut keys: Vec<&String> = snapshots.iter().filter(|(_, s)| !s.windows.is_empty()).map(|(k, _)| k).collect();
-    keys.sort_by_key(|k| {
-        let provider = snapshot_provider(k, &snapshots[*k]);
-        let order = accounts.iter().position(|a| usage_key(&a.id) == **k).unwrap_or(usize::MAX);
-        (provider.to_string(), order, k.contains(':'), (*k).clone())
-    });
-    for k in keys {
-        let provider = snapshot_provider(k, &snapshots[k]).to_string();
-        match grouped.iter_mut().find(|(p, _)| *p == provider) {
-            Some((_, list)) => list.push(k.clone()),
-            None => grouped.push((provider, vec![k.clone()])),
-        }
-    }
-    grouped
-}
-
-/// Display label for one account key on the Limits tab (falls back to "Default" for the base key).
-fn account_name(key: &str, accounts: &[Account]) -> String {
-    accounts.iter().find(|a| usage_key(&a.id) == key).map_or_else(|| if key.contains(':') { key.to_string() } else { "Default".into() }, |a| a.label.clone())
-}
-
-fn window_span(kind: &str) -> Option<f64> {
-    match kind {
-        "month-credit" => Some(30.0 * 86_400_000.0),
-        k if k == "session" || k.starts_with("session-") => Some(5.0 * 3_600_000.0),
-        k if k == "week" || k.starts_with("week-") => Some(7.0 * 86_400_000.0),
-        _ => None,
-    }
-}
-
-/// Combined snapshot across all of a provider's listed account keys: each window's remaining %
-/// is the average across accounts (matching the title bar rings), and `resets_at` is the soonest
-/// live reset.
-fn pooled_snapshot(provider: &str, keys: &[String], snapshots: &HashMap<String, Snapshot>, now: f64) -> Snapshot {
-    let members: Vec<&Snapshot> = keys.iter().filter_map(|k| snapshots.get(k)).filter(|s| !s.windows.is_empty()).collect();
-    let mut kinds: Vec<&str> = Vec::new();
-    for w in members.iter().flat_map(|s| &s.windows) {
-        if !kinds.contains(&w.kind.as_str()) {
-            kinds.push(&w.kind);
-        }
-    }
-    let windows = kinds
-        .into_iter()
-        .map(|kind| {
-            let ws: Vec<&UsageWindow> = members.iter().flat_map(|s| s.windows.iter().filter(|w| w.kind == kind)).collect();
-            let left = ws.iter().map(|w| left_now(w, now)).sum::<f64>() / ws.len().max(1) as f64;
-            let resets_at = ws.iter().filter_map(|w| w.resets_at).filter(|r| *r > now).reduce(f64::min);
-            UsageWindow { kind: kind.to_string(), label: ws[0].label.clone(), used_percent: 100.0 - left, resets_at }
-        })
-        .collect();
-    let at = members.iter().map(|s| s.at).reduce(f64::min).unwrap_or(now);
-    Snapshot { provider: provider.to_string(), windows, at, reset_credits: None }
-}
-
-/// Combined historical curve + stepped future projection across every account of a provider.
-struct PooledSeries {
-    start: f64,
-    end: f64,
-    past: Vec<(f64, f64)>,
-    future: Vec<(f64, f64)>,
-    /// Distinct future reset timestamps across accounts (sorted ascending).
-    resets: Vec<f64>,
-}
-
-fn eval_piecewise(pts: &[(f64, f64)], t: f64) -> f64 {
-    let Some(&(t0, v0)) = pts.first() else { return 100.0 };
-    if t <= t0 {
-        return v0;
-    }
-    for pair in pts.windows(2) {
-        let ((ta, va), (tb, vb)) = (pair[0], pair[1]);
-        if t <= tb {
-            let span = (tb - ta).max(1.0);
-            return va + (vb - va) * ((t - ta) / span);
-        }
-    }
-    pts.last().map_or(100.0, |p| p.1)
-}
-
-fn pooled_series(kind: &str, keys: &[String], snapshots: &HashMap<String, Snapshot>, samples: &HashMap<String, Vec<(f64, f64)>>, now: f64) -> PooledSeries {
-    struct Member {
-        pts: Vec<(f64, f64)>,
-        left: f64,
-        rate: f64,
-        reset: Option<f64>,
-    }
-    let span = window_span(kind);
-    let mut members: Vec<Member> = Vec::new();
-    let mut earliest = now - 3_600_000.0;
-    let mut latest = now;
-    for key in keys {
-        let Some(w) = snapshots.get(key).and_then(|s| s.windows.iter().find(|w| w.kind == kind)) else { continue };
-        let left = left_now(w, now).clamp(0.0, 100.0);
-        let reset = w.resets_at.filter(|r| *r > now);
-        if let Some(r) = reset {
-            latest = latest.max(r);
-        }
-        let ws = reset.and_then(|r| span.map(|s| r - s));
-        let prefix = format!("{key}:{kind}:");
-        let raw_samples = samples.iter().find(|(k, _)| k.starts_with(&prefix)).map(|(_, v)| v.clone()).unwrap_or_default();
-        let mut pts: Vec<(f64, f64)> = if reset.is_some() {
-            raw_samples.iter().filter(|(t, _)| *t <= now).map(|(t, used)| (*t, (100.0 - used).clamp(0.0, 100.0))).collect()
-        } else {
-            Vec::new()
-        };
-        if let Some(wstart) = ws
-            && pts.first().map_or(now, |p| p.0) > wstart
-        {
-            pts.insert(0, (wstart, 100.0));
-        }
-        if let Some((first_t, _)) = pts.first() {
-            earliest = earliest.min(*first_t);
-        }
-        pts.push((now, left));
-        // Estimate drain pace (% per ms) for this account.
-        let sample_rate = if let (Some(&(t0, u0)), Some(&(t1, u1))) = (raw_samples.first(), raw_samples.last())
-            && raw_samples.len() >= 2
-            && t1 - t0 >= 15.0 * 60_000.0
-            && u1 > u0
-        {
-            Some((u1 - u0) / (t1 - t0))
-        } else {
-            None
-        };
-        let rate = sample_rate.unwrap_or_else(|| {
-            if reset.is_some() && ws.is_some_and(|wstart| now > wstart) && left < 100.0 {
-                (100.0 - left) / (now - ws.unwrap())
-            } else {
-                0.0
-            }
-        });
-        members.push(Member { pts, left, rate, reset });
-    }
-    if let Some(s) = span {
-        earliest = earliest.max(now - s);
-    }
-    let start = earliest.min(now - 60_000.0);
-    let end = latest.max(now);
-    let n = members.len().max(1) as f64;
-
-    // Combine historical curve across all accounts at the union of timestamps in [start, now].
-    let mut times: Vec<f64> = vec![start, now];
-    for m in &members {
-        for &(t, _) in &m.pts {
-            if t >= start && t <= now {
-                times.push(t);
-            }
-        }
-    }
-    times.sort_by(f64::total_cmp);
-    times.dedup_by(|a, b| (*a - *b).abs() < 1_000.0);
-    let past: Vec<(f64, f64)> = times.into_iter().map(|t| (t, members.iter().map(|m| eval_piecewise(&m.pts, t)).sum::<f64>() / n)).collect();
-
-    // Future projection from `now` to `end`: drains at combined pace, stepping up each time an
-    // account resets and refills to 100%.
-    let mut resets: Vec<f64> = members.iter().filter_map(|m| m.reset).collect();
-    resets.sort_by(f64::total_cmp);
-    resets.dedup_by(|a, b| (*a - *b).abs() < 60_000.0);
-    let mut cur_left: Vec<f64> = members.iter().map(|m| m.left).collect();
-    let mut cur_rate: Vec<f64> = members.iter().map(|m| m.rate).collect();
-    let avg = |v: &[f64]| v.iter().sum::<f64>() / n;
-    let mut future: Vec<(f64, f64)> = vec![(now, avg(&cur_left))];
-    let mut t = now;
-    for &r in &resets {
-        let dt = (r - t).max(0.0);
-        // If any active member drains to 0% before `r`, add the knee point so the slope stays accurate.
-        let mut knees: Vec<f64> = cur_left
-            .iter()
-            .zip(&cur_rate)
-            .filter_map(|(&l, &rate)| (l > 0.0 && rate > 0.0).then_some(t + l / rate))
-            .filter(|&kt| kt > t + 1_000.0 && kt < r - 1_000.0)
-            .collect();
-        knees.sort_by(f64::total_cmp);
-        knees.dedup_by(|a, b| (*a - *b).abs() < 1_000.0);
-        for kt in knees {
-            let kdt = (kt - t).max(0.0);
-            for (l, rate) in cur_left.iter_mut().zip(&cur_rate) {
-                *l = (*l - *rate * kdt).max(0.0);
-            }
-            t = kt;
-            future.push((t, avg(&cur_left)));
-        }
-        let rem = (r - t).max(0.0);
-        for (l, rate) in cur_left.iter_mut().zip(&cur_rate) {
-            *l = (*l - *rate * rem).max(0.0);
-        }
-        if dt > 0.0 {
-            future.push((r, avg(&cur_left)));
-        }
-        // Accounts resetting at `r` refill to 100%.
-        for (i, m) in members.iter().enumerate() {
-            if m.reset.is_some_and(|mr| (mr - r).abs() < 60_000.0) {
-                cur_left[i] = 100.0;
-                cur_rate[i] = 0.0;
-            }
-        }
-        t = r;
-        future.push((r, avg(&cur_left)));
-    }
-    PooledSeries { start, end, past, future, resets }
 }
 
 fn paint_pooled_chart(series: PooledSeries, line_color: Hsla, warn_color: Hsla, border_color: Hsla, warns: bool) -> impl IntoElement {
