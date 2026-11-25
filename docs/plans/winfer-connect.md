@@ -346,8 +346,12 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
 - **H7** usage half: the GPUI-free usage code (readings, polling backoff, pooled accounts, token totals, the
   `usage.get` answer) is in `winfer_core::usage`; winferd polls its sign-ins every minute, takes status-line readings
   and answers `usage.get` (`raw` for desktops). Settings → Usage has a machine picker; Limits and Spend show the
-  server's numbers (Tools and "By task" stay this machine's). Tested against a Linux container. Phone pairing to a
-  server: next.
+  server's numbers (Tools and "By task" stay this machine's). Tested against a Linux container.
+- **H7** phone half: the mobile bridge runs in winferd; phone requests go through the same host as paired desktops'.
+  `winferd mobile pair|list|revoke`, or Settings → Mobile → Your servers → Pair a phone (`mobile.pair`). A server's
+  vault is a 0600 file, and it pushes on every finish/question. Tested with the PWA in a browser: paired, listed
+  and started agents, survived a restart, revoked. Not yet: a real phone's Web Push from a server, agent transcripts
+  in the phone's thread view (it shows the terminal), phone list of a server on the desktop.
 
 ## Headless risks / notes
 

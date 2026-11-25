@@ -139,6 +139,13 @@ A server polls its own sign-ins' limits (as the desktop polls its own) and reads
 with `raw: true` also `raw: {snapshots, samples, accounts, rows}`, which a paired desktop's Usage page shows when that
 server is picked ("This Mac ▾" next to the range).
 
+### Phones paired with a server
+
+A phone can pair with a server directly (`winferd mobile pair` prints the QR code, or Settings → Mobile → Your servers
+on a paired desktop sends `mobile.pair` → `mobile.pairing {deviceId, link, qrSvg, expiresAt}`). The phone speaks the
+mobile protocol (docs/mobile/protocol.md) to the server, which answers it as it answers paired desktops; pushes go out
+on every finish and question (no one sits at a server). Its phones' keys live in `vault.json` (0600) in its data folder.
+
 ### Review on a server
 
 When an agent on a server finishes work (its worktree has changes), the server makes a review of it: diff stats, a

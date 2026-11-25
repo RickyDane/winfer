@@ -22,3 +22,4 @@ parking_lot = "0.12"
 dirs = "7.0.0"
 ureq = "3.4.2"
 sha2 = "0.11.1"
+qrcode = { version = "0.14", default-features = false }

@@ -65,6 +65,8 @@ pub(super) struct HarnessPage {
     status: Option<Value>,
     pairing: Option<Value>,
     qr: Option<Arc<Image>>,
+    /// A pairing a paired server made for a phone: (server, pairing, its QR code).
+    server_pairing: Option<(String, Value, Option<Arc<Image>>)>,
     relay: Option<Entity<InputState>>,
     mobile_result: Option<Result<String, String>>,
     relay_result: Option<Result<String, String>>,
@@ -350,6 +352,75 @@ impl Root {
         self.refresh_mobile(cx);
     }
 
+    /// Asks a paired server for a pairing, so a phone pairs with it directly (and is notified
+    /// with this machine off).
+    fn pair_phone_with(&mut self, peer: &str, cx: &mut Context<Self>) {
+        let name = crate::connect::peer_name(peer).unwrap_or_else(|| "the server".into());
+        self.harness_page.mobile_result = None;
+        self.harness_page.server_pairing = None;
+        self.connect_request(peer, serde_json::json!({"t": "mobile.pair"}), Some(format!("Couldn't pair a phone with {name}")));
+        cx.notify();
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn dev_pair_phone_with(&mut self, peer: &str, cx: &mut Context<Self>) {
+        self.pair_phone_with(peer, cx);
+    }
+
+    /// `mobile.pairing` from a server (its answer to [`Root::pair_phone_with`]).
+    pub(super) fn on_server_pairing(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+        match msg["error"].as_str() {
+            Some(e) => self.harness_page.mobile_result = Some(Err(e.to_string())),
+            None => {
+                let qr = msg["qrSvg"].as_str().map(|svg| Arc::new(Image::from_bytes(ImageFormat::Svg, svg.as_bytes().to_vec())));
+                self.harness_page.server_pairing = Some((peer.to_string(), msg.clone(), qr));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Settings → Mobile → "Your servers": pair a phone with a paired server.
+    fn server_phones(&mut self, c: Colors, now: f64, cx: &mut Context<Self>) -> Option<Div> {
+        let connect = crate::connect::get()?;
+        let servers: Vec<(String, String)> = connect.status().peers.into_iter().filter(|p| p.kind == winfer_connect::pairing::Kind::Server && p.link.via.is_some()).map(|p| (p.peer_id, p.name)).collect();
+        if servers.is_empty() {
+            return None;
+        }
+        let shown = self.harness_page.server_pairing.clone();
+        let mut list = panel(c);
+        for (i, (peer, name)) in servers.into_iter().enumerate() {
+            let target = peer.clone();
+            list = list.child(div().flex().items_center().gap_3().px_3p5().py_2p5().when(i > 0, |d| d.border_t_1().border_color(c.border))
+                .child(icon_tile(c.muted, IconName::Server, 30.0))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap_0p5()
+                    .child(div().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).text_color(c.fg).child(name.clone()))
+                    .child(div().text_size(px(11.5)).text_color(c.subtle).child("A phone paired with it follows its agents with this machine off.")))
+                .child(button(c, SharedString::from(format!("server-pair-{peer}")), Some(IconName::QrCode), "Pair a phone", Look::Plain, true).on_click(cx.listener(move |this, _, _, cx| this.pair_phone_with(&target, cx)))));
+            if let Some((_, p, qr)) = shown.as_ref().filter(|(p, _, _)| *p == peer) {
+                let link = p["link"].as_str().unwrap_or_default().to_string();
+                let left = ((p["expiresAt"].as_f64().unwrap_or(0.0) - now) / 1000.0).max(0.0) as u64;
+                list = list.child(div().flex().gap_4().p_4().border_t_1().border_color(c.border)
+                    .child(div().size(px(160.0)).flex_shrink_0().overflow_hidden().rounded_lg().bg(gpui_kit::white()).p_2().children(qr.clone().map(|q| img(q).size_full())))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap_2()
+                        .child(div().text_size(px(12.5)).text_color(c.fg).child(format!("Scan with your phone's camera to pair it with {name}.")))
+                        .child(div().text_size(px(11.5)).text_color(c.subtle).child("Then add the page to your Home Screen and allow notifications. Its phones are listed with `winferd mobile list` on the server."))
+                        .child(div().flex().items_center().gap_1p5().text_size(px(11.5)).text_color(c.warning).child(Icon::new(IconName::KeyRound).size(px(12.0))).child("The code holds the key to its agents: don't share it. It works once."))
+                        .child(div().flex_1())
+                        .child(div().flex().items_center().gap_2()
+                            .child(div().flex_1().text_size(px(11.0)).text_color(c.subtle).child(if left > 0 { format!("expires in {}:{:02}", left / 60, left % 60) } else { "expired: make a new one".into() }))
+                            .child(button(c, "server-pair-copy", Some(IconName::Link), "Copy link", Look::Plain, true).on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
+                                this.toast("Pairing link copied", cx);
+                            })))
+                            .child(button(c, "server-pair-done", None, "Done", Look::Plain, true).on_click(cx.listener(|this, _, _, cx| {
+                                this.harness_page.server_pairing = None;
+                                cx.notify();
+                            }))))));
+            }
+        }
+        Some(list)
+    }
+
     pub(super) fn page_mobile(&mut self, c: Colors, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if self.harness_page.polled.is_none_or(|t| t.elapsed() > Duration::from_secs(15)) {
             self.refresh_mobile(cx);
@@ -496,6 +567,7 @@ impl Root {
                         this.refresh_mobile(cx);
                     })))));
         let relay_result = self.harness_page.relay_result.as_ref().map(|r| result_banner(c, r, None));
+        let servers = self.server_phones(c, now, cx);
 
         div().flex().flex_col().gap_4()
             .child(hero)
@@ -503,6 +575,7 @@ impl Root {
             .children(result)
             .child(section(c, "Paired phones", Some(format!("{count} phone{}", if count == 1 { "" } else { "s" }))))
             .child(phones)
+            .when_some(servers, |d, list| d.child(section(c, "Your servers", Some("phones paired with a server directly".into()))).child(list))
             .child(div().flex().items_center().gap_2().mx(px(2.0)).mb(px(-6.0)).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(c.muted).child("Relay").child(div().flex_1()).children(relay_state))
             .child(relay_card)
             .children(relay_result)

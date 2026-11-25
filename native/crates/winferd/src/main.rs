@@ -4,6 +4,7 @@
 mod control;
 mod host;
 mod machine;
+mod phone;
 mod review;
 mod service;
 mod update;
@@ -20,6 +21,7 @@ usage:
   winferd pair <link>                                    pair with a winfer desktop (Settings → Connect)
   winferd status                                         paired machines, links and panes
   winferd unpair <name>                                  forget a paired machine
+  winferd mobile pair|list|revoke <name>                 pair a phone with this server (QR code), list or forget phones
   winferd service install|uninstall                      run at login/boot (systemd user unit, launchd agent)
   winferd update [--check] [--version <tag>]             update to the newest release (and restart the daemon)
   winferd --version
@@ -47,6 +49,7 @@ fn main() {
             None => fail("usage: winferd pair <link>"),
         },
         Some("status") => std::process::exit(control::status()),
+        Some("mobile") => std::process::exit(phone::cli(rest)),
         Some("unpair") if !rest.is_empty() => std::process::exit(control::unpair(&rest.join(" "))),
         Some("unpair") => fail("usage: winferd unpair <name>"),
         Some("service") => {
@@ -94,6 +97,7 @@ fn run(args: &[String]) {
     }
     // Servers are reached through the relay; the LAN listener only on request.
     connect.set_discoverable(args.iter().any(|a| a == "--lan"));
+    phone::name_bridge();
     let host = host::Host::start();
     limits::start();
     update::watch();
@@ -105,5 +109,6 @@ fn run(args: &[String]) {
         std::thread::sleep(Duration::from_secs(1));
         host.tick();
         control::tick(connect, &host);
+        phone::tick();
     }
 }

@@ -120,8 +120,22 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
+/// No one sits at this machine (a server): every finish or question goes to the phones.
+static HEADLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_headless() {
+    HEADLESS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// This machine's name in pair links (a phone shows it).
+static NAME: OnceLock<String> = OnceLock::new();
+
+/// Names this machine for phones (a server: its winfer name) instead of the computer name.
+pub fn set_name(name: &str) {
+    let _ = NAME.set(name.to_string());
+}
+
 fn desktop_name() -> &'static str {
-    static NAME: OnceLock<String> = OnceLock::new();
     NAME.get_or_init(|| {
         let run = |cmd: &str, args: &[&str]| {
             std::process::Command::new(cmd).args(args).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
@@ -259,7 +273,7 @@ impl Mobile {
             system_idle: system_idle(),
             on_phone: self.last_phone.lock().unwrap().is_some_and(|t| t > last_input),
         };
-        if !should_push(&presence) {
+        if !HEADLESS.load(std::sync::atomic::Ordering::Relaxed) && !should_push(&presence) {
             log(
                 crate::diagnostics::INFO,
                 &format!(

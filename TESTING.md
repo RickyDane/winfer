@@ -184,6 +184,11 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
   tests first" → the queue shows Syncing/Testing/Merging/Merged and the base branch on the server has the merge;
   Discard deletes the worktree and branch there. Dev aids: `WINFER_NATIVE_CONNECT_SPAWN='~/repo|claude|task'`,
   `WINFER_NATIVE_CONNECT_REVIEW=open|merge`.
+- [ ] Usage on a server: Settings → Usage → machine picker → the server: Limits and Spend show its sign-ins' numbers
+  (refreshes every 30 s while shown). Dev aid: `WINFER_NATIVE_CONNECT_USAGE=limits|spend`.
+- [ ] Phone on a server: `winferd mobile pair` (or Settings → Mobile → Your servers → Pair a phone) → scan → the PWA
+  lists the server's agents, starts one, answers it; with the desktop closed an agent finishing there pushes to the
+  phone. `winferd mobile list` / `revoke <name>`; the phone stays paired across a daemon restart.
 
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.

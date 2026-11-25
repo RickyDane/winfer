@@ -164,6 +164,10 @@ pub fn status() -> i32 {
         let up = link["via"].as_str().filter(|v| !v.is_empty() && *v != "none");
         println!("  {} ({}) · {}", p["name"].as_str().unwrap_or_default(), p["kind"].as_str().unwrap_or_default(), up.map_or("offline".to_string(), |v| format!("online via {v}")));
     }
+    let phones: Vec<Value> = std::fs::read_to_string(dir().join("phones.json")).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok()).unwrap_or_default().into_iter().filter(|d| d["paired"] == true).collect();
+    if !phones.is_empty() {
+        println!("phones: {}", phones.iter().map(|d| d["name"].as_str().unwrap_or("phone").to_string()).collect::<Vec<_>>().join(", "));
+    }
     0
 }
 

@@ -39,7 +39,7 @@ impl Host {
         // First of all: paired machines ask as soon as their link is up (handled once loaded).
         let forward = tx.clone();
         backend::app().listen_any(move |event, payload| {
-            if matches!(event, "pty://exit" | "agent://status" | "connect://message" | "connect://peer" | "mcp://call" | "usage://report") {
+            if matches!(event, "pty://exit" | "agent://status" | "connect://message" | "connect://peer" | "mcp://call" | "usage://report" | "mobile://request") {
                 let _ = forward.try_send(Event::Backend(event.to_string(), payload.clone()));
             }
         });
@@ -156,6 +156,11 @@ impl Host {
                 self.on_message(&peer, &payload["msg"]);
             }
             "mcp://call" => self.on_mcp_call(payload),
+            // A phone paired with this server asks what a paired machine would.
+            "mobile://request" => {
+                let device = payload["device"].as_str().unwrap_or_default();
+                self.on_message(&format!("phone:{device}"), &payload["msg"]);
+            }
             "usage://report" => crate::limits::report(self, payload),
             _ => {}
         }
@@ -273,7 +278,7 @@ impl Host {
             *self.shape.lock() = shape;
             let mut all = self.mirror();
             all["t"] = json!("panes");
-            connect::broadcast(&all);
+            broadcast(all);
         }
         for (id, pane) in &panes {
             let before = sent.get(id);
@@ -282,7 +287,7 @@ impl Host {
             }
             if !reshaped {
                 let loud = before.is_none_or(|b| b["status"] != pane["status"] || b["message"] != pane["message"] || b["request"] != pane["request"]);
-                connect::broadcast(&json!({"t": "status", "pane": pane, "silent": !loud}));
+                broadcast(json!({"t": "status", "pane": pane, "silent": !loud}));
             }
             sent.insert(id.clone(), pane.clone());
         }
@@ -297,17 +302,21 @@ impl Host {
             if !msg["id"].is_null() {
                 v["id"] = msg["id"].clone();
             }
-            connect::send(peer, v);
+            send_to(peer, v);
         };
         let ok = || json!({"t": "ack", "ok": true});
         let no = |e: &str| json!({"t": "ack", "ok": false, "error": e});
         match kind {
             "panes.get" => {
-                connect::subscribe(peer);
+                if !peer.starts_with("phone:") {
+                    connect::subscribe(peer);
+                }
                 let mut all = self.mirror();
                 all["t"] = json!("panes");
                 reply(all);
-                connect::send(peer, crate::review::message());
+                if !peer.starts_with("phone:") {
+                    connect::send(peer, crate::review::message());
+                }
             }
             kind if kind.starts_with("review.") => {
                 let Some(host) = HOST.get() else { return };
@@ -316,7 +325,7 @@ impl Host {
                 std::thread::spawn(move || {
                     let mut answer = crate::review::on_request(host, &msg);
                     answer["id"] = msg["id"].clone();
-                    connect::send(&peer, answer);
+                    send_to(&peer, answer);
                 });
             }
             "term.attach" | "term.in" | "term.resize" | "term.detach" => self.on_term(peer, msg),
@@ -326,7 +335,7 @@ impl Host {
                     Ok(t) => (true, t),
                     Err(t) => (false, t),
                 };
-                connect::send(peer, json!({"t": "tool.result", "id": msg["id"], "ok": ok, "text": text}));
+                send_to(peer, json!({"t": "tool.result", "id": msg["id"], "ok": ok, "text": text}));
             }
             "pane.new" => reply(self.new_pane(msg, peer)),
             "fs.list" => reply(crate::machine::list(msg["path"].as_str().unwrap_or("~"))),
@@ -349,13 +358,13 @@ impl Host {
                         Err(e) => json!({"t": "ack", "ok": false, "error": e}),
                     };
                     answer["id"] = msg["id"].clone();
-                    connect::send(&peer, answer);
+                    send_to(&peer, answer);
                 });
             }
             "account.push" => {
                 let answer = winfer_core::accounts_sync::on_push(peer, msg);
                 if answer["ok"] == true {
-                    eprintln!("signed in to {} as {} (pushed from {})", msg["provider"].as_str().unwrap_or_default(), answer["accountId"].as_str().unwrap_or_default(), connect::peer_name(peer).unwrap_or_default());
+                    eprintln!("signed in to {} as {} (pushed from {})", msg["provider"].as_str().unwrap_or_default(), answer["accountId"].as_str().unwrap_or_default(), client_name(peer));
                 }
                 reply(answer);
             }
@@ -371,7 +380,7 @@ impl Host {
                         Err(e) => json!({"t": "ack", "ok": false, "error": e}),
                     };
                     answer["id"] = id;
-                    connect::send(&peer, answer);
+                    send_to(&peer, answer);
                     if result.is_ok() {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         crate::update::restart(&crate::update::exe().unwrap_or_default());
@@ -385,17 +394,34 @@ impl Host {
                     let Some(host) = HOST.get() else { return };
                     let mut answer = crate::limits::answer(host, &msg);
                     answer["id"] = msg["id"].clone();
-                    connect::send(&peer, answer);
+                    send_to(&peer, answer);
                 });
             }
+            "mobile.pair" if !peer.starts_with("phone:") => {
+                let mut answer = match crate::phone::start_pairing() {
+                    Ok(p) => p,
+                    Err(e) => json!({"error": e}),
+                };
+                answer["t"] = json!("mobile.pairing");
+                reply(answer);
+            }
             "connect.presence" => {}
-            "thread.get" => reply(json!({"t": "error", "error": "Open the pane to see it."})),
+            "thread.get" => {
+                let Some(pane) = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned()) else {
+                    return reply(json!({"t": "error", "error": "That agent is gone."}));
+                };
+                // What the agent's terminal shows (its transcript isn't read here yet).
+                let screen = SESSIONS.get(&pane.id).map(|s| s.read_text(120)).unwrap_or_default();
+                let screen = screen.trim_end();
+                let messages = if screen.is_empty() { json!([]) } else { json!([{"id": "screen", "role": "assistant", "text": format!("```\n{screen}\n```"), "ts": winfer_core::usage::now_ms()}]) };
+                reply(json!({"t": "thread", "paneId": pane.id, "messages": messages, "source": "screen"}));
+            }
             "config.get" => reply(json!({"t": "config", "paneId": msg["paneId"], "models": []})),
             "models.get" | "pane.set" | "choose" => reply(no("A winfer server can't do that yet.")),
             "send" | "approve" | "decline" | "interrupt" | "pane.close" => {
                 let pane = msg["paneId"].as_str().and_then(|id| self.state.lock().pane(id).cloned());
                 let Some(pane) = pane else { return reply(no("That agent is gone.")) };
-                let via = connect::peer_name(peer).unwrap_or_else(|| "another machine".into());
+                let via = client_name(peer);
                 match kind {
                     "send" => {
                         let text = msg["text"].as_str().map(str::trim).unwrap_or_default();
@@ -494,7 +520,7 @@ impl Host {
                 (s.add_pane(&wanted, AddPane { workspace_id: Some(ws.clone()), prompt, model, effort, worktree, ..Default::default() }), name, ws)
             }
         };
-        let via = connect::peer_name(peer).unwrap_or_else(|| "another machine".into());
+        let via = client_name(peer);
         self.state.lock().log_activity(&ws, format!("Started {name} from {via}"), None);
         self.start_pane(&id);
         json!({"t": "ack", "ok": true, "paneId": id})
@@ -664,6 +690,28 @@ impl Host {
 }
 
 /// A command to a chat pane's `winferd code --serve` process.
+/// Sends to whoever asked: a paired machine (its peer id) or a phone paired with this server
+/// (`phone:<device>`).
+pub(crate) fn send_to(client: &str, msg: Value) {
+    match client.strip_prefix("phone:") {
+        Some(device) => {
+            let _ = winfer_backend::mobile::mobile_send(Some(device.to_string()), msg);
+        }
+        None => connect::send(client, msg),
+    }
+}
+
+/// To every paired machine and phone (a `status` that isn't silent also pushes to phones).
+fn broadcast(msg: Value) {
+    connect::broadcast(&msg);
+    let _ = winfer_backend::mobile::mobile_send(None, msg);
+}
+
+/// "your phone", or the paired machine's name.
+fn client_name(client: &str) -> String {
+    if client.starts_with("phone:") { "your phone".into() } else { connect::peer_name(client).unwrap_or_else(|| "another machine".into()) }
+}
+
 fn write_chat(pane_id: &str, cmd: &Cmd) {
     let line = format!("{}\n", cmd.json());
     let id = pane_id.to_string();

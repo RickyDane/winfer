@@ -143,6 +143,7 @@ pub(super) struct ConnectClient {
     dev_spawn: Option<String>,
     dev_review: bool,
     dev_usage: bool,
+    dev_phone: bool,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
     /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
@@ -400,6 +401,7 @@ impl Root {
             }
             "reviews" => self.on_remote_reviews(&peer, msg, cx),
             "usage" => self.on_remote_usage(&peer, msg, cx),
+            "mobile.pairing" => self.on_server_pairing(&peer, msg, cx),
             "panes" => {
                 let mirror = Mirror {
                     panes: msg["panes"].as_array().into_iter().flatten().filter_map(RemotePane::parse).collect(),
@@ -810,6 +812,17 @@ impl Root {
             }
             self.dev_usage_tab(if tab == "spend" { "spend" } else { "limits" }, cx);
             self.show_usage_of(Some(server.peer_id.clone()), cx);
+        }
+        // Development aid: Settings → Mobile with a pairing from the first server (`WINFER_NATIVE_CONNECT_PHONE=1`).
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WINFER_NATIVE_CONNECT_PHONE").is_some()
+            && !self.connect.dev_phone
+            && let Some(server) = crate::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.kind == Kind::Server && p.link.via.is_some()))
+            && self.connect.mirrors.get(&server.peer_id).is_some_and(|m| m.loaded)
+        {
+            self.connect.dev_phone = true;
+            self.execute(Command::Settings(Some("mobile".into())), window, cx);
+            self.dev_pair_phone_with(&server.peer_id, cx);
         }
         // Development aid: push this account's sign-in to the first server that's up
         // (`WINFER_NATIVE_CONNECT_PUSH=codex:default`).

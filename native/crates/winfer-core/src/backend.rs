@@ -60,6 +60,12 @@ pub fn acquire_instance_lock() -> Option<std::fs::File> {
 pub fn start() -> Result<(), String> {
     let app = AppHandle::new(&identifier());
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // A server has no keychain: its secrets (phones' pairing keys, the push key) go to a private
+    // file in its data folder. Set before any thread starts.
+    if profile().server && std::env::var_os("WINFER_VAULT_FILE").is_none() {
+        // SAFETY: nothing else runs yet.
+        unsafe { std::env::set_var("WINFER_VAULT_FILE", data_dir.join("vault.json")) };
+    }
     diagnostics::install_panic_hook(data_dir.join("logs"));
     std::thread::spawn(|| {
         env::login_env();
