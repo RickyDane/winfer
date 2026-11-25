@@ -126,8 +126,11 @@ their own agents. Clients time out after 30 s.
 | t | from | fields |
 |---|---|---|
 | `server.update` | client | — → `ack {ok, version?, error?}`; the server updates to the newest release and restarts |
+| `fs.list` | client | `path` (`~` for home) → `fs {path, parent?, git, dirs: [{name, git}], truncated, error?}` |
+| `workspace.new` | client | `path`, `name?` → `ack {ok, workspaceId}` (an existing workspace for that folder is reused) |
+| `git.clone` | client | `url`, `branch?`, `parent` → `ack {ok, workspaceId, path}` once cloned (into `parent/<repo>`) |
 | `account.push` | either | `provider` (`claude`/`codex`), `accountId` (the sender's), `label`, `parts` → `ack {ok, accountId (the receiver's), label}` |
 | `account.sync` | either | `accountId` (the receiver's), `parts`: a linked sign-in changed (refresh) |
 
-A server's `panes` mirror carries `server: {version, latest, update, docker, os, arch}`. Sign-ins are never logged
+A server's `panes` mirror carries `server: {version, latest, update, docker, os, arch, stats: {cpus, load, memTotal, memUsed, diskTotal, diskUsed, uptime}}`. Sign-ins are never logged
 (`WINFER_CONNECT_TRACE` leaves `parts` out).

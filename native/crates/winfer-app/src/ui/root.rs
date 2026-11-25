@@ -76,6 +76,8 @@ mod settings_harness;
 mod settings_connect;
 #[path = "connect_ui.rs"]
 mod connect_ui;
+#[path = "connect_folder.rs"]
+mod connect_folder;
 #[path = "settings_code.rs"]
 mod settings_code;
 #[path = "settings_kit.rs"]
@@ -1843,6 +1845,7 @@ impl Render for Root {
         let question = self.render_question(&c, cx);
         let new_pane = self.render_new_pane(&c, cx);
         let model = self.render_model_dialog(&c, cx);
+        let folder = self.render_remote_folder(&c, cx);
         let diff = self.render_diff(&c, cx);
         let settings = self.render_settings(&c, window, cx);
         let review = self.render_review(&c, window, cx);
@@ -2006,6 +2009,7 @@ impl Render for Root {
             .children(sessions)
             .children(new_pane)
             .children(model)
+            .children(folder)
             .children(diff)
             .children(palette)
             .children(sheet)

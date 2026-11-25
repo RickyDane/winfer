@@ -238,6 +238,7 @@ impl Host {
         let server = json!({
             "version": crate::update::VERSION, "latest": crate::update::latest_known(), "update": crate::update::available(),
             "docker": crate::update::in_docker(), "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+            "stats": crate::machine::stats(),
         });
         json!({ "panes": panes, "workspaces": workspaces, "providers": providers, "defaultProvider": s.default_provider_id(), "server": server })
     }
@@ -306,6 +307,29 @@ impl Host {
                 connect::send(peer, json!({"t": "tool.result", "id": msg["id"], "ok": ok, "text": text}));
             }
             "pane.new" => reply(self.new_pane(msg, peer)),
+            "fs.list" => reply(crate::machine::list(msg["path"].as_str().unwrap_or("~"))),
+            "workspace.new" => {
+                let path = crate::machine::expand(msg["path"].as_str().unwrap_or("~"));
+                if !path.is_dir() {
+                    return reply(no("That folder doesn't exist on this server."));
+                }
+                let id = self.add_workspace(&path, msg["name"].as_str());
+                reply(json!({"t": "ack", "ok": true, "workspaceId": id}));
+            }
+            "git.clone" => {
+                // A clone takes a while: answered from its own thread.
+                let (peer, msg) = (peer.to_string(), msg.clone());
+                std::thread::spawn(move || {
+                    let Some(host) = HOST.get() else { return };
+                    let url = msg["url"].as_str().unwrap_or_default();
+                    let mut answer = match crate::machine::clone(url, msg["branch"].as_str(), msg["parent"].as_str().unwrap_or("~")) {
+                        Ok(dest) => json!({"t": "ack", "ok": true, "workspaceId": host.add_workspace(&dest, None), "path": crate::machine::display(&dest)}),
+                        Err(e) => json!({"t": "ack", "ok": false, "error": e}),
+                    };
+                    answer["id"] = msg["id"].clone();
+                    connect::send(&peer, answer);
+                });
+            }
             "account.push" => {
                 let answer = winfer_core::accounts_sync::on_push(peer, msg);
                 if answer["ok"] == true {
@@ -377,6 +401,17 @@ impl Host {
             other if !msg["id"].is_null() => reply(json!({"t": "error", "error": format!("unknown request {other}")})),
             _ => {}
         }
+    }
+
+    /// A workspace for a folder on this server (the one already there, if any).
+    fn add_workspace(&self, path: &std::path::Path, name: Option<&str>) -> String {
+        let root = crate::machine::display(path);
+        let mut s = self.state.lock();
+        if let Some(ws) = s.workspaces.iter().find(|w| w.root_dir == root) {
+            return ws.id.clone();
+        }
+        let name = name.map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| path.file_name().map_or(root.clone(), |n| n.to_string_lossy().to_string()));
+        s.create_workspace(&name, &root)
     }
 
     fn log(&self, pane: &Pane, text: String) {

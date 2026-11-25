@@ -327,6 +327,13 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   Links to unpaired machines are dropped. Not yet: "Move" (desktop forgets its copy), wiping pushed sign-ins on unpair,
   a "Signed out on ‹server›" state.
 
+- **H5** done in its first form: the server row's "+" menu → "New workspace (folder or git clone)…" opens a dialog that
+  browses the server's folders (`fs.list`, git repos marked), opens one as a workspace (`workspace.new`) or clones a
+  typed git URL into the folder shown (`git.clone`, no prompts: `GIT_TERMINAL_PROMPT=0`, ssh `BatchMode`). The server's
+  row tooltip shows its version and health (load, memory, disk, uptime from `server.stats` in its mirror). Tested
+  against a Linux container (clone of a public repo). Not yet: empty server workspaces listed in the sidebar (they're in
+  the "+" menu), a deploy key for private repos.
+
 ## Headless risks / notes
 
 - **H1 is the long pole:** extraction touches the app's central code. Mitigation: one module per PR, desktop behavior unchanged, tests first.

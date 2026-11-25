@@ -82,6 +82,29 @@ pub struct ServerInfo {
     pub version: String,
     pub update: Option<String>,
     pub docker: bool,
+    /// "load 0.4/8 · mem 2.1/7.8 GB · disk 41% · up 3 d", when it reports them.
+    pub health: Option<String>,
+}
+
+fn gb(bytes: f64) -> String {
+    format!("{:.1}", bytes / 1e9)
+}
+
+fn health(s: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(load) = s["load"].as_f64() {
+        parts.push(format!("load {load:.2}/{}", s["cpus"].as_u64().unwrap_or(1)));
+    }
+    if let (Some(used), Some(total)) = (s["memUsed"].as_f64(), s["memTotal"].as_f64()) {
+        parts.push(format!("mem {}/{} GB", gb(used), gb(total)));
+    }
+    if let (Some(used), Some(total)) = (s["diskUsed"].as_f64(), s["diskTotal"].as_f64().filter(|t| *t > 0.0)) {
+        parts.push(format!("disk {:.0}% of {} GB", used / total * 100.0, gb(total)));
+    }
+    if let Some(up) = s["uptime"].as_u64() {
+        parts.push(if up >= 86400 { format!("up {} d", up / 86400) } else { format!("up {} h", up / 3600) });
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 impl ServerInfo {
@@ -90,6 +113,7 @@ impl ServerInfo {
             version: v["version"].as_str()?.to_string(),
             update: v["update"].as_str().map(str::to_string),
             docker: v["docker"].as_bool().unwrap_or(false),
+            health: health(&v["stats"]),
         })
     }
 }
@@ -113,10 +137,14 @@ pub(super) struct ConnectClient {
     dev_opened: bool,
     #[cfg(debug_assertions)]
     dev_pushed: bool,
+    #[cfg(debug_assertions)]
+    dev_folder: bool,
     /// Agents' calls waiting on another machine: our request id → their MCP call id.
     tool_calls: HashMap<String, String>,
     /// Sign-ins pushed and not yet answered: request id → (account here, its fingerprint, machine name).
     pushes: HashMap<String, (String, String, String)>,
+    /// The "New workspace on ‹machine›" dialog.
+    pub folder: Option<super::connect_folder::FolderDialog>,
 }
 
 /// What a Connect agent tool did: answered, or waits for the other machine.
@@ -340,6 +368,9 @@ impl Root {
             }
             let request = json!({"device": crate::connect::device(&peer), "msg": msg});
             self.on_mobile_request(&request, window, cx);
+            return;
+        }
+        if matches!(kind, "fs" | "ack") && self.on_folder_reply(&peer, msg, cx) {
             return;
         }
         match kind {
@@ -709,6 +740,20 @@ impl Root {
                 })
             });
         }
+        // Development aid: open "New workspace on ‹server›" (`WINFER_NATIVE_CONNECT_FOLDER=1`, or a
+        // git URL to clone it into the home folder).
+        #[cfg(debug_assertions)]
+        if let Ok(what) = std::env::var("WINFER_NATIVE_CONNECT_FOLDER")
+            && !self.connect.dev_folder
+            && let Some(server) = crate::connect::get().and_then(|c| c.status().peers.into_iter().find(|p| p.kind == Kind::Server && p.link.via.is_some()))
+            && self.connect.mirrors.get(&server.peer_id).is_some_and(|m| m.loaded)
+        {
+            self.connect.dev_folder = true;
+            self.open_remote_folder(&server.peer_id, window, cx);
+            if what.contains("://") || what.starts_with("git@") {
+                self.folder_clone_dev(&what, cx);
+            }
+        }
         // Development aid: push this account's sign-in to the first server that's up
         // (`WINFER_NATIVE_CONNECT_PUSH=codex:default`).
         #[cfg(debug_assertions)]
@@ -777,7 +822,8 @@ impl Root {
             let (label, _) = super::settings_connect::link_label(peer, now_ms());
             let toggle = peer.peer_id.clone();
             let add_peer = peer.peer_id.clone();
-            let tip = format!("{}\n{label}\nClick to show or hide its sessions", peer.name);
+            let about = mirror.server.as_ref().map(|sv| format!("\nwinferd {}{}", sv.version, sv.health.as_ref().map_or(String::new(), |h| format!("\n{h}")))).unwrap_or_default();
+            let tip = format!("{}\n{label}{about}\nClick to show or hide its sessions", peer.name);
             let header = div().id(SharedString::from(format!("peer-{}", peer.peer_id))).flex().items_center().gap_2().px_2().py(px(6.0)).rounded(px(10.0)).cursor_pointer().text_size(px(13.0))
                 .text_color(if up { c.fg } else { c.muted })
                 .hover(move |d| d.bg(c.hover).text_color(c.fg))
@@ -912,6 +958,9 @@ impl Root {
                 items.push(MenuItem::run(label, move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.remote_new_pane(&peer, Some(ws.clone()), Some(provider.clone()), cx)));
             }
         }
+        items.push(MenuItem::Separator);
+        let p = peer.to_string();
+        items.push(MenuItem::run("New workspace (folder or git clone)…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.open_remote_folder(&p, window, cx)));
         items
     }
 

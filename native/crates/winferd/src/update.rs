@@ -75,7 +75,10 @@ pub fn latest_known() -> Option<String> {
 pub fn watch() {
     std::thread::spawn(|| {
         loop {
-            if let Err(e) = check() {
+            // (404 until a release carries winferd: nothing to say.)
+            if let Err(e) = check()
+                && !e.contains("404")
+            {
                 eprintln!("update check: {e}");
             }
             std::thread::sleep(Duration::from_secs(6 * 3600));

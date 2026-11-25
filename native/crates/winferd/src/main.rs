@@ -3,6 +3,7 @@
 
 mod control;
 mod host;
+mod machine;
 mod service;
 mod update;
 

@@ -173,6 +173,8 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
 - [ ] `docker build -f native/crates/winferd/Dockerfile -t winferd .` then `docker run -d -v winferd:/data -e
   WINFERD_PAIR='<link>' -e WINFERD_AGENTS=claude winferd`: pairs (code in `docker logs`), `claude` runs in a tile.
 
+- [ ] Server row "+" → "New workspace (folder or git clone)…": folders list with ".." and git marks; "Open as workspace"
+  adds it (in the "+" menu); a git URL + Enter clones it there. The row's tooltip shows winferd's version and health.
 - [ ] Settings → Accounts → push icon on a signed-in Codex/Claude account → "Push to ‹server›": toast "Signed in on …";
   an agent of that kind on the server starts signed in; the icon turns accent. A refresh on either side reaches the
   other within ~30 s (compare `auth.json` / `.credentials.json`).
