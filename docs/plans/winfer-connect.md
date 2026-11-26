@@ -352,13 +352,23 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   vault is a 0600 file, and it pushes on every finish/question. Tested with the PWA in a browser: paired, listed
   and started agents, survived a restart, revoked. Not yet: a real phone's Web Push from a server, agent transcripts
   in the phone's thread view (it shows the terminal), phone list of a server on the desktop.
+- **H8** browser: winferd answers `browser.call` with the shared browser backend and forwards its `browser://` events
+  and screencast frames; the desktop panel routes `‹peer›|‹workspace›` ids over Connect (`winfer_core::connect_browser`)
+  and shows a server's tabs next to the workspace's own when the workspace has a tile of that server (instead of the
+  download offer when this machine has no browser). The image ships Debian's Chromium; Linux finds system Chromium/
+  Chrome. Tested against a Linux container over the relay: an agent there opened a page through its CDP proxy, the
+  desktop panel showed it, clicks and typing reached it in order, its tabs left when the server went down.
+  Also fixed: tiles of another machine's panes lost that link on restart (the panes table has no column for it) and
+  came back as this machine's own agents; the link is now saved with the UI state. Not yet: tab titles set by script
+  (an existing backend limit), a browser shown without a tile of the server, adaptive JPEG quality on the relay.
 
 ## Headless risks / notes
 
 - **H1 is the long pole:** extraction touches the app's central code. Mitigation: one module per PR, desktop behavior unchanged, tests first.
 - **Security:** a server is reachable from the internet only through the relay (outbound WebSocket). The LAN listener is off by default on `winferd` (`--lan` to enable) and never needs inbound ports, so no firewall changes. Full trust means a compromised desktop controls its servers. Documented, and revoke works from either side (`winferd unpair`).
 - **Docker** needs `--init`/tini for PTY child reaping. Chromium in Docker needs `--no-sandbox` or a seccomp profile; the image handles it.
-- **Relay bandwidth** for browser screencasts off-LAN: adaptive fps/quality, pause when the panel isn't visible.
+- **Relay bandwidth** for browser screencasts off-LAN: frames are acknowledged one at a time (fps follows the link)
+  and stop when the panel shows another tab; JPEG quality is still fixed at 80.
 - **One user per daemon**: multi-user servers run one `winferd` per Unix user (systemd user units).
 
 ---

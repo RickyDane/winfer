@@ -66,7 +66,18 @@ fn system_candidates() -> Vec<PathBuf> {
         }
         out
     } else {
-        Vec::new()
+        // Linux (servers: Debian's `chromium` package, which the winferd image ships).
+        [
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/brave-browser",
+            "/snap/bin/chromium",
+        ]
+        .map(PathBuf::from)
+        .to_vec()
     }
 }
 
@@ -217,6 +228,15 @@ pub fn spawn(exe: &Executable, profile_dir: &Path, port: u16) -> Result<Child, S
     }
     if !exe.is_headless_shell() {
         cmd.arg("--headless=new");
+    }
+    // Servers and containers: Chromium's sandbox refuses to run as root, and Docker's /dev/shm
+    // is too small for it.
+    #[cfg(target_os = "linux")]
+    {
+        if unsafe { libc::geteuid() } == 0 {
+            cmd.arg("--no-sandbox");
+        }
+        cmd.arg("--disable-dev-shm-usage");
     }
     cmd.arg("about:blank")
         .stdin(Stdio::null())

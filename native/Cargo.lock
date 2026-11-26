@@ -11727,6 +11727,7 @@ name = "winferd"
 version = "0.1.101"
 dependencies = [
  "async-channel",
+ "base64 0.23.1",
  "dirs 7.0.0",
  "parking_lot",
  "qrcode",

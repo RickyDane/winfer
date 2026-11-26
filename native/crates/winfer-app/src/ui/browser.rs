@@ -19,8 +19,6 @@ use smallvec::smallvec;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::Manager;
-use tauri::ipc::{Channel, InvokeResponseBody};
 use winfer_backend::browser::{self, BrowserManager};
 use winfer_backend::browser::inspect::PickHover;
 
@@ -186,6 +184,208 @@ pub fn related_tab<'a>(tabs: &'a [Tab], url: &str) -> Option<&'a Tab> {
     best.map(|(t, _)| t)
 }
 
+/// The paired server of a `‹peer›|‹workspace›` browser id.
+fn remote_peer(id: &str) -> Option<&str> {
+    winfer_core::connect_browser::split(id).map(|(peer, _)| peer)
+}
+
+/// The panel's calls into a workspace's browser: this machine's backend, or for a paired
+/// server's `‹peer›|‹workspace›` ids, that server's over Connect (`winfer_core::connect_browser`).
+mod ops {
+    use super::{BrowserManager, PickHover, backend, browser};
+    use serde_json::{Value, json};
+    use tauri::Manager;
+    use winfer_core::connect_browser as remote;
+
+    type Res<T> = Result<T, String>;
+
+    pub fn is_remote(ws: &str) -> bool {
+        remote::split(ws).is_some()
+    }
+
+    fn parse<T: serde::de::DeserializeOwned>(v: Res<Value>) -> Res<T> {
+        v.and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string()))
+    }
+
+    fn app() -> tauri::AppHandle {
+        backend::app().clone()
+    }
+
+    /// The workspace's tabs, starting its browser. None: this machine has no browser to start.
+    pub async fn open(ws: String) -> Res<Option<Value>> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "open", json!({})).await.map(Some);
+        }
+        let app = app();
+        let status = serde_json::to_value(browser::browser_status(app.clone())?).unwrap_or(Value::Null);
+        if status["executable"].is_null() {
+            return Ok(None);
+        }
+        let tabs = browser::browser_open(app.clone(), app.state::<BrowserManager>(), ws).await?;
+        Ok(Some(serde_json::to_value(tabs).unwrap_or(Value::Null)))
+    }
+
+    pub async fn new_tab(ws: String, url: String) -> Res<String> {
+        if is_remote(&ws) {
+            return parse(remote::call(&ws, "newTab", json!({"url": url})).await);
+        }
+        let app = app();
+        browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), ws, url).await
+    }
+
+    pub async fn close_tab(ws: String, tab: String) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "closeTab", json!({"tab": tab})).await.map(drop);
+        }
+        let app = app();
+        browser::browser_close_tab(app.clone(), app.state::<BrowserManager>(), ws, tab).await
+    }
+
+    pub async fn navigate(ws: String, tab: String, url: String) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "navigate", json!({"tab": tab, "url": url})).await.map(drop);
+        }
+        let app = app();
+        browser::browser_navigate(app.clone(), app.state::<BrowserManager>(), ws, tab, url).await.map(drop)
+    }
+
+    pub async fn history(ws: String, tab: String, delta: i64) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "history", json!({"tab": tab, "delta": delta})).await.map(drop);
+        }
+        let app = app();
+        browser::browser_history(app.clone(), app.state::<BrowserManager>(), ws, tab, delta).await
+    }
+
+    /// One input event; a server's isn't answered (pointer moves come many a second).
+    pub async fn input(ws: String, tab: String, method: String, params: Value) -> Res<()> {
+        if is_remote(&ws) {
+            remote::fire(&ws, "input", json!({"tab": tab, "method": method, "params": params}));
+            return Ok(());
+        }
+        let app = app();
+        browser::browser_input(app.clone(), app.state::<BrowserManager>(), ws, tab, method, params).await
+    }
+
+    pub async fn resize(ws: String, tab: String, viewport: Value) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "resize", json!({"tab": tab, "viewport": viewport})).await.map(drop);
+        }
+        let app = app();
+        let viewport = serde_json::from_value(viewport).map_err(|e| e.to_string())?;
+        browser::browser_resize(app.clone(), app.state::<BrowserManager>(), ws, tab, viewport).await
+    }
+
+    /// Starts the tab's screencast; its frames go to `on_frame` (JPEG bytes).
+    pub async fn attach(ws: String, tab: String, viewport: Value, attach_id: String, on_frame: std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>) -> Res<()> {
+        if is_remote(&ws) {
+            remote::on_frames(&attach_id, move |bytes| on_frame(bytes));
+            return remote::call(&ws, "attach", json!({"tab": tab, "viewport": viewport, "attachId": attach_id})).await.map(drop);
+        }
+        let app = app();
+        let viewport = serde_json::from_value(viewport).map_err(|e| e.to_string())?;
+        let channel = tauri::ipc::Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+                on_frame(bytes);
+            }
+            Ok(())
+        });
+        browser::browser_attach(app.clone(), app.state::<BrowserManager>(), ws, tab, viewport, attach_id, channel).await
+    }
+
+    pub async fn frame_done(ws: String, attach_id: String) -> Res<()> {
+        if is_remote(&ws) {
+            remote::fire(&ws, "frameDone", json!({"attachId": attach_id}));
+            return Ok(());
+        }
+        browser::browser_frame_done(backend::app().state::<BrowserManager>(), ws, attach_id).await
+    }
+
+    pub async fn detach(ws: String, attach_id: String) -> Res<()> {
+        if is_remote(&ws) {
+            remote::drop_frames(&attach_id);
+            return remote::call(&ws, "detach", json!({"attachId": attach_id})).await.map(drop);
+        }
+        browser::browser_detach(backend::app().state::<BrowserManager>(), ws, attach_id).await
+    }
+
+    pub async fn allow_invalid_certificates(ws: String, allow: bool) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "certs", json!({"allow": allow})).await.map(drop);
+        }
+        let app = app();
+        browser::browser_allow_invalid_certificates(app.clone(), app.state::<BrowserManager>(), ws, allow).await
+    }
+
+    pub async fn console_clear(ws: String, tab: String) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "consoleClear", json!({"tab": tab})).await.map(drop);
+        }
+        let app = app();
+        browser::inspect::browser_console_clear(app.clone(), app.state::<BrowserManager>(), ws, tab).await
+    }
+
+    pub async fn pick(ws: String, tab: String, start: bool) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, if start { "pickStart" } else { "pickCancel" }, json!({"tab": tab})).await.map(drop);
+        }
+        let app = app();
+        if start {
+            browser::inspect::browser_pick_start(app.clone(), app.state::<BrowserManager>(), ws, tab).await
+        } else {
+            browser::inspect::browser_pick_cancel(app.clone(), app.state::<BrowserManager>(), ws, tab).await
+        }
+    }
+
+    pub async fn pick_hover(ws: String, tab: String, x: f64, y: f64) -> Res<Option<PickHover>> {
+        if is_remote(&ws) {
+            return parse(remote::call(&ws, "pickHover", json!({"tab": tab, "x": x, "y": y})).await);
+        }
+        let app = app();
+        browser::inspect::browser_pick_hover(app.clone(), app.state::<BrowserManager>(), ws, tab, x, y).await
+    }
+
+    pub async fn select_probe(ws: String, tab: String, x: f64, y: f64) -> Res<Option<Value>> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "selectProbe", json!({"tab": tab, "x": x, "y": y})).await.map(|v| (!v.is_null()).then_some(v));
+        }
+        let app = app();
+        browser::browser_select_probe(app.clone(), app.state::<BrowserManager>(), ws, tab, x, y).await
+    }
+
+    pub async fn select_pick(ws: String, tab: String, index: Option<i64>) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "selectPick", json!({"tab": tab, "index": index})).await.map(drop);
+        }
+        let app = app();
+        browser::browser_select_pick(app.clone(), app.state::<BrowserManager>(), ws, tab, index).await
+    }
+
+    pub async fn selection(ws: String, tab: String) -> Res<String> {
+        if is_remote(&ws) {
+            return parse(remote::call(&ws, "selection", json!({"tab": tab})).await);
+        }
+        let app = app();
+        browser::browser_selection(app.clone(), app.state::<BrowserManager>(), ws, tab).await
+    }
+
+    pub async fn image_at(ws: String, tab: String, x: f64, y: f64, with_data: bool) -> Res<Option<Value>> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "imageAt", json!({"tab": tab, "x": x, "y": y, "withData": with_data})).await.map(|v| (!v.is_null()).then_some(v));
+        }
+        let app = app();
+        browser::browser_image_at(app.clone(), app.state::<BrowserManager>(), ws, tab, x, y, with_data).await
+    }
+
+    pub async fn paste_image(ws: String, tab: String, data: String, mime: String) -> Res<()> {
+        if is_remote(&ws) {
+            return remote::call(&ws, "pasteImage", json!({"tab": tab, "data": data, "mime": mime})).await.map(drop);
+        }
+        let app = app();
+        browser::browser_paste_image(app.clone(), app.state::<BrowserManager>(), ws, tab, data, mime).await
+    }
+}
+
 /// One screencast being shown.
 struct Attachment {
     workspace: String,
@@ -292,7 +492,7 @@ fn decode(bytes: &[u8]) -> Option<Arc<RenderImage>> {
 
 fn frame_done(workspace: String, attach: String) {
     tauri::async_runtime::spawn(async move {
-        let _ = browser::browser_frame_done(backend::app().state(), workspace, attach).await;
+        let _ = ops::frame_done(workspace, attach).await;
     });
 }
 
@@ -330,7 +530,7 @@ fn input_loop(rx: async_channel::Receiver<InputMessage>) {
                 }
             }
             let (workspace, tab, method, params) = message;
-            let _ = browser::browser_input(backend::app().clone(), backend::app().state::<BrowserManager>(), workspace, tab, method, params).await;
+            let _ = ops::input(workspace, tab, method, params).await;
         }
     });
 }
@@ -510,6 +710,8 @@ pub struct BrowserPanel {
     dev_url_opened: bool,
     /// Workspaces where a blank replacement tab was requested after the last tab closed.
     blank_pending: HashSet<String>,
+    /// Paired servers' browsers seen (`‹peer›|‹workspace›` ids): "‹machine› · ‹workspace›".
+    remote_names: HashMap<String, String>,
 }
 
 impl BrowserPanel {
@@ -526,6 +728,22 @@ impl BrowserPanel {
             }
         })
         .detach();
+        // Development aid: input for the shown tab from a file (`click x y` / `type text` lines,
+        // page pixels), consumed as it's read (`WINFER_NATIVE_BROWSER_INPUT_FILE`).
+        #[cfg(debug_assertions)]
+        if let Ok(path) = std::env::var("WINFER_NATIVE_BROWSER_INPUT_FILE") {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(500)).await;
+                    let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                    let _ = std::fs::remove_file(&path);
+                    if this.update(cx, |this, _| this.dev_input(&text)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         let address = cx.new(|cx| InputState::new(window, cx).placeholder("Search or enter address"));
         cx.subscribe_in(&address, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
@@ -584,6 +802,7 @@ impl BrowserPanel {
             #[cfg(debug_assertions)]
             dev_url_opened: false,
             blank_pending: HashSet::new(),
+            remote_names: HashMap::new(),
         }
     }
 
@@ -592,6 +811,9 @@ impl BrowserPanel {
         match event {
             "browser://tabs" => {
                 let Some(workspace) = payload["workspaceId"].as_str() else { return };
+                if let Some(name) = payload["workspaceName"].as_str() {
+                    self.remote_names.insert(workspace.to_string(), name.to_string());
+                }
                 let tabs: Vec<Tab> = serde_json::from_value(payload["tabs"].clone()).unwrap_or_default();
                 self.set_tabs(workspace.to_string(), tabs, cx);
             }
@@ -637,8 +859,7 @@ impl BrowserPanel {
                 }
                 if let Some(ws) = payload["workspaceId"].as_str()
                     && !self.tabs.contains_key(ws)
-                    && !self.needs_install
-                    && !self.installing
+                    && !self.blocked(ws)
                 {
                     self.open_workspace(ws.to_string(), cx);
                 }
@@ -647,10 +868,15 @@ impl BrowserPanel {
                 let (Some(ws), Some(tab)) = (payload["workspaceId"].as_str(), payload["targetId"].as_str()) else { return };
                 self.active_tab.insert(ws.to_string(), tab.to_string());
                 let show_all = self.state.read(cx).view() != View::Workspace;
-                if show_all {
+                let linked = self.linked_peers(cx);
+                if ops::is_remote(ws) && !show_all && !remote_peer(ws).is_some_and(|p| linked.contains(p)) {
+                    // A server agent of a workspace that isn't in front: nothing to show here.
+                    return;
+                }
+                if show_all || ops::is_remote(ws) {
                     self.workspace = Some(ws.to_string());
                 }
-                if !self.tabs.contains_key(ws) && !self.needs_install && !self.installing {
+                if !self.tabs.contains_key(ws) && !self.blocked(ws) {
                     self.open_workspace(ws.to_string(), cx);
                 }
                 self.state.update(cx, |s, cx| {
@@ -690,10 +916,13 @@ impl BrowserPanel {
     }
 
     fn ensure_blank_tab(&mut self, workspace: String) {
+        // A server's browser only shows while it has tabs.
+        if ops::is_remote(&workspace) {
+            return;
+        }
         if self.blank_pending.insert(workspace.clone()) {
             tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                let _ = browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), workspace, "about:blank".to_string()).await;
+                let _ = ops::new_tab(workspace, "about:blank".to_string()).await;
             });
         }
     }
@@ -788,12 +1017,7 @@ impl BrowserPanel {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                if start {
-                    browser::inspect::browser_pick_start(app.clone(), app.state::<BrowserManager>(), workspace, tab).await.map_err(|e| e.to_string())
-                } else {
-                    browser::inspect::browser_pick_cancel(app.clone(), app.state::<BrowserManager>(), workspace, tab).await.map_err(|e| e.to_string())
-                }
+                ops::pick(workspace, tab, start).await
             })
             .await;
             if let Ok(Err(err)) = result {
@@ -829,8 +1053,7 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| {
             let target = tab.clone();
             let result = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::inspect::browser_pick_hover(app.clone(), app.state::<BrowserManager>(), workspace, target, x as f64, y as f64).await
+                ops::pick_hover(workspace, target, x as f64, y as f64).await
             })
             .await;
             let _ = this.update(cx, |this, cx| {
@@ -853,8 +1076,7 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| {
             let ws = workspace.clone();
             let result = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_allow_invalid_certificates(app.clone(), app.state::<BrowserManager>(), ws, allow).await.map_err(|e| e.to_string())
+                ops::allow_invalid_certificates(ws, allow).await.map_err(|e| e.to_string())
             })
             .await;
             let _ = this.update(cx, |this, cx| {
@@ -878,8 +1100,7 @@ impl BrowserPanel {
         self.console.insert(tab.clone(), Vec::new());
         cx.notify();
         tauri::async_runtime::spawn(async move {
-            let app = backend::app();
-            let _ = browser::inspect::browser_console_clear(app.clone(), app.state::<BrowserManager>(), workspace, tab).await;
+            let _ = ops::console_clear(workspace, tab).await;
         });
     }
 
@@ -939,6 +1160,35 @@ impl BrowserPanel {
         self.tabs.get(workspace).map(|t| t.iter().map(tab_label).collect()).unwrap_or_default()
     }
 
+    #[cfg(debug_assertions)]
+    fn dev_input(&self, text: &str) {
+        for line in text.lines() {
+            let mut words = line.splitn(2, ' ');
+            match (words.next(), words.next()) {
+                (Some("click"), Some(at)) => {
+                    let xy: Vec<f64> = at.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                    let [x, y] = xy[..] else { continue };
+                    for kind in ["mousePressed", "mouseReleased"] {
+                        self.send("Input.dispatchMouseEvent", json!({"type": kind, "x": x, "y": y, "button": "left", "buttons": if kind == "mousePressed" { 1 } else { 0 }, "clickCount": 1}));
+                    }
+                }
+                (Some("type"), Some(t)) => self.send("Input.insertText", json!({"text": t})),
+                _ => {}
+            }
+        }
+    }
+
+    /// This machine has no browser yet (a server's runs its own).
+    fn blocked(&self, workspace: &str) -> bool {
+        !ops::is_remote(workspace) && (self.needs_install || self.installing)
+    }
+
+    /// The paired machines the active workspace has tiles of.
+    fn linked_peers(&self, cx: &App) -> HashSet<String> {
+        let s = self.state.read(cx);
+        s.active().map(|w| w.panes.iter().filter_map(|p| p.remote.as_ref().map(|r| r.peer.clone())).collect()).unwrap_or_default()
+    }
+
     fn active(&self) -> Option<(&String, &Tab)> {
         let workspace = self.workspace.as_ref()?;
         let id = self.active_tab.get(workspace)?;
@@ -953,14 +1203,7 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| {
             let target = workspace.clone();
             let opened = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                let status = browser::browser_status(app.clone()).map_err(|e| e.to_string())?;
-                let status = serde_json::to_value(status).unwrap_or(Value::Null);
-                if status["executable"].is_null() {
-                    return Ok::<Option<Value>, String>(None);
-                }
-                let tabs = browser::browser_open(app.clone(), app.state::<BrowserManager>(), target).await.map_err(|e| e.to_string())?;
-                Ok(Some(serde_json::to_value(tabs).unwrap_or(Value::Null)))
+                ops::open(target).await
             })
             .await;
             let _ = this.update(cx, |this, cx| {
@@ -968,7 +1211,9 @@ impl BrowserPanel {
                 match opened {
                     Ok(Ok(Some(tabs))) => {
                         this.message = None;
-                        this.needs_install = false;
+                        if !ops::is_remote(&workspace) {
+                            this.needs_install = false;
+                        }
                         this.failed.remove(&workspace);
                         this.set_tabs(workspace, serde_json::from_value(tabs).unwrap_or_default(), cx);
                     }
@@ -1019,7 +1264,7 @@ impl BrowserPanel {
     fn detach(&mut self) {
         if let Some(a) = self.attachment.take() {
             tauri::async_runtime::spawn(async move {
-                let _ = browser::browser_detach(backend::app().state::<BrowserManager>(), a.workspace, a.id).await;
+                let _ = ops::detach(a.workspace, a.id).await;
             });
         }
     }
@@ -1036,27 +1281,22 @@ impl BrowserPanel {
         self.attachment = Some(Attachment { workspace: workspace.clone(), tab: tab.clone(), id: attach_id.clone(), width, height, scale, mobile });
         let decoder: Arc<Mutex<Decoder>> = Arc::default();
         let (latest, notify, for_workspace, for_attach) = (self.latest.clone(), self.frames.clone(), workspace.clone(), attach_id.clone());
-        let channel: Channel = Channel::new(move |body| {
-            if let InvokeResponseBody::Raw(bytes) = body {
-                let mut d = decoder.lock();
-                if d.busy {
-                    if d.pending.replace(bytes).is_some() {
-                        frame_done(for_workspace.clone(), for_attach.clone());
-                    }
-                } else {
-                    d.busy = true;
-                    drop(d);
-                    run_decoder(decoder.clone(), latest.clone(), notify.clone(), for_workspace.clone(), for_attach.clone(), bytes);
+        let on_frame: Arc<dyn Fn(Vec<u8>) + Send + Sync> = Arc::new(move |bytes| {
+            let mut d = decoder.lock();
+            if d.busy {
+                if d.pending.replace(bytes).is_some() {
+                    frame_done(for_workspace.clone(), for_attach.clone());
                 }
+            } else {
+                d.busy = true;
+                drop(d);
+                run_decoder(decoder.clone(), latest.clone(), notify.clone(), for_workspace.clone(), for_attach.clone(), bytes);
             }
-            Ok(())
         });
         let viewport = json!({ "width": width, "height": height, "deviceScaleFactor": scale, "mobile": mobile });
         cx.spawn(async move |this, cx| {
             let attached = tauri::async_runtime::spawn(async move {
-                let viewport = serde_json::from_value(viewport).map_err(|e: serde_json::Error| e.to_string())?;
-                let app = backend::app();
-                browser::browser_attach(app.clone(), app.state::<BrowserManager>(), workspace, tab, viewport, attach_id, channel).await.map(|_| ()).map_err(|e| e.to_string())
+                ops::attach(workspace, tab, viewport, attach_id, on_frame).await
             })
             .await;
             let failure = match attached {
@@ -1099,9 +1339,7 @@ impl BrowserPanel {
                     self.resize_task = Some(cx.spawn(async move |_, cx| {
                         cx.background_executor().timer(Duration::from_millis(50)).await;
                         tauri::async_runtime::spawn(async move {
-                            let Ok(viewport) = serde_json::from_value(viewport) else { return };
-                            let app = backend::app();
-                            let _ = browser::browser_resize(app.clone(), app.state::<BrowserManager>(), workspace, tab, viewport).await;
+                            let _ = ops::resize(workspace, tab, viewport).await;
                         });
                     }));
                 }
@@ -1149,8 +1387,7 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| {
             let (w, t) = (workspace.clone(), tab.clone());
             let probe = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_select_probe(app.clone(), app.state::<BrowserManager>(), w, t, x as f64, y as f64).await
+                ops::select_probe(w, t, x as f64, y as f64).await
             })
             .await
             .ok()
@@ -1186,8 +1423,7 @@ impl BrowserPanel {
     fn close_select(&mut self, index: Option<i64>, cx: &mut Context<Self>) {
         let Some(menu) = self.select_menu.take() else { return };
         tauri::async_runtime::spawn(async move {
-            let app = backend::app();
-            let _ = browser::browser_select_pick(app.clone(), app.state::<BrowserManager>(), menu.workspace, menu.tab, index).await;
+            let _ = ops::select_pick(menu.workspace, menu.tab, index).await;
         });
         cx.notify();
     }
@@ -1297,8 +1533,7 @@ impl BrowserPanel {
         let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         tauri::async_runtime::spawn(async move {
-            let app = backend::app();
-            let _ = browser::browser_paste_image(app.clone(), app.state::<BrowserManager>(), workspace, tab, data, mime.into()).await;
+            let _ = ops::paste_image(workspace, tab, data, mime.into()).await;
         });
     }
 
@@ -1309,8 +1544,7 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| {
             let (w, t) = (workspace.clone(), tab.clone());
             let found = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_image_at(app.clone(), app.state::<BrowserManager>(), w, t, x as f64, y as f64, false).await
+                ops::image_at(w, t, x as f64, y as f64, false).await
             })
             .await
             .ok()
@@ -1332,8 +1566,7 @@ impl BrowserPanel {
     fn copy_image(&self, menu: ImageMenu, cx: &mut Context<Self>) {
         cx.spawn(async move |_, cx| {
             let found = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_image_at(app.clone(), app.state::<BrowserManager>(), menu.workspace, menu.tab, menu.page.0 as f64, menu.page.1 as f64, true).await
+                ops::image_at(menu.workspace, menu.tab, menu.page.0 as f64, menu.page.1 as f64, true).await
             })
             .await
             .ok()
@@ -1420,8 +1653,7 @@ impl BrowserPanel {
         let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
         cx.spawn(async move |_, cx| {
             let text = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_selection(app.clone(), app.state::<BrowserManager>(), workspace, tab).await
+                ops::selection(workspace, tab).await
             })
             .await;
             if let Ok(Ok(text)) = text {
@@ -1443,8 +1675,7 @@ impl BrowserPanel {
         let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
         cx.spawn(async move |this, cx| {
             let failed = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_navigate(app.clone(), app.state::<BrowserManager>(), workspace, tab, url).await.map(|_| ()).err().map(|e| e.to_string())
+                ops::navigate(workspace, tab, url).await.map(|_| ()).err().map(|e| e.to_string())
             })
             .await
             .ok()
@@ -1469,8 +1700,7 @@ impl BrowserPanel {
             if needs_open {
                 let target = workspace.clone();
                 let tabs = tauri::async_runtime::spawn(async move {
-                    let app = backend::app();
-                    browser::browser_open(app.clone(), app.state::<BrowserManager>(), target).await.map(|t| serde_json::to_value(t).unwrap_or(Value::Null)).map_err(|e| e.to_string())
+                    ops::open(target).await?.ok_or_else(|| "The browser panel needs Chromium.".to_string())
                 })
                 .await
                 .map_err(|e| e.to_string())??;
@@ -1506,15 +1736,14 @@ impl BrowserPanel {
             };
             let (w, u) = (workspace.clone(), url.clone());
             let id = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
                 match target {
                     Some(id) => {
                         if opened {
-                            browser::browser_navigate(app.clone(), app.state::<BrowserManager>(), w, id.clone(), u).await.map_err(|e| e.to_string())?;
+                            ops::navigate(w, id.clone(), u).await.map_err(|e| e.to_string())?;
                         }
                         Ok::<String, String>(id)
                     }
-                    None => browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), w, u).await.map_err(|e| e.to_string()),
+                    None => ops::new_tab(w, u).await.map_err(|e| e.to_string()),
                 }
             })
             .await
@@ -1572,8 +1801,7 @@ impl BrowserPanel {
     fn history(&self, delta: i64) {
         let Some((workspace, tab)) = self.active().map(|(w, t)| (w.clone(), t.id.clone())) else { return };
         tauri::async_runtime::spawn(async move {
-            let app = backend::app();
-            let _ = browser::browser_history(app.clone(), app.state::<BrowserManager>(), workspace, tab, delta).await;
+            let _ = ops::history(workspace, tab, delta).await;
         });
     }
 
@@ -1582,8 +1810,7 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| {
             let target = workspace.clone();
             let id = tauri::async_runtime::spawn(async move {
-                let app = backend::app();
-                browser::browser_new_tab(app.clone(), app.state::<BrowserManager>(), target, "about:blank".to_string()).await
+                ops::new_tab(target, "about:blank".to_string()).await
             })
             .await
             .ok()
@@ -1601,8 +1828,7 @@ impl BrowserPanel {
 
     fn close_tab(&self, workspace: String, tab: String) {
         tauri::async_runtime::spawn(async move {
-            let app = backend::app();
-            let _ = browser::browser_close_tab(app.clone(), app.state::<BrowserManager>(), workspace, tab).await;
+            let _ = ops::close_tab(workspace, tab).await;
         });
     }
 
@@ -1618,10 +1844,18 @@ impl BrowserPanel {
 
     /// Browser-style tabs with darker tab surfaces and subtle elevation shadows; tabs an agent is
     /// using carry a small agent badge next to their page icon.
-    fn render_tabs(&mut self, show_all: bool, workspaces: &[(String, String)], c: Colors, dark: bool, theme_id: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_tabs(&mut self, show_all: bool, active_workspace: Option<&str>, workspaces: &[(String, String)], c: Colors, dark: bool, theme_id: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Clipped at the strip's bottom edge so tab shadows never spill onto the toolbar below.
         let mut strip = div().flex().items_end().gap_1().px_2().pt_2().overflow_hidden();
-        let groups = visible_tab_groups(show_all, self.workspace.as_deref(), workspaces, &self.tabs);
+        let mut groups = visible_tab_groups(show_all, if show_all { self.workspace.as_deref() } else { active_workspace }, workspaces, &self.tabs);
+        if !show_all {
+            // The servers' browsers this workspace has tiles of, after its own tabs.
+            for (id, name) in workspaces.iter().filter(|(id, _)| ops::is_remote(id)) {
+                if let Some(list) = self.tabs.get(id).filter(|l| !l.is_empty()) {
+                    groups.push((id.clone(), name.clone(), list.clone()));
+                }
+            }
+        }
         let multi = groups.len() > 1;
         let shown_workspace = self.workspace.clone();
         let now = Instant::now();
@@ -2027,13 +2261,30 @@ impl Render for BrowserPanel {
             (s.theme.clone(), s.view(), s.active().map(|w| w.id.clone()), ws_list)
         };
         let show_all = view != View::Workspace;
+        // Paired servers' browsers: all in Overview; in a workspace, those of the servers it has
+        // tiles of.
+        let linked = self.linked_peers(cx);
+        let mut remote: Vec<(String, String)> = self
+            .tabs
+            .iter()
+            .filter(|(id, tabs)| !tabs.is_empty() && remote_peer(id).is_some_and(|p| show_all || linked.contains(p)))
+            .map(|(id, _)| (id.clone(), self.remote_names.get(id).cloned().unwrap_or_else(|| "Server".into())))
+            .collect();
+        remote.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut workspaces = workspaces;
+        workspaces.extend(remote.iter().cloned());
         let workspace_ids: Vec<String> = workspaces.iter().map(|(id, _)| id.clone()).collect();
-        let workspace = resolve_shown_workspace(show_all, self.workspace.as_deref(), active_workspace.as_deref(), &workspace_ids, &self.tabs);
+        let workspace = match self.workspace.as_deref() {
+            Some(current) if !show_all && remote.iter().any(|(id, _)| id == current) => Some(current.to_string()),
+            // This machine has no browser: a server's shows instead of the download offer.
+            _ if !show_all && !remote.is_empty() && active_workspace.as_deref().is_some_and(|w| self.blocked(w)) => Some(remote[0].0.clone()),
+            current => resolve_shown_workspace(show_all, current, active_workspace.as_deref(), &workspace_ids, &self.tabs),
+        };
         let c = theme::colors(&theme_id);
         if self.workspace != workspace {
             self.workspace = workspace.clone();
         }
-        if let Some(id) = workspace.filter(|_| !self.needs_install && !self.installing) {
+        if let Some(id) = workspace.filter(|w| !self.blocked(w)) {
             if !self.tabs.contains_key(&id) {
                 self.open_workspace(id, cx);
             } else if self.tabs.get(&id).is_some_and(|t| t.is_empty()) && !self.failed.contains(&id) {
@@ -2076,7 +2327,7 @@ impl Render for BrowserPanel {
         let picking = self.picking;
         let undocked = self.undocked;
         let certs_off = self.workspace.as_ref().is_some_and(|w| self.invalid_certs.contains(w));
-        let body = if self.needs_install {
+        let body = if self.workspace.as_deref().is_some_and(|w| self.blocked(w)) && self.needs_install {
             div().size_full().flex().flex_col().items_center().justify_center().gap_2().text_xs().text_color(c.muted)
                 .child("The browser panel needs Chromium.")
                 .child(
@@ -2239,7 +2490,7 @@ impl Render for BrowserPanel {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_tabs(show_all, &workspaces, c, dark, &theme_id, cx))
+            .child(self.render_tabs(show_all, active_workspace.as_deref(), &workspaces, c, dark, &theme_id, cx))
             .child(self.render_toolbar(c, cx))
             .children(self.render_agent_bar(c))
             .when(certs_off || self.cert_prompt, |d| d.child(

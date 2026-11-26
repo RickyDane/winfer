@@ -48,12 +48,21 @@ pub fn start(app: tauri::AppHandle, data_dir: &std::path::Path) {
                 }
                 app.emit("connect://changed", ())
             }
-            Event::PeerUp(peer) => app.emit("connect://peer", json!({"peer": peer, "up": true})),
+            Event::PeerUp(peer) => {
+                if !server {
+                    crate::connect_browser::peer_up(&app, &peer);
+                }
+                app.emit("connect://peer", json!({"peer": peer, "up": true}))
+            }
             Event::PeerDown(peer) => {
                 crate::connect_term::drop_peer(&peer);
+                if !server {
+                    crate::connect_browser::peer_down(&app, &peer);
+                }
                 unsubscribe(&peer);
                 app.emit("connect://peer", json!({"peer": peer, "up": false}))
             }
+            Event::Message { peer, msg } if !server && crate::connect_browser::intercept(&app, &peer, &msg) => Ok(()),
             Event::Message { peer, msg } => app.emit("connect://message", json!({"peer": peer, "msg": msg})),
         };
     });
@@ -114,6 +123,11 @@ pub fn send(peer: &str, msg: Value) {
 
 pub fn subscribe(peer: &str) {
     SUBSCRIBERS.lock().unwrap().insert(peer.to_string());
+}
+
+/// The peers watching this instance.
+pub fn subscribers() -> Vec<String> {
+    SUBSCRIBERS.lock().unwrap().iter().cloned().collect()
 }
 
 pub fn unsubscribe(peer: &str) {

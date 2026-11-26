@@ -1083,6 +1083,12 @@ impl BrowserManager {
             .map(|i| format!("http://127.0.0.1:{}", i.proxy.port))
     }
 
+    /// The workspaces whose browser is open, with their tabs (starts nothing).
+    pub fn open_tabs(&self) -> Vec<(String, Value)> {
+        let instances: Vec<Arc<Instance>> = self.instances.lock().unwrap().values().cloned().collect();
+        instances.iter().map(|i| (i.workspace_id.clone(), serde_json::to_value(&*i.tabs.lock().unwrap()).unwrap_or_default())).collect()
+    }
+
     /// Saves every workspace's cookies, then ends the browser. Not left to `Drop`: tasks may
     /// still hold it when the app exits, and the browser would outlive winfer.
     pub fn shutdown(&self) {

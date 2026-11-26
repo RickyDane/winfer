@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use base64::Engine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State};
 
@@ -383,7 +383,7 @@ pub async fn browser_pick_start(
 }
 
 /// The element under a point while picking, for the panel to outline.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickHover {
     /// Border box in the page's CSS pixels, relative to the viewport.

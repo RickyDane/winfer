@@ -3,6 +3,7 @@
 pub mod accounts_sync;
 pub mod backend;
 pub mod connect;
+pub mod connect_browser;
 pub mod connect_term;
 pub mod hooks;
 pub mod layout;

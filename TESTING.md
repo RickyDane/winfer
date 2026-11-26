@@ -190,6 +190,12 @@ Build with `cargo build -p winferd` (Linux: in Docker, `rust:1-bookworm`; it lin
   lists the server's agents, starts one, answers it; with the desktop closed an agent finishing there pushes to the
   phone. `winferd mobile list` / `revoke <name>`; the phone stays paired across a daemon restart.
 
+- [ ] Browser on a server: open a tile of a server agent, have it use its browser tools (or open a page through
+  `$WINFER_CDP_URL`) → the browser panel shows the server's tab after the workspace's own (its name in the strip);
+  click and type in it, go back/forward, open and close a tab; stop the server → its tabs leave the panel. Restart
+  the app with a server tile open → the tile still shows the server's pane (it must never start a local agent).
+  Dev aid: `WINFER_NATIVE_BROWSER_INPUT_FILE=/tmp/x` (`click x y` / `type text` lines).
+
 ## 7. Windows
 - [ ] Installed CLIs (Claude Code, Codex via npm, …) show as installed in the "New" menu and start in a pane.
 - [ ] Shortcuts use Ctrl+Shift (Ctrl+Shift+T new pane, Ctrl+Shift+K palette, Ctrl+Shift+/ shortcuts); tooltips and the empty screen show the same keys.

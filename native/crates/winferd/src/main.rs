@@ -1,6 +1,7 @@
 //! `winferd`: winfer for servers. Runs agents and terminals without a window and serves them to the
 //! winfer instances it's paired with (Winfer Connect). See docs/plans/winfer-connect.md (headless).
 
+mod browser;
 mod control;
 mod host;
 mod machine;
@@ -100,6 +101,7 @@ fn run(args: &[String]) {
     phone::name_bridge();
     let host = host::Host::start();
     limits::start();
+    browser::start(host::Host::get());
     update::watch();
     if let Some(link) = flag(args, "--pair").or_else(|| std::env::var("WINFERD_PAIR").ok()).filter(|l| !l.trim().is_empty()) {
         control::request_pair(&link);

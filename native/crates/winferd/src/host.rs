@@ -33,6 +33,11 @@ pub struct Host {
 static HOST: OnceLock<Arc<Host>> = OnceLock::new();
 
 impl Host {
+    /// The host, once started.
+    pub fn get() -> &'static Host {
+        HOST.get().expect("host started")
+    }
+
     /// Loads the saved state and starts handling events. Panes start when a machine opens them.
     pub fn start() -> Arc<Host> {
         let (tx, rx) = async_channel::unbounded();
@@ -156,6 +161,7 @@ impl Host {
                 self.on_message(&peer, &payload["msg"]);
             }
             "mcp://call" => self.on_mcp_call(payload),
+            "connect://peer" if payload["up"] == false => crate::browser::drop_client(payload["peer"].as_str().unwrap_or_default()),
             // A phone paired with this server asks what a paired machine would.
             "mobile://request" => {
                 let device = payload["device"].as_str().unwrap_or_default();
@@ -329,6 +335,11 @@ impl Host {
                 });
             }
             "term.attach" | "term.in" | "term.resize" | "term.detach" => self.on_term(peer, msg),
+            "browser.call" if !peer.starts_with("phone:") => {
+                if let Some(host) = HOST.get() {
+                    crate::browser::on_request(host, peer, msg);
+                }
+            }
             "tool.call" => {
                 let result = self.remote_tool(msg["name"].as_str().unwrap_or_default(), &msg["args"]);
                 let (ok, text) = match result {

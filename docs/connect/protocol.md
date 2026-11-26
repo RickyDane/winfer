@@ -146,6 +146,28 @@ on a paired desktop sends `mobile.pair` → `mobile.pairing {deviceId, link, qrS
 mobile protocol (docs/mobile/protocol.md) to the server, which answers it as it answers paired desktops; pushes go out
 on every finish and question (no one sits at a server). Its phones' keys live in `vault.json` (0600) in its data folder.
 
+### Browser on a server
+
+Each server workspace has the headless Chromium its agents drive (Debian's `chromium` in the image, else
+`WINFER_CHROME` or the downloaded headless shell; run as root it gets `--no-sandbox`). A paired desktop's browser panel
+shows it under the id `‹peer›|‹workspace›`: as a tab group after the workspace's own tabs when the workspace has a tile
+of that server, and with the other groups in Overview. Frames are JPEG, each acknowledged before the next is sent, so
+the frame rate follows the link (LAN or relay).
+
+| t | from | fields |
+|---|---|---|
+| `browser.call` | desktop | `op`, `workspaceId` (the server's), op fields; with an `id`, answered by `ack {ok, value?, error?}`. `input` and `frameDone` come without one and aren't answered |
+| `browser.frame` | server | `attachId`, `data` (JPEG, base64), to the desktop that attached |
+| `browser.event` | server | `event` (a `browser://…` name), `payload` (with `workspace`, the workspace's name); to every paired desktop, `browser://console` only to the one watching that workspace |
+
+Ops: `list` (every open workspace browser: `[{workspaceId, workspace, tabs}]`), `status`, `install`, `open` (tabs,
+starting the browser), `newTab {url}` (tab id), `closeTab`, `navigate {tab, url}`, `history {tab, delta}`,
+`attach {tab, viewport, attachId}`, `frameDone {attachId}`, `detach {attachId}`, `resize {tab, viewport}`,
+`input {tab, method, params}` (applied in order), `certs {allow}`, `consoleClear`, `pickStart`/`pickCancel`/
+`pickHover {tab, x, y}`, `selectProbe {tab, x, y}`, `selectPick {tab, index}`, `selection`, `imageAt {tab, x, y,
+withData}`, `pasteImage {tab, data, mime}`. A desktop asks for `list` when a server's link comes up; its tabs leave the
+panel when it goes down.
+
 ### Review on a server
 
 When an agent on a server finishes work (its worktree has changes), the server makes a review of it: diff stats, a

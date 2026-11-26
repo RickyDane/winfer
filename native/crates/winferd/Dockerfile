@@ -27,10 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 FROM ${BIN} AS bin
 
-# Node 22+ for the agent CLIs (Claude Code needs it).
+# Node 22+ for the agent CLIs (Claude Code needs it); Chromium for the workspaces' browser
+# (agents' browser tools, and the desktop's browser panel on this server).
 FROM node:22-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git bash procps less tini \
+    chromium fonts-liberation fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=bin /usr/local/bin/winferd /usr/local/bin/winferd
 COPY native/crates/winferd/docker/entrypoint.sh /usr/local/bin/winferd-entrypoint
