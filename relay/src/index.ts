@@ -25,10 +25,14 @@ export interface Release {
   assets: { name: string }[];
 }
 
+// A release ships winferd once these are uploaded (the version file goes up last).
+const NEEDED = ["install.sh", "winferd-linux-x86_64.tar.gz", "winferd-linux-aarch64.tar.gz", "winferd-version.txt"];
+
 /** The release to install from: the newest stable one that ships winferd, else the newest
- * pre-release (Nebula) that does. Old stable releases predate winferd. */
+ * pre-release (Nebula) that does. Old stable releases predate winferd; one still uploading
+ * doesn't count yet. */
 export function pickRelease(releases: Release[]): string | undefined {
-  const ships = (r: Release) => !r.draft && r.assets.some((a) => a.name === "install.sh");
+  const ships = (r: Release) => !r.draft && NEEDED.every((n) => r.assets.some((a) => a.name === n));
   return (releases.find((r) => ships(r) && !r.prerelease) ?? releases.find(ships))?.tag_name;
 }
 
@@ -37,23 +41,27 @@ export function pinVersion(script: string, tag: string): string {
   return script.replace('VERSION="${WINFERD_VERSION:-}"', `VERSION="\${WINFERD_VERSION:-${tag}}"`);
 }
 
+/** The installer, fresh for `INSTALL_TTL`; when GitHub fails (rate limit, outage), the last good
+ * copy, kept for a week. */
 async function installScript(): Promise<Response> {
   const cache = caches.default;
-  const key = new Request("https://relay.cache/install.sh");
-  const hit = await cache.match(key);
+  const fresh = new Request("https://relay.cache/install.sh");
+  const kept = new Request("https://relay.cache/install.sh?last-good");
+  const hit = await cache.match(fresh);
   if (hit) return hit;
+  const failed = async (body: string, status: number) => (await cache.match(kept)) ?? text(body, status);
   const gh = { headers: { "user-agent": "winfer-relay", accept: "application/vnd.github+json" } };
-  const list = await fetch(RELEASES, gh);
-  if (!list.ok) return text(`echo "winfer: couldn't list releases (${list.status})" >&2; exit 1\n`, 502);
+  const list = await fetch(RELEASES, gh).catch(() => null);
+  if (!list?.ok) return failed(`echo "winfer: couldn't list releases (${list?.status ?? "offline"})" >&2; exit 1\n`, 502);
   const tag = pickRelease(await list.json());
-  if (!tag) return text('echo "winfer: no release ships winferd yet" >&2; exit 1\n', 404);
-  const sh = await fetch(`https://github.com/RickyDane/winfer/releases/download/${tag}/install.sh`);
-  if (!sh.ok) return text(`echo "winfer: couldn't fetch the installer (${sh.status})" >&2; exit 1\n`, 502);
-  const res = new Response(pinVersion(await sh.text(), tag), {
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": `public, max-age=${INSTALL_TTL}` },
-  });
-  await cache.put(key, res.clone());
-  return res;
+  if (!tag) return failed('echo "winfer: no release ships winferd yet" >&2; exit 1\n', 404);
+  const sh = await fetch(`https://github.com/RickyDane/winfer/releases/download/${tag}/install.sh`).catch(() => null);
+  if (!sh?.ok) return failed(`echo "winfer: couldn't fetch the installer (${sh?.status ?? "offline"})" >&2; exit 1\n`, 502);
+  const body = pinVersion(await sh.text(), tag);
+  const response = (ttl: number) =>
+    new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": `public, max-age=${ttl}` } });
+  await Promise.all([cache.put(fresh, response(INSTALL_TTL)), cache.put(kept, response(7 * 24 * 3600))]);
+  return response(INSTALL_TTL);
 }
 
 const text = (body: string, status: number) =>

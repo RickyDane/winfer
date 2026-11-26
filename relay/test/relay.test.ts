@@ -56,10 +56,12 @@ const isPresence = (f: string) => f.startsWith("{");
 
 describe("relay", () => {
   it("installs from the newest stable release with winferd, else the newest Nebula", () => {
+    const all = ["install.sh", "winferd-linux-x86_64.tar.gz", "winferd-linux-aarch64.tar.gz", "winferd-version.txt"];
     const r = (tag_name: string, prerelease: boolean, sh: boolean) => ({
-      tag_name, prerelease, draft: false, assets: sh ? [{ name: "install.sh" }] : [],
+      tag_name, prerelease, draft: false, assets: (sh ? all : []).map((name) => ({ name })),
     });
-    expect(pickRelease([r("v2-5", true, true), r("v1", false, false)])).toBe("v2-5");
+    const uploading = { ...r("v2-6", true, true), assets: [{ name: "install.sh" }] };
+    expect(pickRelease([uploading, r("v2-5", true, true), r("v1", false, false)])).toBe("v2-5");
     expect(pickRelease([r("v3-1", true, true), r("v2", false, true)])).toBe("v2");
     expect(pickRelease([r("v1", false, false)])).toBeUndefined();
   });
