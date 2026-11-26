@@ -113,7 +113,13 @@ pub fn now() -> u64 {
 pub fn save(s: &Saved) {
     let _ = std::fs::create_dir_all(dir());
     if let Ok(text) = serde_json::to_string(s) {
-        let _ = std::fs::write(dir().join(format!("{}.json", s.id)), text);
+        // Written beside it, then renamed over it: a kill mid-write keeps the last whole copy
+        // (a cut-off file would lose the session's history).
+        let path = dir().join(format!("{}.json", s.id));
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 }
 
@@ -128,6 +134,8 @@ pub fn list() -> Vec<Saved> {
         .into_iter()
         .flatten()
         .flatten()
+        // Not a write cut short (`.tmp`).
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| serde_json::from_str::<Saved>(&std::fs::read_to_string(e.path()).ok()?).ok())
         .map(|mut s| {
             s.transcript.clear();
