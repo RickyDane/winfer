@@ -385,6 +385,20 @@ impl Host {
                 let name = self.with_state(|s| s.workspaces.iter().find(|w| w.id == id).map(|w| w.name.clone()));
                 reply(json!({"t": "ack", "ok": true, "workspaceId": id, "name": name}));
             }
+            "workspace.remove" => {
+                // Its sessions close; the folder (and any worktrees) stay.
+                let id = msg["workspaceId"].as_str().unwrap_or_default();
+                let Some(panes) = self.with_state(|s| s.workspaces.iter().find(|w| w.id == id).map(|w| w.panes.iter().map(|p| p.id.clone()).collect::<Vec<_>>())) else {
+                    return reply(no("That workspace is gone."));
+                };
+                for pane in &panes {
+                    terminal::close(pane);
+                    crate::chats::forget(pane);
+                }
+                self.with_state(|s| s.remove_workspace(id));
+                eprintln!("removed a workspace ({} session{}), asked by {}", panes.len(), if panes.len() == 1 { "" } else { "s" }, client_name(peer));
+                reply(ok());
+            }
             "server.key" if !peer.starts_with("phone:") => {
                 let name = connect::get().map(|c| c.status().name).unwrap_or_default();
                 match crate::machine::deploy_key(&name) {

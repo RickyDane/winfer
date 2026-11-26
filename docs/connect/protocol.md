@@ -141,6 +141,7 @@ the user confirms) and `list_sign_ins`/`push_sign_in` (`account.push`). Not for 
 | `server.update` | client | — → `ack {ok, version?, error?}`; the server updates to the newest release and restarts |
 | `fs.list` | client | `path` (`~` for home) → `fs {path, parent?, git, dirs: [{name, git}], truncated, error?}` |
 | `workspace.new` | client | `path`, `name?` → `ack {ok, workspaceId}` (an existing workspace for that folder is reused) |
+| `workspace.remove` | client | `workspaceId` → `ack {ok}`: its sessions close, the folder and worktrees stay (servers and desktops) |
 | `git.clone` | client | `url`, `branch?`, `parent` → `ack {ok, workspaceId, path}` once cloned (into `parent/<repo>`) |
 | `account.push` | either | `provider` (`claude`/`codex`), `accountId` (the sender's), `label`, `parts` → `ack {ok, accountId (the receiver's), label}` |
 | `account.sync` | either | `accountId` (the receiver's), `parts`: a linked sign-in changed (refresh) |

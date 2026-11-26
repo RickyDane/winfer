@@ -1004,7 +1004,7 @@ impl Root {
         Some(view)
     }
 
-    fn close_side_terminal(&mut self, workspace: &str, cx: &mut Context<Self>) {
+    pub(super) fn close_side_terminal(&mut self, workspace: &str, cx: &mut Context<Self>) {
         let id = format!("side-terminal-{workspace}");
         terminal::close(&id);
         self.terminals.remove(&id);

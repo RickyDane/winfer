@@ -435,7 +435,7 @@ impl Root {
         .detach();
     }
 
-    fn close_all_of(&mut self, ws: &str, cx: &mut Context<Self>) {
+    pub(super) fn close_all_of(&mut self, ws: &str, cx: &mut Context<Self>) {
         let ids: Vec<String> = self.state.read(cx).workspaces.iter().find(|w| w.id == ws).map(|w| w.panes.iter().map(|p| p.id.clone()).collect()).unwrap_or_default();
         for id in ids {
             terminal::close(&id);

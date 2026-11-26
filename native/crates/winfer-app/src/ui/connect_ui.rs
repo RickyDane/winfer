@@ -156,6 +156,7 @@ pub(super) struct ConnectClient {
     dev_history: bool,
     dev_unpaired: bool,
     dev_browser: bool,
+    dev_menu: bool,
     /// Development aid: the server whose History to show once it's open.
     pub dev_history_of: Option<String>,
     /// The `review.diff` request the Changes dialog waits on.
@@ -439,6 +440,21 @@ impl Root {
             return;
         }
         match kind {
+            "workspace.remove" => {
+                let ws = msg["workspaceId"].as_str().unwrap_or_default().to_string();
+                let known = self.state.read(cx).workspaces.iter().any(|w| w.id == ws && w.remote.is_none());
+                let answer = if known {
+                    self.close_all_of(&ws, cx);
+                    self.close_side_terminal(&ws, cx);
+                    self.update_state(cx, |s| s.remove_workspace(&ws));
+                    json!({"t": "ack", "ok": true})
+                } else {
+                    json!({"t": "ack", "ok": false, "error": "That workspace is gone."})
+                };
+                let mut answer = answer;
+                answer["id"] = msg["id"].clone();
+                crate::connect::send(&peer, answer);
+            }
             "account.push" => {
                 let mut answer = winfer_core::accounts_sync::on_push(&peer, msg);
                 answer["id"] = msg["id"].clone();
@@ -1269,6 +1285,24 @@ impl Root {
             self.connect.dev_pushed = true;
             self.push_account(&account, &server.peer_id, cx);
         }
+        // Development aid: open a server workspace's menu (`WINFER_NATIVE_CONNECT_MENU=<name>`), or
+        // remove it without asking (`WINFER_NATIVE_CONNECT_REMOVE=<name>`).
+        #[cfg(debug_assertions)]
+        if !self.connect.dev_menu {
+            for (var, remove) in [("WINFER_NATIVE_CONNECT_MENU", false), ("WINFER_NATIVE_CONNECT_REMOVE", true)] {
+                let Ok(want) = std::env::var(var) else { continue };
+                let found = self.connect.mirrors.iter().filter(|(_, m)| m.loaded).find_map(|(peer, m)| m.workspaces.iter().find(|w| w.1 == want).map(|w| (peer.clone(), w.0.clone())));
+                if let Some((peer, ws)) = found {
+                    self.connect.dev_menu = true;
+                    if remove {
+                        self.connect_request(&peer, json!({"t": "workspace.remove", "workspaceId": ws}), Some("Dev remove".into()));
+                    } else {
+                        let items = self.remote_workspace_menu(&peer, &ws);
+                        self.open_menu(point(px(150.0), px(380.0)), Some(want.into()), items, cx);
+                    }
+                }
+            }
+        }
         // Development aid: open the first remote pane as a tile once it's known.
         #[cfg(debug_assertions)]
         if std::env::var_os("WINFER_NATIVE_CONNECT_OPEN").is_some() && !self.connect.dev_opened {
@@ -1360,8 +1394,8 @@ impl Root {
                 }))
                 .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                     if menu_ready {
-                        let items = this.remote_new_menu(&add_peer);
-                        this.open_menu(e.position, Some("New session on this machine".into()), items, cx);
+                        let items = this.remote_machine_menu(&add_peer);
+                        this.open_menu(e.position, None, items, cx);
                     }
                 }))
                 .child(div().relative().size(px(22.0)).flex_shrink_0().flex().items_center().justify_center().rounded(px(6.0)).bg(c.hover)
@@ -1413,7 +1447,15 @@ impl Root {
                 for (ws_id, ws_name) in &mirror.workspaces {
                     let panes: Vec<&&RemotePane> = live.iter().filter(|p| &p.workspace_id == ws_id).collect();
                     if many_workspaces {
-                        rows = rows.child(div().px_2().pt_1().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle).child(ws_name.clone()));
+                        let (menu_peer, menu_ws, title) = (peer.peer_id.clone(), ws_id.clone(), ws_name.clone());
+                        rows = rows.child(div().id(SharedString::from(format!("peer-ws-{}-{ws_id}", peer.peer_id))).px_2().pt_1().rounded_md().text_size(px(10.5)).font_weight(FontWeight::SEMIBOLD).text_color(c.subtle)
+                            .when(up, |d| d.hover(move |d| d.text_color(c.fg))
+                                .tooltip(|window, cx| Tooltip::new("Right-click for a new session, its browser or removing it").build(window, cx))
+                                .on_mouse_down(MouseButton::Right, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                    let items = this.remote_workspace_menu(&menu_peer, &menu_ws);
+                                    this.open_menu(e.position, Some(title.clone().into()), items, cx);
+                                })))
+                            .child(ws_name.clone()));
                     }
                     // A workspace with no sessions yet (just opened or cloned): start one there.
                     if panes.is_empty() && many_workspaces && up {
@@ -1486,40 +1528,75 @@ impl Root {
             .into_any_element()
     }
 
-    /// One entry per agent installed on the machine, in each of its workspaces when it has several.
-    fn remote_new_menu(&self, peer: &str) -> Vec<MenuItem> {
+    /// A machine's menu (right-click on it): with one workspace, that workspace's menu; then its
+    /// browser and a new workspace.
+    fn remote_machine_menu(&self, peer: &str) -> Vec<MenuItem> {
         let Some(mirror) = self.connect.mirrors.get(peer) else { return Vec::new() };
         let mut items = Vec::new();
-        for (ws_id, ws_name) in &mirror.workspaces {
-            if mirror.workspaces.len() > 1 {
-                if !items.is_empty() {
-                    items.push(MenuItem::Separator);
-                }
-                items.push(MenuItem::run(ws_name.clone(), |_: &mut Root, _: &mut Window, _: &mut Context<Root>| {}).disabled(true));
-            }
-            for (id, name) in &mirror.providers {
-                let (peer, ws, provider) = (peer.to_string(), ws_id.clone(), id.clone());
-                let label = if mirror.default_provider.as_deref() == Some(id.as_str()) { format!("{name} (default)") } else { name.clone() };
-                items.push(MenuItem::run(label, move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.remote_new_pane(&peer, Some(ws.clone()), Some(provider.clone()), cx)));
-            }
+        if let [(ws, _)] = mirror.workspaces.as_slice() {
+            items = self.remote_workspace_menu(peer, ws);
+            items.push(MenuItem::Separator);
+        } else {
+            let (p, first) = (peer.to_string(), mirror.workspaces.first().map(|w| w.0.clone()));
+            items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_remote_browser(&p, first.as_deref(), cx)));
         }
-        items.push(MenuItem::Separator);
-        let p = peer.to_string();
-        let first_ws = mirror.workspaces.first().map(|w| w.0.clone());
-        items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| {
-            let shown = this.browser.update(cx, |b, cx| b.show_server(&p, first_ws.as_deref(), cx));
-            if shown {
-                this.update_state(cx, |s| {
-                    s.browser_open = true;
-                    s.side_panel = Some(crate::model::SidePanel::Browser);
-                });
-            } else {
-                this.toast("That machine has no workspace yet.", cx);
-            }
-        }));
         let p = peer.to_string();
         items.push(MenuItem::run("New workspace (folder or git clone)…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.open_remote_folder(&p, window, cx)));
         items
+    }
+
+    /// A workspace's menu on a paired machine (right-click on it): a session with each agent
+    /// installed there, its browser, and removing it.
+    fn remote_workspace_menu(&self, peer: &str, ws: &str) -> Vec<MenuItem> {
+        let Some(mirror) = self.connect.mirrors.get(peer) else { return Vec::new() };
+        let mut items = Vec::new();
+        for (id, name) in &mirror.providers {
+            let (peer, ws, provider) = (peer.to_string(), ws.to_string(), id.clone());
+            let label = if mirror.default_provider.as_deref() == Some(id.as_str()) { format!("{name} (default)") } else { name.clone() };
+            items.push(MenuItem::run(label, move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.remote_new_pane(&peer, Some(ws.clone()), Some(provider.clone()), cx)));
+        }
+        items.push(MenuItem::Separator);
+        let (p, w) = (peer.to_string(), ws.to_string());
+        items.push(MenuItem::run("Show its browser", move |this: &mut Root, _: &mut Window, cx: &mut Context<Root>| this.show_remote_browser(&p, Some(&w), cx)));
+        let (p, w) = (peer.to_string(), ws.to_string());
+        items.push(MenuItem::run("Remove workspace…", move |this: &mut Root, window: &mut Window, cx: &mut Context<Root>| this.remove_remote_workspace(&p, &w, window, cx)).danger());
+        items
+    }
+
+    fn show_remote_browser(&mut self, peer: &str, ws: Option<&str>, cx: &mut Context<Self>) {
+        let shown = self.browser.update(cx, |b, cx| b.show_server(peer, ws, cx));
+        if shown {
+            self.update_state(cx, |s| {
+                s.browser_open = true;
+                s.side_panel = Some(crate::model::SidePanel::Browser);
+            });
+        } else {
+            self.toast("That machine has no workspace yet.", cx);
+        }
+    }
+
+    /// Asks, then removes a workspace on a paired machine (`workspace.remove`): its sessions
+    /// there close; the folder stays.
+    fn remove_remote_workspace(&mut self, peer: &str, ws: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mirror) = self.connect.mirrors.get(peer) else { return };
+        let name = mirror.workspaces.iter().find(|w| w.0 == ws).map_or_else(String::new, |w| w.1.clone());
+        let machine = crate::connect::peer_name(peer).unwrap_or_else(|| "that machine".into());
+        let panes = match mirror.panes.iter().filter(|p| p.workspace_id == ws && !p.archived).count() {
+            0 => String::new(),
+            1 => " Its 1 session there will be closed.".to_string(),
+            n => format!(" Its {n} sessions there will be closed."),
+        };
+        let detail = format!("Remove workspace “{name}” from {machine}?{panes} Files and worktrees stay on disk.");
+        let (peer, ws) = (peer.to_string(), ws.to_string());
+        self.confirm("Remove workspace", detail, "Remove", window, cx, move |this, cx| {
+            this.connect_request(&peer, json!({"t": "workspace.remove", "workspaceId": ws}), Some(format!("Couldn't remove “{name}” from {machine}")));
+            // Its tiles here go with it.
+            let local = this.state.read(cx).workspaces.iter().find(|w| w.remote.as_ref().is_some_and(|r| r.peer == peer && r.workspace == ws)).map(|w| w.id.clone());
+            if let Some(local) = local {
+                this.close_all_of(&local, cx);
+                this.update_state(cx, |s| s.remove_workspace(&local));
+            }
+        });
     }
 
     fn remote_pane_menu(&self, peer: &str, pane: &str, status: AgentStatus) -> Vec<MenuItem> {
