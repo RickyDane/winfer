@@ -222,6 +222,10 @@ pub fn update(check_only: bool, tag: Option<String>) -> i32 {
     use crate::update;
     let latest = match tag.clone().map(Ok).unwrap_or_else(update::check) {
         Ok(t) => t,
+        Err(e) if e == update::NO_RELEASE => {
+            println!("winferd {} · {e}", update::VERSION);
+            return 0;
+        }
         Err(e) => {
             eprintln!("Couldn't check for updates: {e}");
             return 1;

@@ -51,9 +51,14 @@ fn get(url: &str) -> Result<Vec<u8>, String> {
     res.body_mut().with_config().limit(MAX_DOWNLOAD).read_to_vec().map_err(|e| format!("{url}: {e}"))
 }
 
+/// `check`'s error when the newest release has no winferd in it (none has yet, or test builds
+/// only come as pre-releases).
+pub const NO_RELEASE: &str = "The newest winfer release has no winferd yet. Test builds: winferd update --version <tag>";
+
 /// The newest release's tag (`winferd-version.txt`, uploaded with every release).
 pub fn check() -> Result<String, String> {
-    let text = String::from_utf8(get(&format!("{}/latest/download/winferd-version.txt", base()))?).map_err(|e| e.to_string())?;
+    let text = get(&format!("{}/latest/download/winferd-version.txt", base())).map_err(|e| if e.contains("404") { NO_RELEASE.to_string() } else { e })?;
+    let text = String::from_utf8(text).map_err(|e| e.to_string())?;
     let tag = text.trim().to_string();
     if !tag.starts_with('v') || tag.len() > 40 {
         return Err(format!("unexpected version {tag:?}"));
@@ -75,9 +80,9 @@ pub fn latest_known() -> Option<String> {
 pub fn watch() {
     std::thread::spawn(|| {
         loop {
-            // (404 until a release carries winferd: nothing to say.)
+            // (Until a release carries winferd: nothing to say.)
             if let Err(e) = check()
-                && !e.contains("404")
+                && e != NO_RELEASE
             {
                 eprintln!("update check: {e}");
             }
