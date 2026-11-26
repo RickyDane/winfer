@@ -98,6 +98,8 @@ pub struct ReviewStore {
     pub replies: HashMap<String, Entity<InputState>>,
     /// The review shown in the detail column.
     pub selected: Option<String>,
+    /// Server reviews whose dev-server screenshot was asked for.
+    pub shots_asked: std::collections::HashSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -443,7 +445,31 @@ impl Root {
 
     /// `reviews` from a paired machine: its open reviews and merge queue replace the ones shown.
     pub(super) fn on_remote_reviews(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
-        let reviews: Vec<Review> = msg["items"].as_array().into_iter().flatten().filter_map(|v| remote_review_of(peer, v)).collect();
+        let mut reviews: Vec<Review> = msg["items"].as_array().into_iter().flatten().filter_map(|v| remote_review_of(peer, v)).collect();
+        // The dev server's screenshot: kept once fetched; fetched once the server has it.
+        let shots: Vec<(String, Value)> = msg["items"].as_array().into_iter().flatten().filter_map(|v| Some((format!("{peer}|{}", v["id"].as_str()?), v["screenshot"].clone()))).collect();
+        let mut fetch = Vec::new();
+        for r in &mut reviews {
+            let Some((_, shot)) = shots.iter().find(|(id, _)| *id == r.id) else { continue };
+            r.screenshot_url = shot["url"].as_str().map(str::to_string);
+            let old = self.review.reviews.iter().find(|o| o.id == r.id).map(|o| o.screenshot.clone());
+            r.screenshot = match (shot["state"].as_str().unwrap_or_default(), old) {
+                (_, Some(Load::Done(image))) => Load::Done(image),
+                ("done", old) => {
+                    if self.review.shots_asked.insert(r.id.clone()) {
+                        fetch.push(r.remote.as_ref().map(|(_, rid)| rid.clone()).unwrap_or_default());
+                    }
+                    // A failed fetch stays failed (the reply's error) until the next review.
+                    old.filter(|o| matches!(o, Load::Error(_))).unwrap_or(Load::Loading)
+                }
+                ("loading", _) => Load::Loading,
+                ("error", _) => Load::Error(shot["error"].as_str().unwrap_or_default().to_string()),
+                _ => Load::Idle,
+            };
+        }
+        for rid in fetch {
+            self.connect_request(peer, json!({"t": "review.screenshot", "reviewId": rid}), None);
+        }
         let queue: Vec<QueueItem> = msg["queue"].as_array().into_iter().flatten().map(|v| QueueItem {
             review_id: format!("{peer}|{}", v["reviewId"].as_str().unwrap_or_default()),
             pane_id: String::new(),
@@ -474,6 +500,19 @@ impl Root {
             self.toast(format!("Merged {branch} on {machine}"), cx);
         }
         cx.notify();
+    }
+
+    /// `review.screenshot`: a server review's dev server, as an image.
+    pub(super) fn on_remote_screenshot(&mut self, peer: &str, msg: &Value, cx: &mut Context<Self>) {
+        let id = format!("{peer}|{}", msg["reviewId"].as_str().unwrap_or_default());
+        let image = decode_screenshot(msg["data"].as_str().unwrap_or_default());
+        if let Some(r) = self.review_mut(&id) {
+            r.screenshot = match image {
+                Ok(image) => Load::Done(image),
+                Err(e) => Load::Error(e),
+            };
+            cx.notify();
+        }
     }
 
     /// Sends a `review.*` request for a remote review; false if `id` is one of this machine's.
@@ -899,7 +938,7 @@ impl Root {
                 .when_some(info, |d, t| d.child(div().flex().items_center().gap_1p5().rounded_md().bg(Hsla { a: 0.08, ..c.warning }).px_2p5().py_1p5().text_xs().text_color(c.warning)
                     .child(Icon::new(IconName::TriangleAlert).size(px(12.0))).child(t))))
             .when_some(screenshot, |d, image| d.child(div().flex().flex_col().gap_1p5().child(section("Running app"))
-                .child(img(ImageSource::Render(image)).w_full().max_w(px(520.0)).h(px(240.0)).object_fit(ObjectFit::Cover).rounded_lg().border_1().border_color(c.edge))))
+                .child(img(ImageSource::Render(image)).w(px(480.0)).h(px(300.0)).object_fit(ObjectFit::Contain).rounded_lg().border_1().border_color(c.edge))))
             .when_some(reply, |d, input| d.child(
                 div().flex().items_center().gap_1().rounded_md().border_1().border_color(c.edge).bg(c.panel).px_2()
                     .child(div().flex_1().when(!can_reply, |d| d.opacity(0.5)).child(Input::new(&input).appearance(false)))

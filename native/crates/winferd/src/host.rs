@@ -99,6 +99,15 @@ impl Host {
             }
             Event::Notice(id, message) => status::notice(&mut *self.state.lock(), &id, message),
             Event::Output(id) => status::output(&mut *self.state.lock(), &id),
+            // A dev server an agent started: its review gets a screenshot of it.
+            Event::DevUrl(id, url) => {
+                if std::env::var_os("WINFER_CONNECT_TRACE").is_some() {
+                    eprintln!("[review] {id} serves {url}");
+                }
+                if let Some(pane) = self.state.lock().pane_mut(&id) {
+                    pane.dev_url = Some(url);
+                }
+            }
             Event::FirstOutput(id) => {
                 self.state.lock().starting.remove(&id);
                 if let Some(text) = self.first_messages.lock().remove(&id) {

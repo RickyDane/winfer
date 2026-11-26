@@ -167,7 +167,14 @@ static LOCAL_URL: LazyLock<Regex> =
 fn detect_dev_url(text: &str) -> Option<String> {
     let clean = ANSI.replace_all(text, "");
     let url = LOCAL_URL.find_iter(&clean).last()?;
-    Some(url.as_str().replace("0.0.0.0", "localhost"))
+    // "… on http://localhost:3000." ends the sentence, not the URL.
+    let url = url.as_str().trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    Some(url.replace("0.0.0.0", "localhost"))
+}
+
+/// What a URL can't run into inside a JSON string: escaped line breaks, quotes and colors.
+fn unescape_json_text(text: &str) -> String {
+    text.replace("\\n", " ").replace("\\r", " ").replace("\\t", " ").replace("\\\"", " ").replace("\\u001b", "\x1b")
 }
 
 fn now_ms() -> u64 {
@@ -301,6 +308,13 @@ impl Session {
         }
         if let Some(code) = self.code.lock().clone() {
             (code.tap)(bytes);
+            // A chat's dev server: in its tools' output (JSON lines; not the model's own address
+            // or what anyone wrote).
+            let text = String::from_utf8_lossy(bytes);
+            let tool_output: String = text.lines().filter(|l| l.contains(r#""type":"tool_output""#) || l.contains(r#""type":"tool_end""#)).map(unescape_json_text).collect::<Vec<_>>().join(" ");
+            if let Some(url) = detect_dev_url(&tool_output) {
+                let _ = self.events.try_send(Event::DevUrl(self.pane_id.clone(), url));
+            }
             return;
         }
         self.write_screen(bytes);
@@ -811,6 +825,13 @@ mod tests {
         scanner.feed(b"lo\x07y\x1b]777;notify;Title;Body\x1b\\", |t| found.push(t.to_string()));
         scanner.feed(b"\x1b]0;a title\x07", |t| found.push(t.to_string()));
         assert_eq!(found, ["hello", "Title: Body"]);
+    }
+
+    #[test]
+    fn finds_dev_urls_in_a_chats_json() {
+        let line = r#"{"type":"tool_end","output":"Serving\nLocal: \u001b[36mhttp://localhost:8123/\u001b[39m\n"}"#;
+        assert_eq!(detect_dev_url(&unescape_json_text(line)).as_deref(), Some("http://localhost:8123/"));
+        assert_eq!(detect_dev_url("It runs on http://localhost:8123/.").as_deref(), Some("http://localhost:8123/"));
     }
 
     #[test]

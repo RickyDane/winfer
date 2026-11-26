@@ -190,6 +190,7 @@ server's merge queue, in the agent's worktree there.
 | `review.merge` | client | `reviewId`, `tests` (run them first) → `ack`; queued, progress comes in `reviews` |
 | `review.tests` | client | `reviewId` → `ack`; the result comes in `reviews` |
 | `review.diff` | client | `reviewId` → `review.diff {reviewId, diff, untracked, ahead, dirty, diffTruncated?, diffBytes?}` (Changes) |
+| `review.screenshot` | client | `reviewId` → `review.screenshot {reviewId, data (JPEG data URL), url}`: the agent's dev server from the server's browser, once the review's `screenshot.state` is `done` (no download for it) |
 | `review.history` | client | `query` → `review.history {records}`, the server's merges (History → the server's name) |
 | `review.send` | client | `reviewId`, `text`: typed into the agent's pane; the review closes (a new one comes when it finishes again) |
 | `review.resolve` | client | `reviewId`: asks the agent to merge its base in and resolve the queue's conflict |

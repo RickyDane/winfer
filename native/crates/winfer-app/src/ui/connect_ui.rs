@@ -419,6 +419,7 @@ impl Root {
             }
             "reviews" => self.on_remote_reviews(&peer, msg, cx),
             "review.diff" => self.on_remote_diff(&peer, msg, cx),
+            "review.screenshot" => self.on_remote_screenshot(&peer, msg, cx),
             "review.history" => self.on_remote_history(&peer, msg, cx),
             "usage" => self.on_remote_usage(&peer, msg, cx),
             "mobile.pairing" => self.on_server_pairing(&peer, msg, cx),

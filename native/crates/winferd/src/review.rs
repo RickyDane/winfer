@@ -60,6 +60,9 @@ struct Review {
     tests: Load<Option<TestRun>>,
     test_command: Option<String>,
     conflict: Option<(bool, String)>,
+    /// The agent's dev server, and a screenshot of it (JPEG data URL) from this server's browser.
+    dev_url: Option<String>,
+    screenshot: Load<String>,
 }
 
 impl Review {
@@ -75,6 +78,8 @@ impl Review {
             "tests": {"state": self.tests.state(), "run": tests, "error": self.tests.error()},
             "testCommand": self.test_command,
             "conflict": self.conflict.as_ref().map(|(base, text)| json!({"base": base, "text": text})),
+            // The image itself is fetched with `review.screenshot` (too big to push every change).
+            "screenshot": {"state": self.screenshot.state(), "url": self.dev_url, "error": self.screenshot.error()},
         })
     }
 }
@@ -209,6 +214,8 @@ fn collect(host: &'static Host, pane: Pane) {
         tests: Load::Idle,
         test_command: review_backend::test_command(std::path::Path::new(&dir)),
         conflict: None,
+        dev_url: pane.dev_url.clone(),
+        screenshot: if pane.dev_url.is_some() { Load::Loading } else { Load::Off },
     };
     let id = review.id.clone();
     {
@@ -217,7 +224,35 @@ fn collect(host: &'static Host, pane: Pane) {
         items.insert(0, review.clone());
     }
     *REVIEWS.conflicts_at.lock() = None;
+    if let Some(url) = review.dev_url.clone() {
+        let (id, ws) = (review.id.clone(), review.workspace_id.clone());
+        std::thread::spawn(move || screenshot(&id, ws, url));
+    }
     summarize(host, review, diff);
+}
+
+/// The agent's running app, as the desktop's reviews show it: only with a browser already here
+/// (a review doesn't download one).
+fn screenshot(id: &str, workspace: String, url: String) {
+    let app = backend::app();
+    let has_browser = winfer_backend::browser::browser_status(app.clone()).ok().is_some_and(|s| !json!(s)["executable"].is_null());
+    if !has_browser {
+        if std::env::var_os("WINFER_CONNECT_TRACE").is_some() {
+            eprintln!("[review] no browser here: no screenshot of {url}");
+        }
+        with_review(id, |r| r.screenshot = Load::Off);
+        return;
+    }
+    let shot = tauri::async_runtime::block_on(winfer_backend::browser::browser_screenshot(app.clone(), app.state::<winfer_backend::browser::BrowserManager>(), workspace, url.clone()));
+    if std::env::var_os("WINFER_CONNECT_TRACE").is_some() {
+        eprintln!("[review] screenshot of {url}: {}", shot.as_ref().map_or_else(|e| format!("failed: {e}"), |d| format!("{} bytes", d.len())));
+    }
+    with_review(id, |r| {
+        r.screenshot = match shot {
+            Ok(data) => Load::Done(data),
+            Err(e) => Load::Error(e.to_string()),
+        }
+    });
 }
 
 /// The agent CLI that writes summaries here: `WINFERD_REVIEW_SUMMARY` (codex, claude or off),
@@ -295,6 +330,10 @@ pub fn on_request(host: &'static Host, msg: &Value) -> Value {
     let Some(review) = REVIEWS.items.lock().iter().find(|r| r.id == id).cloned() else { return no("That review is gone.") };
     let pane = host.with_state(|s| s.pane(&review.pane_id).cloned());
     match kind {
+        "review.screenshot" => match &review.screenshot {
+            Load::Done(data) => json!({"t": "review.screenshot", "reviewId": id, "data": data, "url": review.dev_url}),
+            _ => no("No screenshot of this review."),
+        },
         "review.diff" => {
             let Some(info) = &review.worktree else { return no("Only work in a worktree has changes to show.") };
             match worktree::diff(info) {
