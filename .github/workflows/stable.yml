@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  # release.yml pushes the winferd image to GHCR.
+  packages: write
 
 concurrency:
   group: stable-release
