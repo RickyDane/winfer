@@ -395,6 +395,7 @@ impl Host {
                 reply(answer);
             }
             "account.sync" => winfer_core::accounts_sync::on_sync(peer, msg),
+            "account.state" => winfer_core::accounts_sync::on_state(peer, msg),
             "server.update" => {
                 // Takes a while (download): answered from its own thread, then the restart.
                 let (peer, id) = (peer.to_string(), msg["id"].clone());

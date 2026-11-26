@@ -132,6 +132,7 @@ their own agents. Clients time out after 30 s.
 | `git.clone` | client | `url`, `branch?`, `parent` → `ack {ok, workspaceId, path}` once cloned (into `parent/<repo>`) |
 | `account.push` | either | `provider` (`claude`/`codex`), `accountId` (the sender's), `label`, `parts` → `ack {ok, accountId (the receiver's), label}` |
 | `account.sync` | either | `accountId` (the receiver's), `parts`: a linked sign-in changed (refresh) |
+| `account.state` | either | `accountId` (the receiver's), `signedOut`: this side's copy of a linked sign-in is signed out (or back); the pusher shows "Signed out on ‹machine›" |
 
 ### Usage on a server
 

@@ -408,6 +408,10 @@ impl Root {
                 let msg = msg.clone();
                 crate::backend::background(move || winfer_core::accounts_sync::on_sync(&peer, &msg));
             }
+            "account.state" => {
+                winfer_core::accounts_sync::on_state(&peer, msg);
+                cx.notify();
+            }
             "connect.presence" => {
                 if msg["active"] == true {
                     self.connect.active_at.insert(peer, Instant::now());

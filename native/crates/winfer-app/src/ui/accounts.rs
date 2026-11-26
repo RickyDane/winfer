@@ -457,6 +457,18 @@ impl Root {
                 } else {
                     div().truncate().font_family(mono.clone()).text_size(px(11.0)).text_color(c.subtle).child(account.dir.split("/accounts/").last().map_or(account.dir.clone(), |d| format!("accounts/{d}")))
                 };
+                // A copy pushed to another machine that's signed out there.
+                let out_on = {
+                    let machines: Vec<(String, String)> = crate::connect::get().map(|c| c.status().peers.into_iter().map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default();
+                    let links: Vec<_> = winfer_core::accounts_sync::links().into_iter().filter(|l| l.local == account.id).collect();
+                    signed_out_on(&links, &machines)
+                };
+                let location = if out_on.is_empty() {
+                    location
+                } else {
+                    div().flex().flex_col().items_start().gap_0p5().child(location)
+                        .child(div().truncate().text_size(px(11.0)).text_color(c.warning).child(format!("Signed out on {}", out_on.join(", "))))
+                };
                 // What the account can do now: its usage, or why it can't be used.
                 let usage = if !account.signed_in {
                     let (sid, slabel) = (account.id.clone(), account.label.clone());
@@ -537,10 +549,18 @@ impl Root {
                 let machines: Vec<(String, String)> = crate::connect::get().map(|c| c.status().peers.into_iter().map(|p| (p.peer_id, p.name)).collect()).unwrap_or_default();
                 if !machines.is_empty() {
                     let (pid, plabel) = (account.id.clone(), account.label.clone());
-                    let linked: Vec<String> = winfer_core::accounts_sync::links().into_iter().filter(|l| l.local == account.id).map(|l| l.peer).collect();
-                    let tip = if linked.is_empty() { "Sign in on another machine with this account" } else { "Signed in on another machine too (kept in step)" };
+                    let links: Vec<_> = winfer_core::accounts_sync::links().into_iter().filter(|l| l.local == account.id).collect();
+                    let linked: Vec<String> = links.iter().map(|l| l.peer.clone()).collect();
+                    let out_on = signed_out_on(&links, &machines);
+                    let tip = if !out_on.is_empty() {
+                        "Signed out on another machine: push it again"
+                    } else if linked.is_empty() {
+                        "Sign in on another machine with this account"
+                    } else {
+                        "Signed in on another machine too (kept in step)"
+                    };
                     acts = acts.child(icon(format!("push-{}", account.id), IconName::Upload, tip, account.signed_in)
-                        .when(!linked.is_empty(), |d| d.text_color(c.accent))
+                        .when(!linked.is_empty(), |d| d.text_color(if out_on.is_empty() { c.accent } else { c.warning }))
                         .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                             let items = machines.iter().map(|(peer, name)| {
                                 let (peer, id) = (peer.clone(), pid.clone());
@@ -629,6 +649,11 @@ pub fn reset_outcome_text(code: &str) -> String {
         "already_redeemed" => "That reset was already used.".into(),
         other => format!("Codex answered “{other}”."),
     }
+}
+
+/// Names of the machines where a pushed copy of this sign-in is signed out.
+fn signed_out_on(links: &[winfer_core::accounts_sync::Link], machines: &[(String, String)]) -> Vec<String> {
+    links.iter().filter(|l| l.out_there).filter_map(|l| machines.iter().find(|(p, _)| *p == l.peer).map(|(_, n)| n.clone())).collect()
 }
 
 #[cfg(test)]

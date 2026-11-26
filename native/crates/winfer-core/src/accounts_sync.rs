@@ -30,6 +30,12 @@ pub struct Link {
     /// The other machine pushed it here (rather than this one pushing it there).
     #[serde(default)]
     pub received: bool,
+    /// This machine's copy is signed out, as last told to the other one.
+    #[serde(default)]
+    pub out_here: bool,
+    /// The other machine's copy is signed out (it said so): push again to fix.
+    #[serde(default)]
+    pub out_there: bool,
 }
 
 static LINKS: Mutex<Option<Vec<Link>>> = Mutex::new(None);
@@ -263,7 +269,7 @@ pub fn on_push(peer: &str, msg: &Value) -> Value {
     let fp = fingerprint(&parts);
     with_links(|l| {
         l.retain(|x| !(x.peer == peer && x.remote == remote));
-        l.push(Link { peer: peer.into(), local: local.clone(), remote, provider: provider.into(), fp, received: true });
+        l.push(Link { peer: peer.into(), local: local.clone(), remote, provider: provider.into(), fp, received: true, out_here: false, out_there: false });
     });
     json!({"t": "ack", "ok": true, "accountId": local, "label": accounts::label(&local)})
 }
@@ -279,7 +285,7 @@ pub fn push_message(id: &str) -> Result<(Value, String), String> {
 pub fn pushed(peer: &str, local: &str, remote: &str, fp: &str) {
     with_links(|l| {
         l.retain(|x| !(x.peer == peer && x.local == local));
-        l.push(Link { peer: peer.into(), local: local.into(), remote: remote.into(), provider: accounts::provider_of(local).into(), fp: fp.into(), received: false });
+        l.push(Link { peer: peer.into(), local: local.into(), remote: remote.into(), provider: accounts::provider_of(local).into(), fp: fp.into(), received: false, out_here: false, out_there: false });
     });
 }
 
@@ -302,11 +308,32 @@ pub fn on_sync(peer: &str, msg: &Value) {
     }
 }
 
-/// Every half minute or so: linked sign-ins that changed here (a refresh) go to the other side.
-/// `send` returns false when the machine isn't reachable (tried again next time).
+/// `account.state`: the other machine's copy of a linked sign-in is signed out (or back).
+pub fn on_state(peer: &str, msg: &Value) {
+    let id = msg["accountId"].as_str().unwrap_or_default();
+    let out = msg["signedOut"] == true;
+    with_links(|l| {
+        if let Some(x) = l.iter_mut().find(|x| x.peer == peer && x.local == id) {
+            x.out_there = out;
+        }
+    });
+}
+
+/// Every half minute or so: linked sign-ins that changed here (a refresh) go to the other side,
+/// and so does a copy here that's signed out (or signed in again). `send` returns false when the
+/// machine isn't reachable (tried again next time).
 pub fn tick(send: impl Fn(&str, Value) -> bool) {
     for link in links() {
-        let Ok(parts) = read(&link.local) else { continue };
+        let parts = read(&link.local);
+        let out = parts.is_err();
+        if out != link.out_here && send(&link.peer, json!({"t": "account.state", "accountId": link.remote, "signedOut": out})) {
+            with_links(|l| {
+                if let Some(x) = l.iter_mut().find(|x| x.peer == link.peer && x.local == link.local) {
+                    x.out_here = out;
+                }
+            });
+        }
+        let Ok(parts) = parts else { continue };
         let fp = fingerprint(&parts);
         if fp != link.fp && send(&link.peer, json!({"t": "account.sync", "accountId": link.remote, "parts": parts})) {
             with_links(|l| {
