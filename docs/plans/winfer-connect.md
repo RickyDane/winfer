@@ -412,6 +412,30 @@ An `Engine` that owns workspaces, panes, sessions and their status, and exposes 
   test desktop had fallen back to the local `claude`/`codex`); the phone says "server" instead of "desktop" when
   paired with one (needs the relay's PWA redeployed). Removed again afterwards. Still open: `winferd update --check`
   404s until a normal release ships winferd; a terminal on the server runs the user's rc file like any login.
+- **Merged to main** (Nebula `v0.1.110-179` is the first build with winferd: tarballs, `install.sh`, image; the relay
+  is deployed with the PWA wording and its `/install.sh` redirect, which the asset layer had answered with the PWA).
+  A branch review fixed on the way: LAN pairing is commit-then-reveal (`p0` = hash of `p1` before `p2`; the second
+  sender could otherwise grind keys to a matching 6-digit code); turning Connect off stops the LAN listener; a hello
+  can't replace a working LAN path; links fire `Changed` only on change; peer saves land in order and `connect.json`
+  is atomic; remote keys go through the pane's writer thread (in order); `term.snapshot` goes out under the output
+  lock; unpairing the last machine signs out what it pushed; a failing agent isn't restarted every 33 s; a gone
+  workspace fails `pane.new`; the control folder is 0700; servers append version managers' bin folders to PATH (no
+  rc file). CI: nebula/stable grant `packages: write` (the first push hit `startup_failure`).
+- **Docker on a real host** (dane-server, Docker 29): the "Add a server" command paired, a pushed (fake) sign-in
+  landed, a shell tile typed in order, and unpairing the only desktop removed the sign-in. Fixed: names match across
+  case and whitespace (`winferd unpair "Mac Studio von Ricky"` missed the name's no-break space); the command sets
+  `WINFERD_NAME="$(hostname)"` (servers were named after the container id).
+- **Signed out on ‹machine›**: each side reports a linked sign-in that's gone (`account.state`); Settings → Accounts
+  shows it under the account and tints its push button.
+- **Adaptive picture**: a server times frames to `frameDone` and restarts the screencast lighter or heavier
+  (30–75 over the relay, starting by its round trip; 80 on the LAN). Seen: 55 → 75 at ~11 ms a frame.
+- **Running app in server reviews**: winferd keeps panes' dev-server URLs (chats' tool output too, now) and screenshots
+  them with its browser when one is installed; desktops fetch `review.screenshot`. The image shows the whole page.
+- **Not done: the core move.** The chat runner (`code/session.rs`), the agent API (`ui/agent_api.rs`) and the phone
+  host (`ui/mobile.rs`), ~1,700 lines, still live in the app, and winferd has its own smaller copies (`host.rs`,
+  `chats.rs`, `phone.rs`). Plan: move the GPUI-free halves behind traits the way `status::Cell` and `hooks` did
+  (session runner first: it's what both use), then have winferd use them and drop its copies — a structural change
+  to test against the desktop at length before it reaches main (every push there is a Nebula release).
 
 ## Headless risks / notes
 
