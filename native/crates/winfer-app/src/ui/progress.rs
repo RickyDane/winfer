@@ -81,7 +81,9 @@ impl Root {
         let sessions = s.all_panes().map(|p| format!("{}={}", p.id, p.session_id.as_deref().unwrap_or_default())).collect::<Vec<_>>().join(",");
         let open: Vec<String> = s.all_panes().map(|p| p.id.clone()).collect();
         let gone: Vec<String> = s.progress.keys().chain(s.run_times.keys()).filter(|id| !open.contains(id)).cloned().collect();
-        let unnamed: Vec<(String, String, Option<String>)> = s.all_panes().filter_map(|p| {
+        // A paired machine's tiles keep the titles that machine gives them (naming them here would
+        // spend this machine's model on another machine's sessions).
+        let unnamed: Vec<(String, String, Option<String>)> = s.all_panes().filter(|p| p.remote.is_none()).filter_map(|p| {
             let progress = s.progress.get(&p.id)?;
             Some((p.id.clone(), progress.task.clone()?, progress.title.clone()))
         }).collect();
@@ -167,6 +169,10 @@ impl Root {
     }
 
     fn estimate(&mut self, pane: Pane, cx: &mut Context<Self>) {
+        // Not another machine's agents (this machine's model would be spent on them).
+        if pane.remote.is_some() {
+            return;
+        }
         let Some((provider, model)) = self.llm_provider(cx) else { return };
         let progress = self.state.read(cx).progress_of(&pane.id);
         // Without a task there's nothing to measure: a freshly started agent's welcome screen

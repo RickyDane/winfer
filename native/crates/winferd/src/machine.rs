@@ -93,6 +93,11 @@ pub fn clone(url: &str, branch: Option<&str>, parent: &str) -> Result<PathBuf, S
     // Never stop to ask for a password: there's no one at this terminal.
     let out = cmd.arg("--").arg(url.trim()).arg(&dest).env("GIT_TERMINAL_PROMPT", "0").env("GIT_SSH_COMMAND", ssh_command()).output().map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
+        // Later fetches and pulls there (by agents too) offer the deploy key as the clone did.
+        let ssh = url.trim().starts_with("git@") || url.trim().starts_with("ssh://");
+        if ssh && key_path().exists() {
+            let _ = std::process::Command::new("git").arg("-C").arg(&dest).args(["config", "core.sshCommand", &ssh_command()]).output();
+        }
         Ok(dest)
     } else {
         let _ = std::fs::remove_dir_all(&dest);
